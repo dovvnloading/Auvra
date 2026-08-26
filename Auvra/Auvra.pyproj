@@ -22,6 +22,16 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Auvra.py" />
+    <Compile Include="launcher\__init__.py" />
+    <Compile Include="launcher\cli.py" />
+    <Compile Include="launcher\config.py" />
+    <Compile Include="launcher\dependencies.py" />
+    <Compile Include="launcher\diagnostics.py" />
+    <Compile Include="launcher\process.py" />
+    <Compile Include="launcher\readiness.py" />
+    <Compile Include="launcher\platform\__init__.py" />
+    <Compile Include="launcher\platform\posix.py" />
+    <Compile Include="launcher\platform\windows_job.py" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in

@@ -10,7 +10,12 @@ permissions:
 
 jobs:
   editor-build:
+    name: Editor build (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["22.12.0", "24.x"]
     defaults:
       run:
         working-directory: fbx-viewer (1)
@@ -21,7 +26,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
           cache: npm
           cache-dependency-path: fbx-viewer (1)/package-lock.json
 
@@ -31,8 +36,14 @@ jobs:
       - name: Build editor
         run: npm run build
 
-  python-syntax:
-    runs-on: windows-latest
+  python-verify:
+    name: Python ${{ matrix.python-version }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python-version: ["3.12", "3.14"]
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -40,7 +51,20 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: "3.14"
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Check uv and locked environment
+        run: |
+          uv --version
+          uv sync --locked --no-install-project --no-dev
 
       - name: Check launcher syntax
-        run: python -m py_compile Auvra/Auvra.py
+        run: python -m compileall -q Auvra tests
+
+      - name: Run standard-library tests
+        run: python -m unittest discover -s tests -t . -v

@@ -1,0 +1,10 @@
+[project]
+name = "auvra-host"
+version = "0.0.0"
+description = "Auvra development host and launcher"
+requires-python = ">=3.12,<3.15"
+dependencies = []
+
+[tool.uv]
+package = false
+required-version = "==0.12.5"
