@@ -15,7 +15,7 @@ internal architecture or working notes.
 |---|---|---|
 | -1 | Remove inherited provider-specific scaffolding and establish a clean baseline | Complete |
 | 0 | Establish the public repository, license, project status, and verification baseline | Complete |
-| 1 | Make development reproducible and build the Python launcher | In verification |
+| 1 | Make development reproducible and build the Python launcher | Complete |
 | 2 | Run the editor in a desktop-owned frame behind a defined host boundary | Planned |
 | 3 | Replace browser-owned saving with a durable project system | Planned |
 | 4 | Add secure provider routing, BYOK settings, fal.ai media workflows, and text/local provider adapters | Planned |
