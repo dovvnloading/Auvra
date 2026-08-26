@@ -1,0 +1,14 @@
+.vs/
+/.auvra-local/
+/AGENTS.md
+
+**/.env
+**/.env.*
+!**/.env.example
+
+**/node_modules/
+**/dist/
+**/build/
+
+**/__pycache__/
+*.py[cod]

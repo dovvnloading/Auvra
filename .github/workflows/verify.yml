@@ -1,0 +1,46 @@
+name: Verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  editor-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fbx-viewer (1)
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: fbx-viewer (1)/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Build editor
+        run: npm run build
+
+  python-syntax:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Check launcher syntax
+        run: python -m py_compile Auvra/Auvra.py
