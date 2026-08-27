@@ -5,6 +5,7 @@ import { AttachmentData, LoadedModelData } from '../types';
 import { loadFBXFile } from '../utils/modelLoader';
 import { disposeObject } from '../utils/processing/ModelLifecycle';
 import { dbOperations } from '../utils/db';
+import { projectService } from '../utils/projectService';
 
 export const useAttachmentManager = (
   models: LoadedModelData[],
@@ -23,9 +24,7 @@ export const useAttachmentManager = (
       pendingUpdatesRef.current.clear();
       
       try {
-          await Promise.all(Array.from(batch.entries()).map(([id, updates]) => 
-               dbOperations.updateAttachment(id, updates)
-          ));
+          for (const [id, updates] of batch.entries()) await dbOperations.updateAttachment(id, updates);
       } catch (e) {
           console.error("Error saving batched updates", e);
       }
@@ -42,6 +41,7 @@ export const useAttachmentManager = (
   }, [commitUpdates]);
 
   const addAttachment = useCallback(async (file: File, parentModelId: string) => {
+    projectService.assertWritable();
     setIsLoading(true);
     try {
         const loaded = await loadFBXFile(file, { normalize: false });
@@ -80,6 +80,7 @@ export const useAttachmentManager = (
   }, [setIsLoading]);
 
   const addAttachmentFromLibrary = useCallback(async (sourceModelId: string, parentModelId: string) => {
+    projectService.assertWritable();
     setIsLoading(true);
     try {
         const sourceModel = models.find(m => m.id === sourceModelId);
@@ -99,6 +100,7 @@ export const useAttachmentManager = (
   }, [models, addAttachment, setIsLoading]);
 
   const updateAttachment = useCallback((id: string, updates: Partial<AttachmentData>) => {
+      projectService.assertWritable();
       // 1. Update React State Immediately
       setAttachments(prev => prev.map(att => 
         att.id === id ? { ...att, ...updates } : att
@@ -121,6 +123,7 @@ export const useAttachmentManager = (
   }, [commitUpdates]);
 
   const removeAttachment = useCallback(async (id: string) => {
+      projectService.assertWritable();
       if (pendingUpdatesRef.current.has(id)) {
           pendingUpdatesRef.current.delete(id);
       }

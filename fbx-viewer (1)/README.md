@@ -26,10 +26,23 @@ npm run dev
 The supported frontend runtimes are Node.js 22.12+ on the Node 22 LTS line or
 Node.js 24, with npm 10 or 11.
 
+Project files are controlled by the native host. The header provides New,
+Open, Save, Save As, Close, `.auvrapack` import/export, legacy `.forge` import,
+recent projects, read-only status, and recovery selection. Browser storage is
+not a saving authority; `OmniRenderDB` is opened only as a read-only migration
+source for older work.
+
 Create a production bundle with:
 
 ```powershell
 npm run build
+```
+
+Verify the frontend project and host boundary with:
+
+```powershell
+npm run project:verify
+npm run protocol:verify
 ```
 
 Repository status, licensing, and contribution guidance are documented in the

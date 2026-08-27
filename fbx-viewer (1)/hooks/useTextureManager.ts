@@ -2,6 +2,7 @@
 import { useState, useCallback } from 'react';
 import { TextureData } from '../types';
 import { dbOperations } from '../utils/db';
+import { projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
 
 export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
@@ -9,6 +10,7 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
   const { addNotification } = useNotification();
 
   const addTexture = useCallback(async (file: File): Promise<string | null> => {
+    projectService.assertWritable();
     setIsLoading(true);
     try {
         const url = URL.createObjectURL(file);
@@ -50,6 +52,7 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
   }, [setIsLoading, addNotification]);
 
   const saveTextureToLibrary = useCallback(async (base64: string, name: string): Promise<string | null> => {
+      projectService.assertWritable();
       setIsLoading(true);
       try {
           // Convert Base64 to Blob
@@ -68,6 +71,7 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
   }, [addTexture, setIsLoading, addNotification]);
 
   const removeTexture = useCallback(async (id: string) => {
+    projectService.assertWritable();
       try {
           await dbOperations.deleteTexture(id);
           setTextures(prev => {

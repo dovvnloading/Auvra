@@ -1,8 +1,8 @@
 
 import { AssetCategory, AttachmentData, Blueprint, SocketData, TextureData, LevelObject, LevelData, AudioData } from '../types';
+import { projectService } from './projectService';
 
 const DB_NAME = 'OmniRenderDB';
-const DB_VERSION = 16; 
 
 export interface DBModel {
   id: string;
@@ -12,7 +12,7 @@ export interface DBModel {
   category: AssetCategory;
   thumbnail?: string;
   isPlacedInScene: boolean;
-  textureOverrides?: Record<string, string>; // MaterialName -> Base64
+  textureOverrides?: Record<string, string>; // MaterialName -> logical texture id
 }
 
 export interface DBAttachment {
@@ -50,10 +50,13 @@ export type DBAttachmentMetadata = Omit<DBAttachment, 'file'>;
 
 class DBOperations {
   private dbPromise: Promise<IDBDatabase>;
+  private mutationQueue: Promise<unknown> = Promise.resolve();
 
   constructor() {
     this.dbPromise = new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
+      // Legacy storage is a read-only migration source. Opening without a
+      // version prevents upgrades; a new database is aborted immediately.
+      const request = indexedDB.open(DB_NAME);
 
       request.onerror = () => {
         console.error("Database error", request.error);
@@ -64,54 +67,9 @@ class DBOperations {
         resolve(request.result);
       };
 
-      request.onupgradeneeded = (event) => {
-        const db = (event.target as IDBOpenDBRequest).result;
-        
-        if (!db.objectStoreNames.contains('models')) {
-          db.createObjectStore('models', { keyPath: 'id' });
-        }
-        
-        if (!db.objectStoreNames.contains('attachments')) {
-          const store = db.createObjectStore('attachments', { keyPath: 'id' });
-          store.createIndex('parentModelId', 'parentModelId', { unique: false });
-        }
-
-        if (!db.objectStoreNames.contains('sockets')) {
-           const store = db.createObjectStore('sockets', { keyPath: 'id' });
-           store.createIndex('parentModelId', 'parentModelId', { unique: false });
-        }
-
-        if (!db.objectStoreNames.contains('textures')) {
-           db.createObjectStore('textures', { keyPath: 'id' });
-        }
-
-        if (!db.objectStoreNames.contains('audios')) {
-            db.createObjectStore('audios', { keyPath: 'id' });
-        }
-
-        if (!db.objectStoreNames.contains('levelObjects')) {
-           const loStore = db.createObjectStore('levelObjects', { keyPath: 'id' });
-           loStore.createIndex('levelId', 'levelId', { unique: false });
-        } else {
-           // Upgrade existing store for version 15
-           const transaction = (event.target as IDBOpenDBRequest).transaction;
-           if (transaction) {
-               const loStore = transaction.objectStore('levelObjects');
-               if (!loStore.indexNames.contains('levelId')) {
-                   loStore.createIndex('levelId', 'levelId', { unique: false });
-               }
-           }
-        }
-
-        if (!db.objectStoreNames.contains('levels')) {
-            db.createObjectStore('levels', { keyPath: 'id' });
-        }
-
-        if (db.objectStoreNames.contains('blueprints')) {
-            db.deleteObjectStore('blueprints');
-        }
-        
-        db.createObjectStore('blueprints', { keyPath: 'id' });
+      request.onupgradeneeded = () => {
+        request.transaction?.abort();
+        reject(new Error('Legacy project storage does not exist; refusing to create or upgrade it'));
       };
     });
   }
@@ -120,81 +78,135 @@ class DBOperations {
     return this.dbPromise;
   }
 
+  /** Read one bounded legacy page through a readonly cursor. */
+  private async readOnlyStorePage<T>(storeName: string, offset: number, pageSize = 64): Promise<{ values: T[]; nextOffset: number | null }> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction([storeName], 'readonly');
+      const cursorRequest = transaction.objectStore(storeName).openCursor();
+      const values: T[] = [];
+      let index = 0;
+      cursorRequest.onsuccess = () => {
+        const cursor = cursorRequest.result;
+        if (!cursor) { resolve({ values, nextOffset: null }); return; }
+        if (index++ < offset) { cursor.continue(); return; }
+        if (values.length >= pageSize) { resolve({ values, nextOffset: offset + values.length }); return; }
+        values.push(cursor.value as T);
+        cursor.continue();
+      };
+      cursorRequest.onerror = () => reject(cursorRequest.error);
+    });
+  }
+
+  /** Read all legacy records as bounded pages. The compatibility result is
+   * assembled only for callers that explicitly request the legacy fallback. */
+  private async readOnlyStoreAll<T>(storeName: string): Promise<T[]> {
+    const values: T[] = [];
+    let offset = 0;
+    for (;;) {
+      const page = await this.readOnlyStorePage<T>(storeName, offset);
+      values.push(...page.values);
+      if (page.nextOffset === null) return values;
+      offset = page.nextOffset;
+    }
+  }
+
+  private async *readOnlyStorePages<T>(storeName: string): AsyncGenerator<T[]> {
+    const db = await this.getDB();
+    if (!db.objectStoreNames.contains(storeName)) return;
+    let offset = 0;
+    for (;;) {
+      const page = await this.readOnlyStorePage<T>(storeName, offset);
+      if (page.values.length) yield page.values;
+      if (page.nextOffset === null) return;
+      offset = page.nextOffset;
+    }
+  }
+
+  /** Route authored JSON mutations to the native repository once a project is
+   * open. IndexedDB remains a read-only migration source; binary uploads are
+   * handled by the host asset transport and are therefore not sent here. */
+  private async canonicalChange(domain: string, operation: 'upsert' | 'remove', value: unknown, id?: string): Promise<boolean> {
+    const run = () => this.performCanonicalChange(domain, operation, value, id);
+    const result = this.mutationQueue.then(run, run);
+    this.mutationQueue = result.catch(() => undefined);
+    return result;
+  }
+
+  private async performCanonicalChange(domain: string, operation: 'upsert' | 'remove', value: unknown, id?: string): Promise<boolean> {
+    if (!projectService.getStatus().projectId) throw new Error('Open a native project before editing');
+    if (projectService.getStatus().readOnly) throw new Error('Project is read-only');
+    let completeValue = value;
+    if (operation === 'upsert' && value && typeof value === 'object' && id) {
+      const snapshot = await projectService.getSnapshotAll(domain);
+      const rawDomain = snapshot?.domains?.[domain];
+      const records = Array.isArray(rawDomain)
+        ? rawDomain
+        : rawDomain && typeof rawDomain === 'object' && Array.isArray((rawDomain as { documents?: unknown[] }).documents)
+          ? (rawDomain as { documents: unknown[] }).documents : snapshot?.documents || [];
+      const current = records.find((record) => record && typeof record === 'object' && (record as { id?: unknown }).id === id);
+      if (current && typeof current === 'object') completeValue = { ...(current as Record<string, unknown>), ...(value as Record<string, unknown>) };
+    }
+    await projectService.applyChanges([{ domain, operation, id, value: completeValue }]);
+    return true;
+  }
+
+  private requireNativeProject(): void {
+    if (!projectService.getStatus().projectId) throw new Error('Open a native project before editing');
+    if (projectService.getStatus().readOnly) throw new Error('Project is read-only');
+  }
+
   // --- LEVELS ---
 
   async addLevel(level: LevelData): Promise<void> {
-      const db = await this.getDB();
-      return new Promise((resolve, reject) => {
-          const transaction = db.transaction(['levels'], 'readwrite');
-          const store = transaction.objectStore('levels');
-          const request = store.put(level);
-          request.onsuccess = () => resolve();
-          request.onerror = () => reject(request.error);
-      });
+      await this.canonicalChange('levels', 'upsert', level, level.id);
   }
 
   async getAllLevels(): Promise<LevelData[]> {
-      const db = await this.getDB();
-      return new Promise((resolve, reject) => {
-          const transaction = db.transaction(['levels'], 'readonly');
-          const store = transaction.objectStore('levels');
-          const request = store.getAll();
-          request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error);
-      });
+      return this.readOnlyStoreAll<LevelData>('levels');
   }
 
   async deleteLevel(id: string): Promise<void> {
-      const db = await this.getDB();
-      return new Promise((resolve, reject) => {
-          const transaction = db.transaction(['levels', 'levelObjects'], 'readwrite');
-          
-          // Delete the level metadata
-          const levelStore = transaction.objectStore('levels');
-          levelStore.delete(id);
-
-          // Delete all objects associated with this level
-          const objStore = transaction.objectStore('levelObjects');
-          const index = objStore.index('levelId');
-          const request = index.openCursor(IDBKeyRange.only(id));
-
-          request.onsuccess = (e) => {
-              const cursor = (e.target as IDBRequest).result as IDBCursor;
-              if (cursor) {
-                  cursor.delete();
-                  cursor.continue();
-              }
-          };
-
-          transaction.oncomplete = () => resolve();
-          transaction.onerror = () => reject(transaction.error);
-      });
+      this.requireNativeProject();
+      const snapshot = await projectService.getSnapshotAll();
+      const changes: Array<{ domain: string; operation: 'remove' | 'upsert'; id: string; value?: unknown }> = [
+        { domain: 'levels', operation: 'remove', id },
+      ];
+      for (const record of nativeDomainRecords(snapshot, 'objects')) {
+        if (record.levelId === id) changes.push({ domain: 'objects', operation: 'remove', id: record.id });
+      }
+      for (const record of nativeDomainRecords(snapshot, 'scenes')) {
+        if (record.levelId === id) changes.push({ domain: 'scenes', operation: 'remove', id: record.id });
+      }
+      for (const record of nativeDomainRecords(snapshot, 'worlds')) {
+        const levels = Array.isArray(record.levels) ? record.levels.filter((levelId: unknown) => levelId !== id) : [];
+        if (levels.length !== (record.levels || []).length) {
+          changes.push({ domain: 'worlds', operation: 'upsert', id: record.id, value: { ...record, levels } });
+        }
+      }
+      await projectService.applyChanges(changes);
   }
 
   // --- MODELS ---
 
   async addModel(model: DBModel): Promise<void> {
-    const db = await this.getDB();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(['models'], 'readwrite');
-      const store = transaction.objectStore('models');
-      const request = store.put(model);
-      
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+    this.requireNativeProject();
+    const modelAssetId = await projectService.uploadAsset(new File([model.file], model.name));
+    const animationAssets: Array<{ id: string; name: string; assetId: string; modelId: string }> = [];
+    for (const animation of (model.animationFiles || [])) {
+      const assetId = await projectService.uploadAsset(new File([animation.file], animation.name));
+      animationAssets.push({ id: assetId, name: animation.name, assetId, modelId: model.id });
+    }
+    await projectService.applyChanges([{ domain: 'models', operation: 'upsert', id: model.id, value: {
+      id: model.id, name: model.name, assetId: modelAssetId,
+      category: model.category, isPlacedInScene: model.isPlacedInScene,
+    } }, ...animationAssets.map((animation) => ({
+      domain: 'animations', operation: 'upsert' as const, id: animation.id, value: animation,
+    }))]);
   }
 
   async getAllModels(): Promise<DBModel[]> {
-    const db = await this.getDB();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(['models'], 'readonly');
-      const store = transaction.objectStore('models');
-      const request = store.getAll();
-
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
+    return this.readOnlyStoreAll<DBModel>('models');
   }
 
   async getAllModelMetadata(): Promise<DBModelMetadata[]> {
@@ -239,104 +251,72 @@ class DBOperations {
   }
 
   async updateModelPlacement(id: string, isPlacedInScene: boolean): Promise<void> {
-      const db = await this.getDB();
-      return new Promise((resolve, reject) => {
-          const transaction = db.transaction(['models'], 'readwrite');
-          const store = transaction.objectStore('models');
-          const getRequest = store.get(id);
-
-          getRequest.onsuccess = () => {
-              const data = getRequest.result as DBModel;
-              if (data) {
-                  data.isPlacedInScene = isPlacedInScene;
-                  store.put(data);
-                  resolve();
-              } else {
-                  reject(new Error("Model not found"));
-              }
-          };
-          getRequest.onerror = () => reject(getRequest.error);
-      });
+      await this.canonicalChange('models', 'upsert', { id, isPlacedInScene }, id);
   }
 
   async updateModelTextureOverrides(id: string, overrides: Record<string, string>): Promise<void> {
-      const db = await this.getDB();
-      return new Promise((resolve, reject) => {
-          const transaction = db.transaction(['models'], 'readwrite');
-          const store = transaction.objectStore('models');
-          const getRequest = store.get(id);
+      await this.canonicalChange('models', 'upsert', { id, textureOverrides: overrides }, id);
+  }
 
-          getRequest.onsuccess = () => {
-              const data = getRequest.result as DBModel;
-              if (data) {
-                  // Merge with existing overrides if any
-                  data.textureOverrides = { ...(data.textureOverrides || {}), ...overrides };
-                  store.put(data);
-                  resolve();
-              } else {
-                  reject(new Error("Model not found"));
-              }
-          };
-          getRequest.onerror = () => reject(getRequest.error);
-      });
+  async addModelTextureOverride(modelId: string, materialNames: string[], file: File, dimensions: { width: number; height: number }): Promise<string> {
+    this.requireNativeProject();
+    const assetId = await projectService.uploadAsset(file);
+    const snapshot = await projectService.getSnapshotAll('models');
+    const model = nativeDomainRecords(snapshot, 'models').find((record) => record.id === modelId);
+    if (!model) throw new Error('Model does not exist in the active project');
+    const textureId = assetId;
+    const textureOverrides = { ...(model.textureOverrides || {}) } as Record<string, string>;
+    for (const materialName of materialNames) textureOverrides[materialName] = textureId;
+    await projectService.applyChanges([
+      { domain: 'textures', operation: 'upsert', id: textureId, value: { id: textureId, name: file.name, assetId, dimensions } },
+      { domain: 'models', operation: 'upsert', id: modelId, value: { ...model, textureOverrides } },
+    ]);
+    return textureId;
   }
 
   async deleteModel(id: string): Promise<void> {
-    const db = await this.getDB();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(['models'], 'readwrite');
-      const store = transaction.objectStore('models');
-      const request = store.delete(id);
-
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+    this.requireNativeProject();
+    const snapshot = await projectService.getSnapshotAll();
+    const changes: Array<{ domain: string; operation: 'remove' | 'upsert'; id: string; value?: unknown }> = [
+      { domain: 'models', operation: 'remove', id },
+    ];
+    for (const domain of ['animations', 'attachments', 'sockets', 'graphs', 'objects']) {
+      for (const record of nativeDomainRecords(snapshot, domain)) {
+        if (record.modelId === id || record.parentModelId === id) changes.push({ domain, operation: 'remove', id: record.id });
+      }
+    }
+    for (const record of nativeDomainRecords(snapshot, 'blueprints')) {
+      if (record.linkedModelId === id) changes.push({ domain: 'blueprints', operation: 'upsert', id: record.id, value: { ...record, linkedModelId: null } });
+    }
+    await projectService.applyChanges(changes);
   }
 
   async addAnimations(modelId: string, files: File[]): Promise<void> {
-    const db = await this.getDB();
-    return new Promise((resolve, reject) => {
-        const transaction = db.transaction(['models'], 'readwrite');
-        const store = transaction.objectStore('models');
-        const getRequest = store.get(modelId);
-
-        getRequest.onsuccess = () => {
-            const data = getRequest.result as DBModel;
-            if (data) {
-                const newAnims = files.map(f => ({ name: f.name, file: f }));
-                data.animationFiles = [...(data.animationFiles || []), ...newAnims];
-                store.put(data);
-                resolve();
-            } else {
-                reject(new Error("Model not found"));
-            }
-        };
-        getRequest.onerror = () => reject(getRequest.error);
-    });
+    this.requireNativeProject();
+    const animationAssets: Array<{ id: string; name: string; assetId: string; modelId: string }> = [];
+    for (const file of files) {
+      const assetId = await projectService.uploadAsset(file);
+      animationAssets.push({ id: assetId, name: file.name, assetId, modelId });
+    }
+    await projectService.applyChanges(animationAssets.map((animation) => ({
+      domain: 'animations', operation: 'upsert' as const, id: animation.id, value: animation,
+    })));
   }
 
   // --- ATTACHMENTS ---
 
   async addAttachment(attachment: DBAttachment): Promise<void> {
-    const db = await this.getDB();
-    return new Promise((resolve, reject) => {
-        const transaction = db.transaction(['attachments'], 'readwrite');
-        const store = transaction.objectStore('attachments');
-        const request = store.put(attachment);
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
-    });
+    this.requireNativeProject();
+    const assetId = await projectService.uploadAsset(new File([attachment.file], attachment.name));
+    await projectService.applyChanges([{ domain: 'attachments', operation: 'upsert', id: attachment.id, value: {
+      id: attachment.id, name: attachment.name, assetId,
+      parentModelId: attachment.parentModelId, boneName: attachment.boneName,
+      position: attachment.position, rotation: attachment.rotation, scale: attachment.scale,
+    } }]);
   }
 
   async getAllAttachments(): Promise<DBAttachment[]> {
-      const db = await this.getDB();
-      return new Promise((resolve, reject) => {
-          const transaction = db.transaction(['attachments'], 'readonly');
-          const store = transaction.objectStore('attachments');
-          const request = store.getAll();
-          request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error);
-      });
+      return this.readOnlyStoreAll<DBAttachment>('attachments');
   }
 
   async getAllAttachmentMetadata(): Promise<DBAttachmentMetadata[]> {
@@ -378,118 +358,42 @@ class DBOperations {
 
 
   async updateAttachment(id: string, updates: Partial<DBAttachment>): Promise<void> {
-      const db = await this.getDB();
-      return new Promise((resolve, reject) => {
-          const transaction = db.transaction(['attachments'], 'readwrite');
-          const store = transaction.objectStore('attachments');
-          const getRequest = store.get(id);
-
-          getRequest.onsuccess = () => {
-              const data = getRequest.result;
-              if (data) {
-                  const updatedData = { ...data, ...updates };
-                  store.put(updatedData);
-                  resolve();
-              } else {
-                  reject(new Error("Attachment not found"));
-              }
-          };
-          getRequest.onerror = () => reject(getRequest.error);
-      });
+      await this.canonicalChange('attachments', 'upsert', { id, ...updates }, id);
   }
 
   async deleteAttachment(id: string): Promise<void> {
-      const db = await this.getDB();
-      return new Promise((resolve, reject) => {
-          const transaction = db.transaction(['attachments'], 'readwrite');
-          const store = transaction.objectStore('attachments');
-          const request = store.delete(id);
-          request.onsuccess = () => resolve();
-          request.onerror = () => reject(request.error);
-      });
+      await this.canonicalChange('attachments', 'remove', undefined, id);
   }
 
   // --- SOCKETS (MUZZLES) ---
 
   async addSocket(socket: DBSocket): Promise<void> {
-    const db = await this.getDB();
-    return new Promise((resolve, reject) => {
-        const transaction = db.transaction(['sockets'], 'readwrite');
-        const store = transaction.objectStore('sockets');
-        const request = store.put(socket);
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
-    });
+    await this.canonicalChange('sockets', 'upsert', socket, socket.id);
   }
 
   async getAllSockets(): Promise<DBSocket[]> {
-      const db = await this.getDB();
-      return new Promise((resolve, reject) => {
-          const transaction = db.transaction(['sockets'], 'readonly');
-          const store = transaction.objectStore('sockets');
-          const request = store.getAll();
-          request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error);
-      });
+      return this.readOnlyStoreAll<DBSocket>('sockets');
   }
 
   async updateSocket(id: string, updates: Partial<DBSocket>): Promise<void> {
-      const db = await this.getDB();
-      return new Promise((resolve, reject) => {
-          const transaction = db.transaction(['sockets'], 'readwrite');
-          const store = transaction.objectStore('sockets');
-          const getRequest = store.get(id);
-
-          getRequest.onsuccess = () => {
-              const data = getRequest.result;
-              if (data) {
-                  const updatedData = { ...data, ...updates };
-                  store.put(updatedData);
-                  resolve();
-              } else {
-                  reject(new Error("Socket not found"));
-              }
-          };
-          getRequest.onerror = () => reject(getRequest.error);
-      });
+      await this.canonicalChange('sockets', 'upsert', { id, ...updates }, id);
   }
 
   async deleteSocket(id: string): Promise<void> {
-      const db = await this.getDB();
-      return new Promise((resolve, reject) => {
-          const transaction = db.transaction(['sockets'], 'readwrite');
-          const store = transaction.objectStore('sockets');
-          const request = store.delete(id);
-          request.onsuccess = () => resolve();
-          request.onerror = () => reject(request.error);
-      });
+      await this.canonicalChange('sockets', 'remove', undefined, id);
   }
 
   // --- LEVEL OBJECTS ---
 
   async addLevelObject(obj: DBLevelObject): Promise<void> {
-    const db = await this.getDB();
-    return new Promise((resolve, reject) => {
-        const transaction = db.transaction(['levelObjects'], 'readwrite');
-        const store = transaction.objectStore('levelObjects');
-        const request = store.put(obj);
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
-    });
+    await this.canonicalChange('objects', 'upsert', obj, obj.id);
   }
 
   /**
    * Fetch all level objects indiscriminately (for export).
    */
   async getAllLevelObjects(): Promise<DBLevelObject[]> {
-      const db = await this.getDB();
-      return new Promise((resolve, reject) => {
-          const transaction = db.transaction(['levelObjects'], 'readonly');
-          const store = transaction.objectStore('levelObjects');
-          const request = store.getAll();
-          request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error);
-      });
+      return this.readOnlyStoreAll<DBLevelObject>('levelObjects');
   }
 
   /**
@@ -508,173 +412,199 @@ class DBOperations {
   }
 
   async updateLevelObject(id: string, updates: Partial<DBLevelObject>): Promise<void> {
-      const db = await this.getDB();
-      return new Promise((resolve, reject) => {
-          const transaction = db.transaction(['levelObjects'], 'readwrite');
-          const store = transaction.objectStore('levelObjects');
-          const getRequest = store.get(id);
-
-          getRequest.onsuccess = () => {
-              const data = getRequest.result;
-              if (data) {
-                  const updatedData = { ...data, ...updates };
-                  store.put(updatedData);
-                  resolve();
-              } else {
-                  // If not found, ignore or reject. For fast dragging, ignore.
-                  resolve();
-              }
-          };
-          getRequest.onerror = () => reject(getRequest.error);
-      });
+    await this.canonicalChange('objects', 'upsert', { id, ...updates }, id);
   }
 
   async deleteLevelObject(id: string): Promise<void> {
-      const db = await this.getDB();
-      return new Promise((resolve, reject) => {
-          const transaction = db.transaction(['levelObjects'], 'readwrite');
-          const store = transaction.objectStore('levelObjects');
-          const request = store.delete(id);
-          request.onsuccess = () => resolve();
-          request.onerror = () => reject(request.error);
-      });
+    await this.canonicalChange('objects', 'remove', undefined, id);
   }
 
   // --- TEXTURES ---
 
   async addTexture(texture: DBTexture): Promise<void> {
-    const db = await this.getDB();
-    return new Promise((resolve, reject) => {
-        const transaction = db.transaction(['textures'], 'readwrite');
-        const store = transaction.objectStore('textures');
-        const request = store.put(texture);
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
-    });
+    this.requireNativeProject();
+    const assetId = await projectService.uploadAsset(new File([texture.file], texture.name));
+    await projectService.applyChanges([{ domain: 'textures', operation: 'upsert', id: texture.id, value: {
+      id: texture.id, name: texture.name, assetId, dimensions: texture.dimensions,
+    } }]);
   }
 
   async getAllTextures(): Promise<DBTexture[]> {
-      const db = await this.getDB();
-      return new Promise((resolve, reject) => {
-          const transaction = db.transaction(['textures'], 'readonly');
-          const store = transaction.objectStore('textures');
-          const request = store.getAll();
-          request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error);
-      });
+      return this.readOnlyStoreAll<DBTexture>('textures');
   }
 
   async deleteTexture(id: string): Promise<void> {
-      const db = await this.getDB();
-      return new Promise((resolve, reject) => {
-          const transaction = db.transaction(['textures'], 'readwrite');
-          const store = transaction.objectStore('textures');
-          const request = store.delete(id);
-          request.onsuccess = () => resolve();
-          request.onerror = () => reject(request.error);
-      });
+    this.requireNativeProject();
+    const snapshot = await projectService.getSnapshotAll();
+    const changes: Array<{ domain: string; operation: 'remove' | 'upsert'; id: string; value?: unknown }> = [
+      { domain: 'textures', operation: 'remove', id },
+    ];
+    for (const record of nativeDomainRecords(snapshot, 'models')) {
+      const textureOverrides = Object.fromEntries(Object.entries(record.textureOverrides || {}).filter(([, textureId]) => textureId !== id));
+      if (Object.keys(textureOverrides).length !== Object.keys(record.textureOverrides || {}).length) {
+        changes.push({ domain: 'models', operation: 'upsert', id: record.id, value: { ...record, textureOverrides } });
+      }
+    }
+    for (const record of nativeDomainRecords(snapshot, 'blueprints')) {
+      if (record.textureId === id) changes.push({ domain: 'blueprints', operation: 'upsert', id: record.id, value: { ...record, textureId: null } });
+    }
+    for (const record of nativeDomainRecords(snapshot, 'sockets')) {
+      if (record.flashConfig?.textureId === id) changes.push({ domain: 'sockets', operation: 'upsert', id: record.id, value: { ...record, flashConfig: null } });
+    }
+    for (const record of nativeDomainRecords(snapshot, 'materials')) {
+      const textureIds = Array.isArray(record.textureIds) ? record.textureIds.filter((textureId: unknown) => textureId !== id) : [];
+      if (textureIds.length !== (record.textureIds || []).length) changes.push({ domain: 'materials', operation: 'upsert', id: record.id, value: { ...record, textureIds } });
+    }
+    for (const record of nativeDomainRecords(snapshot, 'objects')) {
+      if (record.terrainData?.textureId === id) {
+        const { textureId: _removed, ...terrainData } = record.terrainData;
+        changes.push({ domain: 'objects', operation: 'upsert', id: record.id, value: { ...record, terrainData } });
+      }
+    }
+    await projectService.applyChanges(changes);
   }
 
   // --- AUDIO ---
 
   async addAudio(audio: DBAudio): Promise<void> {
-    const db = await this.getDB();
-    return new Promise((resolve, reject) => {
-        const transaction = db.transaction(['audios'], 'readwrite');
-        const store = transaction.objectStore('audios');
-        const request = store.put(audio);
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
-    });
+    this.requireNativeProject();
+    const assetId = await projectService.uploadAsset(new File([audio.file], audio.name));
+    await projectService.applyChanges([{ domain: 'audio', operation: 'upsert', id: audio.id, value: {
+      id: audio.id, name: audio.name, assetId, type: audio.type, duration: audio.duration,
+    } }]);
   }
 
   async getAllAudio(): Promise<DBAudio[]> {
-      const db = await this.getDB();
-      return new Promise((resolve, reject) => {
-          const transaction = db.transaction(['audios'], 'readonly');
-          const store = transaction.objectStore('audios');
-          const request = store.getAll();
-          request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error);
-      });
+      return this.readOnlyStoreAll<DBAudio>('audios');
   }
 
   async deleteAudio(id: string): Promise<void> {
-      const db = await this.getDB();
-      return new Promise((resolve, reject) => {
-          const transaction = db.transaction(['audios'], 'readwrite');
-          const store = transaction.objectStore('audios');
-          const request = store.delete(id);
-          request.onsuccess = () => resolve();
-          request.onerror = () => reject(request.error);
-      });
+    this.requireNativeProject();
+    const snapshot = await projectService.getSnapshotAll();
+    const changes: Array<{ domain: string; operation: 'remove' | 'upsert'; id: string; value?: unknown }> = [
+      { domain: 'audio', operation: 'remove', id },
+    ];
+    for (const record of nativeDomainRecords(snapshot, 'objects')) {
+      if (record.audioConfig?.audioId === id) changes.push({ domain: 'objects', operation: 'upsert', id: record.id, value: { ...record, audioConfig: null } });
+    }
+    for (const record of nativeDomainRecords(snapshot, 'blueprints')) {
+      const weaponSounds = Array.isArray(record.weaponSounds) ? record.weaponSounds.filter((audioId: unknown) => audioId !== id) : [];
+      if (weaponSounds.length !== (record.weaponSounds || []).length) changes.push({ domain: 'blueprints', operation: 'upsert', id: record.id, value: { ...record, weaponSounds } });
+    }
+    await projectService.applyChanges(changes);
   }
 
   // --- BLUEPRINTS ---
 
   async saveBlueprint(blueprint: Blueprint): Promise<void> {
-    const db = await this.getDB();
-    return new Promise((resolve, reject) => {
-        const transaction = db.transaction(['blueprints'], 'readwrite');
-        const store = transaction.objectStore('blueprints');
-        const request = store.put(blueprint);
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
-    });
+    await this.canonicalChange('blueprints', 'upsert', blueprint, blueprint.id);
   }
 
   async getAllBlueprints(): Promise<Blueprint[]> {
-    const db = await this.getDB();
-    return new Promise((resolve, reject) => {
-        const transaction = db.transaction(['blueprints'], 'readonly');
-        const store = transaction.objectStore('blueprints');
-        const request = store.getAll();
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-    });
+    return this.readOnlyStoreAll<Blueprint>('blueprints');
   }
 
   async deleteBlueprint(id: string): Promise<void> {
-      const db = await this.getDB();
-      return new Promise((resolve, reject) => {
-          const transaction = db.transaction(['blueprints'], 'readwrite');
-          const store = transaction.objectStore('blueprints');
-          const request = store.delete(id);
-          request.onsuccess = () => resolve();
-          request.onerror = () => reject(request.error);
-      });
+      this.requireNativeProject();
+      const snapshot = await projectService.getSnapshotAll();
+      const changes: Array<{ domain: string; operation: 'remove' | 'upsert'; id: string; value?: unknown }> = [
+        { domain: 'blueprints', operation: 'remove', id },
+      ];
+      for (const record of nativeDomainRecords(snapshot, 'objects')) {
+        if (record.spawnConfig?.blueprintId === id) {
+          changes.push({ domain: 'objects', operation: 'upsert', id: record.id, value: { ...record, spawnConfig: null } });
+        }
+      }
+      await projectService.applyChanges(changes);
   }
 
   // --- SYSTEM ---
 
-  async clearDatabase(): Promise<void> {
-    const db = await this.getDB();
-    return new Promise((resolve, reject) => {
-      // Create a transaction that spans all stores to clear them atomically
-      const transaction = db.transaction(
-          ['models', 'attachments', 'sockets', 'blueprints', 'textures', 'levelObjects', 'levels', 'audios'], 
-          'readwrite'
-      );
-      
-      transaction.objectStore('models').clear();
-      transaction.objectStore('attachments').clear();
-      transaction.objectStore('sockets').clear();
-      transaction.objectStore('blueprints').clear();
-      transaction.objectStore('textures').clear();
-      transaction.objectStore('levelObjects').clear();
-      transaction.objectStore('levels').clear();
-      transaction.objectStore('audios').clear();
+  /** Copy the legacy browser database into an empty native project. The old
+   * database is opened read-only, blobs are streamed through host upload
+   * tickets, and authored documents are committed together only after every
+   * legacy page has been converted. */
+  async migrateLegacyDatabase(onProgress?: (records: number) => void): Promise<number> {
+    this.requireNativeProject();
+    const active = await projectService.getSnapshotAll();
+    const occupied = Object.entries(active?.domains || {}).some(([domain]) => domain !== 'metadata' && nativeDomainRecords(active, domain).length > 0);
+    if (occupied) throw new Error('Browser migration requires an empty native project');
 
-      transaction.oncomplete = () => {
-          console.log("[DB] Database Cleared (Object Stores Truncated)");
-          resolve();
-      };
-      
-      transaction.onerror = (e) => {
-          console.error("[DB] Failed to clear database", e);
-          reject(transaction.error);
-      };
-    });
+    const changes: Array<{ domain: string; operation: 'upsert'; id: string; value: unknown }> = [];
+    const textureDocuments = new Set<string>();
+    let processed = 0;
+    const add = (domain: string, value: Record<string, unknown>) => {
+      if (typeof value.id !== 'string' || !value.id) throw new Error(`Legacy ${domain} record has no stable id`);
+      changes.push({ domain, operation: 'upsert', id: value.id, value });
+      onProgress?.(++processed);
+    };
+
+    for await (const page of this.readOnlyStorePages<DBTexture>('textures')) {
+      for (const record of page) {
+        const assetId = await projectService.uploadAsset(new File([record.file], record.name, { type: record.file.type || 'application/octet-stream' }));
+        add('textures', { id: record.id, name: record.name, assetId, dimensions: record.dimensions });
+        textureDocuments.add(record.id);
+      }
+    }
+    for await (const page of this.readOnlyStorePages<DBAudio>('audios')) {
+      for (const record of page) {
+        const assetId = await projectService.uploadAsset(new File([record.file], record.name, { type: record.type || record.file.type || 'application/octet-stream' }));
+        add('audio', { id: record.id, name: record.name, assetId, type: record.type, duration: record.duration });
+      }
+    }
+    for await (const page of this.readOnlyStorePages<DBModel>('models')) {
+      for (const record of page) {
+        const assetId = await projectService.uploadAsset(new File([record.file], record.name, { type: record.file.type || 'application/octet-stream' }));
+        const textureOverrides: Record<string, string> = {};
+        for (const [materialName, legacyUrl] of Object.entries(record.textureOverrides || {})) {
+          const response = await fetch(legacyUrl);
+          if (!response.ok) throw new Error(`Legacy material texture could not be read (${response.status})`);
+          const blob = await response.blob();
+          const overrideAssetId = await projectService.uploadAsset(new File([blob], 'legacy-material.png', { type: blob.type || 'image/png' }));
+          textureOverrides[materialName] = overrideAssetId;
+          if (!textureDocuments.has(overrideAssetId)) {
+            add('textures', { id: overrideAssetId, name: 'Legacy material override', assetId: overrideAssetId, dimensions: { width: 0, height: 0 } });
+            textureDocuments.add(overrideAssetId);
+          }
+        }
+        add('models', {
+          id: record.id, name: record.name, assetId, category: record.category,
+          isPlacedInScene: record.isPlacedInScene, textureOverrides,
+        });
+        for (const animation of record.animationFiles || []) {
+          const animationAssetId = await projectService.uploadAsset(new File([animation.file], animation.name, { type: animation.file.type || 'application/octet-stream' }));
+          add('animations', { id: animationAssetId, name: animation.name, assetId: animationAssetId, modelId: record.id });
+        }
+      }
+    }
+    for await (const page of this.readOnlyStorePages<DBAttachment>('attachments')) {
+      for (const record of page) {
+        const assetId = await projectService.uploadAsset(new File([record.file], record.name, { type: record.file.type || 'application/octet-stream' }));
+        add('attachments', pickDefined(record as unknown as Record<string, unknown>, ['id', 'name', 'parentModelId', 'boneName', 'position', 'rotation', 'scale'], { assetId }));
+      }
+    }
+
+    const jsonStores: Array<[string, string, string[]]> = [
+      ['levels', 'levels', ['id', 'name', 'createdAt', 'blueprint']],
+      ['levelObjects', 'objects', ['id', 'levelId', 'modelId', 'name', 'type', 'position', 'rotation', 'scale', 'spawnConfig', 'audioConfig', 'terrainData', 'skyConfig']],
+      ['sockets', 'sockets', ['id', 'name', 'parentModelId', 'boneName', 'position', 'rotation', 'scale', 'flashConfig']],
+      ['blueprints', 'blueprints', ['id', 'name', 'type', 'description', 'linkedModelId', 'textureId', 'stats', 'traits', 'variables', 'animationGraph', 'meshScale', 'aimOffset', 'weaponSounds', 'weaponVolume']],
+    ];
+    for (const [store, domain, keys] of jsonStores) {
+      for await (const page of this.readOnlyStorePages<Record<string, unknown>>(store)) {
+        for (const record of page) add(domain, pickDefined(record, keys));
+      }
+    }
+    if (!changes.length) throw new Error('No legacy browser project data was found');
+    if (new TextEncoder().encode(JSON.stringify(changes)).byteLength > 900_000) {
+      throw new Error('Legacy project metadata is too large for one safe migration transaction');
+    }
+    await projectService.applyChanges(changes);
+    return processed;
+  }
+
+  async clearDatabase(): Promise<void> {
+    throw new Error('Legacy project storage is read-only; clear the native project instead');
   }
 
   /**
@@ -683,19 +613,23 @@ class DBOperations {
    * as it closes connections. For SPA resets, use clearDatabase().
    */
   async deleteEntireDatabase(): Promise<void> {
-    console.log("[DB] deleteEntireDatabase called. Closing connections...");
-    try {
-        const db = await this.getDB();
-        db.close();
-    } catch(e) { /* ignore */ }
-
-    return new Promise((resolve, reject) => {
-        const request = indexedDB.deleteDatabase(DB_NAME);
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
-        request.onblocked = () => resolve(); // Proceed anyway
-    });
+    throw new Error('Legacy project storage is read-only and cannot be deleted');
   }
 }
 
 export const dbOperations = new DBOperations();
+
+function nativeDomainRecords(snapshot: Awaited<ReturnType<typeof projectService.getSnapshotAll>>, domain: string): Array<Record<string, any>> {
+  const raw = snapshot?.domains?.[domain];
+  const values = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === 'object' && Array.isArray((raw as { documents?: unknown[] }).documents)
+      ? (raw as { documents: unknown[] }).documents : [];
+  return values.filter((value): value is Record<string, any> => Boolean(value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string'));
+}
+
+function pickDefined(source: Record<string, unknown>, keys: string[], extra: Record<string, unknown> = {}): Record<string, unknown> {
+  const output: Record<string, unknown> = { ...extra };
+  for (const key of keys) if (source[key] !== undefined) output[key] = source[key];
+  return output;
+}

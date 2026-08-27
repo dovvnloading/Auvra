@@ -2,6 +2,7 @@
 import { useState, useCallback } from 'react';
 import { Blueprint, BlueprintType } from '../types';
 import { dbOperations } from '../utils/db';
+import { projectService } from '../utils/projectService';
 import { DEFAULT_BLUEPRINTS, PLAYER_GRAPH, ENEMY_GRAPH } from '../data/blueprints';
 
 export const useBlueprintManager = () => {
@@ -9,6 +10,7 @@ export const useBlueprintManager = () => {
   const [selectedBlueprintId, setSelectedBlueprintId] = useState<string | null>(null);
 
   const addBlueprint = useCallback(async (type: BlueprintType) => {
+    projectService.assertWritable();
     const isPlayer = type === 'Player Character';
     
     // ENFORCE SINGLETON PLAYER CONSTRAINT
@@ -45,6 +47,7 @@ export const useBlueprintManager = () => {
   }, [blueprints]);
 
   const updateBlueprint = useCallback((id: string, updates: Partial<Blueprint>) => {
+    projectService.assertWritable();
     setBlueprints(prev => prev.map(bp => {
         if (bp.id === id) {
             const updated = { ...bp, ...updates };
@@ -57,6 +60,7 @@ export const useBlueprintManager = () => {
   }, []);
 
   const removeBlueprint = useCallback((id: string) => {
+    projectService.assertWritable();
     // 1. Optimistic Update
     setBlueprints(prev => prev.filter(bp => bp.id !== id));
     

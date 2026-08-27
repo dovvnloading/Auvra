@@ -17,7 +17,7 @@ internal architecture or working notes.
 | 0 | Establish the public repository, license, project status, and verification baseline | Complete |
 | 1 | Make development reproducible and build the Python launcher | Complete |
 | 2 | Run the editor in a desktop-owned frame behind a defined host boundary | Complete |
-| 3 | Replace browser-owned saving with a durable project system | Planned |
+| 3 | Replace browser-owned saving with a durable project system | Complete |
 | 4 | Add secure provider routing, BYOK settings, fal.ai media workflows, and text/local provider adapters | Planned |
 | 5 | Stabilize the current renderer and establish backend-independent rendering contracts | Planned |
 | 6 | Prove the native engine and multi-backend rendering path with a vertical slice | Planned |
@@ -34,6 +34,8 @@ internal architecture or working notes.
 - Local execution and local compute are first-class requirements.
 - Saving, recovery, rendering, and provider access will move behind explicit
   engine services instead of remaining browser-only concerns.
+- Project saving and recovery now run through the native host; legacy browser
+  storage remains available only as a read-only migration source.
 - Experimental work must preserve a tested fallback and may not silently become
   the default path.
 

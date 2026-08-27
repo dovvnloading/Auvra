@@ -10,6 +10,12 @@ import subprocess
 import threading
 from typing import Any, Callable
 
+from .assets import (
+    AssetResourceRequest,
+    AssetResourceResponse,
+    AssetTransportError,
+    is_asset_resource_url,
+)
 from .contracts import (
     FrameClosedError,
     FrameConfig,
@@ -459,9 +465,110 @@ class WebView2Frame:
 
     def _on_resource(self, sender: Any, args: Any) -> None:
         request = self._value(args, "Request")
-        uri = self._value(request, "Uri", "")
+        uri = str(self._value(request, "Uri", ""))
+        if is_asset_resource_url(uri):
+            self._on_asset_resource(args, request, uri)
+            return
         if not self.policy.resource(str(uri)).allowed:
             self._deny_resource(args)
+
+    @staticmethod
+    def _request_headers(request: Any) -> dict[str, str]:
+        source = getattr(request, "Headers", None)
+        result: dict[str, str] = {}
+        for name in (
+            "Origin",
+            "Content-Type",
+            "Content-Length",
+            "Access-Control-Request-Method",
+        ):
+            try:
+                value = source.GetHeader(name) if source is not None else ""
+            except Exception:
+                value = ""
+            if value:
+                result[name] = str(value)
+        return result
+
+    class _NativeBodyReader:
+        def __init__(self, stream: Any) -> None:
+            self.stream = stream
+
+        def read(self, size: int) -> bytes:
+            if self.stream is None:
+                return b""
+            reader = getattr(self.stream, "read", None)
+            if callable(reader):
+                return bytes(reader(size))
+            from System import Array, Byte  # type: ignore[import-not-found]
+
+            buffer = Array.CreateInstance(Byte, size)
+            count = int(self.stream.Read(buffer, 0, size))
+            if count <= 0:
+                return b""
+            return bytes(buffer[index] for index in range(count))
+
+    def _on_asset_resource(self, args: Any, request: Any, uri: str) -> None:
+        callback = self.config.on_asset_resource
+        if callback is None:
+            self._deny_resource(args)
+            return
+        method = str(self._value(request, "Method", "GET")).upper()
+        body = self._value(request, "Content")
+        resource_request = AssetResourceRequest(
+            method,
+            uri,
+            self._request_headers(request),
+            self._NativeBodyReader(body) if body is not None else None,
+        )
+        try:
+            response = callback(resource_request)
+            if not isinstance(response, AssetResourceResponse):
+                raise TypeError("asset resource callback returned an invalid response")
+        except AssetTransportError as exc:
+            response = AssetResourceResponse(exc.status, "Denied", {"Cache-Control": "no-store"})
+        except Exception:
+            response = AssetResourceResponse(500, "Denied", {"Cache-Control": "no-store"})
+        self._set_resource_response(args, response)
+
+    def _set_resource_response(self, args: Any, response: AssetResourceResponse) -> None:
+        # Pure-Python fakes accept the bounded response directly. Native
+        # WebView2 receives a .NET stream without materializing file contents.
+        environment = getattr(self._core, "Environment", None)
+        if environment is None:
+            if hasattr(args, "Response"):
+                args.Response = response
+                return
+            self._deny_resource(args)
+            return
+        native_stream = None
+        try:
+            if response.body is None:
+                from System.IO import MemoryStream  # type: ignore[import-not-found]
+
+                native_stream = MemoryStream()
+            else:
+                name = getattr(response.body, "name", None)
+                if not isinstance(name, (str, os.PathLike)):
+                    raise TypeError("asset response stream is not file-backed")
+                response.body.close()
+                from System.IO import FileAccess, FileMode, FileShare, FileStream  # type: ignore[import-not-found]
+
+                native_stream = FileStream(str(name), FileMode.Open, FileAccess.Read, FileShare.Read)
+            headers = "".join(f"{name}: {value}\r\n" for name, value in response.headers.items())
+            args.Response = environment.CreateWebResourceResponse(
+                native_stream,
+                int(response.status),
+                str(response.reason),
+                headers,
+            )
+        except Exception:
+            if native_stream is not None:
+                try:
+                    native_stream.Dispose()
+                except Exception:
+                    pass
+            self._fail("asset_resource_failed", "Auvra could not serve a secured asset resource")
 
     def _deny_resource(self, args: Any) -> None:
         # Test fakes expose Cancel. WebView2's real resource event is blocked

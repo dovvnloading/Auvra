@@ -2,6 +2,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { LevelObject, LoadedModelData, LevelObjectType, LevelData, LevelBlueprintData, TerrainData } from '../types';
 import { dbOperations } from '../utils/db';
+import { projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
 
 const DEFAULT_LEVEL_ID = 'default_level';
@@ -37,9 +38,9 @@ const syncStateToDB = async (currentState: LevelObject[], nextState: LevelObject
         }
     }
 
-    if (toDelete.length) await Promise.all(toDelete.map(id => dbOperations.deleteLevelObject(id)));
-    if (toAdd.length) await Promise.all(toAdd.map(o => dbOperations.addLevelObject(o)));
-    if (toUpdate.length) await Promise.all(toUpdate.map(o => dbOperations.updateLevelObject(o.id, o)));
+    for (const id of toDelete) await dbOperations.deleteLevelObject(id);
+    for (const object of toAdd) await dbOperations.addLevelObject(object);
+    for (const object of toUpdate) await dbOperations.updateLevelObject(object.id, object);
 };
 
 export const useLevelManager = (models: LoadedModelData[]) => {
@@ -112,9 +113,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       const batch = new Map<string, any>(pendingUpdatesRef.current);
       pendingUpdatesRef.current.clear();
       try {
-          await Promise.all(Array.from(batch.entries()).map(([id, updates]) => 
-               dbOperations.updateLevelObject(id, updates)
-          ));
+          for (const [id, updates] of batch.entries()) await dbOperations.updateLevelObject(id, updates);
       } catch (e) {
           console.error("Error saving batched level updates", e);
       }
@@ -130,6 +129,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
   }, [commitUpdates]);
 
   const initLevels = useCallback(async () => {
+      if (projectService.getStatus().projectId) return;
       try {
           const storedLevels = await dbOperations.getAllLevels();
           if (storedLevels.length === 0) {
@@ -157,9 +157,11 @@ export const useLevelManager = (models: LoadedModelData[]) => {
 
   useEffect(() => {
       if (currentLevelId) {
-          dbOperations.getLevelObjects(currentLevelId).then(objects => {
-              setLevelObjects(objects);
-          }).catch(console.error);
+          if (!projectService.getStatus().projectId) {
+              dbOperations.getLevelObjects(currentLevelId).then(objects => {
+                  setLevelObjects(objects);
+              }).catch(console.error);
+          }
           
           const lvl = levels.find(l => l.id === currentLevelId);
           if (lvl) {
@@ -169,6 +171,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
   }, [currentLevelId, levels]);
 
   const createLevel = useCallback(async (name: string) => {
+      projectService.assertWritable();
       const newLevel: LevelData = {
           id: crypto.randomUUID(),
           name: name || 'New Level',
@@ -197,6 +200,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
   }, [currentLevelId, commitUpdates, addNotification]);
 
   const deleteLevel = useCallback(async (id: string) => {
+      projectService.assertWritable();
       try {
           await dbOperations.deleteLevel(id);
           setLevels(prev => prev.filter(l => l.id !== id));
@@ -252,6 +256,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
         skyConfig: type === 'sky_sphere' ? extraData : undefined // Crucial fix: Assign sky config
     };
 
+    projectService.assertWritable();
     setLevelObjects(prev => [...prev, newObj]);
     
     try { 
@@ -264,19 +269,22 @@ export const useLevelManager = (models: LoadedModelData[]) => {
   }, [models, currentLevelId, snapshotHistory]);
 
   const removeLevelObject = useCallback(async (id: string) => {
+      projectService.assertWritable();
       snapshotHistory();
       setLevelObjects(prev => prev.filter(o => o.id !== id));
       try { await dbOperations.deleteLevelObject(id); } catch(e) { console.error(e); }
   }, [snapshotHistory]);
 
   const removeLevelObjects = useCallback(async (ids: string[]) => {
+      projectService.assertWritable();
       if (ids.length === 0) return;
       snapshotHistory();
       setLevelObjects(prev => prev.filter(o => !ids.includes(o.id)));
-      try { await Promise.all(ids.map(id => dbOperations.deleteLevelObject(id))); } catch(e) { console.error("Batch delete failed", e); }
+      try { for (const id of ids) await dbOperations.deleteLevelObject(id); } catch(e) { console.error("Batch delete failed", e); }
   }, [snapshotHistory]);
 
   const updateLevelObject = useCallback((id: string, updates: Partial<LevelObject>) => {
+      projectService.assertWritable();
       setLevelObjects(prev => prev.map(o => o.id === id ? { ...o, ...updates } : o));
       const existing = pendingUpdatesRef.current.get(id) || {};
       pendingUpdatesRef.current.set(id, { ...existing, ...updates });
@@ -285,6 +293,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
   }, [commitUpdates]);
 
   const updateLevelBlueprint = useCallback((data: Partial<LevelBlueprintData>) => {
+      projectService.assertWritable();
       setActiveLevelBlueprint(prev => {
           const next = { ...prev, ...data };
           if (currentLevelId) {
@@ -296,6 +305,17 @@ export const useLevelManager = (models: LoadedModelData[]) => {
           return next;
       });
   }, [currentLevelId, levels]);
+
+  const hydrateProjectState = useCallback((nextLevels: LevelData[], nextObjects: LevelObject[], nextCurrentLevelId?: string | null) => {
+      const selected = nextCurrentLevelId || nextLevels[0]?.id || null;
+      setLevels(nextLevels);
+      setCurrentLevelId(selected);
+      setLevelObjects(nextObjects.filter((object) => !selected || object.levelId === selected));
+      const level = nextLevels.find((item) => item.id === selected);
+      setActiveLevelBlueprint(level?.blueprint || { nodes: [], connections: [], variables: [] });
+      history.current = { past: [], future: [] };
+      updateHistoryState();
+  }, []);
 
   useEffect(() => {
       initLevels();
@@ -315,6 +335,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       updateLevelObject,
       activeLevelBlueprint,
       updateLevelBlueprint,
+      hydrateProjectState,
       undo,
       redo,
       canUndo,

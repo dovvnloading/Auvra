@@ -2,6 +2,7 @@
 import { useState, useCallback } from 'react';
 import { AudioData } from '../types';
 import { dbOperations } from '../utils/db';
+import { projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
 
 export const useAudioManager = (setIsLoading: (loading: boolean) => void) => {
@@ -9,6 +10,7 @@ export const useAudioManager = (setIsLoading: (loading: boolean) => void) => {
   const { addNotification } = useNotification();
 
   const addAudio = useCallback(async (file: File): Promise<string | null> => {
+    projectService.assertWritable();
     setIsLoading(true);
     try {
         // Basic validation
@@ -59,6 +61,7 @@ export const useAudioManager = (setIsLoading: (loading: boolean) => void) => {
   }, [setIsLoading, addNotification]);
 
   const removeAudio = useCallback(async (id: string) => {
+    projectService.assertWritable();
       try {
           await dbOperations.deleteAudio(id);
           setAudioAssets(prev => {

@@ -12,8 +12,10 @@ if (/\brequire\s*\(|\b(?:eval|Function)\s*\(/.test(standaloneValidator)) {
   throw new Error("standalone protocol validator contains a browser-unsafe runtime construct");
 }
 const validate = new Ajv2020({ strict: true }).compile(schema);
-for (const vector of vectors.valid) if (!validate(vector.message)) throw new Error(`valid vector rejected: ${vector.name}`);
-for (const vector of vectors.invalid) if (validate(vector.message)) throw new Error(`invalid vector accepted: ${vector.name}`);
+const MAX_MESSAGE_BYTES = 256 * 1024;
+const bounded = (message) => Buffer.byteLength(JSON.stringify(message), "utf8") <= MAX_MESSAGE_BYTES;
+for (const vector of vectors.valid) if (!validate(vector.message) || !bounded(vector.message)) throw new Error(`valid vector rejected or oversized: ${vector.name}`);
+for (const vector of vectors.invalid) if (validate(vector.message) && bounded(vector.message)) throw new Error(`invalid vector accepted: ${vector.name}`);
 console.log(`protocol conformance passed (${vectors.valid.length} valid, ${vectors.invalid.length} invalid)`);
 
 if (process.argv.includes("--fake-host")) {
@@ -39,6 +41,19 @@ const event = host.emitRevision();
 if (event.revision !== 1) throw new Error("revision event failed");
 const next = await host.request({ ...request, revision: 1 });
 if (!next.ok) throw new Error("post-event request failed");
+const created = await host.request({ ...request, id: "create", revision: 1, method: "project.create", payload: { name: "Demo" } });
+if (!created.ok || !created.result.projectId) throw new Error("project create behavior failed");
+const upload = await host.request({ ...request, id: "upload", revision: created.revision, method: "asset.beginUpload", payload: { projectId: created.result.projectId, expectedRevision: 0, size: 3, mime: "application/octet-stream", name: "asset.bin" } });
+if (!upload.ok || !upload.result.url) throw new Error("asset ticket behavior failed");
+const uploaded = await host.requestAsset({ method: "PUT", url: upload.result.url, origin: "https://assets.auvra.local", mime: "application/octet-stream", body: new Uint8Array([1, 2, 3]) });
+if (uploaded.status !== 204 || !uploaded.sha256) throw new Error("asset upload behavior failed");
+let consumed = false;
+try { await host.requestAsset({ method: "PUT", url: upload.result.url, origin: "https://assets.auvra.local", mime: "application/octet-stream", body: new Uint8Array([1, 2, 3]) }); } catch { consumed = true; }
+if (!consumed) throw new Error("asset ticket was reusable");
+const resolved = await host.request({ ...request, id: "resolve", revision: upload.revision, method: "asset.resolve", payload: { projectId: created.result.projectId, assetId: uploaded.sha256 } });
+if (!resolved.ok || !resolved.result.url) throw new Error("asset resolve behavior failed");
+const downloaded = await host.requestAsset({ method: "GET", url: resolved.result.url, origin: "https://assets.auvra.local" });
+if (downloaded.status !== 200 || downloaded.sha256 !== uploaded.sha256) throw new Error("asset download behavior failed");
 const wrongKind = await host.request({ protocol: "auvra.host/1", type: "session", session: host.session, revision: 1, status: "active" });
 if (wrongKind.ok || wrongKind.error.code !== "invalid_request") throw new Error("non-request message did not fail closed");
 console.log("fake host behavior passed");

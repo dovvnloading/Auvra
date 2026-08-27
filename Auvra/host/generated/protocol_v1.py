@@ -3,8 +3,8 @@ from typing import Literal, NotRequired, TypedDict
 ProtocolId = str
 SessionId = str
 Revision = int
-Method = Literal["host.ping", "host.getCapabilities"]
-ErrorCode = Literal["invalid_request", "invalid_response", "session_mismatch", "unknown_method", "revision_conflict", "internal_error"]
+Method = Literal["host.ping", "host.getCapabilities", "project.getStatus", "project.create", "project.open", "project.openRecent", "project.close", "project.getSnapshot", "project.applyChanges", "project.save", "project.saveAs", "project.exportPack", "project.importPack", "project.importLegacy", "asset.beginUpload", "asset.resolve"]
+ErrorCode = Literal["invalid_request", "invalid_response", "session_mismatch", "unknown_method", "revision_conflict", "cancelled", "locking", "read_only", "invalid_project", "unsupported_version", "migration_failed", "disk_failure", "permission_denied", "recovery_required", "internal_error"]
 class Request(TypedDict):
     protocol: Literal["auvra.host/1"]
     type: Literal["request"]
@@ -15,10 +15,39 @@ class Request(TypedDict):
     payload: dict[str, object]
 class PingResult(TypedDict):
     pong: Literal[True]
-class CapabilitiesResult(TypedDict):
+class CapabilitiesResult(TypedDict, total=False):
     protocol: Literal["auvra.host/1"]
     methods: list[Method]
-SuccessResult = PingResult | CapabilitiesResult
+    projectMethods: list[Method]
+class ProjectResult(TypedDict, total=False):
+    projectId: str | None
+    revision: Revision
+    name: str | None
+    readOnly: bool
+    dirty: bool
+    busy: bool
+    progress: float | None
+    recoveryAvailable: bool
+    recoveryId: str
+    recoveryKind: str
+    recoveryPoints: list[dict[str, object]]
+    recentProjects: list[dict[str, str]]
+    status: str
+    domains: list[str] | dict[str, object]
+    documents: list[object]
+    cursor: str
+    hasMore: bool
+    handle: str
+    uploadId: str
+    expiresAt: float
+    method: str
+    url: str
+    assetId: str
+    size: int
+    sha256: str
+    mime: str
+    report: dict[str, object]
+SuccessResult = PingResult | CapabilitiesResult | ProjectResult
 class SuccessResponse(TypedDict):
     protocol: Literal["auvra.host/1"]
     type: Literal["response"]
@@ -26,7 +55,7 @@ class SuccessResponse(TypedDict):
     session: SessionId
     revision: Revision
     ok: Literal[True]
-    result: PingResult | CapabilitiesResult
+    result: PingResult | CapabilitiesResult | ProjectResult
 class ErrorBody(TypedDict):
     code: ErrorCode
     message: str
@@ -42,7 +71,7 @@ class ErrorResponse(TypedDict):
 class Event(TypedDict):
     protocol: Literal["auvra.host/1"]
     type: Literal["event"]
-    event: Literal["host.session", "host.revision"]
+    event: Literal["host.session", "host.revision", "project.status", "project.opening", "project.opened", "project.closing", "project.closed", "project.revision", "project.dirty", "project.readOnly", "project.progress", "project.recovery"]
     session: SessionId
     revision: Revision
     payload: dict[str, object]

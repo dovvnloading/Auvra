@@ -36,6 +36,9 @@ jobs:
       - name: Verify host protocol
         run: npm run protocol:verify
 
+      - name: Verify native project boundary
+        run: npm run project:verify
+
       - name: Verify desktop frame boundaries
         run: node scripts/frame/verify.mjs
 
@@ -74,3 +77,43 @@ jobs:
 
       - name: Run Python tests
         run: uv run --locked --no-sync python -W error::ResourceWarning -m unittest discover -s tests -t . -v
+
+  native-project-smoke:
+    name: Native project lifecycle (Windows WebView2)
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22.12.0"
+          cache: npm
+          cache-dependency-path: fbx-viewer (1)/package-lock.json
+
+      - name: Install locked editor dependencies
+        working-directory: fbx-viewer (1)
+        run: npm ci
+
+      - name: Build editor bundle
+        working-directory: fbx-viewer (1)
+        run: npm run build
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Prepare locked Python environment
+        run: uv sync --locked --no-install-project --no-dev
+
+      - name: Run real WebView2 project lifecycle
+        env:
+          AUVRA_NATIVE_SMOKE: "1"
+        run: uv run --locked --no-sync python -W error::ResourceWarning -m unittest tests.desktop.test_native_smoke -v

@@ -2,6 +2,7 @@
 // ... existing imports ...
 import * as THREE from 'three';
 import React from 'react';
+import type { ProjectStatus } from './utils/projectService';
 
 export type AssetCategory = 'Character' | 'Prop' | 'Environment' | 'Weapon' | 'Animation' | 'Audio' | 'Texture';
 
@@ -65,7 +66,7 @@ export interface LoadedModelData {
   thumbnail?: string; // Base64 Data URL
   isPlacedInScene: boolean; // Determines if visible in Scene/Hierarchy
   initialScale?: [number, number, number]; // Scale applied during normalization
-  textureOverrides?: Record<string, string>; // Map<MaterialName, Base64String> for persistence
+  textureOverrides?: Record<string, string>; // Map<MaterialName, logical texture id>
 }
 
 export type LevelObjectType = 'prop' | 'foliage' | 'spawn_point' | 'audio_emitter' | 'terrain' | 'sky_sphere';
@@ -314,8 +315,17 @@ export interface SceneContextType {
 
   // Project Actions
   saveProject: () => Promise<void>;
-  loadProject: (file: File) => Promise<void>;
+  saveProjectAs: () => Promise<void>;
+  exportProject: () => Promise<void>;
+  importProject: () => Promise<void>;
+  importLegacyProject: () => Promise<void>;
+  migrateLegacyBrowserProject: () => Promise<number>;
+  loadProject: () => Promise<void>;
+  openRecentProject: (projectId: string) => Promise<void>;
+  recoverProject: (recoveryId: string) => Promise<void>;
+  closeProject: () => Promise<void>;
   createNewProject: () => Promise<void>;
+  projectStatus: ProjectStatus;
 
   // Model Actions
   addModel: (file: File, category: AssetCategory) => Promise<void>;
@@ -324,7 +334,7 @@ export interface SceneContextType {
   removeFromScene: (id: string) => void; 
   selectModel: (id: string | null) => void;
   addAnimations: (files: File[], modelId: string) => Promise<void>;
-  retextureModel: (modelId: string, textureUrl: string, targetTextureUuid?: string) => void;
+  retextureModel: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<void>;
   resetModelTexture: (modelId: string) => Promise<void>;
 
   // Texture Actions

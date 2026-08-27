@@ -25,6 +25,7 @@ interface LevelContextType {
   removeLevelObjects: (ids: string[]) => void;
   updateLevelObject: (id: string, updates: Partial<LevelObject>) => void;
   setLevelObjects: (objects: LevelObject[]) => void;
+  hydrateProjectState: (levels: LevelData[], objects: LevelObject[], currentLevelId?: string | null) => void;
 
   undo: () => void;
   redo: () => void;

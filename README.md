@@ -77,11 +77,31 @@ npm ci
 npm run dev
 ```
 
+## Projects
+
+Project saving is owned by the Python host. Use the editor's New, Open, Save,
+Save As, Import, Export, and Close controls instead of browser downloads or
+file inputs. A project is a regular folder with an `.auvra` descriptor,
+reviewable JSON documents, and content-addressed source assets. Portable copies
+use the `.auvrapack` extension.
+
+Only one Auvra process writes a project at a time. If the same project is
+already open elsewhere, the additional window opens it read-only. The editor
+tracks unsaved changes, keeps bounded manual and automatic recovery points, and
+restores project state without reloading the page.
+
+Legacy `.forge` files can be imported through the native project controls. An
+existing `OmniRenderDB` browser database can also be copied into an empty native
+project. Both legacy sources are treated as read-only and are never cleared or
+modified automatically. Because Auvra remains pre-alpha, keep independent
+backups of important work.
+
 To verify the launcher and production bundle locally:
 
 ```powershell
 python -m unittest discover -s tests -t . -v
 cd "fbx-viewer (1)"
+npm run project:verify
 npm run build
 ```
 

@@ -14,15 +14,14 @@
     "protocol:generate": "node scripts/protocol/generate.mjs",
     "protocol:check": "node scripts/protocol/verify.mjs",
     "protocol:tsc": "tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler --resolveJsonModule --skipLibCheck host/index.ts host/protocol.ts host/transport.ts host/fakeHost.ts host/generated/protocolV1.ts",
-    "protocol:verify": "node scripts/protocol/generate.mjs --check && npm run protocol:check && npm run protocol:tsc && node scripts/protocol/verify.mjs --fake-host"
+    "protocol:verify": "node scripts/protocol/generate.mjs --check && npm run protocol:check && npm run protocol:tsc && node scripts/protocol/verify.mjs --fake-host",
+    "project:verify": "node scripts/project/verify.mjs"
   },
   "dependencies": {
     "@babel/standalone": "7.23.6",
     "@react-three/drei": "9.122.0",
     "@react-three/fiber": "8.16.6",
     "@react-three/postprocessing": "2.16.2",
-    "file-saver": "2.0.5",
-    "jszip": "3.10.1",
     "lucide-react": "0.378.0",
     "postprocessing": "6.36.0",
     "react": "18.2.0",
