@@ -39,6 +39,13 @@ Credentials use Windows Credential Manager or an explicit memory-only mode.
 Routes do not silently fall back, and generated media remains a preview until
 it is committed to the project.
 
+The editor currently presents through the WebGL2 compatibility renderer. Its
+editor, preview, and play surfaces are registered through one Auvra-owned
+lifecycle boundary with observable context recovery and frame/resource
+diagnostics. Generated thumbnails use a separate on-demand capture renderer.
+The WebGPU reference path remains experimental and deliberately falls back to
+WebGL2 for editor presentation.
+
 Create a production bundle with:
 
 ```powershell
@@ -51,6 +58,7 @@ Verify the frontend project and host boundary with:
 npm run project:verify
 npm run protocol:verify
 npm run provider:verify
+npm run renderer:verify
 ```
 
 Repository status, licensing, and contribution guidance are documented in the

@@ -1,7 +1,7 @@
 
 import React, { useRef, useMemo, useEffect, useState } from 'react';
 import * as THREE from 'three';
-import { Canvas } from '@react-three/fiber';
+import { AuvraCanvas } from '../../renderer/AuvraCanvas';
 import { View, PerspectiveCamera, OrthographicCamera, OrbitControls } from '@react-three/drei';
 import { useAssets, useLevel } from '../../context/SceneContext';
 import { LoadedModelData } from '../../types';
@@ -174,7 +174,9 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
             </div>
 
             {/* Shared Canvas */}
-            <Canvas 
+            <AuvraCanvas
+                surfaceId="editor-environment-viewport"
+                role="editor"
                 className="absolute inset-0 pointer-events-none"
                 eventSource={containerRef}
                 shadows
@@ -250,7 +252,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                         </View>
                     </>
                 )}
-            </Canvas>
+            </AuvraCanvas>
         </div>
     );
 };

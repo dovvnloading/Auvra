@@ -1,7 +1,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { Canvas } from '@react-three/fiber';
+import { AuvraCanvas } from '../../renderer/AuvraCanvas';
 import { AlertTriangle, User, Skull } from 'lucide-react';
 import { SandboxUI } from './SandboxUI';
 import { SandboxEntityHandle } from './SandboxEntity';
@@ -90,7 +90,9 @@ export const SandboxScene: React.FC<SandboxSceneProps> = ({ visible }) => {
     return (
         <div className="w-full h-full bg-black relative cursor-default select-none">
              {visible && (
-                 <Canvas
+                  <AuvraCanvas
+                     surfaceId="runtime-sandbox"
+                     role="runtime"
                     shadows
                     dpr={[1, 1.5]}
                     gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping }}
@@ -110,7 +112,7 @@ export const SandboxScene: React.FC<SandboxSceneProps> = ({ visible }) => {
                         aimOffset={aimOffset}
                         onAimStateChange={setIsAiming}
                     />
-                 </Canvas>
+                  </AuvraCanvas>
              )}
 
              {/* UI Overlay */}

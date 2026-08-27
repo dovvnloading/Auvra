@@ -327,6 +327,105 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         # STA.  It is not a production bridge or an exposed application API.
         self._ui(frame, lambda core: core.ExecuteScriptAsync(script))
 
+    def _document_title(self, frame: WebView2Frame) -> str:
+        value: list[str] = []
+        self._ui(frame, lambda core: value.append(str(core.DocumentTitle)))
+        return value[0]
+
+    def _renderer_smoke(self, frame: WebView2Frame, label: str) -> dict[str, Any]:
+        """Exercise the renderer diagnostics API in the existing frame."""
+
+        script = f"""
+        (() => {{
+          const finish = value => document.title = "AUVRA_RENDERER_SMOKE:" + JSON.stringify(value);
+          (async () => {{
+            const deadline = performance.now() + 15000;
+            while (!window.__AUVRA_RENDERER__ && performance.now() < deadline)
+              await new Promise(resolve => setTimeout(resolve, 50));
+            const api = window.__AUVRA_RENDERER__;
+            if (!api) return finish({{ label: "{label}", error: "renderer diagnostics unavailable" }});
+            let editor;
+            const surfaceDeadline = performance.now() + 15000;
+            while (!editor && performance.now() < surfaceDeadline) {{
+              editor = api.getSnapshot().surfaces.find(surface => surface.role === "editor");
+              if (!editor) await new Promise(resolve => setTimeout(resolve, 50));
+            }}
+            if (!editor) return finish({{ label: "{label}", error: "registered editor surface unavailable" }});
+            const reference = await api.runReferenceSuite("auto");
+            const before = api.getSnapshot().surfaces.find(surface => surface.id === editor.id);
+            if (!before) return finish({{ label: "{label}", error: "editor snapshot unavailable" }});
+            const lifecycleEvents = [];
+            const onLifecycle = event => {{
+              const detail = event && event.detail;
+              if (detail && detail.id === editor.id) lifecycleEvents.push(detail);
+            }};
+            window.addEventListener("auvra:renderer-lifecycle", onLifecycle);
+            const simulated = api.simulateContextLoss(editor.id);
+            let lost = false;
+            let ready = false;
+            let recoveryCount = before.recoveryCount;
+            const recoveryDeadline = performance.now() + 10000;
+            while (performance.now() < recoveryDeadline) {{
+              const current = api.getSnapshot().surfaces.find(surface => surface.id === editor.id);
+              if (!current) {{
+                await new Promise(resolve => setTimeout(resolve, 50));
+                continue;
+              }}
+              lost = lost || lifecycleEvents.some(event => event.lifecycle === "lost" || event.lifecycle === "restoring") || current.lifecycle === "lost" || current.lifecycle === "restoring";
+              recoveryCount = Math.max(recoveryCount, current.recoveryCount || 0);
+              ready = current.lifecycle === "ready" && recoveryCount > before.recoveryCount;
+              if (lost && ready) break;
+              await new Promise(resolve => setTimeout(resolve, 50));
+            }}
+            window.removeEventListener("auvra:renderer-lifecycle", onLifecycle);
+            finish({{ label: "{label}", simulated, before, reference, lost, ready, lifecycleEvents,
+              recoveryCount, after: api.getSnapshot().surfaces.find(surface => surface.id === editor.id) }});
+          }})().catch(error => finish({{ label: "{label}", error: String(error) }}));
+        }})();
+        """
+        self._execute_script(frame, script)
+        prefix = "AUVRA_RENDERER_SMOKE:"
+        raw: list[str] = []
+        _wait_until(
+            lambda: (raw.clear() or raw.append(self._document_title(frame)) or True) and raw[0].startswith(prefix),
+            30.0,
+            f"{label} renderer diagnostics",
+        )
+        try:
+            result = json.loads(raw[0][len(prefix):])
+        except json.JSONDecodeError as exc:
+            self.fail(f"renderer diagnostics returned invalid JSON: {raw[0]!r}")
+            raise exc
+        self.assertNotIn("error", result, result)
+        self.assertTrue(result.get("simulated"), result)
+        before = result["before"]
+        self.assertEqual(before["contractVersion"], "auvra.renderer/1")
+        self.assertEqual(before["role"], "editor")
+        self.assertEqual(before["id"], "editor-scene-viewer", before)
+        self.assertEqual(before["tier"], "compatibility", before)
+        self.assertIsInstance(before["capabilities"], dict)
+        reference = result["reference"]
+        self.assertEqual(reference["selected"], "webgl2", reference)
+        self.assertTrue(reference["passed"], reference)
+        self.assertTrue(reference["budget"]["maxCpuP95Ms"] > 0)
+        self.assertTrue(reference["budget"]["maxGpuFrameMs"] > 0)
+        self.assertTrue(reference["budget"]["maxMemoryBytes"] > 0)
+        selected = next((item for item in reference.get("results", []) if item.get("backend") == "webgl2"), None)
+        self.assertIsNotNone(selected, reference)
+        self.assertTrue(selected.get("supported"), selected)
+        self.assertTrue(selected.get("qualified"), selected)
+        self.assertIsInstance(selected.get("cpuP95Ms"), (int, float), selected)
+        self.assertIsInstance(selected.get("memoryBytes"), (int, float), selected)
+        self.assertEqual(selected.get("memoryEstimateKind"), "heuristic-resource-count", selected)
+        self.assertIsInstance(selected.get("pixelSignature"), str, selected)
+        self.assertTrue(selected["pixelSignature"], selected)
+        self.assertTrue(any(event.get("lifecycle") in {"lost", "restoring"} for event in result.get("lifecycleEvents", [])), result)
+        self.assertTrue(result["lost"], result)
+        self.assertTrue(result["ready"], result)
+        self.assertGreater(result["recoveryCount"], before["recoveryCount"], result)
+        self.assertEqual(result["after"]["lifecycle"], "ready", result)
+        return result
+
     def _bind_project_host(self, controller: FrameController, root: Path, origin: str) -> Path:
         """Install the production adapter with deterministic, private dialogs."""
 
@@ -508,6 +607,7 @@ class NativeWebView2SmokeTests(unittest.TestCase):
             dev.start()
             self.assertEqual(dev.frame.state, FrameState.READY)
             self.assertTrue(self._source(dev.frame).startswith(f"http://127.0.0.1:{port}/"))
+            self._renderer_smoke(dev.frame, "initial")
             session_id = dev.dispatcher.session.session_id
             self._handshake(dev, "dev-1", dev_seen, trap=True)
             self._project_lifecycle(dev, "project", dev_seen, project_path)
@@ -516,6 +616,9 @@ class NativeWebView2SmokeTests(unittest.TestCase):
             self._ui(dev.frame, lambda core: core.Reload())
             _wait_until(lambda: dev_lifecycle.count("navigation_completed") > nav_before, 15.0, "full reload")
             self._handshake(dev, "dev-2", dev_seen)
+            reload_renderer = self._renderer_smoke(dev.frame, "reload")
+            self.assertEqual(reload_renderer["after"]["contractVersion"], "auvra.renderer/1")
+            self.assertEqual(reload_renderer["after"]["lifecycle"], "ready")
             self.assertEqual(dev.dispatcher.session.session_id, session_id)
             self.assertEqual(dev.frame.state, FrameState.READY)
 

@@ -15,6 +15,7 @@ import { BlueprintEditor } from './components/Blueprint/BlueprintEditor';
 import { SandboxScene } from './components/Sandbox/SandboxScene';
 import { HUDEditor } from './components/HUDEditor/HUDEditor';
 import { EnvironmentEditor } from './components/Environment/EnvironmentEditor';
+import { installRendererDiagnostics } from './renderer/diagnostics';
 
 const AppContent: React.FC = () => {
   const { models, selectedModelId } = useScene();
@@ -150,39 +151,8 @@ const AppContent: React.FC = () => {
 };
 
 const App: React.FC = () => {
-  // Global Log Suppression for Three.js Spam & Context Warnings
   React.useEffect(() => {
-    const originalWarn = console.warn;
-    const originalError = console.error;
-
-    console.warn = (...args) => {
-        const msg = args.join(' ');
-        if (
-            msg.includes('THREE.PropertyBinding: No target node found') ||
-            msg.includes('THREE.FBXLoader') ||
-            msg.includes('FBXLoader') ||
-            msg.includes('THREE.ImageUtils') ||
-            msg.includes('THREE.WebGLRenderer: Context Lost') || 
-            msg.includes('WARNING: Too many active WebGL contexts')
-        ) {
-            return;
-        }
-        originalWarn.apply(console, args);
-    };
-
-    console.error = (...args) => {
-        const msg = args.join(' ');
-        // Filter out context lost warnings if they happen during hot-reloads or initialization
-        if (msg.includes('Context Lost') || msg.includes('WARNING: Too many active WebGL contexts')) {
-            return;
-        }
-        originalError.apply(console, args);
-    }
-    
-    return () => {
-        console.warn = originalWarn;
-        console.error = originalError;
-    };
+    return installRendererDiagnostics();
   }, []);
 
   return (

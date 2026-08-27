@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { Canvas } from '@react-three/fiber';
+import { AuvraCanvas } from '../../renderer/AuvraCanvas';
 import { Center, OrbitControls, Grid, ContactShadows } from '@react-three/drei';
 import { Brush, RefreshCw, Check, Undo2, ArrowRight, AlertTriangle, Search, Box, Layers, Image as ImageIcon, Edit3, Trash2, RotateCcw, Repeat, Wand2, Sparkles, Save, Link, Download } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
@@ -176,7 +176,7 @@ export const RetextureEditor: React.FC = () => {
             <div className="flex-1 bg-[#0a0a0a] relative flex flex-col min-w-0">
                 {selectedModel ? (
                     <>
-                        <Canvas shadows camera={{ position: [2, 2, 4], fov: 45 }} className="flex-1">
+                        <AuvraCanvas surfaceId="preview-retexture-editor" role="preview" shadows camera={{ position: [2, 2, 4], fov: 45 }} className="flex-1">
                             <color attach="background" args={['#0a0a0a']} />
                             <LocalEnvironment />
                             
@@ -188,7 +188,7 @@ export const RetextureEditor: React.FC = () => {
                             </group>
 
                             <OrbitControls makeDefault minPolarAngle={0} maxPolarAngle={Math.PI / 1.8} />
-                        </Canvas>
+                        </AuvraCanvas>
                         
                         {/* Overlay Controls */}
                         <div className="absolute top-4 left-4 z-10 flex gap-2">
