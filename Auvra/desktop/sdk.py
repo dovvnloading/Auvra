@@ -7,6 +7,7 @@ an operating-system prerequisite and is never downloaded or redistributed.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import errno
 import hashlib
 import io
 import os
@@ -100,7 +101,7 @@ def _layout(root: Path) -> SdkLayout:
 
 def _remove_temp(path: Path) -> None:
     try:
-        if path.is_symlink():
+        if path.is_symlink() or not path.is_dir():
             path.unlink()
         else:
             shutil.rmtree(path, ignore_errors=True)
@@ -193,9 +194,12 @@ def acquire_sdk(cache_dir: Path | str, *, downloader: Downloader | None = None) 
         try:
             os.replace(temp, target)
             temp = None
-        except (FileExistsError, PermissionError):
-            # Windows does not replace an existing directory. Re-check for a
-            # concurrent valid publisher, otherwise atomically quarantine the
+        except OSError as exc:
+            if not isinstance(exc, (FileExistsError, PermissionError)) and exc.errno != errno.ENOTEMPTY:
+                raise SdkError("WebView2 SDK cache publication failed") from exc
+            # A POSIX rename cannot replace a non-empty directory, and
+            # Windows does not replace an existing directory at all. Re-check
+            # for a concurrent valid publisher, otherwise quarantine the
             # invalid cache before publishing our verified directory.
             if _cached(target) is None and target.exists() and temp is not None:
                 quarantine = base / f".{target.name}.invalid-{os.getpid()}-{threading.get_ident()}"

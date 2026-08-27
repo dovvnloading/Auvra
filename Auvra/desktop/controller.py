@@ -54,7 +54,11 @@ def _is_link_or_reparse(path: Path) -> bool:
             return False
         if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
             return True
-        return bool(path.stat().st_file_attributes & 0x400)
+        # ``st_file_attributes`` is Windows-only.  On POSIX, a normal stat
+        # result has no such field and should not be treated as a reparse
+        # point merely because the optional attribute is absent.
+        attributes = getattr(path.stat(), "st_file_attributes", 0)
+        return bool(attributes & 0x400)
     except (AttributeError, OSError, RuntimeError):
         return True
 

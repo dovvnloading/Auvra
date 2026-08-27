@@ -80,6 +80,13 @@ def make_paths(root: Path) -> module.BootstrapPaths:
     return module.BootstrapPaths(repo, entry, frontend / ".auvra-launcher", frontend / ".auvra-launcher" / "bootstrap-venv", repo / ".venv", frontend / ".auvra-launcher" / "bootstrap.lock")
 
 
+def environment_interpreter(environment: Path) -> Path:
+    """Return the venv interpreter path for the host platform."""
+    if os.name == "nt":
+        return environment / "Scripts" / "python.exe"
+    return environment / "bin" / "python"
+
+
 class BootstrapTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -95,7 +102,7 @@ class BootstrapTests(unittest.TestCase):
 
     def test_unmarked_existing_environment_uses_nonmutating_check_only(self):
         environment = self.paths.target_env
-        interpreter = environment / "Scripts" / "python.exe"
+        interpreter = environment_interpreter(environment)
         interpreter.parent.mkdir(parents=True)
         interpreter.write_text("python", encoding="ascii")
         (environment / "pyvenv.cfg").write_text("home = C:\\Python314\n", encoding="ascii")
@@ -174,8 +181,7 @@ class BootstrapTests(unittest.TestCase):
 
     def test_reexec_preserves_arguments_and_sets_exact_loop_marker(self):
         runner = FakeRunner(self.paths.repo_root)
-        interpreter = str(self.paths.target_env / ("Scripts" if os.name == "nt" else "bin") / ("python.exe" if os.name == "nt" else "python"))
-        expected_argv = [interpreter, "-E", "-s", str(self.paths.entrypoint), "start", "--port", "3010"]
+        interpreter = str(environment_interpreter(self.paths.target_env))
         with patch.object(module.shutil, "which", return_value=None), patch.object(
             module.sys, "argv", [str(self.paths.entrypoint), "start", "--port", "3010"]
         ):
@@ -185,21 +191,25 @@ class BootstrapTests(unittest.TestCase):
                 with patch.object(module.OwnedProcess, "launch", return_value=owned) as launch:
                     with self.assertRaises(SystemExit) as raised:
                         module.bootstrap(paths=self.paths, runner=runner, reexec=True)
+                canonical_interpreter = str(module._canonical_file(Path(interpreter)))
+                expected_argv = [canonical_interpreter, "-E", "-s", str(self.paths.entrypoint), "start", "--port", "3010"]
                 self.assertEqual(raised.exception.code, 17)
                 self.assertEqual(launch.call_args.args[:2], (expected_argv, self.paths.repo_root))
-                self.assertEqual(launch.call_args.kwargs["env"][module.BOOTSTRAP_MARKER], interpreter)
+                self.assertEqual(launch.call_args.kwargs["env"][module.BOOTSTRAP_MARKER], canonical_interpreter)
                 owned.terminate.assert_called_once_with()
             else:
                 with patch.object(module.os, "execve", side_effect=SystemExit) as execve:
                     with self.assertRaises(SystemExit):
                         module.bootstrap(paths=self.paths, runner=runner, reexec=True)
+                canonical_interpreter = str(module._canonical_file(Path(interpreter)))
+                expected_argv = [canonical_interpreter, "-E", "-s", str(self.paths.entrypoint), "start", "--port", "3010"]
                 execve.assert_called_once()
-                self.assertEqual(execve.call_args.args[0], interpreter)
+                self.assertEqual(execve.call_args.args[0], canonical_interpreter)
                 self.assertEqual(execve.call_args.args[1], expected_argv)
-                self.assertEqual(execve.call_args.args[2][module.BOOTSTRAP_MARKER], interpreter)
+                self.assertEqual(execve.call_args.args[2][module.BOOTSTRAP_MARKER], canonical_interpreter)
 
     def test_loop_marker_must_match_target_interpreter(self):
-        target = self.paths.target_env / ("Scripts" if os.name == "nt" else "bin") / ("python.exe" if os.name == "nt" else "python")
+        target = environment_interpreter(self.paths.target_env)
         target.parent.mkdir(parents=True)
         target.write_text("python", encoding="ascii")
         (self.paths.target_env / "pyvenv.cfg").write_text("home = C:\\Python314\n", encoding="ascii")

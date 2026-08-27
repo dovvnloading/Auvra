@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir, cp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import Ajv2020 from "ajv/dist/2020.js";
+import { buildSync } from "esbuild";
 
 const root = resolve(import.meta.dirname, "..", "..", "..");
 const schema = JSON.parse(await readFile(resolve(root, "protocol", "v1", "auvra-host.schema.json"), "utf8"));
@@ -42,12 +43,22 @@ const wrongKind = await host.request({ protocol: "auvra.host/1", type: "session"
 if (wrongKind.ok || wrongKind.error.code !== "invalid_request") throw new Error("non-request message did not fail closed");
 console.log("fake host behavior passed");
 ` , "utf8");
-  const esbuild = resolve(root, "fbx-viewer (1)", "node_modules", "esbuild", "bin", "esbuild");
-  const build = spawnSync(process.execPath, [esbuild, resolve(temp, "run.ts"), "--bundle", "--platform=node", "--format=esm", `--outfile=${resolve(temp, "run.mjs")}`], { encoding: "utf8" });
-  if (build.status !== 0) {
+  let buildError;
+  try {
+    buildSync({
+      entryPoints: [resolve(temp, "run.ts")],
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      outfile: resolve(temp, "run.mjs"),
+    });
+  } catch (error) {
+    buildError = error;
+  }
+  if (buildError) {
     await rm(temp, { recursive: true, force: true });
-    process.stderr.write(build.stderr || build.stdout || "fake host bundle failed\n");
-    process.exit(build.status ?? 1);
+    process.stderr.write(`${buildError?.message || buildError || "fake host bundle failed"}\n`);
+    process.exit(1);
   }
   const command = process.platform === "win32" ? "node.exe" : "node";
   const result = spawnSync(command, [resolve(temp, "run.mjs")], { encoding: "utf8" });
