@@ -254,6 +254,7 @@ jobs:
           python -m release.pipeline verify --package-root $unpacked --channel dev
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:PYTHONNOUSERSITE = '1'
+          $env:PYTHONDONTWRITEBYTECODE = '1'
           $env:AUVRA_RELEASE_NON_UI_SMOKE = '1'
           & (Join-Path $unpacked 'runtime\python\python.exe') -S (Join-Path $unpacked 'host\auvra_startup.py')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

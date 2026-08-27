@@ -11,6 +11,7 @@ from release.asset_cooking import cook_assets
 from release.cross_backend import verify_cross_backend
 from release.lifecycle import LifecycleState
 from release.pipeline import ReleaseError, assemble, verify_package, write_input_inventory
+from release.runtime_verify import verify_installed_package
 
 
 class ReleasePipelineTests(unittest.TestCase):
@@ -54,6 +55,7 @@ class ReleasePipelineTests(unittest.TestCase):
             # validated by MakeAppx itself and is not part of Auvra's payload.
             (output / "AppxBlockMap.xml").write_bytes(b"<BlockMap />")
             verify_package(output, expected_channel="beta")
+            verify_installed_package(output)
             (output / "AppxBlockMap.xml").unlink()
             companion = root / "Auvra.Beta.appinstaller"
             self.assertTrue(companion.is_file())

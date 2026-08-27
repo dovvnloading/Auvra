@@ -17,6 +17,7 @@ from typing import Any
 MIN_WINDOWS_BUILD = 26100
 CHANNEL_IDENTITIES = {"stable": "Auvra", "beta": "Auvra.Beta", "dev": "Auvra.Dev"}
 FORBIDDEN = (".git", ".auvra-local", "agents.md", "node_modules", ".venv", "__pycache__", ".pytest_cache", ".pfx", ".pem", ".key", ".env")
+MSIX_CONTAINER_METADATA = {"AppxBlockMap.xml"}
 
 
 class RuntimeVerificationError(RuntimeError):
@@ -75,6 +76,8 @@ def verify_installed_package(package_root: Path | str) -> dict[str, Any]:
             raise RuntimeVerificationError("installed package contains a link")
         if path.is_file() and path.name != "release-manifest.json":
             relative = path.relative_to(root).as_posix()
+            if relative in MSIX_CONTAINER_METADATA:
+                continue
             if any(fragment in relative.lower() for fragment in FORBIDDEN):
                 raise RuntimeVerificationError("installed package contains a forbidden file")
             actual[relative] = {"path": relative, "size": path.stat().st_size, "sha256": _sha256(path)}
