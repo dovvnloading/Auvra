@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background: #0a0a0a;
+  color: #fff;
+}
+
+/* Local, deterministic replacement for the old remote texture background. */
+.texture-preview-surface {
+  background-color: #0a0a0a;
+  background-image: linear-gradient(45deg, #171717 25%, transparent 25%),
+    linear-gradient(-45deg, #171717 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #171717 75%),
+    linear-gradient(-45deg, transparent 75%, #171717 75%);
+  background-position: 0 0, 0 6px, 6px -6px, -6px 0;
+  background-size: 12px 12px;
+}
+
+.reticle-noise {
+  background-image: radial-gradient(rgba(255, 255, 255, .14) .55px, transparent .55px),
+    radial-gradient(rgba(0, 0, 0, .2) .55px, transparent .55px);
+  background-position: 0 0, 3px 3px;
+  background-size: 6px 6px;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #171717; }
+::-webkit-scrollbar-thumb { background: #404040; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #525252; }

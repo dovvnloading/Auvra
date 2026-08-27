@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+import os
+import sys
+import tempfile
+import types
+import unittest
+from unittest import mock
+from pathlib import Path
+
+from Auvra.desktop.contracts import FrameConfig, FrameMode, FrameStartupError, FrameState, FrameUnavailableError
+from Auvra.desktop.webview2 import WebView2Frame
+from .fakes import download, frame_navigation, message, navigation, new_window, permission, resource
+
+
+class WebView2HandlerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.received: list[str] = []
+        self.frame = WebView2Frame(FrameConfig(FrameMode.DEVELOPMENT, development_origin="http://127.0.0.1:3000", on_message=lambda body, source: self.received.append(body)))
+
+    def test_navigation_and_resource_handlers_cancel_external_content(self):
+        allowed = navigation("http://127.0.0.1:3000/")
+        denied = navigation("https://evil.test/")
+        self.frame._on_navigation(None, allowed)
+        self.frame._on_navigation(None, denied)
+        self.assertFalse(allowed.Cancel)
+        self.assertTrue(denied.Cancel)
+        hmr = resource("ws://127.0.0.1:3000/@vite/client")
+        external = resource("https://evil.test/app.js")
+        self.frame._on_resource(None, hmr)
+        self.frame._on_resource(None, external)
+        self.assertFalse(hmr.Cancel)
+        self.assertTrue(external.Cancel)
+
+    def test_popup_download_permission_are_denied(self):
+        popup = new_window(); self.frame._on_new_window(None, popup)
+        self.assertTrue(popup.Handled); self.assertTrue(popup.Cancel)
+        item = download(); self.frame._on_download(None, item); self.assertTrue(item.Cancel)
+        allowed = permission(); self.frame._on_permission(None, allowed); self.assertEqual(allowed.State, 2)
+
+    def test_message_is_origin_gated_and_json_only(self):
+        self.frame._on_message(None, message("https://evil.test/", '{"secret":"x"}'))
+        self.frame._on_message(None, message("http://127.0.0.1:3000/", "not-json"))
+        valid = '{"protocol":"auvra.host/1","type":"request","id":"r1","session":"session-0001","revision":0,"method":"host.ping","payload":{}}'
+        self.frame._on_message(None, message("http://127.0.0.1:3000/", valid))
+        self.assertEqual(self.received, [valid])
+
+    def test_native_message_cap_is_before_parse(self):
+        oversized = '{' + (' ' * (256 * 1024)) + '}'
+        self.frame._on_message(None, message("http://127.0.0.1:3000/", oversized))
+        self.assertEqual(self.received, [])
+
+    def test_non_windows_start_fails_without_importing_native_runtime(self):
+        if os.name == "nt":
+            self.skipTest("non-Windows behavior")
+        with self.assertRaises(FrameStartupError):
+            self.frame.start()
+        self.assertEqual(self.frame.failure.code, "runtime_unavailable")
+
+    def test_close_is_idempotent_before_start(self):
+        self.frame.close(); self.frame.close()
+        self.assertEqual(self.frame.state.value, "closed")
+
+    def test_expected_browser_exit_during_close_is_not_reported_as_failure(self):
+        self.frame._state = FrameState.CLOSING
+        self.frame._on_browser_exited(None, object())
+        self.assertIsNone(self.frame.failure)
+        self.assertTrue(self.frame._browser_exited.is_set())
+
+    def test_outbound_post_requires_canonical_protocol_message(self):
+        posted: list[str] = []
+
+        class Core:
+            def PostWebMessageAsJson(self, body: str) -> None:
+                posted.append(body)
+
+        class Form:
+            def BeginInvoke(self, action: object) -> None:
+                action()
+
+        self.frame._state = FrameState.READY
+        self.frame._core = Core()
+        self.frame._form = Form()
+        with self.assertRaises(ValueError):
+            self.frame.post_message({"not": "an envelope"})
+        envelope = {
+            "protocol": "auvra.host/1", "type": "session", "session": "session-0001",
+            "revision": 0, "status": "active",
+        }
+        fake_system = types.ModuleType("System")
+        fake_system.Action = lambda callback: callback
+        with mock.patch.dict(sys.modules, {"System": fake_system}):
+            self.frame.post_message(envelope)
+        self.assertEqual(len(posted), 1)

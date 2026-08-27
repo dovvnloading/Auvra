@@ -8,8 +8,8 @@ more durable foundation.
 The editor currently includes scene assembly, environment tools, animation
 graphs, visual blueprints, sandbox play, HUD editing, and texture workflows. It
 uses React, TypeScript, Three.js, and Vite today. A Python launcher now owns the
-development startup process and provides a foundation for the desktop host and
-local services that will follow.
+development startup process and runs the editor in the supported desktop frame.
+A versioned host boundary provides the foundation for future local services.
 
 ## Development status
 
@@ -22,6 +22,8 @@ are intentionally maintained outside the public repository history.
 
 ## Requirements
 
+- Windows 11 x64 for the desktop editor
+- Microsoft Evergreen WebView2 Runtime
 - CPython 3.12, 3.13, or 3.14
 - Node.js 22.12 or newer on the Node 22 LTS line, or Node.js 24
 - npm 10 or 11
@@ -34,10 +36,17 @@ Run the launcher from the repository root:
 python Auvra/Auvra.py
 ```
 
-The launcher checks the local runtimes, restores locked frontend dependencies
-with `npm ci` when needed, and starts Vite on loopback. It prefers port 3000;
-if that port is occupied, it reports and uses the first available port from
-3001 through 3099. It does not open a browser or stop unrelated processes.
+The standard-library bootstrap prepares the repository's locked Python
+environment and provisions the pinned uv tool when needed. The launcher then
+checks the local runtimes, restores locked frontend dependencies with `npm ci`
+when needed, starts Vite on loopback, and opens Auvra in its own WebView2
+window. It prefers port 3000; if that port is occupied, it reports and uses the
+first available port from 3001 through 3099. It never opens the user's normal
+browser or stops unrelated processes.
+
+The first desktop launch may download the pinned WebView2 SDK package. The
+Evergreen WebView2 Runtime is a machine prerequisite and is not installed by
+the launcher.
 
 Useful commands:
 
@@ -59,7 +68,8 @@ unsupported runtime, 11 for dependency failure, 12 for a port problem, 13 for
 readiness failure, 14 for a child-process failure, 15 for cleanup failure, and
 130 for interruption.
 
-The manual Vite path remains available for diagnosis:
+The manual Vite path remains available for frontend diagnosis. It does not
+exercise the native host boundary:
 
 ```powershell
 cd "fbx-viewer (1)"
@@ -75,9 +85,9 @@ cd "fbx-viewer (1)"
 npm run build
 ```
 
-Python environment metadata is locked with uv. The launcher has no third-party
-Python runtime dependencies and can be used without uv; contributors can check
-the locked environment with `uv sync --locked --no-install-project --no-dev`.
+Python environment metadata is locked with uv. Contributors can check the
+managed environment with `uv sync --locked --no-install-project --no-dev`;
+users do not need to preinstall uv for the normal launcher path.
 
 ## Contributing
 

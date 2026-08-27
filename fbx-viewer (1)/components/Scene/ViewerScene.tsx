@@ -2,11 +2,12 @@
 import React, { useMemo, useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
-import { Grid, Environment } from '@react-three/drei';
+import { Grid } from '@react-three/drei';
 import { useScene } from '../../context/SceneContext';
 import { ModelViewer } from './ModelViewer';
 import { SceneCamera } from './SceneCamera';
 import { ProjectileManager, ProjectileManagerHandle } from '../Sandbox/ProjectileManager';
+import { LocalEnvironment } from './LocalEnvironment';
 
 interface ViewerSceneProps {
   activeClip: THREE.AnimationClip | null;
@@ -65,7 +66,7 @@ export const ViewerScene: React.FC<ViewerSceneProps> = ({
             
             <fog attach="fog" args={['#0a0a0a', 10, 80]} />
             
-            <Environment preset="city" background={false} blur={0.8} />
+            <LocalEnvironment />
 
             <ambientLight intensity={0.5} />
             <directionalLight 

@@ -10,10 +10,13 @@ python Auvra/Auvra.py
 ```
 
 It validates Python, Node.js, npm, and the committed lockfile; installs only
-when the dependency state is missing or stale; and owns the development-server
-process tree. It binds to `127.0.0.1` and does not open a browser.
+when the dependency state is missing or stale; starts Vite on `127.0.0.1`; and
+opens the editor in the Python-owned WebView2 frame on Windows 11 x64. The
+launcher owns the development-server process tree and never opens the user's
+normal browser. The Microsoft Evergreen WebView2 Runtime is required.
 
-For direct frontend diagnosis, use the manual fallback from this directory:
+For direct frontend diagnosis, use the manual fallback from this directory.
+This path does not exercise the native host boundary:
 
 ```powershell
 npm ci

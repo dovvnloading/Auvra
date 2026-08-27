@@ -71,6 +71,29 @@ class OwnedProcessTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertEqual(result.stdout.strip(), str(Path(raw)))
 
+    def test_finite_owned_command_bounds_multimegabyte_partial_line(self) -> None:
+        result = run_owned_command(
+            [sys.executable, "-c", "import sys; sys.stdout.write('x' * 5000000)"],
+            cwd=Path.cwd(),
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertLessEqual(len(result.stdout.encode("utf-8")), 64 * 1024)
+        self.assertTrue(result.stdout.endswith("x"))
+
+    def test_live_output_reader_caps_partial_callbacks(self) -> None:
+        chunks: list[str] = []
+        with tempfile.TemporaryDirectory(prefix="auvra output chunks ") as raw:
+            owned = OwnedProcess.launch(
+                [sys.executable, "-c", "import sys;sys.stdout.write('y' * 1000000)"],
+                Path(raw), on_output=chunks.append,
+            )
+            try:
+                owned.wait(timeout=10)
+            finally:
+                owned.terminate(grace=1)
+            self.assertGreater(len(chunks), 1)
+            self.assertLessEqual(max(map(len, chunks)), 8192)
+
     def test_cleanup_uses_hard_owner_stop_when_graceful_signal_fails(self) -> None:
         process = mock.Mock(pid=1234, stdout=None)
         process.poll.return_value = 0

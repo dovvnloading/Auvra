@@ -21,8 +21,10 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="__init__.py" />
     <Compile Include="Auvra.py" />
     <Compile Include="launcher\__init__.py" />
+    <Compile Include="launcher\bootstrap.py" />
     <Compile Include="launcher\cli.py" />
     <Compile Include="launcher\config.py" />
     <Compile Include="launcher\dependencies.py" />
@@ -32,6 +34,21 @@
     <Compile Include="launcher\platform\__init__.py" />
     <Compile Include="launcher\platform\posix.py" />
     <Compile Include="launcher\platform\windows_job.py" />
+    <Compile Include="desktop\__init__.py" />
+    <Compile Include="desktop\contracts.py" />
+    <Compile Include="desktop\controller.py" />
+    <Compile Include="desktop\policy.py" />
+    <Compile Include="desktop\sdk.py" />
+    <Compile Include="desktop\webview2.py" />
+    <Compile Include="host\__init__.py" />
+    <Compile Include="host\dispatcher.py" />
+    <Compile Include="host\fake.py" />
+    <Compile Include="host\logging.py" />
+    <Compile Include="host\session.py" />
+    <Compile Include="host\settings.py" />
+    <Compile Include="host\validation.py" />
+    <Compile Include="host\generated\__init__.py" />
+    <Compile Include="host\generated\protocol_v1.py" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in

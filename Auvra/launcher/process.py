@@ -12,6 +12,12 @@ import os
 from .platform import PosixProcessGroup, WindowsJob
 
 
+# Never let a child with a missing newline make readline allocate unbounded
+# memory.  The finite-command API retains only a bounded UTF-8 tail.
+OUTPUT_READ_CHARS = 8192
+MAX_CAPTURE_BYTES = 64 * 1024
+
+
 class ProcessLaunchError(RuntimeError):
     pass
 
@@ -64,8 +70,14 @@ class OwnedProcess:
         owned = cls(child, owner)
         if on_output is not None and child.stdout is not None:
             def stream() -> None:
-                for line in child.stdout:
-                    on_output(line.rstrip("\r\n"))
+                while True:
+                    # TextIOWrapper.readline(size) returns a partial line when
+                    # the size is reached, so a multi-megabyte/no-newline
+                    # stream remains bounded while still being live.
+                    chunk = child.stdout.readline(OUTPUT_READ_CHARS)
+                    if not chunk:
+                        break
+                    on_output(chunk.rstrip("\r\n"))
             owned.output_thread = threading.Thread(target=stream, name="auvra-vite-output", daemon=True)
             owned.output_thread.start()
         return owned
@@ -166,18 +178,25 @@ def run_owned_command(
         raise ValueError("owned commands require UTF-8 replacement decoding")
     if stdout != subprocess.PIPE or stderr != subprocess.STDOUT:
         raise ValueError("owned commands require captured combined output")
-    output_lines: list[str] = []
+    output_tail = bytearray()
+
+    def capture(chunk: str) -> None:
+        encoded = chunk.encode("utf-8", "replace")
+        output_tail.extend(encoded)
+        if len(output_tail) > MAX_CAPTURE_BYTES:
+            del output_tail[:len(output_tail) - MAX_CAPTURE_BYTES]
+
     owned = OwnedProcess.launch(
         argv,
         Path(cwd),
-        on_output=output_lines.append,
+        on_output=capture,
         env=env,
     )
     try:
         return_code = owned.wait(timeout=timeout)
     finally:
         owned.terminate()
-    output = "".join(f"{line}\n" for line in output_lines)
+    output = bytes(output_tail).decode("utf-8", "replace")
     command = [os.fspath(item) for item in argv]
     result = subprocess.CompletedProcess(command, return_code, output, None)
     if check and return_code:

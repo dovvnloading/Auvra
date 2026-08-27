@@ -3,8 +3,9 @@ import React, { useMemo, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import * as THREE from 'three';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Environment, Center } from '@react-three/drei';
+import { Center } from '@react-three/drei';
 import { LoadedModelData } from '../../types';
+import { LocalEnvironment } from '../Scene/LocalEnvironment';
 
 interface ThumbnailTooltipProps {
     model: LoadedModelData;
@@ -91,7 +92,7 @@ export const ThumbnailTooltip: React.FC<ThumbnailTooltipProps> = ({ model, posit
                 <ambientLight intensity={1.5} />
                 <directionalLight position={[5, 10, 7]} intensity={2} />
                 <directionalLight position={[-5, 5, -5]} intensity={1} />
-                <Environment preset="city" />
+                <LocalEnvironment />
                 
                 <AutoFramingScene object={clonedObject} />
             </Canvas>

@@ -207,7 +207,7 @@ class CliParserTests(unittest.TestCase):
                  mock.patch.object(cli, "prepare_dependencies", return_value=(True, mock.Mock(to_dict=lambda: {"status": "ready"}), "")), \
                  mock.patch.object(cli.OwnedProcess, "launch", return_value=owned) as launch, \
                  mock.patch.object(cli, "wait_for_readiness", return_value=ready):
-                self.assertEqual(cli.run_start(paths, explicit_port=None, json_mode=True), cli.ExitCode.OK)
+                self.assertEqual(cli.run_start(paths, explicit_port=None, json_mode=True), cli.ExitCode.CHILD)
             launch.assert_called_once()
             argv, cwd = launch.call_args.args[:2]
             self.assertEqual(argv, ["node with spaces", str(paths.vite_script), "--host", "127.0.0.1", "--port", "3022", "--strictPort"])
@@ -344,6 +344,16 @@ class CliPolicyTests(unittest.TestCase):
             self.assertEqual(cli.run_clean(paths, dependencies=False, yes=True, json_mode=True), cli.ExitCode.CLEANUP)
             self.assertTrue(paths.launcher_state.is_symlink())
             self.assertTrue(target.is_dir())
+
+    def test_packaged_start_rejects_unapproved_local_directory(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="auvra packaged ") as raw, \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            root = Path(raw) / "dist"
+            root.mkdir()
+            paths = Paths.from_repo_root(Path(raw) / "repo")
+            result = cli.run_packaged(paths, packaged_root=root, json_mode=True)
+        self.assertEqual(result, cli.ExitCode.DEPENDENCIES)
+        self.assertIn("approved", output.getvalue())
 
 
 if __name__ == "__main__":

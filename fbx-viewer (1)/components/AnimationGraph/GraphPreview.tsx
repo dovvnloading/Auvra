@@ -2,13 +2,14 @@
 import React, { useEffect, useRef, useMemo } from 'react';
 import * as THREE from 'three';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Grid, Environment, OrbitControls, ContactShadows } from '@react-three/drei';
+import { Grid, OrbitControls, ContactShadows } from '@react-three/drei';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { useScene } from '../../context/SceneContext';
 import { AnimationGraphData, LoadedModelData } from '../../types';
 import { GraphRuntime } from './GraphRuntime';
 import { AttachmentController } from '../Scene/AttachmentController';
 import { SocketController } from '../Scene/SocketController';
+import { LocalEnvironment } from '../Scene/LocalEnvironment';
 
 // Helper component to handle camera persistence and tracking
 const PreviewCamera: React.FC<{ targetObject?: THREE.Object3D }> = ({ targetObject }) => {
@@ -132,7 +133,7 @@ export const GraphPreview: React.FC<{
             <color attach="background" args={['#0a0a0a']} />
             <fog attach="fog" args={['#0a0a0a', 10, 50]} />
             
-            <Environment preset="city" background={false} blur={0.8} />
+            <LocalEnvironment />
 
             <ambientLight intensity={0.5} />
             <directionalLight 

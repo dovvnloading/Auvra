@@ -1,8 +1,9 @@
 
 import React, { useMemo } from 'react';
 import * as THREE from 'three';
-import { Sky, Environment } from '@react-three/drei';
+import { Sky } from '@react-three/drei';
 import { LevelObject, SkyConfig } from '../../types';
+import { LocalEnvironment } from '../Scene/LocalEnvironment';
 
 interface SkySystemProps {
     levelObjects: LevelObject[];
@@ -61,7 +62,7 @@ export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects }) => {
                 <fog attach="fog" args={['#050505', 10, 60]} />
                 <ambientLight intensity={0.4} />
                 <directionalLight position={[10, 20, 10]} intensity={1.2} castShadow shadow-bias={-0.0001} />
-                <Environment preset="city" blur={0.8} background={false} />
+                <LocalEnvironment />
             </>
         );
     }
@@ -97,7 +98,7 @@ export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects }) => {
             <ambientLight intensity={config.ambienceIntensity} />
 
             {/* Environment Reflections (Synced roughly to time) */}
-            <Environment preset={isNight ? "night" : "city"} blur={0.8} background={false} />
+            <LocalEnvironment night={isNight} />
 
             {/* Scene Fog */}
             <fog attach="fog" args={[config.fogColor, 0, 1 / Math.max(0.0001, config.fogDensity * 0.5)]} />
