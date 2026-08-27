@@ -32,6 +32,13 @@ recent projects, read-only status, and recovery selection. Browser storage is
 not a saving authority; `OmniRenderDB` is opened only as a read-only migration
 source for older work.
 
+Provider settings and requests are owned by the native host. fal.ai is the
+primary media path; OpenAI, Anthropic, xAI, OpenRouter, Ollama, and llama.cpp
+are available for explicitly configured text, coding, and command capabilities.
+Credentials use Windows Credential Manager or an explicit memory-only mode.
+Routes do not silently fall back, and generated media remains a preview until
+it is committed to the project.
+
 Create a production bundle with:
 
 ```powershell
@@ -43,6 +50,7 @@ Verify the frontend project and host boundary with:
 ```powershell
 npm run project:verify
 npm run protocol:verify
+npm run provider:verify
 ```
 
 Repository status, licensing, and contribution guidance are documented in the

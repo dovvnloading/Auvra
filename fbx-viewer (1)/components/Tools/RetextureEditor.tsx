@@ -13,6 +13,8 @@ import { disposeObject } from '../../utils/processing/ModelLifecycle';
 import { useNotification } from '../../context/NotificationContext';
 import { LocalEnvironment } from '../Scene/LocalEnvironment';
 
+const isRenderablePreview = (value: string | null): value is string => Boolean(value && /^https:\/\/assets\.auvra\.local\/v1\/get\/[A-Za-z0-9_-]{43}$/.test(value));
+
 const ModelList: React.FC<{
     models: LoadedModelData[];
     selectedId: string | null;
@@ -83,10 +85,11 @@ const ModelList: React.FC<{
 };
 
 export const RetextureEditor: React.FC = () => {
-    const { models, retextureModel, saveTextureToLibrary } = useScene();
+    const { models, previewTexture } = useScene();
     const { addNotification } = useNotification();
     
     const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+    const [previewModelId, setPreviewModelId] = useState<string | null>(null);
     const [prompt, setPrompt] = useState('');
     const canvasRef = useRef<HTMLCanvasElement>(null); // For future mask painting
 
@@ -96,11 +99,14 @@ export const RetextureEditor: React.FC = () => {
         currentTextureBase64,
         generatedTextureUrl,
         isGenerating,
+        progress,
         error,
         setCurrentTexture,
         generate,
-        apply,
-        discard
+        commit,
+        discard,
+        cancel,
+        retry
     } = useTextureGeneration();
 
     // 1. Sync Selection -> Current Texture
@@ -122,32 +128,38 @@ export const RetextureEditor: React.FC = () => {
         if (!selectedModel) return;
 
         if (generatedTextureUrl) {
-            // Apply preview immediately to mesh
-            retextureModel(selectedModel.id, generatedTextureUrl);
-        } else if (currentTextureBase64) {
-            // Revert to original if preview is cleared (discarded)
-            // If we just Applied, currentTextureBase64 is updated to the new one, so this effectively commits it visually too
-            retextureModel(selectedModel.id, currentTextureBase64);
+            // Preview is an in-memory material mutation; no project/DB write occurs.
+            if (selectedModel.id === previewModelId && isRenderablePreview(generatedTextureUrl)) void previewTexture(selectedModel.id, generatedTextureUrl);
         }
-    }, [generatedTextureUrl, selectedModel?.id, retextureModel]);
+    }, [generatedTextureUrl, selectedModel?.id, previewModelId, previewTexture]);
 
     const handleGenerate = () => {
         if (currentTextureBase64 && prompt) {
+            setPreviewModelId(selectedModelId);
             generate(prompt, currentTextureBase64);
         }
     };
 
     const handleSave = async () => {
-        if (selectedModel && generatedTextureUrl) {
-            await saveTextureToLibrary(generatedTextureUrl, `AI_${selectedModel.name}_${Date.now().toString().slice(-4)}`);
+        if (selectedModel && generatedTextureUrl && selectedModel.id === previewModelId) {
+            const committed = await commit({ name: `AI_${selectedModel.name}_${Date.now().toString().slice(-4)}` });
+            if (committed) addNotification({ message: 'Texture committed to the library.', type: 'info' });
         }
     };
 
-    const handleApply = () => {
-        // Promote generated texture to "current", clearing the preview flag
-        apply();
-        // We do NOT auto-save to library here, respecting user preference for decoupling.
-        addNotification({ message: "Texture applied to session model.", type: 'info' });
+    const handleApply = async () => {
+        if (!selectedModel || selectedModel.id !== previewModelId) return;
+        const committed = await commit({ targetModelId: selectedModel.id });
+        if (committed) {
+            await previewTexture(selectedModel.id, committed);
+            addNotification({ message: "Texture committed to the model.", type: 'info' });
+        }
+    };
+
+    const handleDiscard = async () => {
+        await discard();
+        if (selectedModel && selectedModel.id === previewModelId && currentTextureBase64) await previewTexture(selectedModel.id, currentTextureBase64);
+        setPreviewModelId(null);
     };
 
     return (
@@ -212,11 +224,13 @@ export const RetextureEditor: React.FC = () => {
                     <div className="space-y-2">
                         <label className="text-[10px] uppercase font-bold text-gray-500">Texture Map</label>
                         <div className="aspect-square w-full bg-gray-950 rounded-lg border border-gray-700 relative overflow-hidden group">
-                            {(generatedTextureUrl || currentTextureBase64) ? (
+                            {(generatedTextureUrl || currentTextureBase64) && isRenderablePreview(generatedTextureUrl || currentTextureBase64) ? (
                                 <img 
                                     src={generatedTextureUrl || currentTextureBase64 || ''} 
                                     className="w-full h-full object-contain" 
                                 />
+                            ) : generatedTextureUrl ? (
+                                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center text-[10px] text-blue-300"><ImageIcon size={24} /><span>Preview asset ready in host memory</span><span className="text-gray-600">Commit or discard to finish.</span></div>
                             ) : (
                                 <div className="absolute inset-0 flex items-center justify-center text-gray-600">
                                     <ImageIcon size={24} />
@@ -226,7 +240,8 @@ export const RetextureEditor: React.FC = () => {
                             {isGenerating && (
                                 <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center gap-2 z-10 backdrop-blur-sm">
                                     <RefreshCw size={24} className="animate-spin text-blue-400" />
-                                    <span className="text-xs text-blue-200 animate-pulse">Generating...</span>
+                                    <span className="text-xs text-blue-200 animate-pulse">Generating… {Math.round(progress * 100)}%</span>
+                                    <button type="button" onClick={() => void cancel()} className="rounded border border-gray-600 px-2 py-1 text-[10px] text-gray-300 hover:bg-gray-800">Cancel job</button>
                                 </div>
                             )}
 
@@ -239,7 +254,7 @@ export const RetextureEditor: React.FC = () => {
                         {error && (
                             <div className="text-[10px] text-red-400 bg-red-900/20 p-2 rounded border border-red-900/50 flex gap-2">
                                 <AlertTriangle size={12} className="shrink-0 mt-0.5" />
-                                {error}
+                                <span className="flex-1">{error}</span><button type="button" onClick={() => void retry()} className="text-red-200 underline">Retry</button>
                             </div>
                         )}
                     </div>
@@ -263,23 +278,25 @@ export const RetextureEditor: React.FC = () => {
                         {generatedTextureUrl ? (
                             <div className="space-y-2 animate-in fade-in slide-in-from-bottom-2">
                                 {/* Primary Actions */}
-                                <button
-                                    onClick={handleSave}
-                                    className="w-full py-2.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors border border-gray-700"
+                                 <button
+                                     onClick={handleSave}
+                                     disabled={selectedModel?.id !== previewModelId}
+                                     className="w-full py-2.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors border border-gray-700"
                                 >
                                     <Save size={14} /> Save to Library
                                 </button>
                                 
                                 <div className="grid grid-cols-2 gap-2">
                                     <button
-                                        onClick={discard}
+                                        onClick={() => void handleDiscard()}
                                         className="py-2.5 rounded-lg bg-red-900/20 hover:bg-red-900/40 text-red-400 border border-red-900/50 font-bold text-xs flex items-center justify-center gap-2 transition-colors"
                                     >
                                         <Undo2 size={14} /> Discard
                                     </button>
-                                    <button
-                                        onClick={handleApply}
-                                        className="py-2.5 rounded-lg bg-green-600 hover:bg-green-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow-lg shadow-green-900/20"
+                                     <button
+                                         onClick={handleApply}
+                                         disabled={selectedModel?.id !== previewModelId}
+                                         className="py-2.5 rounded-lg bg-green-600 hover:bg-green-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow-lg shadow-green-900/20"
                                     >
                                         <Check size={14} /> Apply Only
                                     </button>

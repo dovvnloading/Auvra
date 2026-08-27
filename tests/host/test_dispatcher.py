@@ -97,3 +97,63 @@ class DispatcherTests(unittest.TestCase):
         resolve = {"protocol":"auvra.host/1","type":"request","id":"r3","session":host.session.session_id,"revision":ticket["revision"],"method":"asset.resolve","payload":{"projectId":project_id,"assetId":uploaded["sha256"]}}
         resolved = host.request(resolve)
         self.assertEqual(host.request_asset(method="GET", url=resolved["result"]["url"], origin="https://assets.auvra.local")["sha256"], uploaded["sha256"])
+
+    def test_provider_methods_are_explicit_and_non_project_mutating(self):
+        create = self.dispatcher.dispatch(self.request(method="project.create", payload={"name": "Demo"}))
+        project_id = create["result"]["projectId"]
+        host_revision = create["revision"]
+        listed = self.dispatcher.dispatch(self.request(revision=host_revision, method="provider.list", payload={}))
+        self.assertTrue(listed["ok"])
+        self.assertEqual({item["providerId"] for item in listed["result"]["providers"]},
+                         {"fal", "openai", "anthropic", "xai", "openrouter", "ollama", "llama.cpp"})
+        configured = self.dispatcher.dispatch(self.request(revision=host_revision, method="provider.configureCredential",
+            payload={"providerId": "ollama", "storageMode": "memoryOnly"}))
+        self.assertEqual(configured["result"]["configured"], True)
+        submitted = self.dispatcher.dispatch(self.request(revision=host_revision, method="inference.submit",
+            payload={"projectId": project_id, "expectedRevision": 0, "providerId": "ollama",
+                     "modelId": "llama3.1:8b", "capability": "text", "route": "local"}))
+        self.assertEqual(submitted["result"]["job"]["outputText"], "deterministic fake response")
+        self.assertEqual(submitted["result"]["job"]["status"], "succeeded")
+        self.assertEqual(submitted["revision"], host_revision)
+
+    def test_provider_settings_status_and_ownership_are_strict(self):
+        create = self.dispatcher.dispatch(self.request(method="project.create", payload={"name": "Demo"}))
+        project_id = create["result"]["projectId"]
+        host_revision = create["revision"]
+        status = self.dispatcher.dispatch(self.request(revision=host_revision,
+            method="provider.getStatus", payload={"providerId": "ollama"}))
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["result"]["credentialStatus"], "notRequired")
+        settings = {"enabled": True, "routes": [{"capability": "text", "modelId": "llama3.1:8b"}],
+                    "fallbackPolicy": "none", "requireCostConfirmation": True,
+                    "budgets": {"perJobMicroUsd": 10, "dailyMicroUsd": 20, "monthlyMicroUsd": 30}}
+        configured = self.dispatcher.dispatch(self.request(revision=host_revision,
+            method="provider.configure", payload={"providerId": "ollama",
+                "expectedSettingsRevision": 0, "settings": settings}))
+        self.assertEqual(configured["result"]["settingsRevision"], 1)
+        old_shape = self.dispatcher.dispatch(self.request(revision=host_revision,
+            method="provider.configure", payload={"providerId": "ollama", "route": "local",
+                "selectedModels": {"text": "llama3.1:8b"}, "budgets": {"perJob": 1, "daily": 1, "monthly": 1}}))
+        self.assertEqual(old_shape["error"]["code"], "invalid_request")
+        missing_owner = self.dispatcher.dispatch(self.request(revision=host_revision,
+            method="inference.get", payload={"jobId": "job-00000001"}))
+        self.assertEqual(missing_owner["error"]["code"], "invalid_request")
+        self.assertEqual(project_id, "fake-project-0001")
+
+    def test_command_preview_is_host_owned_and_commit_advances_project_once(self):
+        create = self.dispatcher.dispatch(self.request(method="project.create", payload={"name": "Demo"}))
+        project_id = create["result"]["projectId"]
+        host_revision = create["revision"]
+        configured = self.dispatcher.dispatch(self.request(revision=host_revision, method="provider.configureCredential",
+            payload={"providerId": "openai", "storageMode": "memoryOnly"}))
+        submitted = self.dispatcher.dispatch(self.request(revision=host_revision, method="inference.submit",
+            payload={"projectId": project_id, "expectedRevision": 0, "providerId": "openai",
+                     "modelId": "openai/gpt-test", "capability": "commands", "route": "cloud"}))
+        job = submitted["result"]["job"]
+        preview = self.dispatcher.dispatch(self.request(revision=host_revision, method="command.preview",
+            payload={"projectId": project_id, "expectedRevision": 0, "jobId": job["jobId"]}))
+        self.assertTrue(preview["ok"])
+        approved = self.dispatcher.dispatch(self.request(revision=host_revision, method="command.approve",
+            payload={"projectId": project_id, "expectedRevision": 0, "proposalId": preview["result"]["proposalId"]}))
+        self.assertEqual(approved["result"]["projectRevision"], 1)
+        self.assertEqual(approved["revision"], host_revision + 1)

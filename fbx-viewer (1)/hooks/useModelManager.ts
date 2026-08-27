@@ -226,6 +226,34 @@ export const useModelManager = (
     }
   }, [models]);
 
+  /** Apply an ephemeral material preview. It intentionally never touches the project host or DB. */
+  const previewTexture = useCallback(async (modelId: string, textureUrl: string, targetTextureUuid?: string) => {
+    const model = models.find((candidate) => candidate.id === modelId);
+    if (!model || !textureUrl) throw new Error('Model or preview texture not found');
+    const newTexture = await new THREE.TextureLoader().loadAsync(textureUrl);
+    newTexture.colorSpace = THREE.SRGBColorSpace;
+    newTexture.flipY = true;
+    let targetMapUUID: string | null = targetTextureUuid || null;
+    if (!targetMapUUID) model.object.traverse((child) => {
+      if (targetMapUUID || !(child as THREE.Mesh).isMesh) return;
+      const material = (child as THREE.Mesh).material;
+      for (const candidate of (Array.isArray(material) ? material : [material]) as any[]) {
+        if (candidate.map) { targetMapUUID = candidate.map.uuid; break; }
+      }
+    });
+    model.object.traverse((child) => {
+      if (!(child as THREE.Mesh).isMesh) return;
+      const material = (child as THREE.Mesh).material;
+      for (const candidate of (Array.isArray(material) ? material : [material]) as any[]) {
+        if (targetMapUUID && candidate.map?.uuid !== targetMapUUID) continue;
+        if (!targetMapUUID && candidate.map) continue;
+        if (candidate.map) candidate.map.dispose();
+        candidate.map = newTexture; candidate.transparent = true; candidate.alphaTest = 0.5;
+        candidate.side = THREE.DoubleSide; candidate.needsUpdate = true;
+      }
+    });
+  }, [models]);
+
   const resetModelTexture = useCallback(async (modelId: string) => {
     projectService.assertWritable();
     setIsLoading(true);
@@ -275,6 +303,7 @@ export const useModelManager = (
     removeFromScene,
     addAnimations,
     retextureModel,
+    previewTexture,
     resetModelTexture
   };
 };

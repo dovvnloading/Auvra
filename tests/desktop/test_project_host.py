@@ -8,6 +8,7 @@ import unittest
 from Auvra.desktop.assets import AssetTransferRegistry
 from Auvra.desktop.dialogs import DialogSelection
 from Auvra.desktop.project_host import NativeProjectHost
+from Auvra.desktop.previews import PreviewStore
 
 
 class _Dialogs:
@@ -130,6 +131,33 @@ class NativeProjectHostTests(unittest.TestCase):
         self.assertEqual(served.body.read(), b"payload")
         self.assertEqual(served.headers["Content-Type"], "application/octet-stream")
         served.body.close()
+
+    def test_generated_preview_resolves_without_becoming_project_content(self) -> None:
+        created = self.host.handle("project.create", {"name": "Preview"})
+        previews = PreviewStore(self.root / "previews")
+        try:
+            payload = (
+                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+                b"\x00\x00\x00\x02\x00\x00\x00\x03\x08\x06\x00\x00\x00"
+            )
+            record = previews.ingest("job-0123456789abcdef", io.BytesIO(payload))
+            self.host.set_preview_store(previews)
+            canonical = self.host.service.active.path / "Content" / "sha256" / record.asset_id
+            self.assertFalse(canonical.exists())
+            resolved = self.host.handle(
+                "asset.resolve",
+                {"projectId": created["projectId"], "assetId": record.asset_id},
+            )
+            served = self.registry.handle(
+                method="GET",
+                url=resolved["url"],
+                headers={"Origin": "http://127.0.0.1:3000"},
+            )
+            self.assertEqual(served.body.read(), payload)
+            served.body.close()
+            self.assertFalse(canonical.exists())
+        finally:
+            previews.close()
 
     def test_project_events_are_queued_without_path_authority(self) -> None:
         created = self.host.handle("project.create", {"name": "Events"})

@@ -62,7 +62,7 @@ class AssetStore:
             if size is not None and total != size:
                 raise ValueError("asset size does not match declared size")
             detected = sniff_mime(bytes(prefix))
-            known_media = {"image/png", "image/jpeg", "audio/wav", "audio/ogg", "model/gltf-binary"}
+            known_media = {"image/png", "image/jpeg", "image/webp", "audio/wav", "audio/ogg", "model/gltf-binary"}
             if mime in known_media and detected != mime:
                 raise ValueError("asset MIME does not match its content")
             mime = mime or detected or "application/octet-stream"
@@ -143,6 +143,7 @@ class AssetStore:
 def sniff_mime(prefix: bytes) -> str | None:
     if prefix.startswith(b"\x89PNG\r\n\x1a\n"): return "image/png"
     if prefix.startswith(b"\xff\xd8\xff"): return "image/jpeg"
+    if prefix.startswith(b"RIFF") and prefix[8:12] == b"WEBP": return "image/webp"
     if prefix.startswith(b"RIFF") and prefix[8:12] == b"WAVE": return "audio/wav"
     if prefix.startswith(b"OggS"): return "audio/ogg"
     if prefix.startswith(b"glTF"): return "model/gltf-binary"

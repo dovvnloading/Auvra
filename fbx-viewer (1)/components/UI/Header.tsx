@@ -1,7 +1,8 @@
 
 import React, { useState } from 'react';
-import { Brush, Grid, Network, FileCode, Gamepad2, Download, Upload, LayoutTemplate, Trees, FilePlus, X, Save, FolderOpen } from 'lucide-react';
+import { Brush, Grid, Network, FileCode, Gamepad2, Download, Upload, LayoutTemplate, Trees, FilePlus, X, Save, FolderOpen, Settings2 } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
+import { SettingsModal } from '../Settings/SettingsModal';
 
 interface HeaderProps {
   activeTab?: 'scene' | 'graph' | 'blueprint' | 'sandbox' | 'hud' | 'retexture' | 'environment';
@@ -11,6 +12,7 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
   const { saveProject, saveProjectAs, exportProject, importProject, importLegacyProject, migrateLegacyBrowserProject, loadProject, openRecentProject, recoverProject, createNewProject, closeProject, isLoading, projectStatus } = useScene();
   const [resetConfirm, setResetConfirm] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const handleNewProject = async () => {
       if (resetConfirm) {
@@ -151,7 +153,11 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
                    <X size={12} />
                </button>
            </div>
+           <button type="button" onClick={() => setSettingsOpen(true)} className="flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-900 px-3 py-1 text-xs font-bold text-gray-400 hover:bg-gray-800 hover:text-white" title="Provider settings">
+             <Settings2 size={13} /> Settings
+           </button>
        </div>
+       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 };

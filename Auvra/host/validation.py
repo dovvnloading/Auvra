@@ -20,7 +20,7 @@ class ProtocolValidationError(ValueError):
 
 
 _FORBIDDEN_JSON_KEY = re.compile(
-    r"^(?:path|filepath|filesystempath|sourcepath|assetpath|directorypath|absolutepath|localpath|base64|binary|bytes|blob)$",
+    r"^(?:path|filepath|filesystempath|sourcepath|assetpath|directorypath|absolutepath|localpath|base64|binary|bytes|blob|credential|credentials|secret|token|api[_-]?key|password|authorization|auth[_-]?header)$",
     re.I,
 )
 _WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")

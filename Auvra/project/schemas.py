@@ -28,6 +28,8 @@ _NESTED_KEYS = {
     "terrainData": {"resolution", "width", "depth", "heights", "textureId"},
     "skyConfig": {"timeOfDay", "sunIntensity", "ambienceIntensity", "sunColor", "fogColor", "fogDensity", "turbidity", "rayleigh", "mieCoefficient", "mieDirectionalG", "inclination", "azimuth"},
     "dimensions": {"width", "height"},
+    "size": {"width", "height"},
+    "generation": {"providerId", "modelId", "modelVersion", "jobId", "createdAt", "routeOrigin", "routeConsent", "promptSha256", "settingsSha256", "artifactSha256", "inputAssetIds", "seed", "costMicroUsd"},
     "flashConfig": {"enabled", "textureId", "scale", "color", "duration", "rotationSpeed", "preview"},
     "position": {"x", "y"},
     "variables": {"id", "name", "type", "value"},
@@ -40,12 +42,12 @@ _NESTED_KEYS = {
     "outputs": {"id", "name", "dataType", "direction"},
     "connections": {"id", "fromNodeId", "fromPinId", "toNodeId", "toPinId"},
     "stats": {"id", "name", "value"},
-    "elements": {"id", "type", "name", "position", "size", "text", "style", "customData"},
-    "commands": {"id", "type", "payload", "customData"},
+    "elements": {"id", "type", "name", "props", "position", "size", "zIndex", "isVisible", "isLocked", "align"},
+    "commands": {"id", "jobId", "providerId", "modelId", "promptSha256", "operationsSha256", "appliedAt"},
     "animationGraph": {"variables", "inputs", "states", "transitions", "activeStateId", "customData"},
     "layout": {"x", "y", "width", "height", "customData"},
 }
-_FREEFORM_KEYS = {"settings", "overrides", "style", "payload", "data", "customData"}
+_FREEFORM_KEYS = {"settings", "overrides", "style", "payload", "data", "customData", "props"}
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 _COMMON = {
@@ -135,6 +137,14 @@ def validate_project_references(
         require("textures", (value.get("flashConfig") or {}).get("textureId"), "socket texture", optional=True)
     for value in records["materials"].values():
         for identity in value.get("textureIds", []): require("textures", identity, "material texture")
+    for value in records["textures"].values():
+        generation = value.get("generation")
+        if generation is not None:
+            if generation.get("artifactSha256") != value.get("assetId"):
+                raise ValueError("generated texture provenance does not match its asset")
+            for identity in generation.get("inputAssetIds", []):
+                if asset_exists is not None and not asset_exists(identity):
+                    raise ValueError("generated texture provenance references a missing input asset")
     for value in records["blueprints"].values():
         require("models", value.get("linkedModelId"), "blueprint model", optional=True)
         require("textures", value.get("textureId"), "blueprint texture", optional=True)
@@ -179,7 +189,7 @@ def _asset_handles(value: Any, parent_key: str | None = None):
         for key, child in value.items():
             if key == "assetId" and isinstance(child, str):
                 yield child
-            elif key in {"assetIds", "animationAssetIds"} and isinstance(child, list):
+            elif key in {"assetIds", "animationAssetIds", "inputAssetIds"} and isinstance(child, list):
                 yield from (item for item in child if isinstance(item, str))
             yield from _asset_handles(child, key)
     elif isinstance(value, list):

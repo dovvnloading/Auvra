@@ -116,7 +116,7 @@ const PropertyInput: React.FC<{
 };
 
 export const HUDEditor: React.FC = () => {
-    const { document, hydrated, error, replace } = useNativeProjectDocument<HUDDocument>(
+    const { document, hydrated, error, replace, refresh } = useNativeProjectDocument<HUDDocument>(
         'hud', HUD_DOCUMENT_ID, createDefaultHUDDocument,
     );
     const elements = document.elements;
@@ -254,6 +254,7 @@ export const HUDEditor: React.FC = () => {
                             elements={elements}
                             selectedElementId={selectedId}
                             onSelectElement={setSelectedId}
+                            onRefresh={refresh}
                             onUpdateElement={handleUpdateElement}
                             onAgentCreate={(type, overrides) => handleAddElement(type, { ...overrides, id: 'ai' })}
                         />

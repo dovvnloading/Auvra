@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any, Callable
+import hashlib
 import re
 
 from .logging import StructuredLogger
@@ -21,17 +22,25 @@ METHODS = (
     "project.open", "project.openRecent", "project.close", "project.getSnapshot",
     "project.applyChanges", "project.save", "project.saveAs", "project.exportPack",
     "project.importPack", "project.importLegacy", "asset.beginUpload", "asset.resolve",
+    "provider.list", "provider.getStatus", "provider.configureCredential",
+    "provider.deleteCredential", "provider.configure", "provider.listModels",
+    "provider.health", "inference.submit", "inference.get", "inference.list",
+    "inference.cancel", "inference.retry", "media.discard", "media.commit",
+    "command.preview", "command.approve", "command.undo",
 )
-PROJECT_METHODS = METHODS[2:]
+PROJECT_METHODS = METHODS[2:16]
+PROVIDER_METHODS = METHODS[16:]
 MUTATING_METHODS = frozenset({
     "project.create", "project.open", "project.openRecent", "project.close",
     "project.applyChanges", "project.save", "project.saveAs", "project.exportPack",
     "project.importPack", "project.importLegacy", "asset.beginUpload",
+    "media.commit", "command.approve", "command.undo",
 })
 EVENTS = frozenset({
     "host.session", "host.revision", "project.status", "project.opening", "project.opened",
     "project.closing", "project.closed", "project.revision", "project.dirty",
     "project.readOnly", "project.progress", "project.recovery",
+    "provider.job", "provider.status", "provider.progress", "provider.recovery",
 })
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
@@ -52,15 +61,23 @@ class HostDispatcher:
         self._project_read_only = False
         self._project_service: Any = None
         self._asset_service: Any = None
+        self._provider_service: Any = None
         self._documents: dict[str, dict[str, Any]] = {}
         self._asset_tickets: dict[str, dict[str, Any]] = {}
         self._asset_ids: set[str] = set()
+        self._provider_configured: set[str] = set()
+        self._provider_settings: dict[str, dict[str, Any]] = {}
+        self._provider_settings_revision: dict[str, int] = {}
+        self._jobs: dict[str, dict[str, Any]] = {}
+        self._proposals: dict[str, dict[str, Any]] = {}
+        self._transactions: dict[str, dict[str, Any]] = {}
         self._methods: dict[str, Handler] = {
             "host.ping": lambda payload: {"pong": True},
             "host.getCapabilities": lambda payload: {
                 "protocol": "auvra.host/1",
                 "methods": ["host.ping", "host.getCapabilities"],
                 "projectMethods": list(PROJECT_METHODS),
+                "providerMethods": list(PROVIDER_METHODS),
             },
             "project.getStatus": self._get_status,
             "project.create": self._create_project,
@@ -73,14 +90,32 @@ class HostDispatcher:
             "project.saveAs": self._save_as,
             "project.exportPack": self._export_pack,
             "project.importPack": self._import_pack,
-            "project.importLegacy": self._import_legacy,
-            "asset.beginUpload": self._begin_upload,
-            "asset.resolve": self._resolve_asset,
+                "project.importLegacy": self._import_legacy,
+                "asset.beginUpload": self._begin_upload,
+                "asset.resolve": self._resolve_asset,
+                "provider.list": self._provider_list,
+                "provider.getStatus": self._provider_status,
+                "provider.configureCredential": self._configure_credential,
+                "provider.deleteCredential": self._delete_credential,
+                "provider.configure": self._configure_provider,
+                "provider.listModels": self._list_models,
+                "provider.health": self._provider_health,
+                "inference.submit": self._submit_inference,
+                "inference.get": self._get_job,
+                "inference.list": self._list_jobs,
+                "inference.cancel": self._cancel_job,
+                "inference.retry": self._retry_job,
+                "media.discard": self._discard_media,
+                "media.commit": self._commit_media,
+                "command.preview": self._preview_command,
+                "command.approve": self._approve_command,
+                "command.undo": self._undo_command,
         }
         if methods:
             self._methods.update(methods)
 
-    def bind_services(self, *, project_service: Any = None, asset_service: Any = None) -> None:
+    def bind_services(self, *, project_service: Any = None, asset_service: Any = None,
+                      provider_service: Any = None) -> None:
         """Bind host-owned services without importing filesystem or desktop code.
 
         A service may expose ``handle(method, payload)`` or a method named after
@@ -91,6 +126,7 @@ class HostDispatcher:
         """
         self._project_service = project_service
         self._asset_service = asset_service
+        self._provider_service = provider_service
 
     def register_method(self, method: str, handler: Handler) -> None:
         """Inject one application-owned method without changing the protocol."""
@@ -178,6 +214,13 @@ class HostDispatcher:
             }
             defaults.update(event_payload)
             event_payload = defaults
+        elif event_name.startswith("provider."):
+            defaults = {
+                "providerId": "unknown", "status": "queued", "progress": None,
+                "attempt": 1, "retryable": False,
+            }
+            defaults.update(event_payload)
+            event_payload = defaults
         event = {
             "protocol": "auvra.host/1", "type": "event", "event": event_name,
             "session": self.session.session_id, "revision": self.session.revision,
@@ -195,7 +238,7 @@ class HostDispatcher:
         """
         envelopes: list[dict[str, Any]] = []
         seen: set[int] = set()
-        for service in (self._project_service, self._asset_service):
+        for service in (self._project_service, self._asset_service, self._provider_service):
             if service is None or id(service) in seen:
                 continue
             seen.add(id(service))
@@ -212,7 +255,9 @@ class HostDispatcher:
         return envelopes
 
     def _bound_handler(self, method: str) -> Handler | None:
-        service = self._project_service if method.startswith("project.") else self._asset_service if method.startswith("asset.") else None
+        service = (self._project_service if method.startswith("project.") else
+                   self._asset_service if method.startswith("asset.") else
+                   self._provider_service if (method.startswith("provider.") or method.startswith("inference.") or method.startswith("media.") or method.startswith("command.")) else None)
         if service is None:
             return None
         candidate = getattr(service, "handle", None)
@@ -356,6 +401,244 @@ class HostDispatcher:
         token = "B" * 43
         self._asset_tickets[token] = {"projectId": self._project_id, "size": 0, "mime": "application/octet-stream", "name": "", "expiresAt": 300, "method": "GET", "consumed": False, "sha256": payload["assetId"]}
         return self._result(assetId=payload["assetId"], method="GET", expiresAt=300, url=f"https://assets.auvra.local/v1/get/{token}")
+
+    # Provider handlers are intentionally deterministic and provider-neutral.
+    # Production adapters bind through ``provider_service``; these handlers
+    # make protocol and UI tests useful without network access or secrets.
+    _PROVIDERS = (
+        ("fal", "fal.ai", "cloud", ("media.generate", "media.edit")),
+        ("openai", "OpenAI", "cloud", ("text", "code", "commands")),
+        ("anthropic", "Anthropic", "cloud", ("text", "code", "commands")),
+        ("xai", "xAI", "cloud", ("text", "code", "commands")),
+        ("openrouter", "OpenRouter", "cloud", ("text", "code", "commands")),
+        ("ollama", "Ollama", "local", ("text", "code", "commands")),
+        ("llama.cpp", "llama.cpp", "local", ("text", "code", "commands")),
+    )
+
+    def _provider_info(self, provider_id: str) -> tuple[str, str, str, tuple[str, ...]]:
+        for item in self._PROVIDERS:
+            if item[0] == provider_id:
+                return item
+        raise HostOperationError("provider_unavailable", "Provider is not registered")
+
+    def _provider_list(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return {"kind": "provider.list", "providers": [
+            {"providerId": pid, "displayName": name, "route": route,
+             "capabilities": list(capabilities), "features": ["cancel", "structured_output"],
+             "requiresCredential": route == "cloud",
+             "configured": route == "local" or pid in self._provider_configured,
+             "available": True}
+            for pid, name, route, capabilities in self._PROVIDERS
+        ]}
+
+    def _provider_status(self, payload: dict[str, Any]) -> dict[str, Any]:
+        pid, _name, route, _capabilities = self._provider_info(payload["providerId"])
+        configured = route == "local" or pid in self._provider_configured
+        settings = self._provider_settings.get(pid, {
+            "enabled": False, "routes": [], "fallbackPolicy": "none",
+            "requireCostConfirmation": True,
+            "budgets": {"perJobMicroUsd": 0, "dailyMicroUsd": 0, "monthlyMicroUsd": 0},
+        })
+        public_settings = {key: value for key, value in settings.items() if key != "endpoint"}
+        public_settings["endpointConfigured"] = bool(settings.get("endpoint"))
+        return {"kind": "provider.status", "providerId": pid, "configured": configured,
+                "available": True, "healthy": configured, "state": "ready" if configured else "unconfigured",
+                "settings": public_settings,
+                "settingsRevision": self._provider_settings_revision.get(pid, 0),
+                "credentialStatus": "notRequired" if route == "local" else ("configured" if configured else "absent")}
+
+    def _configure_credential(self, payload: dict[str, Any]) -> dict[str, Any]:
+        pid, _name, _route, _capabilities = self._provider_info(payload["providerId"])
+        self._provider_configured.add(pid)
+        return {"kind": "provider.credential", "providerId": pid,
+                "storageMode": payload["storageMode"], "configured": True,
+                "credentialStatus": "memoryOnly" if payload["storageMode"] == "memoryOnly" else "configured"}
+
+    def _delete_credential(self, payload: dict[str, Any]) -> dict[str, Any]:
+        pid, _name, _route, _capabilities = self._provider_info(payload["providerId"])
+        self._provider_configured.discard(pid)
+        return self._provider_status({"providerId": pid})
+
+    def _configure_provider(self, payload: dict[str, Any]) -> dict[str, Any]:
+        pid, _name, _route, _capabilities = self._provider_info(payload["providerId"])
+        # Settings contain only non-secret values by schema and validation.
+        current = self._provider_settings_revision.get(pid, 0)
+        if payload["expectedSettingsRevision"] != current:
+            raise HostOperationError("revision_conflict", "Provider settings revision does not match")
+        self._provider_settings[pid] = dict(payload["settings"])
+        self._provider_settings_revision[pid] = current + 1
+        return self._provider_status({"providerId": pid})
+
+    def _list_models(self, payload: dict[str, Any]) -> dict[str, Any]:
+        pid, _name, _route, capabilities = self._provider_info(payload["providerId"])
+        selected = payload.get("capability")
+        if selected and selected not in capabilities:
+            return {"kind": "provider.models", "providerId": pid, "models": []}
+        return {"kind": "provider.models", "providerId": pid, "models":[
+            {"modelId": f"{pid}.default", "displayName": "Default", "capabilities": list(capabilities)}
+        ]}
+
+    def _provider_health(self, payload: dict[str, Any]) -> dict[str, Any]:
+        pid, _name, route, _capabilities = self._provider_info(payload["providerId"])
+        return {"kind": "provider.health", "providerId": pid,
+                "healthy": route == "local" or pid in self._provider_configured, "latencyMs": 0,
+                "message": "deterministic fake host"}
+
+    def _check_inference_route(self, payload: dict[str, Any]) -> None:
+        pid, _name, route, capabilities = self._provider_info(payload["providerId"])
+        if payload["route"] != route:
+            raise HostOperationError("endpoint_denied", "Provider route does not match explicit request")
+        if payload["capability"] not in capabilities:
+            raise HostOperationError("unsupported_capability", "Provider does not support capability")
+        if route == "cloud" and pid not in self._provider_configured:
+            raise HostOperationError("provider_not_configured", "Provider credential is not configured")
+
+    def _submit_inference(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_project(payload)
+        if payload["expectedRevision"] != self._project_revision:
+            raise HostOperationError("revision_conflict", "Project revision does not match", {
+                "projectId": self._project_id, "expectedRevision": payload["expectedRevision"],
+                "actualRevision": self._project_revision})
+        self._check_inference_route(payload)
+        if payload.get("targetElementId") is not None and payload["capability"] != "commands":
+            raise HostOperationError("unsupported_capability", "targetElementId is valid only for command jobs")
+        job_id = f"job-{len(self._jobs) + 1:08d}"
+        job = {"jobId": job_id, "providerId": payload["providerId"], "modelId": payload["modelId"],
+               "capability": payload["capability"], "route": payload["route"], "status": "succeeded",
+               "progress": 1, "attempt": 1, "_projectId": self._project_id}
+        if payload["capability"] in {"text", "code"}:
+            job["outputText"] = "deterministic fake response"
+        if payload["capability"] == "commands":
+            proposal_id = f"proposal-{len(self._proposals) + 1:08d}"
+            self._proposals[proposal_id] = {"projectId": self._project_id, "changes": [{
+                "domain": "assistant", "documentId": "proposal-1", "operation": "upsert",
+                "document": {"approved": True}}]}
+            job["proposalAvailable"] = True
+            job["proposalId"] = proposal_id
+        if payload["capability"].startswith("media."):
+            preview_id = hashlib.sha256(f"{job_id}:preview".encode("utf-8")).hexdigest()
+            job["preview"] = {"previewAssetId": preview_id, "mime": "image/png", "size": 1,
+                               "dimensions": {"width": 1, "height": 1}}
+        self._jobs[job_id] = job
+        return {"kind": "inference.submit", "job": self._public_job(job)}
+
+    @staticmethod
+    def _public_job(job: dict[str, Any]) -> dict[str, Any]:
+        return {key: value for key, value in job.items() if not key.startswith("_")}
+
+    def _get_job(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_project(payload)
+        job = self._jobs.get(payload["jobId"])
+        if job is None or job.get("_projectId") != payload["projectId"]:
+            raise HostOperationError("invalid_job", "Inference job is unavailable")
+        return {"kind": "inference.get", "job": self._public_job(job)}
+
+    def _list_jobs(self, payload: dict[str, Any]) -> dict[str, Any]:
+        jobs = list(self._jobs.values())
+        if payload.get("projectId") and payload["projectId"] != self._project_id:
+            jobs = []
+        if payload.get("status"):
+            jobs = [job for job in jobs if job["status"] == payload["status"]]
+        limit = payload.get("limit", 100)
+        offset = int(payload.get("cursor", "0") or 0)
+        page = jobs[offset:offset + limit]
+        next_offset = offset + len(page)
+        return {"kind": "inference.list", "jobs": [self._public_job(job) for job in page],
+                "cursor": str(next_offset) if next_offset < len(jobs) else "", "hasMore": next_offset < len(jobs)}
+
+    def _cancel_job(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_project(payload)
+        job = self._jobs.get(payload["jobId"])
+        if job is None or job.get("_projectId") != payload["projectId"]:
+            raise HostOperationError("invalid_job", "Inference job is unavailable")
+        job["status"] = "cancelled"
+        job["progress"] = None
+        return {"kind": "inference.cancel", "job": self._public_job(job)}
+
+    def _retry_job(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_project(payload, expected=True)
+        job = self._jobs.get(payload["jobId"])
+        if job is None or job.get("_projectId") != payload["projectId"]:
+            raise HostOperationError("invalid_job", "Inference job is unavailable")
+        if payload["expectedRevision"] != self._project_revision:
+            raise HostOperationError("revision_conflict", "Project revision does not match")
+        if job["status"] not in {"failed", "cancelled"} or job["attempt"] >= 8:
+            raise HostOperationError("invalid_job", "Job is not retryable")
+        job["attempt"] += 1
+        job["status"] = "queued"
+        job["progress"] = 0
+        return {"kind": "inference.retry", "job": self._public_job(job)}
+
+    def _require_media(self, payload: dict[str, Any]) -> None:
+        self._require_project(payload)
+        if payload.get("expectedRevision") is not None and payload["expectedRevision"] != self._project_revision:
+            raise HostOperationError("revision_conflict", "Project revision does not match")
+
+    def _discard_media(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_media(payload)
+        job = self._jobs.get(payload["jobId"])
+        if job is None or job.get("preview", {}).get("previewAssetId") != payload["previewAssetId"]:
+            raise HostOperationError("invalid_job", "Media preview is unavailable")
+        return {"kind": "media.discard", "projectId": self._project_id,
+                "projectRevision": self._project_revision, "jobId": payload["jobId"],
+                "previewAssetId": payload["previewAssetId"]}
+
+    def _commit_media(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_media(payload)
+        job = self._jobs.get(payload["jobId"])
+        if job is None or job.get("status") != "succeeded" or job.get("preview", {}).get("previewAssetId") != payload["previewAssetId"]:
+            raise HostOperationError("invalid_job", "Media job is not complete")
+        self._advance_project()
+        asset_id = hashlib.sha256(payload["previewAssetId"].encode("utf-8")).hexdigest()
+        return {"kind": "media.commit", "projectId": self._project_id,
+                "projectRevision": self._project_revision, "jobId": payload["jobId"],
+                "previewAssetId": payload["previewAssetId"], "assetId": asset_id,
+                "provenance": {"providerId": "fal", "modelId": "fal.default",
+                    "jobId": payload["jobId"], "createdAt": 0,
+                    "routeOrigin": "cloud", "routeConsent": "explicit",
+                    "promptSha256": hashlib.sha256(payload["previewAssetId"].encode("utf-8")).hexdigest(),
+                    "settingsSha256": hashlib.sha256(b"fake-settings").hexdigest(),
+                    "artifactSha256": asset_id, "inputAssetIds": []}}
+
+    def _preview_command(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_media(payload)
+        job = self._jobs.get(payload["jobId"])
+        if job is None or job.get("status") != "succeeded" or not job.get("proposalAvailable"):
+            raise HostOperationError("invalid_job", "Job has no validated command proposal")
+        proposal_id = str(job["proposalId"])
+        proposal = self._proposals.get(proposal_id)
+        if proposal is None:
+            raise HostOperationError("invalid_command", "Command proposal is unavailable")
+        changes = proposal["changes"]
+        diff = [{"domain": change["domain"], "documentId": change["documentId"],
+                 "operation": change["operation"], "summary": f"{change['operation']} {change['domain']}"}
+                for change in changes]
+        return {"kind": "command.preview", "projectId": self._project_id,
+                "projectRevision": self._project_revision, "proposalId": proposal_id, "diff": diff}
+
+    def _approve_command(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_media(payload)
+        proposal = self._proposals.pop(payload["proposalId"], None)
+        if proposal is None:
+            raise HostOperationError("approval_required", "Command proposal is unavailable")
+        for change in proposal["changes"]:
+            key = f"{change['domain']}:{change['documentId']}"
+            if change["operation"] == "remove": self._documents.pop(key, None)
+            else: self._documents[key] = change.get("document", {})
+        self._advance_project()
+        transaction_id = f"transaction-{len(self._transactions) + 1:08d}"
+        self._transactions[transaction_id] = {"changes": proposal["changes"]}
+        return {"kind": "command.approve", "projectId": self._project_id,
+                "projectRevision": self._project_revision, "transactionId": transaction_id}
+
+    def _undo_command(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_media(payload)
+        if payload["transactionId"] not in self._transactions:
+            raise HostOperationError("invalid_command", "Transaction is unavailable")
+        self._transactions.pop(payload["transactionId"])
+        self._advance_project()
+        return {"kind": "command.undo", "projectId": self._project_id,
+                "projectRevision": self._project_revision, "transactionId": payload["transactionId"]}
 
 
 class HostOperationError(RuntimeError):

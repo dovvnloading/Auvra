@@ -41,6 +41,9 @@
     <Compile Include="desktop\dialogs.py" />
     <Compile Include="desktop\policy.py" />
     <Compile Include="desktop\project_host.py" />
+    <Compile Include="desktop\credential_prompt.py" />
+    <Compile Include="desktop\previews.py" />
+    <Compile Include="desktop\provider_host.py" />
     <Compile Include="desktop\sdk.py" />
     <Compile Include="desktop\webview2.py" />
     <Compile Include="host\__init__.py" />
@@ -52,6 +55,17 @@
     <Compile Include="host\validation.py" />
     <Compile Include="host\generated\__init__.py" />
     <Compile Include="host\generated\protocol_v1.py" />
+    <Compile Include="providers\__init__.py" />
+    <Compile Include="providers\adapters.py" />
+    <Compile Include="providers\commands.py" />
+    <Compile Include="providers\credentials.py" />
+    <Compile Include="providers\descriptors.py" />
+    <Compile Include="providers\errors.py" />
+    <Compile Include="providers\jobs.py" />
+    <Compile Include="providers\media.py" />
+    <Compile Include="providers\routing.py" />
+    <Compile Include="providers\settings.py" />
+    <Compile Include="providers\transport.py" />
     <Compile Include="project\__init__.py" />
     <Compile Include="project\archive.py" />
     <Compile Include="project\assets.py" />
@@ -63,6 +77,15 @@
     <Compile Include="project\schemas.py" />
     <Compile Include="project\serialization.py" />
     <Compile Include="project\service.py" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="desktop\" />
+    <Folder Include="host\" />
+    <Folder Include="host\generated\" />
+    <Folder Include="launcher\" />
+    <Folder Include="launcher\platform\" />
+    <Folder Include="project\" />
+    <Folder Include="providers\" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in

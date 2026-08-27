@@ -13,6 +13,7 @@ export interface NativeProjectDocumentState<T extends { id: string }> {
   hydrated: boolean;
   error: Error | null;
   replace: (next: T) => Promise<void>;
+  refresh: () => void;
 }
 
 export function useNativeProjectDocument<T extends { id: string }>(
@@ -24,6 +25,7 @@ export function useNativeProjectDocument<T extends { id: string }>(
   const [projectId, setProjectId] = useState<string | null>(() => projectService.getStatus().projectId);
   const [hydrated, setHydrated] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const [refreshToken, setRefreshToken] = useState(0);
   const writeQueue = useRef<Promise<void>>(Promise.resolve());
   const writeSequence = useRef(0);
 
@@ -63,7 +65,7 @@ export function useNativeProjectDocument<T extends { id: string }>(
     });
 
     return () => { cancelled = true; };
-  }, [domain, documentId, projectId, createDefault]);
+  }, [domain, documentId, projectId, createDefault, refreshToken]);
 
   const replace = useCallback(async (next: T): Promise<void> => {
     projectService.assertWritable();
@@ -88,5 +90,6 @@ export function useNativeProjectDocument<T extends { id: string }>(
     }
   }, [document, domain, documentId]);
 
-  return { document, hydrated, error, replace };
+  const refresh = useCallback(() => setRefreshToken((value) => value + 1), []);
+  return { document, hydrated, error, replace, refresh };
 }

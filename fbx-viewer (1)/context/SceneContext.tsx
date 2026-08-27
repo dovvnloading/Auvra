@@ -131,6 +131,7 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
         removeFromScene: assets.removeFromScene,
         addAnimations: assets.addAnimations,
         retextureModel: assets.retextureModel,
+        previewTexture: assets.previewTexture,
         resetModelTexture: assets.resetModelTexture,
         
         attachments: assets.attachments,

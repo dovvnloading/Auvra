@@ -31,6 +31,12 @@ class FakeHost:
         self.events.append(validate_message(event))
         return event
 
+    def emit_provider_event(self, event_name: str, provider_id: str = "ollama", **payload: Any) -> dict[str, Any]:
+        """Emit a bounded provider job/status/progress/recovery event."""
+        event = self.dispatcher.make_event(event_name, {"providerId": provider_id, **payload})
+        self.events.append(validate_message(event))
+        return event
+
     def request_asset(self, *, method: str, url: str, origin: str, mime: str | None = None,
                       body: bytes | bytearray | memoryview | None = None, now: float = 0) -> dict[str, Any]:
         """Exercise the fake asset ticket lifecycle without filesystem access."""

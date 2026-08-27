@@ -6,12 +6,14 @@ import { extractTextureFromModel } from '../../utils/textureUtils';
 import { useTextureGeneration } from '../../hooks/useTextureGeneration';
 import { useNotification } from '../../context/NotificationContext';
 
+const isRenderablePreview = (value: string | null): value is string => Boolean(value && /^https:\/\/assets\.auvra\.local\/v1\/get\/[A-Za-z0-9_-]{43}$/.test(value));
+
 interface RetextureToolProps {
   onClose: () => void;
 }
 
 export const RetextureTool: React.FC<RetextureToolProps> = ({ onClose }) => {
-  const { models, selectedModelId, retextureModel, saveTextureToLibrary } = useScene();
+  const { models, selectedModelId, previewTexture } = useScene();
   const { addNotification } = useNotification();
   const selectedModel = models.find(m => m.id === selectedModelId);
   
@@ -20,14 +22,18 @@ export const RetextureTool: React.FC<RetextureToolProps> = ({ onClose }) => {
     currentTextureBase64,
     generatedTextureUrl,
     isGenerating,
+    progress,
     error,
     setCurrentTexture,
     generate,
-    apply,
-    discard
+    commit,
+    discard,
+    cancel,
+    retry
   } = useTextureGeneration();
 
   const [prompt, setPrompt] = useState('');
+  const [previewModelId, setPreviewModelId] = useState<string | null>(null);
 
   // 1. Sync hook state with scene selection
   useEffect(() => {
@@ -46,23 +52,28 @@ export const RetextureTool: React.FC<RetextureToolProps> = ({ onClose }) => {
     if (!selectedModel) return;
 
     if (generatedTextureUrl) {
-        retextureModel(selectedModel.id, generatedTextureUrl);
-    } else if (currentTextureBase64) {
-        retextureModel(selectedModel.id, currentTextureBase64);
+        if (selectedModel.id === previewModelId && isRenderablePreview(generatedTextureUrl)) void previewTexture(selectedModel.id, generatedTextureUrl);
     }
-  }, [generatedTextureUrl, selectedModel?.id, retextureModel]);
+  }, [generatedTextureUrl, selectedModel?.id, previewModelId, previewTexture]);
 
-  const handleApply = () => {
-    if (selectedModel) {
-        apply();
-        addNotification({ message: "Texture applied.", type: 'info' });
+  const handleApply = async () => {
+    if (selectedModel && selectedModel.id === previewModelId) {
+        const committed = await commit({ targetModelId: selectedModel.id });
+        if (committed) { await previewTexture(selectedModel.id, committed); addNotification({ message: "Texture committed.", type: 'info' }); }
     }
   };
 
   const handleSave = async () => {
-    if (selectedModel && generatedTextureUrl) {
-        await saveTextureToLibrary(generatedTextureUrl, `AI_${selectedModel.name}_${Date.now().toString().slice(-4)}`);
+    if (selectedModel && generatedTextureUrl && selectedModel.id === previewModelId) {
+        const committed = await commit({ name: `AI_${selectedModel.name}_${Date.now().toString().slice(-4)}` });
+        if (committed) addNotification({ message: 'Texture committed to the library.', type: 'info' });
     }
+  };
+
+  const handleDiscard = async () => {
+    await discard();
+    if (selectedModel && selectedModel.id === previewModelId && currentTextureBase64) await previewTexture(selectedModel.id, currentTextureBase64);
+    setPreviewModelId(null);
   };
 
   if (!selectedModel) return null;
@@ -89,12 +100,14 @@ export const RetextureTool: React.FC<RetextureToolProps> = ({ onClose }) => {
             
             {/* Preview Area */}
             <div className="texture-preview-surface aspect-square bg-gray-950 rounded border border-gray-800 relative group overflow-hidden">
-                {displayImage ? (
+                {displayImage && isRenderablePreview(displayImage) ? (
                     <img 
                         src={displayImage} 
                         alt="Texture Map" 
                         className="w-full h-full object-contain"
                     />
+                ) : isPreviewing ? (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center text-[10px] text-blue-300"><span>Opaque preview asset ready</span><span className="text-gray-600">Commit or discard to finish.</span></div>
                 ) : (
                     <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-600 p-4 text-center gap-2">
                          <AlertTriangle size={24} />
@@ -112,7 +125,8 @@ export const RetextureTool: React.FC<RetextureToolProps> = ({ onClose }) => {
                     <div className="absolute inset-0 bg-gray-900/80 backdrop-blur-sm flex items-center justify-center z-10">
                         <div className="flex flex-col items-center gap-2">
                             <RefreshCw size={24} className="animate-spin text-blue-400" />
-                            <span className="text-xs font-mono text-blue-200">Processing...</span>
+                            <span className="text-xs font-mono text-blue-200">Processing… {Math.round(progress * 100)}%</span>
+                            <button type="button" onClick={() => void cancel()} className="rounded border border-gray-600 px-2 py-1 text-[10px] text-gray-300 hover:bg-gray-800">Cancel job</button>
                         </div>
                     </div>
                 )}
@@ -121,21 +135,23 @@ export const RetextureTool: React.FC<RetextureToolProps> = ({ onClose }) => {
             {/* Controls */}
             {isPreviewing ? (
                  <div className="space-y-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                     <button
-                        onClick={handleSave}
+                                <button
+                                    onClick={handleSave}
+                                    disabled={selectedModel.id !== previewModelId}
                         className="w-full py-2 px-3 rounded text-xs font-bold flex items-center justify-center gap-2 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white transition-colors border border-gray-700"
                      >
                          <Save size={12} /> Save to Library
                      </button>
                      <div className="grid grid-cols-2 gap-2">
                         <button
-                            onClick={discard}
+                            onClick={() => void handleDiscard()}
                             className="py-2 px-3 rounded text-xs font-bold flex items-center justify-center gap-2 bg-red-900/20 text-red-400 border border-red-900/50 hover:bg-red-900/40 transition-colors"
                         >
                             <Undo2 size={12} /> Discard
                         </button>
                         <button
                             onClick={handleApply}
+                            disabled={selectedModel.id !== previewModelId}
                             className="py-2 px-3 rounded text-xs font-bold flex items-center justify-center gap-2 bg-green-600 text-white hover:bg-green-500 shadow-lg shadow-green-900/20 transition-colors"
                         >
                             <Check size={12} /> Apply
@@ -159,13 +175,14 @@ export const RetextureTool: React.FC<RetextureToolProps> = ({ onClose }) => {
 
                     {error && (
                         <div className="text-[10px] text-red-400 bg-red-900/20 p-2 rounded border border-red-900/50">
-                            {error}
+                            <span className="flex-1">{error}</span><button type="button" onClick={() => void retry()} className="text-red-200 underline">Retry</button>
                         </div>
                     )}
 
                     <button
                         onClick={() => {
                             if (currentTextureBase64) {
+                                setPreviewModelId(selectedModel.id);
                                 generate(prompt, currentTextureBase64);
                             }
                         }}
