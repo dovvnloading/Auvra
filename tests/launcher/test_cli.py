@@ -174,7 +174,7 @@ class CliParserTests(unittest.TestCase):
             exact = root / "native" / "target" / "release" / name
             exact.parent.mkdir(parents=True)
             exact.write_text("release placeholder")
-            self.assertEqual(cli._native_engine_command(paths), [str(exact)])
+            self.assertEqual(cli._native_engine_command(paths), [str(exact.resolve())])
 
     def test_start_passes_exact_native_argv_and_closes_owner_after_frame_run_failure(self) -> None:
         class FailingController:
@@ -212,7 +212,10 @@ class CliParserTests(unittest.TestCase):
                 result = cli.run_start(paths, explicit_port=None, json_mode=True)
             self.assertEqual(result, cli.ExitCode.RUNTIME)
             development.assert_called_once()
-            self.assertEqual(development.call_args.kwargs["native_command"], [str(exact)])
+            self.assertEqual(
+                development.call_args.kwargs["native_command"],
+                [str(exact.resolve())],
+            )
             self.assertEqual(controller.closed, 1)
             owned.terminate.assert_called_once()
 
