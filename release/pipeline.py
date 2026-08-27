@@ -50,6 +50,7 @@ RUNTIME_CDN_PATTERN = re.compile(
     rb"https?://(?:cdn\.jsdelivr\.net|unpkg\.com|esm\.sh|fonts\.googleapis\.com|fonts\.gstatic\.com)",
     re.IGNORECASE,
 )
+MSIX_CONTAINER_METADATA = {"AppxBlockMap.xml"}
 
 
 class ReleaseError(RuntimeError):
@@ -548,7 +549,7 @@ def verify_package(package_root: Path, *, expected_channel: str | None = None) -
             # The manifest describes its payload; including its own digest
             # would create a circular value.  Its canonical bytes are checked
             # separately by the parser and package signature.
-            if relative != "release-manifest.json":
+            if relative != "release-manifest.json" and relative not in MSIX_CONTAINER_METADATA:
                 actual[relative] = {"path": relative, "size": path.stat().st_size, "sha256": sha256(path)}
     if expected != actual:
         missing = sorted(set(expected) - set(actual))
