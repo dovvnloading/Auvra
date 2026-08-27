@@ -357,7 +357,7 @@ class NativeWebView2SmokeTests(unittest.TestCase):
             const lifecycleEvents = [];
             const onLifecycle = event => {{
               const detail = event && event.detail;
-              if (detail && detail.id === editor.id) lifecycleEvents.push(detail);
+              if (detail && detail.id === editor.id) lifecycleEvents.push(detail.lifecycle);
             }};
             window.addEventListener("auvra:renderer-lifecycle", onLifecycle);
             const simulated = api.simulateContextLoss(editor.id);
@@ -371,7 +371,7 @@ class NativeWebView2SmokeTests(unittest.TestCase):
                 await new Promise(resolve => setTimeout(resolve, 50));
                 continue;
               }}
-              lost = lost || lifecycleEvents.some(event => event.lifecycle === "lost" || event.lifecycle === "restoring") || current.lifecycle === "lost" || current.lifecycle === "restoring";
+              lost = lost || lifecycleEvents.some(lifecycle => lifecycle === "lost" || lifecycle === "restoring") || current.lifecycle === "lost" || current.lifecycle === "restoring";
               recoveryCount = Math.max(recoveryCount, current.recoveryCount || 0);
               ready = current.lifecycle === "ready" && recoveryCount > before.recoveryCount;
               if (lost && ready) break;
@@ -419,7 +419,7 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         self.assertEqual(selected.get("memoryEstimateKind"), "heuristic-resource-count", selected)
         self.assertIsInstance(selected.get("pixelSignature"), str, selected)
         self.assertTrue(selected["pixelSignature"], selected)
-        self.assertTrue(any(event.get("lifecycle") in {"lost", "restoring"} for event in result.get("lifecycleEvents", [])), result)
+        self.assertTrue(any(event in {"lost", "restoring"} for event in result.get("lifecycleEvents", [])), result)
         self.assertTrue(result["lost"], result)
         self.assertTrue(result["ready"], result)
         self.assertGreater(result["recoveryCount"], before["recoveryCount"], result)
