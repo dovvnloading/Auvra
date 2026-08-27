@@ -91,7 +91,12 @@ async function runTransportTests() {
   try {
     const output = join(temporary, "nativeTransport.mjs");
     const esbuild = resolve(root, "node_modules/esbuild/bin/esbuild");
-    const result = spawnSync(process.execPath, [esbuild, "host/nativeTransport.ts", "--bundle", "--platform=browser", "--format=esm", `--outfile=${output}`], { cwd: root, encoding: "utf8", windowsHide: true });
+    const esbuildArgs = ["host/nativeTransport.ts", "--bundle", "--platform=browser", "--format=esm", `--outfile=${output}`];
+    // npm installs the Unix esbuild entry point as the native executable, while
+    // Windows keeps it as a Node wrapper. Execute each form without a shell.
+    const result = process.platform === "win32"
+      ? spawnSync(process.execPath, [esbuild, ...esbuildArgs], { cwd: root, encoding: "utf8", windowsHide: true })
+      : spawnSync(esbuild, esbuildArgs, { cwd: root, encoding: "utf8" });
     if (result.status !== 0) throw new Error(`transport bundle failed: ${result.stderr || result.stdout}`);
     const { NativeHostTransport } = await import(`${pathToFileURL(output).href}?frame-tests=${Date.now()}`);
     const session = { protocol: "auvra.host/1", type: "session", session: "test-session", revision: 0, status: "active" };
