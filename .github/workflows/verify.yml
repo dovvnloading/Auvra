@@ -229,7 +229,8 @@ jobs:
           New-Item -ItemType Directory -Path $site -Force | Out-Null
           Get-ChildItem -LiteralPath (Join-Path $env:GITHUB_WORKSPACE '.venv\Lib\site-packages') -Force | Copy-Item -Destination $site -Recurse -Force
           Get-ChildItem -LiteralPath $site -Directory -Filter '__pycache__' -Recurse | Remove-Item -Recurse -Force
-          Get-ChildItem -LiteralPath $site -File -Filter '*.pyc' -Recurse | Remove-Item -Force
+          $developmentSuffixes = '.pyc', '.pdb', '.ilk', '.obj', '.lib', '.exp', '.map', '.log', '.dmp', '.dump'
+          Get-ChildItem -LiteralPath $site -File -Recurse | Where-Object { $developmentSuffixes -contains $_.Extension.ToLowerInvariant() } | Remove-Item -Force
           $stage = Join-Path $env:RUNNER_TEMP 'auvra-stage-inputs'
           pwsh -NoProfile -File release/stage_inputs.ps1 -Frontend (Join-Path $env:GITHUB_WORKSPACE 'fbx-viewer (1)\dist') -PythonEmbed (Join-Path $env:AUVRA_RUNTIME 'python-embed') -PythonSitePackages $site -WebView2Sdk $env:AUVRA_SDK -WebView2Fixed (Join-Path $env:AUVRA_RUNTIME 'webview2-fixed') -NativeBinary (Join-Path $env:GITHUB_WORKSPACE 'native\target\release\auvra-native.exe') -HostInput $hostInput -Licenses $licenses -Output $stage
           "AUVRA_STAGE=$stage" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -244,10 +245,14 @@ jobs:
           $makeAppx = Get-ChildItem -Path (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin') -Filter MakeAppx.exe -Recurse | Sort-Object FullName | Select-Object -Last 1
           if (-not $makeAppx) { throw 'Windows SDK MakeAppx.exe is required' }
           python -m release.pipeline assemble --input-root $env:AUVRA_STAGE --output $staging --channel dev --version "0.0.0.${{ github.run_number }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m release.pipeline package --staging $staging --output $msix --makeappx $makeAppx.FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $unpacked = Join-Path $env:RUNNER_TEMP 'auvra-package-unpacked'
           & $makeAppx.FullName unpack /p $msix /d $unpacked /o
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m release.pipeline verify --package-root $unpacked --channel dev
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:PYTHONNOUSERSITE = '1'
           $env:AUVRA_RELEASE_NON_UI_SMOKE = '1'
           & (Join-Path $unpacked 'runtime\python\python.exe') -S (Join-Path $unpacked 'host\auvra_startup.py')
@@ -258,6 +263,7 @@ jobs:
           uv run --locked --no-sync python -W error::ResourceWarning -m unittest tests.desktop.test_release_smoke -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m unittest discover -s tests/release -t . -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Write-Output 'Unsigned CI intentionally does not claim MSIX installation, upgrade, rollback, or uninstall success; those require a trusted signing identity on a clean machine.'
 
       - name: Upload unsigned dev MSIX
