@@ -96,12 +96,27 @@ project. Both legacy sources are treated as read-only and are never cleared or
 modified automatically. Because Auvra remains pre-alpha, keep independent
 backups of important work.
 
+## Provider integrations
+
+Provider access is owned by the Python host. fal.ai is Auvra's primary media
+provider. Text, coding, and command assistance can be explicitly routed to
+OpenAI, Anthropic, xAI, OpenRouter, Ollama, or llama.cpp.
+
+Configure providers from the editor settings. On supported Windows systems,
+credentials can be stored in Windows Credential Manager or kept in memory for
+the current session. Credentials are never written to project files or browser
+storage. Routes are explicit; the host does not silently switch providers.
+
+Generated media remains a preview until it is committed to the project. Local
+providers use explicitly configured loopback endpoints.
+
 To verify the launcher and production bundle locally:
 
 ```powershell
 python -m unittest discover -s tests -t . -v
 cd "fbx-viewer (1)"
 npm run project:verify
+npm run provider:verify
 npm run build
 ```
 

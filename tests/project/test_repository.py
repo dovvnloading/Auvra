@@ -8,7 +8,12 @@ import Auvra.project.repository as repository_module
 from Auvra.project.errors import (ArchiveValidationError, InvalidProjectError,
                                   ReadOnlyError, RecoveryRequiredError, RevisionConflictError)
 from Auvra.project.legacy import LegacyArchive
-from Auvra.project.schemas import DOMAIN_NAMES, validate_domain
+from Auvra.project.schemas import (
+    DOMAIN_NAMES,
+    domain_document,
+    validate_domain,
+    validate_project_references,
+)
 
 class ProjectTests(unittest.TestCase):
     def setUp(self):
@@ -43,6 +48,22 @@ class ProjectTests(unittest.TestCase):
         with mock.patch.object(repository_module, "_is_reparse", side_effect=lambda path: Path(path) == self.root / "Project" or original(path)):
             with self.assertRaises(InvalidProjectError):
                 ProjectRepository(self.root)
+        self.repo = ProjectRepository(self.root)
+
+    def test_existing_project_rejects_linked_document_before_recovery(self):
+        self.repo.close()
+        authored = self.root / "Project" / "textures.json"
+        authored.write_text('{"schemaVersion":1,"documents":[]}', encoding="utf-8")
+        original = repository_module._is_reparse
+
+        def linked(path):
+            return Path(path) == authored or original(path)
+
+        with mock.patch.object(repository_module, "_is_reparse", side_effect=linked), \
+             mock.patch.object(ProjectRepository, "_recover") as recover:
+            with self.assertRaises(InvalidProjectError):
+                ProjectRepository(self.root)
+            recover.assert_not_called()
         self.repo = ProjectRepository(self.root)
 
     def test_readonly_opener_never_recovers_a_writer_transaction(self):
@@ -224,6 +245,13 @@ class ProjectTests(unittest.TestCase):
         index_path = Path(self.tmp.name) / "corrupt.sqlite"; index_path.write_bytes(b"not sqlite")
         index = ProjectIndex(index_path); self.assertEqual(index.recent(), []); index.close()
 
+    def test_webp_asset_content_must_match_declared_media_type(self):
+        webp = b"RIFF" + (4).to_bytes(4, "little") + b"WEBP"
+        reference = self.repo.assets.put_stream(io.BytesIO(webp), mime="image/webp")
+        self.assertEqual(reference.mime, "image/webp")
+        with self.assertRaises(ValueError):
+            self.repo.assets.put_stream(io.BytesIO(b"not-webp"), mime="image/webp")
+
     def test_concurrent_asset_manifest_updates_do_not_lose_entries(self):
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=8) as pool:
@@ -277,6 +305,67 @@ class SchemaTests(unittest.TestCase):
             validate_domain("metadata", {"schemaVersion": 1, "documents": [{"id": "meta", "settings": {"scale": float("nan")}}]})
         with self.assertRaises(ValueError):
             validate_domain("metadata", {"schemaVersion": 2, "documents": [{"id": "meta"}]})
+
+    def test_generated_texture_provenance_is_bounded_and_secret_free(self):
+        asset = "a" * 64
+        provenance = {
+            "providerId": "fal",
+            "modelId": "fal-ai/flux/dev",
+            "jobId": "job-0123456789abcdef",
+            "createdAt": 1,
+            "routeOrigin": "cloud",
+            "routeConsent": "explicit",
+            "promptSha256": "b" * 64,
+            "settingsSha256": "c" * 64,
+            "artifactSha256": asset,
+            "inputAssetIds": [],
+        }
+        document = {"schemaVersion": 1, "documents": [{
+            "id": "texture", "name": "Generated", "assetId": asset,
+            "dimensions": {"width": 1024, "height": 1024},
+            "generation": provenance,
+        }]}
+        validate_domain("textures", document)
+        with self.assertRaises(ValueError):
+            validate_domain("textures", {"schemaVersion": 1, "documents": [{
+                **document["documents"][0],
+                "generation": {**provenance, "prompt": "must not persist"},
+            }]})
+        with self.assertRaises(ValueError):
+            mismatched = {
+                **document["documents"][0],
+                "generation": {**provenance, "artifactSha256": "d" * 64},
+            }
+            domains = {
+                domain: domain_document(domain, [mismatched] if domain == "textures" else [])
+                for domain in DOMAIN_NAMES
+            }
+            validate_project_references(domains, asset_exists=lambda identity: identity == asset)
+
+    def test_hud_documents_and_generated_command_provenance_are_strict(self):
+        value = {
+            "id": "hud-main", "name": "Main HUD",
+            "elements": [{
+                "id": "health", "name": "Health", "type": "HealthBar",
+                "props": {"value": 85, "barColor": "#dc2626"},
+                "position": {"x": 10, "y": 20},
+                "size": {"width": 250, "height": 60},
+                "zIndex": 1, "isVisible": True, "isLocked": False,
+            }],
+            "layout": {"width": 1920, "height": 1080},
+            "commands": [{
+                "id": "command-1", "jobId": "job-0123456789abcdef",
+                "providerId": "ollama", "modelId": "local-model",
+                "promptSha256": "a" * 64, "operationsSha256": "b" * 64,
+                "appliedAt": 1,
+            }],
+        }
+        validate_domain("hud", {"schemaVersion": 1, "documents": [value]})
+        with self.assertRaises(ValueError):
+            validate_domain("hud", {"schemaVersion": 1, "documents": [{
+                **value,
+                "commands": [{**value["commands"][0], "rawPrompt": "not allowed"}],
+            }]})
     def test_substantive_round_trip_fixture_for_every_domain(self):
         asset = "a" * 64
         fixtures = {
@@ -288,7 +377,7 @@ class SchemaTests(unittest.TestCase):
             "sockets":{"id":"so","name":"Socket","parentModelId":"m","position":[0,0,0]}, "textures":{"id":"t","name":"Texture","assetId":asset,"dimensions":{"width":1,"height":1}},
             "audio":{"id":"au","name":"Audio","assetId":asset,"type":"audio/wav","duration":1}, "materials":{"id":"mat","name":"Material","textureIds":["t"],"overrides":{}},
             "blueprints":{"id":"b","name":"Blueprint","type":"Enemy Controller","description":"D","linkedModelId":None,"stats":[],"traits":[],"variables":[],"animationGraph":{},"meshScale":1},
-            "graphs":{"id":"g","modelId":"m","variables":[],"inputs":[],"states":[],"transitions":[],"activeStateId":None}, "hud":{"id":"h","name":"HUD","elements":[],"layout":{},"commands":[]},
+            "graphs":{"id":"g","modelId":"m","variables":[],"inputs":[],"states":[],"transitions":[],"activeStateId":None}, "hud":{"id":"h","name":"HUD","elements":[],"layout":{"width":1920,"height":1080},"commands":[]},
         }
         for domain, value in fixtures.items():
             document = {"schemaVersion":1,"documents":[value]}; validate_domain(domain, document); self.assertEqual(validate_domain(domain, json.loads(canonical_json(document))), document)

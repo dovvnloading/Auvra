@@ -44,6 +44,7 @@ class NativeProjectHost:
         asset_registry: AssetTransferRegistry,
         dialogs: WinFormsProjectDialogs | None = None,
         service: ProjectService | None = None,
+        preview_store: Any = None,
         now: Callable[[], float] = time.time,
     ) -> None:
         state_root = Path(state_root).expanduser().absolute()
@@ -51,12 +52,18 @@ class NativeProjectHost:
         self.assets = asset_registry
         self.dialogs = dialogs or WinFormsProjectDialogs()
         self.service = service or ProjectService(ProjectIndex(state_root / "projects.sqlite3"))
+        self.preview_store = preview_store
         self._now = now
         self._dirty_since: float | None = None
         self._last_mutation: float | None = None
         self._events: list[tuple[str, dict[str, Any]]] = []
         self._recovery_by_id: dict[str, tuple[str, str, str]] = {}
         self._recovery_id_by_key: dict[tuple[str, str, str], str] = {}
+
+    def set_preview_store(self, preview_store: Any) -> None:
+        """Bind one session-local generated preview store."""
+
+        self.preview_store = preview_store
 
     def handle(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
         handler = {
@@ -434,14 +441,29 @@ class NativeProjectHost:
         asset_id = payload["assetId"]
         if not _SHA256.fullmatch(asset_id):
             raise HostOperationError("invalid_request", "Asset identity is invalid")
-        reference = self.service.resolve_reference(asset_id, project_id=active.project_id)
-        stream = self.service.resolve(asset_id, project_id=active.project_id)
+        try:
+            reference = self.service.resolve_reference(asset_id, project_id=active.project_id)
+            stream = self.service.resolve(asset_id, project_id=active.project_id)
+            mime, size = reference.mime or "application/octet-stream", reference.size
+        except (FileNotFoundError, ValueError):
+            # Existing project content with missing/corrupt metadata is a
+            # project failure, not an excuse to substitute a session preview.
+            if active.assets.path_for(asset_id).exists():
+                raise
+            if self.preview_store is None:
+                raise
+            try:
+                preview = self.preview_store.find(asset_id)
+                stream = self.preview_store.open(asset_id)
+                mime, size = preview.mime, preview.size
+            except Exception:
+                raise HostOperationError("invalid_job", "Generated preview is unavailable") from None
         try:
             ticket = self.assets.issue_download_stream(
                 stream,
-                mime_type=reference.mime or "application/octet-stream",
+                mime_type=mime,
                 expected_hash=asset_id,
-                max_size=max(1, reference.size),
+                max_size=max(1, size),
                 ttl=60,
             )
         finally:
@@ -450,8 +472,8 @@ class NativeProjectHost:
             url=ticket.url,
             method=ticket.method,
             assetId=asset_id,
-            mime=reference.mime or "application/octet-stream",
-            size=reference.size,
+            mime=mime,
+            size=size,
         )
 
     @staticmethod

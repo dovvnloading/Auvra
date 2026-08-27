@@ -492,6 +492,13 @@ def _validate_open_boundaries(root: Path) -> None:
     descriptors = [path for path in root.glob("*.auvra") if path.is_file()]
     if len(descriptors) != 1 or _is_reparse(descriptors[0]):
         raise InvalidProjectError("project requires one safe descriptor")
+    # Recovery can replace authored documents before the later full schema and
+    # hash audit. Reject linked authority now so journals cannot redirect that
+    # recovery outside the project boundary.
+    for area in (root / "Project", root / "Content", root / "Content" / "sha256"):
+        for entry in area.iterdir():
+            if _is_reparse(entry):
+                raise InvalidProjectError("project authority contains a linked entry")
     internal = root / ".auvra"
     for entry in internal.rglob("*"):
         if _is_reparse(entry):

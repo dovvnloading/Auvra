@@ -28,6 +28,8 @@ from .contracts import (
 )
 from .policy import FramePolicy
 from .project_host import NativeProjectHost
+from .provider_host import NativeProviderHost, _assert_state_path_safe
+from .previews import PreviewStore
 from .sdk import acquire_sdk
 from .webview2 import WebView2Frame
 from .webview2 import MESSAGE_MAX_BYTES
@@ -83,6 +85,8 @@ class FrameController:
     def __init__(self, process: Any, *, frame: Frame, dispatcher: HostDispatcher | None = None,
                   profile_path: Path | None = None, profile_lease: _ProfileLease | None = None,
                   project_host: NativeProjectHost | None = None,
+                  provider_host: NativeProviderHost | None = None,
+                  preview_store: PreviewStore | None = None,
                   asset_registry: AssetTransferRegistry | None = None,
                   poll_interval: float = 0.1) -> None:
         self.process = process
@@ -99,6 +103,8 @@ class FrameController:
                                   packaged_root=str(config.packaged_root) if config.packaged_root else None)
         self.dispatcher = dispatcher or HostDispatcher(SessionManager("s-" + secrets.token_urlsafe(24)))
         self.project_host = project_host
+        self.provider_host = provider_host
+        self.preview_store = preview_store
         self.asset_registry = asset_registry
         self.profile_path = profile_path
         self._profile_lease = profile_lease
@@ -119,6 +125,8 @@ class FrameController:
         active_dispatcher = dispatcher or HostDispatcher(SessionManager("s-" + secrets.token_urlsafe(24)))
         asset_registry: AssetTransferRegistry | None = None
         project_host: NativeProjectHost | None = None
+        preview_store: PreviewStore | None = None
+        provider_host: NativeProviderHost | None = None
         try:
             asset_registry = AssetTransferRegistry(
                 profile.parent / "asset-transfers",
@@ -126,7 +134,12 @@ class FrameController:
                 trusted_origin=exact_origin,
             )
             project_host = NativeProjectHost(profile.parent, asset_registry=asset_registry)
-            active_dispatcher.bind_services(project_service=project_host, asset_service=project_host)
+            _assert_state_path_safe(profile.parent / "previews")
+            _assert_state_path_safe(profile.parent / "provider-state")
+            preview_store = PreviewStore(profile.parent / "previews")
+            project_host.set_preview_store(preview_store)
+            provider_host = NativeProviderHost(profile.parent / "provider-state", project_host=project_host, preview_store=preview_store)
+            active_dispatcher.bind_services(project_service=project_host, asset_service=project_host, provider_service=provider_host)
             config = FrameConfig(FrameMode.DEVELOPMENT, development_origin=exact_origin,
                                  user_data_folder=profile,
                                  on_message=lambda body, source: holder["controller"].on_message(body, source),
@@ -138,6 +151,10 @@ class FrameController:
             else:
                 frame = frame_factory(config)
         except Exception:
+            if provider_host is not None:
+                provider_host.shutdown()
+            if preview_store is not None:
+                preview_store.close()
             if project_host is not None:
                 project_host.shutdown()
             if asset_registry is not None:
@@ -151,6 +168,8 @@ class FrameController:
             profile_path=profile,
             profile_lease=lease,
             project_host=project_host,
+            provider_host=provider_host,
+            preview_store=preview_store,
             asset_registry=asset_registry,
         )
         holder["controller"] = controller
@@ -173,6 +192,8 @@ class FrameController:
         active_dispatcher = dispatcher or HostDispatcher(SessionManager("s-" + secrets.token_urlsafe(24)))
         asset_registry: AssetTransferRegistry | None = None
         project_host: NativeProjectHost | None = None
+        preview_store: PreviewStore | None = None
+        provider_host: NativeProviderHost | None = None
         try:
             asset_registry = AssetTransferRegistry(
                 profile.parent / "asset-transfers",
@@ -180,7 +201,12 @@ class FrameController:
                 trusted_origin="https://app.auvra.local",
             )
             project_host = NativeProjectHost(profile.parent, asset_registry=asset_registry)
-            active_dispatcher.bind_services(project_service=project_host, asset_service=project_host)
+            _assert_state_path_safe(profile.parent / "previews")
+            _assert_state_path_safe(profile.parent / "provider-state")
+            preview_store = PreviewStore(profile.parent / "previews")
+            project_host.set_preview_store(preview_store)
+            provider_host = NativeProviderHost(profile.parent / "provider-state", project_host=project_host, preview_store=preview_store)
+            active_dispatcher.bind_services(project_service=project_host, asset_service=project_host, provider_service=provider_host)
             config = FrameConfig(FrameMode.PACKAGED, packaged_root=approved_root,
                                  user_data_folder=profile,
                                  on_message=lambda body, source: holder["controller"].on_message(body, source),
@@ -192,6 +218,10 @@ class FrameController:
             else:
                 frame = frame_factory(config)
         except Exception:
+            if provider_host is not None:
+                provider_host.shutdown()
+            if preview_store is not None:
+                preview_store.close()
             if project_host is not None:
                 project_host.shutdown()
             if asset_registry is not None:
@@ -205,6 +235,8 @@ class FrameController:
             profile_path=profile,
             profile_lease=lease,
             project_host=project_host,
+            provider_host=provider_host,
+            preview_store=preview_store,
             asset_registry=asset_registry,
         )
         holder["controller"] = controller
@@ -225,7 +257,9 @@ class FrameController:
                 self._drain_lifecycle()
                 if self.project_host is not None:
                     self.project_host.tick()
-                    self._flush_bound_events()
+                if self.provider_host is not None:
+                    self.provider_host.tick()
+                self._flush_bound_events()
                 state = getattr(self.frame, "state", None)
                 state_value = getattr(state, "value", state)
                 failure = getattr(self.frame, "failure", None)
@@ -330,6 +364,16 @@ class FrameController:
         except Exception as exc:
             # Continue to process cleanup even when native shutdown fails.
             self.cleanup_error = exc
+        if self.provider_host is not None:
+            try:
+                self.provider_host.shutdown()
+            except Exception as exc:
+                self.cleanup_error = self.cleanup_error or exc
+        if self.preview_store is not None:
+            try:
+                self.preview_store.close()
+            except Exception as exc:
+                self.cleanup_error = self.cleanup_error or exc
         if self.project_host is not None:
             try:
                 self.project_host.shutdown()

@@ -1,4 +1,4 @@
-"""Opt-in, real Windows WebView2 smoke coverage for the Stage 2 frame.
+"""Opt-in, real Windows WebView2 smoke coverage for the native Stage 4 lane.
 
 The suite is deliberately skipped during normal unit-test discovery.  Set
 ``AUVRA_NATIVE_SMOKE=1`` to run it.  It starts only the exact repository Vite
@@ -25,12 +25,14 @@ from Auvra.desktop import contracts as desktop_contracts
 from Auvra.desktop.assets import AssetTransferRegistry
 from Auvra.desktop.dialogs import DialogSelection
 from Auvra.desktop.project_host import NativeProjectHost
+from Auvra.desktop.provider_host import NativeProviderHost
 from Auvra.desktop.sdk import acquire_sdk
 from Auvra.desktop.webview2 import WebView2Frame
 from Auvra.launcher.cli import choose_port
 from Auvra.launcher.config import FRONTEND_ROOT
 from Auvra.launcher.process import OwnedProcess
 from Auvra.launcher.readiness import wait_for_readiness
+from Auvra.providers.adapters import TextResult
 
 
 _SMOKE_ENABLED = os.environ.get("AUVRA_NATIVE_SMOKE") == "1"
@@ -84,6 +86,17 @@ class _PackagedOwner:
 
     def terminate(self) -> None:
         self.stopped = True
+
+
+class _NativeSmokeProviderAdapter:
+    """Deterministic local adapter; no socket or provider process is used."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, *, model: str, prompt: str, **_kwargs: Any) -> TextResult:
+        self.calls += 1
+        return TextResult("ollama", model, "native smoke local result")
 
 
 class _SmokeProjectDialogs:
@@ -172,11 +185,12 @@ def _script_for_requests(prefix: str, trap_port: int | None = None) -> str:
 
 
 def _script_for_project_lifecycle(prefix: str) -> str:
-    """Exercise the native project service through WebView2's real bridge."""
+    """Exercise project and one deterministic local provider job in the bridge."""
 
     return f"""
     (() => {{
-      const state = {{ session: null, revision: 0, projectId: null, sent: new Set() }};
+      const state = {{ session: null, revision: 0, projectId: null, projectRevision: 0,
+        jobId: null, poll: 0, sent: new Set() }};
       window.__auvraNativeProjectSmoke = state;
       const request = (id, method, payload) => {{
         if (state.sent.has(id)) return;
@@ -189,6 +203,7 @@ def _script_for_project_lifecycle(prefix: str) -> str:
       chrome.webview.addEventListener("message", event => {{
         const message = event.data;
         if (!message || typeof message !== "object") return;
+        if (typeof message.revision === "number") state.revision = message.revision;
         if (message.type === "session" && !state.session) {{
           state.session = message.session;
           state.revision = message.revision;
@@ -197,6 +212,12 @@ def _script_for_project_lifecycle(prefix: str) -> str:
         }}
         if (message.type !== "response" || !message.id) return;
         state.revision = message.revision;
+        if (message.id === "{prefix}-wrong-owner") {{
+          request("{prefix}-close", "project.close", {{
+            projectId: state.projectId, expectedRevision: state.projectRevision
+          }});
+          return;
+        }}
         if (!message.ok) return;
         const result = message.result || {{}};
         if (message.id === "{prefix}-create") {{
@@ -215,9 +236,42 @@ def _script_for_project_lifecycle(prefix: str) -> str:
             projectId: state.projectId, expectedRevision: result.revision
           }});
         }} else if (message.id === "{prefix}-save") {{
-          request("{prefix}-close", "project.close", {{
-            projectId: state.projectId, expectedRevision: result.revision
+          state.projectRevision = result.revision;
+          request("{prefix}-configure-provider", "provider.configure", {{
+            providerId: "ollama", expectedSettingsRevision: 0,
+            settings: {{ enabled: true,
+              routes: [{{ capability: "text", modelId: "native-smoke-text" }}],
+              fallbackPolicy: "none", requireCostConfirmation: false,
+              budgets: {{ perJobMicroUsd: 0, dailyMicroUsd: 0, monthlyMicroUsd: 0 }},
+              endpoint: "http://127.0.0.1:11434" }}
           }});
+        }} else if (message.id === "{prefix}-configure-provider") {{
+          request("{prefix}-submit-provider", "inference.submit", {{
+            projectId: state.projectId, expectedRevision: state.projectRevision,
+            providerId: "ollama", modelId: "native-smoke-text", capability: "text",
+            route: "local", input: "deterministic native smoke"
+          }});
+        }} else if (message.id === "{prefix}-submit-provider") {{
+          state.jobId = result.job.jobId;
+          state.poll = 0;
+          request("{prefix}-get-provider-0", "inference.get", {{
+            projectId: state.projectId, jobId: state.jobId
+          }});
+        }} else if (message.id.indexOf("{prefix}-get-provider-") === 0) {{
+          if (result.job && result.job.status === "succeeded") {{
+            request("{prefix}-wrong-owner", "inference.get", {{
+              projectId: "wrong-project", jobId: state.jobId
+            }});
+          }} else if (result.job && result.job.status === "failed") {{
+            request("{prefix}-close", "project.close", {{
+              projectId: state.projectId, expectedRevision: state.projectRevision
+            }});
+          }} else {{
+            state.poll += 1;
+            if (state.poll < 100) setTimeout(() => request(
+              "{prefix}-get-provider-" + state.poll, "inference.get",
+              {{ projectId: state.projectId, jobId: state.jobId }}), 25);
+          }}
         }}
       }});
     }})();
@@ -283,9 +337,17 @@ class NativeWebView2SmokeTests(unittest.TestCase):
             trusted_origin=origin,
         )
         host = NativeProjectHost(root / "project-state", asset_registry=registry, dialogs=dialogs)
+        provider = NativeProviderHost(
+            root / "provider-state", project_host=host,
+            adapters={"ollama": _NativeSmokeProviderAdapter()},
+        )
+        provider.registry.discover_models("ollama", ("native-smoke-text",))
         controller.asset_registry = registry
         controller.project_host = host
-        controller.dispatcher.bind_services(project_service=host, asset_service=host)
+        controller.provider_host = provider
+        controller.dispatcher.bind_services(
+            project_service=host, asset_service=host, provider_service=provider,
+        )
         return dialogs.project_path
 
     def _project_lifecycle(self, controller: FrameController, prefix: str, seen: list[dict[str, Any]], project_path: Path) -> None:
@@ -301,15 +363,50 @@ class NativeWebView2SmokeTests(unittest.TestCase):
             time.sleep(0.2)
         expected = {
             f"{prefix}-create", f"{prefix}-apply", f"{prefix}-snapshot",
-            f"{prefix}-save", f"{prefix}-close",
+            f"{prefix}-save", f"{prefix}-configure-provider",
+            f"{prefix}-submit-provider", f"{prefix}-wrong-owner",
+            f"{prefix}-close",
         }
         _wait_until(
-            lambda: expected.issubset({item.get("id") for item in seen}),
+            lambda: expected.issubset({item.get("id") for item in seen}) and any(
+                item.get("id", "").startswith(f"{prefix}-get-provider-") and
+                item.get("type") == "response" and item.get("ok") and
+                item.get("result", {}).get("job", {}).get("status") == "succeeded"
+                for item in seen
+            ),
             20.0,
             "native project lifecycle",
         )
         responses = {item["id"]: item for item in seen if item.get("id") in expected}
-        self.assertTrue(all(item.get("ok") is True for item in responses.values()), responses)
+        successful = expected - {f"{prefix}-wrong-owner"}
+        self.assertTrue(all(responses[item].get("ok") is True for item in successful), responses)
+        self.assertEqual(responses[f"{prefix}-wrong-owner"].get("error", {}).get("code"), "invalid_project")
+        configure = responses[f"{prefix}-configure-provider"]["result"]
+        settings = configure["settings"]
+        self.assertEqual(configure["providerId"], "ollama")
+        self.assertEqual(configure["settingsRevision"], 1)
+        self.assertEqual(settings["routes"], [{"capability": "text", "modelId": "native-smoke-text"}])
+        self.assertFalse(settings["requireCostConfirmation"])
+        configure_request = next(item for item in seen
+                                 if item.get("id") == f"{prefix}-configure-provider" and
+                                 item.get("type") == "request")
+        self.assertEqual(configure_request["payload"]["settings"]["endpoint"], "http://127.0.0.1:11434")
+        submitted_request = next(item for item in seen if item.get("id") == f"{prefix}-submit-provider" and item.get("type") == "request")
+        self.assertEqual(submitted_request["payload"]["projectId"], responses[f"{prefix}-create"]["result"]["projectId"])
+        self.assertEqual(submitted_request["payload"]["expectedRevision"], responses[f"{prefix}-save"]["result"]["revision"])
+        get_response = next(item for item in seen
+                            if item.get("id", "").startswith(f"{prefix}-get-provider-") and
+                            item.get("type") == "response" and item.get("ok") and
+                            item.get("result", {}).get("job", {}).get("status") == "succeeded")
+        job = get_response["result"]["job"]
+        self.assertEqual(job["providerId"], "ollama")
+        self.assertEqual(job["modelId"], "native-smoke-text")
+        self.assertEqual(job["route"], "local")
+        self.assertEqual(job["status"], "succeeded")
+        self.assertEqual(job["outputText"], "native smoke local result")
+        self.assertNotIn("http://", json.dumps(job))
+        adapter = controller.provider_host._adapters["ollama"]
+        self.assertEqual(adapter.calls, 1)
         self.assertTrue((project_path / "Native Smoke Project.auvra").is_file())
         self.assertTrue((project_path / "Project" / "metadata.json").is_file())
         self.assertFalse(any(str(project_path) in json.dumps(item) for item in responses.values()))

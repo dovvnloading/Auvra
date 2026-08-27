@@ -23,6 +23,7 @@ interface AssetContextType {
   removeFromScene: (id: string) => void; 
   addAnimations: (files: File[], modelId: string) => Promise<void>;
   retextureModel: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<void>;
+  previewTexture: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<void>;
   resetModelTexture: (modelId: string) => Promise<void>;
   setModels: (models: LoadedModelData[]) => void;
 
@@ -138,6 +139,7 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     },
     addAnimations: modelManager.addAnimations,
     retextureModel: modelManager.retextureModel,
+    previewTexture: modelManager.previewTexture,
     resetModelTexture: modelManager.resetModelTexture,
     setModels: modelManager.setModels,
 

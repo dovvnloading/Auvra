@@ -335,6 +335,7 @@ export interface SceneContextType {
   selectModel: (id: string | null) => void;
   addAnimations: (files: File[], modelId: string) => Promise<void>;
   retextureModel: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<void>;
+  previewTexture: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<void>;
   resetModelTexture: (modelId: string) => Promise<void>;
 
   // Texture Actions
