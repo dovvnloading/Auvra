@@ -2,7 +2,6 @@
 import React, { createContext, useContext, useState, ReactNode, useCallback } from 'react';
 import { SceneContextType } from '../types';
 import { useNotification } from './NotificationContext';
-import { dbOperations } from '../utils/db';
 import { disposeModel, disposeObject } from '../utils/processing/ModelLifecycle';
 import { DEFAULT_BLUEPRINTS } from '../data/blueprints';
 
@@ -56,10 +55,10 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
             assets.textures.forEach(t => URL.revokeObjectURL(t.url));
             assets.audioAssets.forEach(a => URL.revokeObjectURL(a.url));
 
-            // 2. Clear Database
-            await dbOperations.clearDatabase();
-
-            // 3. Reset State in Contexts
+            // The native repository is authoritative. Reset only in-memory
+            // editor state; legacy browser storage is a read-only migration
+            // source and must never be cleared automatically.
+            // 2. Reset State in Contexts
             assets.setModels([]);
             assets.setAttachments([]);
             assets.setSockets([]);
@@ -67,17 +66,12 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
             assets.setAudioAssets([]);
             assets.setBlueprints(DEFAULT_BLUEPRINTS);
             assets.resetGraphs(); 
-            level.setLevelObjects([]); 
+            level.hydrateProjectState([], [], null);
 
-            // 4. Reset UI State
+            // 3. Reset UI State
             selection.selectModel(null);
             selection.selectBlueprint(null);
             viewport.setCameraState({ position: [4, 4, 8], target: [0, 1, 0] });
-
-            addNotification({ message: "New Project Started.", type: 'success' });
-            
-            // Re-init default level implicitly via hook mount or manual reload if needed
-            window.location.reload(); 
 
         } catch(e) {
             console.error("Error resetting scene:", e);
@@ -99,6 +93,8 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
         setSelectedModelId: selection.selectModel,
         setIsLoading,
         defaultBlueprints: DEFAULT_BLUEPRINTS
+        ,hydrateProjectState: level.hydrateProjectState
+        ,hydrateGraphs: assets.hydrateGraphs
     });
 
     const projectManager = useProjectManager({
@@ -196,8 +192,17 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
 
         // Project
         saveProject: projectManager.saveProject,
+        saveProjectAs: projectManager.saveProjectAs,
+        exportProject: projectManager.exportProject,
+        importProject: projectManager.importProject,
+        importLegacyProject: projectManager.importLegacyProject,
+        migrateLegacyBrowserProject: projectManager.migrateLegacyBrowserProject,
         loadProject: projectManager.loadProject,
+        openRecentProject: projectManager.openRecentProject,
+        recoverProject: projectManager.recoverProject,
+        closeProject: projectManager.closeProject,
         createNewProject: projectManager.createNewProject,
+        projectStatus: projectManager.projectStatus,
     };
 
     return (

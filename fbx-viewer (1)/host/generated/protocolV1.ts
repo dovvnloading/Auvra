@@ -2,15 +2,17 @@
 export type Revision = number;
 export type ProtocolId = string;
 export type SessionId = string;
-export type Method = "host.ping" | "host.getCapabilities";
-export type ErrorCode = "invalid_request" | "invalid_response" | "session_mismatch" | "unknown_method" | "revision_conflict" | "internal_error";
-export interface Request { protocol: "auvra.host/1"; type: "request"; id: ProtocolId; session: SessionId; revision: Revision; method: Method; payload: Record<string, never>; }
+export type Method = "host.ping" | "host.getCapabilities" | "project.getStatus" | "project.create" | "project.open" | "project.openRecent" | "project.close" | "project.getSnapshot" | "project.applyChanges" | "project.save" | "project.saveAs" | "project.exportPack" | "project.importPack" | "project.importLegacy" | "asset.beginUpload" | "asset.resolve";
+export type ErrorCode = "invalid_request" | "invalid_response" | "session_mismatch" | "unknown_method" | "revision_conflict" | "cancelled" | "locking" | "read_only" | "invalid_project" | "unsupported_version" | "migration_failed" | "disk_failure" | "permission_denied" | "recovery_required" | "internal_error";
+export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+export interface Request { protocol: "auvra.host/1"; type: "request"; id: ProtocolId; session: SessionId; revision: Revision; method: Method; payload: Record<string, unknown>; }
 export interface PingResult { pong: true; }
-export interface CapabilitiesResult { protocol: "auvra.host/1"; methods: ["host.ping", "host.getCapabilities"]; }
-export type SuccessResult = PingResult | CapabilitiesResult;
+export interface CapabilitiesResult { protocol: "auvra.host/1"; methods: ["host.ping", "host.getCapabilities"]; projectMethods?: Method[]; }
+export interface ProjectResult { projectId?: string | null; revision?: Revision; name?: string | null; readOnly?: boolean; dirty?: boolean; busy?: boolean; progress?: number | null; recoveryAvailable?: boolean; recoveryId?: string; recoveryKind?: "manual" | "autosave"; recoveryPoints?: Array<{ recoveryId: string; kind: "manual" | "autosave"; size?: number }>; recentProjects?: Array<{ projectId: string; name: string }>; status?: "closed" | "opening" | "open" | "saving" | "recovering"; domains?: string[] | { [key: string]: JsonValue }; documents?: JsonValue[]; cursor?: string; hasMore?: boolean; handle?: string; uploadId?: string; expiresAt?: number; method?: "GET" | "PUT"; url?: string; assetId?: string; size?: number; sha256?: string; mime?: string; report?: Record<string, JsonValue>; pong?: never; }
+export type SuccessResult = PingResult | CapabilitiesResult | ProjectResult;
 export interface SuccessResponse { protocol: "auvra.host/1"; type: "response"; id: ProtocolId; session: SessionId; revision: Revision; ok: true; result: SuccessResult; }
 export interface ErrorResponse { protocol: "auvra.host/1"; type: "response"; id: ProtocolId; session: SessionId; revision: Revision; ok: false; error: { code: ErrorCode; message: string; details?: Record<string, never> }; }
 export type Response = SuccessResponse | ErrorResponse;
-export interface Event { protocol: "auvra.host/1"; type: "event"; event: "host.session" | "host.revision"; session: SessionId; revision: Revision; payload: Record<string, never>; }
+export interface Event { protocol: "auvra.host/1"; type: "event"; event: "host.session" | "host.revision" | "project.status" | "project.opening" | "project.opened" | "project.closing" | "project.closed" | "project.revision" | "project.dirty" | "project.readOnly" | "project.progress" | "project.recovery"; session: SessionId; revision: Revision; payload: Record<string, unknown>; }
 export interface Session { protocol: "auvra.host/1"; type: "session"; session: SessionId; revision: Revision; status: "created" | "active" | "closed"; }
 export type Message = Request | Response | Event | Session;

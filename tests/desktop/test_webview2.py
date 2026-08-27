@@ -9,6 +9,7 @@ from unittest import mock
 from pathlib import Path
 
 from Auvra.desktop.contracts import FrameConfig, FrameMode, FrameStartupError, FrameState, FrameUnavailableError
+from Auvra.desktop.assets import ASSET_ORIGIN, AssetResourceResponse
 from Auvra.desktop.webview2 import WebView2Frame
 from .fakes import download, frame_navigation, message, navigation, new_window, permission, resource
 
@@ -31,6 +32,38 @@ class WebView2HandlerTests(unittest.TestCase):
         self.frame._on_resource(None, external)
         self.assertFalse(hmr.Cancel)
         self.assertTrue(external.Cancel)
+
+    def test_asset_origin_is_intercepted_and_never_widens_navigation(self):
+        requests = []
+        frame = WebView2Frame(
+            FrameConfig(
+                FrameMode.DEVELOPMENT,
+                development_origin="http://127.0.0.1:3000",
+                on_asset_resource=lambda request: requests.append(request) or AssetResourceResponse(
+                    204, "No Content", {"Cache-Control": "no-store"}
+                ),
+            )
+        )
+        navigation_args = navigation(f"{ASSET_ORIGIN}/v1/get/token")
+        frame._on_navigation(None, navigation_args)
+        self.assertTrue(navigation_args.Cancel)
+        asset = resource(
+            f"{ASSET_ORIGIN}/v1/put/" + "a" * 43,
+            method="OPTIONS",
+            headers={
+                "Origin": "http://127.0.0.1:3000",
+                "Access-Control-Request-Method": "PUT",
+            },
+        )
+        frame._on_resource(None, asset)
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].method, "OPTIONS")
+        self.assertEqual(asset.Response.status, 204)
+
+    def test_asset_origin_without_host_handler_is_denied(self):
+        asset = resource(f"{ASSET_ORIGIN}/v1/get/" + "a" * 43)
+        self.frame._on_resource(None, asset)
+        self.assertTrue(asset.Cancel)
 
     def test_popup_download_permission_are_denied(self):
         popup = new_window(); self.frame._on_new_window(None, popup)

@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { InteractionMode, PaintMode, PaintSettings, TransformSettings, ViewportLayout, SculptSettings } from '../types';
 import { useScene } from '../../../context/SceneContext';
+import { projectService } from '../../../utils/projectService';
 
 export const useEnvironmentState = () => {
     const { cameraState, levelObjects } = useScene();
@@ -19,6 +20,7 @@ export const useEnvironmentState = () => {
     
     // Play Mode Camera persistence
     const editorCameraPos = useRef<THREE.Vector3 | undefined>(undefined);
+    const projectIdRef = useRef<string | null>(projectService.getStatus().projectId);
 
     const [transformSettings, setTransformSettings] = useState<TransformSettings>({
         tool: 'translate',
@@ -43,6 +45,19 @@ export const useEnvironmentState = () => {
         strength: 0.5,
         flattenHeight: 0
     });
+
+    // Selection, tools, and play mode are editor-session state. Clear them
+    // when the native host switches projects so no transient environment UI
+    // can continue pointing at objects from the previous project.
+    useEffect(() => projectService.subscribe((status) => {
+        if (projectIdRef.current === status.projectId) return;
+        projectIdRef.current = status.projectId;
+        setSelectedBrushId(null);
+        setSelectedObjectId(null);
+        setInteractionMode('select');
+        setIsPlaying(false);
+        editorCameraPos.current = undefined;
+    }), []);
 
     // --- Logic & Effects ---
 

@@ -37,7 +37,10 @@
     <Compile Include="desktop\__init__.py" />
     <Compile Include="desktop\contracts.py" />
     <Compile Include="desktop\controller.py" />
+    <Compile Include="desktop\assets.py" />
+    <Compile Include="desktop\dialogs.py" />
     <Compile Include="desktop\policy.py" />
+    <Compile Include="desktop\project_host.py" />
     <Compile Include="desktop\sdk.py" />
     <Compile Include="desktop\webview2.py" />
     <Compile Include="host\__init__.py" />
@@ -49,6 +52,17 @@
     <Compile Include="host\validation.py" />
     <Compile Include="host\generated\__init__.py" />
     <Compile Include="host\generated\protocol_v1.py" />
+    <Compile Include="project\__init__.py" />
+    <Compile Include="project\archive.py" />
+    <Compile Include="project\assets.py" />
+    <Compile Include="project\errors.py" />
+    <Compile Include="project\index.py" />
+    <Compile Include="project\legacy.py" />
+    <Compile Include="project\locking.py" />
+    <Compile Include="project\repository.py" />
+    <Compile Include="project\schemas.py" />
+    <Compile Include="project\serialization.py" />
+    <Compile Include="project\service.py" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in

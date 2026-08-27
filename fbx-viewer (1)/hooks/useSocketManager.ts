@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { SocketData } from '../types';
 import { dbOperations } from '../utils/db';
+import { projectService } from '../utils/projectService';
 
 export const useSocketManager = () => {
   const [sockets, setSockets] = useState<SocketData[]>([]);
@@ -15,9 +16,7 @@ export const useSocketManager = () => {
       pendingUpdatesRef.current.clear();
       
       try {
-          await Promise.all(Array.from(batch.entries()).map(([id, updates]) => 
-               dbOperations.updateSocket(id, updates)
-          ));
+          for (const [id, updates] of batch.entries()) await dbOperations.updateSocket(id, updates);
       } catch (e) {
           console.error("Error saving batched socket updates", e);
       }
@@ -33,6 +32,7 @@ export const useSocketManager = () => {
   }, [commitUpdates]);
 
   const addSocket = useCallback(async (parentModelId: string, name: string) => {
+    projectService.assertWritable();
     const newSocket: SocketData = {
         id: crypto.randomUUID(),
         name: name,
@@ -53,6 +53,7 @@ export const useSocketManager = () => {
   }, []);
 
   const updateSocket = useCallback((id: string, updates: Partial<SocketData>) => {
+      projectService.assertWritable();
       setSockets(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
 
       // Queue DB update
@@ -64,6 +65,7 @@ export const useSocketManager = () => {
   }, [commitUpdates]);
 
   const removeSocket = useCallback(async (id: string) => {
+      projectService.assertWritable();
       if (pendingUpdatesRef.current.has(id)) {
           pendingUpdatesRef.current.delete(id);
       }
@@ -74,10 +76,11 @@ export const useSocketManager = () => {
       } catch(e) { console.error(e); }
   }, []);
 
-  const removeSocketsByParentId = useCallback((parentId: string) => {
+  const removeSocketsByParentId = useCallback((parentId: string, persist = true) => {
+      if (persist) projectService.assertWritable();
       setSockets(prev => {
           const toRemove = prev.filter(s => s.parentModelId === parentId);
-          toRemove.forEach(s => dbOperations.deleteSocket(s.id).catch(console.error));
+          if (persist) toRemove.forEach(s => dbOperations.deleteSocket(s.id).catch(console.error));
           return prev.filter(s => s.parentModelId !== parentId);
       });
   }, []);

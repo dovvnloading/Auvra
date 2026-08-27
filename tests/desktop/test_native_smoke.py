@@ -22,6 +22,9 @@ from typing import Any, Callable
 from Auvra.desktop.contracts import FrameConfig, FrameMode, FrameState
 from Auvra.desktop.controller import FrameController, _new_profile
 from Auvra.desktop import contracts as desktop_contracts
+from Auvra.desktop.assets import AssetTransferRegistry
+from Auvra.desktop.dialogs import DialogSelection
+from Auvra.desktop.project_host import NativeProjectHost
 from Auvra.desktop.sdk import acquire_sdk
 from Auvra.desktop.webview2 import WebView2Frame
 from Auvra.launcher.cli import choose_port
@@ -83,6 +86,35 @@ class _PackagedOwner:
         self.stopped = True
 
 
+class _SmokeProjectDialogs:
+    """Deterministic dialog seam for the opt-in native project lifecycle."""
+
+    def __init__(self, parent: Path) -> None:
+        self.project_path = parent / "Native Smoke Project"
+
+    def choose_create_location(self, _suggested_name: str) -> DialogSelection:
+        return DialogSelection(self.project_path)
+
+    def choose_open_project(self) -> DialogSelection:
+        return DialogSelection(self.project_path / "Native Smoke Project.auvra")
+
+    def choose_save_as_location(self, _suggested_name: str) -> DialogSelection:
+        return DialogSelection(self.parent / "Native Smoke Project Copy")
+
+    def choose_export_pack(self, _suggested_name: str) -> DialogSelection:
+        return DialogSelection(self.parent / "Native Smoke Project.auvrapack")
+
+    def choose_import_pack(self) -> DialogSelection:
+        return DialogSelection(self.parent / "Native Smoke Project.auvrapack")
+
+    def choose_import_legacy(self) -> DialogSelection:
+        return DialogSelection(self.parent / "legacy.forge")
+
+    @property
+    def parent(self) -> Path:
+        return self.project_path.parent
+
+
 def _wait_until(predicate: Callable[[], bool], timeout: float, label: str) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -139,6 +171,59 @@ def _script_for_requests(prefix: str, trap_port: int | None = None) -> str:
     """
 
 
+def _script_for_project_lifecycle(prefix: str) -> str:
+    """Exercise the native project service through WebView2's real bridge."""
+
+    return f"""
+    (() => {{
+      const state = {{ session: null, revision: 0, projectId: null, sent: new Set() }};
+      window.__auvraNativeProjectSmoke = state;
+      const request = (id, method, payload) => {{
+        if (state.sent.has(id)) return;
+        state.sent.add(id);
+        chrome.webview.postMessage({{
+          protocol: "auvra.host/1", type: "request", id,
+          session: state.session, revision: state.revision, method, payload
+        }});
+      }};
+      chrome.webview.addEventListener("message", event => {{
+        const message = event.data;
+        if (!message || typeof message !== "object") return;
+        if (message.type === "session" && !state.session) {{
+          state.session = message.session;
+          state.revision = message.revision;
+          request("{prefix}-create", "project.create", {{ name: "Native Smoke Project" }});
+          return;
+        }}
+        if (message.type !== "response" || !message.id) return;
+        state.revision = message.revision;
+        if (!message.ok) return;
+        const result = message.result || {{}};
+        if (message.id === "{prefix}-create") {{
+          state.projectId = result.projectId;
+          request("{prefix}-apply", "project.applyChanges", {{
+            projectId: state.projectId, expectedRevision: result.revision,
+            changes: [{{ domain: "metadata", documentId: "project", operation: "upsert",
+              document: {{ id: "project", name: "Native Smoke Project" }} }}]
+          }});
+        }} else if (message.id === "{prefix}-apply") {{
+          request("{prefix}-snapshot", "project.getSnapshot", {{
+            projectId: state.projectId, domain: "metadata", pageSize: 10
+          }});
+        }} else if (message.id === "{prefix}-snapshot") {{
+          request("{prefix}-save", "project.save", {{
+            projectId: state.projectId, expectedRevision: result.revision
+          }});
+        }} else if (message.id === "{prefix}-save") {{
+          request("{prefix}-close", "project.close", {{
+            projectId: state.projectId, expectedRevision: result.revision
+          }});
+        }}
+      }});
+    }})();
+    """
+
+
 @unittest.skipUnless(_SMOKE_ENABLED, "set AUVRA_NATIVE_SMOKE=1 for real WebView2 smoke")
 @unittest.skipUnless(os.name == "nt", "real WebView2 smoke is Windows-only")
 class NativeWebView2SmokeTests(unittest.TestCase):
@@ -188,6 +273,47 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         # STA.  It is not a production bridge or an exposed application API.
         self._ui(frame, lambda core: core.ExecuteScriptAsync(script))
 
+    def _bind_project_host(self, controller: FrameController, root: Path, origin: str) -> Path:
+        """Install the production adapter with deterministic, private dialogs."""
+
+        dialogs = _SmokeProjectDialogs(root / "projects")
+        registry = AssetTransferRegistry(
+            root / "asset-transfers",
+            session_id=controller.dispatcher.session.session_id,
+            trusted_origin=origin,
+        )
+        host = NativeProjectHost(root / "project-state", asset_registry=registry, dialogs=dialogs)
+        controller.asset_registry = registry
+        controller.project_host = host
+        controller.dispatcher.bind_services(project_service=host, asset_service=host)
+        return dialogs.project_path
+
+    def _project_lifecycle(self, controller: FrameController, prefix: str, seen: list[dict[str, Any]], project_path: Path) -> None:
+        self._execute_script(controller.frame, _script_for_project_lifecycle(prefix))
+        # ExecuteScriptAsync queues work on the document thread; wait until
+        # the listener is installed before sending the synthetic navigation
+        # boundary below.
+        time.sleep(0.25)
+        # The native script API is asynchronous; a short repeated boundary
+        # keeps this opt-in smoke deterministic across runner load variance.
+        for _ in range(4):
+            controller.on_lifecycle("navigation_completed", {"success": True})
+            time.sleep(0.2)
+        expected = {
+            f"{prefix}-create", f"{prefix}-apply", f"{prefix}-snapshot",
+            f"{prefix}-save", f"{prefix}-close",
+        }
+        _wait_until(
+            lambda: expected.issubset({item.get("id") for item in seen}),
+            20.0,
+            "native project lifecycle",
+        )
+        responses = {item["id"]: item for item in seen if item.get("id") in expected}
+        self.assertTrue(all(item.get("ok") is True for item in responses.values()), responses)
+        self.assertTrue((project_path / "Native Smoke Project.auvra").is_file())
+        self.assertTrue((project_path / "Project" / "metadata.json").is_file())
+        self.assertFalse(any(str(project_path) in json.dumps(item) for item in responses.values()))
+
     def _make_controller(
         self,
         mode: FrameMode,
@@ -234,6 +360,16 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         controller = FrameController(
             process, frame=frame, profile_path=lease.path, profile_lease=lease, poll_interval=_POLL
         )
+        # Capture both directions of the real bridge.  WebView2 delivers
+        # incoming requests to ``on_message`` directly, while responses leave
+        # through ``post_message`` and are otherwise invisible to the test.
+        post_message = frame.post_message
+
+        def capture_post(message: str | dict[str, Any]) -> None:
+            seen.append(json.loads(message) if isinstance(message, str) else message)
+            post_message(message)
+
+        frame.post_message = capture_post  # type: ignore[method-assign]
         holder["controller"] = controller
         return controller
 
@@ -271,11 +407,13 @@ class NativeWebView2SmokeTests(unittest.TestCase):
                 FrameMode.DEVELOPMENT, dev_profile_parent, origin=f"http://127.0.0.1:{port}",
                 process=vite, seen=dev_seen, lifecycle=dev_lifecycle,
             )
+            project_path = self._bind_project_host(dev, dev_profile_parent, f"http://127.0.0.1:{port}")
             dev.start()
             self.assertEqual(dev.frame.state, FrameState.READY)
             self.assertTrue(self._source(dev.frame).startswith(f"http://127.0.0.1:{port}/"))
             session_id = dev.dispatcher.session.session_id
             self._handshake(dev, "dev-1", dev_seen, trap=True)
+            self._project_lifecycle(dev, "project", dev_seen, project_path)
 
             nav_before = dev_lifecycle.count("navigation_completed")
             self._ui(dev.frame, lambda core: core.Reload())

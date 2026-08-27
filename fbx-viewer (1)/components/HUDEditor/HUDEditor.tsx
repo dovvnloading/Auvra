@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { HUDCanvas } from './HUDCanvas';
 import { HUDLibrary } from './HUDLibrary';
 import { AIChatPanel } from './AIChatPanel';
@@ -7,6 +7,24 @@ import { HUDElement } from './types';
 import { AVAILABLE_COMPONENTS } from './componentRegistry';
 import { Code, Settings2, Sliders, Palette, Type, Move, Scaling } from 'lucide-react';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
+import { useNativeProjectDocument } from '../../utils/useNativeProjectDocument';
+
+interface HUDDocument {
+    id: string;
+    name: string;
+    elements: HUDElement[];
+    layout: { width: number; height: number };
+    commands: unknown[];
+}
+
+const HUD_DOCUMENT_ID = 'hud-main';
+const createDefaultHUDDocument = (): HUDDocument => ({
+    id: HUD_DOCUMENT_ID,
+    name: 'Main HUD',
+    elements: [],
+    layout: { width: 1920, height: 1080 },
+    commands: [],
+});
 
 // Helper to render dynamic inputs based on prop type
 const PropertyInput: React.FC<{ 
@@ -98,10 +116,22 @@ const PropertyInput: React.FC<{
 };
 
 export const HUDEditor: React.FC = () => {
-    // Local State for the session (Persistence would go here in a real app)
-    const [elements, setElements] = useState<HUDElement[]>([]);
+    const { document, hydrated, error, replace } = useNativeProjectDocument<HUDDocument>(
+        'hud', HUD_DOCUMENT_ID, createDefaultHUDDocument,
+    );
+    const elements = document.elements;
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [rightPanelTab, setRightPanelTab] = useState<'ai' | 'props'>('props');
+
+    const commitElements = useCallback((nextElements: HUDElement[]) => {
+        return replace({ ...document, elements: nextElements });
+    }, [document, replace]);
+
+    // Selection and editor-only tabs are transient and must not survive a
+    // project switch or point at a document that was not restored.
+    useEffect(() => {
+        if (selectedId && !elements.some((element) => element.id === selectedId)) setSelectedId(null);
+    }, [elements, selectedId]);
 
     const selectedElement = elements.find(el => el.id === selectedId) || null;
 
@@ -121,7 +151,7 @@ export const HUDEditor: React.FC = () => {
             isLocked: false
         };
 
-        setElements(prev => [...prev, newEl]);
+        void commitElements([...elements, newEl]).catch((cause) => console.error('[HUD] Could not save element', cause));
         
         // Only select and switch tabs if triggered manually, OR if AI created it we might want to select it
         // The override ID 'ai' is a hack to detect source, but we can just check overrides
@@ -137,7 +167,8 @@ export const HUDEditor: React.FC = () => {
     };
 
     const handleUpdateElement = (id: string, updates: Partial<HUDElement>) => {
-        setElements(prev => prev.map(el => el.id === id ? { ...el, ...updates } : el));
+        void commitElements(elements.map(el => el.id === id ? { ...el, ...updates } : el))
+            .catch((cause) => console.error('[HUD] Could not save element update', cause));
     };
 
     const handlePropChange = (key: string, value: any) => {
@@ -148,7 +179,8 @@ export const HUDEditor: React.FC = () => {
     };
 
     const handleDelete = (id: string) => {
-        setElements(prev => prev.filter(el => el.id !== id));
+        void commitElements(elements.filter(el => el.id !== id))
+            .catch((cause) => console.error('[HUD] Could not delete element', cause));
         if (selectedId === id) setSelectedId(null);
     };
 
@@ -164,6 +196,16 @@ export const HUDEditor: React.FC = () => {
 
     return (
         <div className="flex h-full w-full bg-gray-950 text-white font-sans overflow-hidden">
+            {error && (
+                <div className="absolute top-2 left-1/2 -translate-x-1/2 z-50 rounded border border-red-800 bg-red-950/90 px-3 py-2 text-xs text-red-200 shadow-lg">
+                    {error.message}
+                </div>
+            )}
+            {!hydrated && (
+                <div className="absolute inset-0 z-40 flex items-center justify-center bg-gray-950/70 text-xs text-gray-400">
+                    Loading HUD…
+                </div>
+            )}
             {/* Left Sidebar: Library & Layers */}
             <HUDLibrary 
                 elements={elements}

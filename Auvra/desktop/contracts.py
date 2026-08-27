@@ -83,6 +83,7 @@ class FrameFailure:
 # callers must validate both before dispatching.
 MessageCallback = Callable[[str, str], None]
 LifecycleCallback = Callable[[str, Mapping[str, Any] | None], None]
+AssetResourceCallback = Callable[[Any], Any]
 
 
 class Frame(Protocol):
@@ -197,6 +198,7 @@ class FrameConfig:
     packaged_root: Path | None = None
     on_message: MessageCallback | None = None
     on_lifecycle: LifecycleCallback | None = None
+    on_asset_resource: AssetResourceCallback | None = None
     startup_timeout: float = 15.0
     shutdown_timeout: float = 5.0
     title: str = "Auvra"

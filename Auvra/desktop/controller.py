@@ -14,8 +14,10 @@ from urllib.parse import urlsplit
 
 from Auvra.host.dispatcher import HostDispatcher
 from Auvra.host.session import SessionManager
+from Auvra.host.validation import validate_response
 
 from . import contracts as _contracts
+from .assets import AssetResourceRequest, AssetTransferRegistry
 from .contracts import (
     Frame,
     FrameClosedError,
@@ -25,6 +27,7 @@ from .contracts import (
     FrameStartupError,
 )
 from .policy import FramePolicy
+from .project_host import NativeProjectHost
 from .sdk import acquire_sdk
 from .webview2 import WebView2Frame
 from .webview2 import MESSAGE_MAX_BYTES
@@ -78,8 +81,10 @@ class FrameController:
     """Own one Vite tree and one frame with deterministic teardown."""
 
     def __init__(self, process: Any, *, frame: Frame, dispatcher: HostDispatcher | None = None,
-                 profile_path: Path | None = None, profile_lease: _ProfileLease | None = None,
-                 poll_interval: float = 0.1) -> None:
+                  profile_path: Path | None = None, profile_lease: _ProfileLease | None = None,
+                  project_host: NativeProjectHost | None = None,
+                  asset_registry: AssetTransferRegistry | None = None,
+                  poll_interval: float = 0.1) -> None:
         self.process = process
         self.frame = frame
         # Rebuild the policy from the immutable frame configuration at this
@@ -93,6 +98,8 @@ class FrameController:
         self.policy = FramePolicy(config.mode, config.trusted_origin,
                                   packaged_root=str(config.packaged_root) if config.packaged_root else None)
         self.dispatcher = dispatcher or HostDispatcher(SessionManager("s-" + secrets.token_urlsafe(24)))
+        self.project_host = project_host
+        self.asset_registry = asset_registry
         self.profile_path = profile_path
         self._profile_lease = profile_lease
         self.poll_interval = max(0.02, poll_interval)
@@ -109,20 +116,43 @@ class FrameController:
         parsed = urlsplit(origin)
         exact_origin = f"{parsed.scheme}://{parsed.netloc}"
         holder: dict[str, FrameController] = {}
+        active_dispatcher = dispatcher or HostDispatcher(SessionManager("s-" + secrets.token_urlsafe(24)))
+        asset_registry: AssetTransferRegistry | None = None
+        project_host: NativeProjectHost | None = None
         try:
+            asset_registry = AssetTransferRegistry(
+                profile.parent / "asset-transfers",
+                session_id=active_dispatcher.session.session_id,
+                trusted_origin=exact_origin,
+            )
+            project_host = NativeProjectHost(profile.parent, asset_registry=asset_registry)
+            active_dispatcher.bind_services(project_service=project_host, asset_service=project_host)
             config = FrameConfig(FrameMode.DEVELOPMENT, development_origin=exact_origin,
                                  user_data_folder=profile,
                                  on_message=lambda body, source: holder["controller"].on_message(body, source),
-                                 on_lifecycle=lambda event, fields=None: holder["controller"].on_lifecycle(event, fields))
+                                 on_lifecycle=lambda event, fields=None: holder["controller"].on_lifecycle(event, fields),
+                                 on_asset_resource=lambda request: holder["controller"].on_asset_resource(request))
             if frame_factory is WebView2Frame:
                 sdk = acquire_sdk(profile.parent / "webview2-sdk")
                 frame = frame_factory(config, sdk=sdk)
             else:
                 frame = frame_factory(config)
         except Exception:
+            if project_host is not None:
+                project_host.shutdown()
+            if asset_registry is not None:
+                asset_registry.close()
             _remove_profile(lease)
             raise
-        controller = cls(process, frame=frame, dispatcher=dispatcher, profile_path=profile, profile_lease=lease)
+        controller = cls(
+            process,
+            frame=frame,
+            dispatcher=active_dispatcher,
+            profile_path=profile,
+            profile_lease=lease,
+            project_host=project_host,
+            asset_registry=asset_registry,
+        )
         holder["controller"] = controller
         return controller
 
@@ -140,20 +170,43 @@ class FrameController:
         lease = _new_profile(profile_parent)
         profile = lease.path
         holder: dict[str, FrameController] = {}
+        active_dispatcher = dispatcher or HostDispatcher(SessionManager("s-" + secrets.token_urlsafe(24)))
+        asset_registry: AssetTransferRegistry | None = None
+        project_host: NativeProjectHost | None = None
         try:
+            asset_registry = AssetTransferRegistry(
+                profile.parent / "asset-transfers",
+                session_id=active_dispatcher.session.session_id,
+                trusted_origin="https://app.auvra.local",
+            )
+            project_host = NativeProjectHost(profile.parent, asset_registry=asset_registry)
+            active_dispatcher.bind_services(project_service=project_host, asset_service=project_host)
             config = FrameConfig(FrameMode.PACKAGED, packaged_root=approved_root,
                                  user_data_folder=profile,
                                  on_message=lambda body, source: holder["controller"].on_message(body, source),
-                                 on_lifecycle=lambda event, fields=None: holder["controller"].on_lifecycle(event, fields))
+                                 on_lifecycle=lambda event, fields=None: holder["controller"].on_lifecycle(event, fields),
+                                 on_asset_resource=lambda request: holder["controller"].on_asset_resource(request))
             if frame_factory is WebView2Frame:
                 sdk = acquire_sdk(profile.parent / "webview2-sdk")
                 frame = frame_factory(config, sdk=sdk)
             else:
                 frame = frame_factory(config)
         except Exception:
+            if project_host is not None:
+                project_host.shutdown()
+            if asset_registry is not None:
+                asset_registry.close()
             _remove_profile(lease)
             raise
-        controller = cls(process, frame=frame, dispatcher=dispatcher, profile_path=profile, profile_lease=lease)
+        controller = cls(
+            process,
+            frame=frame,
+            dispatcher=active_dispatcher,
+            profile_path=profile,
+            profile_lease=lease,
+            project_host=project_host,
+            asset_registry=asset_registry,
+        )
         holder["controller"] = controller
         return controller
 
@@ -170,6 +223,9 @@ class FrameController:
         try:
             while True:
                 self._drain_lifecycle()
+                if self.project_host is not None:
+                    self.project_host.tick()
+                    self._flush_bound_events()
                 state = getattr(self.frame, "state", None)
                 state_value = getattr(state, "value", state)
                 failure = getattr(self.frame, "failure", None)
@@ -197,7 +253,24 @@ class FrameController:
         except (TypeError, ValueError, json.JSONDecodeError):
             request = None
         response = self.dispatcher.dispatch(request)
+        events = self.dispatcher.drain_bound_events()
+        if events:
+            # Deliver state events before resolving the request promise, then
+            # stamp the response with the final host revision.  Otherwise a
+            # frontend continuation could issue its next request from the
+            # response revision while the host had already advanced for
+            # queued events.
+            for event in events:
+                self._post(event)
+            response = dict(response)
+            response["revision"] = self.dispatcher.session.revision
+            response = validate_response(response)
         self._post(response)
+
+    def on_asset_resource(self, request: AssetResourceRequest):
+        if self.project_host is None:
+            raise RuntimeError("native project asset service is unavailable")
+        return self.project_host.asset_resource(request)
 
     def _post(self, payload: dict[str, Any]) -> None:
         try:
@@ -206,6 +279,12 @@ class FrameController:
             self.frame.post_message(json.dumps(payload, ensure_ascii=True, separators=(",", ":")))  # type: ignore[attr-defined]
         except FrameClosedError:
             return
+
+    def _flush_bound_events(self) -> None:
+        """Post validated native-service events in dispatcher revision order."""
+
+        for event in self.dispatcher.drain_bound_events():
+            self._post(event)
 
     def on_lifecycle(self, event: str, fields: dict[str, Any] | None = None) -> None:
         # NavigationCompleted is the authoritative document boundary.  The
@@ -251,6 +330,16 @@ class FrameController:
         except Exception as exc:
             # Continue to process cleanup even when native shutdown fails.
             self.cleanup_error = exc
+        if self.project_host is not None:
+            try:
+                self.project_host.shutdown()
+            except Exception as exc:
+                self.cleanup_error = self.cleanup_error or exc
+        if self.asset_registry is not None:
+            try:
+                self.asset_registry.close()
+            except OSError as exc:
+                self.cleanup_error = self.cleanup_error or exc
         self._stop_process()
         if self.profile_path is not None:
             try:

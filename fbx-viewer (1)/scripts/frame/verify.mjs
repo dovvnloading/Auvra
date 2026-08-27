@@ -31,7 +31,10 @@ const files = {
   tailwind: resolve(root, "tailwind.config.cjs"),
 };
 
-const source = Object.fromEntries(await Promise.all(Object.entries(files).map(async ([name, file]) => [name, await readFile(file, "utf8")] )));
+const source = Object.fromEntries(await Promise.all(Object.entries(files).map(async ([name, file]) => [
+  name,
+  (await readFile(file, "utf8")).replace(/\r\n/g, "\n"),
+] )));
 const failures = [];
 const check = (condition, message) => { if (!condition) failures.push(message); };
 

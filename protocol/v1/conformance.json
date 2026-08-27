@@ -6,6 +6,13 @@
     {"name":"success response","message":{"protocol":"auvra.host/1","type":"response","id":"r1","session":"s1","revision":0,"ok":true,"result":{"pong":true}}},
     {"name":"error response","message":{"protocol":"auvra.host/1","type":"response","id":"r2","session":"s1","revision":1,"ok":false,"error":{"code":"unknown_method","message":"Unknown host method"}}},
     {"name":"event","message":{"protocol":"auvra.host/1","type":"event","event":"host.revision","session":"s1","revision":2,"payload":{}}},
+    {"name":"project create request","message":{"protocol":"auvra.host/1","type":"request","id":"r3","session":"s1","revision":0,"method":"project.create","payload":{"name":"Demo"}}},
+    {"name":"project mutation request","message":{"protocol":"auvra.host/1","type":"request","id":"r4","session":"s1","revision":0,"method":"project.applyChanges","payload":{"projectId":"p1","expectedRevision":0,"changes":[{"domain":"levels","documentId":"level-1","operation":"upsert","document":{"name":"Start"}}]}}},
+    {"name":"asset upload request","message":{"protocol":"auvra.host/1","type":"request","id":"r5","session":"s1","revision":0,"method":"asset.beginUpload","payload":{"projectId":"p1","expectedRevision":0,"size":10,"mime":"model/gltf-binary","name":"mesh.glb"}}},
+    {"name":"project status event","message":{"protocol":"auvra.host/1","type":"event","event":"project.status","session":"s1","revision":2,"payload":{"projectId":"p1","revision":3,"name":"Demo","dirty":true,"readOnly":false,"busy":false,"progress":null,"recoveryAvailable":false,"recentProjects":[]}}},
+    {"name":"empty project status request","message":{"protocol":"auvra.host/1","type":"request","id":"r6","session":"s1","revision":0,"method":"project.getStatus","payload":{}}},
+    {"name":"close mutation request","message":{"protocol":"auvra.host/1","type":"request","id":"r7","session":"s1","revision":0,"method":"project.close","payload":{"projectId":"p1","expectedRevision":0}}},
+    {"name":"pathfinding authored field","message":{"protocol":"auvra.host/1","type":"request","id":"r8","session":"s1","revision":0,"method":"project.applyChanges","payload":{"projectId":"p1","expectedRevision":0,"changes":[{"domain":"levels","documentId":"level-1","operation":"upsert","document":{"pathfinding":true}}]}}},
     {"name":"session","message":{"protocol":"auvra.host/1","type":"session","session":"s1","revision":0,"status":"created"}}
   ],
   "invalid": [
@@ -24,6 +31,9 @@
     {"name":"malformed event","message":{"protocol":"auvra.host/1","type":"event","event":"host.revision","session":"s1","revision":0,"payload":{"extra":1}}},
     {"name":"malformed session","message":{"protocol":"auvra.host/1","type":"session","session":"s1","revision":0,"status":"unknown"}},
     {"name":"oversized id","message":{"protocol":"auvra.host/1","type":"request","id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","session":"s1","revision":0,"method":"host.ping","payload":{}}},
-    {"name":"oneOf ambiguity","message":{"protocol":"auvra.host/1","type":"response","id":"r1","session":"s1","revision":0,"ok":true,"result":{"pong":true,"protocol":"auvra.host/1","methods":["host.ping","host.getCapabilities"]}}}
+    {"name":"oneOf ambiguity","message":{"protocol":"auvra.host/1","type":"response","id":"r1","session":"s1","revision":0,"ok":true,"result":{"pong":true,"protocol":"auvra.host/1","methods":["host.ping","host.getCapabilities"]}}},
+    {"name":"mutation missing expected revision","message":{"protocol":"auvra.host/1","type":"request","id":"r1","session":"s1","revision":0,"method":"project.save","payload":{"projectId":"p1"}}},
+    {"name":"filesystem path in document","message":{"protocol":"auvra.host/1","type":"request","id":"r1","session":"s1","revision":0,"method":"project.applyChanges","payload":{"projectId":"p1","expectedRevision":0,"changes":[{"domain":"levels","documentId":"level-1","operation":"upsert","document":{"filePath":"C:/secret"}}]}}},
+    {"name":"filesystem path value in document","message":{"protocol":"auvra.host/1","type":"request","id":"r1","session":"s1","revision":0,"method":"project.applyChanges","payload":{"projectId":"p1","expectedRevision":0,"changes":[{"domain":"levels","documentId":"level-1","operation":"upsert","document":{"assetRef":"C:/secret"}}]}}}
   ]
 }

@@ -7,6 +7,7 @@ import { disposeModel, disposeObject } from '../utils/processing/ModelLifecycle'
 import { stripGeometry } from '../utils/processing/ModelTransforms';
 import { generateThumbnail } from '../utils/thumbnailGenerator';
 import { dbOperations } from '../utils/db';
+import { projectService } from '../utils/projectService';
 
 export const useModelManager = (
   setIsLoading: (loading: boolean) => void,
@@ -16,6 +17,7 @@ export const useModelManager = (
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
 
   const addModel = useCallback(async (file: File, category: AssetCategory) => {
+    projectService.assertWritable();
     // Prevent duplicate imports
     if (models.some(m => m.name === file.name)) {
         alert(`A model named "${file.name}" is already loaded in the library.`);
@@ -69,6 +71,7 @@ export const useModelManager = (
   }, [models, setIsLoading]);
 
   const placeInScene = useCallback(async (id: string) => {
+      projectService.assertWritable();
       setModels(prev => prev.map(m => m.id === id ? { ...m, isPlacedInScene: true } : m));
       setSelectedModelId(id);
       try {
@@ -77,6 +80,7 @@ export const useModelManager = (
   }, []);
 
   const removeFromScene = useCallback(async (id: string) => {
+      projectService.assertWritable();
       setModels(prev => prev.map(m => m.id === id ? { ...m, isPlacedInScene: false } : m));
       if (selectedModelId === id) setSelectedModelId(null);
       try {
@@ -85,6 +89,7 @@ export const useModelManager = (
   }, [selectedModelId]);
 
   const removeModel = useCallback(async (id: string) => {
+    projectService.assertWritable();
     try {
         await dbOperations.deleteModel(id);
         
@@ -108,6 +113,7 @@ export const useModelManager = (
   }, [selectedModelId, onModelRemoved]);
 
   const addAnimations = useCallback(async (files: File[], modelId: string) => {
+    projectService.assertWritable();
     setIsLoading(true);
     try {
       const allNewClips: THREE.AnimationClip[] = [];
@@ -149,99 +155,79 @@ export const useModelManager = (
     }
   }, [setIsLoading]);
 
-  const retextureModel = useCallback((modelId: string, textureUrl: string, targetTextureUuid?: string) => {
-    const loader = new THREE.TextureLoader();
-    loader.load(textureUrl, (newTexture) => {
+  const retextureModel = useCallback(async (modelId: string, textureUrl: string, targetTextureUuid?: string) => {
+    projectService.assertWritable();
+    try {
+      const sourceResponse = await fetch(textureUrl);
+      if (!sourceResponse.ok) throw new Error(`Texture fetch failed (${sourceResponse.status})`);
+      const blob = await sourceResponse.blob();
+      const mime = blob.type || 'image/png';
+      const extension = mime.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
+      const file = new File([blob], `material-override.${extension}`, { type: mime });
+      const newTexture = await new THREE.TextureLoader().loadAsync(textureUrl);
       newTexture.colorSpace = THREE.SRGBColorSpace;
-      newTexture.flipY = true; 
-      
-      setModels(prev => prev.map(model => {
-        if (model.id === modelId) {
-          
-          let targetMapUUID: string | null = targetTextureUuid || null;
+      newTexture.flipY = true;
+      const model = models.find((candidate) => candidate.id === modelId);
+      if (!model) throw new Error('Model not found');
+      let targetMapUUID: string | null = targetTextureUuid || null;
 
-          // If no specific target UUID is provided, try to guess the primary texture (legacy behavior)
-          if (!targetMapUUID) {
-              model.object.traverse((child) => {
-                 if (targetMapUUID) return;
-                 if ((child as THREE.Mesh).isMesh) {
-                     const mat = (child as THREE.Mesh).material;
-                     if (Array.isArray(mat)) {
-                         for (const m of mat) if ((m as any).map) { targetMapUUID = (m as any).map.uuid; break; }
-                     } else {
-                         if ((mat as any).map) targetMapUUID = (mat as any).map.uuid;
-                     }
-                 }
-              });
+      if (!targetMapUUID) {
+        model.object.traverse((child) => {
+          if (targetMapUUID || !(child as THREE.Mesh).isMesh) return;
+          const material = (child as THREE.Mesh).material;
+          const materials = Array.isArray(material) ? material : [material];
+          for (const candidate of materials) {
+            if ((candidate as any).map) { targetMapUUID = (candidate as any).map.uuid; break; }
           }
+        });
+      }
 
-          // Capture overrides to persist
-          const newOverrides: Record<string, string> = { ...(model.textureOverrides || {}) };
-          let hasUpdates = false;
-
-          // Apply to matching materials
-          model.object.traverse((child) => {
-            if ((child as THREE.Mesh).isMesh) {
-              const mesh = child as THREE.Mesh;
-              const material = mesh.material;
-              
-              const applyToMaterial = (m: any) => {
-                  if (m.isMeshStandardMaterial || m.isMeshPhongMaterial) {
-                      // Logic: 
-                      // 1. If target provided, match strictly.
-                      // 2. If target NOT provided but map exists on material, match heuristic primary found above.
-                      // 3. If target NOT provided and NO map on material, apply broadly (fresh paint).
-                      
-                      const matchesTarget = targetMapUUID && m.map && m.map.uuid === targetMapUUID;
-                      const isUntextured = !targetMapUUID && !m.map;
-                      
-                      if (matchesTarget || isUntextured) {
-                          // Dispose old if exists
-                          if (m.map) m.map.dispose();
-                          m.map = newTexture;
-                          
-                          // FORCE TRANSPARENCY SETTINGS for masks to function correctly
-                          m.transparent = true;
-                          m.alphaTest = 0.5; 
-                          m.side = THREE.DoubleSide;
-                          
-                          m.needsUpdate = true;
-
-                          // Persist based on Material Name
-                          if (m.name) {
-                              newOverrides[m.name] = textureUrl;
-                              hasUpdates = true;
-                          }
-                      }
-                  }
-              };
-
-              if (Array.isArray(material)) {
-                material.forEach(applyToMaterial);
-              } else {
-                applyToMaterial(material);
-              }
-            }
-          });
-          
-          if (hasUpdates) {
-              // Persist to DB asynchronously
-              dbOperations.updateModelTextureOverrides(modelId, newOverrides).catch(e => 
-                  console.error("Failed to persist texture override:", e)
-              );
-              // Update React state
-              return { ...model, textureOverrides: newOverrides };
-          }
-
-          // Return a shallow copy to trigger React updates (activeModel change detection)
-          return { ...model };
+      const materialNames = new Set<string>();
+      model.object.traverse((child) => {
+        if (!(child as THREE.Mesh).isMesh) return;
+        const material = (child as THREE.Mesh).material;
+        const materials = Array.isArray(material) ? material : [material];
+        for (const candidate of materials as any[]) {
+          const matchesTarget = targetMapUUID && candidate.map?.uuid === targetMapUUID;
+          const isUntextured = !targetMapUUID && !candidate.map;
+          if ((matchesTarget || isUntextured) && candidate.name) materialNames.add(candidate.name);
         }
-        return model;
-      }));
-    });
-  }, []);
+      });
+      if (!materialNames.size) return;
+
+      const textureId = await dbOperations.addModelTextureOverride(
+        modelId,
+        [...materialNames],
+        file,
+        { width: newTexture.image?.width || 0, height: newTexture.image?.height || 0 },
+      );
+      const newOverrides = { ...(model.textureOverrides || {}) };
+      for (const materialName of materialNames) newOverrides[materialName] = textureId;
+      model.object.traverse((child) => {
+        if (!(child as THREE.Mesh).isMesh) return;
+        const material = (child as THREE.Mesh).material;
+        const materials = Array.isArray(material) ? material : [material];
+        for (const candidate of materials as any[]) {
+          if (!materialNames.has(candidate.name)) continue;
+          if (candidate.map) candidate.map.dispose();
+          candidate.map = newTexture;
+          candidate.transparent = true;
+          candidate.alphaTest = 0.5;
+          candidate.side = THREE.DoubleSide;
+          candidate.needsUpdate = true;
+        }
+      });
+      setModels((previous) => previous.map((candidate) => candidate.id === modelId
+        ? { ...candidate, textureOverrides: newOverrides }
+        : candidate));
+    } catch (error) {
+      console.error('Failed to persist texture override:', error);
+      alert('Failed to apply texture override.');
+    }
+  }, [models]);
 
   const resetModelTexture = useCallback(async (modelId: string) => {
+    projectService.assertWritable();
     setIsLoading(true);
     try {
         const model = models.find(m => m.id === modelId);

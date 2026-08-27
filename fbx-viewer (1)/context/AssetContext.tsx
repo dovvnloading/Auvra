@@ -22,7 +22,7 @@ interface AssetContextType {
   placeInScene: (id: string) => void; 
   removeFromScene: (id: string) => void; 
   addAnimations: (files: File[], modelId: string) => Promise<void>;
-  retextureModel: (modelId: string, textureUrl: string, targetTextureUuid?: string) => void;
+  retextureModel: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<void>;
   resetModelTexture: (modelId: string) => Promise<void>;
   setModels: (models: LoadedModelData[]) => void;
 
@@ -66,6 +66,7 @@ interface AssetContextType {
   // Graphs
   graphData: Record<string, AnimationGraphData>;
   updateGraph: (modelId: string, data: Partial<AnimationGraphData>) => void;
+  hydrateGraphs: (graphs: Record<string, AnimationGraphData>) => void;
   resetGraphs: () => void;
 
   // Runtime Triggers
@@ -102,8 +103,8 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
   // Model Manager (Handles cleanup of other domains on deletion)
   const modelManager = useModelManager(setIsLoading, (id) => {
     attachmentManager.removeAttachmentsByParentId(id);
-    socketManager.removeSocketsByParentId(id);
-    graphManager.removeGraphData(id);
+    socketManager.removeSocketsByParentId(id, false);
+    graphManager.removeGraphData(id, false);
     blueprintManager.unlinkModelFromBlueprints(id);
   });
 
@@ -182,6 +183,7 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     // Graphs
     graphData: graphManager.graphData,
     updateGraph: graphManager.updateGraph,
+    hydrateGraphs: graphManager.hydrateGraphs,
     resetGraphs: graphManager.resetGraphs,
 
     // Runtime

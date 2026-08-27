@@ -63,6 +63,55 @@ class ControllerTests(unittest.TestCase):
             controller.close(); controller.close()
             self.assertEqual(controller.frame.closed, 1)
 
+    def test_bound_project_events_are_posted_before_the_response(self):
+        class EventingProjectService:
+            def handle(self, method, payload):
+                self.assertions.append((method, payload))
+                return {
+                    "projectId": None,
+                    "revision": 0,
+                    "name": None,
+                    "readOnly": False,
+                    "dirty": False,
+                    "busy": False,
+                    "progress": None,
+                    "recoveryAvailable": False,
+                    "recentProjects": [],
+                    "status": "closed",
+                }
+
+            def drain_events(self):
+                return [("project.status", {"status": "closed"})]
+
+            assertions = []
+
+        process = Mock(is_alive=Mock(return_value=True))
+        frame = FakeFrame(FrameConfig(
+            FrameMode.DEVELOPMENT,
+            development_origin="http://127.0.0.1:3099",
+        ))
+        frame.state = FrameState.READY
+        controller = FrameController(process, frame=frame)
+        service = EventingProjectService()
+        controller.dispatcher.bind_services(project_service=service)
+        request = {
+            "protocol": "auvra.host/1",
+            "type": "request",
+            "id": "status-1",
+            "session": controller.dispatcher.session.session_id,
+            "revision": 0,
+            "method": "project.getStatus",
+            "payload": {},
+        }
+
+        controller.on_message(json.dumps(request), "http://127.0.0.1:3099/")
+
+        messages = [json.loads(body) for body in frame.posts]
+        self.assertEqual([message["type"] for message in messages], ["event", "response"])
+        self.assertEqual([message["revision"] for message in messages], [1, 1])
+        self.assertEqual(messages[0]["event"], "project.status")
+        self.assertEqual(service.assertions, [("project.getStatus", {})])
+
     def test_adapter_without_origin_policy_is_rejected(self):
         class UnsafeFrame(FakeFrame):
             def __init__(self, config):
