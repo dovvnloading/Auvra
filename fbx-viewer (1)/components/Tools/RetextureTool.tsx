@@ -88,7 +88,7 @@ export const RetextureTool: React.FC<RetextureToolProps> = ({ onClose }) => {
         <div className="p-4 space-y-4">
             
             {/* Preview Area */}
-            <div className="aspect-square bg-[url('https://transparenttextures.com/patterns/dark-matter.png')] bg-gray-950 rounded border border-gray-800 relative group overflow-hidden">
+            <div className="texture-preview-surface aspect-square bg-gray-950 rounded border border-gray-800 relative group overflow-hidden">
                 {displayImage ? (
                     <img 
                         src={displayImage} 

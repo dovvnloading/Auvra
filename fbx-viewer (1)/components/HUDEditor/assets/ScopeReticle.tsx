@@ -27,7 +27,7 @@ export const ScopeReticle: React.FC<ScopeReticleProps> = ({
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_25%,rgba(0,0,0,0.6)_50%,#000_70%)] mix-blend-normal" />
                 
             {/* 2. Lens Imperfections & Chromatic Tint */}
-            <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.08] mix-blend-overlay" />
+            <div className="reticle-noise absolute inset-0 opacity-[0.08] mix-blend-overlay" aria-hidden="true" />
             
             {/* 3. Reticle System */}
             <div 

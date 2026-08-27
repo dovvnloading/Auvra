@@ -2,7 +2,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
-import { Environment, Center, OrbitControls, Grid, ContactShadows } from '@react-three/drei';
+import { Center, OrbitControls, Grid, ContactShadows } from '@react-three/drei';
 import { Brush, RefreshCw, Check, Undo2, ArrowRight, AlertTriangle, Search, Box, Layers, Image as ImageIcon, Edit3, Trash2, RotateCcw, Repeat, Wand2, Sparkles, Save, Link, Download } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
 import { useTextureGeneration } from '../../hooks/useTextureGeneration';
@@ -11,6 +11,7 @@ import { LoadedModelData } from '../../types';
 import { loadFBXFile } from '../../utils/modelLoader';
 import { disposeObject } from '../../utils/processing/ModelLifecycle';
 import { useNotification } from '../../context/NotificationContext';
+import { LocalEnvironment } from '../Scene/LocalEnvironment';
 
 const ModelList: React.FC<{
     models: LoadedModelData[];
@@ -165,7 +166,7 @@ export const RetextureEditor: React.FC = () => {
                     <>
                         <Canvas shadows camera={{ position: [2, 2, 4], fov: 45 }} className="flex-1">
                             <color attach="background" args={['#0a0a0a']} />
-                            <Environment preset="city" blur={0.8} />
+                            <LocalEnvironment />
                             
                             <group>
                                 <Center>

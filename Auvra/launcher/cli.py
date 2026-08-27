@@ -9,6 +9,7 @@ import signal
 import socket
 import threading
 import time
+from pathlib import Path
 from collections.abc import Iterator
 
 from .config import DEFAULT_PORT, HOST, PORT_RANGE, READINESS_TIMEOUT, Paths
@@ -18,6 +19,9 @@ from .diagnostics import (
 )
 from .process import OwnedProcess, ProcessCleanupError, ProcessLaunchError
 from .readiness import wait_for_readiness
+from Auvra.desktop.controller import FrameController, FrameProcessExitedError
+from Auvra.desktop.contracts import FrameConfigurationError, FrameStartupError
+from Auvra.desktop.sdk import SdkError
 
 
 class ExitCode:
@@ -39,6 +43,7 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
     start = sub.add_parser("start", help="prepare and run the loopback Vite server")
     start.add_argument("--port", type=int, help="strictly use this loopback port")
+    start.add_argument("--packaged-root", type=Path, help="open an immutable frontend dist directory without Vite")
     start.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     doctor = sub.add_parser("doctor", help="check runtimes, lockfile, and dependencies")
     doctor.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
@@ -213,7 +218,61 @@ def run_clean(paths: Paths, *, dependencies: bool, yes: bool, json_mode: bool) -
     return ExitCode.OK
 
 
-def run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool) -> int:
+class _PackagedOwner:
+    def __init__(self) -> None:
+        self.stopped = False
+
+    def is_alive(self) -> bool:
+        return not self.stopped
+
+    def poll(self) -> int:
+        return 0
+
+    def terminate(self) -> None:
+        self.stopped = True
+
+
+def run_packaged(paths: Paths, *, packaged_root: Path, json_mode: bool) -> int:
+    if not packaged_root.is_dir():
+        emit({"command": "start", "ok": False, "error": "packaged frontend directory does not exist"}, json_mode=json_mode)
+        return ExitCode.DEPENDENCIES
+    owner = _PackagedOwner()
+    controller: FrameController | None = None
+    exit_code = ExitCode.OK
+    try:
+        controller = FrameController.packaged(owner, packaged_root, profile_parent=paths.launcher_state)
+        controller.start()
+        emit({"command": "start", "ok": True, "packaged": True, "root": str(packaged_root)}, json_mode=json_mode)
+        controller.run()
+    except FrameConfigurationError as exc:
+        emit({"command": "start", "ok": False, "error": str(exc)[:240]}, json_mode=json_mode)
+        exit_code = ExitCode.DEPENDENCIES
+    except (FrameStartupError, SdkError) as exc:
+        emit({"command": "start", "ok": False, "error": str(exc)[:240]}, json_mode=json_mode)
+        exit_code = ExitCode.RUNTIME
+    except FrameProcessExitedError as exc:
+        emit({"command": "start", "ok": False, "error": str(exc)[:240]}, json_mode=json_mode)
+        exit_code = ExitCode.CHILD
+    except (OSError, ProcessLaunchError) as exc:
+        emit({"command": "start", "ok": False, "error": str(exc)[:240]}, json_mode=json_mode)
+        exit_code = ExitCode.CHILD
+    except KeyboardInterrupt:
+        emit({"command": "start", "ok": False, "interrupted": True,
+              "error": "interrupted by user"}, json_mode=json_mode)
+        exit_code = ExitCode.INTERRUPTED
+    finally:
+        if controller is not None:
+            controller.close()
+            if controller.cleanup_error is not None:
+                emit({"command": "start", "ok": False,
+                      "error": "desktop frame cleanup failed"}, json_mode=json_mode)
+                exit_code = ExitCode.CLEANUP
+    return exit_code
+
+
+def run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool, packaged_root: Path | None = None) -> int:
+    if packaged_root is not None:
+        return run_packaged(paths, packaged_root=packaged_root, json_mode=json_mode)
     ok_runtime, checks = _runtime_ok(paths)
     if not ok_runtime:
         emit({"command": "start", "ok": False, "error": "runtime check failed", "runtimes": checks}, json_mode=json_mode)
@@ -251,6 +310,7 @@ def run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool) -> in
         if not json_mode and line:
             print(str(redact(line)), flush=True)
     owned: OwnedProcess | None = None
+    controller: FrameController | None = None
     exit_code = ExitCode.OK
     try:
         owned = OwnedProcess.launch(command, paths.frontend_root, on_output=log)
@@ -265,15 +325,28 @@ def run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool) -> in
             )
             exit_code = ExitCode.CHILD if child_exited else ExitCode.READINESS
         else:
-            emit({"command": "start", "ok": True, "url": result.url, "port": port,
-                  "preferred_port": DEFAULT_PORT, "fallback": used_fallback}, json_mode=json_mode)
-            while owned.is_alive():
-                time.sleep(0.2)
-            child_code = owned.poll() or 0
-            if child_code:
+            if not owned.is_alive():
+                child_code = int(owned.poll() or 0)
                 emit({"command": "start", "ok": False,
                       "error": f"frontend child exited with status {child_code}"}, json_mode=json_mode)
                 exit_code = ExitCode.CHILD
+            else:
+                try:
+                    controller = FrameController.development(
+                        owned, result.url, profile_parent=paths.launcher_state,
+                    )
+                    controller.start()
+                    emit({"command": "start", "ok": True, "url": result.url, "port": port,
+                          "preferred_port": DEFAULT_PORT, "fallback": used_fallback}, json_mode=json_mode)
+                    controller.run()
+                except FrameProcessExitedError as exc:
+                    emit({"command": "start", "ok": False,
+                          "error": str(exc)[:240]}, json_mode=json_mode)
+                    exit_code = ExitCode.CHILD
+                except (FrameStartupError, SdkError, FrameConfigurationError) as exc:
+                    emit({"command": "start", "ok": False,
+                          "error": str(exc)[:240]}, json_mode=json_mode)
+                    exit_code = ExitCode.RUNTIME
     except KeyboardInterrupt:
         emit({"command": "start", "ok": False, "interrupted": True,
               "error": "interrupted by user"}, json_mode=json_mode)
@@ -282,6 +355,12 @@ def run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool) -> in
         emit({"command": "start", "ok": False, "error": str(exc)[:240]}, json_mode=json_mode)
         exit_code = ExitCode.CHILD
     finally:
+        if controller is not None:
+            controller.close()
+            if controller.cleanup_error is not None:
+                emit({"command": "start", "ok": False,
+                      "error": "desktop frame cleanup failed"}, json_mode=json_mode)
+                exit_code = ExitCode.CLEANUP
         if owned is not None:
             try:
                 owned.terminate()
@@ -321,6 +400,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_clean(paths, dependencies=args.dependencies, yes=args.yes, json_mode=json_mode)
     try:
         with _shutdown_signal_handlers():
+            if getattr(args, "packaged_root", None) is not None:
+                return run_start(paths, explicit_port=None, json_mode=json_mode, packaged_root=args.packaged_root)
             return run_start(paths, explicit_port=getattr(args, "port", None), json_mode=json_mode)
     except KeyboardInterrupt:
         emit({"command": "start", "ok": False, "interrupted": True,

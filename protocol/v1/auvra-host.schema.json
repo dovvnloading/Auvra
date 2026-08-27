@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://auvra.dev/protocol/v1/auvra-host.schema.json",
+  "title": "Auvra host protocol v1",
+  "description": "Strict messages exchanged between the Auvra editor and its host.",
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/successResponse" },
+    { "$ref": "#/$defs/errorResponse" },
+    { "$ref": "#/$defs/event" },
+    { "$ref": "#/$defs/session" }
+  ],
+  "$defs": {
+    "protocol": { "const": "auvra.host/1" },
+    "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" },
+    "revision": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "sessionId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" },
+    "emptyObject": { "type": "object", "properties": {}, "required": [], "additionalProperties": false },
+    "request": {
+      "type": "object",
+      "required": ["protocol", "type", "id", "session", "revision", "method", "payload"],
+      "properties": {
+        "protocol": { "$ref": "#/$defs/protocol" }, "type": { "const": "request" }, "id": { "$ref": "#/$defs/id" },
+        "session": { "$ref": "#/$defs/sessionId" }, "revision": { "$ref": "#/$defs/revision" },
+        "method": { "enum": ["host.ping", "host.getCapabilities"] },
+        "payload": { "$ref": "#/$defs/emptyObject" }
+      },
+      "additionalProperties": false
+    },
+    "successResponse": {
+      "type": "object",
+      "required": ["protocol", "type", "id", "session", "revision", "ok", "result"],
+      "properties": {
+        "protocol": { "$ref": "#/$defs/protocol" }, "type": { "const": "response" }, "id": { "$ref": "#/$defs/id" },
+        "session": { "$ref": "#/$defs/sessionId" }, "revision": { "$ref": "#/$defs/revision" }, "ok": { "const": true },
+        "result": { "oneOf": [ { "$ref": "#/$defs/pingResult" }, { "$ref": "#/$defs/capabilitiesResult" } ] }
+      },
+      "additionalProperties": false
+    },
+    "pingResult": { "type": "object", "required": ["pong"], "properties": { "pong": { "const": true } }, "additionalProperties": false },
+    "capabilitiesResult": { "type": "object", "required": ["protocol", "methods"], "properties": { "protocol": { "$ref": "#/$defs/protocol" }, "methods": { "type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [ { "const": "host.ping" }, { "const": "host.getCapabilities" } ], "items": false } }, "additionalProperties": false },
+    "errorCode": { "enum": ["invalid_request", "invalid_response", "session_mismatch", "unknown_method", "revision_conflict", "internal_error"] },
+    "error": {
+      "type": "object", "required": ["code", "message"],
+      "properties": {
+        "code": { "$ref": "#/$defs/errorCode" },
+        "message": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "details": { "type": "object", "additionalProperties": false }
+      },
+      "additionalProperties": false
+    },
+    "errorResponse": {
+      "type": "object",
+      "required": ["protocol", "type", "id", "session", "revision", "ok", "error"],
+      "properties": {
+        "protocol": { "$ref": "#/$defs/protocol" }, "type": { "const": "response" }, "id": { "$ref": "#/$defs/id" },
+        "session": { "$ref": "#/$defs/sessionId" }, "revision": { "$ref": "#/$defs/revision" }, "ok": { "const": false },
+        "error": { "$ref": "#/$defs/error" }
+      },
+      "additionalProperties": false
+    },
+    "event": {
+      "type": "object",
+      "required": ["protocol", "type", "event", "session", "revision", "payload"],
+      "properties": {
+        "protocol": { "$ref": "#/$defs/protocol" }, "type": { "const": "event" }, "event": { "enum": ["host.session", "host.revision"] },
+        "session": { "$ref": "#/$defs/sessionId" }, "revision": { "$ref": "#/$defs/revision" },
+        "payload": { "type": "object", "additionalProperties": false }
+      },
+      "additionalProperties": false
+    },
+    "session": {
+      "type": "object",
+      "required": ["protocol", "type", "session", "revision", "status"],
+      "properties": {
+        "protocol": { "$ref": "#/$defs/protocol" }, "type": { "const": "session" }, "session": { "$ref": "#/$defs/sessionId" },
+        "revision": { "$ref": "#/$defs/revision" }, "status": { "enum": ["created", "active", "closed"] }
+      },
+      "additionalProperties": false
+    }
+  }
+}

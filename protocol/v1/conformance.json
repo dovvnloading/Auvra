@@ -1,0 +1,29 @@
+{
+  "protocol": "auvra.host/1",
+  "valid": [
+    {"name":"ping request","message":{"protocol":"auvra.host/1","type":"request","id":"r1","session":"s1","revision":0,"method":"host.ping","payload":{}}},
+    {"name":"capabilities request","message":{"protocol":"auvra.host/1","type":"request","id":"r2","session":"s1","revision":1,"method":"host.getCapabilities","payload":{}}},
+    {"name":"success response","message":{"protocol":"auvra.host/1","type":"response","id":"r1","session":"s1","revision":0,"ok":true,"result":{"pong":true}}},
+    {"name":"error response","message":{"protocol":"auvra.host/1","type":"response","id":"r2","session":"s1","revision":1,"ok":false,"error":{"code":"unknown_method","message":"Unknown host method"}}},
+    {"name":"event","message":{"protocol":"auvra.host/1","type":"event","event":"host.revision","session":"s1","revision":2,"payload":{}}},
+    {"name":"session","message":{"protocol":"auvra.host/1","type":"session","session":"s1","revision":0,"status":"created"}}
+  ],
+  "invalid": [
+    {"name":"unknown protocol","message":{"protocol":"auvra.host/2","type":"request","id":"r1","session":"s1","revision":0,"method":"host.ping","payload":{}}},
+    {"name":"unknown request field","message":{"protocol":"auvra.host/1","type":"request","id":"r1","session":"s1","revision":0,"method":"host.ping","payload":{},"extra":1}},
+    {"name":"unknown method","message":{"protocol":"auvra.host/1","type":"request","id":"r1","session":"s1","revision":0,"method":"host.shell","payload":{}}},
+    {"name":"negative revision","message":{"protocol":"auvra.host/1","type":"request","id":"r1","session":"s1","revision":-1,"method":"host.ping","payload":{}}},
+    {"name":"nonempty payload","message":{"protocol":"auvra.host/1","type":"request","id":"r1","session":"s1","revision":0,"method":"host.ping","payload":{"x":1}}},
+    {"name":"malformed id","message":{"protocol":"auvra.host/1","type":"request","id":"","session":"s1","revision":0,"method":"host.ping","payload":{}}},
+    {"name":"unknown error field","message":{"protocol":"auvra.host/1","type":"response","id":"r1","session":"s1","revision":0,"ok":false,"error":{"code":"internal_error","message":"x","secret":"bad"}}},
+    {"name":"invalid success result","message":{"protocol":"auvra.host/1","type":"response","id":"r1","session":"s1","revision":0,"ok":true,"result":{"unexpected":true}}},
+    {"name":"duplicate capability methods","message":{"protocol":"auvra.host/1","type":"response","id":"r1","session":"s1","revision":0,"ok":true,"result":{"protocol":"auvra.host/1","methods":["host.ping","host.ping"]}}},
+    {"name":"reordered capability methods","message":{"protocol":"auvra.host/1","type":"response","id":"r1","session":"s1","revision":0,"ok":true,"result":{"protocol":"auvra.host/1","methods":["host.getCapabilities","host.ping"]}}},
+    {"name":"missing capability methods","message":{"protocol":"auvra.host/1","type":"response","id":"r1","session":"s1","revision":0,"ok":true,"result":{"protocol":"auvra.host/1","methods":["host.ping"]}}},
+    {"name":"malformed response","message":{"protocol":"auvra.host/1","type":"response","id":"r1","session":"s1","revision":0,"ok":true,"result":{}}},
+    {"name":"malformed event","message":{"protocol":"auvra.host/1","type":"event","event":"host.revision","session":"s1","revision":0,"payload":{"extra":1}}},
+    {"name":"malformed session","message":{"protocol":"auvra.host/1","type":"session","session":"s1","revision":0,"status":"unknown"}},
+    {"name":"oversized id","message":{"protocol":"auvra.host/1","type":"request","id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","session":"s1","revision":0,"method":"host.ping","payload":{}}},
+    {"name":"oneOf ambiguity","message":{"protocol":"auvra.host/1","type":"response","id":"r1","session":"s1","revision":0,"ok":true,"result":{"pong":true,"protocol":"auvra.host/1","methods":["host.ping","host.getCapabilities"]}}}
+  ]
+}

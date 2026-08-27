@@ -1,5 +1,5 @@
 
-import React from 'react';
+import React, { useState } from 'react';
 import { Palette, Trash2, Maximize2 } from 'lucide-react';
 import { TextureData } from '../../../types';
 
@@ -9,12 +9,13 @@ interface TextureCardProps {
 }
 
 export const TextureCard: React.FC<TextureCardProps> = ({ texture, onDelete }) => {
+    const [showPreview, setShowPreview] = useState(false);
     return (
         <div className="group relative flex flex-col gap-1 cursor-pointer">
-            <div className="aspect-square bg-gray-800 rounded-md border border-gray-700 overflow-hidden group-hover:border-white transition-all shadow-sm relative">
+            <div className="texture-preview-surface aspect-square bg-gray-800 rounded-md border border-gray-700 overflow-hidden group-hover:border-white transition-all shadow-sm relative">
                 
                 {/* Texture Image */}
-                <div className="w-full h-full bg-[url('https://transparenttextures.com/patterns/dark-matter.png')]">
+                <div className="texture-preview-surface w-full h-full">
                     <img
                         src={texture.url}
                         alt={texture.name}
@@ -34,16 +35,15 @@ export const TextureCard: React.FC<TextureCardProps> = ({ texture, onDelete }) =
 
                 {/* Actions Overlay */}
                 <div className="absolute inset-0 bg-black/60 backdrop-blur-[1px] opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-2">
-                    <a 
-                        href={texture.url} 
-                        target="_blank" 
-                        rel="noreferrer"
-                        onClick={(e) => e.stopPropagation()}
+                    <button
+                        type="button"
+                        aria-label={`Preview ${texture.name}`}
+                        onClick={(e) => { e.stopPropagation(); setShowPreview(true); }}
                         className="p-2 bg-gray-700 hover:bg-gray-600 text-white rounded-full transition-colors"
                         title="View Full Size"
                     >
                         <Maximize2 size={14} />
-                    </a>
+                    </button>
                     <button
                         onClick={(e) => { e.stopPropagation(); onDelete(); }}
                         className="p-2 bg-red-600 hover:bg-red-500 text-white rounded-full transition-colors"
@@ -56,6 +56,14 @@ export const TextureCard: React.FC<TextureCardProps> = ({ texture, onDelete }) =
             <span className="text-[11px] truncate px-0.5 text-center text-gray-400 group-hover:text-white">
                 {texture.name}
             </span>
+            {showPreview && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-8" role="dialog" aria-label={`${texture.name} preview`} onClick={() => setShowPreview(false)}>
+                    <div className="texture-preview-surface relative max-w-3xl max-h-full rounded border border-gray-600 p-3 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                        <button type="button" aria-label="Close preview" className="absolute right-2 top-2 rounded bg-gray-900/90 px-2 py-1 text-xs text-white" onClick={() => setShowPreview(false)}>Close</button>
+                        <img src={texture.url} alt={texture.name} className="max-h-[75vh] max-w-[80vw] object-contain" />
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

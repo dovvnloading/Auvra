@@ -33,6 +33,12 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
+      - name: Verify host protocol
+        run: npm run protocol:verify
+
+      - name: Verify desktop frame boundaries
+        run: node scripts/frame/verify.mjs
+
       - name: Build editor
         run: npm run build
 
@@ -63,8 +69,8 @@ jobs:
           uv --version
           uv sync --locked --no-install-project --no-dev
 
-      - name: Check launcher syntax
-        run: python -m compileall -q Auvra tests
+      - name: Check Python syntax
+        run: uv run --locked --no-sync python -m compileall -q Auvra tests
 
-      - name: Run standard-library tests
-        run: python -m unittest discover -s tests -t . -v
+      - name: Run Python tests
+        run: uv run --locked --no-sync python -W error::ResourceWarning -m unittest discover -s tests -t . -v

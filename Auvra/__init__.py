@@ -1,0 +1,1 @@
+"""Auvra desktop host package."""
