@@ -7,7 +7,7 @@ JobId = str
 ProposalId = str
 TransactionId = str
 PreviewAssetId = str
-Method = Literal["host.ping", "host.getCapabilities", "project.getStatus", "project.create", "project.open", "project.openRecent", "project.close", "project.getSnapshot", "project.applyChanges", "project.save", "project.saveAs", "project.exportPack", "project.importPack", "project.importLegacy", "asset.beginUpload", "asset.resolve", "provider.list", "provider.getStatus", "provider.configureCredential", "provider.deleteCredential", "provider.configure", "provider.listModels", "provider.health", "inference.submit", "inference.get", "inference.list", "inference.cancel", "inference.retry", "media.discard", "media.commit", "command.preview", "command.approve", "command.undo"]
+Method = Literal["host.ping", "host.getCapabilities", "project.getStatus", "project.create", "project.open", "project.openRecent", "project.close", "project.getSnapshot", "project.applyChanges", "project.save", "project.saveAs", "project.exportPack", "project.importPack", "project.importLegacy", "asset.beginUpload", "asset.resolve", "provider.list", "provider.getStatus", "provider.configureCredential", "provider.deleteCredential", "provider.configure", "provider.listModels", "provider.health", "inference.submit", "inference.get", "inference.list", "inference.cancel", "inference.retry", "media.discard", "media.commit", "command.preview", "command.approve", "command.undo", "engine.getStatus", "engine.getSnapshot", "engine.applyChanges", "engine.openViewport", "engine.closeViewport", "engine.renderReference", "engine.getMetrics", "engine.recover"]
 ErrorCode = Literal["invalid_request", "invalid_response", "session_mismatch", "unknown_method", "revision_conflict", "cancelled", "locking", "read_only", "invalid_project", "unsupported_version", "migration_failed", "disk_failure", "permission_denied", "recovery_required", "unsupported_capability", "provider_not_configured", "provider_unavailable", "provider_authentication", "provider_authorization", "provider_rate_limited", "provider_timeout", "provider_network", "provider_invalid_response", "provider_not_found", "invalid_job", "budget_exceeded", "invalid_command", "approval_required", "credential_unavailable", "endpoint_denied", "internal_error"]
 class Request(TypedDict):
     protocol: Literal["auvra.host/1"]
@@ -24,6 +24,7 @@ class CapabilitiesResult(TypedDict, total=False):
     methods: list[Method]
     projectMethods: list[Method]
     providerMethods: list[Method]
+    engineMethods: list[Method]
 class ProjectResult(TypedDict, total=False):
     projectId: str | None
     revision: Revision
@@ -117,7 +118,7 @@ class ErrorResponse(TypedDict):
 class Event(TypedDict):
     protocol: Literal["auvra.host/1"]
     type: Literal["event"]
-    event: Literal["host.session", "host.revision", "project.status", "project.opening", "project.opened", "project.closing", "project.closed", "project.revision", "project.dirty", "project.readOnly", "project.progress", "project.recovery", "provider.job", "provider.status", "provider.progress", "provider.recovery"]
+    event: Literal["host.session", "host.revision", "project.status", "project.opening", "project.opened", "project.closing", "project.closed", "project.revision", "project.dirty", "project.readOnly", "project.progress", "project.recovery", "provider.job", "provider.status", "provider.progress", "provider.recovery", "engine.status", "engine.revision", "engine.viewport", "engine.recovery"]
     session: SessionId
     revision: Revision
     payload: dict[str, object]

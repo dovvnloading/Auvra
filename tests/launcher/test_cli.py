@@ -161,6 +161,61 @@ class CliParserTests(unittest.TestCase):
              mock.patch.object(cli.OwnedProcess, "launch", side_effect=OSError("cannot launch child")):
             self.assertEqual(cli.run_start(paths, explicit_port=None, json_mode=True), 14)
 
+    def test_native_binary_resolution_is_release_only_and_missing_binary_uses_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            paths = Paths.from_repo_root(root)
+            name = "auvra-native.exe" if cli.os.name == "nt" else "auvra-native"
+            wrong = root / "native" / "target" / "debug" / name
+            wrong.parent.mkdir(parents=True)
+            wrong.write_text("debug placeholder")
+            self.assertIsNone(cli._native_engine_command(paths))
+
+            exact = root / "native" / "target" / "release" / name
+            exact.parent.mkdir(parents=True)
+            exact.write_text("release placeholder")
+            self.assertEqual(cli._native_engine_command(paths), [str(exact)])
+
+    def test_start_passes_exact_native_argv_and_closes_owner_after_frame_run_failure(self) -> None:
+        class FailingController:
+            def __init__(self):
+                self.cleanup_error = None
+                self.closed = 0
+
+            def start(self):
+                return None
+
+            def run(self):
+                raise cli.FrameStartupError("frame run failed")
+
+            def close(self):
+                self.closed += 1
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            paths = Paths.from_repo_root(root)
+            name = "auvra-native.exe" if cli.os.name == "nt" else "auvra-native"
+            exact = root / "native" / "target" / "release" / name
+            exact.parent.mkdir(parents=True)
+            exact.write_text("native placeholder")
+            owned = mock.Mock()
+            owned.is_alive.return_value = True
+            ready = ReadinessResult(True, "http://127.0.0.1:3024/", 1, "HTTP 200")
+            controller = FailingController()
+            with mock.patch.object(cli, "_runtime_ok", return_value=(True, [])), \
+                 mock.patch.object(cli, "choose_port", return_value=3024), \
+                 mock.patch.object(cli, "_node_npm", return_value=("node", "npm")), \
+                 mock.patch.object(cli, "prepare_dependencies", return_value=(True, mock.Mock(to_dict=lambda: {"status": "ready"}), "")), \
+                 mock.patch.object(cli.OwnedProcess, "launch", return_value=owned), \
+                 mock.patch.object(cli, "wait_for_readiness", return_value=ready), \
+                 mock.patch.object(cli.FrameController, "development", return_value=controller) as development:
+                result = cli.run_start(paths, explicit_port=None, json_mode=True)
+            self.assertEqual(result, cli.ExitCode.RUNTIME)
+            development.assert_called_once()
+            self.assertEqual(development.call_args.kwargs["native_command"], [str(exact)])
+            self.assertEqual(controller.closed, 1)
+            owned.terminate.assert_called_once()
+
     def test_start_maps_readiness_timeout_and_child_exit_separately(self) -> None:
         paths = Paths()
         owned = mock.Mock()

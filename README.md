@@ -107,8 +107,24 @@ additional live renderers in hover UI.
 
 WebGL2 is the stable compatibility path. WebGPU is available only as an
 experimental reference probe and is not selected for editor presentation; an
-explicit WebGPU request reports why it falls back to WebGL2. Native rendering
-backends are not part of this stage of the engine.
+explicit WebGPU request reports why it falls back to WebGL2.
+
+A native engine vertical slice is also available for development. It runs as a
+launcher-owned Rust process, keeps its world state across editor reloads, and
+renders reference content through `wgpu` in a separate native viewport. Build
+the pinned release binary before launching Auvra:
+
+```powershell
+cd native
+cargo +1.98.0 build --release --locked
+cd ..
+python Auvra/Auvra.py
+```
+
+Add `?renderer=native` to the editor URL to select the native viewport. If the
+release binary or native device is unavailable, Auvra reports the reason and
+keeps the WebGL2 viewport active. Packaging and redistribution of the native
+binary remain Stage 7 work.
 
 ## Provider integrations
 
@@ -129,6 +145,7 @@ To verify the launcher and production bundle locally:
 ```powershell
 python -m unittest discover -s tests -t . -v
 cd "fbx-viewer (1)"
+npm run protocol:verify
 npm run renderer:verify
 npm run project:verify
 npm run provider:verify

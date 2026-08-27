@@ -9,7 +9,7 @@ import shutil
 import tempfile
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 from urllib.parse import urlsplit
 
 from Auvra.host.dispatcher import HostDispatcher
@@ -30,6 +30,12 @@ from .policy import FramePolicy
 from .project_host import NativeProjectHost
 from .provider_host import NativeProviderHost, _assert_state_path_safe
 from .previews import PreviewStore
+from .native_engine import (
+    NativeEngine,
+    NativeEngineError,
+    NativeEngineHost,
+    NativeEngineUnavailableHost,
+)
 from .sdk import acquire_sdk
 from .webview2 import WebView2Frame
 from .webview2 import MESSAGE_MAX_BYTES
@@ -88,6 +94,7 @@ class FrameController:
                   provider_host: NativeProviderHost | None = None,
                   preview_store: PreviewStore | None = None,
                   asset_registry: AssetTransferRegistry | None = None,
+                  native_engine_host: NativeEngineHost | NativeEngineUnavailableHost | None = None,
                   poll_interval: float = 0.1) -> None:
         self.process = process
         self.frame = frame
@@ -106,6 +113,7 @@ class FrameController:
         self.provider_host = provider_host
         self.preview_store = preview_store
         self.asset_registry = asset_registry
+        self.native_engine_host = native_engine_host
         self.profile_path = profile_path
         self._profile_lease = profile_lease
         self.poll_interval = max(0.02, poll_interval)
@@ -116,7 +124,9 @@ class FrameController:
 
     @classmethod
     def development(cls, process: Any, origin: str, *, profile_parent: Path,
-                    dispatcher: HostDispatcher | None = None, frame_factory: Callable[..., Frame] = WebView2Frame) -> "FrameController":
+                    dispatcher: HostDispatcher | None = None,
+                    native_command: Sequence[str] | None = None,
+                    frame_factory: Callable[..., Frame] = WebView2Frame) -> "FrameController":
         lease = _new_profile(profile_parent)
         profile = lease.path
         parsed = urlsplit(origin)
@@ -127,6 +137,7 @@ class FrameController:
         project_host: NativeProjectHost | None = None
         preview_store: PreviewStore | None = None
         provider_host: NativeProviderHost | None = None
+        native_engine_host: NativeEngineHost | NativeEngineUnavailableHost = NativeEngineUnavailableHost()
         try:
             asset_registry = AssetTransferRegistry(
                 profile.parent / "asset-transfers",
@@ -139,7 +150,18 @@ class FrameController:
             preview_store = PreviewStore(profile.parent / "previews")
             project_host.set_preview_store(preview_store)
             provider_host = NativeProviderHost(profile.parent / "provider-state", project_host=project_host, preview_store=preview_store)
-            active_dispatcher.bind_services(project_service=project_host, asset_service=project_host, provider_service=provider_host)
+            if native_command:
+                candidate = NativeEngineHost(NativeEngine(tuple(native_command)))
+                try:
+                    candidate.start(editor_session=active_dispatcher.session.session_id)
+                    native_engine_host = candidate
+                except NativeEngineError:
+                    candidate.close(timeout=1)
+                    native_engine_host = NativeEngineUnavailableHost("Native engine startup failed; using the web compatibility renderer")
+            active_dispatcher.bind_services(
+                project_service=project_host, asset_service=project_host,
+                provider_service=provider_host, engine_service=native_engine_host,
+            )
             config = FrameConfig(FrameMode.DEVELOPMENT, development_origin=exact_origin,
                                  user_data_folder=profile,
                                  on_message=lambda body, source: holder["controller"].on_message(body, source),
@@ -159,6 +181,8 @@ class FrameController:
                 project_host.shutdown()
             if asset_registry is not None:
                 asset_registry.close()
+            if isinstance(native_engine_host, NativeEngineHost):
+                native_engine_host.close(timeout=1)
             _remove_profile(lease)
             raise
         controller = cls(
@@ -171,6 +195,7 @@ class FrameController:
             provider_host=provider_host,
             preview_store=preview_store,
             asset_registry=asset_registry,
+            native_engine_host=native_engine_host,
         )
         holder["controller"] = controller
         return controller
@@ -194,6 +219,9 @@ class FrameController:
         project_host: NativeProjectHost | None = None
         preview_store: PreviewStore | None = None
         provider_host: NativeProviderHost | None = None
+        native_engine_host = NativeEngineUnavailableHost(
+            "Native engine packaging is not part of the Stage 6 development slice"
+        )
         try:
             asset_registry = AssetTransferRegistry(
                 profile.parent / "asset-transfers",
@@ -206,7 +234,10 @@ class FrameController:
             preview_store = PreviewStore(profile.parent / "previews")
             project_host.set_preview_store(preview_store)
             provider_host = NativeProviderHost(profile.parent / "provider-state", project_host=project_host, preview_store=preview_store)
-            active_dispatcher.bind_services(project_service=project_host, asset_service=project_host, provider_service=provider_host)
+            active_dispatcher.bind_services(
+                project_service=project_host, asset_service=project_host,
+                provider_service=provider_host, engine_service=native_engine_host,
+            )
             config = FrameConfig(FrameMode.PACKAGED, packaged_root=approved_root,
                                  user_data_folder=profile,
                                  on_message=lambda body, source: holder["controller"].on_message(body, source),
@@ -238,6 +269,7 @@ class FrameController:
             provider_host=provider_host,
             preview_store=preview_store,
             asset_registry=asset_registry,
+            native_engine_host=native_engine_host,
         )
         holder["controller"] = controller
         return controller
@@ -383,6 +415,11 @@ class FrameController:
             try:
                 self.asset_registry.close()
             except OSError as exc:
+                self.cleanup_error = self.cleanup_error or exc
+        if isinstance(self.native_engine_host, NativeEngineHost):
+            try:
+                self.native_engine_host.close()
+            except NativeEngineError as exc:
                 self.cleanup_error = self.cleanup_error or exc
         self._stop_process()
         if self.profile_path is not None:

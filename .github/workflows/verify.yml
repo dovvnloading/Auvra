@@ -84,6 +84,32 @@ jobs:
       - name: Run Python tests
         run: uv run --locked --no-sync python -W error::ResourceWarning -m unittest discover -s tests -t . -v
 
+  native-engine-build:
+    name: Native engine (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Select pinned Rust toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal
+
+      - name: Build locked native engine
+        run: cargo +1.98.0 build --release --locked
+
+      - name: Run native reference lifecycle
+        if: runner.os == 'Windows'
+        env:
+          AUVRA_NATIVE_SESSION_TOKEN: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+        run: cargo +1.98.0 run --release --locked -- --self-test
+
   native-project-smoke:
     name: Native project lifecycle (Windows WebView2)
     runs-on: windows-latest
@@ -105,6 +131,13 @@ jobs:
       - name: Build editor bundle
         working-directory: fbx-viewer (1)
         run: npm run build
+
+      - name: Select pinned Rust toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal
+
+      - name: Build locked native engine
+        working-directory: native
+        run: cargo +1.98.0 build --release --locked
 
       - name: Set up Python
         uses: actions/setup-python@v7

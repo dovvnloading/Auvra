@@ -1,0 +1,12 @@
+[package]
+name = "auvra-native"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+pollster = "=1.0.1"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.145"
+wgpu = { version = "=30.0.1", default-features = true }
+winit = { version = "=0.30.12", features = ["rwh_06"] }

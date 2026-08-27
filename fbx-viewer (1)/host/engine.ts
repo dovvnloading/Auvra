@@ -1,0 +1,122 @@
+import { getHostTransport } from "./bootstrap";
+import type { Event, Response } from "./generated/protocolV1";
+
+export interface NativeEngineStatus {
+  protocol: "auvra.native/1";
+  status: "starting" | "ready" | "degraded" | "stopped" | "failed";
+  worldRevision: number;
+  viewport: "closed" | "opening" | "open" | "recovering";
+  backend?: string;
+  adapter?: string;
+  fallbackReason?: string | null;
+  metrics?: {
+    startupMs: number;
+    frameCpuMs: number | null;
+    gpuFrameMs: number | null;
+    memoryBytes: number;
+    recoveryCount: number;
+  };
+}
+
+type HostLike = {
+  session?: string | null;
+  currentRevision?: number;
+  ready?: () => Promise<unknown>;
+  request: (request: unknown) => Promise<Response>;
+  subscribe: (listener: (event: Event) => void) => () => void;
+};
+
+const STOPPED: NativeEngineStatus = {
+  protocol: "auvra.native/1",
+  status: "stopped",
+  worldRevision: 0,
+  viewport: "closed",
+};
+
+/** UI-side client for the host-owned, long-lived native engine process. */
+export class NativeEngineService {
+  private host: HostLike | null = null;
+  private session: string | null = null;
+  private wireRevision = 0;
+  private counter = 0;
+  private queue: Promise<unknown> = Promise.resolve();
+  private value: NativeEngineStatus = { ...STOPPED };
+  private readonly listeners = new Set<(status: NativeEngineStatus) => void>();
+  private unsubscribeHost: (() => void) | null = null;
+
+  getStatus(): NativeEngineStatus { return { ...this.value, metrics: this.value.metrics ? { ...this.value.metrics } : undefined }; }
+
+  subscribe(listener: (status: NativeEngineStatus) => void): () => void {
+    this.listeners.add(listener);
+    listener(this.getStatus());
+    return () => this.listeners.delete(listener);
+  }
+
+  refresh(): Promise<NativeEngineStatus> { return this.call("engine.getStatus", {}); }
+  getSnapshot(): Promise<NativeEngineStatus & { entities?: unknown[] }> { return this.call("engine.getSnapshot", {}); }
+  applyChanges(expectedRevision: number, entities: Array<{ id: string; position: [number, number, number]; color: [number, number, number, number] }>): Promise<NativeEngineStatus> {
+    return this.call("engine.applyChanges", { expectedRevision, entities });
+  }
+  openViewport(width = 1280, height = 720): Promise<NativeEngineStatus> { return this.call("engine.openViewport", { width, height, title: "Auvra Native Viewport" }); }
+  closeViewport(): Promise<NativeEngineStatus> { return this.call("engine.closeViewport", {}); }
+  renderReference(width = 256, height = 256): Promise<NativeEngineStatus & { signature?: string }> { return this.call("engine.renderReference", { width, height }); }
+  getMetrics(): Promise<NativeEngineStatus> { return this.call("engine.getMetrics", {}); }
+  recover(): Promise<NativeEngineStatus> { return this.call("engine.recover", {}); }
+
+  private call<T extends NativeEngineStatus>(method: string, payload: Record<string, unknown>): Promise<T> {
+    const run = () => this.performCall<T>(method, payload);
+    const result = this.queue.then(run, run);
+    this.queue = result.catch(() => undefined);
+    return result;
+  }
+
+  private async performCall<T extends NativeEngineStatus>(method: string, payload: Record<string, unknown>): Promise<T> {
+    await this.ensureSession();
+    if (!this.session) throw new Error("The native engine host is not ready");
+    const response = await this.getHost().request({
+      protocol: "auvra.host/1", type: "request", id: `engine-${++this.counter}`,
+      session: this.session, revision: this.wireRevision, method, payload,
+    });
+    if (typeof response.revision === "number") this.wireRevision = response.revision;
+    if (!response.ok) throw new Error(response.error.message || response.error.code);
+    const result = response.result as unknown as T;
+    this.update(result);
+    return result;
+  }
+
+  private async ensureSession(): Promise<void> {
+    if (this.session) return;
+    const host = this.getHost();
+    if (host.ready) {
+      const envelope = await host.ready() as { session?: string; revision?: number };
+      this.session = envelope.session ?? null;
+      this.wireRevision = envelope.revision ?? this.wireRevision;
+    } else {
+      this.session = host.session ?? null;
+      this.wireRevision = host.currentRevision ?? this.wireRevision;
+    }
+  }
+
+  private getHost(): HostLike {
+    if (!this.host) {
+      this.host = getHostTransport() as unknown as HostLike;
+      this.unsubscribeHost = this.host.subscribe((event) => this.handleEvent(event));
+    }
+    return this.host;
+  }
+
+  private handleEvent(event: Event): void {
+    if (typeof event.revision === "number") this.wireRevision = event.revision;
+    if (event.event === "host.session") this.session = event.session;
+    if (event.event.startsWith("engine.")) this.update(event.payload as unknown as Partial<NativeEngineStatus>);
+  }
+
+  private update(value: Partial<NativeEngineStatus>): void {
+    if (!value || typeof value !== "object") return;
+    this.value = { ...this.value, ...value, protocol: "auvra.native/1" };
+    const snapshot = this.getStatus();
+    this.listeners.forEach((listener) => listener(snapshot));
+  }
+}
+
+export const nativeEngine = new NativeEngineService();

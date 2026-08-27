@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib
 from pathlib import Path
 import tempfile
 import unittest
@@ -10,6 +11,9 @@ import Auvra.desktop.contracts as contracts
 from Auvra.desktop.controller import FrameController, FrameProcessExitedError
 from Auvra.desktop.contracts import FrameConfig, FrameConfigurationError, FrameFailure, FrameMode, FrameStartupError, FrameState
 from Auvra.desktop.policy import FramePolicy
+
+
+controller_module = importlib.import_module("Auvra.desktop.controller")
 
 
 class FakeFrame:
@@ -37,6 +41,73 @@ class FakeFrame:
 
 
 class ControllerTests(unittest.TestCase):
+    def test_development_binds_supplied_native_owner_and_closes_it_once(self):
+        class FakeNativeEngine:
+            def __init__(self, command):
+                self.command = command
+
+        class FakeNativeHost:
+            instances = []
+
+            def __init__(self, engine):
+                self.engine = engine
+                self.starts = []
+                self.closes = 0
+                self.__class__.instances.append(self)
+
+            def start(self, *, editor_session):
+                self.starts.append(editor_session)
+
+            def close(self, *, timeout=None):
+                self.closes += 1
+
+            def drain_events(self):
+                return []
+
+        process = Mock(is_alive=Mock(return_value=True))
+        command = ["C:\\owned\\auvra-native.exe", "--profile", "test"]
+        with tempfile.TemporaryDirectory() as temp, patch.object(contracts, "_CONTROLLED_TEST_PROFILE_PARENTS", {Path(temp)}), \
+             patch.object(controller_module, "NativeEngine", FakeNativeEngine), \
+             patch.object(controller_module, "NativeEngineHost", FakeNativeHost):
+            controller = FrameController.development(
+                process, "http://127.0.0.1:3099/", profile_parent=Path(temp),
+                native_command=command, frame_factory=FakeFrame,
+            )
+            owner = FakeNativeHost.instances[-1]
+            self.assertEqual(owner.engine.command, tuple(command))
+            self.assertEqual(owner.starts, [controller.dispatcher.session.session_id])
+            self.assertIs(controller.dispatcher._engine_service, owner)
+            controller.close()
+            controller.close()
+            self.assertEqual(owner.closes, 1)
+
+    def test_native_owner_is_closed_when_frame_start_fails(self):
+        class FailingFrame(FakeFrame):
+            def start(self):
+                raise FrameStartupError("frame startup failed")
+
+        class FakeNativeHost:
+            def __init__(self):
+                self.closes = 0
+
+            def close(self, *, timeout=None):
+                self.closes += 1
+
+        process = Mock(is_alive=Mock(return_value=True))
+        owner = FakeNativeHost()
+        with patch.object(controller_module, "NativeEngineHost", FakeNativeHost):
+            controller = FrameController(
+                process,
+                frame=FailingFrame(FrameConfig(
+                    FrameMode.DEVELOPMENT,
+                    development_origin="http://127.0.0.1:3099",
+                )),
+                native_engine_host=owner,
+            )
+            with self.assertRaisesRegex(FrameStartupError, "frame startup failed"):
+                controller.start()
+            self.assertEqual(owner.closes, 1)
+
     def test_dispatches_only_exact_source_and_posts_validated_response(self):
         process = Mock(is_alive=Mock(return_value=True))
         with tempfile.TemporaryDirectory() as temp, patch.object(contracts, "_CONTROLLED_TEST_PROFILE_PARENTS", {Path(temp)}):

@@ -14,8 +14,10 @@ from .contracts import (
 )
 from .policy import FramePolicy, PolicyDecision
 from .controller import FrameController
+from .native_engine import NativeEngine, NativeEngineHost, NativeEngineState, NativeEngineUnavailableHost
 
 __all__ = [
     "FrameConfig", "FrameError", "FrameFailure", "FrameMode", "FramePolicy",
     "FrameState", "FrameUnavailableError", "PolicyDecision", "FrameController",
+    "NativeEngine", "NativeEngineHost", "NativeEngineState", "NativeEngineUnavailableHost",
 ]
