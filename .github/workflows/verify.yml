@@ -263,7 +263,7 @@ jobs:
           $env:AUVRA_RELEASE_PACKAGE_ROOT = $unpacked
           uv run --locked --no-sync python -W error::ResourceWarning -m unittest tests.desktop.test_release_smoke -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -m unittest discover -s tests/release -t . -v
+          uv run --locked --no-sync python -m unittest discover -s tests/release -t . -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Write-Output 'Unsigned CI intentionally does not claim MSIX installation, upgrade, rollback, or uninstall success; those require a trusted signing identity on a clean machine.'
 
