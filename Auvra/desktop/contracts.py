@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import os
 from pathlib import Path
 import tempfile
 from typing import Any, Callable, Mapping, Protocol
@@ -17,6 +18,7 @@ _REPO_LAUNCHER_STATE = _REPO_FRONTEND_DIST.parent / ".auvra-launcher"
 # is never enough to make an arbitrary caller-chosen directory trusted.
 _CONTROLLED_TEST_PROFILE_PARENTS: set[Path] = set()
 _PROFILE_LEASE_MARKER = ".auvra-profile-lease"
+_PACKAGED_CHANNELS = frozenset({"stable", "beta", "dev"})
 
 
 def _profile_parent_is_allowed(value: Path | str) -> bool:
@@ -27,6 +29,11 @@ def _profile_parent_is_allowed(value: Path | str) -> bool:
         approved = _REPO_LAUNCHER_STATE.resolve(strict=False)
         if candidate == approved:
             return True
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            release_state = Path(local_app_data).expanduser().absolute().resolve(strict=False) / "Auvra"
+            if candidate.parent == release_state and candidate.name in _PACKAGED_CHANNELS:
+                return True
         temp_root = Path(tempfile.gettempdir()).resolve()
         controlled = {
             Path(item).expanduser().absolute().resolve(strict=False)
@@ -125,16 +132,37 @@ def _immutable_root(value: Path | str | None) -> Path | None:
                 pass
     except OSError as exc:
         raise FrameConfigurationError("packaged root could not be inspected safely") from exc
-    # A virtual HTTPS host is a privileged content boundary.  Only the exact
-    # repository build output may be mapped; a marker inside a caller-chosen
-    # directory would be forgeable and would turn arbitrary local HTML into
-    # trusted host content.
+    # A virtual HTTPS host is a privileged content boundary.  Development may
+    # map only the exact repository build.  A release may map only the exact
+    # ``frontend`` tree of a complete package whose canonical manifest and
+    # every payload hash pass the runtime verifier; a marker in an arbitrary
+    # directory is never sufficient authority.
     try:
         approved_repo_dist = _REPO_FRONTEND_DIST.resolve(strict=True)
     except (OSError, RuntimeError) as exc:
         raise FrameConfigurationError("the approved Auvra build directory is unavailable") from exc
-    if path != approved_repo_dist or not (path / "index.html").is_file():
+    if path == approved_repo_dist and (path / "index.html").is_file():
+        return path
+    if path.name != "frontend" or not (path / "index.html").is_file():
         raise FrameConfigurationError("packaged root is not the approved Auvra build directory")
+    package_root = path.parent
+    verifier = None
+    try:
+        from auvra_release_verify import verify_installed_package as verifier  # type: ignore[import-not-found]
+    except ImportError:
+        try:
+            from release.runtime_verify import verify_installed_package as verifier  # type: ignore[no-redef]
+        except ImportError as exc:
+            raise FrameConfigurationError("release package verifier is unavailable") from exc
+    try:
+        verifier(package_root)
+    except Exception as exc:
+        raise FrameConfigurationError("release package integrity validation failed") from exc
+    try:
+        if path != (package_root / "frontend").resolve(strict=True):
+            raise FrameConfigurationError("release frontend authority is invalid")
+    except (OSError, RuntimeError) as exc:
+        raise FrameConfigurationError("release frontend authority is invalid") from exc
     return path
 
 
@@ -196,6 +224,7 @@ class FrameConfig:
     development_origin: str = ""
     packaged_origin: str = "https://app.auvra.local"
     packaged_root: Path | None = None
+    browser_executable_folder: Path | None = None
     on_message: MessageCallback | None = None
     on_lifecycle: LifecycleCallback | None = None
     on_asset_resource: AssetResourceCallback | None = None
@@ -225,6 +254,27 @@ class FrameConfig:
                 if root is None:
                     raise FrameConfigurationError("packaged root is required in packaged mode")
                 object.__setattr__(self, "packaged_root", root)
+                if self.browser_executable_folder is not None:
+                    candidate_runtime = Path(self.browser_executable_folder).expanduser().absolute()
+                    current = Path(candidate_runtime.anchor)
+                    try:
+                        for component in candidate_runtime.parts[1:]:
+                            current = current / component
+                            if current.is_symlink() or (hasattr(current, "is_junction") and current.is_junction()):
+                                raise FrameConfigurationError("fixed WebView2 runtime cannot contain links")
+                            if getattr(current.stat(), "st_file_attributes", 0) & 0x400:
+                                raise FrameConfigurationError("fixed WebView2 runtime cannot contain reparse points")
+                    except FrameConfigurationError:
+                        raise
+                    except (OSError, RuntimeError) as exc:
+                        raise FrameConfigurationError("fixed WebView2 runtime is unavailable") from exc
+                    try:
+                        runtime = candidate_runtime.resolve(strict=True)
+                    except (OSError, RuntimeError) as exc:
+                        raise FrameConfigurationError("fixed WebView2 runtime is unavailable") from exc
+                    if not runtime.is_dir() or not (runtime / "msedgewebview2.exe").is_file():
+                        raise FrameConfigurationError("fixed WebView2 runtime is incomplete")
+                    object.__setattr__(self, "browser_executable_folder", runtime)
         except FrameConfigurationError:
             raise
         except ValueError as exc:

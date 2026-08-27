@@ -20,12 +20,15 @@ import threading
 from typing import Any, BinaryIO, Mapping, Sequence
 
 from Auvra.host.dispatcher import HostOperationError
+from Auvra.host.logging import redact
 
 
 PROTOCOL_VERSION = "auvra.native/1"
 SESSION_TOKEN_ENV = "AUVRA_NATIVE_SESSION_TOKEN"
 MAX_FRAME_BYTES = 64 * 1024
 _MAX_DIAGNOSTIC_BYTES = 64 * 1024
+_MAX_DIAGNOSTIC_RECORD_BYTES = 8 * 1024
+_MAX_DIAGNOSTIC_RECORDS = 256
 
 
 class NativeEngineError(RuntimeError):
@@ -188,6 +191,8 @@ class NativeEngine:
         self._ready = threading.Event()
         self._stderr_done = threading.Event()
         self._diagnostics: list[NativeDiagnostic] = []
+        self._diagnostic_sizes: list[int] = []
+        self._diagnostic_bytes = 0
         self._diagnostics_lock = threading.Lock()
 
     @property
@@ -272,8 +277,22 @@ class NativeEngine:
                 self._ready.set()
 
     def _diagnostics_append(self, record: dict[str, Any]) -> None:
+        safe = redact(record, max_depth=6, max_items=64, max_string=512)
+        if not isinstance(safe, dict):
+            safe = {"level": "error", "code": "invalid_diagnostic"}
+        encoded = json.dumps(safe, ensure_ascii=True, separators=(",", ":"))
+        size = len(encoded.encode("utf-8"))
+        if size > _MAX_DIAGNOSTIC_RECORD_BYTES:
+            safe = {"level": "warning", "code": "diagnostic_truncated"}
+            size = len(json.dumps(safe, ensure_ascii=True, separators=(",", ":")).encode("utf-8"))
         with self._diagnostics_lock:
-            self._diagnostics.append(NativeDiagnostic(record))
+            self._diagnostics.append(NativeDiagnostic(safe))
+            self._diagnostic_sizes.append(size)
+            self._diagnostic_bytes += size
+            while (len(self._diagnostics) > _MAX_DIAGNOSTIC_RECORDS
+                   or self._diagnostic_bytes > _MAX_DIAGNOSTIC_BYTES):
+                self._diagnostics.pop(0)
+                self._diagnostic_bytes -= self._diagnostic_sizes.pop(0)
 
     def _read_stdout(self, stream: BinaryIO) -> None:
         try:

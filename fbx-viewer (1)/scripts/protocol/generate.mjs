@@ -94,7 +94,7 @@ for (const [path, content] of outputs) {
   if (check) {
     let existing;
     try { existing = await readFile(path, "utf8"); } catch { throw new Error(`missing generated file: ${path}`); }
-    if (existing !== content) throw new Error(`generated output drift: ${path}`);
+    if (existing.replace(/\r\n/g, "\n") !== content) throw new Error(`generated output drift: ${path}`);
   } else {
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, content, "utf8");

@@ -21,6 +21,7 @@ VERSION = 1
 MANUAL_LIMIT = 5
 AUTOSAVE_LIMIT = 10
 PROJECT_CAP = 2 * 1024**3
+RECOVERY_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 
 @dataclass(frozen=True)
 class ProjectStatus:
@@ -285,6 +286,13 @@ class ProjectRepository:
         limit = AUTOSAVE_LIMIT if kind == "autosave" else MANUAL_LIMIT
         points = sorted((p for p in root.iterdir() if p.is_dir()), key=lambda p:p.stat().st_mtime, reverse=True)
         for point in points[limit:]: shutil.rmtree(point, ignore_errors=True)
+        cutoff = time.time() - RECOVERY_MAX_AGE_SECONDS
+        for point in points[:limit]:
+            try:
+                if point.stat().st_mtime < cutoff:
+                    shutil.rmtree(point, ignore_errors=True)
+            except OSError:
+                continue
         all_points = []
         for recovery_root in (self.path / ".auvra" / "backups", self.path / ".auvra" / "autosaves"):
             if recovery_root.exists():
@@ -307,7 +315,13 @@ class ProjectRepository:
         for selected in kinds:
             root = self.path / ".auvra" / ("autosaves" if selected == "autosave" else "backups")
             if not root.exists(): continue
+            cutoff = time.time() - RECOVERY_MAX_AGE_SECONDS
             for point in sorted((p for p in root.iterdir() if p.is_dir()), key=lambda p:p.stat().st_mtime, reverse=True):
+                try:
+                    if point.stat().st_mtime < cutoff:
+                        continue
+                except OSError:
+                    continue
                 output.append({"kind": selected, "name": point.name, "size": sum(f.stat().st_size for f in point.rglob("*") if f.is_file())})
         return output
     def restore_recovery(self, kind: str, name: str) -> int:

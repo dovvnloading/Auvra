@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import json
 import os
 import shutil
 import signal
@@ -16,13 +17,15 @@ from collections.abc import Iterator
 from .config import DEFAULT_PORT, HOST, PORT_RANGE, READINESS_TIMEOUT, Paths
 from .dependencies import prepare_dependencies, remove_scoped_tree
 from .diagnostics import (
-    check_node, check_npm, check_python, collect_diagnostics, emit, redact,
+    begin_diagnostics_run, check_node, check_npm, check_python, collect_diagnostics,
+    delete_local_diagnostics, emit, export_support_bundle, finish_diagnostics_run,
+    record_diagnostics_crash, redact,
 )
 from .process import OwnedProcess, ProcessCleanupError, ProcessLaunchError
 from .readiness import wait_for_readiness
 from Auvra.desktop.controller import FrameController, FrameProcessExitedError
 from Auvra.desktop.contracts import FrameConfigurationError, FrameStartupError
-from Auvra.desktop.sdk import SdkError
+from Auvra.desktop.sdk import SdkError, load_packaged_sdk
 
 
 class ExitCode:
@@ -55,6 +58,11 @@ def _parser() -> argparse.ArgumentParser:
     clean.add_argument("--dependencies", action="store_true", help="also remove exact node_modules")
     clean.add_argument("--yes", action="store_true", help="confirm dependency removal")
     clean.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    support = sub.add_parser("support", help="export or delete local diagnostics")
+    support.add_argument("--output", type=Path, help="write a redacted support bundle to this path")
+    support.add_argument("--delete-local", action="store_true", help="delete launcher-owned local diagnostics")
+    support.add_argument("--yes", action="store_true", help="confirm local diagnostics deletion")
+    support.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     return parser
 
 
@@ -219,6 +227,27 @@ def run_clean(paths: Paths, *, dependencies: bool, yes: bool, json_mode: bool) -
     return ExitCode.OK
 
 
+def run_support(paths: Paths, *, output: Path | None, delete_local: bool, yes: bool,
+                json_mode: bool) -> int:
+    if delete_local and not yes:
+        emit({"command": "support", "ok": False, "error": "--yes is required with --delete-local"}, json_mode=json_mode)
+        return ExitCode.USAGE
+    if output is None and not delete_local:
+        emit({"command": "support", "ok": False, "error": "--output or --delete-local is required"}, json_mode=json_mode)
+        return ExitCode.USAGE
+    try:
+        result: dict[str, object] = {"command": "support", "ok": True}
+        if output is not None:
+            result["output"] = str(export_support_bundle(paths, output))
+        if delete_local:
+            result["removed"] = delete_local_diagnostics(paths)
+        emit(result, json_mode=json_mode)
+        return ExitCode.OK
+    except (OSError, ValueError) as exc:
+        emit({"command": "support", "ok": False, "error": str(exc)[:240]}, json_mode=json_mode)
+        return ExitCode.CLEANUP
+
+
 class _PackagedOwner:
     def __init__(self) -> None:
         self.stopped = False
@@ -233,6 +262,69 @@ class _PackagedOwner:
         self.stopped = True
 
 
+def _verify_release_package(package_root: Path) -> dict[str, object]:
+    """Use the package-shipped verifier; development checkout is a test fallback."""
+    verifier = None
+    try:
+        from auvra_release_verify import verify_installed_package
+        verifier = verify_installed_package
+    except ImportError:
+        try:
+            from release.runtime_verify import verify_installed_package
+            verifier = verify_installed_package
+        except ImportError as exc:
+            raise FrameConfigurationError("packaged release verifier is unavailable") from exc
+    try:
+        result = verifier(package_root)
+    except Exception as exc:
+        raise FrameConfigurationError(str(exc)[:240]) from exc
+    if not isinstance(result, dict) or not isinstance(result.get("channel"), str):
+        raise FrameConfigurationError("packaged release verification returned invalid metadata")
+    return result
+
+
+def _release_packaged_inputs(packaged_root: Path) -> tuple[Paths, Path, object, Path, Path] | None:
+    """Resolve verified release assets; return ``None`` for legacy dev dist."""
+    requested = Path(packaged_root).expanduser().absolute()
+    if not requested.is_dir():
+        return None
+    try:
+        frontend = requested.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise FrameConfigurationError("packaged frontend directory is unavailable") from exc
+    package_root = frontend.parent
+    if not (package_root / "release-manifest.json").is_file():
+        return None
+    metadata = _verify_release_package(package_root)
+    paths = Paths.from_packaged_root(frontend, str(metadata["channel"]))
+    sdk = load_packaged_sdk(paths.packaged_webview2_sdk)
+    runtime = paths.packaged_webview2_runtime
+    native = paths.packaged_native
+    if runtime.is_symlink() or not runtime.is_dir() or runtime.joinpath("msedgewebview2.exe").is_symlink() \
+            or not runtime.joinpath("msedgewebview2.exe").is_file():
+        raise FrameConfigurationError("packaged fixed WebView2 runtime is missing or incomplete")
+    if native.is_symlink() or not native.is_file():
+        raise FrameConfigurationError("packaged native engine is missing or unsafe")
+    return paths, frontend, sdk, runtime, native
+
+
+def _packaged_diagnostics_paths(packaged_root: Path, fallback: Paths) -> Paths | None:
+    """Select release-local diagnostics without trusting an invalid package."""
+    requested = Path(packaged_root).expanduser().absolute()
+    try:
+        frontend = requested.resolve(strict=True)
+        manifest = frontend.parent / "release-manifest.json"
+        if not manifest.is_file():
+            return fallback
+        value = json.loads(manifest.read_text(encoding="utf-8"))
+        channel = value.get("channel") if isinstance(value, dict) else None
+        if not isinstance(channel, str):
+            return None
+        return Paths.from_packaged_root(frontend, channel)
+    except (OSError, RuntimeError, ValueError, UnicodeError, json.JSONDecodeError):
+        return None
+
+
 def run_packaged(paths: Paths, *, packaged_root: Path, json_mode: bool) -> int:
     if not packaged_root.is_dir():
         emit({"command": "start", "ok": False, "error": "packaged frontend directory does not exist"}, json_mode=json_mode)
@@ -241,9 +333,18 @@ def run_packaged(paths: Paths, *, packaged_root: Path, json_mode: bool) -> int:
     controller: FrameController | None = None
     exit_code = ExitCode.OK
     try:
-        controller = FrameController.packaged(owner, packaged_root, profile_parent=paths.launcher_state)
+        release = _release_packaged_inputs(packaged_root)
+        if release is None:
+            launch_paths, resolved_root, sdk, runtime, native = paths, packaged_root, None, None, None
+        else:
+            launch_paths, resolved_root, sdk, runtime, native = release
+        controller = FrameController.packaged(
+            owner, resolved_root, profile_parent=launch_paths.launcher_state,
+            sdk=sdk, browser_executable_folder=runtime,
+            native_command=[str(native.resolve())] if native is not None else None,
+        )
         controller.start()
-        emit({"command": "start", "ok": True, "packaged": True, "root": str(packaged_root)}, json_mode=json_mode)
+        emit({"command": "start", "ok": True, "packaged": True, "root": str(resolved_root)}, json_mode=json_mode)
         controller.run()
     except FrameConfigurationError as exc:
         emit({"command": "start", "ok": False, "error": str(exc)[:240]}, json_mode=json_mode)
@@ -271,7 +372,7 @@ def run_packaged(paths: Paths, *, packaged_root: Path, json_mode: bool) -> int:
     return exit_code
 
 
-def run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool, packaged_root: Path | None = None) -> int:
+def _run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool, packaged_root: Path | None = None) -> int:
     if packaged_root is not None:
         return run_packaged(paths, packaged_root=packaged_root, json_mode=json_mode)
     ok_runtime, checks = _runtime_ok(paths)
@@ -373,6 +474,28 @@ def run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool, packa
     return exit_code
 
 
+def run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool, packaged_root: Path | None = None) -> int:
+    """Run start with an atomic local crash marker and bounded retention."""
+    diagnostic_paths = _packaged_diagnostics_paths(packaged_root, paths) if packaged_root is not None else paths
+    if diagnostic_paths is not None:
+        begin_diagnostics_run(diagnostic_paths)
+    try:
+        result = _run_start(paths, explicit_port=explicit_port, json_mode=json_mode, packaged_root=packaged_root)
+        # Persist only unexpected owned-process or cleanup failures. Expected
+        # configuration, dependency, port, readiness, and user-cancellation
+        # outcomes are actionable errors, not crashes from a previous run.
+        if diagnostic_paths is not None and result in {ExitCode.CHILD, ExitCode.CLEANUP}:
+            record_diagnostics_crash(diagnostic_paths, component="launcher", code="start_failed", exit_code=result)
+        return result
+    except BaseException as exc:
+        if diagnostic_paths is not None:
+            record_diagnostics_crash(diagnostic_paths, component="launcher", code="uncaught_exception", detail=type(exc).__name__)
+        raise
+    finally:
+        if diagnostic_paths is not None:
+            finish_diagnostics_run(diagnostic_paths)
+
+
 def _native_engine_command(paths: Paths) -> list[str] | None:
     """Resolve only the repository-owned Stage 6 development binary."""
 
@@ -381,14 +504,14 @@ def _native_engine_command(paths: Paths) -> list[str] | None:
     return [str(candidate)] if candidate.is_file() else None
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, paths: Paths | None = None) -> int:
     parser = _parser()
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
         return int(exc.code)
     command = args.command or "start"
-    paths = Paths()
+    paths = paths or Paths()
     json_mode = _json_mode(args)
     if command == "doctor":
         try:
@@ -408,6 +531,9 @@ def main(argv: list[str] | None = None) -> int:
             return ExitCode.INTERRUPTED
     if command == "clean":
         return run_clean(paths, dependencies=args.dependencies, yes=args.yes, json_mode=json_mode)
+    if command == "support":
+        return run_support(paths, output=args.output, delete_local=args.delete_local,
+                           yes=args.yes, json_mode=json_mode)
     try:
         with _shutdown_signal_handlers():
             if getattr(args, "packaged_root", None) is not None:

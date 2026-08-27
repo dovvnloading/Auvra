@@ -143,6 +143,20 @@ class NativeEngineTests(unittest.TestCase):
         engine.close(timeout=1)
         self.assertEqual(engine.state, NativeEngineState.CLOSED)
 
+    def test_native_diagnostics_are_redacted_and_bounded(self) -> None:
+        engine = self.make_engine()
+        for number in range(400):
+            engine._diagnostics_append({
+                "event": "native.detail",
+                "authorization": "Bearer do-not-print-this-token",
+                "message": "x" * 9000,
+                "number": number,
+            })
+        encoded = json.dumps([item.record for item in engine.diagnostics])
+        self.assertLessEqual(len(engine.diagnostics), 256)
+        self.assertNotIn("do-not-print-this-token", encoded)
+        self.assertNotIn("x" * 9000, encoded)
+
     def test_host_maps_engine_methods_and_drains_bounded_events(self) -> None:
         engine = self.make_engine()
         host = NativeEngineHost(engine)

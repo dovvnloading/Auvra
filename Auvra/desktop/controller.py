@@ -36,7 +36,7 @@ from .native_engine import (
     NativeEngineHost,
     NativeEngineUnavailableHost,
 )
-from .sdk import acquire_sdk
+from .sdk import SdkLayout, acquire_sdk
 from .webview2 import WebView2Frame
 from .webview2 import MESSAGE_MAX_BYTES
 
@@ -203,6 +203,9 @@ class FrameController:
     @classmethod
     def packaged(cls, process: Any, packaged_root: Path, *, profile_parent: Path,
                  dispatcher: HostDispatcher | None = None,
+                 native_command: Sequence[str] | None = None,
+                 sdk: SdkLayout | None = None,
+                 browser_executable_folder: Path | None = None,
                  frame_factory: Callable[..., Frame] = WebView2Frame) -> "FrameController":
         """Build a controller mapped to one immutable frontend ``dist`` tree."""
         # Validate privileged packaged content before creating any browser
@@ -219,8 +222,8 @@ class FrameController:
         project_host: NativeProjectHost | None = None
         preview_store: PreviewStore | None = None
         provider_host: NativeProviderHost | None = None
-        native_engine_host = NativeEngineUnavailableHost(
-            "Native engine packaging is not part of the Stage 6 development slice"
+        native_engine_host: NativeEngineHost | NativeEngineUnavailableHost = (
+            NativeEngineUnavailableHost("Native engine is unavailable; using the web compatibility renderer")
         )
         try:
             asset_registry = AssetTransferRegistry(
@@ -234,17 +237,31 @@ class FrameController:
             preview_store = PreviewStore(profile.parent / "previews")
             project_host.set_preview_store(preview_store)
             provider_host = NativeProviderHost(profile.parent / "provider-state", project_host=project_host, preview_store=preview_store)
+            if native_command:
+                candidate = NativeEngineHost(NativeEngine(tuple(native_command)))
+                try:
+                    candidate.start(editor_session=active_dispatcher.session.session_id)
+                    native_engine_host = candidate
+                except NativeEngineError:
+                    candidate.close(timeout=1)
+                    native_engine_host = NativeEngineUnavailableHost(
+                        "Native engine startup failed; using the web compatibility renderer"
+                    )
             active_dispatcher.bind_services(
                 project_service=project_host, asset_service=project_host,
                 provider_service=provider_host, engine_service=native_engine_host,
             )
             config = FrameConfig(FrameMode.PACKAGED, packaged_root=approved_root,
+                                 browser_executable_folder=browser_executable_folder,
                                  user_data_folder=profile,
                                  on_message=lambda body, source: holder["controller"].on_message(body, source),
                                  on_lifecycle=lambda event, fields=None: holder["controller"].on_lifecycle(event, fields),
                                  on_asset_resource=lambda request: holder["controller"].on_asset_resource(request))
             if frame_factory is WebView2Frame:
-                sdk = acquire_sdk(profile.parent / "webview2-sdk")
+                if sdk is None or browser_executable_folder is None:
+                    raise FrameConfigurationError(
+                        "packaged mode requires verified WebView2 SDK and fixed runtime layouts"
+                    )
                 frame = frame_factory(config, sdk=sdk)
             else:
                 frame = frame_factory(config)
@@ -257,6 +274,8 @@ class FrameController:
                 project_host.shutdown()
             if asset_registry is not None:
                 asset_registry.close()
+            if isinstance(native_engine_host, NativeEngineHost):
+                native_engine_host.close(timeout=1)
             _remove_profile(lease)
             raise
         controller = cls(

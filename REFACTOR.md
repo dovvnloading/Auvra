@@ -20,8 +20,8 @@ internal architecture or working notes.
 | 3 | Replace browser-owned saving with a durable project system | Complete |
 | 4 | Add secure provider routing, BYOK settings, fal.ai media workflows, and text/local provider adapters | Complete |
 | 5 | Stabilize the current renderer and establish backend-independent rendering contracts | Complete |
-| 6 | Prove the native engine and multi-backend rendering path with a vertical slice | In review |
-| 7 | Complete packaging, recovery, performance, compatibility, and release hardening | Planned |
+| 6 | Prove the native engine and multi-backend rendering path with a vertical slice | Complete |
+| 7 | Complete packaging, recovery, performance, compatibility, and release hardening | In review |
 
 ## What this means for the current repository
 
@@ -45,6 +45,15 @@ internal architecture or working notes.
   storage remains available only as a read-only migration source.
 - Experimental work must preserve a tested fallback and may not silently become
   the default path.
+- The Windows release pipeline now assembles the frontend, embedded Python,
+  fixed WebView2 runtime, and native engine into a deterministic MSIX. Packaged
+  startup is offline and verifies its payload before opening the editor; CI
+  publishes unsigned development artifacts, while stable and beta signing stays
+  in a protected release operation.
+- Provider extensions now have a signed package format, per-project permissions,
+  revocation, a versioned interface, and restricted out-of-process execution.
+  Diagnostics remain local, bounded, and redacted, with explicit export and
+  deletion controls and no automatic telemetry or crash upload.
 
 There is no release date attached to these stages. Progress is measured by
 verified exit conditions, not by partially implemented feature claims.

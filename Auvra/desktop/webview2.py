@@ -288,12 +288,18 @@ class WebView2Frame:
             from Microsoft.Web.WebView2.WinForms import WebView2  # type: ignore[import-not-found]
         except ImportError as exc:
             raise FrameUnavailableError("Python.NET and the WebView2 WinForms SDK are required on Windows") from exc
+        browser_folder = self.config.browser_executable_folder
         try:
-            runtime_version = str(CoreWebView2Environment.GetAvailableBrowserVersionString())
+            runtime_version = str(
+                CoreWebView2Environment.GetAvailableBrowserVersionString(str(browser_folder))
+                if browser_folder is not None
+                else CoreWebView2Environment.GetAvailableBrowserVersionString()
+            )
             if not runtime_version:
                 raise RuntimeError("empty runtime version")
         except Exception as exc:
-            raise FrameUnavailableError("the Evergreen WebView2 Runtime is not installed or cannot be loaded") from exc
+            runtime_kind = "fixed" if browser_folder is not None else "Evergreen"
+            raise FrameUnavailableError(f"the {runtime_kind} WebView2 Runtime cannot be loaded") from exc
 
         form = Form()
         form.Text = self.config.title
@@ -335,7 +341,10 @@ class WebView2Frame:
             try:
                 profile = self.config.user_data_folder
                 profile.mkdir(parents=True, exist_ok=True)
-                environment = CoreWebView2Environment.CreateAsync(None, str(profile)).GetAwaiter().GetResult()
+                environment = CoreWebView2Environment.CreateAsync(
+                    str(browser_folder) if browser_folder is not None else None,
+                    str(profile),
+                ).GetAwaiter().GetResult()
                 self._environment = environment
                 control.EnsureCoreWebView2Async(environment)
                 if self.config.visible:

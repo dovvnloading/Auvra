@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import zipfile
 from unittest import mock
 
 from Auvra.launcher import cli
@@ -402,6 +403,27 @@ class CliPolicyTests(unittest.TestCase):
             self.assertEqual(cli.run_clean(paths, dependencies=False, yes=True, json_mode=True), cli.ExitCode.CLEANUP)
             self.assertTrue(paths.launcher_state.is_symlink())
             self.assertTrue(target.is_dir())
+
+    def test_support_diagnostics_marker_export_delete_and_pruning(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="auvra support ") as raw:
+            paths = Paths.from_repo_root(Path(raw))
+            previous = diagnostics.begin_diagnostics_run(paths, run_id="first")
+            self.assertIsNone(previous)
+            diagnostics.finish_diagnostics_run(paths)
+            diagnostics.begin_diagnostics_run(paths, run_id="second")
+            diagnostics.record_diagnostics_crash(paths, component="launcher", code="failed", exit_code=14)
+            diagnostics.finish_diagnostics_run(paths)
+            output = Path(raw) / "support.auvra.zip"
+            with mock.patch.object(diagnostics, "collect_diagnostics", return_value={"ok": False, "frontend": "C:\\secret\\project"}):
+                diagnostics.export_support_bundle(paths, output)
+            self.assertTrue(output.is_file())
+            with zipfile.ZipFile(output) as archive:
+                self.assertEqual(set(archive.namelist()), set(diagnostics._SUPPORT_MEMBERS))
+                body = b"".join(archive.read(name) for name in archive.namelist())
+                self.assertNotIn(b"secret", body.lower())
+                self.assertNotIn(b"http://", body.lower())
+            diagnostics.delete_local_diagnostics(paths)
+            self.assertFalse(paths.diagnostics_root.exists())
 
     def test_packaged_start_rejects_unapproved_local_directory(self) -> None:
         with tempfile.TemporaryDirectory(prefix="auvra packaged ") as raw, \

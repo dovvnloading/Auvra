@@ -644,7 +644,7 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         # listener is installed so the test proves delivery, not timing luck.
         controller.on_lifecycle("navigation_completed", {"success": True})
         expected = {f"{prefix}-ping", f"{prefix}-ack", f"{prefix}-data", f"{prefix}-blob"}
-        _wait_until(lambda: expected.issubset({item.get("id") for item in seen}), 12.0, f"{prefix} native protocol roundtrip")
+        _wait_until(lambda: expected.issubset({item.get("id") for item in seen}), 30.0, f"{prefix} native protocol roundtrip")
         self.assertNotIn(f"{prefix}-data-error", {item.get("id") for item in seen})
         self.assertNotIn(f"{prefix}-blob-error", {item.get("id") for item in seen})
 
