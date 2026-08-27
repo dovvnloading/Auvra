@@ -121,10 +121,19 @@ WebGL2 is the stable compatibility path. WebGPU is available only as an
 experimental reference probe and is not selected for editor presentation; an
 explicit WebGPU request reports why it falls back to WebGL2.
 
-A native engine vertical slice is also available for development. It runs as a
-launcher-owned Rust process, keeps its world state across editor reloads, and
-renders reference content through `wgpu` in a separate native viewport. Build
-the pinned release binary before launching Auvra:
+Auvra's native runtime is a launcher-owned Rust process with a deterministic
+fixed-step world. Project state is hydrated from the Python project repository,
+survives editor reloads and native-process recovery, and is extracted into
+immutable render snapshots. Source assets are cooked into a rebuildable local
+cache without becoming a second project authority.
+
+The `wgpu` renderer provides the current native production baseline: metallic-
+roughness PBR, animation, culling and deterministic LOD, batching, directional,
+point and spot lights, shadows, image-based lighting, integer picking, editor
+gizmos, HDR/ACES output, anti-aliasing, and a bounded post-processing chain.
+It presents in a separate native viewport; WebGL2 remains the compatibility
+path in the editor frame. Build the pinned release binary before launching
+Auvra from source:
 
 ```powershell
 cd native
@@ -133,9 +142,10 @@ cd ..
 python Auvra/Auvra.py
 ```
 
-Add `?renderer=native` to the editor URL to select the native viewport. If the
-release binary or native device is unavailable, Auvra reports the reason and
-keeps the WebGL2 viewport active.
+Add `?renderer=native` to the editor URL to select the native viewport. Native
+docking remains disabled until its same-build composition gate passes. If the
+binary, adapter, or a required GPU feature is unavailable, Auvra reports the
+specific fallback and keeps the WebGL2 viewport active.
 
 ## Packaged releases
 
@@ -181,6 +191,7 @@ npm run provider:verify
 npm run build
 cd ..
 cargo +1.98.0 build --release --locked --manifest-path native/Cargo.toml
+.\native\target\release\auvra-native.exe --headless-self-test
 .\native\target\release\auvra-native.exe --self-test
 ```
 

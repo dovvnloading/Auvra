@@ -102,11 +102,16 @@ const NativeViewportBridge: React.FC<{ surfaceId: string; onFailure: (message: s
     return unsubscribe;
   }, [onFailure]);
   return (
-    <div data-auvra-native-surface={surfaceId} className="flex h-full w-full items-center justify-center bg-zinc-950 text-zinc-200">
+    <div data-auvra-native-surface={surfaceId} data-auvra-native-dock-active={status.dockActive === true ? "true" : "false"} className="flex h-full w-full items-center justify-center bg-zinc-950 text-zinc-200">
       <div className="max-w-md rounded border border-zinc-700 bg-zinc-900 p-5 text-sm shadow-xl">
         <div className="font-semibold">Native viewport: {status.viewport}</div>
         <div className="mt-1 text-zinc-400">{status.backend ?? "Starting renderer"}{status.adapter ? ` · ${status.adapter}` : ""}</div>
-        <div className="mt-2 text-xs text-zinc-500">World revision {status.worldRevision}. The scene is rendered in the separately owned native window.</div>
+        <div className="mt-2 text-xs text-zinc-500">
+          World revision {status.worldRevision}, tick {status.tick ?? 0}. {status.dockActive
+            ? "The native viewport is attached to this desktop frame."
+            : "The scene is rendered in the separately owned native window."}
+        </div>
+        {!status.dockActive && status.dockReason ? <div className="mt-1 text-xs text-zinc-600">{status.dockReason}</div> : null}
       </div>
     </div>
   );

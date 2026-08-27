@@ -59,11 +59,20 @@ class NativeProjectHost:
         self._events: list[tuple[str, dict[str, Any]]] = []
         self._recovery_by_id: dict[str, tuple[str, str, str]] = {}
         self._recovery_id_by_key: dict[tuple[str, str, str], str] = {}
+        self._native_engine: Any = None
+        self._native_staged_assets: set[str] = set()
 
     def set_preview_store(self, preview_store: Any) -> None:
         """Bind one session-local generated preview store."""
 
         self.preview_store = preview_store
+
+    def set_native_engine_host(self, native_engine: Any) -> None:
+        """Bind the runtime owner without making it a second project authority."""
+        self._native_engine = native_engine
+        active = self.service.active
+        if active is not None:
+            self._hydrate_native(active)
 
     def handle(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
         handler = {
@@ -122,7 +131,76 @@ class NativeProjectHost:
             self._dirty_since = None
 
     def shutdown(self) -> None:
+        if self._native_engine is not None:
+            try:
+                self._native_engine.close_project()
+            except Exception:
+                pass
         self.service.shutdown()
+
+    @staticmethod
+    def _cook_asset_ids(domains: dict[str, Any]) -> set[str]:
+        """Select only glTF/GLB/FBX-backed authored model and animation sources."""
+        found: set[str] = set()
+        for domain in ("models", "animations"):
+            documents = domains.get(domain, {}).get("documents", [])
+            if not isinstance(documents, list):
+                continue
+            for document in documents:
+                asset_id = document.get("assetId") if isinstance(document, dict) else None
+                if isinstance(asset_id, str) and _SHA256.fullmatch(asset_id):
+                    found.add(asset_id)
+        return found
+
+    def _native_domains(self, active: Any) -> dict[str, Any]:
+        # Only world-authority fields cross the private native boundary. Large
+        # HUD/graph/terrain/provider documents remain solely in the project
+        # repository and cannot inflate a native protocol frame.
+        fields = {
+            "levels": ("id",),
+            "models": ("id", "assetId"),
+            "animations": ("id", "assetId", "modelId"),
+            "objects": ("id", "levelId", "modelId", "position", "rotation", "scale"),
+        }
+        result: dict[str, dict[str, Any]] = {}
+        for domain, allowed in fields.items():
+            documents = active.get_domain(domain).get("documents", [])
+            result[domain] = {
+                "schemaVersion": 1,
+                "documents": [
+                    {key: document[key] for key in allowed if key in document}
+                    for document in documents
+                ],
+            }
+        return result
+
+    def _hydrate_native(self, active: Any) -> None:
+        native = self._native_engine
+        if native is None:
+            return
+        try:
+            domains = self._native_domains(active)
+            asset_ids = self._cook_asset_ids(domains)
+            for asset_id in sorted(asset_ids - self._native_staged_assets):
+                with active.assets.open(asset_id) as stream:
+                    native.stage_asset(asset_id, stream)
+                self._native_staged_assets.add(asset_id)
+            native.hydrate_project(active.project_id, active.revision, domains, asset_ids=sorted(asset_ids))
+        except Exception:
+            # Durable project state wins. A native child can be restarted and
+            # rehydrated from the repository on the next lifecycle boundary.
+            # Use the existing project recovery event shape; no new protocol
+            # event is invented for a transient native-runtime failure.
+            self._queue("project.recovery", self._status_value(available=len(self._recovery_values())))
+
+    def _validate_native_candidate(self, active: Any, revision: int, domains: dict[str, Any]) -> None:
+        native = self._native_engine
+        if native is None or not callable(getattr(native, "validate_project", None)):
+            return
+        try:
+            native.validate_project(active.project_id, revision, domains)
+        except Exception as exc:
+            raise HostOperationError("invalid_project", "Native world rejected the project candidate") from exc
 
     def _queue(self, name: str, payload: dict[str, Any]) -> None:
         event_fields = {
@@ -238,6 +316,8 @@ class NativeProjectHost:
         destination = self._selected(self.dialogs.choose_create_location(name))
         self._queue("project.opening", self._status_value(busy=True, operation="create"))
         status = self.service.create(destination, name)
+        self._native_staged_assets.clear()
+        self._hydrate_native(self.service.active)
         self._dirty_since = self._last_mutation = None
         result = self._status_value(status)
         self._queue("project.opened", result)
@@ -251,6 +331,8 @@ class NativeProjectHost:
         status = self.service.open(descriptor.parent)
         status = self._restore_requested(payload, status)
         self._dirty_since = self._last_mutation = None
+        self._native_staged_assets.clear()
+        self._hydrate_native(self.service.active)
         result = self._status_value(status)
         self._queue("project.opened", result)
         if status.read_only:
@@ -262,6 +344,8 @@ class NativeProjectHost:
         status = self.service.open_recent(payload["recentId"])
         status = self._restore_requested(payload, status)
         self._dirty_since = self._last_mutation = None
+        self._native_staged_assets.clear()
+        self._hydrate_native(self.service.active)
         result = self._status_value(status)
         self._queue("project.opened", result)
         return result
@@ -270,7 +354,13 @@ class NativeProjectHost:
         active = self._require(payload, expected=True)
         project_id, revision = active.project_id, active.revision
         self._queue("project.closing", self._status_value(busy=True, operation="close"))
+        if self._native_engine is not None:
+            try:
+                self._native_engine.close_project(project_id)
+            except Exception:
+                pass
         self.service.close()
+        self._native_staged_assets.clear()
         self._dirty_since = self._last_mutation = None
         # ``_status_value`` accepts a ProjectStatus as its positional value;
         # after close the service has no active status, so start from the
@@ -328,6 +418,12 @@ class NativeProjectHost:
                         raise HostOperationError("invalid_request", "Project document identity does not match")
                     documents[document_id] = document
             changed[domain] = [documents[key] for key in sorted(documents)]
+        candidate = {
+            domain: {"schemaVersion": 1, "documents":
+                     (changed[domain] if domain in changed else active.get_domain(domain)["documents"])}
+            for domain in DOMAIN_NAMES
+        }
+        self._validate_native_candidate(active, active.revision + 1, candidate)
         status = self.service.apply_changes(
             changed,
             project_id=active.project_id,
@@ -336,6 +432,7 @@ class NativeProjectHost:
         now = self._now()
         self._dirty_since = self._dirty_since or now
         self._last_mutation = now
+        self._hydrate_native(self.service.active)
         result = self._status_value(status)
         self._queue("project.revision", result)
         self._queue("project.dirty", result)
@@ -358,6 +455,8 @@ class NativeProjectHost:
         name = payload["name"]
         destination = self._selected(self.dialogs.choose_save_as_location(name))
         status = self.service.save_as(destination, project_id=active.project_id, name=name)
+        self._native_staged_assets.clear()
+        self._hydrate_native(self.service.active)
         self._dirty_since = self._last_mutation = None
         result = self._status_value(status)
         self._queue("project.opened", result)
@@ -375,6 +474,8 @@ class NativeProjectHost:
         destination = self._selected(self.dialogs.choose_create_location(name))
         self._queue("project.opening", self._status_value(busy=True, operation="importPack"))
         status = self.service.import_pack(source, destination)
+        self._native_staged_assets.clear()
+        self._hydrate_native(self.service.active)
         self._dirty_since = self._last_mutation = None
         result = self._status_value(status)
         self._queue("project.opened", result)
@@ -397,6 +498,8 @@ class NativeProjectHost:
         except Exception:
             raise HostOperationError("migration_failed", "Legacy migration failed validation") from None
         self._dirty_since = self._last_mutation = None
+        self._native_staged_assets.clear()
+        self._hydrate_native(self.service.active)
         result = self._status_value(status, report=self._safe_report(report))
         self._queue("project.opened", result)
         return result

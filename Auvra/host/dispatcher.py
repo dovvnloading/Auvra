@@ -50,6 +50,13 @@ EVENTS = frozenset({
     "engine.status", "engine.revision", "engine.viewport", "engine.recovery",
 })
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_ENGINE_FEATURES = (
+    "pbr_metallic_roughness", "skeletal_animation", "frustum_culling",
+    "deterministic_lod", "instance_batching", "directional_lights",
+    "point_lights", "spot_lights", "shadow_maps", "image_based_lighting",
+    "entity_picking", "editor_gizmos", "hdr_intermediate",
+    "aces_tone_mapping", "msaa_or_fxaa", "post_processing_chain",
+)
 
 
 Handler = Callable[[dict[str, Any]], dict[str, Any]]
@@ -670,10 +677,24 @@ class HostDispatcher:
             "protocol": "auvra.native/1",
             "status": "ready",
             "worldRevision": self._engine_revision,
+            "tick": 0,
+            "projectId": self._project_id if self._project_open else None,
+            "projectRevision": self._project_revision if self._project_open else 0,
+            "worldHash": "0" * 64,
+            "replayHash": "0" * 64,
+            "extractionHash": "0" * 64,
             "viewport": self._engine_viewport,
             "backend": "WebGL2 fake fallback",
             "adapter": "deterministic fake host",
             "fallbackReason": "Native engine process is not started in browser development mode",
+            "featureCapabilities": [
+                {"feature": feature, "supported": False,
+                 "fallbackReason": f"{feature} is unavailable in the deterministic browser fake"}
+                for feature in _ENGINE_FEATURES
+            ],
+            "dockSupport": "unsupported",
+            "dockActive": False,
+            "dockReason": "Docking requires the same-build desktop host and native engine",
             **values,
         }
 
@@ -702,7 +723,8 @@ class HostDispatcher:
 
     def _engine_render_reference(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._engine_result(
-            "engine.renderReference", signature="47ed61f4e0a9caba",
+            "engine.renderReference", referenceScene="basic", referenceVersion=1,
+            signature="47ed61f4e0a9caba",
             width=payload.get("width", 64), height=payload.get("height", 64),
         )
 

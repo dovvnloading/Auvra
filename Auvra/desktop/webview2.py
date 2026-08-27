@@ -74,6 +74,35 @@ class WebView2Frame:
         with self._lock:
             return self._failure
 
+    def dock_target(self) -> dict[str, int] | None:
+        """Return the current native parent handle and client size, if ready.
+
+        This is deliberately a read-only seam. It exposes no WebView2 object,
+        filesystem path, or browser authority and returns ``None`` until the
+        frame has a live WinForms handle.
+        """
+        with self._lock:
+            form, state = self._form, self._state
+        if state is not FrameState.READY or form is None:
+            return None
+        try:
+            handle = getattr(form, "Handle")
+            to_int = getattr(handle, "ToInt64", None)
+            value = int(to_int() if callable(to_int) else handle)
+            size = getattr(form, "ClientSize", None)
+            width = int(getattr(size, "Width", getattr(form, "ClientSize.Width", 0)))
+            height = int(getattr(size, "Height", getattr(form, "ClientSize.Height", 0)))
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return None
+        if value <= 0 or width <= 0 or height <= 0:
+            return None
+        return {"parentHandle": value, "width": width, "height": height}
+
+    @property
+    def native_parent_handle(self) -> int | None:
+        target = self.dock_target()
+        return None if target is None else target["parentHandle"]
+
     def _signal(self, event: str, fields: dict[str, Any] | None = None) -> None:
         callback = self.config.on_lifecycle
         if callback is not None:

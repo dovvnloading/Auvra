@@ -283,7 +283,10 @@ class PluginSdkTests(unittest.TestCase):
             self.fail(f"supported Windows reported unavailable isolation: {exc}")
         self.assertGreater(process.pid, 0)
         process.terminate()
-        process.close()
+        try:
+            process.wait(timeout=5)
+        finally:
+            process.close()
 
 
 if __name__ == "__main__":

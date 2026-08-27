@@ -52,13 +52,14 @@ diagnostics. Generated thumbnails use a separate on-demand capture renderer.
 The WebGPU reference path remains experimental and deliberately falls back to
 WebGL2 for editor presentation.
 
-The Stage 6 native vertical slice can be selected with `?renderer=native` after
-building `native/target/release/auvra-native`. The launcher owns that process;
-its world state survives an editor reload, and it presents through a separate
-native viewport. A failed or unavailable native start reports its reason and
-leaves the WebGL2 compatibility renderer active. Production packages include
-the verified native release binary while preserving WebGL2 as the compatibility
-fallback.
+The native runtime can be selected with `?renderer=native` after building
+`native/target/release/auvra-native`. The launcher owns the process and hydrates
+its deterministic world from the Python project repository. The native `wgpu`
+renderer covers the production feature baseline and presents through a separate
+viewport; docking remains disabled until its same-build gate passes. A failed
+or unavailable native start reports the specific fallback and leaves the
+WebGL2 compatibility renderer active. Production packages include the verified
+native binary while preserving WebGL2 as the compatibility path.
 
 Create the compiled frontend input with:
 

@@ -1,9 +1,11 @@
 import { rendererCoordinator, type RendererSurfaceSnapshot } from "./registry";
 import { runReferenceSuite, type ReferenceBackendRequest, type ReferenceSuiteResult } from "./referenceScenes";
+import { runNativeReferenceGate, type NativeReferenceResult } from "./nativeReference";
 
 export interface RendererDiagnosticsApi {
   getSnapshot(): { contractVersion: "auvra.renderer/1"; surfaces: RendererSurfaceSnapshot[] };
   runReferenceSuite(request?: "auto" | "webgpu" | "webgl2"): Promise<ReferenceSuiteResult>;
+  runNativeReferenceGate(width?: number, height?: number): Promise<NativeReferenceResult>;
   simulateContextLoss(surfaceId: string): boolean;
 }
 
@@ -17,6 +19,7 @@ export function installRendererDiagnostics(): (() => void) | undefined {
   const api: RendererDiagnosticsApi = {
     getSnapshot: () => ({ contractVersion: "auvra.renderer/1", surfaces: rendererCoordinator.getSnapshot() as RendererSurfaceSnapshot[] }),
     runReferenceSuite: (request = "auto") => runReferenceSuite(request === "auto" ? {} : { preferred: request, allowExperimentalWebGPU: request === "webgpu" }),
+    runNativeReferenceGate,
     simulateContextLoss: (surfaceId) => rendererCoordinator.simulateContextLoss(surfaceId),
   };
   window.__AUVRA_RENDERER__ = api;

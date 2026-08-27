@@ -154,8 +154,12 @@ async function staticChecks(files) {
   const publicContracts = ["contracts.ts", "conventions.ts", "renderGraph.ts"].map((name) => Object.fromEntries(all)[name] || "").join("\n");
   check(!/\b(?:WebGL|WebGPU|GPU|THREE|HTMLCanvasElement|CanvasRenderingContext)\b/.test(publicContracts), "public renderer contracts expose backend-native or DOM types");
   const reference = Object.fromEntries(all)["referenceScenes.ts"] || "";
+  const nativeReference = Object.fromEntries(all)["nativeReference.ts"] || "";
+  const diagnostics = Object.fromEntries(all)["diagnostics.ts"] || "";
   check(/REFERENCE_BASELINE/.test(reference) && /maxCpuP95Ms\s*:\s*\d+/.test(reference) && /maxGpuFrameMs\s*:\s*\d+/.test(reference) && /maxMemoryBytes\s*:\s*\d+/.test(reference), "reference scene budgets are missing");
   check(reference.includes("createRenderPipeline") && reference.includes("onSubmittedWorkDone") && !reference.includes("WebGPURenderer"), "WebGPU reference probe must remain directly owned and compatible with the production build target");
+  check(/runNativeReferenceGate/.test(nativeReference) && /referenceVersion\s*!==\s*1/.test(nativeReference) && /FEATURES/.test(nativeReference) && /entry\.feature\s*!==\s*FEATURES\[index\]/.test(nativeReference) && /REFERENCE_BASELINE/.test(nativeReference), "native cross-backend reference gate is incomplete");
+  check(/runNativeReferenceGate/.test(diagnostics), "native reference gate is not exposed through renderer diagnostics");
   const expectedSurfaceIds = new Set(["editor-scene-viewer", "preview-retexture-editor", "preview-animation-graph", "runtime-sandbox", "editor-environment-viewport", "runtime-level-game-loop"]);
   check(surfaces.length === expectedSurfaceIds.size && surfaces.every(([id]) => expectedSurfaceIds.has(id)), "renderer surface IDs do not match the six stable editor/runtime surfaces");
 }

@@ -1,9 +1,19 @@
+use auvra_native::assets::{CancellationToken, CookConfig, CookWorker, cook_source};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+mod gpu;
+use auvra_native::render_world::{
+    AnimationInput, Frustum, IblInput, LightKind, LodLevel, MaterialReference, Plane, PostEffect,
+    RenderExtraction, WorldRenderEntity, WorldRenderInput, WorldRenderLight, extract_render_world,
+};
+use auvra_native::world::{Entity, World as NativeWorld, WorldCommand, WorldTransaction};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, Read, Write};
 use std::sync::Arc;
-use std::time::Instant;
-use winit::{event_loop::EventLoop, platform::run_on_demand::EventLoopExtRunOnDemand, window::Window};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use winit::{
+    event_loop::EventLoop, platform::run_on_demand::EventLoopExtRunOnDemand, window::Window,
+};
 
 const MAX_FRAME: usize = 64 * 1024;
 const PROTOCOL: &str = "auvra.native/1";
@@ -18,7 +28,12 @@ struct Diagnostic<'a> {
 }
 
 fn diagnostic(event: &'static str, method: Option<&str>, detail: Option<String>) {
-    let line = serde_json::to_string(&Diagnostic { event, method, detail }).unwrap_or_else(|_| "{\"event\":\"diagnostic_failure\"}".to_string());
+    let line = serde_json::to_string(&Diagnostic {
+        event,
+        method,
+        detail,
+    })
+    .unwrap_or_else(|_| "{\"event\":\"diagnostic_failure\"}".to_string());
     eprintln!("{line}");
 }
 
@@ -47,14 +62,51 @@ struct Response {
 struct ErrorBody {
     code: &'static str,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<Value>,
 }
 
 fn response(id: u64, result: Value) -> Response {
-    Response { id, protocol: PROTOCOL, ok: true, result: Some(result), error: None }
+    Response {
+        id,
+        protocol: PROTOCOL,
+        ok: true,
+        result: Some(result),
+        error: None,
+    }
 }
 
 fn error_response(id: u64, code: &'static str, message: impl Into<String>) -> Response {
-    Response { id, protocol: PROTOCOL, ok: false, result: None, error: Some(ErrorBody { code, message: message.into() }) }
+    Response {
+        id,
+        protocol: PROTOCOL,
+        ok: false,
+        result: None,
+        error: Some(ErrorBody {
+            code,
+            message: message.into(),
+            details: None,
+        }),
+    }
+}
+
+fn error_response_with_details(
+    id: u64,
+    code: &'static str,
+    message: impl Into<String>,
+    details: Option<Value>,
+) -> Response {
+    Response {
+        id,
+        protocol: PROTOCOL,
+        ok: false,
+        result: None,
+        error: Some(ErrorBody {
+            code,
+            message: message.into(),
+            details,
+        }),
+    }
 }
 
 fn read_frame(input: &mut impl Read) -> Result<Option<Vec<u8>>, String> {
@@ -63,16 +115,24 @@ fn read_frame(input: &mut impl Read) -> Result<Option<Vec<u8>>, String> {
     while read < 4 {
         let count = input.read(&mut header[read..]).map_err(|e| e.to_string())?;
         if count == 0 {
-            return if read == 0 { Ok(None) } else { Err("truncated length prefix".into()) };
+            return if read == 0 {
+                Ok(None)
+            } else {
+                Err("truncated length prefix".into())
+            };
         }
         read += count;
     }
     let length = u32::from_be_bytes(header) as usize;
     if length == 0 || length > MAX_FRAME {
-        return Err(format!("frame length {length} exceeds 64 KiB protocol limit"));
+        return Err(format!(
+            "frame length {length} exceeds 64 KiB protocol limit"
+        ));
     }
     let mut body = vec![0_u8; length];
-    input.read_exact(&mut body).map_err(|e| format!("truncated frame: {e}"))?;
+    input
+        .read_exact(&mut body)
+        .map_err(|e| format!("truncated frame: {e}"))?;
     Ok(Some(body))
 }
 
@@ -81,39 +141,11 @@ fn write_frame(output: &mut impl Write, value: &impl Serialize) -> Result<(), St
     if body.is_empty() || body.len() > MAX_FRAME {
         return Err("response exceeds 64 KiB protocol limit".into());
     }
-    output.write_all(&(body.len() as u32).to_be_bytes()).map_err(|e| e.to_string())?;
+    output
+        .write_all(&(body.len() as u32).to_be_bytes())
+        .map_err(|e| e.to_string())?;
     output.write_all(&body).map_err(|e| e.to_string())?;
     output.flush().map_err(|e| e.to_string())
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Entity {
-    id: String,
-    position: [f64; 3],
-    color: [f64; 4],
-}
-
-#[derive(Debug, Serialize)]
-struct WorldSnapshot {
-    revision: u64,
-    entities: Vec<Entity>,
-}
-
-#[derive(Debug)]
-struct World {
-    revision: u64,
-    entities: Vec<Entity>,
-}
-
-impl World {
-    fn new() -> Self {
-        Self { revision: 0, entities: vec![Entity { id: "reference".into(), position: [0.0, 0.0, 0.0], color: [0.2, 0.6, 1.0, 1.0] }] }
-    }
-
-    fn snapshot(&self) -> WorldSnapshot {
-        WorldSnapshot { revision: self.revision, entities: self.entities.clone() }
-    }
 }
 
 struct Renderer {
@@ -128,11 +160,9 @@ struct Renderer {
     last_gpu_ms: Option<f64>,
     last_memory_bytes: u64,
     last_hash: Option<String>,
-    pipeline_key: String,
+    production_pipelines: gpu::ProductionPipelines,
     gpu_timing_supported: bool,
     gpu_timing_fallback: Option<String>,
-    reference_bind_layout: Option<wgpu::BindGroupLayout>,
-    reference_pipeline: Option<wgpu::RenderPipeline>,
     pipeline_cache_hits: u64,
     pipeline_cache_misses: u64,
 }
@@ -144,13 +174,21 @@ impl Renderer {
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::LowPower,
             compatible_surface: None,
-            force_fallback_adapter: false,
+            force_fallback_adapter: std::env::var_os("AUVRA_WGPU_FORCE_FALLBACK_ADAPTER").as_deref()
+                == Some(std::ffi::OsStr::new("1")),
             apply_limit_buckets: false,
-        })).map_err(|e| format!("adapter request failed: {e:?}"))?;
+        }))
+        .map_err(|e| format!("adapter request failed: {e:?}"))?;
         let info = adapter.get_info();
+        gpu::validate_adapter(&adapter)?;
         let available = adapter.features();
-        let gpu_timing_supported = available.contains(wgpu::Features::TIMESTAMP_QUERY) && available.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES);
-        let required_features = if gpu_timing_supported { wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES } else { wgpu::Features::empty() };
+        let gpu_timing_supported = available.contains(wgpu::Features::TIMESTAMP_QUERY)
+            && available.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES);
+        let required_features = if gpu_timing_supported {
+            wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES
+        } else {
+            wgpu::Features::empty()
+        };
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("auvra-native-device"),
             required_features,
@@ -158,7 +196,10 @@ impl Renderer {
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             memory_hints: wgpu::MemoryHints::Performance,
             trace: wgpu::Trace::Off,
-        })).map_err(|e| format!("device request failed: {e:?}"))?;
+        }))
+        .map_err(|e| format!("device request failed: {e:?}"))?;
+        let production_pipelines =
+            gpu::ProductionPipelines::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb);
         Ok(Self {
             instance,
             adapter,
@@ -171,237 +212,1737 @@ impl Renderer {
             last_gpu_ms: None,
             last_memory_bytes: 0,
             last_hash: None,
-            pipeline_key: "reference-v1|rgba8unorm-srgb|triangle|procedural-lit-texture".into(),
+            production_pipelines,
             gpu_timing_supported,
-            gpu_timing_fallback: (!gpu_timing_supported).then(|| "timestamp_query_unavailable_cpu_submit".into()),
-            reference_bind_layout: None,
-            reference_pipeline: None,
+            gpu_timing_fallback: (!gpu_timing_supported)
+                .then(|| "timestamp_query_unavailable_cpu_submit".into()),
             pipeline_cache_hits: 0,
             pipeline_cache_misses: 0,
         })
     }
 
     fn capabilities(&self) -> Value {
-        json!({"backend": format!("{:?}", self.info.backend), "adapter": self.info.name, "device_type": format!("{:?}", self.info.device_type), "driver": self.info.driver, "format": format!("{:?}", self.format), "gpu_timing": {"supported": self.gpu_timing_supported, "fallback": self.gpu_timing_fallback}, "pipeline_cache_key": self.pipeline_key, "pipeline_cache_hits": self.pipeline_cache_hits, "pipeline_cache_misses": self.pipeline_cache_misses})
+        let feature_caps = gpu::capabilities();
+        json!({"backend": format!("{:?}", self.info.backend), "adapter": self.info.name, "device_type": format!("{:?}", self.info.device_type), "format": format!("{:?}", self.format), "gpu_timing": {"supported": self.gpu_timing_supported, "fallback": self.gpu_timing_fallback}, "pipeline_cache_key": "production-v1|immutable-extraction", "pipeline_cache_hits": self.pipeline_cache_hits, "pipeline_cache_misses": self.pipeline_cache_misses, "featureCapabilities": feature_caps.features, "dockSupport": "unsupported", "dockActive": false, "dockReason": "same-build-native-parenting-gate-not-passed"})
     }
 
-    fn reference_pipeline(&mut self) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
-        if let (Some(layout), Some(pipeline)) = (&self.reference_bind_layout, &self.reference_pipeline) {
-            self.pipeline_cache_hits += 1;
-            return (layout.clone(), pipeline.clone());
-        }
-        let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("auvra-reference-wgsl"), source: wgpu::ShaderSource::Wgsl(r#"
-            struct Light { time: f32, intensity: f32, tint: f32, alpha: f32 }
-            @group(0) @binding(0) var<uniform> light: Light;
-            @group(0) @binding(1) var tex: texture_2d<f32>;
-            @group(0) @binding(2) var samp: sampler;
-            struct Out { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) normal: vec3<f32> }
-            @vertex fn vs(@builtin(vertex_index) i: u32) -> Out {
-                var p = array<vec2<f32>, 3>(vec2(-0.8,-0.8), vec2(0.0,0.8), vec2(0.8,-0.8));
-                var uv = array<vec2<f32>, 3>(vec2(0.0,1.0), vec2(0.5,0.0), vec2(1.0,1.0));
-                var o: Out; o.position = vec4(p[i], 0.0, 1.0); o.uv = uv[i]; o.normal = normalize(vec3(0.0, 0.0, 1.0)); return o;
-            }
-            @fragment fn fs(i: Out) -> @location(0) vec4<f32> {
-                let base = textureSample(tex, samp, i.uv); let lit = max(dot(i.normal, normalize(vec3(0.3,0.4,1.0))), 0.0) * light.intensity;
-                return vec4(base.rgb * (0.25 + lit) * vec3(light.time + 0.7, light.tint + 0.4, 1.0), 1.0);
-            }
-        "#.into()) });
-        let layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("auvra-reference-bind-layout"), entries: &[
-            wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
-            wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
-            wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
-        ] });
-        let pipeline_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("auvra-reference-pipeline-layout"), bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
-        let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: Some("auvra-reference-pipeline"), layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs"), targets: &[Some(wgpu::ColorTargetState { format: self.format, blend: Some(wgpu::BlendState::REPLACE), write_mask: wgpu::ColorWrites::ALL })], compilation_options: Default::default() }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview_mask: None, cache: None });
-        self.pipeline_cache_misses += 1;
-        self.reference_bind_layout = Some(layout.clone());
-        self.reference_pipeline = Some(pipeline.clone());
-        (layout, pipeline)
-    }
-
-    fn render_reference(&mut self, params: &Value) -> Result<Value, String> {
+    fn render_production(
+        &mut self,
+        params: &Value,
+        extraction: &RenderExtraction,
+    ) -> Result<Value, String> {
         let (width, height) = dimensions(params)?;
-        let width = width;
-        let height = height;
-        let frame_started = Instant::now();
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("auvra-reference-target"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let texture_data: [u8; 16] = [220, 35, 30, 255, 35, 220, 40, 255, 35, 70, 220, 255, 220, 220, 40, 255];
-        let source_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("auvra-reference-procedural-texture"),
-            size: wgpu::Extent3d { width: 2, height: 2, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        self.queue.write_texture(wgpu::TexelCopyTextureInfo { texture: &source_texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All }, &texture_data, wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(8), rows_per_image: Some(2) }, wgpu::Extent3d { width: 2, height: 2, depth_or_array_layers: 1 });
-        let source_view = source_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor { label: Some("auvra-reference-sampler"), mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default() });
-        let uniform_data: [u8; 16] = [205, 204, 76, 62, 0, 0, 128, 63, 205, 204, 76, 62, 154, 153, 153, 63];
-        let uniform = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("auvra-reference-light-uniform"), size: 16, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        self.queue.write_buffer(&uniform, 0, &uniform_data);
-        let (bind_layout, pipeline) = self.reference_pipeline();
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("auvra-reference-bind-group"), layout: &bind_layout, entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&source_view) },
-            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
-        ] });
-        let bytes_per_row = wgpu::util::align_to(width * 4, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        let pixel_bytes = u64::from(bytes_per_row) * u64::from(height);
-        let timestamp_offset = pixel_bytes;
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("auvra-reference-readback"), size: pixel_bytes + 16, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
-        let timestamp_readback = self.gpu_timing_supported.then(|| self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("auvra-reference-timestamp-resolve"), size: 16, usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false }));
-        let query_set = self.gpu_timing_supported.then(|| self.device.create_query_set(&wgpu::QuerySetDescriptor { label: Some("auvra-reference-gpu-timestamps"), ty: wgpu::QueryType::Timestamp, count: 2 }));
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("auvra-reference-command-encoder") });
-        { let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { label: Some("auvra-reference-pass"), color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.02, g: 0.04, b: 0.08, a: 1.0 }), store: wgpu::StoreOp::Store } })], depth_stencil_attachment: None, occlusion_query_set: None, timestamp_writes: query_set.as_ref().map(|q| wgpu::RenderPassTimestampWrites { query_set: q, beginning_of_pass_write_index: Some(0), end_of_pass_write_index: Some(1) }), multiview_mask: None }); pass.set_pipeline(&pipeline); pass.set_bind_group(0, &bind_group, &[]); pass.draw(0..3, 0..1); }
-        encoder.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All }, wgpu::TexelCopyBufferInfo { buffer: &readback, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bytes_per_row), rows_per_image: Some(height) } }, wgpu::Extent3d { width, height, depth_or_array_layers: 1 });
-        if let (Some(q), Some(timestamp_readback)) = (&query_set, &timestamp_readback) { encoder.resolve_query_set(q, 0..2, timestamp_readback, 0); encoder.copy_buffer_to_buffer(timestamp_readback, 0, &readback, timestamp_offset, 16); }
-        self.queue.submit(Some(encoder.finish()));
-        let submit_ms = frame_started.elapsed().as_secs_f64() * 1000.0;
-        let slice = readback.slice(..); let (tx, rx) = std::sync::mpsc::channel(); slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); }); self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("poll failed: {e:?}"))?; rx.recv().map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
-        let mapped = slice.get_mapped_range().map_err(|e| e.to_string())?; let mut pixels = Vec::with_capacity((width * height * 4) as usize); for row in mapped[..pixel_bytes as usize].chunks_exact(bytes_per_row as usize).take(height as usize) { pixels.extend_from_slice(&row[..(width * 4) as usize]); } let hash = fnv1a(&pixels); let gpu_ms = if self.gpu_timing_supported { let start = u64::from_le_bytes(mapped[timestamp_offset as usize..timestamp_offset as usize + 8].try_into().unwrap()); let end = u64::from_le_bytes(mapped[timestamp_offset as usize + 8..timestamp_offset as usize + 16].try_into().unwrap()); Some((end.saturating_sub(start) as f64) * f64::from(self.queue.get_timestamp_period()) / 1_000_000.0) } else { None }; drop(mapped); readback.unmap();
-        self.last_frame_ms = Some(submit_ms); self.last_gpu_ms = gpu_ms; self.last_hash = Some(format!("0x{hash:016x}"));
-        self.last_memory_bytes = u64::from(width) * u64::from(height) * 4 + 16 + 16 + pixel_bytes + 16 + if self.gpu_timing_supported { 16 } else { 0 };
-        Ok(json!({"width": width, "height": height, "format": format!("{:?}", self.format), "pixel_hash_fnv1a64": format!("0x{hash:016x}"), "frame_submit_ms": submit_ms, "gpu_timing": {"supported": self.gpu_timing_supported, "value_ms": gpu_ms, "fallback": self.gpu_timing_fallback}, "pipeline_cache_key": self.pipeline_key, "pipeline_cache_hits": self.pipeline_cache_hits, "pipeline_cache_misses": self.pipeline_cache_misses}))
+        let frame = gpu::render_offscreen(
+            &self.device,
+            &self.queue,
+            self.format,
+            &self.production_pipelines,
+            extraction,
+            width,
+            height,
+        )?;
+        // This metric is deliberately CPU command encoding/submission only.
+        // GPU completion, readback mapping, and signature hashing are separate
+        // acceptance work and must not be compared with the CPU frame budget.
+        self.last_frame_ms = Some(frame.cpu_submit_ms);
+        self.last_hash = Some(format!("0x{:016x}", frame.pixel_hash));
+        self.last_memory_bytes = u64::from(width) * u64::from(height) * 4;
+        self.pipeline_cache_hits = self.pipeline_cache_hits.saturating_add(1);
+        Ok(
+            json!({"referenceScene":"basic", "referenceVersion":1, "width":width, "height":height, "signature":format!("{:016x}", frame.pixel_hash), "pixel_hash_fnv1a64":format!("0x{:016x}", frame.pixel_hash), "geometryCount":frame.geometry_count, "batchCount":frame.batch_count, "passCount":frame.pass_count, "fallbackCount":frame.fallback_count, "executedPasses":frame.executed_passes, "extractionHash":extraction.snapshot.extraction_hash, "capabilities":gpu::capabilities().features, "pipeline_cache_hits":self.pipeline_cache_hits, "pipeline_cache_misses":self.pipeline_cache_misses, "frame_submit_ms":self.last_frame_ms}),
+        )
     }
 
-    fn present_surface(&mut self, surface: &wgpu::Surface<'_>, format: wgpu::TextureFormat) -> Result<(), String> {
-        let frame = match surface.get_current_texture() { wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame, status => return Err(format!("surface acquire failed: {status:?}")) };
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("auvra-viewport-reference-shader"), source: wgpu::ShaderSource::Wgsl(r#"@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> { var p = array<vec2<f32>,3>(vec2(-0.7,-0.7),vec2(0.0,0.7),vec2(0.7,-0.7)); return vec4(p[i],0.0,1.0); } @fragment fn fs() -> @location(0) vec4<f32> { return vec4(0.18,0.62,0.95,1.0); }"#.into()) });
-        let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: Some("auvra-viewport-reference-pipeline"), layout: None, vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs"), targets: &[Some(wgpu::ColorTargetState { format, blend: Some(wgpu::BlendState::REPLACE), write_mask: wgpu::ColorWrites::ALL })], compilation_options: Default::default() }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview_mask: None, cache: None });
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("auvra-viewport-reference-encoder") });
-        { let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { label: Some("auvra-viewport-reference-pass"), color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.02, g: 0.04, b: 0.08, a: 1.0 }), store: wgpu::StoreOp::Store } })], depth_stencil_attachment: None, occlusion_query_set: None, timestamp_writes: None, multiview_mask: None }); pass.set_pipeline(&pipeline); pass.draw(0..3, 0..1); }
-        self.queue.submit(Some(encoder.finish())); self.queue.present(frame); Ok(())
+    fn present_surface(
+        &mut self,
+        surface: &wgpu::Surface<'_>,
+        _format: wgpu::TextureFormat,
+        extraction: &RenderExtraction,
+    ) -> Result<(), String> {
+        let frame = match surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            status => return Err(format!("surface acquire failed: {status:?}")),
+        };
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        gpu::present_extraction(
+            &self.device,
+            &self.queue,
+            &view,
+            &self.production_pipelines,
+            extraction,
+        )?;
+        self.queue.present(frame);
+        Ok(())
     }
 
-    fn metrics(&self) -> Value { json!({"startup_ms": self.startup_ms, "last_frame_submit_ms": self.last_frame_ms, "gpu_frame_ms": self.last_gpu_ms, "memory_bytes": self.last_memory_bytes, "last_readback_hash": self.last_hash, "backend": format!("{:?}", self.info.backend), "adapter": self.info.name, "gpu_timing": {"supported": self.gpu_timing_supported, "fallback": self.gpu_timing_fallback}}) }
+    fn metrics(&self) -> Value {
+        json!({"startup_ms": self.startup_ms, "last_frame_submit_ms": self.last_frame_ms, "gpu_frame_ms": self.last_gpu_ms, "memory_bytes": self.last_memory_bytes, "last_readback_hash": self.last_hash, "backend": format!("{:?}", self.info.backend), "adapter": self.info.name, "gpu_timing": {"supported": self.gpu_timing_supported, "fallback": self.gpu_timing_fallback}})
+    }
 }
 
-fn dimensions(params: &Value) -> Result<(u32, u32), String> { let obj = params.as_object(); let width = obj.and_then(|v| v.get("width")).and_then(Value::as_u64).unwrap_or(128); let height = obj.and_then(|v| v.get("height")).and_then(Value::as_u64).unwrap_or(128); if !(1..=2048).contains(&width) || !(1..=2048).contains(&height) { return Err("reference dimensions must be between 1 and 2048".into()); } Ok((width as u32, height as u32)) }
+fn dimensions(params: &Value) -> Result<(u32, u32), String> {
+    let obj = params.as_object();
+    let width = obj
+        .and_then(|v| v.get("width"))
+        .and_then(Value::as_u64)
+        .unwrap_or(128);
+    let height = obj
+        .and_then(|v| v.get("height"))
+        .and_then(Value::as_u64)
+        .unwrap_or(128);
+    if !(16..=2048).contains(&width) || !(16..=2048).contains(&height) {
+        return Err("reference dimensions must be between 16 and 2048".into());
+    }
+    Ok((width as u32, height as u32))
+}
 
-fn fnv1a(bytes: &[u8]) -> u64 { let mut h = 0xcbf29ce484222325_u64; for b in bytes { h ^= u64::from(*b); h = h.wrapping_mul(0x100000001b3); } h }
+struct Viewport {
+    _event_loop: EventLoop<()>,
+    _window: Arc<Window>,
+    _surface: Option<wgpu::Surface<'static>>,
+    width: u32,
+    height: u32,
+}
 
-struct Viewport { _event_loop: EventLoop<()>, _window: Arc<Window>, _surface: Option<wgpu::Surface<'static>>, width: u32, height: u32 }
-
-struct ViewportApp { window: Option<Arc<Window>>, width: u32, height: u32, title: String }
+struct ViewportApp {
+    window: Option<Arc<Window>>,
+    width: u32,
+    height: u32,
+    title: String,
+}
 
 impl winit::application::ApplicationHandler for ViewportApp {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        if self.window.is_some() { event_loop.exit(); return; }
-        let attrs = Window::default_attributes().with_title(self.title.clone()).with_inner_size(winit::dpi::PhysicalSize::new(self.width, self.height));
+        if self.window.is_some() {
+            event_loop.exit();
+            return;
+        }
+        let attrs = Window::default_attributes()
+            .with_title(self.title.clone())
+            .with_inner_size(winit::dpi::PhysicalSize::new(self.width, self.height));
         match event_loop.create_window(attrs) {
-            Ok(window) => { self.window = Some(Arc::new(window)); event_loop.exit(); }
-            Err(_) => { event_loop.exit(); }
+            Ok(window) => {
+                self.window = Some(Arc::new(window));
+                event_loop.exit();
+            }
+            Err(_) => {
+                event_loop.exit();
+            }
         }
     }
-    fn window_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, _window_id: winit::window::WindowId, event: winit::event::WindowEvent) { if matches!(event, winit::event::WindowEvent::CloseRequested) { event_loop.exit(); } }
-    fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) { event_loop.exit(); }
+    fn window_event(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        _window_id: winit::window::WindowId,
+        event: winit::event::WindowEvent,
+    ) {
+        if matches!(event, winit::event::WindowEvent::CloseRequested) {
+            event_loop.exit();
+        }
+    }
+    fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        event_loop.exit();
+    }
 }
 
 impl Viewport {
-    fn open(renderer: &mut Renderer, width: u32, height: u32, title: String) -> Result<Self, String> {
+    fn open(
+        renderer: &mut Renderer,
+        width: u32,
+        height: u32,
+        title: String,
+        extraction: &RenderExtraction,
+    ) -> Result<Self, String> {
         let mut event_loop = EventLoop::new().map_err(|e| e.to_string())?;
-        let mut app = ViewportApp { window: None, width, height, title: title.clone() };
-        event_loop.run_app_on_demand(&mut app).map_err(|e| e.to_string())?;
+        let mut app = ViewportApp {
+            window: None,
+            width,
+            height,
+            title: title.clone(),
+        };
+        event_loop
+            .run_app_on_demand(&mut app)
+            .map_err(|e| e.to_string())?;
         let window = app.window.take().ok_or("viewport window creation failed")?;
-        let surface = renderer.instance.create_surface(window.clone()).map_err(|e| e.to_string())?;
-        let caps = surface.get_capabilities(&renderer.adapter); let format = caps.formats.first().copied().ok_or("viewport surface has no formats")?; let present_mode = caps.present_modes.first().copied().ok_or("viewport surface has no present modes")?; let alpha_mode = caps.alpha_modes.first().copied().ok_or("viewport surface has no alpha modes")?;
-        surface.configure(&renderer.device, &wgpu::SurfaceConfiguration { usage: wgpu::TextureUsages::RENDER_ATTACHMENT, format, color_space: wgpu::SurfaceColorSpace::Auto, width, height, present_mode, alpha_mode, view_formats: vec![], desired_maximum_frame_latency: 2 });
-        renderer.present_surface(&surface, format)?;
-        Ok(Self { _event_loop: event_loop, _window: window, _surface: Some(surface), width, height })
+        let surface = renderer
+            .instance
+            .create_surface(window.clone())
+            .map_err(|e| e.to_string())?;
+        let caps = surface.get_capabilities(&renderer.adapter);
+        let format = caps
+            .formats
+            .first()
+            .copied()
+            .ok_or("viewport surface has no formats")?;
+        let present_mode = caps
+            .present_modes
+            .first()
+            .copied()
+            .ok_or("viewport surface has no present modes")?;
+        let alpha_mode = caps
+            .alpha_modes
+            .first()
+            .copied()
+            .ok_or("viewport surface has no alpha modes")?;
+        renderer
+            .production_pipelines
+            .ensure_surface_format(&renderer.device, format);
+        surface.configure(
+            &renderer.device,
+            &wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format,
+                color_space: wgpu::SurfaceColorSpace::Auto,
+                width,
+                height,
+                present_mode,
+                alpha_mode,
+                view_formats: vec![],
+                desired_maximum_frame_latency: 2,
+            },
+        );
+        renderer.present_surface(&surface, format, extraction)?;
+        Ok(Self {
+            _event_loop: event_loop,
+            _window: window,
+            _surface: Some(surface),
+            width,
+            height,
+        })
     }
 
-    fn recover(&mut self, renderer: &mut Renderer) -> Result<(), String> {
+    fn recover(
+        &mut self,
+        renderer: &mut Renderer,
+        extraction: &RenderExtraction,
+    ) -> Result<(), String> {
         drop(self._surface.take());
-        let surface = renderer.instance.create_surface(self._window.clone()).map_err(|e| e.to_string())?;
-        let caps = surface.get_capabilities(&renderer.adapter); let format = caps.formats.first().copied().ok_or("recovered viewport surface has no formats")?; let present_mode = caps.present_modes.first().copied().ok_or("recovered viewport surface has no present modes")?; let alpha_mode = caps.alpha_modes.first().copied().ok_or("recovered viewport surface has no alpha modes")?;
-        surface.configure(&renderer.device, &wgpu::SurfaceConfiguration { usage: wgpu::TextureUsages::RENDER_ATTACHMENT, format, color_space: wgpu::SurfaceColorSpace::Auto, width: self.width, height: self.height, present_mode, alpha_mode, view_formats: vec![], desired_maximum_frame_latency: 2 });
-        renderer.present_surface(&surface, format)?;
+        let surface = renderer
+            .instance
+            .create_surface(self._window.clone())
+            .map_err(|e| e.to_string())?;
+        let caps = surface.get_capabilities(&renderer.adapter);
+        let format = caps
+            .formats
+            .first()
+            .copied()
+            .ok_or("recovered viewport surface has no formats")?;
+        let present_mode = caps
+            .present_modes
+            .first()
+            .copied()
+            .ok_or("recovered viewport surface has no present modes")?;
+        let alpha_mode = caps
+            .alpha_modes
+            .first()
+            .copied()
+            .ok_or("recovered viewport surface has no alpha modes")?;
+        renderer
+            .production_pipelines
+            .ensure_surface_format(&renderer.device, format);
+        surface.configure(
+            &renderer.device,
+            &wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format,
+                color_space: wgpu::SurfaceColorSpace::Auto,
+                width: self.width,
+                height: self.height,
+                present_mode,
+                alpha_mode,
+                view_formats: vec![],
+                desired_maximum_frame_latency: 2,
+            },
+        );
+        renderer.present_surface(&surface, format, extraction)?;
         self._surface = Some(surface);
         Ok(())
     }
 }
 
+struct App {
+    authenticated: bool,
+    world: NativeWorld,
+    project_id: Option<String>,
+    project_revision: Option<u64>,
+    renderer: Renderer,
+    viewport: Option<Viewport>,
+    cooker: Option<CookWorker>,
+    asset_jobs: HashMap<u64, CancellationToken>,
+    hydration: Option<HydrationDraft>,
+}
 
-struct App { authenticated: bool, world: World, renderer: Renderer, viewport: Option<Viewport> }
+#[derive(Clone)]
+struct HydrationDraft {
+    project_id: String,
+    project_revision: u64,
+    validate_only: bool,
+    domains: BTreeMap<String, Vec<Value>>,
+    asset_ids: BTreeSet<String>,
+    document_count: usize,
+}
 
 impl App {
+    fn new() -> Result<Self, String> {
+        let world = NativeWorld::new();
+        let cooker = match (
+            std::env::var_os("AUVRA_NATIVE_SOURCE_ROOT"),
+            std::env::var_os("AUVRA_NATIVE_DERIVED_ROOT"),
+        ) {
+            (Some(source), Some(derived)) => {
+                Some(CookWorker::new(CookConfig::new(source, derived)).map_err(|e| e.to_string())?)
+            }
+            _ => None,
+        };
+        Ok(Self {
+            authenticated: false,
+            world,
+            project_id: None,
+            project_revision: None,
+            renderer: Renderer::new()?,
+            viewport: None,
+            cooker,
+            asset_jobs: HashMap::new(),
+            hydration: None,
+        })
+    }
+
     fn dispatch(&mut self, req: Request) -> Result<Response, String> {
-        if req.protocol != PROTOCOL { return Err("unsupported protocol version".into()); }
-        if req.method == "session.hello" { self.authenticated = true; return Ok(response(req.id, json!({"protocol": PROTOCOL, "authenticated": true, "world_revision": self.world.revision}))); }
-        if !self.authenticated { return Err("session.hello required".into()); }
-        match req.method.as_str() {
-            "world.getSnapshot" => Ok(response(req.id, serde_json::to_value(self.world.snapshot()).map_err(|e| e.to_string())?)),
-            "world.apply" => self.apply_world(req),
-            "renderer.getCapabilities" => Ok(response(req.id, self.renderer.capabilities())),
-            "renderer.renderReference" => Ok(response(req.id, self.renderer.render_reference(&req.params)?)),
-            "renderer.getMetrics" => Ok(response(req.id, self.renderer.metrics())),
-            "renderer.recover" => { self.renderer = Renderer::new()?; let viewport_reopened = if let Some(viewport) = self.viewport.as_mut() { viewport.recover(&mut self.renderer)?; true } else { false }; Ok(response(req.id, json!({"recovered": true, "viewport_reopened": viewport_reopened, "capabilities": self.renderer.capabilities(), "world_revision": self.world.revision}))) },
-            "viewport.open" => { if self.viewport.is_some() { return Ok(error_response(req.id, "already_open", "viewport is already open")); } let obj = req.params.as_object(); let width = obj.and_then(|v| v.get("width")).and_then(Value::as_u64).unwrap_or(640); let height = obj.and_then(|v| v.get("height")).and_then(Value::as_u64).unwrap_or(480); let title = obj.and_then(|v| v.get("title")).and_then(Value::as_str).unwrap_or("Auvra Native Viewport").to_string(); if !(1..=4096).contains(&width) || !(1..=4096).contains(&height) || title.is_empty() || title.len() > 256 { return Err("invalid viewport dimensions or title".into()); } self.viewport = Some(Viewport::open(&mut self.renderer, width as u32, height as u32, title)?); Ok(response(req.id, json!({"open": true, "width": width, "height": height, "ownership": "separate-native-surface"}))) },
-            "viewport.close" => { self.viewport = None; Ok(response(req.id, json!({"open": false, "world_revision": self.world.revision}))) },
-            "shutdown" => Ok(response(req.id, json!({"stopped": true}))),
-            _ => Ok(error_response(req.id, "unknown_method", "method is not part of auvra.native/1")),
+        if req.protocol != PROTOCOL {
+            return Err("unsupported protocol version".into());
+        }
+        if req.method == "session.hello" {
+            self.authenticated = true;
+            return Ok(response(
+                req.id,
+                json!({"protocol": PROTOCOL, "authenticated": true, "world_revision": self.world.revision(), "world_tick": self.world.tick()}),
+            ));
+        }
+        if !self.authenticated {
+            return Err("session.hello required".into());
+        }
+        let result = match req.method.as_str() {
+            "world.getSnapshot" => self.world_snapshot(&req.params),
+            "world.apply" => self.apply_legacy(&req.params),
+            "world.applyTransaction" | "world.applyCommands" => self.apply_transaction(&req.params),
+            "world.validateHydration" => self.validate_hydration(&req.params),
+            "world.hydrate" => self.hydrate_world(&req.params),
+            "world.beginHydration" => self.begin_hydration(&req.params),
+            "world.appendHydration" => self.append_hydration(&req.params),
+            "world.commitHydration" => self.commit_hydration(),
+            "world.abortHydration" => self.abort_hydration(),
+            "world.closeProject" => self.close_project(),
+            "world.advance" => self.advance_world(&req.params),
+            "world.getReplay" => self.replay_snapshot(),
+            "renderer.getCapabilities" => Ok(self.renderer.capabilities()),
+            "renderer.renderReference" => {
+                let extraction = self.build_extraction(&req.params)?;
+                self.renderer.render_production(&req.params, &extraction)
+            }
+            "renderer.extract" => self.render_extract(&req.params),
+            "renderer.getMetrics" => Ok(self.renderer.metrics()),
+            "renderer.recover" => self.recover_renderer(),
+            "asset.submit" | "asset.beginCook" => self.submit_asset(&req.params),
+            "asset.status" => self.asset_status(&req.params),
+            "asset.cancel" => self.cancel_asset(&req.params),
+            "viewport.open" => self.open_viewport(&req.params),
+            "viewport.close" => {
+                self.viewport = None;
+                Ok(json!({"open": false, "world_revision": self.world.revision()}))
+            }
+            "shutdown" => Ok(json!({"stopped": true})),
+            _ => Ok(
+                json!({"__error": {"code": "unknown_method", "message": "method is not part of auvra.native/1"}}),
+            ),
+        };
+        match result {
+            Ok(value) => {
+                if let Some(error) = value.get("__error") {
+                    let body = match error.get("code").and_then(Value::as_str) {
+                        Some("unknown_method") => "unknown_method",
+                        _ => "operation_failed",
+                    };
+                    let message = error
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("native operation failed");
+                    Ok(error_response(req.id, body, message))
+                } else {
+                    Ok(response(req.id, value))
+                }
+            }
+            Err(error) => Ok(Self::operation_error_response(req.id, &error)),
         }
     }
 
-    fn apply_world(&mut self, req: Request) -> Result<Response, String> {
-        let obj = req.params.as_object().ok_or_else(|| "params must be an object".to_string())?;
-        let expected = obj.get("expectedRevision").and_then(Value::as_u64).ok_or_else(|| "expectedRevision must be an unsigned integer".to_string())?;
-        if expected != self.world.revision { return Ok(error_response(req.id, "revision_conflict", format!("expected {}, current {}", expected, self.world.revision))); }
-        let entities: Vec<Entity> = serde_json::from_value(obj.get("entities").cloned().ok_or_else(|| "entities are required".to_string())?).map_err(|e| format!("invalid entities: {e}"))?;
-        if entities.len() > 1024 || entities.iter().any(|entity| entity.id.is_empty() || entity.id.len() > 128 || entity.position.iter().any(|v| !v.is_finite()) || entity.color.iter().any(|v| !v.is_finite() || *v < 0.0 || *v > 1.0)) { return Err("invalid native world entity".into()); }
-        let mut ids = std::collections::HashSet::new();
-        if entities.iter().any(|entity| !ids.insert(entity.id.clone())) { return Err("duplicate native entity id".into()); }
-        self.world.entities = entities; self.world.revision += 1;
-        Ok(response(req.id, serde_json::to_value(self.world.snapshot()).map_err(|e| e.to_string())?))
+    fn operation_error_response(id: u64, error: &str) -> Response {
+        let (code, message) = error.split_once('|').unwrap_or(("operation_failed", error));
+        if code == "revision_conflict" {
+            let details = message
+                .split('|')
+                .filter_map(|part| part.split_once('='))
+                .fold(serde_json::Map::new(), |mut map, (key, value)| {
+                    if let Ok(number) = value.parse::<u64>() {
+                        map.insert(key.to_string(), json!(number));
+                    }
+                    map
+                });
+            let message = message.split('|').next().unwrap_or(message);
+            return error_response_with_details(
+                id,
+                "revision_conflict",
+                message,
+                Some(Value::Object(details)),
+            );
+        }
+        let allowed = [
+            "invalid_project",
+            "invalid_request",
+            "unsupported_version",
+            "cancelled",
+            "recovery_required",
+            "permission_denied",
+            "unsupported_capability",
+        ];
+        let safe_code = allowed
+            .iter()
+            .copied()
+            .find(|candidate| *candidate == code)
+            .unwrap_or("operation_failed");
+        error_response(id, safe_code, message)
+    }
+
+    fn world_snapshot(&self, params: &Value) -> Result<Value, String> {
+        let snapshot = self.world.snapshot();
+        let object = params.as_object();
+        let offset = object
+            .and_then(|v| v.get("offset"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(snapshot.entities.len() as u64) as usize;
+        let limit = object
+            .and_then(|v| v.get("limit"))
+            .and_then(Value::as_u64)
+            .unwrap_or(128)
+            .clamp(1, 256) as usize;
+        let end = offset.saturating_add(limit).min(snapshot.entities.len());
+        Ok(
+            json!({"revision": snapshot.revision, "tick": snapshot.tick, "worldHash": snapshot.world_hash, "worldRevision": snapshot.revision, "projectId": self.project_id, "projectRevision": self.project_revision, "replayHash": self.world.replay_hash(), "entities": &snapshot.entities[offset..end], "page": {"offset": offset, "limit": limit, "total": snapshot.entities.len(), "hasMore": end < snapshot.entities.len()}}),
+        )
+    }
+
+    fn apply_legacy(&mut self, params: &Value) -> Result<Value, String> {
+        let object = params
+            .as_object()
+            .ok_or("invalid_request|params must be an object")?;
+        let expected = object
+            .get("expectedRevision")
+            .and_then(Value::as_u64)
+            .ok_or("invalid_request|expectedRevision must be an unsigned integer")?;
+        let entities: Vec<Entity> = serde_json::from_value(
+            object
+                .get("entities")
+                .cloned()
+                .ok_or("invalid_request|entities are required")?,
+        )
+        .map_err(|e| format!("invalid_request|invalid entities: {e}"))?;
+        let existing = self.world.snapshot().entities;
+        let incoming = entities
+            .iter()
+            .map(|entity| entity.id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut commands = existing
+            .into_iter()
+            .filter(|entity| !incoming.contains(entity.id.as_str()))
+            .map(|entity| WorldCommand::Remove {
+                id: entity.id,
+                expected_generation: Some(entity.generation),
+            })
+            .collect::<Vec<_>>();
+        commands.extend(
+            entities
+                .into_iter()
+                .map(|entity| WorldCommand::Upsert { entity }),
+        );
+        if commands.is_empty() {
+            if expected != self.world.revision() {
+                return Err(world_error_message(
+                    auvra_native::world::WorldError::RevisionConflict {
+                        expected,
+                        actual: self.world.revision(),
+                    },
+                ));
+            }
+            return self.world_snapshot(&Value::Null);
+        }
+        self.world
+            .apply_commands(expected, commands)
+            .map_err(world_error_message)
+            .and_then(|snapshot| self.snapshot_value(snapshot, params))
+    }
+
+    fn apply_transaction(&mut self, params: &Value) -> Result<Value, String> {
+        let tx: WorldTransaction = serde_json::from_value(params.clone())
+            .map_err(|e| format!("invalid_request|invalid world transaction: {e}"))?;
+        self.world
+            .apply_transaction(tx)
+            .map_err(world_error_message)
+            .and_then(|snapshot| self.snapshot_value(snapshot, params))
+    }
+
+    fn snapshot_value(
+        &self,
+        snapshot: auvra_native::world::WorldSnapshot,
+        params: &Value,
+    ) -> Result<Value, String> {
+        let object = params.as_object();
+        let offset = object
+            .and_then(|v| v.get("offset"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(snapshot.entities.len() as u64) as usize;
+        let limit = object
+            .and_then(|v| v.get("limit"))
+            .and_then(Value::as_u64)
+            .unwrap_or(128)
+            .clamp(1, 256) as usize;
+        let end = offset.saturating_add(limit).min(snapshot.entities.len());
+        Ok(
+            json!({"revision": snapshot.revision, "tick": snapshot.tick, "worldHash": snapshot.world_hash, "worldRevision": snapshot.revision, "projectId": self.project_id, "projectRevision": self.project_revision, "replayHash": self.world.replay_hash(), "entities": &snapshot.entities[offset..end], "page": {"offset": offset, "limit": limit, "total": snapshot.entities.len(), "hasMore": end < snapshot.entities.len()}}),
+        )
+    }
+
+    fn validate_hydration(&self, params: &Value) -> Result<Value, String> {
+        let (_, revision, entities, _) = project_candidate(params)?;
+        let mut candidate = NativeWorld::new();
+        candidate
+            .hydrate(revision, entities)
+            .map_err(world_error_message)?;
+        Ok(json!({"valid": true, "projectRevision": revision}))
+    }
+
+    fn begin_hydration(&mut self, params: &Value) -> Result<Value, String> {
+        if self.hydration.is_some() {
+            return Err("invalid_request|a hydration transaction is already active".into());
+        }
+        let object = params
+            .as_object()
+            .ok_or("invalid_request|hydration transaction must be an object")?;
+        let project_id = object
+            .get("projectId")
+            .and_then(Value::as_str)
+            .ok_or("invalid_project|projectId is required")?;
+        if project_id.is_empty()
+            || project_id.len() > 128
+            || !project_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"_-.:".contains(&byte))
+        {
+            return Err("invalid_project|projectId is invalid".into());
+        }
+        let project_revision = object
+            .get("projectRevision")
+            .and_then(Value::as_u64)
+            .ok_or("invalid_project|projectRevision is required")?;
+        let validate_only = object
+            .get("validateOnly")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        self.hydration = Some(HydrationDraft {
+            project_id: project_id.into(),
+            project_revision,
+            validate_only,
+            domains: BTreeMap::new(),
+            asset_ids: BTreeSet::new(),
+            document_count: 0,
+        });
+        Ok(
+            json!({"hydrationTransaction": true, "active": true, "projectId": project_id, "projectRevision": project_revision, "validateOnly": validate_only}),
+        )
+    }
+
+    fn append_hydration(&mut self, params: &Value) -> Result<Value, String> {
+        let draft = self
+            .hydration
+            .as_mut()
+            .ok_or("invalid_request|no hydration transaction is active")?;
+        let object = params
+            .as_object()
+            .ok_or("invalid_request|hydration page must be an object")?;
+        if let Some(project_id) = object.get("projectId").and_then(Value::as_str) {
+            if project_id != draft.project_id {
+                return Err(
+                    "invalid_project|hydration projectId does not match beginHydration".into(),
+                );
+            }
+        }
+        if let Some(revision) = object.get("projectRevision").and_then(Value::as_u64) {
+            if revision != draft.project_revision {
+                return Err(
+                    "invalid_project|hydration projectRevision does not match beginHydration"
+                        .into(),
+                );
+            }
+        }
+        let mut appended = 0_usize;
+        let mut has_domain_page = false;
+        if let Some(domain) = object.get("domain").and_then(Value::as_str) {
+            has_domain_page = true;
+            let schema_version = object
+                .get("schemaVersion")
+                .and_then(Value::as_u64)
+                .ok_or("invalid_project|domain schemaVersion is required")?;
+            if schema_version != 1 {
+                return Err(
+                    "unsupported_version|project domain schema version is unsupported".into(),
+                );
+            }
+            let documents = object
+                .get("documents")
+                .and_then(Value::as_array)
+                .ok_or("invalid_project|domain documents are required")?;
+            if domain.is_empty()
+                || domain.len() > 128
+                || !domain
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            {
+                return Err("invalid_project|domain name is invalid".into());
+            }
+            if documents.len() > 256
+                || draft.document_count.saturating_add(documents.len()) > 16_384
+            {
+                return Err("invalid_project|hydration document limit exceeded".into());
+            }
+            let entries = draft.domains.entry(domain.into()).or_default();
+            entries.extend(documents.iter().cloned());
+            draft.document_count += documents.len();
+            appended = documents.len();
+        } else if let Some(domains) = object.get("domains").and_then(Value::as_object) {
+            has_domain_page = true;
+            for (domain, value) in domains {
+                let page = value
+                    .as_object()
+                    .ok_or("invalid_project|domain must be an object")?;
+                if page.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
+                    return Err(
+                        "unsupported_version|project domain schema version is unsupported".into(),
+                    );
+                }
+                let documents = page
+                    .get("documents")
+                    .and_then(Value::as_array)
+                    .ok_or("invalid_project|domain documents are required")?;
+                if domain.is_empty()
+                    || domain.len() > 128
+                    || !domain
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+                    || documents.len() > 256
+                    || draft.document_count.saturating_add(documents.len()) > 16_384
+                {
+                    return Err("invalid_project|hydration document limit exceeded or domain name is invalid".into());
+                }
+                draft
+                    .domains
+                    .entry(domain.clone())
+                    .or_default()
+                    .extend(documents.iter().cloned());
+                draft.document_count += documents.len();
+                appended += documents.len();
+            }
+        }
+        if let Some(asset_ids) = object.get("assetIds").and_then(Value::as_array) {
+            if asset_ids.len() > 256
+                || draft.asset_ids.len().saturating_add(asset_ids.len()) > 16_384
+            {
+                return Err("invalid_project|hydration asset limit exceeded".into());
+            }
+            for value in asset_ids {
+                let asset_id = value
+                    .as_str()
+                    .ok_or("invalid_project|assetIds must contain strings")?;
+                if asset_id.len() != 64
+                    || !asset_id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                {
+                    return Err("invalid_project|assetId is invalid".into());
+                }
+                draft.asset_ids.insert(asset_id.into());
+            }
+        }
+        if !has_domain_page && object.get("assetIds").is_none() {
+            return Err("invalid_request|hydration page must contain a domain or assetIds".into());
+        }
+        Ok(
+            json!({"hydrationTransaction": true, "active": true, "documentsAppended": appended, "documentCount": draft.document_count, "assetCount": draft.asset_ids.len()}),
+        )
+    }
+
+    fn commit_hydration(&mut self) -> Result<Value, String> {
+        let draft = self
+            .hydration
+            .clone()
+            .ok_or("invalid_request|no hydration transaction is active")?;
+        let domains = draft
+            .domains
+            .iter()
+            .map(|(domain, documents)| {
+                (
+                    domain.clone(),
+                    json!({"schemaVersion": 1, "documents": documents}),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        let params = json!({"projectId": draft.project_id, "projectRevision": draft.project_revision, "domains": domains, "assetIds": draft.asset_ids});
+        let (project_id, project_revision, entities, asset_ids) = project_candidate(&params)?;
+        let mut candidate = NativeWorld::new();
+        let snapshot = candidate
+            .hydrate(project_revision, entities)
+            .map_err(world_error_message)?;
+        self.hydration = None;
+        if draft.validate_only {
+            return Ok(
+                json!({"hydrationTransaction": true, "committed": false, "valid": true, "projectId": project_id, "projectRevision": project_revision}),
+            );
+        }
+        self.world = candidate;
+        self.project_id = Some(project_id.clone());
+        self.project_revision = Some(project_revision);
+        let (queued_assets, deferred_assets) = self.submit_asset_ids(&asset_ids);
+        let mut result = self.snapshot_value(snapshot, &Value::Null)?;
+        if let Some(object) = result.as_object_mut() {
+            object.insert("hydrationTransaction".into(), json!(true));
+            object.insert("projectId".into(), json!(project_id));
+            object.insert("projectRevision".into(), json!(project_revision));
+            object.insert("assetJobsQueued".into(), json!(queued_assets));
+            object.insert("assetJobsDeferred".into(), json!(deferred_assets));
+        }
+        Ok(result)
+    }
+
+    fn abort_hydration(&mut self) -> Result<Value, String> {
+        let active = self.hydration.take().is_some();
+        Ok(json!({"hydrationTransaction": true, "aborted": active, "active": false}))
+    }
+
+    fn hydrate_world(&mut self, params: &Value) -> Result<Value, String> {
+        let (project_id, project_revision, entities, asset_ids) = project_candidate(params)?;
+        let mut candidate = NativeWorld::new();
+        let snapshot = candidate
+            .hydrate(project_revision, entities)
+            .map_err(world_error_message)?;
+        self.world = candidate;
+        self.project_id = Some(project_id.clone());
+        self.project_revision = Some(project_revision);
+        let (queued_assets, deferred_assets) = self.submit_asset_ids(&asset_ids);
+        let mut result = self.snapshot_value(snapshot, params)?;
+        if let Some(object) = result.as_object_mut() {
+            object.insert("projectId".into(), json!(project_id));
+            object.insert("projectRevision".into(), json!(project_revision));
+            object.insert("replayHash".into(), json!(self.world.replay_hash()));
+            object.insert("assetJobsQueued".into(), json!(queued_assets));
+            object.insert("assetJobsDeferred".into(), json!(deferred_assets));
+        }
+        Ok(result)
+    }
+
+    fn close_project(&mut self) -> Result<Value, String> {
+        self.world = NativeWorld::new();
+        self.project_id = None;
+        self.project_revision = None;
+        self.asset_jobs.clear();
+        self.world_snapshot(&Value::Null)
+    }
+
+    fn submit_asset_ids(&mut self, asset_ids: &[String]) -> (usize, usize) {
+        let Some(cooker) = self.cooker.as_ref() else {
+            return (0, asset_ids.len().min(256));
+        };
+        let mut queued = 0;
+        let mut deferred = 0;
+        for source_id in asset_ids.iter().take(256) {
+            match cooker.submit(source_id) {
+                Ok(submission) => {
+                    self.asset_jobs
+                        .insert(submission.job_id, submission.cancellation);
+                    queued += 1;
+                }
+                Err(_) => deferred += 1,
+            }
+        }
+        (queued, deferred + asset_ids.len().saturating_sub(256))
+    }
+
+    fn advance_world(&mut self, params: &Value) -> Result<Value, String> {
+        let object = params.as_object();
+        let workers = object
+            .and_then(|v| v.get("workers"))
+            .and_then(Value::as_u64)
+            .unwrap_or(1)
+            .min(64) as usize;
+        let report =
+            if let Some(steps) = object.and_then(|v| v.get("steps")).and_then(Value::as_u64) {
+                self.world
+                    .advance_steps(steps.min(u64::from(u32::MAX)) as u32, workers)
+            } else {
+                let elapsed = object
+                    .and_then(|v| v.get("elapsedNanos"))
+                    .and_then(Value::as_u64)
+                    .ok_or("elapsedNanos or steps is required")?;
+                self.world.advance_frame(elapsed, workers)
+            }
+            .map_err(|e| e.to_string())?;
+        serde_json::to_value(report).map_err(|e| e.to_string())
+    }
+
+    fn replay_snapshot(&self) -> Result<Value, String> {
+        serde_json::to_value(self.world.replay_snapshot()).map_err(|e| e.to_string())
+    }
+
+    fn recover_renderer(&mut self) -> Result<Value, String> {
+        self.renderer = Renderer::new()?;
+        let extraction = self.build_extraction(&Value::Null)?;
+        let viewport_reopened = if let Some(viewport) = self.viewport.as_mut() {
+            viewport.recover(&mut self.renderer, &extraction)?;
+            true
+        } else {
+            false
+        };
+        Ok(
+            json!({"recovered": true, "viewport_reopened": viewport_reopened, "capabilities": self.renderer.capabilities(), "world_revision": self.world.revision()}),
+        )
+    }
+
+    fn submit_asset(&mut self, params: &Value) -> Result<Value, String> {
+        let source_id = params
+            .as_object()
+            .and_then(|v| v.get("sourceId"))
+            .and_then(Value::as_str)
+            .ok_or("sourceId is required")?;
+        let cooker = self
+            .cooker
+            .as_ref()
+            .ok_or("asset cooker roots are not configured")?;
+        let submission = cooker.submit(source_id).map_err(|e| e.to_string())?;
+        self.asset_jobs
+            .insert(submission.job_id, submission.cancellation);
+        Ok(json!({"jobId": submission.job_id, "sourceId": source_id, "state": "Queued"}))
+    }
+
+    fn asset_status(&self, params: &Value) -> Result<Value, String> {
+        let job_id = params
+            .as_object()
+            .and_then(|v| v.get("jobId"))
+            .and_then(Value::as_u64)
+            .ok_or("jobId is required")?;
+        let status = self
+            .cooker
+            .as_ref()
+            .and_then(|cooker| cooker.status(job_id))
+            .ok_or("asset job not found")?;
+        serde_json::to_value(status).map_err(|e| e.to_string())
+    }
+
+    fn cancel_asset(&mut self, params: &Value) -> Result<Value, String> {
+        let job_id = params
+            .as_object()
+            .and_then(|v| v.get("jobId"))
+            .and_then(Value::as_u64)
+            .ok_or("jobId is required")?;
+        let token = self.asset_jobs.get(&job_id).ok_or("asset job not found")?;
+        token.cancel();
+        Ok(json!({"jobId": job_id, "cancelled": true}))
+    }
+
+    fn render_extract(&self, params: &Value) -> Result<Value, String> {
+        let extraction = self.build_extraction(params)?;
+        serde_json::to_value(extraction).map_err(|e| e.to_string())
+    }
+
+    fn build_extraction(&self, params: &Value) -> Result<RenderExtraction, String> {
+        let snapshot = self.world.snapshot();
+        let render_entities = snapshot
+            .entities
+            .iter()
+            .map(|entity| WorldRenderEntity {
+                id: stable_id(&entity.id),
+                mesh_id: entity
+                    .render
+                    .as_ref()
+                    .and_then(|render| render.asset_hash.as_deref())
+                    .map(stable_id)
+                    .unwrap_or(1),
+                position: entity.position.map(|value| value as f32),
+                radius: 1.0,
+                material: MaterialReference {
+                    material_id: 1,
+                    base_color_factor: entity.color.map(|value| value.clamp(0.0, 1.0) as f32),
+                    metallic: 0.0,
+                    roughness: 1.0,
+                    base_color_texture: None,
+                    normal_texture: None,
+                    metallic_roughness_texture: None,
+                },
+                lods: vec![LodLevel {
+                    level: 0,
+                    max_distance: f32::MAX,
+                }],
+                animation: None,
+                selected: false,
+            })
+            .collect();
+        let mut input = WorldRenderInput {
+            world_revision: snapshot.revision,
+            fixed_tick: snapshot.tick,
+            camera_position: [0.0; 3],
+            frustum: wide_frustum(),
+            entities: render_entities,
+            lights: Vec::new(),
+            ibl: None,
+            post_effects: Vec::<PostEffect>::new(),
+            msaa_samples: params
+                .as_object()
+                .and_then(|v| v.get("msaaSamples"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                .min(16) as u8,
+            fxaa: params
+                .as_object()
+                .and_then(|v| v.get("fxaa"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        };
+        if params
+            .as_object()
+            .and_then(|value| value.get("sceneId"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            == "basic"
+        {
+            input = reference_input(snapshot.revision, snapshot.tick);
+        }
+        extract_render_world(&input, gpu::capabilities()).map_err(|e| e.to_string())
+    }
+
+    fn open_viewport(&mut self, params: &Value) -> Result<Value, String> {
+        if let Some(viewport) = &self.viewport {
+            return Ok(
+                json!({"open": true, "alreadyOpen": true, "width": viewport.width, "height": viewport.height, "ownership": "separate-native-surface", "dockSupport": "unsupported", "dockActive": false, "dockReason": "same-build-native-parenting-gate-not-passed"}),
+            );
+        }
+        let object = params.as_object();
+        if let Some(parent_handle) = object.and_then(|v| v.get("parentHandle")) {
+            if parent_handle.as_u64().is_none() || parent_handle.as_u64() == Some(0) {
+                return Err("invalid_request|viewport parent handle is invalid".into());
+            }
+        }
+        let width = object
+            .and_then(|v| v.get("width"))
+            .and_then(Value::as_u64)
+            .unwrap_or(640);
+        let height = object
+            .and_then(|v| v.get("height"))
+            .and_then(Value::as_u64)
+            .unwrap_or(480);
+        let title = object
+            .and_then(|v| v.get("title"))
+            .and_then(Value::as_str)
+            .unwrap_or("Auvra Native Viewport")
+            .to_string();
+        if !(320..=4096).contains(&width)
+            || !(240..=4096).contains(&height)
+            || title.is_empty()
+            || title.len() > 256
+        {
+            return Err("invalid viewport dimensions or title".into());
+        }
+        let extraction = self.build_extraction(&Value::Null)?;
+        self.viewport = Some(Viewport::open(
+            &mut self.renderer,
+            width as u32,
+            height as u32,
+            title,
+            &extraction,
+        )?);
+        Ok(
+            json!({"open": true, "alreadyOpen": false, "width": width, "height": height, "ownership": "separate-native-surface", "dockSupport": "unsupported", "dockActive": false, "dockReason": "same-build-native-parenting-gate-not-passed"}),
+        )
+    }
+}
+
+fn world_error_message(error: auvra_native::world::WorldError) -> String {
+    match error {
+        auvra_native::world::WorldError::RevisionConflict { expected, actual } => format!(
+            "revision_conflict|expected revision {expected}, current revision is {actual}|expected={expected}|actual={actual}"
+        ),
+        other => format!("invalid_project|{other}"),
+    }
+}
+
+fn project_candidate(params: &Value) -> Result<(String, u64, Vec<Entity>, Vec<String>), String> {
+    let object = params
+        .as_object()
+        .ok_or("invalid_project|project hydration must be an object")?;
+    let project_id = object
+        .get("projectId")
+        .and_then(Value::as_str)
+        .ok_or("invalid_project|projectId is required")?;
+    if project_id.is_empty()
+        || project_id.len() > 128
+        || !project_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_-.:".contains(&byte))
+    {
+        return Err("invalid_project|projectId is invalid".into());
+    }
+    let project_revision = object
+        .get("projectRevision")
+        .and_then(Value::as_u64)
+        .ok_or("invalid_project|projectRevision is required")?;
+    let domains = object
+        .get("domains")
+        .and_then(Value::as_object)
+        .ok_or("invalid_project|domains are required")?;
+    let mut documents = serde_json::Map::new();
+    for (domain, value) in domains {
+        if domain.len() > 128
+            || !domain
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            return Err("invalid_project|domain name is invalid".into());
+        }
+        let domain_object = value
+            .as_object()
+            .ok_or("invalid_project|domain must be an object")?;
+        match domain_object.get("schemaVersion").and_then(Value::as_u64) {
+            Some(1) => (),
+            Some(_) => {
+                return Err(
+                    "unsupported_version|project domain schema version is unsupported".into(),
+                );
+            }
+            None => return Err("invalid_project|domain schemaVersion is required".into()),
+        }
+        let docs = domain_object
+            .get("documents")
+            .and_then(Value::as_array)
+            .ok_or("invalid_project|domain documents are required")?;
+        if docs.len() > 16_384 {
+            return Err("invalid_project|domain document limit exceeded".into());
+        }
+        documents.insert(domain.clone(), Value::Array(docs.clone()));
+    }
+    let models = documents
+        .get("models")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut model_assets = std::collections::BTreeMap::<String, String>::new();
+    for model in models {
+        let model = model
+            .as_object()
+            .ok_or("invalid_project|model document is invalid")?;
+        let id = model
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or("invalid_project|model id is required")?;
+        let asset_id = model
+            .get("assetId")
+            .and_then(Value::as_str)
+            .ok_or("invalid_project|model assetId is required")?;
+        if asset_id.len() != 64
+            || !asset_id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err("invalid_project|model assetId is invalid".into());
+        }
+        model_assets.insert(id.into(), asset_id.into());
+    }
+    let objects = documents
+        .get("objects")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let level_ids = documents
+        .get("levels")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|value| value.get("id").and_then(Value::as_str).map(str::to_owned))
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut entities = Vec::with_capacity(objects.len());
+    let mut ids = std::collections::BTreeSet::new();
+    for value in objects {
+        let value = value
+            .as_object()
+            .ok_or("invalid_project|object document is invalid")?;
+        let id = value
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or("invalid_project|object id is required")?;
+        if !ids.insert(id.to_string()) {
+            return Err("invalid_project|duplicate object id".into());
+        }
+        let level_id = value
+            .get("levelId")
+            .and_then(Value::as_str)
+            .ok_or("invalid_project|object levelId is required")?;
+        if !level_ids.contains(level_id) {
+            return Err("invalid_project|object references a missing level".into());
+        }
+        let position = vector3(value.get("position"), [0.0, 0.0, 0.0])?;
+        let rotation = vector4(value.get("rotation"), [0.0, 0.0, 0.0, 1.0])?;
+        let scale = vector3(value.get("scale"), [1.0, 1.0, 1.0])?;
+        let color = vector4(value.get("color"), [0.7, 0.7, 0.7, 1.0])?;
+        let render = if let Some(model_id) = value.get("modelId").and_then(Value::as_str) {
+            let asset_hash = model_assets
+                .get(model_id)
+                .ok_or("invalid_project|object references a missing model")?;
+            Some(auvra_native::world::RenderData {
+                asset_hash: Some(asset_hash.clone()),
+                visible: true,
+                cast_shadow: true,
+                receive_shadow: true,
+                layer: 0,
+            })
+        } else {
+            None
+        };
+        entities.push(Entity {
+            id: id.into(),
+            position,
+            color,
+            generation: 0,
+            rotation,
+            scale,
+            velocity: [0.0; 3],
+            render,
+            light: None,
+            animation: None,
+        });
+    }
+    let mut asset_ids = std::collections::BTreeSet::new();
+    if let Some(values) = object.get("assetIds").and_then(Value::as_array) {
+        for value in values {
+            let asset_id = value
+                .as_str()
+                .ok_or("invalid_project|assetIds must contain strings")?;
+            if asset_id.len() != 64
+                || !asset_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err("invalid_project|assetId is invalid".into());
+            }
+            asset_ids.insert(asset_id.to_string());
+        }
+    }
+    asset_ids.extend(model_assets.into_values());
+    Ok((
+        project_id.into(),
+        project_revision,
+        entities,
+        asset_ids.into_iter().collect(),
+    ))
+}
+
+fn vector3(value: Option<&Value>, default: [f64; 3]) -> Result<[f64; 3], String> {
+    let Some(value) = value else {
+        return Ok(default);
+    };
+    if let Some(array) = value.as_array() {
+        if array.len() != 3 {
+            return Err("invalid_project|vector3 must have three values".into());
+        }
+        return Ok([
+            array[0]
+                .as_f64()
+                .ok_or("invalid_project|vector3 value is invalid")?,
+            array[1]
+                .as_f64()
+                .ok_or("invalid_project|vector3 value is invalid")?,
+            array[2]
+                .as_f64()
+                .ok_or("invalid_project|vector3 value is invalid")?,
+        ]);
+    }
+    let map = value
+        .as_object()
+        .ok_or("invalid_project|vector3 is invalid")?;
+    Ok([
+        map.get("x")
+            .and_then(Value::as_f64)
+            .ok_or("invalid_project|vector3 x is invalid")?,
+        map.get("y")
+            .and_then(Value::as_f64)
+            .ok_or("invalid_project|vector3 y is invalid")?,
+        map.get("z")
+            .and_then(Value::as_f64)
+            .ok_or("invalid_project|vector3 z is invalid")?,
+    ])
+}
+
+fn vector4(value: Option<&Value>, default: [f64; 4]) -> Result<[f64; 4], String> {
+    let Some(value) = value else {
+        return Ok(default);
+    };
+    let array = value
+        .as_array()
+        .ok_or("invalid_project|vector4 is invalid")?;
+    if array.len() != 4 {
+        return Err("invalid_project|vector4 must have four values".into());
+    }
+    Ok([
+        array[0]
+            .as_f64()
+            .ok_or("invalid_project|vector4 value is invalid")?,
+        array[1]
+            .as_f64()
+            .ok_or("invalid_project|vector4 value is invalid")?,
+        array[2]
+            .as_f64()
+            .ok_or("invalid_project|vector4 value is invalid")?,
+        array[3]
+            .as_f64()
+            .ok_or("invalid_project|vector4 value is invalid")?,
+    ])
+}
+fn stable_id(value: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash.max(1)
+}
+fn wide_frustum() -> Frustum {
+    Frustum {
+        planes: [Plane {
+            normal: [1.0, 0.0, 0.0],
+            distance: 1_000_000_000.0,
+        }; 6],
+    }
+}
+fn reference_input(revision: u64, tick: u64) -> WorldRenderInput {
+    let material = |id| MaterialReference {
+        material_id: id,
+        base_color_factor: [0.35, 0.58, 0.82, 1.0],
+        metallic: 0.35,
+        roughness: 0.55,
+        base_color_texture: None,
+        normal_texture: None,
+        metallic_roughness_texture: None,
+    };
+    let entity = |id, position, selected| WorldRenderEntity {
+        id,
+        mesh_id: 7,
+        position,
+        radius: 0.35,
+        material: material(3),
+        lods: vec![
+            LodLevel {
+                level: 0,
+                max_distance: 2.0,
+            },
+            LodLevel {
+                level: 1,
+                max_distance: 40.0,
+            },
+        ],
+        animation: Some(AnimationInput {
+            clip_id: 11,
+            duration_ticks: 120,
+            speed_numerator: 1,
+            speed_denominator: 1,
+            looped: true,
+        }),
+        selected,
+    };
+    WorldRenderInput {
+        world_revision: revision,
+        fixed_tick: tick,
+        camera_position: [0.0, 0.0, 2.0],
+        frustum: wide_frustum(),
+        entities: vec![
+            entity(1, [-0.4, 0.0, 0.0], true),
+            entity(2, [0.0, 0.2, 0.0], false),
+            entity(3, [0.4, -0.1, 0.0], false),
+        ],
+        lights: vec![
+            WorldRenderLight {
+                id: 21,
+                kind: LightKind::Directional,
+                position: [0.0, 2.0, 2.0],
+                direction: [-0.3, -1.0, -0.2],
+                range: 0.0,
+                spot_inner_cos: 1.0,
+                spot_outer_cos: 1.0,
+                casts_shadow: true,
+            },
+            WorldRenderLight {
+                id: 22,
+                kind: LightKind::Point,
+                position: [1.0, 1.0, 1.0],
+                direction: [0.0, -1.0, 0.0],
+                range: 10.0,
+                spot_inner_cos: 1.0,
+                spot_outer_cos: 1.0,
+                casts_shadow: true,
+            },
+            WorldRenderLight {
+                id: 23,
+                kind: LightKind::Spot,
+                position: [-1.0, 1.0, 1.0],
+                direction: [0.0, -1.0, 0.0],
+                range: 8.0,
+                spot_inner_cos: 0.9,
+                spot_outer_cos: 0.7,
+                casts_shadow: false,
+            },
+        ],
+        ibl: Some(IblInput {
+            environment_id: 31,
+            irradiance_id: 32,
+            prefiltered_id: 33,
+            brdf_lut_id: 34,
+        }),
+        post_effects: vec![
+            PostEffect::Bloom,
+            PostEffect::ColorGrading,
+            PostEffect::Vignette,
+            PostEffect::Sharpen,
+            PostEffect::Fxaa,
+        ],
+        msaa_samples: 4,
+        fxaa: true,
     }
 }
 
 fn run_ipc() -> Result<(), String> {
-    let mut app = App { authenticated: false, world: World::new(), renderer: Renderer::new()?, viewport: None };
+    let mut app = App::new()?;
     diagnostic("native.ready", None, Some(PROTOCOL.into()));
-    let stdin = io::stdin(); let stdout = io::stdout(); let mut input = stdin.lock(); let mut output = stdout.lock();
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let mut input = stdin.lock();
+    let mut output = stdout.lock();
     loop {
-        let Some(bytes) = read_frame(&mut input)? else { diagnostic("eof", None, None); return Ok(()); };
-        let req: Request = serde_json::from_slice(&bytes).map_err(|e| format!("invalid request schema: {e}"))?;
-        let method = req.method.clone(); let id = req.id; let result = app.dispatch(req);
-        match result { Ok(resp) => { write_frame(&mut output, &resp)?; if method == "shutdown" { diagnostic("shutdown", Some(&method), Some("clean".into())); return Ok(()); } }, Err(e) => { diagnostic("fatal_protocol_error", Some(&method), Some(e)); return Err("fatal protocol error".into()); } }
+        let Some(bytes) = read_frame(&mut input)? else {
+            diagnostic("eof", None, None);
+            return Ok(());
+        };
+        let req: Request =
+            serde_json::from_slice(&bytes).map_err(|e| format!("invalid request schema: {e}"))?;
+        let method = req.method.clone();
+        let id = req.id;
+        let result = app.dispatch(req);
+        match result {
+            Ok(resp) => {
+                write_frame(&mut output, &resp)?;
+                if method == "shutdown" {
+                    diagnostic("shutdown", Some(&method), Some("clean".into()));
+                    return Ok(());
+                }
+            }
+            Err(e) => {
+                diagnostic("fatal_protocol_error", Some(&method), Some(e));
+                return Err("fatal protocol error".into());
+            }
+        }
         diagnostic("request_complete", Some(&method), Some(format!("id={id}")));
     }
 }
 
 fn run_self_test() -> Result<(), String> {
-    let started = Instant::now(); let mut app = App { authenticated: false, world: World::new(), renderer: Renderer::new()?, viewport: None };
-    let hello = app.dispatch(Request { id: 1, protocol: PROTOCOL.into(), method: "session.hello".into(), params: Value::Null })?;
+    let started = Instant::now();
+    let mut app = App::new()?;
+    let hello = app.dispatch(Request {
+        id: 1,
+        protocol: PROTOCOL.into(),
+        method: "session.hello".into(),
+        params: Value::Null,
+    })?;
     let applied = app.dispatch(Request { id: 2, protocol: PROTOCOL.into(), method: "world.apply".into(), params: json!({"expectedRevision": 0, "entities": [{"id":"reference","position":[1.25,-0.5,0.0],"color":[0.2,0.6,1.0,1.0]}]}) })?;
-    let rendered = app.dispatch(Request { id: 3, protocol: PROTOCOL.into(), method: "renderer.renderReference".into(), params: json!({"width": 96, "height": 80}) })?;
-    let cached = app.dispatch(Request { id: 4, protocol: PROTOCOL.into(), method: "renderer.renderReference".into(), params: json!({"width": 96, "height": 80}) })?;
-    let opened = app.dispatch(Request { id: 5, protocol: PROTOCOL.into(), method: "viewport.open".into(), params: json!({"width": 320, "height": 200, "title": "Auvra Stage 6 Self-Test"}) })?;
-    let recovered = app.dispatch(Request { id: 6, protocol: PROTOCOL.into(), method: "renderer.recover".into(), params: Value::Null })?;
-    let closed = app.dispatch(Request { id: 7, protocol: PROTOCOL.into(), method: "viewport.close".into(), params: Value::Null })?;
-    let stopped = app.dispatch(Request { id: 8, protocol: PROTOCOL.into(), method: "shutdown".into(), params: Value::Null })?;
-    let cache_hit = cached.result.as_ref().and_then(|v| v.get("pipeline_cache_hits")).and_then(Value::as_u64).unwrap_or(0) >= 1;
-    let viewport_reopened = recovered.result.as_ref().and_then(|v| v.get("viewport_reopened")).and_then(Value::as_bool).unwrap_or(false);
-    let clean_shutdown = stopped.ok && stopped.result.as_ref().and_then(|v| v.get("stopped")).and_then(Value::as_bool).unwrap_or(false);
-    if !(hello.ok && applied.ok && rendered.ok && cached.ok && cache_hit && opened.ok && recovered.ok && viewport_reopened && closed.ok && clean_shutdown && app.world.revision == 1) {
+    let rendered = app.dispatch(Request {
+        id: 3,
+        protocol: PROTOCOL.into(),
+        method: "renderer.renderReference".into(),
+        params: json!({"width": 96, "height": 80}),
+    })?;
+    let cached = app.dispatch(Request {
+        id: 4,
+        protocol: PROTOCOL.into(),
+        method: "renderer.renderReference".into(),
+        params: json!({"width": 96, "height": 80}),
+    })?;
+    let opened = app.dispatch(Request {
+        id: 5,
+        protocol: PROTOCOL.into(),
+        method: "viewport.open".into(),
+        params: json!({"width": 320, "height": 240, "title": "Auvra Stage 8 Self-Test"}),
+    })?;
+    let recovered = app.dispatch(Request {
+        id: 6,
+        protocol: PROTOCOL.into(),
+        method: "renderer.recover".into(),
+        params: Value::Null,
+    })?;
+    let closed = app.dispatch(Request {
+        id: 7,
+        protocol: PROTOCOL.into(),
+        method: "viewport.close".into(),
+        params: Value::Null,
+    })?;
+    let stopped = app.dispatch(Request {
+        id: 8,
+        protocol: PROTOCOL.into(),
+        method: "shutdown".into(),
+        params: Value::Null,
+    })?;
+    let cache_hit = cached
+        .result
+        .as_ref()
+        .and_then(|v| v.get("pipeline_cache_hits"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        >= 1;
+    let viewport_reopened = recovered
+        .result
+        .as_ref()
+        .and_then(|v| v.get("viewport_reopened"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let clean_shutdown = stopped.ok
+        && stopped
+            .result
+            .as_ref()
+            .and_then(|v| v.get("stopped"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    if !(hello.ok
+        && applied.ok
+        && rendered.ok
+        && cached.ok
+        && cache_hit
+        && opened.ok
+        && recovered.ok
+        && viewport_reopened
+        && closed.ok
+        && clean_shutdown
+        && app.world.revision() == 1)
+    {
         return Err("native self-test acceptance failed".into());
     }
-    let evidence = json!({"probe": "auvra-native-self-test", "protocol": PROTOCOL, "hello_ok": hello.ok, "world_apply_ok": applied.ok, "world_revision": app.world.revision, "reference_render_ok": rendered.ok, "reference": rendered.result, "pipeline_cache_hit": cache_hit, "viewport_open_ok": opened.ok, "recovery_ok": recovered.ok, "viewport_reopened": viewport_reopened, "viewport_close_ok": closed.ok, "clean_shutdown": clean_shutdown, "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0}); println!("{}", serde_json::to_string(&evidence).map_err(|e| e.to_string())?); Ok(())
+    let evidence = json!({"probe": "auvra-native-self-test", "protocol": PROTOCOL, "hello_ok": hello.ok, "world_apply_ok": applied.ok, "world_revision": app.world.revision(), "reference_render_ok": rendered.ok, "reference": rendered.result, "pipeline_cache_hit": cache_hit, "viewport_open_ok": opened.ok, "recovery_ok": recovered.ok, "viewport_reopened": viewport_reopened, "viewport_close_ok": closed.ok, "clean_shutdown": clean_shutdown, "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0});
+    println!(
+        "{}",
+        serde_json::to_string(&evidence).map_err(|e| e.to_string())?
+    );
+    Ok(())
+}
+
+fn run_headless_self_test() -> Result<(), String> {
+    let started = Instant::now();
+    let mut app = App::new()?;
+    let hello = app.dispatch(Request {
+        id: 1,
+        protocol: PROTOCOL.into(),
+        method: "session.hello".into(),
+        params: Value::Null,
+    })?;
+    let asset_id = "0000000000000000000000000000000000000000000000000000000000000000";
+    let hydrated = app.dispatch(Request { id: 2, protocol: PROTOCOL.into(), method: "world.hydrate".into(), params: json!({"projectId":"headless-reference","projectRevision":7,"domains":{"objects":{"schemaVersion":1,"documents":[{"id":"reference","levelId":"level","modelId":"model","name":"Reference","type":"mesh","position":[0.0,0.0,0.0],"color":[0.2,0.6,1.0,1.0]}]},"models":{"schemaVersion":1,"documents":[{"id":"model","name":"Reference","assetId":asset_id}]},"levels":{"schemaVersion":1,"documents":[{"id":"level"}]}},"assetIds":[]}) })?;
+    let advanced = app.dispatch(Request {
+        id: 3,
+        protocol: PROTOCOL.into(),
+        method: "world.advance".into(),
+        params: json!({"steps":2,"workers":2}),
+    })?;
+    let extracted = app.dispatch(Request {
+        id: 4,
+        protocol: PROTOCOL.into(),
+        method: "renderer.extract".into(),
+        params: Value::Null,
+    })?;
+    let rendered = app.dispatch(Request {
+        id: 5,
+        protocol: PROTOCOL.into(),
+        method: "renderer.renderReference".into(),
+        params: json!({"sceneId":"basic","width":32,"height":32}),
+    })?;
+    let replay = app
+        .world
+        .replay_from_hydration(2)
+        .map_err(world_error_message)?;
+    let replay_matches = replay.world_hash == app.world.snapshot().world_hash;
+    let rendered_twice = app.dispatch(Request {
+        id: 6,
+        protocol: PROTOCOL.into(),
+        method: "renderer.renderReference".into(),
+        params: json!({"sceneId":"basic","width":32,"height":32}),
+    })?;
+    let render_matches = rendered
+        .result
+        .as_ref()
+        .and_then(|value| value.get("signature"))
+        == rendered_twice
+            .result
+            .as_ref()
+            .and_then(|value| value.get("signature"))
+        && rendered
+            .result
+            .as_ref()
+            .and_then(|value| value.get("extractionHash"))
+            == rendered_twice
+                .result
+                .as_ref()
+                .and_then(|value| value.get("extractionHash"));
+    let cook_root = std::env::temp_dir().join(format!(
+        "auvra-headless-cook-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_nanos()
+    ));
+    let source_root = cook_root.join("source");
+    let derived_root = cook_root.join("derived");
+    std::fs::create_dir_all(&source_root).map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(&derived_root).map_err(|error| error.to_string())?;
+    let cook_asset_id = "7e3669e2c7c58ec4cfd8a3c7dfefe4a21169789217f071c703c057753ffcea66";
+    std::fs::write(
+        source_root.join(cook_asset_id),
+        br#"{"asset":{"version":"2.0"},"buffers":[],"meshes":[],"nodes":[],"scenes":[]}"#,
+    )
+    .map_err(|error| error.to_string())?;
+    let cook_config = CookConfig::new(&source_root, &derived_root);
+    let cooked_once = cook_source(&cook_config, cook_asset_id, &CancellationToken::new())
+        .map_err(|error| error.to_string())?;
+    let cooked_twice = cook_source(&cook_config, cook_asset_id, &CancellationToken::new())
+        .map_err(|error| error.to_string())?;
+    let cook_matches = cooked_once.artifact_sha256 == cooked_twice.artifact_sha256
+        && cooked_once.artifact_size == cooked_twice.artifact_size
+        && serde_json::to_vec(&cooked_once.manifest).map_err(|error| error.to_string())?
+            == serde_json::to_vec(&cooked_twice.manifest).map_err(|error| error.to_string())?;
+    let cook_artifact_id = cooked_once.artifact_sha256.clone();
+    std::fs::remove_dir_all(&cook_root).map_err(|error| error.to_string())?;
+    let closed = app.dispatch(Request {
+        id: 7,
+        protocol: PROTOCOL.into(),
+        method: "world.closeProject".into(),
+        params: Value::Null,
+    })?;
+    let close_idempotent = app.dispatch(Request {
+        id: 8,
+        protocol: PROTOCOL.into(),
+        method: "world.closeProject".into(),
+        params: Value::Null,
+    })?;
+    let closed_ok = closed.ok
+        && close_idempotent.ok
+        && closed
+            .result
+            .as_ref()
+            .and_then(|value| value.get("projectId"))
+            .map(Value::is_null)
+            .unwrap_or(false);
+    if !(hello.ok
+        && hydrated.ok
+        && advanced.ok
+        && extracted.ok
+        && rendered.ok
+        && rendered_twice.ok
+        && render_matches
+        && replay_matches
+        && cook_matches
+        && closed_ok)
+    {
+        return Err("headless native self-test acceptance failed".into());
+    }
+    let evidence = json!({"probe":"auvra-native-headless-self-test","protocol":PROTOCOL,"hello_ok":hello.ok,"hydration_ok":hydrated.ok,"advance_ok":advanced.ok,"extraction_ok":extracted.ok,"reference_render_ok":rendered.ok,"reference_render_repeat_ok":rendered_twice.ok,"reference_deterministic":render_matches,"replay_matches":replay_matches,"cook_ok":cook_matches,"cook_artifact_sha256":cook_artifact_id,"close_project_ok":closed_ok,"world_revision":app.world.revision(),"world_tick":app.world.tick(),"world_hash":app.world.snapshot().world_hash,"replay_hash":app.world.replay_hash(),"backend":format!("{:?}", app.renderer.info.backend),"adapter":app.renderer.info.name,"reference":rendered.result,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0});
+    println!(
+        "{}",
+        serde_json::to_string(&evidence).map_err(|e| e.to_string())?
+    );
+    Ok(())
 }
 
 fn main() {
-    match std::env::var("AUVRA_NATIVE_SESSION_TOKEN") { Ok(token) if token.len() == 64 && token.bytes().all(|byte| byte.is_ascii_hexdigit()) => (), _ => { diagnostic("fatal_configuration_error", None, Some("AUVRA_NATIVE_SESSION_TOKEN must be a 256-bit hex secret".into())); std::process::exit(2); } };
-    let result = if std::env::args().any(|arg| arg == "--self-test") { run_self_test() } else { run_ipc() };
-    if let Err(error) = result { diagnostic("fatal_error", None, Some(error)); std::process::exit(1); }
+    match std::env::var("AUVRA_NATIVE_SESSION_TOKEN") {
+        Ok(token) if token.len() == 64 && token.bytes().all(|byte| byte.is_ascii_hexdigit()) => (),
+        _ => {
+            diagnostic(
+                "fatal_configuration_error",
+                None,
+                Some("AUVRA_NATIVE_SESSION_TOKEN must be a 256-bit hex secret".into()),
+            );
+            std::process::exit(2);
+        }
+    };
+    let result = if std::env::args().any(|arg| arg == "--headless-self-test") {
+        run_headless_self_test()
+    } else if std::env::args().any(|arg| arg == "--self-test") {
+        run_self_test()
+    } else {
+        run_ipc()
+    };
+    if let Err(error) = result {
+        diagnostic("fatal_error", None, Some(error));
+        std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project_payload() -> Value {
+        json!({"projectId":"test-project","projectRevision":4,"domains":{"levels":{"schemaVersion":1,"documents":[{"id":"level"}]},"models":{"schemaVersion":1,"documents":[{"id":"model","name":"Model","assetId":"0000000000000000000000000000000000000000000000000000000000000000"}]},"objects":{"schemaVersion":1,"documents":[{"id":"object","levelId":"level","modelId":"model","name":"Object","type":"mesh","position":[1.0,2.0,3.0]}]}}})
+    }
+
+    #[test]
+    fn project_domains_map_deterministically_to_native_entities() {
+        let first = project_candidate(&project_payload()).unwrap();
+        let second = project_candidate(&project_payload()).unwrap();
+        assert_eq!(first.0, "test-project");
+        assert_eq!(first.1, 4);
+        assert_eq!(first.2, second.2);
+        assert_eq!(first.2.len(), 1);
+        assert_eq!(
+            first.2[0]
+                .render
+                .as_ref()
+                .and_then(|render| render.asset_hash.as_deref()),
+            Some("0000000000000000000000000000000000000000000000000000000000000000")
+        );
+    }
+
+    #[test]
+    fn hydration_candidate_rejects_without_mutating_an_existing_world() {
+        let world = NativeWorld::new();
+        let before = world.snapshot();
+        let invalid = json!({"projectId":"test","projectRevision":1,"domains":{"objects":{"schemaVersion":2,"documents":[]}}});
+        assert!(project_candidate(&invalid).is_err());
+        assert_eq!(world.snapshot(), before);
+    }
+
+    #[test]
+    fn revision_errors_preserve_machine_readable_details() {
+        let response = App::operation_error_response(
+            9,
+            "revision_conflict|expected revision 2, current revision is 7|expected=2|actual=7",
+        );
+        let details = response.error.unwrap().details.unwrap();
+        assert_eq!(details.get("expected").and_then(Value::as_u64), Some(2));
+        assert_eq!(details.get("actual").and_then(Value::as_u64), Some(7));
+    }
+
+    #[test]
+    fn paged_hydration_is_atomic_and_validate_only_does_not_mutate() {
+        let mut app = App::new().unwrap();
+        app.authenticated = true;
+        let begin = app
+            .dispatch(Request {
+                id: 1,
+                protocol: PROTOCOL.into(),
+                method: "world.beginHydration".into(),
+                params: json!({"projectId":"paged","projectRevision":3}),
+            })
+            .unwrap();
+        assert!(
+            begin.ok
+                && begin
+                    .result
+                    .as_ref()
+                    .and_then(|value| value.get("hydrationTransaction"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+        );
+        let empty = app
+            .dispatch(Request {
+                id: 2,
+                protocol: PROTOCOL.into(),
+                method: "world.appendHydration".into(),
+                params: json!({"domain":"levels","schemaVersion":1,"documents":[]}),
+            })
+            .unwrap();
+        assert!(empty.ok);
+        let pages = [
+            json!({"domain":"levels","schemaVersion":1,"documents":[{"id":"level"}]}),
+            json!({"domain":"models","schemaVersion":1,"documents":[{"id":"model","assetId":"0000000000000000000000000000000000000000000000000000000000000000"}]}),
+            json!({"domain":"objects","schemaVersion":1,"documents":[{"id":"object","levelId":"level","modelId":"model"}]}),
+        ];
+        for (index, page) in pages.into_iter().enumerate() {
+            let response = app
+                .dispatch(Request {
+                    id: index as u64 + 3,
+                    protocol: PROTOCOL.into(),
+                    method: "world.appendHydration".into(),
+                    params: page,
+                })
+                .unwrap();
+            assert!(response.ok);
+        }
+        let committed = app
+            .dispatch(Request {
+                id: 6,
+                protocol: PROTOCOL.into(),
+                method: "world.commitHydration".into(),
+                params: Value::Null,
+            })
+            .unwrap();
+        assert!(committed.ok);
+        assert_eq!(app.project_id.as_deref(), Some("paged"));
+        assert_eq!(app.world.snapshot().entities.len(), 1);
+        let before = app.world.snapshot();
+        app.dispatch(Request {
+            id: 7,
+            protocol: PROTOCOL.into(),
+            method: "world.beginHydration".into(),
+            params: json!({"projectId":"check","projectRevision":1,"validateOnly":true}),
+        })
+        .unwrap();
+        app.dispatch(Request {
+            id: 8,
+            protocol: PROTOCOL.into(),
+            method: "world.appendHydration".into(),
+            params: json!({"domain":"levels","schemaVersion":1,"documents":[]}),
+        })
+        .unwrap();
+        let validation = app
+            .dispatch(Request {
+                id: 9,
+                protocol: PROTOCOL.into(),
+                method: "world.commitHydration".into(),
+                params: Value::Null,
+            })
+            .unwrap();
+        assert!(
+            validation.ok
+                && validation
+                    .result
+                    .as_ref()
+                    .and_then(|value| value.get("committed"))
+                    .and_then(Value::as_bool)
+                    == Some(false)
+        );
+        assert_eq!(app.world.snapshot(), before);
+        assert!(
+            app.dispatch(Request {
+                id: 10,
+                protocol: PROTOCOL.into(),
+                method: "world.abortHydration".into(),
+                params: Value::Null
+            })
+            .unwrap()
+            .ok
+        );
+    }
 }

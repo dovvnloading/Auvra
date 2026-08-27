@@ -213,20 +213,22 @@ def _script_for_project_lifecycle(prefix: str) -> str:
         }}
         if (message.type !== "response" || !message.id) return;
         state.revision = message.revision;
-        if (message.id === "{prefix}-wrong-owner") {{
-          request("{prefix}-close", "project.close", {{
-            projectId: state.projectId, expectedRevision: state.projectRevision
-          }});
-          return;
-        }}
+        if (message.id === "{prefix}-wrong-owner") return;
         if (!message.ok) return;
         const result = message.result || {{}};
         if (message.id === "{prefix}-create") {{
           state.projectId = result.projectId;
           request("{prefix}-apply", "project.applyChanges", {{
             projectId: state.projectId, expectedRevision: result.revision,
-            changes: [{{ domain: "metadata", documentId: "project", operation: "upsert",
-              document: {{ id: "project", name: "Native Smoke Project" }} }}]
+            changes: [
+              {{ domain: "metadata", documentId: "project", operation: "upsert",
+                document: {{ id: "project", name: "Native Smoke Project" }} }},
+              {{ domain: "levels", documentId: "level", operation: "upsert",
+                document: {{ id: "level", name: "Native Smoke Level" }} }},
+              {{ domain: "objects", documentId: "reference", operation: "upsert",
+                document: {{ id: "reference", levelId: "level", name: "Reference", type: "mesh",
+                  position: [0.25, -0.5, 0.0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] }} }}
+            ]
           }});
         }} else if (message.id === "{prefix}-apply") {{
           request("{prefix}-snapshot", "project.getSnapshot", {{
@@ -264,8 +266,8 @@ def _script_for_project_lifecycle(prefix: str) -> str:
               projectId: "wrong-project", jobId: state.jobId
             }});
           }} else if (result.job && result.job.status === "failed") {{
-            request("{prefix}-close", "project.close", {{
-              projectId: state.projectId, expectedRevision: state.projectRevision
+            request("{prefix}-wrong-owner", "inference.get", {{
+              projectId: "wrong-project", jobId: state.jobId
             }});
           }} else {{
             state.poll += 1;
@@ -307,9 +309,6 @@ def _script_for_engine_lifecycle(prefix: str, *, resume: bool) -> str:
           if ({str(resume).lower()}) request("{prefix}-metrics", "engine.getMetrics", {{}});
           else request("{prefix}-snapshot", "engine.getSnapshot", {{}});
         }} else if (message.id === "{prefix}-snapshot") {{
-          request("{prefix}-apply", "engine.applyChanges", {{ expectedRevision: result.worldRevision,
-            entities: [{{ id: "reference", position: [1.25, -0.5, 0], color: [0.2, 0.6, 1, 1] }}] }});
-        }} else if (message.id === "{prefix}-apply") {{
           request("{prefix}-render", "engine.renderReference", {{ width: 128, height: 128 }});
         }} else if (message.id === "{prefix}-render") {{
           request("{prefix}-open", "engine.openViewport", {{ width: 640, height: 480, title: "Auvra Native Smoke" }});
@@ -400,6 +399,7 @@ class NativeWebView2SmokeTests(unittest.TestCase):
             }}
             if (!editor) return finish({{ label: "{label}", error: "registered editor surface unavailable" }});
             const reference = await api.runReferenceSuite("auto");
+            const nativeReference = await api.runNativeReferenceGate(128, 128);
             const before = api.getSnapshot().surfaces.find(surface => surface.id === editor.id);
             if (!before) return finish({{ label: "{label}", error: "editor snapshot unavailable" }});
             const lifecycleEvents = [];
@@ -426,7 +426,7 @@ class NativeWebView2SmokeTests(unittest.TestCase):
               await new Promise(resolve => setTimeout(resolve, 50));
             }}
             window.removeEventListener("auvra:renderer-lifecycle", onLifecycle);
-            finish({{ label: "{label}", simulated, before, reference, lost, ready, lifecycleEvents,
+            finish({{ label: "{label}", simulated, before, reference, nativeReference, lost, ready, lifecycleEvents,
               recoveryCount, after: api.getSnapshot().surfaces.find(surface => surface.id === editor.id) }});
           }})().catch(error => finish({{ label: "{label}", error: String(error) }}));
         }})();
@@ -467,6 +467,11 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         self.assertEqual(selected.get("memoryEstimateKind"), "heuristic-resource-count", selected)
         self.assertIsInstance(selected.get("pixelSignature"), str, selected)
         self.assertTrue(selected["pixelSignature"], selected)
+        native_reference = result["nativeReference"]
+        self.assertTrue(native_reference["qualified"], native_reference)
+        self.assertEqual(native_reference["sceneId"], "basic")
+        self.assertEqual(native_reference["referenceVersion"], 1)
+        self.assertIsInstance(native_reference["signature"], str)
         self.assertTrue(any(event in {"lost", "restoring"} for event in result.get("lifecycleEvents", [])), result)
         self.assertTrue(result["lost"], result)
         self.assertTrue(result["ready"], result)
@@ -484,6 +489,7 @@ class NativeWebView2SmokeTests(unittest.TestCase):
             trusted_origin=origin,
         )
         host = NativeProjectHost(root / "project-state", asset_registry=registry, dialogs=dialogs)
+        host.set_native_engine_host(controller.native_engine_host)
         provider = NativeProviderHost(
             root / "provider-state", project_host=host,
             adapters={"ollama": _NativeSmokeProviderAdapter()},
@@ -498,7 +504,7 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         )
         return dialogs.project_path
 
-    def _project_lifecycle(self, controller: FrameController, prefix: str, seen: list[dict[str, Any]], project_path: Path) -> None:
+    def _project_lifecycle(self, controller: FrameController, prefix: str, seen: list[dict[str, Any]], project_path: Path) -> dict[str, Any]:
         self._execute_script(controller.frame, _script_for_project_lifecycle(prefix))
         # ExecuteScriptAsync queues work on the document thread; wait until
         # the listener is installed before sending the synthetic navigation
@@ -513,7 +519,6 @@ class NativeWebView2SmokeTests(unittest.TestCase):
             f"{prefix}-create", f"{prefix}-apply", f"{prefix}-snapshot",
             f"{prefix}-save", f"{prefix}-configure-provider",
             f"{prefix}-submit-provider", f"{prefix}-wrong-owner",
-            f"{prefix}-close",
         }
         _wait_until(
             lambda: expected.issubset({item.get("id") for item in seen}) and any(
@@ -557,7 +562,13 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         self.assertEqual(adapter.calls, 1)
         self.assertTrue((project_path / "Native Smoke Project.auvra").is_file())
         self.assertTrue((project_path / "Project" / "metadata.json").is_file())
+        self.assertTrue((project_path / "Project" / "levels.json").is_file())
+        self.assertTrue((project_path / "Project" / "objects.json").is_file())
         self.assertFalse(any(str(project_path) in json.dumps(item) for item in responses.values()))
+        return {
+            "projectId": responses[f"{prefix}-create"]["result"]["projectId"],
+            "projectRevision": responses[f"{prefix}-save"]["result"]["revision"],
+        }
 
     def _make_controller(
         self,
@@ -630,12 +641,46 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         controller.on_lifecycle("navigation_completed", {"success": True})
         expected = ({f"{prefix}-first", f"{prefix}-metrics", f"{prefix}-recover", f"{prefix}-close"}
                     if resume else
-                    {f"{prefix}-first", f"{prefix}-snapshot", f"{prefix}-apply", f"{prefix}-render", f"{prefix}-open"})
+                    {f"{prefix}-first", f"{prefix}-snapshot", f"{prefix}-render", f"{prefix}-open"})
         _wait_until(lambda: expected.issubset({item.get("id") for item in seen if item.get("type") == "response"}),
                     30.0, "native engine lifecycle")
         responses = {item["id"]: item for item in seen if item.get("id") in expected and item.get("type") == "response"}
         self.assertTrue(all(item.get("ok") is True for item in responses.values()), responses)
         return responses
+
+    def _application_engine_resume(self, frame: WebView2Frame, label: str) -> dict[str, Any]:
+        """Exercise the engine through the application's owned transport."""
+
+        prefix = "AUVRA_ENGINE_RESUME:"
+        script = f"""
+        (() => {{
+          const finish = value => document.title = "{prefix}" + JSON.stringify(value);
+          (async () => {{
+            const {{ nativeEngine }} = await import("/host/engine.ts");
+            const first = await nativeEngine.getSnapshot();
+            const metrics = await nativeEngine.getMetrics();
+            const recovered = await nativeEngine.recover();
+            const closed = await nativeEngine.closeViewport();
+            finish({{ label: "{label}",
+              first: {{ projectId: first.projectId, projectRevision: first.projectRevision,
+                worldHash: first.worldHash, viewport: first.viewport }},
+              metrics: {{ status: metrics.status, viewport: metrics.viewport }},
+              recovered: {{ status: recovered.status, viewport: recovered.viewport }},
+              closed: {{ status: closed.status, viewport: closed.viewport }}
+            }});
+          }})().catch(error => finish({{ label: "{label}", error: String(error) }}));
+        }})();
+        """
+        self._execute_script(frame, script)
+        raw: list[str] = []
+        _wait_until(
+            lambda: (raw.clear() or raw.append(self._document_title(frame)) or True) and raw[0].startswith(prefix),
+            30.0,
+            f"{label} application engine resume",
+        )
+        result = json.loads(raw[0][len(prefix):])
+        self.assertNotIn("error", result, result)
+        return result
 
     def _handshake(self, controller: FrameController, prefix: str, seen: list[dict[str, Any]], *, trap: bool = False) -> None:
         frame = controller.frame
@@ -678,23 +723,43 @@ class NativeWebView2SmokeTests(unittest.TestCase):
             self._renderer_smoke(dev.frame, "initial")
             session_id = dev.dispatcher.session.session_id
             self._handshake(dev, "dev-1", dev_seen, trap=True)
-            self._project_lifecycle(dev, "project", dev_seen, project_path)
+            project = self._project_lifecycle(dev, "project", dev_seen, project_path)
             native_pid = dev.native_engine_host.engine.status.pid
             engine_initial = self._engine_lifecycle(dev, "engine-1", dev_seen, resume=False)
-            self.assertEqual(engine_initial["engine-1-apply"]["result"]["worldRevision"], 1)
+            initial_snapshot = engine_initial["engine-1-snapshot"]["result"]
+            self.assertEqual(initial_snapshot["projectId"], project["projectId"])
+            self.assertEqual(initial_snapshot["projectRevision"], project["projectRevision"])
+            self.assertEqual([entity["id"] for entity in initial_snapshot["entities"]], ["reference"])
+            self.assertIsInstance(initial_snapshot.get("worldHash"), str)
             self.assertEqual(engine_initial["engine-1-open"]["result"]["viewport"], "open")
+            self.assertFalse(engine_initial["engine-1-open"]["result"]["dockActive"])
+            self.assertIsInstance(engine_initial["engine-1-open"]["result"]["dockReason"], str)
 
             nav_before = dev_lifecycle.count("navigation_completed")
             self._ui(dev.frame, lambda core: core.Reload())
             _wait_until(lambda: dev_lifecycle.count("navigation_completed") > nav_before, 15.0, "full reload")
-            self._handshake(dev, "dev-2", dev_seen)
-            engine_reload = self._engine_lifecycle(dev, "engine-2", dev_seen, resume=True)
-            self.assertEqual(engine_reload["engine-2-first"]["result"]["worldRevision"], 1)
-            self.assertEqual(dev.native_engine_host.engine.status.pid, native_pid)
-            self.assertEqual(engine_reload["engine-2-close"]["result"]["viewport"], "closed")
+            # Exercise the application-owned transport before the lower-level
+            # protocol probes below deliberately post requests outside it.
+            # Unknown responses must continue to close that transport.
             reload_renderer = self._renderer_smoke(dev.frame, "reload")
             self.assertEqual(reload_renderer["after"]["contractVersion"], "auvra.renderer/1")
             self.assertEqual(reload_renderer["after"]["lifecycle"], "ready")
+            engine_reload = self._application_engine_resume(dev.frame, "engine-2")
+            reloaded_snapshot = engine_reload["first"]
+            self.assertEqual(reloaded_snapshot["projectId"], project["projectId"])
+            self.assertEqual(reloaded_snapshot["projectRevision"], project["projectRevision"])
+            self.assertEqual(reloaded_snapshot["worldHash"], initial_snapshot["worldHash"])
+            self.assertEqual(dev.native_engine_host.engine.status.pid, native_pid)
+            self.assertEqual(engine_reload["closed"]["viewport"], "closed")
+
+            dev.native_engine_host.restart(editor_session=session_id)
+            restarted_pid = dev.native_engine_host.engine.status.pid
+            self.assertNotEqual(restarted_pid, native_pid)
+            engine_restart = self._application_engine_resume(dev.frame, "engine-3")
+            restarted_snapshot = engine_restart["first"]
+            self.assertEqual(restarted_snapshot["projectId"], project["projectId"])
+            self.assertEqual(restarted_snapshot["projectRevision"], project["projectRevision"])
+            self.assertEqual(restarted_snapshot["worldHash"], initial_snapshot["worldHash"])
             self.assertEqual(dev.dispatcher.session.session_id, session_id)
             self.assertEqual(dev.frame.state, FrameState.READY)
 
