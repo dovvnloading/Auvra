@@ -174,7 +174,8 @@ impl Renderer {
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::LowPower,
             compatible_surface: None,
-            force_fallback_adapter: false,
+            force_fallback_adapter: std::env::var_os("AUVRA_WGPU_FORCE_FALLBACK_ADAPTER").as_deref()
+                == Some(std::ffi::OsStr::new("1")),
             apply_limit_buckets: false,
         }))
         .map_err(|e| format!("adapter request failed: {e:?}"))?;
@@ -231,7 +232,6 @@ impl Renderer {
         extraction: &RenderExtraction,
     ) -> Result<Value, String> {
         let (width, height) = dimensions(params)?;
-        let started = Instant::now();
         let frame = gpu::render_offscreen(
             &self.device,
             &self.queue,
@@ -241,7 +241,10 @@ impl Renderer {
             width,
             height,
         )?;
-        self.last_frame_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
+        // This metric is deliberately CPU command encoding/submission only.
+        // GPU completion, readback mapping, and signature hashing are separate
+        // acceptance work and must not be compared with the CPU frame budget.
+        self.last_frame_ms = Some(frame.cpu_submit_ms);
         self.last_hash = Some(format!("0x{:016x}", frame.pixel_hash));
         self.last_memory_bytes = u64::from(width) * u64::from(height) * 4;
         self.pipeline_cache_hits = self.pipeline_cache_hits.saturating_add(1);

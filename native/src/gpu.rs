@@ -3,9 +3,11 @@
 use auvra_native::render_world::{
     ExtractedEntity, PostEffect, RenderCapabilities, RenderExtraction, RenderFeatureBits,
 };
+use std::time::Instant;
 
 pub struct ProductionFrame {
     pub pixel_hash: u64,
+    pub cpu_submit_ms: f64,
     pub geometry_count: usize,
     pub batch_count: usize,
     pub pass_count: usize,
@@ -234,6 +236,7 @@ pub fn render_offscreen(
             },
         ],
     });
+    let submit_started = Instant::now();
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("auvra-production-frame"),
     });
@@ -385,6 +388,7 @@ pub fn render_offscreen(
         pass.draw(0..3, 0..1);
     }
     queue.submit(Some(encoder.finish()));
+    let cpu_submit_ms = submit_started.elapsed().as_secs_f64() * 1000.0;
     let bytes_per_row = wgpu::util::align_to(width * 4, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("auvra-production-readback"),
@@ -455,6 +459,7 @@ pub fn render_offscreen(
         .count();
     Ok(ProductionFrame {
         pixel_hash: hash,
+        cpu_submit_ms,
         geometry_count: extraction.snapshot.entities.len(),
         batch_count: extraction.snapshot.batches.len(),
         pass_count: executed.len(),

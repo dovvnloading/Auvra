@@ -101,6 +101,14 @@ jobs:
       - name: Select pinned Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt
 
+      - name: Configure headless software Vulkan
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes mesa-vulkan-drivers
+          echo "WGPU_BACKEND=vulkan" >> "$GITHUB_ENV"
+          echo "AUVRA_WGPU_FORCE_FALLBACK_ADAPTER=1" >> "$GITHUB_ENV"
+
       - name: Check native formatting
         run: cargo +1.98.0 fmt -- --check
 
