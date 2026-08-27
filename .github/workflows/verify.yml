@@ -21,10 +21,10 @@ jobs:
         working-directory: fbx-viewer (1)
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -61,10 +61,10 @@ jobs:
         python-version: ["3.12", "3.14"]
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.6.0
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -96,7 +96,7 @@ jobs:
         working-directory: native
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Select pinned Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal
@@ -115,10 +115,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22.12.0"
           cache: npm
@@ -140,7 +140,7 @@ jobs:
         run: cargo +1.98.0 build --release --locked
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.6.0
         with:
           python-version: "3.12"
 
@@ -156,3 +156,114 @@ jobs:
         env:
           AUVRA_NATIVE_SMOKE: "1"
         run: uv run --locked --no-sync python -W error::ResourceWarning -m unittest tests.desktop.test_native_smoke -v
+
+  release-dev-msix:
+    name: Clean Windows unsigned dev MSIX
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.12.0"
+          cache: npm
+          cache-dependency-path: fbx-viewer (1)/package-lock.json
+
+      - name: Build locked frontend
+        working-directory: fbx-viewer (1)
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Select pinned Rust toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal
+
+      - name: Build locked native engine
+        working-directory: native
+        run: cargo +1.98.0 build --release --locked
+
+      - name: Set up CPython and locked host environment
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.6.0
+        with:
+          python-version: "3.14.7"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.14.7"
+
+      - name: Prepare locked Python environment
+        run: uv sync --locked --no-install-project --no-dev
+
+      - name: Acquire exact pinned runtime payloads
+        shell: pwsh
+        run: |
+          $runtime = Join-Path $env:RUNNER_TEMP 'auvra-runtime-inputs'
+          pwsh -NoProfile -File release/acquire-runtime.ps1 -Output $runtime
+          $sdkCache = Join-Path $env:RUNNER_TEMP 'auvra-webview2-sdk-cache'
+          uv run --locked --no-sync python -c "from pathlib import Path; from Auvra.desktop.sdk import acquire_sdk; acquire_sdk(Path(r'$sdkCache'))"
+          $sdk = Get-ChildItem -LiteralPath $sdkCache -Directory | Where-Object { $_.Name -like 'microsoft.web.webview2-*' } | Select-Object -First 1
+          if (-not $sdk) { throw 'verified WebView2 SDK cache entry is missing' }
+          "AUVRA_SDK=$($sdk.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "AUVRA_RUNTIME=$runtime" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Stage exact package inputs
+        shell: pwsh
+        run: |
+          $hostInput = Join-Path $env:RUNNER_TEMP 'auvra-host-input'
+          New-Item -ItemType Directory -Path $hostInput -Force | Out-Null
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'Auvra') -Destination $hostInput -Recurse -Force
+          $hostAuvra = Join-Path $hostInput 'Auvra'
+          Remove-Item -LiteralPath (Join-Path $hostAuvra 'Auvra.py'), (Join-Path $hostAuvra 'Auvra.pyproj'), (Join-Path $hostAuvra 'launcher\bootstrap.py') -Force -ErrorAction SilentlyContinue
+          Get-ChildItem -LiteralPath $hostAuvra -Directory -Filter '__pycache__' -Recurse | Remove-Item -Recurse -Force
+          $licenses = Join-Path $env:RUNNER_TEMP 'auvra-license-input'
+          New-Item -ItemType Directory -Path $licenses -Force | Out-Null
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'LICENSE') -Destination (Join-Path $licenses 'Auvra-LICENSE')
+          $site = Join-Path $env:RUNNER_TEMP 'auvra-site-packages'
+          New-Item -ItemType Directory -Path $site -Force | Out-Null
+          Get-ChildItem -LiteralPath (Join-Path $env:GITHUB_WORKSPACE '.venv\Lib\site-packages') -Force | Copy-Item -Destination $site -Recurse -Force
+          Get-ChildItem -LiteralPath $site -Directory -Filter '__pycache__' -Recurse | Remove-Item -Recurse -Force
+          Get-ChildItem -LiteralPath $site -File -Filter '*.pyc' -Recurse | Remove-Item -Force
+          $stage = Join-Path $env:RUNNER_TEMP 'auvra-stage-inputs'
+          pwsh -NoProfile -File release/stage_inputs.ps1 -Frontend (Join-Path $env:GITHUB_WORKSPACE 'fbx-viewer (1)\dist') -PythonEmbed (Join-Path $env:AUVRA_RUNTIME 'python-embed') -PythonSitePackages $site -WebView2Sdk $env:AUVRA_SDK -WebView2Fixed (Join-Path $env:AUVRA_RUNTIME 'webview2-fixed') -NativeBinary (Join-Path $env:GITHUB_WORKSPACE 'native\target\release\auvra-native.exe') -HostInput $hostInput -Licenses $licenses -Output $stage
+          "AUVRA_STAGE=$stage" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Assemble and MakeAppx-validate unsigned dev package
+        shell: pwsh
+        env:
+          AUVRA_NATIVE_SESSION_TOKEN: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+        run: |
+          $staging = Join-Path $env:RUNNER_TEMP 'auvra-package-staging'
+          $msix = Join-Path $env:RUNNER_TEMP 'Auvra.Dev.msix'
+          $makeAppx = Get-ChildItem -Path (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin') -Filter MakeAppx.exe -Recurse | Sort-Object FullName | Select-Object -Last 1
+          if (-not $makeAppx) { throw 'Windows SDK MakeAppx.exe is required' }
+          python -m release.pipeline assemble --input-root $env:AUVRA_STAGE --output $staging --channel dev --version "0.0.0.${{ github.run_number }}"
+          python -m release.pipeline package --staging $staging --output $msix --makeappx $makeAppx.FullName
+          $unpacked = Join-Path $env:RUNNER_TEMP 'auvra-package-unpacked'
+          & $makeAppx.FullName unpack /p $msix /d $unpacked /o
+          python -m release.pipeline verify --package-root $unpacked --channel dev
+          $env:PYTHONNOUSERSITE = '1'
+          $env:AUVRA_RELEASE_NON_UI_SMOKE = '1'
+          & (Join-Path $unpacked 'runtime\python\python.exe') -S (Join-Path $unpacked 'host\auvra_startup.py')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Output 'offline packaged startup non-UI smoke: OK'
+          $env:AUVRA_RELEASE_SMOKE = '1'
+          $env:AUVRA_RELEASE_PACKAGE_ROOT = $unpacked
+          uv run --locked --no-sync python -W error::ResourceWarning -m unittest tests.desktop.test_release_smoke -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests/release -t . -v
+          Write-Output 'Unsigned CI intentionally does not claim MSIX installation, upgrade, rollback, or uninstall success; those require a trusted signing identity on a clean machine.'
+
+      - name: Upload unsigned dev MSIX
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Auvra-dev-msix-${{ github.run_number }}
+          path: ${{ runner.temp }}/Auvra.Dev.msix
+          if-no-files-found: error

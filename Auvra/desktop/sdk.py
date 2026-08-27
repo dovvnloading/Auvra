@@ -1,7 +1,9 @@
-"""Pinned, least-privilege acquisition of the official WebView2 SDK.
+"""Pinned WebView2 SDK acquisition and packaged-layout validation.
 
-Only the SDK assemblies and x64 loader are copied. The Evergreen Runtime is
-an operating-system prerequisite and is never downloaded or redistributed.
+Development may acquire the pinned SDK archive. Release startup accepts only
+the already staged, hash-verified SDK layout and performs no network access.
+The separately versioned fixed browser runtime is validated by the release
+manifest and selected by :mod:`Auvra.desktop.webview2`.
 """
 
 from __future__ import annotations
@@ -218,6 +220,22 @@ def acquire_sdk(cache_dir: Path | str, *, downloader: Downloader | None = None) 
             _remove_temp(temp)
         if quarantine is not None:
             _remove_temp(quarantine)
+
+
+def load_packaged_sdk(root: Path | str) -> SdkLayout:
+    """Load one immutable packaged SDK directory without downloading it."""
+
+    candidate = Path(root).expanduser().absolute()
+    try:
+        candidate = candidate.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise SdkError("packaged WebView2 SDK directory is unavailable") from exc
+    if candidate.is_symlink() or not candidate.is_dir():
+        raise SdkError("packaged WebView2 SDK directory is invalid")
+    layout = _cached(candidate)
+    if layout is None:
+        raise SdkError("packaged WebView2 SDK failed pinned integrity validation")
+    return layout
 
 
 def sdk_evidence() -> dict[str, str]:

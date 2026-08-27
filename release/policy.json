@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "product": "Auvra",
+  "platform": "win-x64",
+  "minimumWindowsBuild": 26100,
+  "architecture": "x64",
+  "supportMatrix": {
+    "windows": "Windows 11 24H2",
+    "logicalCores": 4,
+    "ramGiB": 8,
+    "freeSsdGiB": 10,
+    "minimumDisplay": "1280x720",
+    "graphics": "DX12/WDDM2.0",
+    "nativeFeatureLevel": "11_0",
+    "webglFallback": "WebGL2"
+  },
+  "runtimePins": {
+    "pythonEmbed": {
+      "version": "3.14.7",
+      "url": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-embed-amd64.zip",
+      "sha256": "d297e5ff019966817ad8502465176139f2d3d840fa4ed84b13bed399a6ab1f15"
+    },
+    "webview2Sdk": {
+      "version": "1.0.4129.50",
+      "url": "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4129.50/microsoft.web.webview2.1.0.4129.50.nupkg",
+      "sha256": "d3934f482d484b89fb4825df720c710664e1143a1e90f7b3a60794ef33f473d2"
+    },
+    "webview2Fixed": {
+      "version": "151.0.4129.107",
+      "url": "https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/ab25c23c-1b43-4759-826f-75267a2235d9/Microsoft.WebView2.FixedVersionRuntime.151.0.4129.107.x64.cab",
+      "size": 307246390,
+      "sha256": "f1e1c2c9b34c79ba4d88df77fb79a05441e1bd7481d6a985d76dd377cda45f33"
+    }
+  },
+  "channels": {
+    "stable": {
+      "identity": "Auvra",
+      "publisher": "CN=Auvra",
+      "updates": true
+    },
+    "beta": {
+      "identity": "Auvra.Beta",
+      "publisher": "CN=Auvra Beta",
+      "updates": true
+    },
+    "dev": {
+      "identity": "Auvra.Dev",
+      "publisher": "CN=Auvra Dev",
+      "updates": false
+    }
+  },
+  "requiredInputs": [
+    "frontend",
+    "python-embed",
+    "python-site-packages",
+    "webview2-sdk",
+    "webview2-fixed",
+    "native",
+    "host",
+    "licenses"
+  ],
+  "forbiddenPathFragments": [
+    ".git",
+    ".auvra-local",
+    "AGENTS.md",
+    "node_modules",
+    ".venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".pfx",
+    ".pem",
+    ".key",
+    ".env"
+  ]
+}

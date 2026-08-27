@@ -20,15 +20,20 @@ The current refactor status is tracked in [REFACTOR.md](REFACTOR.md). That file
 is a public summary; detailed architecture and internal implementation planning
 are intentionally maintained outside the public repository history.
 
-## Requirements
+## Development requirements
 
-- Windows 11 x64 for the desktop editor
+- Windows 11 24H2 or newer on x64 for the desktop editor
 - Microsoft Evergreen WebView2 Runtime
 - CPython 3.12, 3.13, or 3.14
 - Node.js 22.12 or newer on the Node 22 LTS line, or Node.js 24
 - npm 10 or 11
 
-## Start the editor
+Installed packages carry their own Python runtime, WebView2 runtime and SDK,
+native engine, and compiled frontend. Node.js, npm, uv, Vite, and the repository
+source tree are development tools and are not runtime requirements for an
+installed build.
+
+## Development startup
 
 Run the launcher from the repository root:
 
@@ -57,11 +62,18 @@ python Auvra/Auvra.py prepare --repair
 python Auvra/Auvra.py start --port 3010
 python Auvra/Auvra.py clean
 python Auvra/Auvra.py clean --dependencies
+python Auvra/Auvra.py support --output .\auvra-support.zip
+python Auvra/Auvra.py support --delete-local --yes
 ```
 
 `clean` removes launcher state and frontend build output. Dependency removal is
 separate and requires confirmation. Add `--json` before or after a command for
 structured diagnostics.
+
+Diagnostics stay on the local machine, are redacted, and are limited to five
+files, 30 days, and 5 MiB. A support bundle is created only when requested, and
+local diagnostics can be deleted explicitly. Auvra does not collect telemetry
+or upload crash reports automatically.
 
 The stable exit codes are 0 for success, 2 for invalid usage, 10 for an
 unsupported runtime, 11 for dependency failure, 12 for a port problem, 13 for
@@ -123,8 +135,25 @@ python Auvra/Auvra.py
 
 Add `?renderer=native` to the editor URL to select the native viewport. If the
 release binary or native device is unavailable, Auvra reports the reason and
-keeps the WebGL2 viewport active. Packaging and redistribution of the native
-binary remain Stage 7 work.
+keeps the WebGL2 viewport active.
+
+## Packaged releases
+
+The release pipeline produces a deterministic Windows x64 MSIX containing the
+compiled frontend, embedded Python environment, fixed WebView2 runtime, and
+native engine. Packaged startup verifies the release manifest before opening
+the editor, runs without Vite or a network connection, and keeps projects,
+settings, diagnostics, and recovery data outside the immutable package.
+
+Stable, beta, and development packages have separate Windows identities. CI
+builds an unsigned development package and verifies its contents and packaged
+startup. Stable and beta packages must be signed in a protected release
+operation; signing certificates are never stored in the repository or CI.
+
+Provider extensions use signed `.auvraplugin` packages. Their permissions are
+granted per project, can be revoked, and are enforced in a restricted
+out-of-process worker. Plugins do not receive raw credentials or ambient access
+to project files, the network, the browser, or the engine process.
 
 ## Provider integrations
 
@@ -140,7 +169,7 @@ storage. Routes are explicit; the host does not silently switch providers.
 Generated media remains a preview until it is committed to the project. Local
 providers use explicitly configured loopback endpoints.
 
-To verify the launcher and production bundle locally:
+To verify the launcher, frontend contracts, and production bundle locally:
 
 ```powershell
 python -m unittest discover -s tests -t . -v
@@ -150,6 +179,9 @@ npm run renderer:verify
 npm run project:verify
 npm run provider:verify
 npm run build
+cd ..
+cargo +1.98.0 build --release --locked --manifest-path native/Cargo.toml
+.\native\target\release\auvra-native.exe --self-test
 ```
 
 Python environment metadata is locked with uv. Contributors can check the

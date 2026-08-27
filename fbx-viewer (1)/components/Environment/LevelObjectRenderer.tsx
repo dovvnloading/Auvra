@@ -1,7 +1,7 @@
 
 import React, { useMemo, forwardRef, useState, useRef, useImperativeHandle } from 'react';
 import * as THREE from 'three';
-import { Billboard, Text, Html } from '@react-three/drei';
+import { Billboard, Html } from '@react-three/drei';
 import { Skull, Music, Sun } from 'lucide-react';
 import { LoadedModelData, LevelObject } from '../../types';
 
@@ -87,17 +87,16 @@ export const LevelObjectRenderer = forwardRef<THREE.Group, LevelObjectRendererPr
 
                 {/* Title (Inside Billboard to face camera) */}
                 {isSelected && visible && (
-                    <Text 
-                        position={[0, 0.8, 0]} 
-                        fontSize={0.2} 
-                        color="white" 
-                        anchorX="center" 
-                        anchorY="middle"
-                        outlineWidth={0.02}
-                        outlineColor="#000000"
+                    <Html
+                        position={[0, 0.8, 0]}
+                        transform
+                        center
+                        style={{ pointerEvents: 'none' }}
                     >
-                        {label}
-                    </Text>
+                        <div className="select-none whitespace-nowrap text-sm font-semibold text-white [text-shadow:0_1px_3px_#000,0_0_2px_#000]">
+                            {label}
+                        </div>
+                    </Html>
                 )}
             </Billboard>
 

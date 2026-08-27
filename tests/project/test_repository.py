@@ -1,5 +1,5 @@
 from __future__ import annotations
-import io, json, os, subprocess, sys, tempfile, unittest, zipfile
+import io, json, os, subprocess, sys, tempfile, time, unittest, zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -130,6 +130,18 @@ class ProjectTests(unittest.TestCase):
         self.assertLessEqual(len(self.repo.recovery_points("manual")), 5)
         root = self.root / ".auvra" / "backups"
         self.assertLessEqual(sum(f.stat().st_size for f in root.rglob("*") if f.is_file()), 1)
+
+    def test_recovery_points_older_than_thirty_days_are_pruned(self):
+        self.repo.apply_changes({"metadata": [{"id": "m"}]}, expected_revision=0)
+        self.repo.save()
+        point = self.repo.recovery_points("manual")[0]["name"]
+        root = self.root / ".auvra" / "backups" / point
+        old = time.time() - repository_module.RECOVERY_MAX_AGE_SECONDS - 1
+        for child in root.iterdir():
+            os.utime(child, (old, old))
+        os.utime(root, (old, old))
+        self.repo.save()
+        self.assertNotIn(point, {item["name"] for item in self.repo.recovery_points("manual")})
     def test_recovery_cap_combines_manual_and_autosave(self):
         self.repo.apply_changes({"metadata": [{"id":"m", "description":"0123456789"}]}, expected_revision=0)
         with mock.patch.object(repository_module, "PROJECT_CAP", 1000):
