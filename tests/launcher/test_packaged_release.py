@@ -29,7 +29,7 @@ def _package(base: Path, *, runtime: bool = True, native: bool = True) -> tuple[
 class PackagedReleaseTests(unittest.TestCase):
     def test_packaged_paths_use_channel_local_appdata_state(self) -> None:
         with tempfile.TemporaryDirectory(prefix="auvra installed spaces ") as raw:
-            base = Path(raw)
+            base = Path(raw).resolve()
             _, frontend, _ = _package(base)
             local = base / "Local AppData"
             with patch.dict(cli.os.environ, {"LOCALAPPDATA": str(local)}, clear=False):
@@ -40,7 +40,7 @@ class PackagedReleaseTests(unittest.TestCase):
 
     def test_verified_release_passes_staged_sdk_runtime_native_and_skips_dev_toolchain(self) -> None:
         with tempfile.TemporaryDirectory(prefix="auvra release startup spaces ") as raw:
-            base = Path(raw)
+            base = Path(raw).resolve()
             package, frontend, native = _package(base)
             sdk = object()
             fake_controller = Mock(cleanup_error=None, run=Mock(return_value=0))
@@ -73,7 +73,7 @@ class PackagedReleaseTests(unittest.TestCase):
     def test_verified_release_requires_fixed_runtime_and_native_payload(self) -> None:
         for runtime, native in ((False, True), (True, False)):
             with self.subTest(runtime=runtime, native=native), tempfile.TemporaryDirectory(prefix="auvra release inputs ") as raw:
-                base = Path(raw)
+                base = Path(raw).resolve()
                 package, frontend, _ = _package(base, runtime=runtime, native=native)
                 with patch.dict(cli.os.environ, {"LOCALAPPDATA": str(base / "Local AppData")}, clear=False), \
                      patch.object(cli, "_verify_release_package", return_value={"channel": "dev"}), \
@@ -86,7 +86,7 @@ class PackagedReleaseTests(unittest.TestCase):
 
     def test_start_wrapper_uses_release_local_diagnostics_state(self) -> None:
         with tempfile.TemporaryDirectory(prefix="auvra release diagnostics ") as raw:
-            base = Path(raw)
+            base = Path(raw).resolve()
             _, frontend, _ = _package(base)
             source_paths = Paths.from_repo_root(base / "checkout")
             local = base / "Local AppData"
