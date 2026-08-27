@@ -99,10 +99,21 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Select pinned Rust toolchain
-        run: rustup toolchain install 1.98.0 --profile minimal
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt
+
+      - name: Check native formatting
+        run: cargo +1.98.0 fmt -- --check
+
+      - name: Run locked native tests
+        run: cargo +1.98.0 test --locked
 
       - name: Build locked native engine
         run: cargo +1.98.0 build --release --locked
+
+      - name: Run headless deterministic native acceptance
+        env:
+          AUVRA_NATIVE_SESSION_TOKEN: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+        run: cargo +1.98.0 run --release --locked -- --headless-self-test
 
       - name: Run native reference lifecycle
         if: runner.os == 'Windows'

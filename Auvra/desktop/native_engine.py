@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import hashlib
 import json
 import os
 import queue
@@ -17,7 +18,8 @@ import secrets
 import struct
 import subprocess
 import threading
-from typing import Any, BinaryIO, Mapping, Sequence
+from pathlib import Path
+from typing import Any, BinaryIO, Callable, Mapping, Sequence
 
 from Auvra.host.dispatcher import HostOperationError
 from Auvra.host.logging import redact
@@ -25,10 +27,19 @@ from Auvra.host.logging import redact
 
 PROTOCOL_VERSION = "auvra.native/1"
 SESSION_TOKEN_ENV = "AUVRA_NATIVE_SESSION_TOKEN"
+NATIVE_SOURCE_ROOT_ENV = "AUVRA_NATIVE_SOURCE_ROOT"
+NATIVE_DERIVED_ROOT_ENV = "AUVRA_NATIVE_DERIVED_ROOT"
 MAX_FRAME_BYTES = 64 * 1024
 _MAX_DIAGNOSTIC_BYTES = 64 * 1024
 _MAX_DIAGNOSTIC_RECORD_BYTES = 8 * 1024
 _MAX_DIAGNOSTIC_RECORDS = 256
+_ENGINE_FEATURES = (
+    "pbr_metallic_roughness", "skeletal_animation", "frustum_culling",
+    "deterministic_lod", "instance_batching", "directional_lights",
+    "point_lights", "spot_lights", "shadow_maps", "image_based_lighting",
+    "entity_picking", "editor_gizmos", "hdr_intermediate",
+    "aces_tone_mapping", "msaa_or_fxaa", "post_processing_chain",
+)
 
 
 class NativeEngineError(RuntimeError):
@@ -130,17 +141,23 @@ def _encode_frame(value: Mapping[str, Any]) -> bytes:
 
 
 def _read_frame(stream: BinaryIO) -> dict[str, Any] | None:
-    header = stream.read(4)
-    if not header:
-        return None
-    if len(header) != 4:
-        raise NativeEngineProtocolError("native response header is incomplete")
+    header = bytearray()
+    while len(header) < 4:
+        chunk = stream.read(4 - len(header))
+        if not chunk:
+            if not header:
+                return None
+            raise NativeEngineProtocolError("native response header is incomplete")
+        header.extend(chunk)
     size = struct.unpack(">I", header)[0]
     if size < 2 or size > MAX_FRAME_BYTES:
         raise NativeEngineFrameTooLargeError("native response exceeds the 64 KiB frame limit")
-    payload = stream.read(size)
-    if len(payload) != size:
-        raise NativeEngineProtocolError("native response body is incomplete")
+    payload = bytearray()
+    while len(payload) < size:
+        chunk = stream.read(size - len(payload))
+        if not chunk:
+            raise NativeEngineProtocolError("native response body is incomplete")
+        payload.extend(chunk)
     try:
         value = json.loads(payload.decode("utf-8"), parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
@@ -159,10 +176,25 @@ def _validate_json_data(value: Any) -> None:
         for key, child in value.items():
             if not isinstance(key, str):
                 raise NativeEngineProtocolError("native JSON object keys must be strings")
+            normalized_key = "".join(character for character in key.casefold() if character.isalnum())
+            if normalized_key in {
+                "path", "filepath", "filesystempath", "sourcepath", "derivedpath",
+                "assetpath", "directorypath", "absolutepath", "localpath",
+                "base64", "binary", "bytes", "blob",
+            }:
+                raise NativeEngineProtocolError("native protocol does not carry paths or binary data")
             _validate_json_data(child)
     elif isinstance(value, (list, tuple)):
         for child in value:
             _validate_json_data(child)
+    elif isinstance(value, str):
+        windows_absolute = (
+            len(value) >= 3 and value[0].isalpha() and value[1] == ":"
+            and value[2] in {"/", "\\"}
+        )
+        if (windows_absolute or value.startswith(("/", "\\\\", "//"))
+                or value.casefold().startswith("data:")):
+            raise NativeEngineProtocolError("native protocol does not carry paths or binary data")
 
 
 class NativeEngine:
@@ -170,7 +202,9 @@ class NativeEngine:
 
     def __init__(self, command: Sequence[str], *, startup_timeout: float = 10.0,
                  request_timeout: float = 10.0, shutdown_timeout: float = 5.0,
-                 environment: Mapping[str, str] | None = None) -> None:
+                 environment: Mapping[str, str] | None = None,
+                 source_root: Path | str | None = None,
+                 derived_root: Path | str | None = None) -> None:
         if not command or isinstance(command, (str, bytes)) or any(not isinstance(item, str) or not item for item in command):
             raise NativeEngineConfigurationError("native command must be a non-empty argument sequence")
         for name, value in (("startup", startup_timeout), ("request", request_timeout), ("shutdown", shutdown_timeout)):
@@ -181,6 +215,8 @@ class NativeEngine:
         self.request_timeout = request_timeout
         self.shutdown_timeout = shutdown_timeout
         self._environment = dict(environment or os.environ)
+        self.source_root = Path(source_root).expanduser().absolute() if source_root is not None else None
+        self.derived_root = Path(derived_root).expanduser().absolute() if derived_root is not None else None
         self._process: subprocess.Popen[bytes] | None = None
         self._token: str | None = None
         self._state = NativeEngineState.NEW
@@ -223,6 +259,12 @@ class NativeEngine:
         self._token = secrets.token_hex(32)
         environment = dict(self._environment)
         environment[SESSION_TOKEN_ENV] = self._token
+        if self.source_root is not None:
+            self.source_root.mkdir(parents=True, exist_ok=True)
+            environment[NATIVE_SOURCE_ROOT_ENV] = str(self.source_root)
+        if self.derived_root is not None:
+            self.derived_root.mkdir(parents=True, exist_ok=True)
+            environment[NATIVE_DERIVED_ROOT_ENV] = str(self.derived_root)
         try:
             self._process = subprocess.Popen(
                 list(self.command), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -234,9 +276,10 @@ class NativeEngine:
             raise NativeEngineStartupError("native process could not be started") from exc
         assert self._process.stderr is not None
         assert self._process.stdout is not None
-        threading.Thread(target=self._read_stderr, args=(self._process.stderr,), daemon=True,
+        threading.Thread(target=self._read_stderr,
+                         args=(self._process.stderr, self._process, self._ready, self._stderr_done), daemon=True,
                          name="auvra-native-stderr").start()
-        threading.Thread(target=self._read_stdout, args=(self._process.stdout,), daemon=True,
+        threading.Thread(target=self._read_stdout, args=(self._process.stdout, self._response_queue), daemon=True,
                          name="auvra-native-stdout").start()
         if not self._ready.wait(self.startup_timeout):
             self._state = NativeEngineState.FAILED
@@ -254,7 +297,27 @@ class NativeEngine:
         self._state = NativeEngineState.READY
         return self.status
 
-    def _read_stderr(self, stream: BinaryIO) -> None:
+    def restart(self, *, editor_session: str = "editor") -> NativeStatus:
+        """Replace the owned child while retaining no durable project state."""
+        if self._state in {NativeEngineState.STARTING, NativeEngineState.CLOSING}:
+            raise NativeEngineClosedError("native engine is already transitioning")
+        if self._state is NativeEngineState.NEW:
+            return self.start(editor_session=editor_session)
+        self.close(timeout=self.shutdown_timeout)
+        # Reader threads from the previous child may finish after close; the
+        # new child receives a fresh transport queue and readiness event.
+        self._process = None
+        self._token = None
+        self._state = NativeEngineState.NEW
+        self._revision = None
+        self._request_number = 0
+        self._response_queue = queue.Queue()
+        self._ready = threading.Event()
+        self._stderr_done = threading.Event()
+        return self.start(editor_session=editor_session)
+
+    def _read_stderr(self, stream: BinaryIO, process: subprocess.Popen[bytes],
+                     ready: threading.Event, done: threading.Event) -> None:
         try:
             for raw in iter(stream.readline, b""):
                 if len(raw) > _MAX_DIAGNOSTIC_BYTES:
@@ -270,11 +333,11 @@ class NativeEngine:
                     continue
                 self._diagnostics_append(record)
                 if record.get("event") == "native.ready":
-                    self._ready.set()
+                    ready.set()
         finally:
-            self._stderr_done.set()
-            if self._process is not None and self._process.poll() is not None:
-                self._ready.set()
+            done.set()
+            if process.poll() is not None:
+                ready.set()
 
     def _diagnostics_append(self, record: dict[str, Any]) -> None:
         safe = redact(record, max_depth=6, max_items=64, max_string=512)
@@ -294,16 +357,17 @@ class NativeEngine:
                 self._diagnostics.pop(0)
                 self._diagnostic_bytes -= self._diagnostic_sizes.pop(0)
 
-    def _read_stdout(self, stream: BinaryIO) -> None:
+    def _read_stdout(self, stream: BinaryIO,
+                     response_queue: queue.Queue[dict[str, Any] | BaseException | None]) -> None:
         try:
             while True:
                 frame = _read_frame(stream)
                 if frame is None:
-                    self._response_queue.put(None)
+                    response_queue.put(None)
                     return
-                self._response_queue.put(frame)
+                response_queue.put(frame)
         except BaseException as exc:
-            self._response_queue.put(exc)
+            response_queue.put(exc)
 
     def _next_request_id(self) -> int:
         self._request_number += 1
@@ -355,6 +419,7 @@ class NativeEngine:
             result = response.get("result", {})
             if not isinstance(result, dict):
                 raise NativeEngineProtocolError("native result must be a JSON object")
+            _validate_json_data(result)
             if isinstance(result.get("revision"), int) and not isinstance(result.get("revision"), bool):
                 self._revision = result["revision"]
             return result
@@ -457,23 +522,326 @@ class NativeEngineHost:
         "engine.getMetrics", "engine.recover",
     })
 
-    def __init__(self, engine: NativeEngine) -> None:
+    def __init__(self, engine: NativeEngine, *, source_root: Path | str | None = None) -> None:
         self.engine = engine
+        configured_source = source_root if source_root is not None else getattr(engine, "source_root", None)
+        self._source_root = Path(configured_source).expanduser().absolute() if configured_source is not None else None
         self._world_revision = 0
+        self._project_id: str | None = None
+        self._project_revision = 0
+        self._project_payload: dict[str, Any] | None = None
+        self._staged_assets: set[str] = set()
+        self._dock_target_provider: Callable[[], Mapping[str, int] | None] | None = None
+        self._dock_support: str = "unsupported"
+        self._dock_active = False
+        self._dock_reason: str | None = None
         self._viewport = "closed"
         self._backend: str | None = None
         self._adapter: str | None = None
         self._fallback_reason: str | None = None
         self._metrics: dict[str, Any] | None = None
+        self._native_fields: dict[str, Any] = {}
         self._recovery_count = 0
         self._events: list[tuple[str, dict[str, Any]]] = []
+        self._editor_session = "editor"
 
     def start(self, *, editor_session: str = "editor") -> NativeStatus:
+        self._editor_session = editor_session
         status = self.engine.start(editor_session=editor_session)
+        if self._project_payload is not None:
+            self._hydrate_native()
+        return status
+
+    def restart(self, *, editor_session: str = "editor") -> NativeStatus:
+        self._editor_session = editor_session
+        self._world_revision = 0
+        self._viewport = "closed"
+        self._dock_active = False
+        self._dock_reason = None
+        restart = getattr(self.engine, "restart", None)
+        if not callable(restart):
+            raise NativeEngineClosedError("native engine restart is unavailable")
+        status = restart(editor_session=editor_session)
+        if self._project_payload is not None:
+            self._hydrate_native()
         return status
 
     def close(self, *, timeout: float | None = None) -> None:
         self.engine.close(timeout=timeout)
+
+    def set_dock_target_provider(self, provider: Callable[[], Mapping[str, int] | None] | None) -> None:
+        """Bind an internal frame seam; browser payloads cannot provide handles."""
+        self._dock_target_provider = provider
+
+    def stage_asset(self, asset_id: str, stream: BinaryIO, *, chunk_size: int = 1024 * 1024) -> None:
+        """Copy one verified project asset to the private native source cache.
+
+        The project repository remains canonical.  This cache is rebuildable,
+        addressed only by the verified lowercase SHA-256 asset id, and never
+        appears in a UI or native JSON payload.
+        """
+        if not isinstance(asset_id, str) or len(asset_id) != 64 or any(c not in "0123456789abcdef" for c in asset_id):
+            raise NativeEngineConfigurationError("native asset identity is invalid")
+        if self._source_root is None:
+            raise NativeEngineConfigurationError("native source cache is unavailable")
+        if chunk_size <= 0 or chunk_size > 8 * 1024 * 1024:
+            raise NativeEngineConfigurationError("native asset chunk size is invalid")
+        self._assert_cache_safe(self._source_root)
+        self._source_root.mkdir(parents=True, exist_ok=True)
+        self._assert_cache_safe(self._source_root)
+        target = self._source_root / asset_id
+        if self._unsafe_path(target):
+            raise NativeEngineConfigurationError("native source cache entry is unsafe")
+        if target.exists():
+            if not target.is_file():
+                raise NativeEngineConfigurationError("native source cache entry is unsafe")
+            digest = hashlib.sha256()
+            with target.open("rb") as existing:
+                for block in iter(lambda: existing.read(chunk_size), b""):
+                    digest.update(block)
+            if digest.hexdigest() == asset_id:
+                self._staged_assets.add(asset_id)
+                return
+            target.unlink()
+        temporary = self._source_root / f".{asset_id}.{secrets.token_hex(8)}.tmp"
+        digest = hashlib.sha256()
+        try:
+            with temporary.open("xb") as output:
+                while True:
+                    block = stream.read(chunk_size)
+                    if not block:
+                        break
+                    if not isinstance(block, (bytes, bytearray, memoryview)) or len(block) > chunk_size:
+                        raise NativeEngineConfigurationError("native asset stream exceeded its chunk bound")
+                    digest.update(block)
+                    output.write(block)
+                output.flush()
+                os.fsync(output.fileno())
+            if digest.hexdigest() != asset_id:
+                raise NativeEngineConfigurationError("native asset hash verification failed")
+            os.replace(temporary, target)
+            try:
+                directory_fd = os.open(self._source_root, os.O_RDONLY)
+                os.fsync(directory_fd)
+                os.close(directory_fd)
+            except OSError:
+                pass
+            self._staged_assets.add(asset_id)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    @staticmethod
+    def _unsafe_path(path: Path) -> bool:
+        try:
+            info = os.lstat(path)
+            return path.is_symlink() or bool(getattr(info, "st_file_attributes", 0) & 0x400)
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return True
+
+    @classmethod
+    def _assert_cache_safe(cls, path: Path) -> None:
+        current = Path(path.anchor)
+        for component in path.parts[1:]:
+            current /= component
+            if cls._unsafe_path(current):
+                raise NativeEngineConfigurationError("native cache path contains a link or reparse point")
+
+    def _hydrate_native(self) -> dict[str, Any] | None:
+        if self._project_payload is None or self.engine.state is not NativeEngineState.READY:
+            return None
+        try:
+            result = self._transfer_hydration(self._project_payload, validate_only=False)
+        except NativeEngineResponseError as error:
+            # Stage 6 binaries may predate hydration.  They remain usable for
+            # the compatibility path; the project is still retained as the
+            # durable authority and will hydrate after a native restart.
+            if error.code == "unknown_method":
+                return None
+            raise
+        self._ingest_native_result(result)
+        return result
+
+    @staticmethod
+    def _hydration_pages(documents: Sequence[Mapping[str, Any]], *, limit: int = 48 * 1024) -> list[list[Mapping[str, Any]]]:
+        pages: list[list[Mapping[str, Any]]] = []
+        page: list[Mapping[str, Any]] = []
+        for document in documents:
+            candidate = [*page, document]
+            size = len(json.dumps(candidate, ensure_ascii=False, allow_nan=False,
+                                  separators=(",", ":"), sort_keys=True).encode("utf-8"))
+            if size > limit and page:
+                pages.append(page)
+                page = [document]
+            elif size > limit:
+                raise NativeEngineFrameTooLargeError("native hydration document exceeds the bounded frame limit")
+            else:
+                page = candidate
+        if page:
+            pages.append(page)
+        return pages
+
+    def _transfer_hydration(self, payload: Mapping[str, Any], *, validate_only: bool) -> dict[str, Any]:
+        begin = {
+            "projectId": payload["projectId"],
+            "projectRevision": payload["projectRevision"],
+            "validateOnly": validate_only,
+        }
+        try:
+            started = self.engine.call("world.beginHydration", begin)
+        except NativeEngineResponseError as error:
+            if error.code == "unknown_method":
+                method = "world.validateHydration" if validate_only else "world.hydrate"
+                return self.engine.call(method, payload)
+            raise
+        if started.get("hydrationTransaction") is not True:
+            method = "world.validateHydration" if validate_only else "world.hydrate"
+            return self.engine.call(method, payload)
+        try:
+            domains = payload.get("domains", {})
+            if not isinstance(domains, Mapping):
+                raise NativeEngineConfigurationError("project domains are invalid")
+            for domain in sorted(domains):
+                value = domains[domain]
+                if not isinstance(value, Mapping) or value.get("schemaVersion") != 1:
+                    raise NativeEngineConfigurationError("project domain schema is invalid")
+                documents = value.get("documents")
+                if not isinstance(documents, list) or not all(isinstance(item, Mapping) for item in documents):
+                    raise NativeEngineConfigurationError("project domain documents are invalid")
+                pages = self._hydration_pages(documents) or [[]]
+                for page in pages:
+                    self.engine.call("world.appendHydration", {
+                        "domain": domain, "schemaVersion": 1,
+                        "documents": page,
+                    })
+            asset_ids = payload.get("assetIds", [])
+            if not isinstance(asset_ids, list):
+                raise NativeEngineConfigurationError("project asset identities are invalid")
+            for offset in range(0, len(asset_ids), 256):
+                self.engine.call("world.appendHydration", {
+                    "assetIds": asset_ids[offset:offset + 256],
+                })
+            return self.engine.call("world.commitHydration")
+        except BaseException:
+            try:
+                self.engine.call("world.abortHydration")
+            except NativeEngineError:
+                pass
+            raise
+
+    @staticmethod
+    def _normalized_hash(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value[2:] if value.startswith("0x") else value
+        if not 16 <= len(normalized) <= 64 or any(char not in "0123456789abcdef" for char in normalized):
+            return None
+        return normalized
+
+    def _ingest_native_result(self, value: Mapping[str, Any]) -> None:
+        """Retain only schema-shaped native status fields for canonical output."""
+        if not isinstance(value, Mapping):
+            return
+        revision = value.get("worldRevision", value.get("revision"))
+        if isinstance(revision, int) and not isinstance(revision, bool) and revision >= 0:
+            self._world_revision = revision
+        for key in ("tick", "projectRevision"):
+            item = value.get(key)
+            if isinstance(item, int) and not isinstance(item, bool) and item >= 0:
+                self._native_fields[key] = item
+        if "projectId" in value:
+            project_id = value.get("projectId")
+            if project_id is None or (isinstance(project_id, str) and 0 < len(project_id) <= 128):
+                self._native_fields["projectId"] = project_id
+        for key in ("worldHash", "replayHash", "extractionHash"):
+            normalized = self._normalized_hash(value.get(key))
+            if normalized is not None:
+                self._native_fields[key] = normalized
+        capabilities = value.get("featureCapabilities")
+        if isinstance(capabilities, list) and len(capabilities) == len(_ENGINE_FEATURES):
+            normalized_capabilities: list[dict[str, Any]] = []
+            for expected, item in zip(_ENGINE_FEATURES, capabilities, strict=True):
+                if not isinstance(item, Mapping) or item.get("feature") != expected or not isinstance(item.get("supported"), bool):
+                    break
+                reason = item.get("fallbackReason", item.get("fallback_reason"))
+                if reason is not None and not isinstance(reason, str):
+                    break
+                if item["supported"]:
+                    reason = None
+                normalized_capabilities.append({
+                    "feature": expected,
+                    "supported": item["supported"],
+                    "fallbackReason": reason[:256] if isinstance(reason, str) else None,
+                })
+            if len(normalized_capabilities) == len(_ENGINE_FEATURES):
+                self._native_fields["featureCapabilities"] = normalized_capabilities
+        if isinstance(value.get("backend"), str) and 0 < len(value["backend"]) <= 64:
+            self._backend = value["backend"]
+        if isinstance(value.get("adapter"), str) and 0 < len(value["adapter"]) <= 256:
+            self._adapter = value["adapter"]
+        if "fallback" in value and isinstance(value.get("fallback"), str):
+            self._fallback_reason = value["fallback"][:256]
+        if "fallbackReason" in value and (isinstance(value.get("fallbackReason"), str) or value.get("fallbackReason") is None):
+            fallback = value.get("fallbackReason")
+            self._fallback_reason = fallback[:256] if isinstance(fallback, str) else None
+        if value.get("dockSupport") in {"unsupported", "same-build"}:
+            self._dock_support = value["dockSupport"]
+        if "dockActive" in value and isinstance(value.get("dockActive"), bool):
+            self._dock_active = value["dockActive"]
+        if "dockReason" in value and (isinstance(value.get("dockReason"), str) or value.get("dockReason") is None):
+            reason = value.get("dockReason")
+            self._dock_reason = reason[:256] if isinstance(reason, str) else None
+        if value.get("referenceScene") == "basic":
+            self._native_fields["referenceScene"] = "basic"
+        if value.get("referenceVersion") == 1:
+            self._native_fields["referenceVersion"] = 1
+
+    def validate_project(self, project_id: str, project_revision: int, domains: Mapping[str, Any]) -> None:
+        """Validate a candidate project against native rules without mutation."""
+        payload = {"projectId": project_id, "projectRevision": project_revision, "domains": dict(domains)}
+        _validate_json_data(payload)
+        if self.engine.state is not NativeEngineState.READY:
+            return
+        try:
+            self._transfer_hydration(payload, validate_only=True)
+        except NativeEngineResponseError as error:
+            if error.code != "unknown_method":
+                raise
+
+    def hydrate_project(self, project_id: str, project_revision: int,
+                        domains: Mapping[str, Any], *, asset_ids: Sequence[str] = ()) -> dict[str, Any] | None:
+        if not isinstance(project_id, str) or not project_id:
+            raise NativeEngineConfigurationError("project identity is invalid")
+        if not isinstance(project_revision, int) or isinstance(project_revision, bool) or project_revision < 0:
+            raise NativeEngineConfigurationError("project revision is invalid")
+        payload = {"projectId": project_id, "projectRevision": project_revision,
+                   "domains": dict(domains), "assetIds": sorted(set(asset_ids))}
+        _validate_json_data(payload)
+        self._project_id = project_id
+        self._project_revision = project_revision
+        self._project_payload = payload
+        return self._hydrate_native()
+
+    def close_project(self, project_id: str | None = None) -> None:
+        if project_id is not None and self._project_id not in {None, project_id}:
+            return
+        try:
+            if self.engine.state is NativeEngineState.READY:
+                try:
+                    self.engine.call("world.closeProject")
+                except NativeEngineResponseError as error:
+                    if error.code != "unknown_method":
+                        raise
+        finally:
+            self._project_id = None
+            self._project_revision = 0
+            self._project_payload = None
+            self._world_revision = 0
+            for key in ("tick", "projectId", "projectRevision", "worldHash",
+                        "replayHash", "extractionHash", "referenceScene",
+                        "referenceVersion"):
+                self._native_fields.pop(key, None)
 
     @staticmethod
     def _state_name(state: NativeEngineState) -> str:
@@ -493,7 +861,17 @@ class NativeEngineHost:
             "status": self._state_name(self.engine.state),
             "worldRevision": self._world_revision,
             "viewport": self._viewport,
+            "dockSupport": self._dock_support,
+            "dockActive": self._dock_active,
+            "dockReason": self._dock_reason,
         }
+        if "projectId" in self._native_fields:
+            result["projectId"] = self._native_fields["projectId"]
+            if self._native_fields["projectId"] is not None and "projectRevision" in self._native_fields:
+                result["projectRevision"] = self._native_fields["projectRevision"]
+        elif self._project_id is not None:
+            result["projectId"] = self._project_id
+            result["projectRevision"] = self._project_revision
         if self._backend is not None:
             result["backend"] = self._backend
         if self._adapter is not None:
@@ -502,6 +880,11 @@ class NativeEngineHost:
             result["fallbackReason"] = self._fallback_reason
         if self._metrics is not None:
             result["metrics"] = dict(self._metrics)
+        for key in ("tick", "worldHash", "replayHash", "extractionHash", "featureCapabilities",
+                    "referenceScene", "referenceVersion"):
+            value = getattr(self, "_native_fields", {}).get(key)
+            if value is not None:
+                result[key] = value
         if values:
             result.update(values)
         return result
@@ -540,13 +923,25 @@ class NativeEngineHost:
 
     def _capabilities(self) -> dict[str, Any]:
         capabilities = self.engine.call("renderer.getCapabilities")
-        if isinstance(capabilities.get("backend"), str):
-            self._backend = capabilities["backend"]
-        if isinstance(capabilities.get("adapter"), str):
-            self._adapter = capabilities["adapter"]
-        if isinstance(capabilities.get("fallback"), str):
-            self._fallback_reason = capabilities["fallback"]
+        self._ingest_native_result(capabilities)
         return capabilities
+
+    @staticmethod
+    def _host_entities(value: Any) -> list[dict[str, Any]]:
+        """Project the private native DTO onto the strict public entity shape."""
+        if not isinstance(value, list) or len(value) > 1024:
+            raise NativeEngineProtocolError("native entity snapshot is invalid")
+        result: list[dict[str, Any]] = []
+        for item in value:
+            if not isinstance(item, Mapping):
+                raise NativeEngineProtocolError("native entity snapshot is invalid")
+            entity_id, position, color = item.get("id"), item.get("position"), item.get("color")
+            if (not isinstance(entity_id, str) or not entity_id
+                    or not isinstance(position, list) or len(position) != 3
+                    or not isinstance(color, list) or len(color) != 4):
+                raise NativeEngineProtocolError("native entity snapshot is invalid")
+            result.append({"id": entity_id, "position": list(position), "color": list(color)})
+        return result
 
     def handle(self, method: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         if method not in self._METHODS:
@@ -559,23 +954,57 @@ class NativeEngineHost:
                 result = self._canonical("engine.status")
             elif method == "engine.getSnapshot":
                 snapshot = self.engine.call("world.getSnapshot")
-                self._world_revision = int(snapshot.get("revision", self._world_revision))
-                result = self._canonical("engine.snapshot", values={"entities": snapshot.get("entities", [])})
+                self._ingest_native_result(snapshot)
+                result = self._canonical("engine.snapshot", values={"entities": self._host_entities(snapshot.get("entities", []))})
             elif method == "engine.applyChanges":
+                if self._project_id is not None:
+                    raise HostOperationError(
+                        "unsupported_capability",
+                        "Project world mutations must use project.applyChanges",
+                    )
                 expected = payload.get("expectedRevision")
                 entities = payload.get("entities")
                 if not isinstance(expected, int) or isinstance(expected, bool) or not isinstance(entities, list):
                     raise HostOperationError("invalid_request", "expectedRevision and entities are required")
                 applied = self.engine.call("world.apply", {"expectedRevision": expected, "entities": entities})
-                self._world_revision = int(applied.get("revision", self._world_revision + 1))
-                result = self._canonical("engine.applyChanges", values={"entities": applied.get("entities", entities)})
+                self._ingest_native_result(applied)
+                if "revision" not in applied and "worldRevision" not in applied:
+                    self._world_revision += 1
+                result = self._canonical("engine.applyChanges", values={"entities": self._host_entities(applied.get("entities", entities))})
                 self._event("engine.revision", {"worldRevision": self._world_revision})
             elif method == "engine.openViewport":
                 width, height = payload.get("width", 1280), payload.get("height", 720)
                 title = payload.get("title", "Auvra Native Viewport")
                 if not isinstance(width, int) or isinstance(width, bool) or not isinstance(height, int) or isinstance(height, bool) or not isinstance(title, str):
                     raise HostOperationError("invalid_request", "viewport dimensions and title are invalid")
-                self.engine.call("viewport.open", {"width": width, "height": height, "title": title})
+                if self._viewport == "open":
+                    result = self._canonical("engine.openViewport")
+                    self._event("engine.status", {key: value for key, value in result.items()
+                                                   if key in {"status", "worldRevision", "viewport", "backend", "adapter", "fallbackReason"}})
+                    return result
+                request = {"width": width, "height": height, "title": title}
+                self._dock_active = False
+                self._dock_reason = None
+                target = self._dock_target_provider() if self._dock_target_provider is not None else None
+                if self._dock_support == "same-build" and isinstance(target, Mapping):
+                    handle = target.get("parentHandle")
+                    target_width, target_height = target.get("width"), target.get("height")
+                    if (isinstance(handle, int) and not isinstance(handle, bool) and handle > 0
+                            and isinstance(target_width, int) and target_width > 0
+                            and isinstance(target_height, int) and target_height > 0):
+                        request["parentHandle"] = handle
+                        request["width"] = target_width
+                        request["height"] = target_height
+                    else:
+                        self._dock_reason = "same-build dock target is unavailable"
+                elif self._dock_support != "same-build":
+                    self._dock_reason = "native dock target is unsupported"
+                opened = self.engine.call("viewport.open", request)
+                if not isinstance(opened, dict):
+                    raise NativeEngineProtocolError("native viewport result must be an object")
+                self._ingest_native_result(opened)
+                if not self._dock_active and self._dock_reason is None:
+                    self._dock_reason = "native viewport opened as a separate window"
                 self._viewport = "open"
                 result = self._canonical("engine.openViewport")
                 self._event("engine.viewport", {"viewport": self._viewport})
@@ -588,13 +1017,30 @@ class NativeEngineHost:
                 width, height = payload.get("width", 256), payload.get("height", 256)
                 if not isinstance(width, int) or isinstance(width, bool) or not isinstance(height, int) or isinstance(height, bool):
                     raise HostOperationError("invalid_request", "reference dimensions are invalid")
-                rendered = self.engine.call("renderer.renderReference", {"width": width, "height": height})
+                rendered = self.engine.call("renderer.renderReference", {
+                    "sceneId": "basic", "width": width, "height": height,
+                })
+                self._ingest_native_result(rendered)
+                self._capabilities()
+                raw_metrics = self.engine.call("renderer.getMetrics")
+                self._metrics = {
+                    "startupMs": raw_metrics.get("startup_ms", 0),
+                    "frameCpuMs": raw_metrics.get("last_frame_submit_ms"),
+                    "gpuFrameMs": raw_metrics.get("gpu_frame_ms"),
+                    "memoryBytes": raw_metrics.get("memory_bytes", 0),
+                    "recoveryCount": self._recovery_count,
+                }
                 values: dict[str, Any] = {
                     "width": rendered.get("width", width),
                     "height": rendered.get("height", height),
+                    "referenceScene": "basic",
+                    "referenceVersion": 1,
                 }
                 if isinstance(rendered.get("pixel_hash_fnv1a64"), str):
-                    values["signature"] = rendered["pixel_hash_fnv1a64"].removeprefix("0x")
+                    signature = rendered["pixel_hash_fnv1a64"]
+                    normalized_signature = signature[2:] if signature.startswith("0x") else signature
+                    if 16 <= len(normalized_signature) <= 64 and all(char in "0123456789abcdef" for char in normalized_signature):
+                        values["signature"] = normalized_signature
                 result = self._canonical("engine.renderReference", values=values)
             elif method == "engine.getMetrics":
                 raw = self.engine.call("renderer.getMetrics")
@@ -607,14 +1053,22 @@ class NativeEngineHost:
                 }
                 result = self._canonical("engine.metrics")
             else:  # engine.recover
-                recovered = self.engine.call("renderer.recover")
+                try:
+                    recovered = self.engine.call("renderer.recover")
+                except (NativeEngineTimeoutError, NativeEngineChildExitedError,
+                        NativeEngineProtocolError, NativeEngineClosedError):
+                    self.restart(editor_session=self._editor_session)
+                    self._viewport = "closed"
+                    self._dock_active = False
+                    self._dock_reason = "native viewport must be reopened after process recovery"
+                    recovered = {"capabilities": self._capabilities()}
+                self._ingest_native_result(recovered)
                 self._recovery_count += 1
                 if self._metrics is not None:
                     self._metrics["recoveryCount"] = self._recovery_count
                 caps = recovered.get("capabilities")
                 if isinstance(caps, dict):
-                    if isinstance(caps.get("backend"), str): self._backend = caps["backend"]
-                    if isinstance(caps.get("adapter"), str): self._adapter = caps["adapter"]
+                    self._ingest_native_result(caps)
                 result = self._canonical("engine.recover")
                 self._event("engine.recovery", {
                     "worldRevision": self._world_revision,
@@ -637,6 +1091,25 @@ class NativeEngineUnavailableHost:
 
     def __init__(self, reason: str = "Native engine executable is unavailable") -> None:
         self.reason = reason[:256]
+
+    def start(self, *, editor_session: str = "editor") -> None:
+        return None
+
+    def restart(self, *, editor_session: str = "editor") -> None:
+        return None
+
+    def close(self, *, timeout: float | None = None) -> None:
+        return None
+
+    def validate_project(self, project_id: str, project_revision: int, domains: Mapping[str, Any]) -> None:
+        return None
+
+    def hydrate_project(self, project_id: str, project_revision: int,
+                        domains: Mapping[str, Any], *, asset_ids: Sequence[str] = ()) -> None:
+        return None
+
+    def close_project(self, project_id: str | None = None) -> None:
+        return None
 
     def handle(self, method: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         kind = {

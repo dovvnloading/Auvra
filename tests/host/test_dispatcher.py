@@ -40,6 +40,10 @@ class DispatcherTests(unittest.TestCase):
         ])
         status = self.dispatcher.dispatch(self.request(method="engine.getStatus"))
         self.assertEqual(status["result"]["kind"], "engine.status")
+        self.assertEqual(len(status["result"]["featureCapabilities"]), 16)
+        self.assertEqual(status["result"]["dockSupport"], "unsupported")
+        self.assertFalse(status["result"]["dockActive"])
+        self.assertEqual(status["result"]["worldHash"], "0" * 64)
         snapshot = self.dispatcher.dispatch(self.request(method="engine.getSnapshot"))
         self.assertEqual(snapshot["result"]["kind"], "engine.snapshot")
         applied = self.dispatcher.dispatch(self.request(

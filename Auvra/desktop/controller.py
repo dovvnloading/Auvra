@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import secrets
 import shutil
@@ -151,13 +152,33 @@ class FrameController:
             project_host.set_preview_store(preview_store)
             provider_host = NativeProviderHost(profile.parent / "provider-state", project_host=project_host, preview_store=preview_store)
             if native_command:
-                candidate = NativeEngineHost(NativeEngine(tuple(native_command)))
+                native_source = profile.parent / "native" / "source"
+                native_derived = profile.parent / "native" / "derived"
+                _assert_state_path_safe(native_source)
+                _assert_state_path_safe(native_derived)
+                native_environment = dict(os.environ)
+                native_environment.update({
+                    "AUVRA_NATIVE_SOURCE_ROOT": str(native_source),
+                    "AUVRA_NATIVE_DERIVED_ROOT": str(native_derived),
+                })
+                try:
+                    engine = NativeEngine(tuple(native_command), environment=native_environment,
+                                          source_root=native_source, derived_root=native_derived)
+                except TypeError:
+                    # Keep narrow test doubles and legacy adapters compatible;
+                    # production NativeEngine always accepts the cache roots.
+                    engine = NativeEngine(tuple(native_command))
+                try:
+                    candidate = NativeEngineHost(engine, source_root=native_source)
+                except TypeError:
+                    candidate = NativeEngineHost(engine)
                 try:
                     candidate.start(editor_session=active_dispatcher.session.session_id)
                     native_engine_host = candidate
                 except NativeEngineError:
                     candidate.close(timeout=1)
                     native_engine_host = NativeEngineUnavailableHost("Native engine startup failed; using the web compatibility renderer")
+            project_host.set_native_engine_host(native_engine_host)
             active_dispatcher.bind_services(
                 project_service=project_host, asset_service=project_host,
                 provider_service=provider_host, engine_service=native_engine_host,
@@ -198,6 +219,9 @@ class FrameController:
             native_engine_host=native_engine_host,
         )
         holder["controller"] = controller
+        setter = getattr(native_engine_host, "set_dock_target_provider", None)
+        if callable(setter):
+            setter(controller.dock_target)
         return controller
 
     @classmethod
@@ -238,7 +262,24 @@ class FrameController:
             project_host.set_preview_store(preview_store)
             provider_host = NativeProviderHost(profile.parent / "provider-state", project_host=project_host, preview_store=preview_store)
             if native_command:
-                candidate = NativeEngineHost(NativeEngine(tuple(native_command)))
+                native_source = profile.parent / "native" / "source"
+                native_derived = profile.parent / "native" / "derived"
+                _assert_state_path_safe(native_source)
+                _assert_state_path_safe(native_derived)
+                native_environment = dict(os.environ)
+                native_environment.update({
+                    "AUVRA_NATIVE_SOURCE_ROOT": str(native_source),
+                    "AUVRA_NATIVE_DERIVED_ROOT": str(native_derived),
+                })
+                try:
+                    engine = NativeEngine(tuple(native_command), environment=native_environment,
+                                          source_root=native_source, derived_root=native_derived)
+                except TypeError:
+                    engine = NativeEngine(tuple(native_command))
+                try:
+                    candidate = NativeEngineHost(engine, source_root=native_source)
+                except TypeError:
+                    candidate = NativeEngineHost(engine)
                 try:
                     candidate.start(editor_session=active_dispatcher.session.session_id)
                     native_engine_host = candidate
@@ -247,6 +288,7 @@ class FrameController:
                     native_engine_host = NativeEngineUnavailableHost(
                         "Native engine startup failed; using the web compatibility renderer"
                     )
+            project_host.set_native_engine_host(native_engine_host)
             active_dispatcher.bind_services(
                 project_service=project_host, asset_service=project_host,
                 provider_service=provider_host, engine_service=native_engine_host,
@@ -291,6 +333,9 @@ class FrameController:
             native_engine_host=native_engine_host,
         )
         holder["controller"] = controller
+        setter = getattr(native_engine_host, "set_dock_target_provider", None)
+        if callable(setter):
+            setter(controller.dock_target)
         return controller
 
     def start(self) -> None:
@@ -356,6 +401,11 @@ class FrameController:
         if self.project_host is None:
             raise RuntimeError("native project asset service is unavailable")
         return self.project_host.asset_resource(request)
+
+    def dock_target(self) -> dict[str, int] | None:
+        """Expose only the frame's read-only dock target to host adapters."""
+        target = getattr(self.frame, "dock_target", None)
+        return target() if callable(target) else None
 
     def _post(self, payload: dict[str, Any]) -> None:
         try:

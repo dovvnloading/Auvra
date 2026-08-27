@@ -7,6 +7,7 @@ const PROVIDER_METHODS = ["provider.list", "provider.getStatus", "provider.confi
 const ENGINE_METHODS = ["engine.getStatus", "engine.getSnapshot", "engine.applyChanges", "engine.openViewport", "engine.closeViewport", "engine.renderReference", "engine.getMetrics", "engine.recover"] as const;
 const METHODS = ["host.ping", "host.getCapabilities", ...PROJECT_METHODS, ...PROVIDER_METHODS, ...ENGINE_METHODS] as const;
 const MEDIA_CAPABILITIES = ["media.generate", "media.edit"] as const;
+const ENGINE_FEATURES = ["pbr_metallic_roughness", "skeletal_animation", "frustum_culling", "deterministic_lod", "instance_batching", "directional_lights", "point_lights", "spot_lights", "shadow_maps", "image_based_lighting", "entity_picking", "editor_gizmos", "hdr_intermediate", "aces_tone_mapping", "msaa_or_fxaa", "post_processing_chain"] as const;
 type Payload = Record<string, unknown>;
 
 /** In-memory, deterministic project host for browser development and protocol tests. */
@@ -159,6 +160,7 @@ export class FakeHost implements HostTransport {
       case "engine.getStatus": return this.engineResult("engine.status");
       case "engine.getSnapshot": return this.engineResult("engine.snapshot", { entities: [...this.engineEntities] });
       case "engine.applyChanges": {
+        if (this.projectOpen) throw { code: "unsupported_capability", message: "Project world mutations must use project.applyChanges" };
         if (payload.expectedRevision !== this.engineRevision) throw { code: "revision_conflict", message: "Native world revision does not match" };
         this.engineEntities = Array.isArray(payload.entities) ? [...payload.entities] : [];
         this.engineRevision++; this.revision++;
@@ -166,7 +168,7 @@ export class FakeHost implements HostTransport {
       }
       case "engine.openViewport": this.engineViewport = "open"; this.revision++; return this.engineResult("engine.openViewport");
       case "engine.closeViewport": this.engineViewport = "closed"; this.revision++; return this.engineResult("engine.closeViewport");
-      case "engine.renderReference": return this.engineResult("engine.renderReference", { signature: "47ed61f4e0a9caba", width: Number(payload.width ?? 64), height: Number(payload.height ?? 64) });
+      case "engine.renderReference": return this.engineResult("engine.renderReference", { referenceScene: "basic", referenceVersion: 1, signature: "47ed61f4e0a9caba", width: Number(payload.width ?? 64), height: Number(payload.height ?? 64) });
       case "engine.getMetrics": return this.engineResult("engine.metrics", { metrics: this.engineMetrics() });
       case "engine.recover": this.engineRecoveries++; this.revision++; return this.engineResult("engine.recover", { metrics: this.engineMetrics() });
       default: throw { code: "unknown_method", message: "Unknown host method" };
@@ -181,7 +183,29 @@ export class FakeHost implements HostTransport {
   private assertProvider(providerId: string): void { if (!["fal", "openai", "anthropic", "xai", "openrouter", "ollama", "llama.cpp"].includes(providerId)) throw { code: "provider_unavailable", message: "Provider is not registered" }; }
   private providerStatus(providerId: string, configured: boolean): SuccessResult { const local = ["ollama", "llama.cpp"].includes(providerId); const stored = this.providerSettings.get(providerId) ?? { enabled: false, routes: [], fallbackPolicy: "none", requireCostConfirmation: true, budgets: { perJobMicroUsd: 0, dailyMicroUsd: 0, monthlyMicroUsd: 0 } }; const settings = { ...stored }; if ("endpoint" in settings) { delete settings.endpoint; settings.endpointConfigured = true; } return { kind: "provider.status", providerId, configured: configured || local, available: true, healthy: configured || local, state: configured || local ? "ready" : "unconfigured", settings, settingsRevision: this.providerSettingsRevision.get(providerId) ?? 0, credentialStatus: local ? "notRequired" : configured ? "configured" : "absent" } as unknown as SuccessResult; }
   private engineMetrics(): Record<string, unknown> { return { startupMs: 0, frameCpuMs: 0, gpuFrameMs: null, memoryBytes: 0, recoveryCount: this.engineRecoveries }; }
-  private engineResult(kind: string, extra: Record<string, unknown> = {}): SuccessResult { return { kind, protocol: "auvra.native/1", status: "ready", worldRevision: this.engineRevision, viewport: this.engineViewport, backend: "WebGL2 fake fallback", adapter: "deterministic fake host", fallbackReason: "Native engine process is not started in browser development mode", ...extra } as unknown as SuccessResult; }
+  private engineResult(kind: string, extra: Record<string, unknown> = {}): SuccessResult {
+    return {
+      kind,
+      protocol: "auvra.native/1",
+      status: "ready",
+      worldRevision: this.engineRevision,
+      tick: 0,
+      projectId: this.projectOpen ? this.projectId : null,
+      projectRevision: this.projectOpen ? this.projectRevision : 0,
+      worldHash: "0".repeat(64),
+      replayHash: "0".repeat(64),
+      extractionHash: "0".repeat(64),
+      viewport: this.engineViewport,
+      backend: "WebGL2 fake fallback",
+      adapter: "deterministic fake host",
+      fallbackReason: "Native engine process is not started in browser development mode",
+      featureCapabilities: ENGINE_FEATURES.map((feature) => ({ feature, supported: false, fallbackReason: `${feature} is unavailable in the deterministic browser fake` })),
+      dockSupport: "unsupported",
+      dockActive: false,
+      dockReason: "Docking requires the same-build desktop host and native engine",
+      ...extra,
+    } as unknown as SuccessResult;
+  }
   async requestAsset(request: { method: string; url: string; origin: string; mime?: string; body?: Uint8Array; now?: number }): Promise<{ status: number; sha256?: string }> {
     const expectedOrigin = "https://assets.auvra.local";
     if (request.origin !== expectedOrigin) throw { code: "asset_origin_denied" };

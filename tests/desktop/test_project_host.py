@@ -4,6 +4,7 @@ import io
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from Auvra.desktop.assets import AssetTransferRegistry
 from Auvra.desktop.dialogs import DialogSelection
@@ -34,6 +35,28 @@ class _Dialogs:
 
     def choose_import_legacy(self):
         return None
+
+
+class _NativeRecorder:
+    def __init__(self, *, fail_hydrate: bool = False) -> None:
+        self.fail_hydrate = fail_hydrate
+        self.hydrations = []
+        self.validations = []
+        self.closed = []
+
+    def validate_project(self, project_id, revision, domains):
+        self.validations.append((project_id, revision, domains))
+
+    def hydrate_project(self, project_id, revision, domains, *, asset_ids=()):
+        if self.fail_hydrate:
+            raise RuntimeError("native child unavailable")
+        self.hydrations.append((project_id, revision, domains, tuple(asset_ids)))
+
+    def close_project(self, project_id=None):
+        self.closed.append(project_id)
+
+    def stage_asset(self, asset_id, stream):
+        stream.read()
 
 
 class NativeProjectHostTests(unittest.TestCase):
@@ -277,6 +300,60 @@ class NativeProjectHostTests(unittest.TestCase):
             cursor = page["cursor"]
         self.assertEqual(received, [value["id"] for value in documents])
         self.assertEqual(page["revision"], changed["revision"])
+
+    def test_project_open_and_mutation_hydrate_native_after_durable_commit(self) -> None:
+        native = _NativeRecorder()
+        self.host.set_native_engine_host(native)
+        created = self.host.handle("project.create", {"name": "NativeWorld"})
+        self.assertEqual(len(native.hydrations), 1)
+        changed = self.host.handle("project.applyChanges", {
+            "projectId": created["projectId"], "expectedRevision": created["revision"],
+            "changes": [{
+                "domain": "metadata", "documentId": "project", "operation": "upsert",
+                "document": {"id": "project", "name": "NativeWorld"},
+            }],
+        })
+        self.assertEqual(changed["revision"], 1)
+        self.assertEqual(native.hydrations[-1][1], 1)
+        self.assertEqual(native.validations[-1][1], 1)
+
+    def test_durable_project_wins_when_native_rehydration_fails(self) -> None:
+        native = _NativeRecorder(fail_hydrate=True)
+        self.host.set_native_engine_host(native)
+        created = self.host.handle("project.create", {"name": "RecoveryWorld"})
+        changed = self.host.handle("project.applyChanges", {
+            "projectId": created["projectId"], "expectedRevision": created["revision"],
+            "changes": [{
+                "domain": "metadata", "documentId": "project", "operation": "upsert",
+                "document": {"id": "project", "name": "Persisted"},
+            }],
+        })
+        self.assertEqual(changed["revision"], 1)
+        snapshot = self.host.handle("project.getSnapshot", {
+            "projectId": created["projectId"], "domain": "metadata", "pageSize": 10,
+        })
+        self.assertEqual(snapshot["domains"]["metadata"]["documents"][0]["name"], "Persisted")
+        self.assertTrue(any(name == "project.recovery" for name, _ in self.host.drain_events()))
+
+    def test_import_pack_and_legacy_each_hydrate_once(self) -> None:
+        native = _NativeRecorder()
+        self.host.set_native_engine_host(native)
+        created = self.host.handle("project.create", {"name": "ImportTarget"})
+        native.hydrations.clear()
+        source = self.root / "source.auvrapack"
+        source.write_bytes(b"placeholder")
+        with mock.patch.object(self.host.dialogs, "choose_import_pack", return_value=DialogSelection(source)), \
+             mock.patch.object(self.host.service, "import_pack", return_value=self.host.service.active.status):
+            self.host.handle("project.importPack", {"sourceHandle": "pack"})
+        self.assertEqual(len(native.hydrations), 1)
+        native.hydrations.clear()
+        legacy = self.root / "legacy.forge"
+        legacy.write_bytes(b"placeholder")
+        report = type("Report", (), {})()
+        with mock.patch.object(self.host.dialogs, "choose_import_legacy", return_value=DialogSelection(legacy)), \
+             mock.patch.object(self.host.service, "migrate_legacy", return_value=(self.host.service.active.status, report)):
+            self.host.handle("project.importLegacy", {"sourceHandle": "legacy"})
+        self.assertEqual(len(native.hydrations), 1)
 
 
 if __name__ == "__main__":

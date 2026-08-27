@@ -5,10 +5,24 @@ export interface NativeEngineStatus {
   protocol: "auvra.native/1";
   status: "starting" | "ready" | "degraded" | "stopped" | "failed";
   worldRevision: number;
+  tick?: number;
+  projectId?: string | null;
+  projectRevision?: number;
+  worldHash?: string;
+  replayHash?: string;
+  extractionHash?: string;
   viewport: "closed" | "opening" | "open" | "recovering";
   backend?: string;
   adapter?: string;
   fallbackReason?: string | null;
+  featureCapabilities?: Array<{
+    feature: "pbr_metallic_roughness" | "skeletal_animation" | "frustum_culling" | "deterministic_lod" | "instance_batching" | "directional_lights" | "point_lights" | "spot_lights" | "shadow_maps" | "image_based_lighting" | "entity_picking" | "editor_gizmos" | "hdr_intermediate" | "aces_tone_mapping" | "msaa_or_fxaa" | "post_processing_chain";
+    supported: boolean;
+    fallbackReason: string | null;
+  }>;
+  dockSupport?: "unsupported" | "same-build";
+  dockActive?: boolean;
+  dockReason?: string | null;
   metrics?: {
     startupMs: number;
     frameCpuMs: number | null;
@@ -44,7 +58,13 @@ export class NativeEngineService {
   private readonly listeners = new Set<(status: NativeEngineStatus) => void>();
   private unsubscribeHost: (() => void) | null = null;
 
-  getStatus(): NativeEngineStatus { return { ...this.value, metrics: this.value.metrics ? { ...this.value.metrics } : undefined }; }
+  getStatus(): NativeEngineStatus {
+    return {
+      ...this.value,
+      metrics: this.value.metrics ? { ...this.value.metrics } : undefined,
+      featureCapabilities: this.value.featureCapabilities?.map((capability) => ({ ...capability })),
+    };
+  }
 
   subscribe(listener: (status: NativeEngineStatus) => void): () => void {
     this.listeners.add(listener);
@@ -59,7 +79,9 @@ export class NativeEngineService {
   }
   openViewport(width = 1280, height = 720): Promise<NativeEngineStatus> { return this.call("engine.openViewport", { width, height, title: "Auvra Native Viewport" }); }
   closeViewport(): Promise<NativeEngineStatus> { return this.call("engine.closeViewport", {}); }
-  renderReference(width = 256, height = 256): Promise<NativeEngineStatus & { signature?: string }> { return this.call("engine.renderReference", { width, height }); }
+  renderReference(width = 256, height = 256): Promise<NativeEngineStatus & { referenceScene?: "basic"; referenceVersion?: 1; signature?: string; width?: number; height?: number }> {
+    return this.call("engine.renderReference", { sceneId: "basic", width, height });
+  }
   getMetrics(): Promise<NativeEngineStatus> { return this.call("engine.getMetrics", {}); }
   recover(): Promise<NativeEngineStatus> { return this.call("engine.recover", {}); }
 

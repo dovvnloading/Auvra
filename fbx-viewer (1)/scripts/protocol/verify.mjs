@@ -16,6 +16,19 @@ const MAX_MESSAGE_BYTES = 256 * 1024;
 const bounded = (message) => Buffer.byteLength(JSON.stringify(message), "utf8") <= MAX_MESSAGE_BYTES;
 for (const vector of vectors.valid) if (!validate(vector.message) || !bounded(vector.message)) throw new Error(`valid vector rejected or oversized: ${vector.name}`);
 for (const vector of vectors.invalid) if (validate(vector.message) && bounded(vector.message)) throw new Error(`invalid vector accepted: ${vector.name}`);
+const engineAjv = new Ajv2020({ strict: true });
+engineAjv.addSchema(schema);
+const validateEngineResult = engineAjv.getSchema(`${schema.$id}#/$defs/engineResult`);
+if (!validateEngineResult) throw new Error("engine result schema is unavailable");
+const featureNames = schema.$defs.engineFeature.enum;
+const engineFeatureResult = { kind: "engine.status", protocol: "auvra.native/1", status: "ready", worldRevision: 0, viewport: "closed", featureCapabilities: featureNames.map((feature) => ({ feature, supported: true, fallbackReason: null })) };
+if (!validateEngineResult(engineFeatureResult)) throw new Error("exact native feature capability table was rejected");
+const duplicateFeatures = structuredClone(engineFeatureResult);
+duplicateFeatures.featureCapabilities[1] = { ...duplicateFeatures.featureCapabilities[0] };
+if (validateEngineResult(duplicateFeatures)) throw new Error("duplicate native feature capability names were accepted");
+const reorderedFeatures = structuredClone(engineFeatureResult);
+[reorderedFeatures.featureCapabilities[0], reorderedFeatures.featureCapabilities[1]] = [reorderedFeatures.featureCapabilities[1], reorderedFeatures.featureCapabilities[0]];
+if (validateEngineResult(reorderedFeatures)) throw new Error("reordered native feature capabilities were accepted");
 console.log(`protocol conformance passed (${vectors.valid.length} valid, ${vectors.invalid.length} invalid)`);
 
 if (process.argv.includes("--fake-host")) {
@@ -70,11 +83,15 @@ const undone = await host.request({ ...request, id: "command-undo", revision: ap
 if (!undone.ok || undone.result.kind !== "command.undo") throw new Error("command undo behavior failed");
 const wrongKind = await host.request({ protocol: "auvra.host/1", type: "session", session: host.session, revision: 1, status: "active" });
 if (wrongKind.ok || wrongKind.error.code !== "invalid_request") throw new Error("non-request message did not fail closed");
-const engineCall = (id, method, payload = {}) => host.request({ ...request, id, revision: host.currentRevision, method, payload });
+const blockedEngineApply = await host.request({ ...request, id: "engine-project-owned", revision: host.currentRevision, method: "engine.applyChanges", payload: { expectedRevision: 0, entities: [] } });
+if (blockedEngineApply.ok || blockedEngineApply.error.code !== "unsupported_capability") throw new Error("fake host allowed a competing native project mutation");
+const engineHost = new FakeHost("fake-engine-session");
+const engineCall = (id, method, payload = {}) => engineHost.request({ ...request, session: engineHost.session, id, revision: engineHost.currentRevision, method, payload });
 const engineCaps = await engineCall("engine-caps", "host.getCapabilities");
 if (!engineCaps.ok || engineCaps.result.engineMethods.length !== 8 || engineCaps.result.engineMethods[7] !== "engine.recover") throw new Error("engine capability list is incomplete");
 const engineStatus = await engineCall("engine-status", "engine.getStatus");
 if (!engineStatus.ok || engineStatus.result.kind !== "engine.status" || engineStatus.result.protocol !== "auvra.native/1") throw new Error("engine status behavior failed");
+if (engineStatus.result.featureCapabilities?.length !== 16 || engineStatus.result.dockSupport !== "unsupported" || engineStatus.result.dockActive !== false) throw new Error("engine feature or dock capability behavior failed");
 const engineSnapshot = await engineCall("engine-snapshot", "engine.getSnapshot");
 if (!engineSnapshot.ok || engineSnapshot.result.kind !== "engine.snapshot") throw new Error("engine snapshot behavior failed");
 const engineApply = await engineCall("engine-apply", "engine.applyChanges", { expectedRevision: 0, entities: [{ id: "reference", position: [0, 0, 0], color: [0.2, 0.6, 1, 1] }] });
@@ -85,8 +102,8 @@ const engineOpen = await engineCall("engine-open", "engine.openViewport", { widt
 if (!engineOpen.ok || engineOpen.result.viewport !== "open") throw new Error("engine viewport open behavior failed");
 const engineClose = await engineCall("engine-close", "engine.closeViewport");
 if (!engineClose.ok || engineClose.result.viewport !== "closed") throw new Error("engine viewport close behavior failed");
-const engineRender = await engineCall("engine-render", "engine.renderReference", { width: 64, height: 64 });
-if (!engineRender.ok || engineRender.result.kind !== "engine.renderReference" || engineRender.result.signature.length < 16) throw new Error("engine reference render behavior failed");
+const engineRender = await engineCall("engine-render", "engine.renderReference", { sceneId: "basic", width: 64, height: 64 });
+if (!engineRender.ok || engineRender.result.kind !== "engine.renderReference" || engineRender.result.referenceScene !== "basic" || engineRender.result.referenceVersion !== 1 || engineRender.result.signature.length < 16) throw new Error("engine reference render behavior failed");
 const engineMetrics = await engineCall("engine-metrics", "engine.getMetrics");
 if (!engineMetrics.ok || engineMetrics.result.kind !== "engine.metrics" || !engineMetrics.result.metrics) throw new Error("engine metrics behavior failed");
 const engineRecover = await engineCall("engine-recover", "engine.recover");
