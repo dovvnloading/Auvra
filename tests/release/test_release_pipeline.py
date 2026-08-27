@@ -78,6 +78,9 @@ class ReleasePipelineTests(unittest.TestCase):
             startup = (output / "host" / "auvra_startup.py").read_text(encoding="utf-8")
             self.assertIn("sys.argv[1] != 'support'", startup)
             self.assertIn("main(sys.argv[1:], paths=paths)", startup)
+            sitecustomize = (output / "runtime" / "python" / "sitecustomize.py").read_text(encoding="utf-8")
+            self.assertIn("except SystemExit as exc:", sitecustomize)
+            self.assertIn("os._exit(code)", sitecustomize)
 
     def test_integrity_and_forbidden_inputs_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

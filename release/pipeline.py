@@ -394,8 +394,14 @@ raise SystemExit(run_start(paths, explicit_port=None, json_mode=False, packaged_
     )
     (python_root / "sitecustomize.py").write_text(
         """from pathlib import Path
+import os
 import runpy
-runpy.run_path(str(Path(__file__).resolve().parents[2] / 'host' / 'auvra_startup.py'), run_name='__main__')
+try:
+    runpy.run_path(str(Path(__file__).resolve().parents[2] / 'host' / 'auvra_startup.py'), run_name='__main__')
+except SystemExit as exc:
+    code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+    os._exit(code)
+os._exit(0)
 """,
         encoding="utf-8",
         newline="\n",
