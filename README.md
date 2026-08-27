@@ -96,6 +96,20 @@ project. Both legacy sources are treated as read-only and are never cleared or
 modified automatically. Because Auvra remains pre-alpha, keep independent
 backups of important work.
 
+## Rendering
+
+The current editor renderer remains Three.js on WebGL2, now behind Auvra-owned
+rendering contracts and explicit surface ownership. Editor, preview, and play
+surfaces share one lifecycle policy, report their capabilities and frame
+metrics, and recover from a lost graphics context without hiding the failure.
+Thumbnail generation uses a separate on-demand capture path instead of opening
+additional live renderers in hover UI.
+
+WebGL2 is the stable compatibility path. WebGPU is available only as an
+experimental reference probe and is not selected for editor presentation; an
+explicit WebGPU request reports why it falls back to WebGL2. Native rendering
+backends are not part of this stage of the engine.
+
 ## Provider integrations
 
 Provider access is owned by the Python host. fal.ai is Auvra's primary media
@@ -115,6 +129,7 @@ To verify the launcher and production bundle locally:
 ```powershell
 python -m unittest discover -s tests -t . -v
 cd "fbx-viewer (1)"
+npm run renderer:verify
 npm run project:verify
 npm run provider:verify
 npm run build

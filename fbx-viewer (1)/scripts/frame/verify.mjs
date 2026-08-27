@@ -82,7 +82,8 @@ for (const name of environmentSites) {
 }
 check(source.localEnvironment.includes("<Lightformer") && source.localEnvironment.includes("frames={1}"), "local procedural environment is missing deterministic Lightformer content");
 check(source.localEnvironment.includes("export const LocalEnvironment"), "reusable local environment component is missing");
-for (const name of environmentSites.slice(1)) check(source[name].includes("LocalEnvironment"), `${name} is missing the local environment replacement`);
+for (const name of ["viewerScene", "graphPreview", "retextureEditor", "skySystem"]) check(source[name].includes("LocalEnvironment"), `${name} is missing the local environment replacement`);
+check(source.thumbnailTooltip.includes("model.thumbnail") && !source.thumbnailTooltip.includes("<Canvas") && !source.thumbnailTooltip.includes("LocalEnvironment"), "thumbnail tooltip must use the generated image without owning a live renderer");
 check(source.skySystem.includes("<LocalEnvironment night={isNight}"), "SkySystem no longer distinguishes day and night lighting");
 check(source.dynamic.indexOf("new TextEncoder().encode(code)") < source.dynamic.indexOf("Babel.transform"), "HUD source size is not checked before Babel");
 check(source.dynamic.includes("try {\n      port.postMessage(message);") && source.dynamic.includes("could not be transferred"), "HUD non-cloneable props are not safely contained");

@@ -16,7 +16,8 @@
     "protocol:tsc": "tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler --resolveJsonModule --skipLibCheck host/index.ts host/protocol.ts host/transport.ts host/fakeHost.ts host/generated/protocolV1.ts",
     "protocol:verify": "node scripts/protocol/generate.mjs --check && npm run protocol:check && npm run protocol:tsc && node scripts/protocol/verify.mjs --fake-host",
     "project:verify": "node scripts/project/verify.mjs",
-    "provider:verify": "node scripts/providers/verify.mjs"
+    "provider:verify": "node scripts/providers/verify.mjs",
+    "renderer:verify": "node scripts/renderer/verify.mjs"
   },
   "dependencies": {
     "@babel/standalone": "7.23.6",

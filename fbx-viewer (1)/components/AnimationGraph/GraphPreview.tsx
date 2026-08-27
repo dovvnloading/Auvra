@@ -1,7 +1,8 @@
 
 import React, { useEffect, useRef, useMemo } from 'react';
 import * as THREE from 'three';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
+import { AuvraCanvas } from '../../renderer/AuvraCanvas';
 import { Grid, OrbitControls, ContactShadows } from '@react-three/drei';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { useScene } from '../../context/SceneContext';
@@ -119,12 +120,13 @@ export const GraphPreview: React.FC<{
     if (!targetModel || !displayObject || !graph) return null;
 
     return (
-        <Canvas 
+        <AuvraCanvas
+            surfaceId="preview-animation-graph"
+            role="preview"
             shadows
             camera={{ position: [4, 4, 8], fov: 45 }}
             dpr={[1, 2]}
             gl={{ 
-                preserveDrawingBuffer: true, 
                 toneMapping: THREE.ACESFilmicToneMapping,
                 toneMappingExposure: 1.0, 
                 antialias: true
@@ -190,6 +192,6 @@ export const GraphPreview: React.FC<{
             />
 
             <PreviewCamera targetObject={displayObject} />
-        </Canvas>
+        </AuvraCanvas>
     );
 };

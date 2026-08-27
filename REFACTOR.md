@@ -19,23 +19,27 @@ internal architecture or working notes.
 | 2 | Run the editor in a desktop-owned frame behind a defined host boundary | Complete |
 | 3 | Replace browser-owned saving with a durable project system | Complete |
 | 4 | Add secure provider routing, BYOK settings, fal.ai media workflows, and text/local provider adapters | Complete |
-| 5 | Stabilize the current renderer and establish backend-independent rendering contracts | Planned |
+| 5 | Stabilize the current renderer and establish backend-independent rendering contracts | Complete |
 | 6 | Prove the native engine and multi-backend rendering path with a vertical slice | Planned |
 | 7 | Complete packaging, recovery, performance, compatibility, and release hardening | Planned |
 
 ## What this means for the current repository
 
 - Expect breaking changes while project and runtime boundaries are established.
-- The current web renderer remains the working reference inside the desktop
-  frame during the migration.
+- The current WebGL2 renderer remains the working compatibility path inside the
+  desktop frame. Renderer ownership, capture, diagnostics, context recovery,
+  reference measurements, and backend-independent contracts are now explicit.
+  WebGPU remains an experimental reference path and does not silently replace
+  the stable renderer.
 - Provider access now runs through the Python host. fal.ai is the primary media
   path; OpenAI, Anthropic, xAI, OpenRouter, Ollama, and llama.cpp support
   explicitly configured text, coding, and command capabilities. Credentials use
   Windows Credential Manager or an explicit memory-only mode, routes do not
   silently fall back, and generated media remains a preview until committed.
 - Local execution and local compute are first-class requirements.
-- Saving, recovery, and provider access now run behind explicit engine services;
-  rendering remains part of the active refactor.
+- Saving, recovery, provider access, and the current rendering boundary now run
+  behind explicit engine services. Native rendering and gameplay runtime work
+  remain later stages.
 - Project saving and recovery now run through the native host; legacy browser
   storage remains available only as a read-only migration source.
 - Experimental work must preserve a tested fallback and may not silently become

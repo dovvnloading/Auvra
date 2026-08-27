@@ -1,7 +1,8 @@
 
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import * as THREE from 'three';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { useFrame } from '@react-three/fiber';
+import { AuvraCanvas } from '../../renderer/AuvraCanvas';
 import { Environment, PerformanceMonitor } from '@react-three/drei';
 import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing';
 import { SkeletonUtils } from 'three-stdlib';
@@ -247,7 +248,9 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
 
     return (
         <div className="relative w-full h-full bg-black cursor-none">
-            <Canvas 
+            <AuvraCanvas
+                surfaceId="runtime-level-game-loop"
+                role="runtime"
                 shadows 
                 camera={{ fov: 60 }} 
                 dpr={dpr} // Dynamic DPI scaling based on performance
@@ -385,7 +388,7 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
                     isAiming={isAiming}
                     aimOffset={playerBlueprint.aimOffset || [0.5, 4.5, 1.0]}
                 />
-            </Canvas>
+            </AuvraCanvas>
 
             <SandboxUI 
                 isPlaying={true}
