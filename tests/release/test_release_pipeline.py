@@ -90,7 +90,7 @@ class ReleasePipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             inputs = self.staged_inputs(root)
-            (inputs / "host" / "secret.txt").write_text("api_key=0123456789abcdef0123456789", encoding="utf-8")
+            (inputs / "host" / "secret.txt").write_text("api_key='0123456789abcdef0123456789'", encoding="utf-8")
             with self.assertRaises(ReleaseError):
                 assemble(inputs, root / "bad-package", channel="stable", version="1.0.0")
             self.assertFalse((root / "bad-package").exists())
