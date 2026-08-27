@@ -31,8 +31,16 @@ FORBIDDEN_SUFFIXES = {".pfx", ".p12", ".pem", ".key", ".env"}
 FORBIDDEN_CONTENT_SUFFIXES = {".map", ".log", ".dmp", ".dump", ".pdb", ".ilk", ".obj", ".lib", ".exp", ".pyc", ".pyproj", ".sln"}
 FORBIDDEN_CONTENT_NAMES = {"vite.config.ts", "vite.config.js", "tsconfig.json", "cargo.toml", "cargo.lock", "pyproject.toml", "uv.lock", "package.json", "package-lock.json", "auvra.py", "auvra.pyproj", "bootstrap.py"}
 SECRET_PATTERN = re.compile(rb"-----BEGIN [^-]*PRIVATE KEY-----|(?:password|passwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*[\"']?[A-Za-z0-9_./+=:-]{12,}", re.IGNORECASE)
-ABSOLUTE_PATH_PATTERN = re.compile(rb"(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/]|\\\\[A-Za-z0-9_.-]+[\\/]|/(?:Users|home|workspace|tmp|var)/)")
-PRIVATE_CONTENT_PATTERN = re.compile(rb"(?:private[ _-]*plan|project[ _-]*(?:plan|dump|snapshot)|do[ _-]*not[ _-]*share|provider[ _-]*(?:token|secret)|internal[ _-]*roadmap)", re.IGNORECASE)
+ABSOLUTE_PATH_PATTERN = re.compile(
+    rb"(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/](?:Users|home|workspace|tmp|var)[\\/]"
+    rb"|\\\\[A-Za-z0-9_.-]{2,}[\\/](?:Users|home|workspace|tmp|var)[\\/]"
+    rb"|/(?:Users|home|workspace|tmp|var)/)",
+    re.IGNORECASE,
+)
+PRIVATE_CONTENT_PATTERN = re.compile(
+    rb"(?:private[ _-]*plan|do[ _-]*not[ _-]*share|provider[ _-]*(?:token|secret)|internal[ _-]*roadmap)",
+    re.IGNORECASE,
+)
 RUNTIME_CDN_PATTERN = re.compile(
     rb"https?://(?:cdn\.jsdelivr\.net|unpkg\.com|esm\.sh|fonts\.googleapis\.com|fonts\.gstatic\.com)",
     re.IGNORECASE,

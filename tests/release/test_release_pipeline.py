@@ -105,6 +105,16 @@ class ReleasePipelineTests(unittest.TestCase):
             with self.assertRaises(ReleaseError):
                 assemble(inputs, root / "cdn-package", channel="stable", version="1.0.0")
             (inputs / "frontend" / "bundle.js").unlink()
+            (inputs / "host" / "developer-path.txt").write_text(
+                r"C:\Users\developer\source\Auvra.py", encoding="utf-8"
+            )
+            with self.assertRaises(ReleaseError):
+                assemble(inputs, root / "path-package", channel="stable", version="1.0.0")
+            (inputs / "host" / "developer-path.txt").unlink()
+            (inputs / "host" / "private-plan.txt").write_text("internal roadmap", encoding="utf-8")
+            with self.assertRaises(ReleaseError):
+                assemble(inputs, root / "private-package", channel="stable", version="1.0.0")
+            (inputs / "host" / "private-plan.txt").unlink()
             with self.assertRaises(ReleaseError):
                 assemble(inputs, root / "dev-package", channel="dev", version="1.0.0",
                          appinstaller_uri="https://updates.example/dev.appinstaller")
