@@ -34,3 +34,20 @@ class ValidationTests(unittest.TestCase):
                  "changes":[{"domain":"levels","documentId":"l1","operation":"upsert",
                               "document":{"description":"x" * (256 * 1024)}}]}}
         with self.assertRaises(ProtocolValidationError): validate_message(value)
+
+    def test_engine_payloads_are_bounded_and_path_free(self):
+        base = {"protocol": "auvra.host/1", "type": "request", "id": "r-engine",
+                "session": "s1", "revision": 0, "method": "engine.applyChanges",
+                "payload": {"expectedRevision": 0, "entities": [{
+                    "id": "reference", "position": [0, 0, 0], "color": [0.2, 0.6, 1, 1],
+                }]}}
+        validate_message(base)
+        path_entity = {**base, "payload": {**base["payload"], "entities": [{
+            "id": "C:/secret", "position": [0, 0, 0], "color": [1, 1, 1, 1],
+        }]}}
+        with self.assertRaises(ProtocolValidationError): validate_message(path_entity)
+        oversized = {**base, "payload": {**base["payload"], "entities": [{
+            "id": "reference", "position": [0, 0, 0], "color": [1, 1, 1, 1],
+            "extra": "x" * (256 * 1024),
+        }]}}
+        with self.assertRaises(ProtocolValidationError): validate_message(oversized)

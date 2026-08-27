@@ -20,7 +20,7 @@ internal architecture or working notes.
 | 3 | Replace browser-owned saving with a durable project system | Complete |
 | 4 | Add secure provider routing, BYOK settings, fal.ai media workflows, and text/local provider adapters | Complete |
 | 5 | Stabilize the current renderer and establish backend-independent rendering contracts | Complete |
-| 6 | Prove the native engine and multi-backend rendering path with a vertical slice | Planned |
+| 6 | Prove the native engine and multi-backend rendering path with a vertical slice | In review |
 | 7 | Complete packaging, recovery, performance, compatibility, and release hardening | Planned |
 
 ## What this means for the current repository
@@ -37,9 +37,10 @@ internal architecture or working notes.
   Windows Credential Manager or an explicit memory-only mode, routes do not
   silently fall back, and generated media remains a preview until committed.
 - Local execution and local compute are first-class requirements.
-- Saving, recovery, provider access, and the current rendering boundary now run
-  behind explicit engine services. Native rendering and gameplay runtime work
-  remain later stages.
+- Saving, recovery, provider access, and rendering now run behind explicit
+  engine services. The first Rust/wgpu vertical slice keeps native world state
+  across editor reloads, presents reference content in a separate native
+  viewport, and preserves WebGL2 as the compatibility fallback.
 - Project saving and recovery now run through the native host; legacy browser
   storage remains available only as a read-only migration source.
 - Experimental work must preserve a tested fallback and may not silently become

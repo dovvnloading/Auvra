@@ -1,3 +1,5 @@
+/// <reference path="./webview2.d.ts" />
+
 import { FakeHost } from "./fakeHost";
 import { NativeHostTransport } from "./nativeTransport";
 import type { HostTransport } from "./transport";

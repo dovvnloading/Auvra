@@ -4,7 +4,8 @@ import type { HostTransport } from "./transport";
 
 const PROJECT_METHODS = ["project.getStatus", "project.create", "project.open", "project.openRecent", "project.close", "project.getSnapshot", "project.applyChanges", "project.save", "project.saveAs", "project.exportPack", "project.importPack", "project.importLegacy", "asset.beginUpload", "asset.resolve"] as const;
 const PROVIDER_METHODS = ["provider.list", "provider.getStatus", "provider.configureCredential", "provider.deleteCredential", "provider.configure", "provider.listModels", "provider.health", "inference.submit", "inference.get", "inference.list", "inference.cancel", "inference.retry", "media.discard", "media.commit", "command.preview", "command.approve", "command.undo"] as const;
-const METHODS = ["host.ping", "host.getCapabilities", ...PROJECT_METHODS, ...PROVIDER_METHODS] as const;
+const ENGINE_METHODS = ["engine.getStatus", "engine.getSnapshot", "engine.applyChanges", "engine.openViewport", "engine.closeViewport", "engine.renderReference", "engine.getMetrics", "engine.recover"] as const;
+const METHODS = ["host.ping", "host.getCapabilities", ...PROJECT_METHODS, ...PROVIDER_METHODS, ...ENGINE_METHODS] as const;
 const MEDIA_CAPABILITIES = ["media.generate", "media.edit"] as const;
 type Payload = Record<string, unknown>;
 
@@ -28,6 +29,10 @@ export class FakeHost implements HostTransport {
   private readonly jobProjects = new Map<string, string>();
   private readonly proposals = new Map<string, Record<string, unknown>>();
   private readonly transactions = new Map<string, string>();
+  private engineRevision = 0;
+  private engineViewport: "closed" | "open" = "closed";
+  private engineRecoveries = 0;
+  private engineEntities: unknown[] = [];
   private clock = 1_000;
   private readonly listeners = new Set<(event: Event) => void>();
   private closed = false;
@@ -45,7 +50,7 @@ export class FakeHost implements HostTransport {
     if (request.revision !== this.revision) return this.error(request.id, "revision_conflict", "Host revision does not match");
     const payload = request.payload as Payload;
     if (request.method === "host.ping") return this.reply(request, { pong: true });
-    if (request.method === "host.getCapabilities") return this.reply(request, { protocol: "auvra.host/1", methods: ["host.ping", "host.getCapabilities"], projectMethods: [...PROJECT_METHODS], providerMethods: [...PROVIDER_METHODS] });
+    if (request.method === "host.getCapabilities") return this.reply(request, { protocol: "auvra.host/1", methods: ["host.ping", "host.getCapabilities"], projectMethods: [...PROJECT_METHODS], providerMethods: [...PROVIDER_METHODS], engineMethods: [...ENGINE_METHODS] });
     try { return this.reply(request, this.operationRequest(request.method, payload)); }
     catch (error) {
       const operation = error as { code?: ErrorCode; message?: string };
@@ -151,6 +156,19 @@ export class FakeHost implements HostTransport {
       case "command.preview": { this.requireProject(payload); const job = this.requireJob(payload); const proposalId = String(job.proposalId || ""); if (!this.proposals.has(proposalId)) throw { code: "invalid_job", message: "Command proposal is unavailable" }; return { kind: "command.preview", projectId: this.projectId, projectRevision: this.projectRevision, proposalId, diff: [] } as unknown as SuccessResult; }
       case "command.approve": { this.requireMutation(payload); const proposalId = String(payload.proposalId); const proposal = this.proposals.get(proposalId); if (!proposal || proposal.projectId !== this.projectId) throw { code: "approval_required", message: "Command proposal is unavailable" }; this.projectRevision++; this.revision++; const transactionId = `transaction-${String(this.transactions.size + 1).padStart(8, "0")}`; this.transactions.set(transactionId, proposalId); this.proposals.delete(proposalId); return { kind: "command.approve", projectId: this.projectId, projectRevision: this.projectRevision, transactionId } as unknown as SuccessResult; }
       case "command.undo": { this.requireMutation(payload); const transactionId = String(payload.transactionId); if (!this.transactions.has(transactionId)) throw { code: "invalid_command", message: "Command transaction is unavailable" }; this.projectRevision++; this.revision++; this.transactions.delete(transactionId); return { kind: "command.undo", projectId: this.projectId, projectRevision: this.projectRevision, transactionId } as unknown as SuccessResult; }
+      case "engine.getStatus": return this.engineResult("engine.status");
+      case "engine.getSnapshot": return this.engineResult("engine.snapshot", { entities: [...this.engineEntities] });
+      case "engine.applyChanges": {
+        if (payload.expectedRevision !== this.engineRevision) throw { code: "revision_conflict", message: "Native world revision does not match" };
+        this.engineEntities = Array.isArray(payload.entities) ? [...payload.entities] : [];
+        this.engineRevision++; this.revision++;
+        return this.engineResult("engine.applyChanges", { entities: [...this.engineEntities] });
+      }
+      case "engine.openViewport": this.engineViewport = "open"; this.revision++; return this.engineResult("engine.openViewport");
+      case "engine.closeViewport": this.engineViewport = "closed"; this.revision++; return this.engineResult("engine.closeViewport");
+      case "engine.renderReference": return this.engineResult("engine.renderReference", { signature: "47ed61f4e0a9caba", width: Number(payload.width ?? 64), height: Number(payload.height ?? 64) });
+      case "engine.getMetrics": return this.engineResult("engine.metrics", { metrics: this.engineMetrics() });
+      case "engine.recover": this.engineRecoveries++; this.revision++; return this.engineResult("engine.recover", { metrics: this.engineMetrics() });
       default: throw { code: "unknown_method", message: "Unknown host method" };
     }
   }
@@ -162,6 +180,8 @@ export class FakeHost implements HostTransport {
   private requireJob(payload: Payload): Record<string, unknown> { const jobId = String(payload.jobId); const job = this.jobs.get(jobId); if (!job || this.jobProjects.get(jobId) !== this.projectId) throw { code: "invalid_job", message: "Inference job is unavailable" }; return job; }
   private assertProvider(providerId: string): void { if (!["fal", "openai", "anthropic", "xai", "openrouter", "ollama", "llama.cpp"].includes(providerId)) throw { code: "provider_unavailable", message: "Provider is not registered" }; }
   private providerStatus(providerId: string, configured: boolean): SuccessResult { const local = ["ollama", "llama.cpp"].includes(providerId); const stored = this.providerSettings.get(providerId) ?? { enabled: false, routes: [], fallbackPolicy: "none", requireCostConfirmation: true, budgets: { perJobMicroUsd: 0, dailyMicroUsd: 0, monthlyMicroUsd: 0 } }; const settings = { ...stored }; if ("endpoint" in settings) { delete settings.endpoint; settings.endpointConfigured = true; } return { kind: "provider.status", providerId, configured: configured || local, available: true, healthy: configured || local, state: configured || local ? "ready" : "unconfigured", settings, settingsRevision: this.providerSettingsRevision.get(providerId) ?? 0, credentialStatus: local ? "notRequired" : configured ? "configured" : "absent" } as unknown as SuccessResult; }
+  private engineMetrics(): Record<string, unknown> { return { startupMs: 0, frameCpuMs: 0, gpuFrameMs: null, memoryBytes: 0, recoveryCount: this.engineRecoveries }; }
+  private engineResult(kind: string, extra: Record<string, unknown> = {}): SuccessResult { return { kind, protocol: "auvra.native/1", status: "ready", worldRevision: this.engineRevision, viewport: this.engineViewport, backend: "WebGL2 fake fallback", adapter: "deterministic fake host", fallbackReason: "Native engine process is not started in browser development mode", ...extra } as unknown as SuccessResult; }
   async requestAsset(request: { method: string; url: string; origin: string; mime?: string; body?: Uint8Array; now?: number }): Promise<{ status: number; sha256?: string }> {
     const expectedOrigin = "https://assets.auvra.local";
     if (request.origin !== expectedOrigin) throw { code: "asset_origin_denied" };

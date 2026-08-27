@@ -26,10 +26,11 @@ from Auvra.desktop.assets import AssetTransferRegistry
 from Auvra.desktop.dialogs import DialogSelection
 from Auvra.desktop.project_host import NativeProjectHost
 from Auvra.desktop.provider_host import NativeProviderHost
+from Auvra.desktop.native_engine import NativeEngine, NativeEngineHost
 from Auvra.desktop.sdk import acquire_sdk
 from Auvra.desktop.webview2 import WebView2Frame
 from Auvra.launcher.cli import choose_port
-from Auvra.launcher.config import FRONTEND_ROOT
+from Auvra.launcher.config import FRONTEND_ROOT, REPO_ROOT
 from Auvra.launcher.process import OwnedProcess
 from Auvra.launcher.readiness import wait_for_readiness
 from Auvra.providers.adapters import TextResult
@@ -278,6 +279,50 @@ def _script_for_project_lifecycle(prefix: str) -> str:
     """
 
 
+def _script_for_engine_lifecycle(prefix: str, *, resume: bool) -> str:
+    """Exercise the real native child while keeping all state behind the host."""
+
+    first_method = "engine.getSnapshot" if resume else "engine.getStatus"
+    return f"""
+    (() => {{
+      const state = {{ session: null, revision: 0, sent: new Set() }};
+      const request = (id, method, payload) => {{
+        if (state.sent.has(id)) return;
+        state.sent.add(id);
+        chrome.webview.postMessage({{ protocol: "auvra.host/1", type: "request", id,
+          session: state.session, revision: state.revision, method, payload }});
+      }};
+      chrome.webview.addEventListener("message", event => {{
+        const message = event.data;
+        if (!message || typeof message !== "object") return;
+        if (typeof message.revision === "number") state.revision = message.revision;
+        if (message.type === "session" && !state.session) {{
+          state.session = message.session;
+          request("{prefix}-first", "{first_method}", {{}});
+          return;
+        }}
+        if (message.type !== "response" || !message.ok) return;
+        const result = message.result || {{}};
+        if (message.id === "{prefix}-first") {{
+          if ({str(resume).lower()}) request("{prefix}-metrics", "engine.getMetrics", {{}});
+          else request("{prefix}-snapshot", "engine.getSnapshot", {{}});
+        }} else if (message.id === "{prefix}-snapshot") {{
+          request("{prefix}-apply", "engine.applyChanges", {{ expectedRevision: result.worldRevision,
+            entities: [{{ id: "reference", position: [1.25, -0.5, 0], color: [0.2, 0.6, 1, 1] }}] }});
+        }} else if (message.id === "{prefix}-apply") {{
+          request("{prefix}-render", "engine.renderReference", {{ width: 128, height: 128 }});
+        }} else if (message.id === "{prefix}-render") {{
+          request("{prefix}-open", "engine.openViewport", {{ width: 640, height: 480, title: "Auvra Native Smoke" }});
+        }} else if (message.id === "{prefix}-metrics") {{
+          request("{prefix}-recover", "engine.recover", {{}});
+        }} else if (message.id === "{prefix}-recover") {{
+          request("{prefix}-close", "engine.closeViewport", {{}});
+        }}
+      }});
+    }})();
+    """
+
+
 @unittest.skipUnless(_SMOKE_ENABLED, "set AUVRA_NATIVE_SMOKE=1 for real WebView2 smoke")
 @unittest.skipUnless(os.name == "nt", "real WebView2 smoke is Windows-only")
 class NativeWebView2SmokeTests(unittest.TestCase):
@@ -289,6 +334,9 @@ class NativeWebView2SmokeTests(unittest.TestCase):
             raise AssertionError("npm is required for the enabled native smoke")
         if not (FRONTEND_ROOT / "node_modules").is_dir():
             raise AssertionError("frontend node_modules is required; run the launcher prepare step")
+        cls.native_binary = REPO_ROOT / "native" / "target" / "release" / "auvra-native.exe"
+        if not cls.native_binary.is_file():
+            raise AssertionError("native release binary is required; build native/ before the smoke")
         cls.sdk = acquire_sdk(FRONTEND_ROOT / ".auvra-launcher" / "webview2-sdk")
         cls.trap = _TrapServer()
 
@@ -446,6 +494,7 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         controller.provider_host = provider
         controller.dispatcher.bind_services(
             project_service=host, asset_service=host, provider_service=provider,
+            engine_service=controller.native_engine_host,
         )
         return dialogs.project_path
 
@@ -567,7 +616,26 @@ class NativeWebView2SmokeTests(unittest.TestCase):
 
         frame.post_message = capture_post  # type: ignore[method-assign]
         holder["controller"] = controller
+        if mode is FrameMode.DEVELOPMENT:
+            native = NativeEngineHost(NativeEngine([str(self.native_binary)]))
+            native.start(editor_session=controller.dispatcher.session.session_id)
+            controller.native_engine_host = native
+            controller.dispatcher.bind_services(engine_service=native)
         return controller
+
+    def _engine_lifecycle(self, controller: FrameController, prefix: str,
+                          seen: list[dict[str, Any]], *, resume: bool) -> dict[str, Any]:
+        self._execute_script(controller.frame, _script_for_engine_lifecycle(prefix, resume=resume))
+        time.sleep(0.25)
+        controller.on_lifecycle("navigation_completed", {"success": True})
+        expected = ({f"{prefix}-first", f"{prefix}-metrics", f"{prefix}-recover", f"{prefix}-close"}
+                    if resume else
+                    {f"{prefix}-first", f"{prefix}-snapshot", f"{prefix}-apply", f"{prefix}-render", f"{prefix}-open"})
+        _wait_until(lambda: expected.issubset({item.get("id") for item in seen if item.get("type") == "response"}),
+                    30.0, "native engine lifecycle")
+        responses = {item["id"]: item for item in seen if item.get("id") in expected and item.get("type") == "response"}
+        self.assertTrue(all(item.get("ok") is True for item in responses.values()), responses)
+        return responses
 
     def _handshake(self, controller: FrameController, prefix: str, seen: list[dict[str, Any]], *, trap: bool = False) -> None:
         frame = controller.frame
@@ -611,11 +679,19 @@ class NativeWebView2SmokeTests(unittest.TestCase):
             session_id = dev.dispatcher.session.session_id
             self._handshake(dev, "dev-1", dev_seen, trap=True)
             self._project_lifecycle(dev, "project", dev_seen, project_path)
+            native_pid = dev.native_engine_host.engine.status.pid
+            engine_initial = self._engine_lifecycle(dev, "engine-1", dev_seen, resume=False)
+            self.assertEqual(engine_initial["engine-1-apply"]["result"]["worldRevision"], 1)
+            self.assertEqual(engine_initial["engine-1-open"]["result"]["viewport"], "open")
 
             nav_before = dev_lifecycle.count("navigation_completed")
             self._ui(dev.frame, lambda core: core.Reload())
             _wait_until(lambda: dev_lifecycle.count("navigation_completed") > nav_before, 15.0, "full reload")
             self._handshake(dev, "dev-2", dev_seen)
+            engine_reload = self._engine_lifecycle(dev, "engine-2", dev_seen, resume=True)
+            self.assertEqual(engine_reload["engine-2-first"]["result"]["worldRevision"], 1)
+            self.assertEqual(dev.native_engine_host.engine.status.pid, native_pid)
+            self.assertEqual(engine_reload["engine-2-close"]["result"]["viewport"], "closed")
             reload_renderer = self._renderer_smoke(dev.frame, "reload")
             self.assertEqual(reload_renderer["after"]["contractVersion"], "auvra.renderer/1")
             self.assertEqual(reload_renderer["after"]["lifecycle"], "ready")

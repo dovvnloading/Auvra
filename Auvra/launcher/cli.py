@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import os
 import shutil
 import signal
 import socket
@@ -334,6 +335,7 @@ def run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool, packa
                 try:
                     controller = FrameController.development(
                         owned, result.url, profile_parent=paths.launcher_state,
+                        native_command=_native_engine_command(paths),
                     )
                     controller.start()
                     emit({"command": "start", "ok": True, "url": result.url, "port": port,
@@ -369,6 +371,14 @@ def run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool, packa
                       "error": f"owned-process cleanup failed: {exc}"}, json_mode=json_mode)
                 exit_code = ExitCode.CLEANUP
     return exit_code
+
+
+def _native_engine_command(paths: Paths) -> list[str] | None:
+    """Resolve only the repository-owned Stage 6 development binary."""
+
+    name = "auvra-native.exe" if os.name == "nt" else "auvra-native"
+    candidate = paths.repo_root / "native" / "target" / "release" / name
+    return [str(candidate)] if candidate.is_file() else None
 
 
 def main(argv: list[str] | None = None) -> int:

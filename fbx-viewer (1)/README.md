@@ -46,6 +46,13 @@ diagnostics. Generated thumbnails use a separate on-demand capture renderer.
 The WebGPU reference path remains experimental and deliberately falls back to
 WebGL2 for editor presentation.
 
+The Stage 6 native vertical slice can be selected with `?renderer=native` after
+building `native/target/release/auvra-native`. The launcher owns that process;
+its world state survives an editor reload, and it presents through a separate
+native viewport. A failed or unavailable native start reports its reason and
+leaves the WebGL2 compatibility renderer active. Native binary packaging is not
+part of the development frontend workflow yet.
+
 Create a production bundle with:
 
 ```powershell

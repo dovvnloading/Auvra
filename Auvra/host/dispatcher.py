@@ -27,20 +27,27 @@ METHODS = (
     "provider.health", "inference.submit", "inference.get", "inference.list",
     "inference.cancel", "inference.retry", "media.discard", "media.commit",
     "command.preview", "command.approve", "command.undo",
+    "engine.getStatus", "engine.getSnapshot", "engine.applyChanges",
+    "engine.openViewport", "engine.closeViewport", "engine.renderReference",
+    "engine.getMetrics", "engine.recover",
 )
 PROJECT_METHODS = METHODS[2:16]
-PROVIDER_METHODS = METHODS[16:]
+PROVIDER_METHODS = METHODS[16:33]
+ENGINE_METHODS = METHODS[33:]
 MUTATING_METHODS = frozenset({
     "project.create", "project.open", "project.openRecent", "project.close",
     "project.applyChanges", "project.save", "project.saveAs", "project.exportPack",
     "project.importPack", "project.importLegacy", "asset.beginUpload",
     "media.commit", "command.approve", "command.undo",
+    "engine.applyChanges", "engine.openViewport", "engine.closeViewport",
+    "engine.recover",
 })
 EVENTS = frozenset({
     "host.session", "host.revision", "project.status", "project.opening", "project.opened",
     "project.closing", "project.closed", "project.revision", "project.dirty",
     "project.readOnly", "project.progress", "project.recovery",
     "provider.job", "provider.status", "provider.progress", "provider.recovery",
+    "engine.status", "engine.revision", "engine.viewport", "engine.recovery",
 })
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
@@ -62,6 +69,7 @@ class HostDispatcher:
         self._project_service: Any = None
         self._asset_service: Any = None
         self._provider_service: Any = None
+        self._engine_service: Any = None
         self._documents: dict[str, dict[str, Any]] = {}
         self._asset_tickets: dict[str, dict[str, Any]] = {}
         self._asset_ids: set[str] = set()
@@ -71,6 +79,10 @@ class HostDispatcher:
         self._jobs: dict[str, dict[str, Any]] = {}
         self._proposals: dict[str, dict[str, Any]] = {}
         self._transactions: dict[str, dict[str, Any]] = {}
+        self._engine_revision = 0
+        self._engine_entities: list[dict[str, Any]] = []
+        self._engine_viewport = "closed"
+        self._engine_recoveries = 0
         self._methods: dict[str, Handler] = {
             "host.ping": lambda payload: {"pong": True},
             "host.getCapabilities": lambda payload: {
@@ -78,6 +90,7 @@ class HostDispatcher:
                 "methods": ["host.ping", "host.getCapabilities"],
                 "projectMethods": list(PROJECT_METHODS),
                 "providerMethods": list(PROVIDER_METHODS),
+                "engineMethods": list(ENGINE_METHODS),
             },
             "project.getStatus": self._get_status,
             "project.create": self._create_project,
@@ -110,12 +123,20 @@ class HostDispatcher:
                 "command.preview": self._preview_command,
                 "command.approve": self._approve_command,
                 "command.undo": self._undo_command,
+                "engine.getStatus": self._engine_status,
+                "engine.getSnapshot": self._engine_snapshot,
+                "engine.applyChanges": self._engine_apply,
+                "engine.openViewport": self._engine_open_viewport,
+                "engine.closeViewport": self._engine_close_viewport,
+                "engine.renderReference": self._engine_render_reference,
+                "engine.getMetrics": self._engine_metrics,
+                "engine.recover": self._engine_recover,
         }
         if methods:
             self._methods.update(methods)
 
     def bind_services(self, *, project_service: Any = None, asset_service: Any = None,
-                      provider_service: Any = None) -> None:
+                      provider_service: Any = None, engine_service: Any = None) -> None:
         """Bind host-owned services without importing filesystem or desktop code.
 
         A service may expose ``handle(method, payload)`` or a method named after
@@ -127,6 +148,7 @@ class HostDispatcher:
         self._project_service = project_service
         self._asset_service = asset_service
         self._provider_service = provider_service
+        self._engine_service = engine_service
 
     def register_method(self, method: str, handler: Handler) -> None:
         """Inject one application-owned method without changing the protocol."""
@@ -238,7 +260,7 @@ class HostDispatcher:
         """
         envelopes: list[dict[str, Any]] = []
         seen: set[int] = set()
-        for service in (self._project_service, self._asset_service, self._provider_service):
+        for service in (self._project_service, self._asset_service, self._provider_service, self._engine_service):
             if service is None or id(service) in seen:
                 continue
             seen.add(id(service))
@@ -258,6 +280,8 @@ class HostDispatcher:
         service = (self._project_service if method.startswith("project.") else
                    self._asset_service if method.startswith("asset.") else
                    self._provider_service if (method.startswith("provider.") or method.startswith("inference.") or method.startswith("media.") or method.startswith("command.")) else None)
+        if method.startswith("engine."):
+            service = self._engine_service
         if service is None:
             return None
         candidate = getattr(service, "handle", None)
@@ -639,6 +663,61 @@ class HostDispatcher:
         self._advance_project()
         return {"kind": "command.undo", "projectId": self._project_id,
                 "projectRevision": self._project_revision, "transactionId": payload["transactionId"]}
+
+    def _engine_result(self, kind: str, **values: Any) -> dict[str, Any]:
+        return {
+            "kind": kind,
+            "protocol": "auvra.native/1",
+            "status": "ready",
+            "worldRevision": self._engine_revision,
+            "viewport": self._engine_viewport,
+            "backend": "WebGL2 fake fallback",
+            "adapter": "deterministic fake host",
+            "fallbackReason": "Native engine process is not started in browser development mode",
+            **values,
+        }
+
+    def _engine_status(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._engine_result("engine.status")
+
+    def _engine_snapshot(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._engine_result("engine.snapshot", entities=[dict(value) for value in self._engine_entities])
+
+    def _engine_apply(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if payload["expectedRevision"] != self._engine_revision:
+            raise HostOperationError("revision_conflict", "Native world revision does not match", {
+                "expectedRevision": payload["expectedRevision"], "actualRevision": self._engine_revision,
+            })
+        self._engine_entities = [dict(value) for value in payload["entities"]]
+        self._engine_revision += 1
+        return self._engine_result("engine.applyChanges", entities=[dict(value) for value in self._engine_entities])
+
+    def _engine_open_viewport(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._engine_viewport = "open"
+        return self._engine_result("engine.openViewport")
+
+    def _engine_close_viewport(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._engine_viewport = "closed"
+        return self._engine_result("engine.closeViewport")
+
+    def _engine_render_reference(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._engine_result(
+            "engine.renderReference", signature="47ed61f4e0a9caba",
+            width=payload.get("width", 64), height=payload.get("height", 64),
+        )
+
+    def _engine_metrics(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._engine_result("engine.metrics", metrics={
+            "startupMs": 0, "frameCpuMs": 0, "gpuFrameMs": None,
+            "memoryBytes": 0, "recoveryCount": self._engine_recoveries,
+        })
+
+    def _engine_recover(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._engine_recoveries += 1
+        return self._engine_result("engine.recover", metrics={
+            "startupMs": 0, "frameCpuMs": 0, "gpuFrameMs": None,
+            "memoryBytes": 0, "recoveryCount": self._engine_recoveries,
+        })
 
 
 class HostOperationError(RuntimeError):

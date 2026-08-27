@@ -31,6 +31,73 @@ class DispatcherTests(unittest.TestCase):
         self.assertEqual(host.emit_revision()["revision"], 1)
         self.assertEqual(host.request(dict(request, revision=1))["revision"], 1)
 
+    def test_engine_methods_and_capabilities_are_explicit(self):
+        capabilities = self.dispatcher.dispatch(self.request(method="host.getCapabilities"))
+        self.assertEqual(capabilities["result"]["engineMethods"], [
+            "engine.getStatus", "engine.getSnapshot", "engine.applyChanges",
+            "engine.openViewport", "engine.closeViewport", "engine.renderReference",
+            "engine.getMetrics", "engine.recover",
+        ])
+        status = self.dispatcher.dispatch(self.request(method="engine.getStatus"))
+        self.assertEqual(status["result"]["kind"], "engine.status")
+        snapshot = self.dispatcher.dispatch(self.request(method="engine.getSnapshot"))
+        self.assertEqual(snapshot["result"]["kind"], "engine.snapshot")
+        applied = self.dispatcher.dispatch(self.request(
+            method="engine.applyChanges",
+            payload={"expectedRevision": 0, "entities": [{
+                "id": "reference", "position": [0, 0, 0], "color": [0.2, 0.6, 1, 1],
+            }]},
+        ))
+        self.assertTrue(applied["ok"])
+        conflict = self.dispatcher.dispatch(self.request(
+            id="engine-conflict", revision=applied["revision"], method="engine.applyChanges",
+            payload={"expectedRevision": 0, "entities": []},
+        ))
+        self.assertEqual(conflict["error"]["code"], "revision_conflict")
+
+    def test_bound_engine_service_survives_reload_and_drains_safe_events(self):
+        class EngineService:
+            def __init__(self):
+                self.revision = 0
+                self.entities = []
+                self.events = []
+
+            def handle(self, method, payload):
+                base = {"kind": "engine.status", "protocol": "auvra.native/1",
+                        "status": "ready", "worldRevision": self.revision,
+                        "viewport": "closed", "backend": "Vulkan", "adapter": "test"}
+                if method == "engine.getSnapshot":
+                    return {**base, "kind": "engine.snapshot", "entities": list(self.entities)}
+                if method == "engine.applyChanges":
+                    if payload["expectedRevision"] != self.revision:
+                        from Auvra.host.dispatcher import HostOperationError
+                        raise HostOperationError("revision_conflict", "Native revision does not match", {
+                            "expectedRevision": payload["expectedRevision"], "actualRevision": self.revision,
+                        })
+                    self.entities = list(payload["entities"]); self.revision += 1
+                    self.events.append(("engine.revision", {"status": "ready", "worldRevision": self.revision, "viewport": "closed"}))
+                    return {**base, "kind": "engine.applyChanges", "worldRevision": self.revision, "entities": list(self.entities)}
+                return base
+
+            def drain_events(self):
+                events, self.events = self.events, []
+                return events
+
+        service = EngineService()
+        dispatcher = HostDispatcher(SessionManager("s1"))
+        dispatcher.bind_services(engine_service=service)
+        first = dispatcher.dispatch(self.request(method="engine.applyChanges", payload={
+            "expectedRevision": 0, "entities": [{"id": "cube", "position": [1, 2, 3], "color": [1, 0, 0, 1]}],
+        }))
+        self.assertTrue(first["ok"])
+        reload_request = self.request(id="reload", revision=first["revision"], method="engine.getSnapshot")
+        after_reload = dispatcher.dispatch(reload_request)
+        self.assertEqual(after_reload["result"]["entities"][0]["id"], "cube")
+        event = dispatcher.drain_bound_events()[0]
+        self.assertEqual(event["event"], "engine.revision")
+        self.assertEqual(event["payload"]["worldRevision"], 1)
+        self.assertNotIn("token", str(event).lower())
+
     def test_project_workflow_is_bounded_and_revision_checked(self):
         create = self.request(method="project.create", payload={"name": "Demo"})
         created = self.dispatcher.dispatch(create)
