@@ -45,6 +45,14 @@ check(!source.index.includes("cdn.tailwindcss.com"), "editor still references Ta
 check(source.index.includes("__AUVRA_EDITOR_CSP__"), "editor CSP placeholder missing");
 check(source.hud.includes("__AUVRA_HUD_CSP__"), "HUD CSP placeholder missing");
 check(source.vite.includes("'unsafe-eval'") && source.vite.includes("connect-src 'none'"), "HUD CSP does not confine evaluation and network access");
+const editorCspDefinitions = {
+  development: source.vite.match(/const editorDevCsp[^`]+`([^`]+)`;/)?.[1],
+  packaged: source.vite.match(/const editorPackagedCsp\s*=\s*`([^`]+)`;/)?.[1],
+};
+for (const [mode, policy] of Object.entries(editorCspDefinitions)) {
+  const connectSources = policy?.match(/(?:^|;\s*)connect-src\s+([^;]+);/)?.[1].split(/\s+/) ?? [];
+  check(connectSources.includes("blob:"), `${mode} editor CSP blocks blob-backed model imports`);
+}
 check(source.vite.includes("cspNonce"), "Vite CSP nonce integration is missing");
 check(!/127\.0\.0\.1:\*/.test(source.vite), "development CSP grants unrelated loopback ports");
 check(source.vite.includes("httpServer?.address()") && source.vite.includes("editorDevCsp(address.port, developmentNonce)"), "development CSP is not bound to the actual Vite listener");
