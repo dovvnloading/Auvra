@@ -65,6 +65,24 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _remove_staging(path: Path) -> None:
+    """Remove a failed staging tree even after immutable modes were applied."""
+    if not path.exists():
+        return
+    for item in sorted(path.rglob("*"), key=lambda value: len(value.parts), reverse=True):
+        try:
+            item.chmod(0o700)
+        except OSError:
+            pass
+    try:
+        path.chmod(0o700)
+    except OSError:
+        pass
+    shutil.rmtree(path, ignore_errors=True)
+    if path.exists():
+        raise InstallError("failed plugin installation left staging data")
+
+
 class PluginInstaller:
     """Install only a fully validated package into a digest-addressed directory."""
 
@@ -127,13 +145,7 @@ class PluginInstaller:
             raise InstallError("plugin installation failed closed") from exc
         finally:
             if staging is not None and staging.exists():
-                def _make_writable(function, path, _exc) -> None:
-                    try:
-                        Path(path).chmod(0o700)
-                        function(path)
-                    except OSError:
-                        pass
-                shutil.rmtree(staging, onerror=_make_writable)
+                _remove_staging(staging)
 
 
 def _grant_appcontainer_read_execute(directory: Path, package: PluginPackage) -> None:
