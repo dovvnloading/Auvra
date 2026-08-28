@@ -7,6 +7,7 @@ import { loadFBXFile } from '../utils/modelLoader';
 import { stripGeometry } from '../utils/processing/ModelTransforms';
 import { generateThumbnail } from '../utils/thumbnailGenerator';
 import { disposeModel } from '../utils/processing/ModelLifecycle';
+import { prepareAnimationClips } from '../utils/animationBinding';
 import { projectService, ProjectSnapshot } from '../utils/projectService';
 
 interface ScenePersistenceProps {
@@ -151,8 +152,12 @@ async function hydrateSnapshot(snapshot: ProjectSnapshot, targets: SnapshotHydra
           if (!animation?.assetId) continue;
           try {
             const animationModel = await loadFBXFile(await loadProjectAssetFile(animation.assetId, animation.name || 'animation.fbx'), { normalize: false });
-            loaded.animations.push(...animationModel.animations.map((clip) => { const copy = clip.clone(); copy.name = String(animation.name || copy.name); return copy; }));
-            disposeModel(animationModel);
+            try {
+              const prepared = prepareAnimationClips(loaded.object, animationModel.object, animationModel.animations);
+              loaded.animations.push(...prepared.clips);
+            } finally {
+              disposeModel(animationModel);
+            }
           } catch (error) { console.warn(`[Persistence] Could not hydrate animation ${animation.assetId}`, error); }
         }
         models.push(loaded);
@@ -333,14 +338,11 @@ export const useScenePersistence = ({
               for (const animFile of dbM.animationFiles) {
                  const aFile = new File([animFile.file], animFile.name, { type: 'application/octet-stream' });
                  const tempLoaded = await loadFBXFile(aFile, { normalize: false });
-                 const newClips = tempLoaded.animations.map(clip => {
-                    const cleanName = animFile.name.replace('.fbx', '').replace('.FBX', '');
-                    const newClip = clip.clone();
-                    newClip.name = cleanName;
-                    return newClip;
-                 });
-                 animClips.push(...newClips);
-                 disposeModel(tempLoaded);
+                 try {
+                    animClips.push(...prepareAnimationClips(loaded.object, tempLoaded.object, tempLoaded.animations).clips);
+                 } finally {
+                    disposeModel(tempLoaded);
+                 }
               }
               loaded.animations = [...loaded.animations, ...animClips];
             }

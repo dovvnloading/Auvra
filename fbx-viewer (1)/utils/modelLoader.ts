@@ -45,9 +45,11 @@ export const loadFBXFile = async (file: File, options: LoadOptions = { normalize
     });
 
     // --- FILTER ANIMATIONS ---
-    // Filter out clips with 0 duration or no tracks (e.g. static pose artifacts, T-poses)
+    // Reject only empty/invalid clips. Short authored clips are valid assets.
     if (object.animations) {
-       object.animations = object.animations.filter(clip => clip.duration > 0.1 && clip.tracks.length > 0);
+       object.animations = object.animations.filter(
+         clip => Number.isFinite(clip.duration) && clip.duration > 0 && clip.tracks.length > 0,
+       );
     }
 
     // --- OPTIMIZE MATERIALS ---

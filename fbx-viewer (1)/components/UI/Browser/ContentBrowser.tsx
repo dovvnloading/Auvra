@@ -9,11 +9,14 @@ import { ModelCard } from './ModelCard';
 import { BlueprintCard } from './BlueprintCard';
 import { TextureCard } from './TextureCard';
 import { AudioCard } from './AudioCard';
+import { selectAnimationTarget } from '../../../utils/animationBinding';
 
 export const ContentBrowser: React.FC = () => {
     const { 
         models, 
         addModel, 
+        addAnimations,
+        selectedModelId,
         selectModel, 
         placeInScene, 
         isLoading, 
@@ -31,6 +34,13 @@ export const ContentBrowser: React.FC = () => {
     const [activeTab, setActiveTab] = useState<'models' | 'blueprints'>('models');
     const [filter, setFilter] = useState<AssetCategory | 'All'>('All');
     const [searchQuery, setSearchQuery] = useState('');
+    const animationTarget = useMemo(() => {
+        try {
+            return selectAnimationTarget(models, selectedModelId);
+        } catch {
+            return null;
+        }
+    }, [models, selectedModelId]);
 
     // --- Hover Logic for Live Preview ---
     const [hoveredModel, setHoveredModel] = useState<LoadedModelData | null>(null);
@@ -61,6 +71,16 @@ export const ContentBrowser: React.FC = () => {
 
     // --- Import Handlers ---
     const handleImport = async (files: File[], category: AssetCategory) => {
+        if (category === 'Animation') {
+            try {
+                const target = selectAnimationTarget(models, selectedModelId);
+                await addAnimations(files, target.id);
+                selectModel(target.id);
+            } catch (error) {
+                alert(error instanceof Error ? error.message : 'Select a skeletal model before importing animation clips.');
+            }
+            return;
+        }
         for (const file of files) {
             await addModel(file, category);
         }
@@ -120,6 +140,7 @@ export const ContentBrowser: React.FC = () => {
                 onAddBlueprint={addBlueprint}
                 isLoading={isLoading}
                 hasPlayerCharacter={hasPlayerCharacter}
+                animationTargetName={animationTarget?.name}
             />
 
             {/* Grid Content */}

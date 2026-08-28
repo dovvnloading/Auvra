@@ -16,6 +16,7 @@ interface BrowserToolbarProps {
     onAddBlueprint: (type: 'Player Character' | 'Enemy Controller') => void;
     isLoading: boolean;
     hasPlayerCharacter: boolean;
+    animationTargetName?: string;
 }
 
 export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
@@ -30,7 +31,8 @@ export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
     onImportAudio,
     onAddBlueprint,
     isLoading,
-    hasPlayerCharacter
+    hasPlayerCharacter,
+    animationTargetName
 }) => {
     const [isImportOpen, setIsImportOpen] = useState(false);
 
@@ -91,8 +93,14 @@ export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
                                     <div className="fixed inset-0 z-40" onClick={() => setIsImportOpen(false)} />
                                     <div className="absolute bottom-full left-0 mb-2 w-48 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-50 overflow-hidden py-1">
                                         <div className="px-3 py-2 text-[10px] uppercase text-gray-500 font-bold tracking-wider border-b border-gray-700/50 mb-1">Asset Type</div>
-                                        {(['Character', 'Prop', 'Environment', 'Weapon', 'Animation', 'Texture', 'Audio'] as AssetCategory[]).map(cat => (
-                                            <label key={cat} className="flex items-center gap-3 px-3 py-2 hover:bg-gray-700 hover:text-white cursor-pointer group transition-colors">
+                                        {(['Character', 'Prop', 'Environment', 'Weapon', 'Animation', 'Texture', 'Audio'] as AssetCategory[]).map(cat => {
+                                            const animationUnavailable = cat === 'Animation' && !animationTargetName;
+                                            return (
+                                                <label
+                                                    key={cat}
+                                                    title={animationUnavailable ? 'Select a skeletal model before importing animation clips.' : undefined}
+                                                    className={`flex items-center gap-3 px-3 py-2 group transition-colors ${animationUnavailable ? 'opacity-45 cursor-not-allowed' : 'hover:bg-gray-700 hover:text-white cursor-pointer'}`}
+                                                >
                                                 {cat === 'Character' && <User size={14} className="text-gray-500 group-hover:text-white" />}
                                                 {cat === 'Prop' && <Component size={14} className="text-gray-500 group-hover:text-white" />}
                                                 {cat === 'Environment' && <Image size={14} className="text-gray-500 group-hover:text-white" />}
@@ -100,16 +108,23 @@ export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
                                                 {cat === 'Animation' && <Film size={14} className="text-gray-500 group-hover:text-white" />}
                                                 {cat === 'Texture' && <Palette size={14} className="text-gray-500 group-hover:text-white" />}
                                                 {cat === 'Audio' && <Music size={14} className="text-gray-500 group-hover:text-white" />}
-                                                <span className="text-sm text-gray-300 group-hover:text-white">{cat}</span>
+                                                <span className="text-sm text-gray-300 group-hover:text-white flex-1">{cat}</span>
+                                                {cat === 'Animation' && (
+                                                    <span className="max-w-20 truncate text-[9px] text-gray-500">
+                                                        {animationTargetName ? `→ ${animationTargetName}` : 'select target'}
+                                                    </span>
+                                                )}
                                                 <input 
                                                     type="file" 
                                                     accept={cat === 'Texture' ? "image/*" : cat === 'Audio' ? "audio/*" : ".fbx"}
                                                     multiple 
                                                     className="hidden" 
                                                     onChange={(e) => handleFileSelect(e, cat)} 
+                                                    disabled={isLoading || animationUnavailable}
                                                 />
-                                            </label>
-                                        ))}
+                                                </label>
+                                            );
+                                        })}
                                     </div>
                                 </>
                             )}

@@ -31,12 +31,17 @@ const AppContent: React.FC = () => {
   // Camera State
   const [cameraMode, setCameraMode] = useState<'orbit' | 'free'>('orbit');
   const [resetTrigger, setResetTrigger] = useState(0);
+  const selectedAnimations = React.useMemo(
+    () => models.find((model) => model.id === selectedModelId)?.animations || [],
+    [models, selectedModelId],
+  );
 
-  // Reset animation state when model changes
+  // A valid embedded or newly associated clip is immediately available for
+  // preview. Manual selection still takes over after this import/selection edge.
   React.useEffect(() => {
-    setActiveClip(null);
+    setActiveClip(selectedAnimations[0] || null);
     setIsPlaying(true);
-  }, [selectedModelId]);
+  }, [selectedModelId, selectedAnimations]);
 
   return (
     <div className="flex flex-col h-screen w-screen bg-gray-950 text-white overflow-hidden font-sans">

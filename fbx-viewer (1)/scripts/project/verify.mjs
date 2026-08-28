@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
+import * as THREE from 'three';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const db = await readFile(resolve(root, 'utils/db.ts'), 'utf8');
@@ -11,6 +13,10 @@ const modelManager = await readFile(resolve(root, 'hooks/useModelManager.ts'), '
 const persistence = await readFile(resolve(root, 'hooks/useScenePersistence.ts'), 'utf8');
 const levels = await readFile(resolve(root, 'hooks/useLevelManager.ts'), 'utf8');
 const projectManager = await readFile(resolve(root, 'hooks/useProjectManager.ts'), 'utf8');
+const contentBrowser = await readFile(resolve(root, 'components/UI/Browser/ContentBrowser.tsx'), 'utf8');
+const animationBinding = await readFile(resolve(root, 'utils/animationBinding.ts'), 'utf8');
+const app = await readFile(resolve(root, 'App.tsx'), 'utf8');
+const modelLoader = await readFile(resolve(root, 'utils/modelLoader.ts'), 'utf8');
 
 const failures = [];
 const mustNotContain = (text, pattern, label) => { if (pattern.test(text)) failures.push(`${label}: forbidden ${pattern}`); };
@@ -43,5 +49,66 @@ for (const domain of ['metadata', 'worlds', 'scenes', 'levels', 'objects', 'envi
 }
 if (!/!projectService\.getStatus\(\)\.projectId/.test(levels)) failures.push('level manager can still replace native state from legacy storage');
 if (!/await projectService\.close\(\);\s*await resetScene\(\)/.test(projectManager)) failures.push('project close does not reset editor contexts in place');
+if (!/category === 'Animation'[\s\S]*selectAnimationTarget\(models, selectedModelId\)[\s\S]*addAnimations\(files, target\.id\)/.test(contentBrowser)) failures.push('Library animation import is not routed to the selected skeletal model');
+if (!/prepareAnimationClips\(targetModel\.object, loaded\.object, loaded\.animations\)/.test(modelManager)) failures.push('animation import bypasses target skeleton binding');
+if (!/prepareAnimationClips\(loaded\.object, animationModel\.object, animationModel\.animations\)/.test(persistence)) failures.push('native project hydration bypasses target skeleton binding');
+if (!/setActiveClip\(selectedAnimations\[0\] \|\| null\)/.test(app)) failures.push('valid imported animation is not selected for preview');
+if (!/retargetClip/.test(animationBinding) || !/clipBindsDirectly/.test(animationBinding)) failures.push('animation binding lacks direct and retargeted paths');
+if (/clip\.duration > 0\.1/.test(modelLoader) || !/clip\.duration > 0/.test(modelLoader)) failures.push('valid short animation clips are still discarded');
+
+const bundledBinding = await build({
+  entryPoints: [resolve(root, 'utils/animationBinding.ts')],
+  bundle: true,
+  minify: true,
+  platform: 'node',
+  format: 'esm',
+  target: 'node22',
+  write: false,
+});
+const bindingModule = await import(`data:text/javascript;base64,${Buffer.from(bundledBinding.outputFiles[0].contents).toString('base64')}`);
+
+const rig = (names) => {
+  const root = new THREE.Group();
+  const mesh = new THREE.SkinnedMesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial());
+  const rigBones = names.map((name) => { const bone = new THREE.Bone(); bone.name = name; return bone; });
+  for (let index = 1; index < rigBones.length; index += 1) rigBones[index - 1].add(rigBones[index]);
+  mesh.add(rigBones[0]);
+  mesh.bind(new THREE.Skeleton(rigBones));
+  root.add(mesh);
+  root.updateMatrixWorld(true);
+  return root;
+};
+const quaternionValues = [0, 0, 0, 1, 0, 0, Math.SQRT1_2, Math.SQRT1_2];
+const exactTarget = rig(['Hips', 'Spine']);
+const exactSource = rig(['Hips', 'Spine']);
+const directClip = new THREE.AnimationClip('Direct', 1, [
+  new THREE.QuaternionKeyframeTrack('Hips.quaternion', [0, 1], quaternionValues),
+]);
+const direct = bindingModule.prepareAnimationClips(exactTarget, exactSource, [directClip]);
+if (direct.mode !== 'direct' || direct.clips.length !== 1 || direct.clips[0] === directClip) failures.push('exact skeleton clips are not cloned through direct binding');
+
+const prefixedSource = rig(['mixamorigHips', 'mixamorigSpine']);
+const prefixedClip = new THREE.AnimationClip('Retargeted', 1, [
+  new THREE.QuaternionKeyframeTrack('mixamorigHips.quaternion', [0, 1], quaternionValues),
+  new THREE.QuaternionKeyframeTrack('mixamorigSpine.quaternion', [0, 1], quaternionValues),
+]);
+const retargeted = bindingModule.prepareAnimationClips(exactTarget, prefixedSource, [prefixedClip]);
+if (retargeted.mode !== 'retargeted' || retargeted.clips.length !== 1 || retargeted.clips[0].tracks.length < 2) failures.push('compatible namespaced skeletons are not retargeted');
+
+const targetModel = { id: 'target', name: 'Target', category: 'Character', object: exactTarget };
+if (bindingModule.selectAnimationTarget([targetModel], null) !== targetModel) failures.push('single skeletal model is not selected as the animation target');
+let ambiguousTargetRejected = false;
+try { bindingModule.selectAnimationTarget([targetModel, { ...targetModel, id: 'other', name: 'Other', object: rig(['Hips']) }], null); }
+catch { ambiguousTargetRejected = true; }
+if (!ambiguousTargetRejected) failures.push('ambiguous animation target was silently selected');
+
+let incompatibleRejected = false;
+try {
+  const incompatible = rig(['Wing']);
+  const incompatibleClip = new THREE.AnimationClip('Invalid', 1, [new THREE.QuaternionKeyframeTrack('Wing.quaternion', [0, 1], quaternionValues)]);
+  bindingModule.prepareAnimationClips(exactTarget, incompatible, [incompatibleClip]);
+} catch { incompatibleRejected = true; }
+if (!incompatibleRejected) failures.push('incompatible animation skeleton was accepted');
+
 if (failures.length) { console.error(failures.join('\n')); process.exit(1); }
 console.log('frontend project boundary verification passed');

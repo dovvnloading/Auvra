@@ -5,6 +5,7 @@ import { LoadedModelData, AssetCategory } from '../types';
 import { loadFBXFile } from '../utils/modelLoader';
 import { disposeModel, disposeObject } from '../utils/processing/ModelLifecycle';
 import { stripGeometry } from '../utils/processing/ModelTransforms';
+import { prepareAnimationClips } from '../utils/animationBinding';
 import { generateThumbnail } from '../utils/thumbnailGenerator';
 import { dbOperations } from '../utils/db';
 import { projectService } from '../utils/projectService';
@@ -116,25 +117,28 @@ export const useModelManager = (
     projectService.assertWritable();
     setIsLoading(true);
     try {
+      const targetModel = models.find((model) => model.id === modelId);
+      if (!targetModel) throw new Error('The target model is no longer loaded.');
       const allNewClips: THREE.AnimationClip[] = [];
 
       for (const file of files) {
         const loaded = await loadFBXFile(file, { normalize: false });
-        
-        if (loaded.animations.length > 0) {
-            // Use names as cleaned by loadFBXFile
-            const clips = loaded.animations.map(clip => clip.clone());
-            allNewClips.push(...clips);
+        try {
+          const prepared = prepareAnimationClips(targetModel.object, loaded.object, loaded.animations);
+          allNewClips.push(...prepared.clips);
+          console.info(
+            `[Animation] ${file.name}: ${prepared.mode} binding, ${prepared.clips.length} clip(s)`,
+          );
+        } finally {
+          disposeModel(loaded);
         }
-        
-        disposeModel(loaded);
       }
 
       if (allNewClips.length === 0) {
-        alert("No valid animations found in the selected files.");
-        return;
+        throw new Error('No valid animations were found in the selected files.');
       }
 
+      await dbOperations.addAnimations(modelId, files);
       setModels(prev => prev.map(model => {
         if (model.id === modelId) {
           return {
@@ -144,16 +148,14 @@ export const useModelManager = (
         }
         return model;
       }));
-      
-      await dbOperations.addAnimations(modelId, files);
 
     } catch (error) {
       console.error("Failed to load animations:", error);
-      alert("Error loading animation files.");
+      alert(error instanceof Error ? error.message : 'Error loading animation files.');
     } finally {
       setIsLoading(false);
     }
-  }, [setIsLoading]);
+  }, [models, setIsLoading]);
 
   const retextureModel = useCallback(async (modelId: string, textureUrl: string, targetTextureUuid?: string) => {
     projectService.assertWritable();
