@@ -5,9 +5,12 @@ import { LoadedModelData, AssetCategory } from '../types';
 import { loadFBXFile } from '../utils/modelLoader';
 import { disposeModel, disposeObject } from '../utils/processing/ModelLifecycle';
 import { stripGeometry } from '../utils/processing/ModelTransforms';
+import { prepareAnimationClips } from '../utils/animationBinding';
 import { generateThumbnail } from '../utils/thumbnailGenerator';
 import { dbOperations } from '../utils/db';
 import { projectService } from '../utils/projectService';
+import { isAbortError, useOperationActions } from '../context/OperationContext';
+import { useNotification } from '../context/NotificationContext';
 
 export const useModelManager = (
   setIsLoading: (loading: boolean) => void,
@@ -15,6 +18,8 @@ export const useModelManager = (
 ) => {
   const [models, setModels] = useState<LoadedModelData[]>([]);
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  const { startOperation } = useOperationActions();
+  const { addNotification } = useNotification();
 
   const addModel = useCallback(async (file: File, category: AssetCategory) => {
     projectService.assertWritable();
@@ -24,51 +29,74 @@ export const useModelManager = (
         return;
     }
 
+    const operation = startOperation({
+      label: `Importing ${file.name}`,
+      detail: 'Reading FBX source',
+      progress: 0,
+      cancellable: true,
+    });
+    let newModel: LoadedModelData | null = null;
     setIsLoading(true);
     try {
-      // For Animation category, we don't normalize to avoid bounding box issues with bones-only
-      const newModel = await loadFBXFile(file, { normalize: category !== 'Animation' });
+      newModel = await loadFBXFile(file, {
+        normalize: category !== 'Animation',
+        signal: operation.signal,
+        onProgress: (progress, phase) => operation.update({ progress: progress * 0.68, detail: phase }),
+      });
       newModel.category = category;
       newModel.thumbnail = undefined;
-      // Default to FALSE: Not in scene, just in library
       newModel.isPlacedInScene = false;
-      
+
       if (category === 'Animation') {
-          stripGeometry(newModel.object);
+        stripGeometry(newModel.object);
       } else if (newModel.object) {
-          // Generate thumbnail for non-animation assets immediately
-          newModel.thumbnail = generateThumbnail(newModel.object);
+        operation.update({ progress: 0.7, detail: 'Generating thumbnail' });
+        newModel.thumbnail = generateThumbnail(newModel.object);
       }
-      
-      // Safety check for duplicate IDs
-      setModels(prev => {
-          if (prev.some(m => m.id === newModel.id)) {
-              console.warn("Attempted to add duplicate model ID:", newModel.id);
-              return prev;
-          }
-          return [...prev, newModel];
-      });
 
+      operation.update({ progress: 0.72, detail: 'Saving source asset' });
       await dbOperations.addModel({
-          id: newModel.id,
-          name: newModel.name,
-          file: file,
-          animationFiles: [],
-          category: newModel.category,
-          thumbnail: newModel.thumbnail,
-          isPlacedInScene: false,
-          textureOverrides: {} 
+        id: newModel.id,
+        name: newModel.name,
+        file,
+        animationFiles: [],
+        category: newModel.category,
+        thumbnail: newModel.thumbnail,
+        isPlacedInScene: false,
+        textureOverrides: {},
+      }, {
+        signal: operation.signal,
+        onProgress: (progress) => {
+          if (progress >= 1) operation.lockCancellation();
+          operation.update({ progress: 0.72 + progress * 0.24, detail: progress >= 1 ? 'Finalizing project record' : 'Saving source asset' });
+        },
       });
 
-      // Do NOT automatically select/place in scene upon import.
-      
+      if (operation.signal.aborted) throw new DOMException('Asset import was cancelled.', 'AbortError');
+      operation.update({ progress: 0.98, detail: 'Publishing to library' });
+      const completedModel = newModel;
+      setModels((previous) => {
+        if (previous.some((model) => model.id === completedModel.id)) {
+          console.warn('Attempted to add duplicate model ID:', completedModel.id);
+          disposeModel(completedModel);
+          return previous;
+        }
+        return [...previous, completedModel];
+      });
+      newModel = null;
+      addNotification({ message: `Imported "${file.name}".`, type: 'success' });
     } catch (error) {
-      console.error("Failed to load FBX:", error);
-      alert(`Error loading ${file.name}. Check console.`);
+      console.error('Failed to load FBX:', error);
+      if (newModel) disposeModel(newModel);
+      addNotification({
+        message: isAbortError(error) ? `Cancelled import of "${file.name}".` : `Failed to import "${file.name}".`,
+        type: isAbortError(error) ? 'info' : 'error',
+      });
     } finally {
+      operation.finish();
       setIsLoading(false);
     }
-  }, [models, setIsLoading]);
+  }, [models, setIsLoading, startOperation, addNotification]);
 
   const placeInScene = useCallback(async (id: string) => {
       projectService.assertWritable();
@@ -114,27 +142,52 @@ export const useModelManager = (
 
   const addAnimations = useCallback(async (files: File[], modelId: string) => {
     projectService.assertWritable();
+    const operation = startOperation({
+      label: files.length === 1 ? `Importing ${files[0].name}` : `Importing ${files.length} animation files`,
+      detail: 'Preparing animation sources',
+      progress: 0,
+      cancellable: true,
+    });
     setIsLoading(true);
     try {
+      const targetModel = models.find((model) => model.id === modelId);
+      if (!targetModel) throw new Error('The target model is no longer loaded.');
       const allNewClips: THREE.AnimationClip[] = [];
 
-      for (const file of files) {
-        const loaded = await loadFBXFile(file, { normalize: false });
-        
-        if (loaded.animations.length > 0) {
-            // Use names as cleaned by loadFBXFile
-            const clips = loaded.animations.map(clip => clip.clone());
-            allNewClips.push(...clips);
+      for (const [index, file] of files.entries()) {
+        const loaded = await loadFBXFile(file, {
+          normalize: false,
+          signal: operation.signal,
+          onProgress: (progress, phase) => operation.update({
+            progress: ((index + progress) / Math.max(1, files.length)) * 0.7,
+            detail: `${phase} — ${file.name}`,
+          }),
+        });
+        try {
+          operation.update({ detail: `Binding animation — ${file.name}` });
+          const prepared = prepareAnimationClips(targetModel.object, loaded.object, loaded.animations);
+          allNewClips.push(...prepared.clips);
+          console.info(
+            `[Animation] ${file.name}: ${prepared.mode} binding, ${prepared.clips.length} clip(s)`,
+          );
+        } finally {
+          disposeModel(loaded);
         }
-        
-        disposeModel(loaded);
       }
 
       if (allNewClips.length === 0) {
-        alert("No valid animations found in the selected files.");
-        return;
+        throw new Error('No valid animations were found in the selected files.');
       }
 
+      operation.update({ progress: 0.72, detail: 'Saving animation sources' });
+      await dbOperations.addAnimations(modelId, files, {
+        signal: operation.signal,
+        onProgress: (progress) => {
+          if (progress >= 1) operation.lockCancellation();
+          operation.update({ progress: 0.72 + progress * 0.25, detail: progress >= 1 ? 'Finalizing project records' : 'Saving animation sources' });
+        },
+      });
+      if (operation.signal.aborted) throw new DOMException('Animation import was cancelled.', 'AbortError');
       setModels(prev => prev.map(model => {
         if (model.id === modelId) {
           return {
@@ -144,16 +197,21 @@ export const useModelManager = (
         }
         return model;
       }));
-      
-      await dbOperations.addAnimations(modelId, files);
+      addNotification({ message: `Imported ${allNewClips.length} animation clip${allNewClips.length === 1 ? '' : 's'}.`, type: 'success' });
 
     } catch (error) {
       console.error("Failed to load animations:", error);
-      alert("Error loading animation files.");
+      addNotification({
+        message: isAbortError(error)
+          ? 'Animation import cancelled.'
+          : error instanceof Error ? error.message : 'Error loading animation files.',
+        type: isAbortError(error) ? 'info' : 'error',
+      });
     } finally {
+      operation.finish();
       setIsLoading(false);
     }
-  }, [setIsLoading]);
+  }, [models, setIsLoading, startOperation, addNotification]);
 
   const retextureModel = useCallback(async (modelId: string, textureUrl: string, targetTextureUuid?: string) => {
     projectService.assertWritable();

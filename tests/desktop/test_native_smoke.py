@@ -148,7 +148,7 @@ def _script_for_requests(prefix: str, trap_port: int | None = None) -> str:
         """
     return f"""
     (() => {{
-      const state = {{ session: null, requested: new Set() }};
+      const state = {{ session: null, requested: new Set(), pending: [] }};
       window.__auvraNativeSmoke = state;
       const send = (id, session, revision) => {{
         if (state.requested.has(id)) return;
@@ -158,12 +158,17 @@ def _script_for_requests(prefix: str, trap_port: int | None = None) -> str:
           session, revision, method: "host.ping", payload: {{}}
         }});
       }};
+      const signal = id => {{
+        if (!state.session) {{ state.pending.push(id); return; }}
+        send(id, state.session, 0);
+      }};
       chrome.webview.addEventListener("message", event => {{
         const message = event.data;
         if (!message || typeof message !== "object") return;
         if (message.type === "session" && !state.session) {{
           state.session = message.session;
           send("{prefix}-ping", message.session, message.revision);
+          for (const id of state.pending.splice(0)) signal(id);
         }}
         if (message.type === "response" && message.id === "{prefix}-ping" && message.ok) {{
           send("{prefix}-ack", message.session, message.revision);
@@ -172,15 +177,29 @@ def _script_for_requests(prefix: str, trap_port: int | None = None) -> str:
       {trap}
       const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
       const dataImage = new Image();
-      dataImage.onload = () => send("{prefix}-data", state.session, 0);
-      dataImage.onerror = () => send("{prefix}-data-error", state.session, 0);
+      dataImage.onload = () => signal("{prefix}-data");
+      dataImage.onerror = () => signal("{prefix}-data-error");
       dataImage.src = "data:image/png;base64," + png;
       const blobImage = new Image();
-      blobImage.onload = () => send("{prefix}-blob", state.session, 0);
-      blobImage.onerror = () => send("{prefix}-blob-error", state.session, 0);
+      blobImage.onload = () => signal("{prefix}-blob");
+      blobImage.onerror = () => signal("{prefix}-blob-error");
       blobImage.src = URL.createObjectURL(
         new Blob([Uint8Array.from(atob(png), character => character.charCodeAt(0))], {{type: "image/png"}})
       );
+      const samples = 800;
+      const wav = new Uint8Array(44 + samples);
+      const view = new DataView(wav.buffer);
+      const ascii = (offset, text) => [...text].forEach((character, index) => wav[offset + index] = character.charCodeAt(0));
+      ascii(0, "RIFF"); view.setUint32(4, wav.length - 8, true); ascii(8, "WAVE");
+      ascii(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true); view.setUint32(24, 8000, true); view.setUint32(28, 8000, true);
+      view.setUint16(32, 1, true); view.setUint16(34, 8, true); ascii(36, "data");
+      view.setUint32(40, samples, true); wav.fill(128, 44);
+      const audioUrl = URL.createObjectURL(new Blob([wav], {{ type: "audio/wav" }}));
+      const blobAudio = new Audio(audioUrl);
+      blobAudio.onloadedmetadata = () => {{ URL.revokeObjectURL(audioUrl); signal("{prefix}-audio"); }};
+      blobAudio.onerror = () => {{ URL.revokeObjectURL(audioUrl); signal("{prefix}-audio-error"); }};
+      blobAudio.load();
     }})();
     """
 
@@ -191,7 +210,7 @@ def _script_for_project_lifecycle(prefix: str) -> str:
     return f"""
     (() => {{
       const state = {{ session: null, revision: 0, projectId: null, projectRevision: 0,
-        jobId: null, poll: 0, sent: new Set() }};
+        assetId: null, jobId: null, poll: 0, sent: new Set() }};
       window.__auvraNativeProjectSmoke = state;
       const request = (id, method, payload) => {{
         if (state.sent.has(id)) return;
@@ -200,6 +219,10 @@ def _script_for_project_lifecycle(prefix: str) -> str:
           protocol: "auvra.host/1", type: "request", id,
           session: state.session, revision: state.revision, method, payload
         }});
+      }};
+      const failAsset = error => {{
+        document.title = "AUVRA_ASSET_ERROR:" + String(error);
+        request("{prefix}-asset-error", "project.getStatus", {{ projectId: state.projectId }});
       }};
       chrome.webview.addEventListener("message", event => {{
         const message = event.data;
@@ -218,22 +241,53 @@ def _script_for_project_lifecycle(prefix: str) -> str:
         const result = message.result || {{}};
         if (message.id === "{prefix}-create") {{
           state.projectId = result.projectId;
-          request("{prefix}-apply", "project.applyChanges", {{
-            projectId: state.projectId, expectedRevision: result.revision,
-            changes: [
-              {{ domain: "metadata", documentId: "project", operation: "upsert",
-                document: {{ id: "project", name: "Native Smoke Project" }} }},
-              {{ domain: "levels", documentId: "level", operation: "upsert",
-                document: {{ id: "level", name: "Native Smoke Level" }} }},
-              {{ domain: "objects", documentId: "reference", operation: "upsert",
-                document: {{ id: "reference", levelId: "level", name: "Reference", type: "mesh",
-                  position: [0.25, -0.5, 0.0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] }} }}
-            ]
+          state.projectRevision = result.revision;
+          request("{prefix}-begin-upload", "asset.beginUpload", {{
+            projectId: state.projectId, expectedRevision: state.projectRevision,
+            size: 5, mime: "application/octet-stream", name: "smoke.bin"
           }});
+        }} else if (message.id === "{prefix}-begin-upload") {{
+          (async () => {{
+            const upload = await fetch(result.url, {{
+              method: result.method,
+              headers: {{ "Content-Type": result.mime }},
+              body: new Uint8Array([65, 85, 86, 82, 65])
+            }});
+            if (!upload.ok) throw new Error("asset upload failed: " + upload.status);
+            state.assetId = upload.headers.get("X-Auvra-Asset-Sha256");
+            if (!state.assetId) throw new Error("asset upload omitted its digest");
+            request("{prefix}-apply", "project.applyChanges", {{
+              projectId: state.projectId, expectedRevision: state.projectRevision,
+              changes: [
+                {{ domain: "metadata", documentId: "project", operation: "upsert",
+                  document: {{ id: "project", name: "Native Smoke Project" }} }},
+                {{ domain: "levels", documentId: "level", operation: "upsert",
+                  document: {{ id: "level", name: "Native Smoke Level" }} }},
+                {{ domain: "objects", documentId: "reference", operation: "upsert",
+                  document: {{ id: "reference", levelId: "level", name: "Reference", type: "mesh",
+                    position: [0.25, -0.5, 0.0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] }} }},
+                {{ domain: "textures", documentId: "smoke-asset", operation: "upsert",
+                  document: {{ id: "smoke-asset", name: "smoke.bin", assetId: state.assetId,
+                    dimensions: {{ width: 1, height: 1 }} }} }}
+              ]
+            }});
+          }})().catch(failAsset);
         }} else if (message.id === "{prefix}-apply") {{
-          request("{prefix}-snapshot", "project.getSnapshot", {{
-            projectId: state.projectId, domain: "metadata", pageSize: 10
+          state.projectRevision = result.revision;
+          request("{prefix}-resolve", "asset.resolve", {{
+            projectId: state.projectId, assetId: state.assetId
           }});
+        }} else if (message.id === "{prefix}-resolve") {{
+          (async () => {{
+            const download = await fetch(result.url, {{ method: result.method }});
+            if (!download.ok) throw new Error("asset download failed: " + download.status);
+            const bytes = new Uint8Array(await download.arrayBuffer());
+            if (bytes.length !== 5 || bytes.some((value, index) => value !== [65, 85, 86, 82, 65][index]))
+              throw new Error("asset download changed content");
+            request("{prefix}-snapshot", "project.getSnapshot", {{
+              projectId: state.projectId, domain: "metadata", pageSize: 10
+            }});
+          }})().catch(failAsset);
         }} else if (message.id === "{prefix}-snapshot") {{
           request("{prefix}-save", "project.save", {{
             projectId: state.projectId, expectedRevision: result.revision
@@ -498,6 +552,8 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         controller.asset_registry = registry
         controller.project_host = host
         controller.provider_host = provider
+        host.set_ui_invoker(controller.frame.invoke_on_ui)
+        host.set_event_sink(controller._post_project_event)
         controller.dispatcher.bind_services(
             project_service=host, asset_service=host, provider_service=provider,
             engine_service=controller.native_engine_host,
@@ -516,20 +572,25 @@ class NativeWebView2SmokeTests(unittest.TestCase):
             controller.on_lifecycle("navigation_completed", {"success": True})
             time.sleep(0.2)
         expected = {
-            f"{prefix}-create", f"{prefix}-apply", f"{prefix}-snapshot",
+            f"{prefix}-create", f"{prefix}-begin-upload", f"{prefix}-apply",
+            f"{prefix}-resolve", f"{prefix}-snapshot",
             f"{prefix}-save", f"{prefix}-configure-provider",
             f"{prefix}-submit-provider", f"{prefix}-wrong-owner",
         }
         _wait_until(
-            lambda: expected.issubset({item.get("id") for item in seen}) and any(
-                item.get("id", "").startswith(f"{prefix}-get-provider-") and
-                item.get("type") == "response" and item.get("ok") and
-                item.get("result", {}).get("job", {}).get("status") == "succeeded"
-                for item in seen
+            lambda: any(item.get("id") == f"{prefix}-asset-error" for item in seen) or (
+                expected.issubset({item.get("id") for item in seen}) and any(
+                    item.get("id", "").startswith(f"{prefix}-get-provider-") and
+                    item.get("type") == "response" and item.get("ok") and
+                    item.get("result", {}).get("job", {}).get("status") == "succeeded"
+                    for item in seen
+                )
             ),
             20.0,
             "native project lifecycle",
         )
+        if any(item.get("id") == f"{prefix}-asset-error" for item in seen):
+            self.fail(self._document_title(controller.frame))
         responses = {item["id"]: item for item in seen if item.get("id") in expected}
         successful = expected - {f"{prefix}-wrong-owner"}
         self.assertTrue(all(responses[item].get("ok") is True for item in successful), responses)
@@ -564,6 +625,13 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         self.assertTrue((project_path / "Project" / "metadata.json").is_file())
         self.assertTrue((project_path / "Project" / "levels.json").is_file())
         self.assertTrue((project_path / "Project" / "objects.json").is_file())
+        apply_request = next(item for item in seen if item.get("id") == f"{prefix}-apply" and item.get("type") == "request")
+        texture_change = next(change for change in apply_request["payload"]["changes"] if change["domain"] == "textures")
+        asset_id = texture_change["document"]["assetId"]
+        self.assertRegex(asset_id, r"^[0-9a-f]{64}$")
+        self.assertEqual((project_path / "Content" / "sha256" / asset_id).read_bytes(), b"AUVRA")
+        manifest = json.loads((project_path / "Content" / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest[asset_id]["name"], "smoke.bin")
         self.assertFalse(any(str(project_path) in json.dumps(item) for item in responses.values()))
         return {
             "projectId": responses[f"{prefix}-create"]["result"]["projectId"],
@@ -605,6 +673,7 @@ class NativeWebView2SmokeTests(unittest.TestCase):
                 user_data_folder=lease.path,
                 on_message=on_message,
                 on_lifecycle=on_lifecycle,
+                on_asset_resource=lambda request: holder["controller"].on_asset_resource(request),
                 startup_timeout=_STARTUP_TIMEOUT,
                 shutdown_timeout=_SHUTDOWN_TIMEOUT,
                 visible=False,
@@ -688,10 +757,11 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         # NavigationCompleted normally sends this already. Re-send after the
         # listener is installed so the test proves delivery, not timing luck.
         controller.on_lifecycle("navigation_completed", {"success": True})
-        expected = {f"{prefix}-ping", f"{prefix}-ack", f"{prefix}-data", f"{prefix}-blob"}
+        expected = {f"{prefix}-ping", f"{prefix}-ack", f"{prefix}-data", f"{prefix}-blob", f"{prefix}-audio"}
         _wait_until(lambda: expected.issubset({item.get("id") for item in seen}), 30.0, f"{prefix} native protocol roundtrip")
         self.assertNotIn(f"{prefix}-data-error", {item.get("id") for item in seen})
         self.assertNotIn(f"{prefix}-blob-error", {item.get("id") for item in seen})
+        self.assertNotIn(f"{prefix}-audio-error", {item.get("id") for item in seen})
 
     def _source(self, frame: WebView2Frame) -> str:
         value: list[str] = []

@@ -16,6 +16,8 @@ import { SandboxScene } from './components/Sandbox/SandboxScene';
 import { HUDEditor } from './components/HUDEditor/HUDEditor';
 import { EnvironmentEditor } from './components/Environment/EnvironmentEditor';
 import { installRendererDiagnostics } from './renderer/diagnostics';
+import { OperationProvider } from './context/OperationContext';
+import { OperationCenter } from './components/UI/OperationCenter';
 
 const AppContent: React.FC = () => {
   const { models, selectedModelId } = useScene();
@@ -31,12 +33,17 @@ const AppContent: React.FC = () => {
   // Camera State
   const [cameraMode, setCameraMode] = useState<'orbit' | 'free'>('orbit');
   const [resetTrigger, setResetTrigger] = useState(0);
+  const selectedAnimations = React.useMemo(
+    () => models.find((model) => model.id === selectedModelId)?.animations || [],
+    [models, selectedModelId],
+  );
 
-  // Reset animation state when model changes
+  // A valid embedded or newly associated clip is immediately available for
+  // preview. Manual selection still takes over after this import/selection edge.
   React.useEffect(() => {
-    setActiveClip(null);
+    setActiveClip(selectedAnimations[0] || null);
     setIsPlaying(true);
-  }, [selectedModelId]);
+  }, [selectedModelId, selectedAnimations]);
 
   return (
     <div className="flex flex-col h-screen w-screen bg-gray-950 text-white overflow-hidden font-sans">
@@ -145,6 +152,7 @@ const AppContent: React.FC = () => {
       </div>
       
       {/* Global Notification Container */}
+      <OperationCenter />
       <NotificationContainer />
     </div>
   );
@@ -157,9 +165,11 @@ const App: React.FC = () => {
 
   return (
     <NotificationProvider>
-      <SceneProvider>
-        <AppContent />
-      </SceneProvider>
+      <OperationProvider>
+        <SceneProvider>
+          <AppContent />
+        </SceneProvider>
+      </OperationProvider>
     </NotificationProvider>
   );
 };

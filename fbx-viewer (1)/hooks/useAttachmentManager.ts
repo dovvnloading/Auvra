@@ -6,12 +6,16 @@ import { loadFBXFile } from '../utils/modelLoader';
 import { disposeObject } from '../utils/processing/ModelLifecycle';
 import { dbOperations } from '../utils/db';
 import { projectService } from '../utils/projectService';
+import { isAbortError, useOperationActions } from '../context/OperationContext';
+import { useNotification } from '../context/NotificationContext';
 
 export const useAttachmentManager = (
   models: LoadedModelData[],
   setIsLoading: (loading: boolean) => void
 ) => {
   const [attachments, setAttachments] = useState<AttachmentData[]>([]);
+  const { startOperation } = useOperationActions();
+  const { addNotification } = useNotification();
   
   // Refs for debouncing DB updates
   const pendingUpdatesRef = useRef<Map<string, any>>(new Map());
@@ -42,9 +46,20 @@ export const useAttachmentManager = (
 
   const addAttachment = useCallback(async (file: File, parentModelId: string) => {
     projectService.assertWritable();
+    const operation = startOperation({
+      label: `Importing ${file.name}`,
+      detail: 'Reading attachment source',
+      progress: 0,
+      cancellable: true,
+    });
+    let loaded: LoadedModelData | null = null;
     setIsLoading(true);
     try {
-        const loaded = await loadFBXFile(file, { normalize: false });
+        loaded = await loadFBXFile(file, {
+          normalize: false,
+          signal: operation.signal,
+          onProgress: (progress, phase) => operation.update({ progress: progress * 0.7, detail: phase }),
+        });
         
         const newAttachment: AttachmentData = {
             id: loaded.id,
@@ -58,6 +73,7 @@ export const useAttachmentManager = (
             scale: [1, 1, 1]
         };
 
+        operation.update({ progress: 0.72, detail: 'Saving attachment source' });
         await dbOperations.addAttachment({
             id: newAttachment.id,
             name: newAttachment.name,
@@ -66,18 +82,34 @@ export const useAttachmentManager = (
             boneName: newAttachment.boneName,
             position: newAttachment.position,
             rotation: newAttachment.rotation,
-            scale: newAttachment.scale
+            scale: newAttachment.scale,
+        }, {
+            signal: operation.signal,
+            onProgress: (progress) => {
+              if (progress >= 1) operation.lockCancellation();
+              operation.update({ progress: 0.72 + progress * 0.25, detail: progress >= 1 ? 'Finalizing project record' : 'Saving attachment source' });
+            },
         });
-        
+        if (operation.signal.aborted) throw new DOMException('Attachment import was cancelled.', 'AbortError');
         setAttachments(prev => [...prev, newAttachment]);
+        loaded = null;
+        addNotification({ message: `Imported attachment "${file.name}".`, type: 'success' });
 
     } catch (error) {
         console.error("Failed to load attachment:", error);
-        alert("Error loading attachment.");
+        if (loaded) {
+          URL.revokeObjectURL(loaded.url);
+          disposeObject(loaded.object);
+        }
+        addNotification({
+          message: isAbortError(error) ? `Cancelled import of "${file.name}".` : `Failed to import attachment "${file.name}".`,
+          type: isAbortError(error) ? 'info' : 'error',
+        });
     } finally {
+        operation.finish();
         setIsLoading(false);
     }
-  }, [setIsLoading]);
+  }, [setIsLoading, startOperation, addNotification]);
 
   const addAttachmentFromLibrary = useCallback(async (sourceModelId: string, parentModelId: string) => {
     projectService.assertWritable();

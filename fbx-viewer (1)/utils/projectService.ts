@@ -32,6 +32,11 @@ export interface ProjectChange {
   value?: unknown;
 }
 
+export interface AssetTransferOptions {
+  signal?: AbortSignal;
+  onProgress?: (progress: number) => void;
+}
+
 type HostLike = {
   session?: string | null;
   currentRevision?: number;
@@ -180,14 +185,68 @@ export class ProjectService {
     return result.url;
   }
 
-  async uploadAsset(file: File): Promise<string> {
+  async uploadAsset(file: File, options: AssetTransferOptions = {}): Promise<string> {
+    if (options.signal?.aborted) throw new DOMException('Asset upload was cancelled.', 'AbortError');
     const mime = file.type || 'application/octet-stream';
     const ticket = await this.beginAssetUpload(file, mime, file.name);
-    const response = await fetch(ticket.url, { method: ticket.method, headers: { 'Content-Type': ticket.mime }, body: file });
-    if (!response.ok) throw new Error(`Asset upload failed (${response.status})`);
-    const assetId = response.headers.get('X-Auvra-Asset-Sha256');
+    const assetId = await this.putAsset(ticket, file, options);
     if (!assetId || !/^[A-Fa-f0-9]{64}$/.test(assetId)) throw new Error('Asset upload did not return a verified SHA-256 asset id');
     return assetId.toLowerCase();
+  }
+
+  private putAsset(
+    ticket: { url: string; method: 'PUT'; mime: string },
+    file: File,
+    options: AssetTransferOptions,
+  ): Promise<string | null> {
+    // XMLHttpRequest is deliberately used for this local, ticketed transfer:
+    // Fetch has no upload-progress surface. The native WebView handler streams
+    // the body on its bounded background owner.
+    if (typeof XMLHttpRequest === 'undefined') {
+      return fetch(ticket.url, {
+        method: ticket.method,
+        headers: { 'Content-Type': ticket.mime },
+        body: file,
+        signal: options.signal,
+      }).then((response) => {
+        if (!response.ok) throw new Error(`Asset upload failed (${response.status})`);
+        options.onProgress?.(1);
+        return response.headers.get('X-Auvra-Asset-Sha256');
+      });
+    }
+    return new Promise((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      let settled = false;
+      const finish = (callback: () => void) => {
+        if (settled) return;
+        settled = true;
+        options.signal?.removeEventListener('abort', onAbort);
+        callback();
+      };
+      const onAbort = () => {
+        request.abort();
+        finish(() => reject(new DOMException('Asset upload was cancelled.', 'AbortError')));
+      };
+      request.open(ticket.method, ticket.url, true);
+      request.setRequestHeader('Content-Type', ticket.mime);
+      request.upload.onprogress = (event) => {
+        const total = event.lengthComputable && event.total > 0 ? event.total : file.size;
+        if (total > 0) options.onProgress?.(Math.max(0, Math.min(1, event.loaded / total)));
+      };
+      request.onload = () => finish(() => {
+        if (request.status < 200 || request.status >= 300) {
+          reject(new Error(`Asset upload failed (${request.status})`));
+          return;
+        }
+        options.onProgress?.(1);
+        resolve(request.getResponseHeader('X-Auvra-Asset-Sha256'));
+      });
+      request.onerror = () => finish(() => reject(new Error('Asset upload failed.')));
+      request.onabort = () => finish(() => reject(new DOMException('Asset upload was cancelled.', 'AbortError')));
+      options.signal?.addEventListener('abort', onAbort, { once: true });
+      if (options.signal?.aborted) onAbort();
+      else request.send(file);
+    });
   }
 
 
@@ -286,6 +345,7 @@ export class ProjectService {
     if (typeof candidate.name === 'string' || candidate.name === null) next.name = candidate.name as string | null;
     if (typeof candidate.dirty === 'boolean') next.dirty = candidate.dirty;
     if (typeof candidate.readOnly === 'boolean') next.readOnly = candidate.readOnly;
+    if (typeof candidate.busy === 'boolean') next.busy = candidate.busy;
     if (typeof candidate.progress === 'number' || candidate.progress === null) next.progress = candidate.progress as number | null;
     if (typeof candidate.recoveryAvailable === 'boolean') next.recoveryAvailable = candidate.recoveryAvailable;
     if (Array.isArray(candidate.recoveryPoints)) {

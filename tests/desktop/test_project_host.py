@@ -184,8 +184,15 @@ class NativeProjectHostTests(unittest.TestCase):
 
     def test_project_events_are_queued_without_path_authority(self) -> None:
         created = self.host.handle("project.create", {"name": "Events"})
-        names = [name for name, _ in self.host.drain_events()]
-        self.assertEqual(names, ["project.opening", "project.opened"])
+        opening_events = self.host.drain_events()
+        names = [name for name, _ in opening_events]
+        self.assertEqual(
+            names,
+            ["project.opening", "project.progress", "project.progress", "project.opened"],
+        )
+        progress = [payload["progress"] for name, payload in opening_events if name == "project.progress"]
+        self.assertEqual(progress, sorted(progress))
+        self.assertTrue(all(0.0 <= value <= 1.0 for value in progress))
         self.host.handle(
             "project.applyChanges",
             {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -63,11 +64,59 @@ class WebView2Frame:
         self._browser_process_id: int | None = None
         self._dll_directory_handle: Any = None
         self._pending_actions: list[Any] = []
+        self._resource_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="auvra-assets")
+        self._resource_slots = threading.BoundedSemaphore(4)
 
     @property
     def state(self) -> FrameState:
         with self._lock:
             return self._state
+
+    def invoke_on_ui(self, callback: Callable[[], Any]) -> Any:
+        """Run only the small native-UI portion of a host operation on STA."""
+
+        with self._lock:
+            form = self._form
+            state = self._state
+        if form is None or state in {FrameState.CLOSING, FrameState.CLOSED, FrameState.FAILED}:
+            raise FrameClosedError("desktop frame is not available")
+        if not bool(getattr(form, "InvokeRequired", True)):
+            return callback()
+
+        completed = threading.Event()
+        result: dict[str, Any] = {}
+
+        def invoke() -> None:
+            try:
+                result["value"] = callback()
+            except BaseException as exc:
+                result["error"] = exc
+            finally:
+                completed.set()
+                with self._lock:
+                    if action in self._pending_actions:
+                        self._pending_actions.remove(action)
+
+        from System import Action  # type: ignore[import-not-found]
+
+        action = Action(invoke)
+        with self._lock:
+            self._pending_actions.append(action)
+        try:
+            form.BeginInvoke(action)
+        except Exception:
+            with self._lock:
+                if action in self._pending_actions:
+                    self._pending_actions.remove(action)
+            raise FrameClosedError("desktop frame is not available") from None
+
+        while not completed.wait(0.1):
+            with self._lock:
+                if self._state in {FrameState.CLOSING, FrameState.CLOSED, FrameState.FAILED}:
+                    raise FrameClosedError("desktop frame closed during native UI operation")
+        if "error" in result:
+            raise result["error"]
+        return result.get("value")
 
     @property
     def failure(self) -> FrameFailure | None:
@@ -150,6 +199,7 @@ class WebView2Frame:
             self._state = FrameState.CLOSING
             form = self._form
             thread = self._thread
+        self._resource_executor.shutdown(wait=False, cancel_futures=True)
         if form is not None:
             try:
                 from System import Action  # type: ignore[import-not-found]
@@ -314,7 +364,10 @@ class WebView2Frame:
             from System import Action  # type: ignore[import-not-found]
             from System.Windows.Forms import Application, DockStyle, Form  # type: ignore[import-not-found]
             from Microsoft.Web.WebView2.Core import CoreWebView2Environment  # type: ignore[import-not-found]
-            from Microsoft.Web.WebView2.WinForms import WebView2  # type: ignore[import-not-found]
+            from Microsoft.Web.WebView2.WinForms import (  # type: ignore[import-not-found]
+                CoreWebView2CreationProperties,
+                WebView2,
+            )
         except ImportError as exc:
             raise FrameUnavailableError("Python.NET and the WebView2 WinForms SDK are required on Windows") from exc
         browser_folder = self.config.browser_executable_folder
@@ -330,6 +383,12 @@ class WebView2Frame:
             runtime_kind = "fixed" if browser_folder is not None else "Evergreen"
             raise FrameUnavailableError(f"the {runtime_kind} WebView2 Runtime cannot be loaded") from exc
 
+        profile = self.config.user_data_folder
+        profile.mkdir(parents=True, exist_ok=True)
+        creation = CoreWebView2CreationProperties()
+        creation.BrowserExecutableFolder = str(browser_folder) if browser_folder is not None else None
+        creation.UserDataFolder = str(profile)
+
         form = Form()
         form.Text = self.config.title
         form.Width, form.Height = 1280, 800
@@ -340,6 +399,11 @@ class WebView2Frame:
         form.Visible = False
         form.FormClosed += lambda sender, args: self._closed.set()
         control = WebView2()
+        # CreationProperties lets the WinForms wrapper create its environment
+        # as part of implicit initialization.  Do not synchronously wait on a
+        # WebView2 task from this STA: WebView2 needs this message pump to
+        # deliver initialization and shutdown callbacks.
+        control.CreationProperties = creation
         control.Dock = DockStyle.Fill
         form.Controls.Add(control)
         self._form, self._control = form, control
@@ -358,7 +422,12 @@ class WebView2Frame:
                 form.Close()
                 return
             try:
-                self._configure_core(control.CoreWebView2)
+                core = control.CoreWebView2
+                environment = getattr(core, "Environment", None)
+                if environment is None:
+                    raise RuntimeError("WebView2 environment is unavailable")
+                self._environment = environment
+                self._configure_core(core)
             except Exception as exc:
                 self._fail("native_configuration_failed", "WebView2 frame policy configuration failed")
                 self._signal("configuration_failed", {"exception_type": type(exc).__name__})
@@ -368,14 +437,9 @@ class WebView2Frame:
 
         def shown(sender: Any, args: Any) -> None:
             try:
-                profile = self.config.user_data_folder
-                profile.mkdir(parents=True, exist_ok=True)
-                environment = CoreWebView2Environment.CreateAsync(
-                    str(browser_folder) if browser_folder is not None else None,
-                    str(profile),
-                ).GetAwaiter().GetResult()
-                self._environment = environment
-                control.EnsureCoreWebView2Async(environment)
+                # InitializationCompleted is the completion boundary.  The
+                # returned task is deliberately not waited synchronously.
+                control.EnsureCoreWebView2Async()
                 if self.config.visible:
                     form.Show()
             except Exception:
@@ -559,6 +623,34 @@ class WebView2Frame:
             self._request_headers(request),
             self._NativeBodyReader(body) if body is not None else None,
         )
+        get_deferral = getattr(args, "GetDeferral", None)
+        if callable(get_deferral):
+            try:
+                deferral = get_deferral()
+            except Exception:
+                self._deny_resource(args)
+                return
+            if not self._resource_slots.acquire(blocking=False):
+                response = AssetResourceResponse(503, "Busy", {"Cache-Control": "no-store"})
+                self._complete_deferred_resource(args, deferral, response)
+                return
+            try:
+                future = self._resource_executor.submit(self._handle_asset_resource, callback, resource_request)
+            except RuntimeError:
+                self._resource_slots.release()
+                self._complete_deferred_resource(
+                    args, deferral, AssetResourceResponse(503, "Closed", {"Cache-Control": "no-store"}),
+                )
+                return
+            future.add_done_callback(lambda completed: self._asset_resource_finished(args, deferral, completed))
+            return
+        # Pure-Python adapters without WebView2 deferrals retain a synchronous
+        # bounded path for unit tests only.
+        response = self._handle_asset_resource(callback, resource_request)
+        self._set_resource_response(args, response)
+
+    @staticmethod
+    def _handle_asset_resource(callback: Callable[[AssetResourceRequest], Any], resource_request: AssetResourceRequest) -> AssetResourceResponse:
         try:
             response = callback(resource_request)
             if not isinstance(response, AssetResourceResponse):
@@ -567,7 +659,64 @@ class WebView2Frame:
             response = AssetResourceResponse(exc.status, "Denied", {"Cache-Control": "no-store"})
         except Exception:
             response = AssetResourceResponse(500, "Denied", {"Cache-Control": "no-store"})
-        self._set_resource_response(args, response)
+        return response
+
+    def _asset_resource_finished(self, args: Any, deferral: Any, future: Future[AssetResourceResponse]) -> None:
+        self._resource_slots.release()
+        try:
+            response = future.result()
+        except Exception:
+            response = AssetResourceResponse(500, "Denied", {"Cache-Control": "no-store"})
+        self._complete_deferred_resource(args, deferral, response)
+
+    def _complete_deferred_resource(self, args: Any, deferral: Any, response: AssetResourceResponse) -> None:
+        with self._lock:
+            form = self._form
+            state = self._state
+
+        def complete() -> None:
+            try:
+                self._set_resource_response(args, response)
+            finally:
+                try:
+                    deferral.Complete()
+                finally:
+                    with self._lock:
+                        if action in self._pending_actions:
+                            self._pending_actions.remove(action)
+
+        if form is None:
+            try:
+                if state in {FrameState.CLOSING, FrameState.CLOSED, FrameState.FAILED}:
+                    self._close_resource_body(response)
+                else:
+                    self._set_resource_response(args, response)
+            finally:
+                deferral.Complete()
+            return
+        try:
+            from System import Action  # type: ignore[import-not-found]
+            action = Action(complete)
+            with self._lock:
+                self._pending_actions.append(action)
+            form.BeginInvoke(action)
+        except Exception:
+            with self._lock:
+                if "action" in locals() and action in self._pending_actions:
+                    self._pending_actions.remove(action)
+            self._close_resource_body(response)
+            try:
+                deferral.Complete()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _close_resource_body(response: AssetResourceResponse) -> None:
+        if response.body is not None:
+            try:
+                response.body.close()
+            except Exception:
+                pass
 
     def _set_resource_response(self, args: Any, response: AssetResourceResponse) -> None:
         # Pure-Python fakes accept the bounded response directly. Native

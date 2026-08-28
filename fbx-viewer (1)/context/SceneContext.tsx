@@ -14,6 +14,7 @@ import { LevelProvider, useLevel } from './LevelContext';
 // Logic
 import { useScenePersistence } from '../hooks/useScenePersistence';
 import { useProjectManager } from '../hooks/useProjectManager';
+import { useOperationBusy } from './OperationContext';
 
 // Export granular hooks for high-performance consumption
 export { useViewport, useSelection, useAssets, useLevel };
@@ -215,7 +216,9 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
 
 // Root Provider
 export const SceneProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-    const [isLoading, setIsLoading] = useState(false);
+    const [localLoading, setIsLoading] = useState(false);
+    const operationBusy = useOperationBusy();
+    const isLoading = localLoading || operationBusy;
 
     return (
         <ViewportProvider>

@@ -7,7 +7,9 @@ import { loadFBXFile } from '../utils/modelLoader';
 import { stripGeometry } from '../utils/processing/ModelTransforms';
 import { generateThumbnail } from '../utils/thumbnailGenerator';
 import { disposeModel } from '../utils/processing/ModelLifecycle';
+import { prepareAnimationClips } from '../utils/animationBinding';
 import { projectService, ProjectSnapshot } from '../utils/projectService';
+import { useOperationActions } from '../context/OperationContext';
 
 interface ScenePersistenceProps {
   setModels: (models: LoadedModelData[]) => void;
@@ -37,9 +39,21 @@ interface SnapshotHydrationTargets {
   hydrateGraphs?: (graphs: Record<string, import('../types').AnimationGraphData>) => void;
 }
 
+type HydrationProgress = (progress: number, detail: string) => void;
+
+const throwIfAborted = (signal?: AbortSignal): void => {
+  if (signal?.aborted) throw new DOMException('Project loading was cancelled.', 'AbortError');
+};
+
 /** Hydrate authored domains from a bounded native snapshot. Binary assets are
  * resolved only through opaque host tickets and never embedded in JSON. */
-async function hydrateSnapshot(snapshot: ProjectSnapshot, targets: SnapshotHydrationTargets): Promise<boolean> {
+async function hydrateSnapshot(
+  snapshot: ProjectSnapshot,
+  targets: SnapshotHydrationTargets,
+  onProgress: HydrationProgress,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  throwIfAborted(signal);
   const source = snapshot.domains && typeof snapshot.domains === 'object'
     ? snapshot.domains
     : snapshot as Record<string, unknown>;
@@ -86,6 +100,19 @@ async function hydrateSnapshot(snapshot: ProjectSnapshot, targets: SnapshotHydra
     if (domain) (docsByDomain[domain] ||= []).push(document);
   }
   const documents = (key: string): unknown[] => domainDocuments(key).length ? domainDocuments(key) : docsByDomain[key] || [];
+  const assetWork = Math.max(1,
+    documents('textures').length + documents('audio').length + documents('models').length
+    + documents('animations').length + documents('attachments').length,
+  );
+  let completedWork = 0;
+  const report = (detail: string, fraction = 0) => {
+    throwIfAborted(signal);
+    onProgress(Math.min(0.99, (completedWork + fraction) / assetWork), detail);
+  };
+  const complete = (detail: string) => {
+    completedWork += 1;
+    report(detail);
+  };
   const textureAssetUrls = new Map<string, string>();
   if (targets.setBlueprints) targets.setBlueprints(documents('blueprints') as Blueprint[]);
   if (targets.setTextures) {
@@ -94,11 +121,13 @@ async function hydrateSnapshot(snapshot: ProjectSnapshot, targets: SnapshotHydra
       const item = value as Partial<TextureData> & { assetId?: string };
       if (!item.id || !item.name || !item.assetId) continue;
       try {
-        const url = await loadProjectAssetUrl(item.assetId);
+        report(`Loading texture — ${item.name}`, 0.1);
+        const url = await loadProjectAssetUrl(item.assetId, signal);
         textureAssetUrls.set(item.id, url);
         textures.push({ id: item.id, name: item.name, dimensions: item.dimensions || { width: 0, height: 0 }, url });
       }
       catch (error) { console.warn(`[Persistence] Could not hydrate texture ${item.id}`, error); }
+      complete(`Loaded texture — ${item.name}`);
     }
     targets.setTextures(textures);
   }
@@ -107,8 +136,12 @@ async function hydrateSnapshot(snapshot: ProjectSnapshot, targets: SnapshotHydra
     for (const value of documents('audio')) {
       const item = value as Partial<AudioData> & { assetId?: string };
       if (!item.id || !item.name || !item.assetId) continue;
-      try { audios.push({ id: item.id, name: item.name, type: item.type || 'application/octet-stream', duration: item.duration || 0, url: await loadProjectAssetUrl(item.assetId) }); }
+      try {
+        report(`Loading audio — ${item.name}`, 0.1);
+        audios.push({ id: item.id, name: item.name, type: item.type || 'application/octet-stream', duration: item.duration || 0, url: await loadProjectAssetUrl(item.assetId, signal) });
+      }
       catch (error) { console.warn(`[Persistence] Could not hydrate audio ${item.id}`, error); }
+      complete(`Loaded audio — ${item.name}`);
     }
     targets.setAudioAssets(audios);
   }
@@ -119,7 +152,13 @@ async function hydrateSnapshot(snapshot: ProjectSnapshot, targets: SnapshotHydra
       const item = value as Record<string, any>;
       if (!item.id || !item.name || !item.assetId) continue;
       try {
-        const loaded = await loadFBXFile(await loadProjectAssetFile(item.assetId, item.name), { normalize: item.category !== 'Animation', manualId: item.id });
+        report(`Downloading model — ${item.name}`, 0.05);
+        const loaded = await loadFBXFile(await loadProjectAssetFile(item.assetId, item.name, signal), {
+          normalize: item.category !== 'Animation',
+          manualId: item.id,
+          signal,
+          onProgress: (progress, phase) => report(`${phase} — ${item.name}`, progress * 0.8 + 0.1),
+        });
         loaded.category = item.category || 'Prop';
         loaded.isPlacedInScene = Boolean(item.isPlacedInScene);
         loaded.textureOverrides = item.textureOverrides;
@@ -147,16 +186,31 @@ async function hydrateSnapshot(snapshot: ProjectSnapshot, targets: SnapshotHydra
         if (loaded.category === 'Animation') stripGeometry(loaded.object);
         if (!item.thumbnail && loaded.category !== 'Animation') loaded.thumbnail = generateThumbnail(loaded.object);
         const animations = animationDocuments.filter((animation) => animation.modelId === item.id);
+        complete(`Loaded model — ${item.name}`);
         for (const animation of animations) {
           if (!animation?.assetId) continue;
           try {
-            const animationModel = await loadFBXFile(await loadProjectAssetFile(animation.assetId, animation.name || 'animation.fbx'), { normalize: false });
-            loaded.animations.push(...animationModel.animations.map((clip) => { const copy = clip.clone(); copy.name = String(animation.name || copy.name); return copy; }));
-            disposeModel(animationModel);
+            const animationName = animation.name || 'animation.fbx';
+            report(`Downloading animation — ${animationName}`, 0.05);
+            const animationModel = await loadFBXFile(await loadProjectAssetFile(animation.assetId, animationName, signal), {
+              normalize: false,
+              signal,
+              onProgress: (progress, phase) => report(`${phase} — ${animationName}`, progress * 0.85 + 0.1),
+            });
+            try {
+              const prepared = prepareAnimationClips(loaded.object, animationModel.object, animationModel.animations);
+              loaded.animations.push(...prepared.clips);
+            } finally {
+              disposeModel(animationModel);
+            }
           } catch (error) { console.warn(`[Persistence] Could not hydrate animation ${animation.assetId}`, error); }
+          complete(`Loaded animation — ${animation.name || 'animation.fbx'}`);
         }
         models.push(loaded);
-      } catch (error) { console.warn(`[Persistence] Could not hydrate model ${item.id}`, error); }
+      } catch (error) {
+        console.warn(`[Persistence] Could not hydrate model ${item.id}`, error);
+        complete(`Skipped model — ${item.name}`);
+      }
     }
     targets.setModels(models);
   }
@@ -166,9 +220,16 @@ async function hydrateSnapshot(snapshot: ProjectSnapshot, targets: SnapshotHydra
       const item = value as Record<string, any>;
       if (!item.id || !item.name || !item.assetId) continue;
       try {
-        const loaded = await loadFBXFile(await loadProjectAssetFile(item.assetId, item.name), { normalize: false, manualId: item.id });
+        report(`Downloading attachment — ${item.name}`, 0.05);
+        const loaded = await loadFBXFile(await loadProjectAssetFile(item.assetId, item.name, signal), {
+          normalize: false,
+          manualId: item.id,
+          signal,
+          onProgress: (progress, phase) => report(`${phase} — ${item.name}`, progress * 0.85 + 0.1),
+        });
         attachments.push({ id: item.id, name: item.name, url: loaded.url, object: loaded.object, parentModelId: item.parentModelId || '', boneName: item.boneName || 'Hips', position: item.position || [0, 0, 0], rotation: item.rotation || [0, 0, 0], scale: item.scale || [1, 1, 1] });
       } catch (error) { console.warn(`[Persistence] Could not hydrate attachment ${item.id}`, error); }
+      complete(`Loaded attachment — ${item.name}`);
     }
     targets.setAttachments(attachments);
   }
@@ -184,18 +245,20 @@ async function hydrateSnapshot(snapshot: ProjectSnapshot, targets: SnapshotHydra
     targets.hydrateGraphs(graphs);
   }
   targets.setSelectedModelId(null);
+  onProgress(1, 'Project assets ready');
   return true;
 }
 
-async function loadProjectAssetFile(assetId: string, name: string): Promise<File> {
+async function loadProjectAssetFile(assetId: string, name: string, signal?: AbortSignal): Promise<File> {
+  throwIfAborted(signal);
   const url = await projectService.resolveAsset(assetId);
-  const response = await fetch(url, { method: 'GET' });
+  const response = await fetch(url, { method: 'GET', signal });
   if (!response.ok) throw new Error(`Asset download failed (${response.status})`);
   return new File([await response.blob()], name, { type: response.headers.get('Content-Type') || 'application/octet-stream' });
 }
 
-async function loadProjectAssetUrl(assetId: string): Promise<string> {
-  const file = await loadProjectAssetFile(assetId, assetId);
+async function loadProjectAssetUrl(assetId: string, signal?: AbortSignal): Promise<string> {
+  const file = await loadProjectAssetFile(assetId, assetId, signal);
   return URL.createObjectURL(file);
 }
 
@@ -214,9 +277,20 @@ export const useScenePersistence = ({
   hydrateGraphs,
 }: ScenePersistenceProps) => {
 
-  const restoreSession = useCallback(async () => {
+  const { startOperation } = useOperationActions();
+
+  const restoreSession = useCallback(async (onProgress?: HydrationProgress, signal?: AbortSignal) => {
+      const ownedOperation = onProgress ? null : startOperation({
+        label: 'Loading project assets',
+        detail: 'Reading project snapshot',
+        progress: 0,
+        cancellable: false,
+      });
+      const report: HydrationProgress = onProgress || ((progress, detail) => ownedOperation?.update({ progress, detail }));
       setIsLoading(true);
       try {
+        throwIfAborted(signal);
+        report(0.01, 'Reading project snapshot');
         // Project data is host-owned. A snapshot is intentionally attempted
         // before the legacy browser store; the latter is read-only and exists
         // only to keep older workspaces recoverable during migration.
@@ -229,7 +303,7 @@ export const useScenePersistence = ({
               setBlueprints, setTextures, setAudioAssets, setLevelObjects,
               setSelectedModelId,
               hydrateProjectState, hydrateGraphs,
-            });
+            }, report, signal);
             if (!hydrated) throw new Error('Native project snapshot did not contain a valid domain payload');
             return;
           }
@@ -245,6 +319,7 @@ export const useScenePersistence = ({
           dbOperations.getAllTextures(),
           dbOperations.getAllAudio()
         ]);
+        report(0.08, 'Reading legacy project assets');
 
         // 1. Restore Blueprints
         if (setBlueprints) {
@@ -288,10 +363,18 @@ export const useScenePersistence = ({
 
         // 4. Restore Models
         const loadedModels: LoadedModelData[] = [];
-        for (const dbM of dbModels) {
+        for (const [modelIndex, dbM] of dbModels.entries()) {
           try {
             const file = new File([dbM.file], dbM.name, { type: 'application/octet-stream' });
-            const loaded = await loadFBXFile(file, { normalize: dbM.category !== 'Animation', manualId: dbM.id });
+            const loaded = await loadFBXFile(file, {
+              normalize: dbM.category !== 'Animation',
+              manualId: dbM.id,
+              signal,
+              onProgress: (progress, phase) => report(
+                0.1 + ((modelIndex + progress) / Math.max(1, dbModels.length + dbAttachments.length)) * 0.75,
+                `${phase} — ${dbM.name}`,
+              ),
+            });
             loaded.category = dbM.category || 'Prop';
             if (loaded.category === 'Animation') stripGeometry(loaded.object);
             loaded.thumbnail = dbM.thumbnail;
@@ -332,15 +415,12 @@ export const useScenePersistence = ({
               const animClips = [];
               for (const animFile of dbM.animationFiles) {
                  const aFile = new File([animFile.file], animFile.name, { type: 'application/octet-stream' });
-                 const tempLoaded = await loadFBXFile(aFile, { normalize: false });
-                 const newClips = tempLoaded.animations.map(clip => {
-                    const cleanName = animFile.name.replace('.fbx', '').replace('.FBX', '');
-                    const newClip = clip.clone();
-                    newClip.name = cleanName;
-                    return newClip;
-                 });
-                 animClips.push(...newClips);
-                 disposeModel(tempLoaded);
+                 const tempLoaded = await loadFBXFile(aFile, { normalize: false, signal });
+                 try {
+                    animClips.push(...prepareAnimationClips(loaded.object, tempLoaded.object, tempLoaded.animations).clips);
+                 } finally {
+                    disposeModel(tempLoaded);
+                 }
               }
               loaded.animations = [...loaded.animations, ...animClips];
             }
@@ -354,10 +434,18 @@ export const useScenePersistence = ({
 
         // 5. Restore Attachments
         const loadedAttachments: AttachmentData[] = [];
-        for (const dbA of dbAttachments) {
+        for (const [attachmentIndex, dbA] of dbAttachments.entries()) {
             try {
                 const file = new File([dbA.file], dbA.name, { type: 'application/octet-stream' });
-                const loaded = await loadFBXFile(file, { normalize: false, manualId: dbA.id });
+                const loaded = await loadFBXFile(file, {
+                  normalize: false,
+                  manualId: dbA.id,
+                  signal,
+                  onProgress: (progress, phase) => report(
+                    0.1 + ((dbModels.length + attachmentIndex + progress) / Math.max(1, dbModels.length + dbAttachments.length)) * 0.75,
+                    `${phase} — ${dbA.name}`,
+                  ),
+                });
                 loadedAttachments.push({
                     id: dbA.id,
                     name: dbA.name,
@@ -404,16 +492,19 @@ export const useScenePersistence = ({
         if (placedModels.length > 0 && !dbBlueprints.length) {
             setSelectedModelId(placedModels[0].id);
         }
+        report(1, 'Project assets ready');
 
       } catch (err) {
         console.error("Database restore failed", err);
+        if (projectService.getStatus().projectId) throw err;
       } finally {
+        ownedOperation?.finish();
         setIsLoading(false);
       }
-  }, [setModels, setAttachments, setSockets, setBlueprints, setTextures, setAudioAssets, setLevelObjects, setSelectedModelId, setIsLoading, defaultBlueprints, hydrateProjectState, hydrateGraphs]);
+  }, [setModels, setAttachments, setSockets, setBlueprints, setTextures, setAudioAssets, setLevelObjects, setSelectedModelId, setIsLoading, defaultBlueprints, hydrateProjectState, hydrateGraphs, startOperation]);
   
   useEffect(() => {
-    restoreSession();
+    void restoreSession().catch((error) => console.error('[Persistence] Initial restore failed', error));
   }, []);
 
   return { restoreSession };

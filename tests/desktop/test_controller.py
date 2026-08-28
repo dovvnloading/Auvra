@@ -4,6 +4,8 @@ import json
 import importlib
 from pathlib import Path
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -132,6 +134,7 @@ class ControllerTests(unittest.TestCase):
             valid = {"protocol": "auvra.host/1", "type": "request", "id": "r1", "session": controller.dispatcher.session.session_id, "revision": 0, "method": "host.ping", "payload": {}}
             controller.on_message(json.dumps(valid), "http://127.0.0.1:3099/")
             controller.on_message(json.dumps(valid), "http://evil.test/")
+            self.assertTrue(controller.wait_for_host_idle())
             self.assertEqual(len(controller.frame.posts), 1)
             self.assertTrue(json.loads(controller.frame.posts[0])["ok"])
             controller.close()
@@ -192,12 +195,103 @@ class ControllerTests(unittest.TestCase):
         }
 
         controller.on_message(json.dumps(request), "http://127.0.0.1:3099/")
+        self.assertTrue(controller.wait_for_host_idle())
 
         messages = [json.loads(body) for body in frame.posts]
         self.assertEqual([message["type"] for message in messages], ["event", "response"])
         self.assertEqual([message["revision"] for message in messages], [1, 1])
         self.assertEqual(messages[0]["event"], "project.status")
         self.assertEqual(service.assertions, [("project.getStatus", {})])
+        controller.close()
+
+    def test_host_request_returns_before_blocking_handler_completes(self):
+        process = Mock(is_alive=Mock(return_value=True))
+        frame = FakeFrame(FrameConfig(
+            FrameMode.DEVELOPMENT,
+            development_origin="http://127.0.0.1:3099",
+        ))
+        frame.state = FrameState.READY
+        controller = FrameController(process, frame=frame)
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocking_ping(payload):
+            started.set()
+            if not release.wait(3):
+                raise RuntimeError("test handler timed out")
+            return {"pong": True}
+
+        controller.dispatcher.register_method("host.ping", blocking_ping)
+        request = {
+            "protocol": "auvra.host/1", "type": "request", "id": "slow-1",
+            "session": controller.dispatcher.session.session_id, "revision": 0,
+            "method": "host.ping", "payload": {},
+        }
+
+        before = time.monotonic()
+        controller.on_message(json.dumps(request), "http://127.0.0.1:3099/")
+        elapsed = time.monotonic() - before
+
+        self.assertLess(elapsed, 0.2)
+        self.assertTrue(started.wait(1))
+        self.assertEqual(frame.posts, [])
+        release.set()
+        self.assertTrue(controller.wait_for_host_idle())
+        self.assertTrue(json.loads(frame.posts[-1])["ok"])
+        controller.close()
+
+    def test_project_progress_is_streamed_while_handler_is_running(self):
+        class StreamingProjectService:
+            def __init__(self):
+                self.sink = None
+                self.started = threading.Event()
+                self.release = threading.Event()
+
+            def set_event_sink(self, sink):
+                self.sink = sink
+
+            def handle(self, method, payload):
+                self.sink("project.progress", {"busy": True, "progress": 0.25, "status": "closed"})
+                self.started.set()
+                if not self.release.wait(3):
+                    raise RuntimeError("test project handler timed out")
+                return {
+                    "projectId": None, "revision": 0, "name": None, "readOnly": False,
+                    "dirty": False, "busy": False, "progress": None,
+                    "recoveryAvailable": False, "recentProjects": [], "status": "closed",
+                }
+
+            def drain_events(self):
+                return []
+
+            def shutdown(self):
+                return None
+
+        process = Mock(is_alive=Mock(return_value=True))
+        frame = FakeFrame(FrameConfig(
+            FrameMode.DEVELOPMENT,
+            development_origin="http://127.0.0.1:3099",
+        ))
+        frame.state = FrameState.READY
+        service = StreamingProjectService()
+        controller = FrameController(process, frame=frame, project_host=service)
+        controller.dispatcher.bind_services(project_service=service)
+        request = {
+            "protocol": "auvra.host/1", "type": "request", "id": "status-live",
+            "session": controller.dispatcher.session.session_id, "revision": 0,
+            "method": "project.getStatus", "payload": {},
+        }
+
+        controller.on_message(json.dumps(request), "http://127.0.0.1:3099/")
+        self.assertTrue(service.started.wait(1))
+        messages = [json.loads(body) for body in frame.posts]
+        self.assertEqual([message["type"] for message in messages], ["event"])
+        self.assertEqual(messages[0]["event"], "project.progress")
+        self.assertEqual(messages[0]["payload"]["progress"], 0.25)
+        service.release.set()
+        self.assertTrue(controller.wait_for_host_idle())
+        self.assertEqual(json.loads(frame.posts[-1])["type"], "response")
+        controller.close()
 
     def test_adapter_without_origin_policy_is_rejected(self):
         class UnsafeFrame(FakeFrame):

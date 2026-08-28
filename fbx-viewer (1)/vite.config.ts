@@ -3,8 +3,8 @@ import { randomBytes } from 'node:crypto';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-const editorDevCsp = (port: number, nonce: string) => `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'self'; img-src 'self' data: blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-${nonce}'; connect-src 'self' blob: http://127.0.0.1:${port} ws://127.0.0.1:${port}; form-action 'none'; navigate-to 'self';`;
-const editorPackagedCsp = `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'self'; img-src 'self' data: blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' blob:; form-action 'none'; navigate-to 'self';`;
+const editorDevCsp = (port: number, nonce: string) => `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-${nonce}'; connect-src 'self' blob: https://assets.auvra.local http://127.0.0.1:${port} ws://127.0.0.1:${port}; form-action 'none'; navigate-to 'self';`;
+const editorPackagedCsp = `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' blob: https://assets.auvra.local; form-action 'none'; navigate-to 'self';`;
 const hudPackagedCsp = `default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'none'; connect-src 'none'; media-src 'none'; form-action 'none'; navigate-to 'none';`;
 
 export default defineConfig(({ command }) => {
