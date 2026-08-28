@@ -39,7 +39,7 @@ const failures = [];
 const check = (condition, message) => { if (!condition) failures.push(message); };
 
 for (const [name, text] of Object.entries(source)) {
-  if (name !== "packageLock") check(!/https?:\/\/(?!127\.0\.0\.1)/i.test(text), `${name} contains a remote URL`);
+  if (name !== "packageLock") check(!/https?:\/\/(?!(?:127\.0\.0\.1|assets\.auvra\.local)(?:[:/;\s]|$))/i.test(text), `${name} contains an unapproved remote URL`);
 }
 check(!source.index.includes("cdn.tailwindcss.com"), "editor still references Tailwind CDN");
 check(source.index.includes("__AUVRA_EDITOR_CSP__"), "editor CSP placeholder missing");
@@ -51,7 +51,10 @@ const editorCspDefinitions = {
 };
 for (const [mode, policy] of Object.entries(editorCspDefinitions)) {
   const connectSources = policy?.match(/(?:^|;\s*)connect-src\s+([^;]+);/)?.[1].split(/\s+/) ?? [];
+  const mediaSources = policy?.match(/(?:^|;\s*)media-src\s+([^;]+);/)?.[1].split(/\s+/) ?? [];
   check(connectSources.includes("blob:"), `${mode} editor CSP blocks blob-backed model imports`);
+  check(connectSources.includes("https://assets.auvra.local"), `${mode} editor CSP blocks native project asset transfers`);
+  check(mediaSources.includes("'self'") && mediaSources.includes("blob:"), `${mode} editor CSP blocks blob-backed audio imports`);
 }
 check(source.vite.includes("cspNonce"), "Vite CSP nonce integration is missing");
 check(!/127\.0\.0\.1:\*/.test(source.vite), "development CSP grants unrelated loopback ports");
