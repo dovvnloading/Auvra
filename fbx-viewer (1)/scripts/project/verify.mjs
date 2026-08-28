@@ -21,6 +21,7 @@ const importWorker = await readFile(resolve(root, 'workers/fbxImport.worker.ts')
 const operationContext = await readFile(resolve(root, 'context/OperationContext.tsx'), 'utf8');
 const operationCenter = await readFile(resolve(root, 'components/UI/OperationCenter.tsx'), 'utf8');
 const nativeTransport = await readFile(resolve(root, 'host/nativeTransport.ts'), 'utf8');
+const diagnosticsRuntime = await readFile(resolve(root, 'diagnostics/runtime.ts'), 'utf8');
 
 const failures = [];
 const mustNotContain = (text, pattern, label) => { if (pattern.test(text)) failures.push(`${label}: forbidden ${pattern}`); };
@@ -52,7 +53,7 @@ for (const domain of ['metadata', 'worlds', 'scenes', 'levels', 'objects', 'envi
   if (!persistence.includes(`'${domain}'`)) failures.push(`native hydration inventory is missing ${domain}`);
 }
 if (!/!projectService\.getStatus\(\)\.projectId/.test(levels)) failures.push('level manager can still replace native state from legacy storage');
-if (!/await projectService\.close\(\);\s*await resetScene\(\)/.test(projectManager)) failures.push('project close does not reset editor contexts in place');
+if (!/await projectService\.close\(contextFor\(handle\)\);\s*await resetScene\(\)/.test(projectManager)) failures.push('project close does not reset editor contexts in place');
 if (!/category === 'Animation'[\s\S]*selectAnimationTarget\(models, selectedModelId\)[\s\S]*addAnimations\(files, target\.id\)/.test(contentBrowser)) failures.push('Library animation import is not routed to the selected skeletal model');
 if (!/prepareAnimationClips\(targetModel\.object, loaded\.object, loaded\.animations\)/.test(modelManager)) failures.push('animation import bypasses target skeleton binding');
 if (!/prepareAnimationClips\(loaded\.object, animationModel\.object, animationModel\.animations\)/.test(persistence)) failures.push('native project hydration bypasses target skeleton binding');
@@ -68,7 +69,20 @@ if (!/OperationProvider/.test(app) || !/OperationCenter/.test(app) || !/AbortCon
 if (!/lockCancellation/.test(operationContext) || !/operation\.lockCancellation\(\)/.test(modelManager)) failures.push('safe import commit boundary is missing');
 if (!/aria-live=["']polite["']/.test(operationCenter) || !/Cancel operation/.test(operationCenter)) failures.push('operation UI lacks accessible status or cancellation');
 if (!/LONG_RUNNING_METHODS/.test(nativeTransport) || !/LONG_REQUEST_TIMEOUT_MS/.test(nativeTransport)) failures.push('long native operations retain the interactive request timeout');
-if (!/hydrateSnapshot\(snapshot,[\s\S]*?\}, report, signal\)/.test(persistence)) failures.push('project hydration does not propagate progress and cancellation');
+if (!/hydrateSnapshot\(snapshot,[\s\S]*?\}, report, signal, activeDiagnostics\)/.test(persistence)) failures.push('project hydration does not propagate progress, cancellation, and trace context');
+for (const phase of ['source_read', 'worker_creation', 'fbx_structure_parse', 'embedded_texture_decode', 'runtime_asset_construction', 'runtime_asset_transfer', 'viewport_materialization', 'material_optimization_normalization']) {
+  if (!modelLoader.includes(`'${phase}'`) && !importWorker.includes(`'${phase}'`)) failures.push(`FBX diagnostic phase is missing from loader/worker: ${phase}`);
+}
+for (const phase of ['thumbnail_generation', 'animation_binding', 'project_upload', 'library_publication']) {
+  if (!modelManager.includes(`'${phase}'`)) failures.push(`asset operation diagnostic phase is missing: ${phase}`);
+}
+if (!db.includes("'project_record_commit'")) failures.push('asset operation diagnostic phase is missing: project_record_commit');
+if (!/assetDiagnosticAttributes/.test(modelManager) || !/nextAssetAlias/.test(modelManager) || !/traceId/.test(operationContext)) failures.push('asset aliases or operation trace identity are missing');
+if (!/worker\.phase/.test(modelLoader) || !/worker\.failed/.test(modelLoader) || !/workerState/.test(modelLoader)) failures.push('worker lifecycle is not traced with stable state');
+if (!/diagnostics:\s*traceAsset/.test(persistence) || !/animation_hydration_failed/.test(persistence)) failures.push('project-open FBX/animation hydration is not traced');
+if (!/`\$\{traceId\}\.req-\$\{requestNumber\}`/.test(service)) failures.push('host request IDs are not correlated to the browser trace');
+if (!/MAX_RECORDS\s*=\s*256/.test(diagnosticsRuntime) || !/MAX_BUFFER_BYTES\s*=\s*512\s*\*\s*1024/.test(diagnosticsRuntime) || !/MAX_BATCH_RECORDS\s*=\s*16/.test(diagnosticsRuntime)) failures.push('browser diagnostics bounds are missing');
+if (!/HEARTBEAT_MS\s*=\s*1_000/.test(diagnosticsRuntime) || !/EVENT_LOOP_STALL_MS/.test(diagnosticsRuntime)) failures.push('browser heartbeat or event-loop stall detection is missing');
 
 const bundledBinding = await build({
   entryPoints: [resolve(root, 'utils/animationBinding.ts')],

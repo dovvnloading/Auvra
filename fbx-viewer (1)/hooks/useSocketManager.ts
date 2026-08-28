@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { SocketData } from '../types';
 import { dbOperations } from '../utils/db';
 import { projectService } from '../utils/projectService';
+import { frontendDiagnostics } from '../diagnostics/runtime';
 
 export const useSocketManager = () => {
   const [sockets, setSockets] = useState<SocketData[]>([]);
@@ -18,7 +19,7 @@ export const useSocketManager = () => {
       try {
           for (const [id, updates] of batch.entries()) await dbOperations.updateSocket(id, updates);
       } catch (e) {
-          console.error("Error saving batched socket updates", e);
+          frontendDiagnostics.failure('socket_batch_persist_failed', e);
       }
   }, []);
 
@@ -48,7 +49,7 @@ export const useSocketManager = () => {
     try {
         await dbOperations.addSocket(newSocket);
     } catch(e) {
-        console.error("Failed to add socket", e);
+        frontendDiagnostics.failure('socket_add_failed', e);
     }
   }, []);
 
@@ -73,14 +74,14 @@ export const useSocketManager = () => {
       
       try {
           await dbOperations.deleteSocket(id);
-      } catch(e) { console.error(e); }
+      } catch(e) { frontendDiagnostics.failure('socket_delete_failed', e); }
   }, []);
 
   const removeSocketsByParentId = useCallback((parentId: string, persist = true) => {
       if (persist) projectService.assertWritable();
       setSockets(prev => {
           const toRemove = prev.filter(s => s.parentModelId === parentId);
-          if (persist) toRemove.forEach(s => dbOperations.deleteSocket(s.id).catch(console.error));
+          if (persist) toRemove.forEach(s => dbOperations.deleteSocket(s.id).catch((error) => frontendDiagnostics.failure('socket_cleanup_failed', error)));
           return prev.filter(s => s.parentModelId !== parentId);
       });
   }, []);

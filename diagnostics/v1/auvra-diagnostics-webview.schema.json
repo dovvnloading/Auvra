@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://auvra.dev/diagnostics/v1/auvra-diagnostics-webview.schema.json",
+  "title": "Auvra WebView diagnostics lane v1",
+  "oneOf": [
+    { "$ref": "#/$defs/eventBatch" },
+    { "$ref": "#/$defs/heartbeat" },
+    { "$ref": "#/$defs/query" },
+    { "$ref": "#/$defs/command" },
+    { "$ref": "#/$defs/response" }
+  ],
+  "$defs": {
+    "protocol": { "const": "auvra.diagnostics/1" },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "scalar": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string", "minLength": 1, "maxLength": 256 },
+        {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "oneOf": [
+              { "type": "null" },
+              { "type": "boolean" },
+              { "type": "number" },
+              { "type": "string", "minLength": 1, "maxLength": 256 }
+            ]
+          }
+        }
+      ]
+    },
+    "record": {
+      "type": "object",
+      "required": ["component", "event", "attributes"],
+      "additionalProperties": false,
+      "properties": {
+        "component": { "enum": ["frontend", "worker", "operation", "renderer"] },
+        "event": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:[._][a-z0-9]+)*$" },
+        "operationId": { "$ref": "#/$defs/id" },
+        "traceId": { "$ref": "#/$defs/id" },
+        "spanId": { "$ref": "#/$defs/id" },
+        "parentSpanId": { "$ref": "#/$defs/id" },
+        "attributes": {
+          "type": "object",
+          "maxProperties": 16,
+          "additionalProperties": { "$ref": "#/$defs/scalar" }
+        }
+      }
+    },
+    "eventBatch": {
+      "type": "object",
+      "required": ["protocol", "type", "id", "records"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "$ref": "#/$defs/protocol" },
+        "type": { "const": "event-batch" },
+        "id": { "$ref": "#/$defs/id" },
+        "records": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/record" } },
+        "failedDeliveryCount": { "type": "integer", "minimum": 0, "maximum": 4096 }
+      }
+    },
+    "heartbeat": {
+      "type": "object",
+      "required": ["protocol", "type", "visibility", "activeCount"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "$ref": "#/$defs/protocol" },
+        "type": { "const": "heartbeat" },
+        "visibility": { "enum": ["active", "hidden", "starting", "closing"] },
+        "activeCount": { "type": "integer", "minimum": 0, "maximum": 64 }
+      }
+    },
+    "query": {
+      "type": "object",
+      "required": ["protocol", "type", "id", "session", "limit"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "$ref": "#/$defs/protocol" },
+        "type": { "const": "query" },
+        "id": { "$ref": "#/$defs/id" },
+        "session": { "$ref": "#/$defs/id" },
+        "level": { "enum": ["debug", "info", "warning", "error", "critical"] },
+        "component": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "trace": { "$ref": "#/$defs/id" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+      }
+    },
+    "command": {
+      "type": "object",
+      "required": ["protocol", "type", "id", "session", "command"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "$ref": "#/$defs/protocol" },
+        "type": { "const": "command" },
+        "id": { "$ref": "#/$defs/id" },
+        "session": { "$ref": "#/$defs/id" },
+        "command": { "enum": ["capture.enable", "capture.disable"] }
+      }
+    },
+    "response": {
+      "type": "object",
+      "required": ["protocol", "type", "id", "ok", "result"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "$ref": "#/$defs/protocol" },
+        "type": { "const": "response" },
+        "id": { "$ref": "#/$defs/id" },
+        "ok": { "type": "boolean" },
+        "result": { "type": "object" }
+      }
+    }
+  }
+}

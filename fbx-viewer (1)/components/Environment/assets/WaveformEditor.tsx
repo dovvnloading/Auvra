@@ -1,6 +1,7 @@
 
 import React, { useRef, useEffect, useState } from 'react';
 import { Play, Square, Loader2 } from 'lucide-react';
+import { frontendDiagnostics } from '../../../diagnostics/runtime';
 
 interface WaveformEditorProps {
     audioUrl: string;
@@ -55,7 +56,7 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
                 }
             })
             .catch(err => {
-                console.error("Waveform decode error:", err);
+                frontendDiagnostics.failure('waveform_decode_failed', err);
                 if (active) {
                     setError("Failed to decode audio");
                     setIsLoading(false);

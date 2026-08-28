@@ -3,6 +3,7 @@ import { Canvas, useFrame, useThree, type CanvasProps } from "@react-three/fiber
 import * as THREE from "three";
 import { nativeEngine, type NativeEngineStatus } from "../host/engine";
 import { rendererCoordinator, type RendererSurfaceRole } from "./registry";
+import { frontendDiagnostics } from "../diagnostics/runtime";
 
 type AuvraCanvasGlOptions = Partial<THREE.WebGLRendererParameters> & Partial<Pick<THREE.WebGLRenderer, "outputColorSpace" | "toneMapping" | "toneMappingExposure">>;
 
@@ -145,7 +146,16 @@ export const AuvraCanvas: React.FC<AuvraCanvasProps> = ({
   }), [providedGl]);
 
   const remount = useCallback(() => setGeneration((value) => value + 1), []);
-  const failNative = useCallback((message: string) => setNativeFailure(message), []);
+  const failNative = useCallback((message: string) => {
+    frontendDiagnostics.record("renderer", "renderer.backend_failed", {
+      backend: "native",
+      fallback: true,
+      code: "native_viewport_start_failed",
+      errorType: "NativeViewportError",
+      surfaceRole: role,
+    }, {}, true);
+    setNativeFailure(message);
+  }, [role]);
   const nativeEligible = surfaceId === "editor-scene-viewer";
   if (requestedBackend === "native" && nativeEligible && !nativeFailure) {
     return <NativeViewportBridge surfaceId={surfaceId} onFailure={failNative} />;

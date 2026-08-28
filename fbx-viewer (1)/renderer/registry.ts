@@ -130,7 +130,6 @@ class RendererCoordinator {
     }
     if (this.surfaces.has(id)) {
       const message = `Renderer surface is already registered: ${id}`;
-      console.error(message);
       throw new RendererRegistryError(message);
     }
     const generation = (this.generations.get(id) ?? 0) + 1;

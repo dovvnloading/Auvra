@@ -1,5 +1,6 @@
 
 import * as THREE from 'three';
+import { frontendDiagnostics } from '../diagnostics/runtime';
 
 export interface ExtractedTexture {
     uuid: string;
@@ -47,7 +48,7 @@ export const extractTextureFromModel = (object: THREE.Object3D): string | null =
     ctx.drawImage(image, 0, 0);
     return canvas.toDataURL('image/png');
   } catch (e) {
-    console.error("Error extracting texture", e);
+    frontendDiagnostics.failure('texture_extract_failed', e);
     return null;
   }
 };
@@ -87,7 +88,7 @@ export const extractAllTexturesFromModel = (object: THREE.Object3D): ExtractedTe
                                 });
                             }
                         } catch(e) {
-                            console.warn("Could not extract texture", e);
+                            frontendDiagnostics.failure('material_texture_extract_failed', e);
                         }
                     }
                 }

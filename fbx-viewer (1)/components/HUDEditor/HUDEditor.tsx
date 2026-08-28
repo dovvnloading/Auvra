@@ -8,6 +8,7 @@ import { AVAILABLE_COMPONENTS } from './componentRegistry';
 import { Code, Settings2, Sliders, Palette, Type, Move, Scaling } from 'lucide-react';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
 import { useNativeProjectDocument } from '../../utils/useNativeProjectDocument';
+import { frontendDiagnostics } from '../../diagnostics/runtime';
 
 interface HUDDocument {
     id: string;
@@ -151,7 +152,7 @@ export const HUDEditor: React.FC = () => {
             isLocked: false
         };
 
-        void commitElements([...elements, newEl]).catch((cause) => console.error('[HUD] Could not save element', cause));
+        void commitElements([...elements, newEl]).catch((cause) => frontendDiagnostics.failure('hud_element_add_failed', cause));
         
         // Only select and switch tabs if triggered manually, OR if AI created it we might want to select it
         // The override ID 'ai' is a hack to detect source, but we can just check overrides
@@ -168,7 +169,7 @@ export const HUDEditor: React.FC = () => {
 
     const handleUpdateElement = (id: string, updates: Partial<HUDElement>) => {
         void commitElements(elements.map(el => el.id === id ? { ...el, ...updates } : el))
-            .catch((cause) => console.error('[HUD] Could not save element update', cause));
+            .catch((cause) => frontendDiagnostics.failure('hud_element_update_failed', cause));
     };
 
     const handlePropChange = (key: string, value: any) => {
@@ -180,7 +181,7 @@ export const HUDEditor: React.FC = () => {
 
     const handleDelete = (id: string) => {
         void commitElements(elements.filter(el => el.id !== id))
-            .catch((cause) => console.error('[HUD] Could not delete element', cause));
+            .catch((cause) => frontendDiagnostics.failure('hud_element_delete_failed', cause));
         if (selectedId === id) setSelectedId(null);
     };
 

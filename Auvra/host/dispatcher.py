@@ -210,22 +210,25 @@ class HostDispatcher:
             return self._response(request, code="unknown_method", message="Unknown host method")
         method = request["method"]
         request_id = request["id"]
+        trace_id = _diagnostic_trace_id(request_id)
         diagnostics = active_diagnostics()
         request_class = ("mutating" if method in MUTATING_METHODS else
                          "long-running" if method in _LONG_RUNNING_METHODS else "read")
         started = time.monotonic()
         activity = (diagnostics.begin_activity("host", method, request_id=request_id,
-                                               trace_id=request_id)
+                                               trace_id=trace_id)
                     if diagnostics is not None else None)
+        if activity is not None:
+            activity.progress(queue_state="executing")
         persist_boundary = method in MUTATING_METHODS or method in _LONG_RUNNING_METHODS
         if diagnostics is not None and (persist_boundary or diagnostics.detailed):
             diagnostics.emit("host", "host.request_started", session_id=self.session.session_id,
                              request_id=request_id,
-                             trace_id=request_id,
+                             trace_id=trace_id,
                              attributes={"method": method, "requestClass": request_class})
         try:
             with bind_diagnostic_context(session_id=self.session.session_id,
-                                         request_id=request_id, trace_id=request_id):
+                                         request_id=request_id, trace_id=trace_id):
                 result = handler(request["payload"])
             # The native service owns project revisions, while this dispatcher
             # owns the host/session revision used to order messages.  Advance
@@ -236,7 +239,7 @@ class HostDispatcher:
             if diagnostics is not None and (persist_boundary or diagnostics.detailed):
                 diagnostics.emit("host", "host.request_completed", session_id=self.session.session_id,
                                  request_id=request_id,
-                                 trace_id=request_id,
+                                 trace_id=trace_id,
                                  attributes={
                                      "method": method, "requestClass": request_class,
                                      "outcome": "success",
@@ -248,7 +251,7 @@ class HostDispatcher:
             if diagnostics is not None:
                 diagnostics.emit("host", "host.request_failed", session_id=self.session.session_id,
                                  request_id=request_id,
-                                 trace_id=request_id,
+                                 trace_id=trace_id,
                                  attributes={
                                      "method": method, "requestClass": request_class,
                                      "outcome": "failure", "code": error.code,
@@ -260,7 +263,7 @@ class HostDispatcher:
             if diagnostics is not None:
                 diagnostics.emit("host", "host.dispatch_failed", session_id=self.session.session_id,
                                  request_id=request_id,
-                                 trace_id=request_id,
+                                 trace_id=trace_id,
                                  attributes={
                                      "method": method, "requestClass": request_class,
                                      "outcome": "failure", "code": "internal_error",
@@ -801,3 +804,10 @@ class HostOperationError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.details = details or {}
+
+
+def _diagnostic_trace_id(request_id: str) -> str:
+    candidate, marker, suffix = request_id.partition(".req-")
+    if marker and suffix.isdigit() and _ID.fullmatch(candidate):
+        return candidate
+    return request_id

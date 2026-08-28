@@ -1,6 +1,7 @@
 import type { Event, Request, Response, Session } from "./generated/protocolV1";
 import { assertRequest, assertResponse, isValidMessage } from "./protocol";
 import type { HostTransport } from "./transport";
+import { frontendDiagnostics } from "../diagnostics/runtime";
 
 const MAX_MESSAGE_BYTES = 256 * 1024;
 const MAX_PENDING = 64;
@@ -126,6 +127,7 @@ export class NativeHostTransport implements HostTransport {
       const timer = setTimeout(() => {
         this.pending.delete(request.id);
         this.rememberCompleted(request.id);
+        frontendDiagnostics.transportFailure('request_timeout', request.method, undefined, requestTimeout);
         reject(new NativeTransportError("Host request timed out"));
       }, requestTimeout);
       this.pending.set(request.id, { resolve, reject, timer });
@@ -135,7 +137,7 @@ export class NativeHostTransport implements HostTransport {
         clearTimeout(timer);
         this.pending.delete(request.id);
         this.rememberCompleted(request.id);
-        void error;
+        frontendDiagnostics.transportFailure('post_message_failed', request.method, error);
         reject(new NativeTransportError("Host request failed"));
       }
     });
@@ -160,11 +162,15 @@ export class NativeHostTransport implements HostTransport {
     for (const reject of Array.from(this.readyRejectors)) reject(new NativeTransportError("Host transport closed"));
     this.readyRejectors.clear();
     this.listeners.clear();
+    frontendDiagnostics.setSession(null);
   }
 
   private readonly handleMessage = (messageEvent: WebView2MessageEvent): void => {
     if (this.closed) return;
     const value = messageEvent.data;
+    if (value && typeof value === 'object' && (value as { protocol?: unknown }).protocol === 'auvra.diagnostics/1') {
+      return;
+    }
     if (this.messageSize(value) > MAX_MESSAGE_BYTES || !isValidMessage(value)) {
       this.failClosed("Malformed or oversized host message");
       return;
@@ -207,6 +213,7 @@ export class NativeHostTransport implements HostTransport {
       return;
     }
     this.sessionEnvelope = session;
+    frontendDiagnostics.setSession(session.session);
     this.revision = session.revision;
     const event: Event = {
       protocol: "auvra.host/1",
@@ -233,6 +240,7 @@ export class NativeHostTransport implements HostTransport {
   }
 
   private failClosed(message: string): void {
+    frontendDiagnostics.transportFailure('protocol_closed', undefined, new NativeTransportError(message));
     this.close();
     // Keep protocol failures generic; payloads must never be reflected to
     // logs/UI, and a transport failure must not be disguised as a valid event.

@@ -16,6 +16,7 @@ from .core import (
     redact,
     safe_diagnostics_root,
 )
+from .webview import DiagnosticWebViewLane, WEBVIEW_DIAGNOSTIC_PROTOCOL
 
 __all__ = [
     "DIAGNOSTIC_SCHEMA",
@@ -32,4 +33,6 @@ __all__ = [
     "latest_run_summary",
     "redact",
     "safe_diagnostics_root",
+    "DiagnosticWebViewLane",
+    "WEBVIEW_DIAGNOSTIC_PROTOCOL",
 ]
