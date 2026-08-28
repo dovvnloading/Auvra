@@ -12,7 +12,9 @@ from collections.abc import Mapping
 from typing import Any, Callable
 import hashlib
 import re
+import time
 
+from Auvra.diagnostics.core import active_diagnostics, bind_diagnostic_context
 from .logging import StructuredLogger
 from .session import SessionManager
 from .validation import ProtocolValidationError, validate_message, validate_request, validate_response
@@ -42,6 +44,7 @@ MUTATING_METHODS = frozenset({
     "engine.applyChanges", "engine.openViewport", "engine.closeViewport",
     "engine.recover",
 })
+_LONG_RUNNING_METHODS = frozenset({"inference.submit", "engine.renderReference"})
 EVENTS = frozenset({
     "host.session", "host.revision", "project.status", "project.opening", "project.opened",
     "project.closing", "project.closed", "project.revision", "project.dirty",
@@ -205,20 +208,71 @@ class HostDispatcher:
         handler = bound_handler or self._methods.get(request["method"])
         if handler is None:
             return self._response(request, code="unknown_method", message="Unknown host method")
+        method = request["method"]
+        request_id = request["id"]
+        diagnostics = active_diagnostics()
+        request_class = ("mutating" if method in MUTATING_METHODS else
+                         "long-running" if method in _LONG_RUNNING_METHODS else "read")
+        started = time.monotonic()
+        activity = (diagnostics.begin_activity("host", method, request_id=request_id,
+                                               trace_id=request_id)
+                    if diagnostics is not None else None)
+        persist_boundary = method in MUTATING_METHODS or method in _LONG_RUNNING_METHODS
+        if diagnostics is not None and (persist_boundary or diagnostics.detailed):
+            diagnostics.emit("host", "host.request_started", session_id=self.session.session_id,
+                             request_id=request_id,
+                             trace_id=request_id,
+                             attributes={"method": method, "requestClass": request_class})
         try:
-            result = handler(request["payload"])
+            with bind_diagnostic_context(session_id=self.session.session_id,
+                                         request_id=request_id, trace_id=request_id):
+                result = handler(request["payload"])
             # The native service owns project revisions, while this dispatcher
             # owns the host/session revision used to order messages.  Advance
             # it after a successful bound mutation and before response
             # validation so the response is the next authoritative revision.
-            if bound_handler is not None and request["method"] in MUTATING_METHODS:
+            if bound_handler is not None and method in MUTATING_METHODS:
                 self.session.advance()
+            if diagnostics is not None and (persist_boundary or diagnostics.detailed):
+                diagnostics.emit("host", "host.request_completed", session_id=self.session.session_id,
+                                 request_id=request_id,
+                                 trace_id=request_id,
+                                 attributes={
+                                     "method": method, "requestClass": request_class,
+                                     "outcome": "success",
+                                     "durationMs": round((time.monotonic() - started) * 1000, 3),
+                                     "revision": self.session.revision,
+                                 })
             return self._response(request, result=result)
         except HostOperationError as error:
+            if diagnostics is not None:
+                diagnostics.emit("host", "host.request_failed", session_id=self.session.session_id,
+                                 request_id=request_id,
+                                 trace_id=request_id,
+                                 attributes={
+                                     "method": method, "requestClass": request_class,
+                                     "outcome": "failure", "code": error.code,
+                                     "errorType": type(error).__name__,
+                                     "durationMs": round((time.monotonic() - started) * 1000, 3),
+                                 })
             return self._response(request, code=error.code, message=str(error), details=error.details)
-        except Exception:
-            self.logger.emit("error", "host.dispatch_failed", {"method": request["method"]})
+        except Exception as error:
+            if diagnostics is not None:
+                diagnostics.emit("host", "host.dispatch_failed", session_id=self.session.session_id,
+                                 request_id=request_id,
+                                 trace_id=request_id,
+                                 attributes={
+                                     "method": method, "requestClass": request_class,
+                                     "outcome": "failure", "code": "internal_error",
+                                     "errorType": type(error).__name__,
+                                     "durationMs": round((time.monotonic() - started) * 1000, 3),
+                                 })
+            else:
+                self.logger.emit("error", "host.dispatch_failed", {"method": method})
             return self._response(request, code="internal_error", message="Host operation failed")
+        finally:
+            if activity is not None:
+                activity.finish()
 
     def make_event(self, event_name: str, payload: Mapping[str, Any] | None = None,
                    *, advance: bool = True) -> dict[str, Any]:

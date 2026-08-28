@@ -253,6 +253,40 @@ class CliParserTests(unittest.TestCase):
              mock.patch.object(cli, "wait_for_readiness", return_value=exited_ready):
             self.assertEqual(cli.run_start(paths, explicit_port=None, json_mode=True), 14)
 
+    def test_vite_ready_frame_timeout_survives_as_last_startup_phase(self) -> None:
+        class TimedOutController:
+            cleanup_error = None
+
+            def start(self):
+                raise cli.FrameStartupError("desktop frame startup timed out")
+
+            def close(self):
+                return None
+
+        with tempfile.TemporaryDirectory(prefix="auvra frame timeout diagnostics ") as raw:
+            paths = Paths.from_repo_root(Path(raw))
+            owned = mock.Mock()
+            owned.is_alive.return_value = True
+            owned.poll.return_value = 0
+            ready = ReadinessResult(True, "http://127.0.0.1:3027/", 1, "HTTP 200")
+            with mock.patch.object(cli, "_runtime_ok", return_value=(True, [])), \
+                 mock.patch.object(cli, "choose_port", return_value=3027), \
+                 mock.patch.object(cli, "_node_npm", return_value=("node", "npm")), \
+                 mock.patch.object(cli, "prepare_dependencies", return_value=(True, mock.Mock(to_dict=lambda: {"status": "ready"}), "")), \
+                 mock.patch.object(cli.OwnedProcess, "launch", return_value=owned), \
+                 mock.patch.object(cli, "wait_for_readiness", return_value=ready), \
+                 mock.patch.object(cli.FrameController, "development", return_value=TimedOutController()):
+                result = cli.run_start(paths, explicit_port=None, json_mode=True)
+            self.assertEqual(result, cli.ExitCode.RUNTIME)
+            summary = diagnostics.latest_run_summary(paths.diagnostics_root)
+            self.assertEqual(summary["lastPhase"], "desktop-frame-creation")
+            records = diagnostics.inspect_records(paths.diagnostics_root, limit=1000)
+            self.assertTrue(any(record["event"] == "child.ready" for record in records))
+            failures = [record for record in records
+                        if record["event"] == "startup.phase_failed"]
+            self.assertEqual(failures[-1]["attributes"]["phase"], "desktop-frame-creation")
+            self.assertEqual(failures[-1]["attributes"]["code"], "frame_startup")
+
     def test_start_builds_loopback_strict_port_command_from_space_safe_paths(self) -> None:
         with tempfile.TemporaryDirectory(prefix="auvra start path with spaces ") as raw:
             paths = Paths.from_repo_root(Path(raw))

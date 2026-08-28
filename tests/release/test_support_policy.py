@@ -26,7 +26,11 @@ class SupportPolicyTests(unittest.TestCase):
                 for name in archive.namelist():
                     self.assertNotRegex(archive.read(name).decode("utf-8"), r"(?i)bearer|https?://|[A-Z]:\\")
                 manifest = json.loads(archive.read("manifest.json"))
-                self.assertEqual(manifest, {"kind": "auvra-support", "telemetry": False, "version": 1})
+                self.assertEqual(manifest["kind"], "auvra-support")
+                self.assertEqual(manifest["version"], 2)
+                self.assertEqual(manifest["schema"], "auvra.diagnostics/1")
+                self.assertEqual(manifest["build"], "development")
+                self.assertFalse(manifest["telemetry"])
 
 
 if __name__ == "__main__":

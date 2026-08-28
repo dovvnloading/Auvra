@@ -521,6 +521,7 @@ class WebView2Frame:
 
     def _on_navigation(self, sender: Any, args: Any) -> None:
         if not self.policy.navigation(str(self._value(args, "Uri", ""))).allowed:
+            self._signal("policy_rejected", {"code": "navigation"})
             self._cancel(args)
 
     def _on_navigation_completed(self, sender: Any, args: Any) -> None:
@@ -545,19 +546,23 @@ class WebView2Frame:
 
     def _on_frame_navigation(self, sender: Any, args: Any) -> None:
         if not self.policy.frame_navigation(str(self._value(args, "Uri", ""))).allowed:
+            self._signal("policy_rejected", {"code": "frame_navigation"})
             self._cancel(args)
 
     def _on_new_window(self, sender: Any, args: Any) -> None:
+        self._signal("policy_rejected", {"code": "new_window"})
         if hasattr(args, "Handled"):
             args.Handled = True
         if hasattr(args, "Cancel"):
             args.Cancel = True
 
     def _on_download(self, sender: Any, args: Any) -> None:
+        self._signal("policy_rejected", {"code": "download"})
         if hasattr(args, "Cancel"):
             args.Cancel = True
 
     def _on_permission(self, sender: Any, args: Any) -> None:
+        self._signal("policy_rejected", {"code": "permission"})
         if hasattr(args, "State"):
             try:
                 from Microsoft.Web.WebView2.Core import CoreWebView2PermissionState  # type: ignore[import-not-found]
@@ -572,6 +577,7 @@ class WebView2Frame:
             self._on_asset_resource(args, request, uri)
             return
         if not self.policy.resource(str(uri)).allowed:
+            self._signal("policy_rejected", {"code": "resource"})
             self._deny_resource(args)
 
     @staticmethod
@@ -779,14 +785,17 @@ class WebView2Frame:
     def _on_message(self, sender: Any, args: Any) -> None:
         source = str(self._value(args, "Source", ""))
         if not self.policy.allow_message(source):
+            self._signal("message_rejected", {"code": "source_rejected"})
             return
         try:
             body = str(self._value(args, "WebMessageAsJson", ""))
             if len(body.encode("utf-8", "replace")) > MESSAGE_MAX_BYTES:
+                self._signal("message_rejected", {"code": "message_too_large"})
                 return
             parsed = json.loads(body)
             validate_message(parsed)
         except (TypeError, ValueError, json.JSONDecodeError, ProtocolValidationError):
+            self._signal("message_rejected", {"code": "invalid_message"})
             return
         callback = self.config.on_message
         if callback is not None:

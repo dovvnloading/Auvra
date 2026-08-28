@@ -13,7 +13,7 @@ class LoggingTests(unittest.TestCase):
         lines = []; logger = StructuredLogger(lines.append, max_bytes=256)
         logger.emit("info", "test", {"message":"x" * 1000})
         self.assertLessEqual(len(lines[0].encode()), 256)
-        self.assertEqual(json.loads(lines[0])["event"], "log.truncated")
+        self.assertEqual(json.loads(lines[0])["event"], "diagnostics.record_rejected")
 
     def test_diagnostic_ring_is_bounded_and_redacted(self):
         ring = DiagnosticRing(max_records=2, max_bytes=512)

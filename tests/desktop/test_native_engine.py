@@ -11,6 +11,7 @@ import unittest
 import hashlib
 import io
 
+from Auvra.diagnostics.core import DiagnosticsSession, bind_diagnostic_context
 from Auvra.desktop.native_engine import (
     MAX_FRAME_BYTES,
     NativeEngine,
@@ -35,7 +36,7 @@ FAKE_CHILD = textwrap.dedent(
     token = os.environ.get("AUVRA_NATIVE_SESSION_TOKEN", "")
     revision = 0
     entities = []
-    print(json.dumps({"level":"info","event":"native.ready","protocol":PROTOCOL}), file=sys.stderr, flush=True)
+    print(json.dumps({"schema":"auvra.native-diagnostic/1","level":"info","event":"native.ready"}), file=sys.stderr, flush=True)
 
     def read_frame():
         header = sys.stdin.buffer.read(4)
@@ -76,7 +77,7 @@ FAKE_CHILD = textwrap.dedent(
                 result = {"revision": revision, "entities": entities}
             elif method == "shutdown":
                 write_frame({"protocol":PROTOCOL,"id":request_id,"ok":True,"result":{"stopped":True}})
-                print(json.dumps({"level":"info","event":"native.stopped","revision":revision}), file=sys.stderr, flush=True)
+                print(json.dumps({"schema":"auvra.native-diagnostic/1","level":"info","event":"native.stopped","method":"shutdown"}), file=sys.stderr, flush=True)
                 break
             elif method == "exit":
                 os._exit(7)
@@ -117,16 +118,22 @@ class NativeEngineTests(unittest.TestCase):
         self.script = Path(self.temp.name) / "fake_native.py"
         self.script.write_text(FAKE_CHILD, encoding="utf-8")
         self.engine: NativeEngine | None = None
+        self.diagnostic_session = DiagnosticsSession(
+            Path(self.temp.name) / "diagnostics", run_id="run-native", mode="test",
+        )
+        self.diagnostic_session.start()
 
     def tearDown(self) -> None:
         if self.engine is not None:
             self.engine.close(timeout=1)
+        self.diagnostic_session.close(outcome="success")
         self.temp.cleanup()
 
     def make_engine(self) -> NativeEngine:
         self.engine = NativeEngine([sys.executable, "-u", str(self.script)],
                                    startup_timeout=2, request_timeout=2,
-                                   shutdown_timeout=1)
+                                   shutdown_timeout=1,
+                                   diagnostics=self.diagnostic_session)
         self.engine.start(editor_session="editor-before-reload")
         return self.engine
 
@@ -157,6 +164,18 @@ class NativeEngineTests(unittest.TestCase):
         self.assertEqual(snapshot["revision"], 1)
         self.assertEqual(snapshot["entities"][0]["position"], [1, 2, 3])
 
+    def test_host_trace_context_propagates_to_native_calls(self) -> None:
+        engine = self.make_engine()
+        self.diagnostic_session.start_detailed_capture()
+        with bind_diagnostic_context(session_id="s-host", request_id="host-request",
+                                     trace_id="host-request"):
+            engine.call("world.getSnapshot")
+        records = [item.record for item in engine.diagnostics]
+        self.assertTrue(any(record.get("event") == "native.request_completed"
+                            and record.get("traceId") == "host-request"
+                            and record.get("sessionId") == "s-host"
+                            for record in records))
+
     def test_oversize_request_is_rejected_before_write(self) -> None:
         engine = self.make_engine()
         with self.assertRaises(NativeEngineFrameTooLargeError):
@@ -169,8 +188,13 @@ class NativeEngineTests(unittest.TestCase):
         engine.close(timeout=1)
         self.assertEqual(engine.state, NativeEngineState.CLOSED)
         self.assertEqual(process.returncode, 0)
-        self.assertEqual([item.record.get("event") for item in engine.diagnostics],
-                         ["native.ready", "native.stopped"])
+        records = [item.record for item in engine.diagnostics]
+        self.assertTrue(any(item.get("event") == "native.child_record"
+                            and item.get("attributes", {}).get("state") == "native.ready"
+                            for item in records))
+        self.assertTrue(any(item.get("event") == "native.lifecycle"
+                            and item.get("attributes", {}).get("state") == "closed"
+                            for item in records))
 
     def test_child_exit_is_typed_and_cleanup_is_bounded(self) -> None:
         engine = self.make_engine()
@@ -184,13 +208,17 @@ class NativeEngineTests(unittest.TestCase):
         engine = self.make_engine()
         for number in range(400):
             engine._diagnostics_append({
-                "event": "native.detail",
+                "schema": "auvra.native-diagnostic/1",
+                "level": "error",
+                "event": "native.protocol_failed",
+                "code": "fatal_protocol_error",
                 "authorization": "Bearer do-not-print-this-token",
                 "message": "x" * 9000,
                 "number": number,
             })
         encoded = json.dumps([item.record for item in engine.diagnostics])
         self.assertLessEqual(len(engine.diagnostics), 256)
+        self.assertIn("native.diagnostic_invalid", encoded)
         self.assertNotIn("do-not-print-this-token", encoded)
         self.assertNotIn("x" * 9000, encoded)
 

@@ -9,12 +9,25 @@ import os
 from pathlib import Path
 import re
 import shutil
-import secrets
 import subprocess
 import sys
 import time
 import zipfile
 from typing import Callable
+
+from Auvra.diagnostics.core import (
+    LATEST_RUN_NAME,
+    RUN_MARKER_NAME,
+    DiagnosticsSession,
+    active_diagnostics,
+    atomic_json as _core_atomic_json,
+    follow_records,
+    inspect_records,
+    install_diagnostics,
+    latest_run_summary,
+    redact as _core_redact,
+    safe_diagnostics_root,
+)
 
 from .config import Paths, command_environment
 from .dependencies import inspect_dependencies, validate_lockfile
@@ -39,17 +52,16 @@ _SECRET_ASSIGNMENT = re.compile(
 _AUTHORIZATION_HEADER = re.compile(r"(?i)(\bauthorization\s*:\s*)([^\r\n,;]+)")
 _BEARER_TOKEN = re.compile(r"(?i)(\bbearer\s+)([^\s,;]+)")
 _URL_CREDENTIALS = re.compile(r"(?i)(https?://)([^/@\s:]+):([^/@\s]+)@")
-_ABSOLUTE_PATH = re.compile(r"(?i)(?:[a-z]:[\\/]|\\\\|/(?![\s\"']))[^\s\"']*")
+_ABSOLUTE_PATH = re.compile(r"(?i)(?:[a-z]:[\\/]|\\\\|(?<![A-Za-z0-9._-])/(?![\s\"']))[^\s\"']*")
 _URL = re.compile(r"(?i)https?://[^\s\"']+")
 _SUPPORT_SECRET = re.compile(r"(?i)(?:bearer\s+|authorization\s*[:=]|(?:api|anon|access|private|fal)[_-]?key\s*[:=]|password\s*[:=]|secret\s*[:=]|token\s*[:=])")
 _SUPPORT_SECRET_KEY = re.compile(r"(?i)(?:password|secret|token|api[_-]?key|anon[_-]?key|access[_-]?key|private[_-]?key|fal[_-]?key|authorization|credential|bearer|cookie)")
 _SUPPORT_FORBIDDEN_KEY = re.compile(r"(?i)^(?:payload|prompt|response|output|body|document|documents|asset|assets|content|binary|base64|path|file[_-]?path|filesystem[_-]?path|source[_-]?path|directory[_-]?path|local[_-]?path)$")
 
-DIAGNOSTIC_RETENTION_SECONDS = 30 * 24 * 60 * 60
+DIAGNOSTIC_RETENTION_SECONDS = 7 * 24 * 60 * 60
 DIAGNOSTIC_MAX_FILES = 5
-DIAGNOSTIC_MAX_BYTES = 5 * 1024 * 1024
+DIAGNOSTIC_MAX_BYTES = 256 * 1024
 SUPPORT_BUNDLE_MAX_BYTES = 10 * 1024 * 1024
-RUN_MARKER_NAME = "run-marker.json"
 CRASH_MARKER_NAME = "crash-marker.json"
 _SUPPORT_MEMBERS = frozenset({"manifest.json", "diagnostics.json", "events.ndjson", "crash.json", "checksums.sha256"})
 
@@ -129,25 +141,9 @@ def collect_diagnostics(paths: Paths, *, runner: Callable[..., subprocess.Comple
 
 
 def redact(value: object) -> object:
-    """Recursively redact values whose keys or text resemble secrets."""
-    secret_words = (
-        "password", "secret", "token", "apikey", "accesskey", "anonkey",
-        "privatekey", "falkey", "credential", "authorization",
-    )
-    if isinstance(value, dict):
-        result: dict[object, object] = {}
-        for key, item in value.items():
-            key_text = re.sub(r"[^a-z0-9]", "", str(key).lower())
-            result[key] = "[REDACTED]" if any(word in key_text for word in secret_words) else redact(item)
-        return result
-    if isinstance(value, list):
-        return [redact(item) for item in value]
-    if isinstance(value, str):
-        value = _AUTHORIZATION_HEADER.sub(r"\1[REDACTED]", value)
-        value = _BEARER_TOKEN.sub(r"\1[REDACTED]", value)
-        value = _URL_CREDENTIALS.sub(r"\1[REDACTED]@", value)
-        return _SECRET_ASSIGNMENT.sub(r"\1[REDACTED]", value)
-    return value
+    """Use the one bounded sanitizer shared by every runtime component."""
+
+    return _core_redact(value, omit_forbidden=False)
 
 
 def emit(data: dict[str, object], *, json_mode: bool) -> None:
@@ -174,50 +170,11 @@ def emit(data: dict[str, object], *, json_mode: bool) -> None:
 
 
 def _safe_diagnostics_root(paths: Paths) -> Path:
-    root = paths.diagnostics_root.absolute()
-    for candidate in (paths.launcher_state.absolute(), root):
-        current = Path(candidate.anchor)
-        for component in candidate.parts[1:]:
-            current /= component
-            if not current.exists() and not current.is_symlink():
-                continue
-            if current.is_symlink() or (hasattr(current, "is_junction") and current.is_junction()):
-                raise OSError("diagnostics path cannot contain links or reparse points")
-            try:
-                if getattr(current.stat(), "st_file_attributes", 0) & 0x400:
-                    raise OSError("diagnostics path cannot contain links or reparse points")
-            except FileNotFoundError:
-                continue
-    if root.exists() and not root.is_dir():
-        raise OSError("diagnostics directory is not a regular directory")
-    root.mkdir(parents=True, exist_ok=True)
-    if root.is_symlink() or (hasattr(root, "is_junction") and root.is_junction()) or not root.is_dir():
-        raise OSError("diagnostics directory is unsafe")
-    return root
+    return safe_diagnostics_root(paths.diagnostics_root)
 
 
 def _atomic_json(path: Path, value: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.{os.urandom(8).hex()}.tmp")
-    try:
-        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-        fd = os.open(temporary, flags, 0o600)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
-                fd = -1
-                json.dump(value, stream, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-                stream.write("\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-        finally:
-            if fd >= 0:
-                os.close(fd)
-        os.replace(temporary, path)
-    finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+    _core_atomic_json(path, value)
 
 
 def _load_json(path: Path) -> dict[str, object] | None:
@@ -264,30 +221,38 @@ def prune_local_diagnostics(paths: Paths, *, now: float | None = None) -> list[s
     return removed
 
 
-def begin_diagnostics_run(paths: Paths, *, run_id: str | None = None) -> dict[str, object] | None:
-    """Publish a crash-safe run marker and return any prior unclean marker."""
-    root = _safe_diagnostics_root(paths)
+def begin_diagnostics_run(paths: Paths, *, run_id: str | None = None,
+                          mode: str = "development") -> dict[str, object] | None:
+    """Start the process-wide durable diagnostics session."""
+
     prune_local_diagnostics(paths)
-    marker = root / RUN_MARKER_NAME
-    previous = _load_json(marker) if marker.exists() else None
+    previous_session = active_diagnostics()
+    if previous_session is not None:
+        previous_session.close(outcome="failure")
+        install_diagnostics(None)
+    session = DiagnosticsSession(paths.diagnostics_root, source_root=paths.repo_root,
+                                 run_id=run_id, mode=mode)
+    previous = session.start()
+    install_diagnostics(session)
     if previous is not None:
-        crash = {"version": 1, "kind": "unclean_shutdown", "previous": previous, "at": time.time()}
-        _atomic_json(root / CRASH_MARKER_NAME, redact(crash))
-    _atomic_json(marker, {"version": 1, "runId": run_id or secrets.token_urlsafe(16), "startedAt": time.time()})
+        crash = {"version": 2, "kind": "unclean_shutdown", "previousRunId": previous.get("runId"),
+                 "at": time.time()}
+        _atomic_json(paths.diagnostics_root / CRASH_MARKER_NAME, redact(crash))
     return previous
 
 
-def finish_diagnostics_run(paths: Paths) -> None:
-    root = _safe_diagnostics_root(paths)
-    marker = root / RUN_MARKER_NAME
-    if marker.exists() and not marker.is_symlink():
-        marker.unlink()
+def finish_diagnostics_run(paths: Paths, *, outcome: str = "success",
+                           exit_code: int | None = None, interrupted: bool = False) -> None:
+    session = active_diagnostics()
+    if session is not None and session.root == paths.diagnostics_root.absolute():
+        session.close(outcome=outcome, exit_code=exit_code, interrupted=interrupted)
+        install_diagnostics(None)
 
 
 def record_diagnostics_crash(paths: Paths, *, component: str, code: str,
                              exit_code: int | None = None, detail: str | None = None) -> Path:
     root = _safe_diagnostics_root(paths)
-    value: dict[str, object] = {"version": 1, "kind": "crash", "component": str(component)[:64],
+    value: dict[str, object] = {"version": 2, "kind": "crash", "component": str(component)[:64],
                                 "code": str(code)[:128], "at": time.time()}
     if exit_code is not None:
         value["exitCode"] = int(exit_code)
@@ -303,6 +268,9 @@ def record_diagnostics_crash(paths: Paths, *, component: str, code: str,
 
 def delete_local_diagnostics(paths: Paths) -> list[str]:
     """Delete only the exact launcher-owned diagnostics directory contents."""
+    session = active_diagnostics()
+    if session is not None and session.root == paths.diagnostics_root.absolute():
+        raise OSError("cannot delete diagnostics while Auvra is running")
     root = paths.diagnostics_root
     if not root.exists() and not root.is_symlink():
         return []
@@ -341,25 +309,57 @@ def _support_scan(data: bytes) -> None:
         raise ValueError("support bundle contains an excluded artifact")
 
 
+def _support_build(paths: Paths) -> str:
+    manifest = _load_json(paths.repo_root / "release-manifest.json")
+    version = manifest.get("version") if manifest else None
+    if isinstance(version, str) and re.fullmatch(r"\d{1,5}(?:\.\d{1,5}){2,3}", version):
+        return version
+    return "development"
+
+
 def export_support_bundle(paths: Paths, destination: str | os.PathLike[str], *, ring: object | None = None) -> Path:
     """Write a user-requested, redacted, path-free support ZIP atomically."""
-    if ring is None:
-        from Auvra.host.logging import process_diagnostics
-        ring = process_diagnostics()
+    session = active_diagnostics()
+    if session is not None:
+        session.flush(0.5)
     destination = Path(destination).expanduser().absolute()
     if (destination.name in {"", ".", ".."} or destination.exists()
             or destination.is_symlink()):
         raise ValueError("support bundle destination is invalid")
     destination.parent.mkdir(parents=True, exist_ok=True)
     runtime = _support_sanitize(redact(collect_diagnostics(paths)))
-    events = []
-    snapshot = getattr(ring, "snapshot", None)
-    if callable(snapshot):
-        events = _support_sanitize(snapshot())
+    summary = session.summary if session is not None else latest_run_summary(paths.diagnostics_root)
+    summary = summary if isinstance(summary, dict) else {}
+    run_id = summary.get("runId") if isinstance(summary.get("runId"), str) else None
+    if ring is not None:
+        snapshot = getattr(ring, "snapshot", None)
+        events = _support_sanitize(snapshot()) if callable(snapshot) else []
+    else:
+        events = _support_sanitize(inspect_records(paths.diagnostics_root, run_id=run_id, limit=1000))
+        if not events and session is not None:
+            events = _support_sanitize(session.snapshot())
+    safe_run = {
+        key: summary[key] for key in (
+            "schema", "runId", "mode", "state", "lastPhase",
+            "lastCompletedStartupPhase", "lastFailurePhase", "captureMode",
+            "counts", "dropped", "repeated", "storageFailed", "drainIncomplete",
+            "componentHealth", "activeOperations",
+        ) if key in summary
+    }
     crash = _support_sanitize(_load_json(paths.diagnostics_root / CRASH_MARKER_NAME) or {})
     documents = {
-        "manifest.json": {"version": 1, "kind": "auvra-support", "telemetry": False},
-        "diagnostics.json": runtime,
+        "manifest.json": {
+            "version": 2,
+            "kind": "auvra-support",
+            "schema": "auvra.diagnostics/1",
+            "build": _support_build(paths),
+            "runId": run_id,
+            "captureMode": safe_run.get("captureMode", "concise"),
+            "telemetry": False,
+            "dropped": safe_run.get("dropped", {}),
+            "repeated": safe_run.get("repeated", 0),
+        },
+        "diagnostics.json": {"runtime": runtime, "run": safe_run},
         "events.ndjson": "\n".join(json.dumps(item, ensure_ascii=True, sort_keys=True, separators=(",", ":")) for item in events) + ("\n" if events else ""),
         "crash.json": crash,
     }
@@ -387,4 +387,7 @@ def export_support_bundle(paths: Paths, destination: str | os.PathLike[str], *, 
             temporary.unlink()
         except FileNotFoundError:
             pass
+    if session is not None:
+        session.emit("diagnostics", "diagnostics.support_exported",
+                     attributes={"count": len(events), "bytes": destination.stat().st_size})
     return destination
