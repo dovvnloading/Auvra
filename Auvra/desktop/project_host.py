@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import re
 import secrets
+import threading
 import time
 from typing import Any, Callable
 
@@ -61,6 +62,20 @@ class NativeProjectHost:
         self._recovery_id_by_key: dict[tuple[str, str, str], str] = {}
         self._native_engine: Any = None
         self._native_staged_assets: set[str] = set()
+        self._operation_lock = threading.RLock()
+        self._event_lock = threading.Lock()
+        self._event_sink: Callable[[str, dict[str, Any]], None] | None = None
+        self._ui_invoker: Callable[[Callable[[], Any]], Any] = lambda callback: callback()
+
+    def set_event_sink(self, sink: Callable[[str, dict[str, Any]], None] | None) -> None:
+        """Stream events while an off-thread project operation is running."""
+
+        self._event_sink = sink
+
+    def set_ui_invoker(self, invoker: Callable[[Callable[[], Any]], Any]) -> None:
+        """Marshal only native dialogs to the desktop STA thread."""
+
+        self._ui_invoker = invoker
 
     def set_preview_store(self, preview_store: Any) -> None:
         """Bind one session-local generated preview store."""
@@ -75,6 +90,10 @@ class NativeProjectHost:
             self._hydrate_native(active)
 
     def handle(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._operation_lock:
+            return self._handle_serial(method, payload)
+
+    def _handle_serial(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
         handler = {
             "project.getStatus": self._get_status,
             "project.create": self._create,
@@ -103,32 +122,39 @@ class NativeProjectHost:
             raise self._mapped_error(exc) from None
 
     def asset_resource(self, request: AssetResourceRequest):
-        return self.assets.handle(
-            method=request.method,
-            url=request.url,
-            headers=request.headers,
-            body=request.body,
-        )
+        with self._operation_lock:
+            return self.assets.handle(
+                method=request.method,
+                url=request.url,
+                headers=request.headers,
+                body=request.body,
+            )
 
     def drain_events(self) -> list[tuple[str, dict[str, Any]]]:
-        events, self._events = self._events, []
-        return events
+        with self._event_lock:
+            events, self._events = self._events, []
+            return events
 
     def tick(self) -> None:
-        active = self.service.active
-        if active is None:
+        if not self._operation_lock.acquire(blocking=False):
             return
-        if active.autosave_due(
-            dirty_since=self._dirty_since,
-            last_mutation=self._last_mutation,
-            now=self._now(),
-        ):
-            active.autosave()
-            recoveries = len(active.recovery_points())
-            self._queue("project.recovery", self._status_value(available=recoveries))
-            # One recovery point per dirty period. A later mutation starts a
-            # new 60-second window instead of duplicating an unchanged state.
-            self._dirty_since = None
+        try:
+            active = self.service.active
+            if active is None:
+                return
+            if active.autosave_due(
+                dirty_since=self._dirty_since,
+                last_mutation=self._last_mutation,
+                now=self._now(),
+            ):
+                active.autosave()
+                recoveries = len(active.recovery_points())
+                self._queue("project.recovery", self._status_value(available=recoveries))
+                # One recovery point per dirty period. A later mutation starts a
+                # new 60-second window instead of duplicating an unchanged state.
+                self._dirty_since = None
+        finally:
+            self._operation_lock.release()
 
     def shutdown(self) -> None:
         if self._native_engine is not None:
@@ -174,18 +200,26 @@ class NativeProjectHost:
             }
         return result
 
-    def _hydrate_native(self, active: Any) -> None:
+    def _hydrate_native(self, active: Any, progress: Callable[[float], None] | None = None) -> None:
         native = self._native_engine
         if native is None:
+            if progress is not None:
+                progress(1.0)
             return
         try:
             domains = self._native_domains(active)
             asset_ids = self._cook_asset_ids(domains)
-            for asset_id in sorted(asset_ids - self._native_staged_assets):
+            pending = sorted(asset_ids - self._native_staged_assets)
+            total_steps = len(pending) + 1
+            for index, asset_id in enumerate(pending, start=1):
                 with active.assets.open(asset_id) as stream:
                     native.stage_asset(asset_id, stream)
                 self._native_staged_assets.add(asset_id)
+                if progress is not None:
+                    progress(index / total_steps)
             native.hydrate_project(active.project_id, active.revision, domains, asset_ids=sorted(asset_ids))
+            if progress is not None:
+                progress(1.0)
         except Exception:
             # Durable project state wins. A native child can be restarted and
             # rehydrated from the repository on the next lifecycle boundary.
@@ -209,7 +243,22 @@ class NativeProjectHost:
             "recentProjects", "status", "domains", "dirtySince", "operation",
             "available",
         }
-        self._events.append((name, {key: value for key, value in payload.items() if key in event_fields}))
+        bounded = {key: value for key, value in payload.items() if key in event_fields}
+        sink = self._event_sink
+        if sink is not None:
+            sink(name, bounded)
+            return
+        with self._event_lock:
+            self._events.append((name, bounded))
+
+    def _progress(self, operation: str, value: float) -> None:
+        self._queue(
+            "project.progress",
+            self._status_value(busy=True, progress=max(0.0, min(1.0, value)), operation=operation),
+        )
+
+    def _choose(self, callback: Callable[[], DialogSelection | None]) -> DialogSelection:
+        return self._selected(self._ui_invoker(callback))
 
     def _recovery_values(self) -> list[dict[str, Any]]:
         active = self.service.active
@@ -313,11 +362,12 @@ class NativeProjectHost:
 
     def _create(self, payload: dict[str, Any]) -> dict[str, Any]:
         name = payload["name"]
-        destination = self._selected(self.dialogs.choose_create_location(name))
-        self._queue("project.opening", self._status_value(busy=True, operation="create"))
+        destination = self._choose(lambda: self.dialogs.choose_create_location(name))
+        self._queue("project.opening", self._status_value(busy=True, progress=0.0, operation="create"))
         status = self.service.create(destination, name)
+        self._progress("create", 0.6)
         self._native_staged_assets.clear()
-        self._hydrate_native(self.service.active)
+        self._hydrate_native(self.service.active, lambda value: self._progress("create", 0.6 + value * 0.35))
         self._dirty_since = self._last_mutation = None
         result = self._status_value(status)
         self._queue("project.opened", result)
@@ -326,13 +376,14 @@ class NativeProjectHost:
     def _open(self, payload: dict[str, Any]) -> dict[str, Any]:
         if payload.get("projectHandle") != "dialog":
             raise HostOperationError("invalid_project", "Project handle is not available")
-        descriptor = self._selected(self.dialogs.choose_open_project())
-        self._queue("project.opening", self._status_value(busy=True, operation="open"))
+        descriptor = self._choose(self.dialogs.choose_open_project)
+        self._queue("project.opening", self._status_value(busy=True, progress=0.0, operation="open"))
         status = self.service.open(descriptor.parent)
+        self._progress("open", 0.5)
         status = self._restore_requested(payload, status)
         self._dirty_since = self._last_mutation = None
         self._native_staged_assets.clear()
-        self._hydrate_native(self.service.active)
+        self._hydrate_native(self.service.active, lambda value: self._progress("open", 0.55 + value * 0.4))
         result = self._status_value(status)
         self._queue("project.opened", result)
         if status.read_only:
@@ -340,12 +391,13 @@ class NativeProjectHost:
         return result
 
     def _open_recent(self, payload: dict[str, Any]) -> dict[str, Any]:
-        self._queue("project.opening", self._status_value(busy=True, operation="openRecent"))
+        self._queue("project.opening", self._status_value(busy=True, progress=0.0, operation="openRecent"))
         status = self.service.open_recent(payload["recentId"])
+        self._progress("openRecent", 0.5)
         status = self._restore_requested(payload, status)
         self._dirty_since = self._last_mutation = None
         self._native_staged_assets.clear()
-        self._hydrate_native(self.service.active)
+        self._hydrate_native(self.service.active, lambda value: self._progress("openRecent", 0.55 + value * 0.4))
         result = self._status_value(status)
         self._queue("project.opened", result)
         return result
@@ -453,7 +505,7 @@ class NativeProjectHost:
     def _save_as(self, payload: dict[str, Any]) -> dict[str, Any]:
         active = self._require(payload, expected=True)
         name = payload["name"]
-        destination = self._selected(self.dialogs.choose_save_as_location(name))
+        destination = self._choose(lambda: self.dialogs.choose_save_as_location(name))
         status = self.service.save_as(destination, project_id=active.project_id, name=name)
         self._native_staged_assets.clear()
         self._hydrate_native(self.service.active)
@@ -464,28 +516,29 @@ class NativeProjectHost:
 
     def _export(self, payload: dict[str, Any]) -> dict[str, Any]:
         active = self._require(payload, expected=True)
-        destination = self._selected(self.dialogs.choose_export_pack(active.name))
+        destination = self._choose(lambda: self.dialogs.choose_export_pack(active.name))
         self.service.export_pack(destination, project_id=active.project_id)
         return self._status_value()
 
     def _import_pack(self, payload: dict[str, Any]) -> dict[str, Any]:
-        source = self._selected(self.dialogs.choose_import_pack())
+        source = self._choose(self.dialogs.choose_import_pack)
         name = payload.get("name") or source.stem
-        destination = self._selected(self.dialogs.choose_create_location(name))
-        self._queue("project.opening", self._status_value(busy=True, operation="importPack"))
+        destination = self._choose(lambda: self.dialogs.choose_create_location(name))
+        self._queue("project.opening", self._status_value(busy=True, progress=0.0, operation="importPack"))
         status = self.service.import_pack(source, destination)
+        self._progress("importPack", 0.65)
         self._native_staged_assets.clear()
-        self._hydrate_native(self.service.active)
+        self._hydrate_native(self.service.active, lambda value: self._progress("importPack", 0.65 + value * 0.3))
         self._dirty_since = self._last_mutation = None
         result = self._status_value(status)
         self._queue("project.opened", result)
         return result
 
     def _import_legacy(self, payload: dict[str, Any]) -> dict[str, Any]:
-        source = self._selected(self.dialogs.choose_import_legacy())
+        source = self._choose(self.dialogs.choose_import_legacy)
         name = payload.get("name") or source.stem
-        destination = self._selected(self.dialogs.choose_create_location(name))
-        self._queue("project.opening", self._status_value(busy=True, operation="importLegacy"))
+        destination = self._choose(lambda: self.dialogs.choose_create_location(name))
+        self._queue("project.opening", self._status_value(busy=True, progress=0.0, operation="importLegacy"))
         migrate = getattr(self.service, "migrate_legacy", None)
         if not callable(migrate):
             raise HostOperationError("migration_failed", "Legacy migration is unavailable")
@@ -497,9 +550,10 @@ class NativeProjectHost:
             raise
         except Exception:
             raise HostOperationError("migration_failed", "Legacy migration failed validation") from None
+        self._progress("importLegacy", 0.65)
         self._dirty_since = self._last_mutation = None
         self._native_staged_assets.clear()
-        self._hydrate_native(self.service.active)
+        self._hydrate_native(self.service.active, lambda value: self._progress("importLegacy", 0.65 + value * 0.3))
         result = self._status_value(status, report=self._safe_report(report))
         self._queue("project.opened", result)
         return result

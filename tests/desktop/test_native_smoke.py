@@ -552,6 +552,8 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         controller.asset_registry = registry
         controller.project_host = host
         controller.provider_host = provider
+        host.set_ui_invoker(controller.frame.invoke_on_ui)
+        host.set_event_sink(controller._post_project_event)
         controller.dispatcher.bind_services(
             project_service=host, asset_service=host, provider_service=provider,
             engine_service=controller.native_engine_host,

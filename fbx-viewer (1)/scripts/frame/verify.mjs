@@ -29,6 +29,9 @@ const files = {
   packageLock: resolve(root, "package-lock.json"),
   postcss: resolve(root, "postcss.config.cjs"),
   tailwind: resolve(root, "tailwind.config.cjs"),
+  desktopController: resolve(root, "../Auvra/desktop/controller.py"),
+  desktopProjectHost: resolve(root, "../Auvra/desktop/project_host.py"),
+  desktopWebView: resolve(root, "../Auvra/desktop/webview2.py"),
 };
 
 const source = Object.fromEntries(await Promise.all(Object.entries(files).map(async ([name, file]) => [
@@ -39,7 +42,9 @@ const failures = [];
 const check = (condition, message) => { if (!condition) failures.push(message); };
 
 for (const [name, text] of Object.entries(source)) {
-  if (name !== "packageLock") check(!/https?:\/\/(?!(?:127\.0\.0\.1|assets\.auvra\.local)(?:[:/;\s]|$))/i.test(text), `${name} contains an unapproved remote URL`);
+  if (!["packageLock", "desktopController", "desktopProjectHost", "desktopWebView"].includes(name)) {
+    check(!/https?:\/\/(?!(?:127\.0\.0\.1|assets\.auvra\.local)(?:[:/;\s]|$))/i.test(text), `${name} contains an unapproved remote URL`);
+  }
 }
 check(!source.index.includes("cdn.tailwindcss.com"), "editor still references Tailwind CDN");
 check(source.index.includes("__AUVRA_EDITOR_CSP__"), "editor CSP placeholder missing");
@@ -70,9 +75,13 @@ check(source.hudScript.includes("window.removeEventListener(\"message\", receive
 check(source.transport.includes("isValidMessage"), "native transport does not validate inbound messages");
 check(source.transport.includes("assertRequest") && source.transport.includes("MAX_PENDING"), "native transport lacks outbound validation/bounds");
 check(source.transport.includes("setTimeout") && source.transport.includes("clearTimeout"), "native transport lacks timeout cleanup");
+check(source.transport.includes("LONG_RUNNING_METHODS") && source.transport.includes("LONG_REQUEST_TIMEOUT_MS"), "long native operations retain the interactive timeout");
 check(source.transport.includes("postMessage"), "native transport lacks native postMessage");
 check(!source.transport.includes("eval(") && !source.transport.includes("new Function"), "native transport exposes dynamic evaluation");
 check(!/\b(eval|Function|require)\s*\(/.test(source.protocol), "browser protocol validator exposes dynamic evaluation or require");
+check(source.desktopController.includes('ThreadPoolExecutor(max_workers=1') && source.desktopController.includes('_dispatcher_lock'), "desktop protocol work is not serialized off the WebView callback");
+check(source.desktopWebView.includes('GetDeferral') && source.desktopWebView.includes('ThreadPoolExecutor(max_workers=2'), "asset resource work is not deferred to a bounded background owner");
+check(source.desktopProjectHost.includes('"project.progress"') && source.desktopProjectHost.includes('set_event_sink'), "project progress cannot stream while a host operation is active");
 check(source.bootstrap.includes("isDevelopment") && source.bootstrap.includes("FakeHost"), "development FakeHost fallback is not explicit");
 check(source.bootstrap.includes("requires the packaged WebView2 host"), "production fallback does not fail closed");
 check(source.vite.includes("hud-frame.html") && !source.vite.includes("@tailwindcss/vite"), "Vite still uses the rejected Tailwind 4 plugin");

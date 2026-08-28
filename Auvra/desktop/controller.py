@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, wait
 import json
 import os
 from pathlib import Path
@@ -124,7 +125,19 @@ class FrameController:
         self._lock = threading.RLock()
         self._closed = False
         self._process_stopped = False
+        self._dispatcher_lock = threading.RLock()
+        self._host_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="auvra-host")
+        self._host_slots = threading.BoundedSemaphore(64)
+        self._host_futures: set[Future[Any]] = set()
         self.cleanup_error: Exception | None = None
+        if self.project_host is not None:
+            set_ui_invoker = getattr(self.project_host, "set_ui_invoker", None)
+            invoke_on_ui = getattr(self.frame, "invoke_on_ui", None)
+            if callable(set_ui_invoker) and callable(invoke_on_ui):
+                set_ui_invoker(invoke_on_ui)
+            set_event_sink = getattr(self.project_host, "set_event_sink", None)
+            if callable(set_event_sink):
+                set_event_sink(self._post_project_event)
 
     @classmethod
     def development(cls, process: Any, origin: str, *, profile_parent: Path,
@@ -355,11 +368,15 @@ class FrameController:
         try:
             while True:
                 self._drain_lifecycle()
-                if self.project_host is not None:
-                    self.project_host.tick()
-                if self.provider_host is not None:
-                    self.provider_host.tick()
-                self._flush_bound_events()
+                if self._dispatcher_lock.acquire(blocking=False):
+                    try:
+                        if self.project_host is not None:
+                            self.project_host.tick()
+                        if self.provider_host is not None:
+                            self.provider_host.tick()
+                        self._flush_bound_events_locked()
+                    finally:
+                        self._dispatcher_lock.release()
                 state = getattr(self.frame, "state", None)
                 state_value = getattr(state, "value", state)
                 failure = getattr(self.frame, "failure", None)
@@ -377,7 +394,7 @@ class FrameController:
             self.close()
 
     def on_message(self, body: str, source: str) -> None:
-        """Dispatch a source-gated JSON request and post its safe response."""
+        """Queue a source-gated request without blocking WebView2's STA thread."""
         if not isinstance(source, str) or not self.policy.allow_message(source):
             return
         if not isinstance(body, str) or len(body.encode("utf-8", "replace")) > MESSAGE_MAX_BYTES:
@@ -386,25 +403,78 @@ class FrameController:
             request = json.loads(body)
         except (TypeError, ValueError, json.JSONDecodeError):
             request = None
-        response = self.dispatcher.dispatch(request)
-        events = self.dispatcher.drain_bound_events()
-        if events:
-            # Deliver state events before resolving the request promise, then
-            # stamp the response with the final host revision.  Otherwise a
-            # frontend continuation could issue its next request from the
-            # response revision while the host had already advanced for
-            # queued events.
-            for event in events:
-                self._post(event)
-            response = dict(response)
-            response["revision"] = self.dispatcher.session.revision
-            response = validate_response(response)
+        self._submit_host(self._dispatch_message, request)
+
+    def _submit_host(self, callback: Callable[..., Any], *args: Any) -> Future[Any] | None:
+        if not self._host_slots.acquire(blocking=False):
+            return None
+        with self._lock:
+            if self._closed:
+                self._host_slots.release()
+                return None
+            try:
+                future = self._host_executor.submit(callback, *args)
+            except RuntimeError:
+                self._host_slots.release()
+                return None
+            self._host_futures.add(future)
+        future.add_done_callback(self._host_request_finished)
+        return future
+
+    def _dispatch_message(self, request: Any) -> None:
+        """Run one protocol request on the bounded serial host owner."""
+        with self._dispatcher_lock:
+            response = self.dispatcher.dispatch(request)
+            events = self.dispatcher.drain_bound_events()
+            if events:
+                # Deliver state events before resolving the request promise, then
+                # stamp the response with the final host revision.  Otherwise a
+                # frontend continuation could issue its next request from the
+                # response revision while the host had already advanced for
+                # queued events.
+                for event in events:
+                    self._post(event)
+                response = dict(response)
+                response["revision"] = self.dispatcher.session.revision
+                response = validate_response(response)
         self._post(response)
+
+    def _post_project_event(self, name: str, payload: dict[str, Any]) -> None:
+        """Validate and stream project progress from the serial host worker."""
+
+        with self._dispatcher_lock:
+            self._post(self.dispatcher.make_event(name, payload))
+
+    def _host_request_finished(self, future: Future[Any]) -> None:
+        self._host_slots.release()
+        with self._lock:
+            self._host_futures.discard(future)
+        try:
+            future.result()
+        except CancelledError:
+            return
+        except Exception as exc:
+            # Request payloads are never reflected. Preserve only the bounded
+            # host failure for shutdown diagnostics.
+            with self._lock:
+                self.cleanup_error = self.cleanup_error or exc
+
+    def wait_for_host_idle(self, timeout: float = 5.0) -> bool:
+        """Wait for a snapshot of queued host work; used by lifecycle/tests."""
+        with self._lock:
+            futures = tuple(self._host_futures)
+        if not futures:
+            return True
+        _, pending = wait(futures, timeout=max(0.0, timeout))
+        return not pending
 
     def on_asset_resource(self, request: AssetResourceRequest):
         if self.project_host is None:
             raise RuntimeError("native project asset service is unavailable")
-        return self.project_host.asset_resource(request)
+        future = self._submit_host(self.project_host.asset_resource, request)
+        if future is None:
+            raise RuntimeError("native project asset service is busy or closed")
+        return future.result()
 
     def dock_target(self) -> dict[str, int] | None:
         """Expose only the frame's read-only dock target to host adapters."""
@@ -422,6 +492,14 @@ class FrameController:
     def _flush_bound_events(self) -> None:
         """Post validated native-service events in dispatcher revision order."""
 
+        if not self._dispatcher_lock.acquire(blocking=False):
+            return
+        try:
+            self._flush_bound_events_locked()
+        finally:
+            self._dispatcher_lock.release()
+
+    def _flush_bound_events_locked(self) -> None:
         for event in self.dispatcher.drain_bound_events():
             self._post(event)
 
@@ -469,6 +547,10 @@ class FrameController:
         except Exception as exc:
             # Continue to process cleanup even when native shutdown fails.
             self.cleanup_error = exc
+        try:
+            self._host_executor.shutdown(wait=True, cancel_futures=True)
+        except Exception as exc:
+            self.cleanup_error = self.cleanup_error or exc
         if self.provider_host is not None:
             try:
                 self.provider_host.shutdown()

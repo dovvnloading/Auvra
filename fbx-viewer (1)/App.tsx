@@ -16,6 +16,8 @@ import { SandboxScene } from './components/Sandbox/SandboxScene';
 import { HUDEditor } from './components/HUDEditor/HUDEditor';
 import { EnvironmentEditor } from './components/Environment/EnvironmentEditor';
 import { installRendererDiagnostics } from './renderer/diagnostics';
+import { OperationProvider } from './context/OperationContext';
+import { OperationCenter } from './components/UI/OperationCenter';
 
 const AppContent: React.FC = () => {
   const { models, selectedModelId } = useScene();
@@ -150,6 +152,7 @@ const AppContent: React.FC = () => {
       </div>
       
       {/* Global Notification Container */}
+      <OperationCenter />
       <NotificationContainer />
     </div>
   );
@@ -162,9 +165,11 @@ const App: React.FC = () => {
 
   return (
     <NotificationProvider>
-      <SceneProvider>
-        <AppContent />
-      </SceneProvider>
+      <OperationProvider>
+        <SceneProvider>
+          <AppContent />
+        </SceneProvider>
+      </OperationProvider>
     </NotificationProvider>
   );
 };

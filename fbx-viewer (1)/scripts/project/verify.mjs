@@ -17,6 +17,10 @@ const contentBrowser = await readFile(resolve(root, 'components/UI/Browser/Conte
 const animationBinding = await readFile(resolve(root, 'utils/animationBinding.ts'), 'utf8');
 const app = await readFile(resolve(root, 'App.tsx'), 'utf8');
 const modelLoader = await readFile(resolve(root, 'utils/modelLoader.ts'), 'utf8');
+const importWorker = await readFile(resolve(root, 'workers/fbxImport.worker.ts'), 'utf8');
+const operationContext = await readFile(resolve(root, 'context/OperationContext.tsx'), 'utf8');
+const operationCenter = await readFile(resolve(root, 'components/UI/OperationCenter.tsx'), 'utf8');
+const nativeTransport = await readFile(resolve(root, 'host/nativeTransport.ts'), 'utf8');
 
 const failures = [];
 const mustNotContain = (text, pattern, label) => { if (pattern.test(text)) failures.push(`${label}: forbidden ${pattern}`); };
@@ -55,6 +59,16 @@ if (!/prepareAnimationClips\(loaded\.object, animationModel\.object, animationMo
 if (!/setActiveClip\(selectedAnimations\[0\] \|\| null\)/.test(app)) failures.push('valid imported animation is not selected for preview');
 if (!/retargetClip/.test(animationBinding) || !/clipBindsDirectly/.test(animationBinding)) failures.push('animation binding lacks direct and retargeted paths');
 if (/clip\.duration > 0\.1/.test(modelLoader) || !/clip\.duration > 0/.test(modelLoader)) failures.push('valid short animation clips are still discarded');
+if (!/new Worker\(new URL\(['"]\.\.\/workers\/fbxImport\.worker\.ts['"]/.test(modelLoader)) failures.push('FBX import is not isolated in a module worker');
+if (/import\s*\{\s*FBXLoader\s*\}/.test(modelLoader)) failures.push('renderer model loader still imports FBXLoader directly');
+if (!/new FBXLoader\(\)\.parse/.test(importWorker) || !/new GLTFExporter\(\)\.parseAsync/.test(importWorker)) failures.push('FBX worker does not own parse and transient runtime conversion');
+if (!/signal\?\.addEventListener\(['"]abort/.test(modelLoader) || !/worker\.terminate\(\)/.test(modelLoader)) failures.push('FBX worker cancellation or teardown is missing');
+if (!/request\.upload\.onprogress/.test(service) || !/XMLHttpRequest/.test(service)) failures.push('asset upload has no byte progress surface');
+if (!/OperationProvider/.test(app) || !/OperationCenter/.test(app) || !/AbortController/.test(operationContext)) failures.push('global operation lifecycle is not mounted');
+if (!/lockCancellation/.test(operationContext) || !/operation\.lockCancellation\(\)/.test(modelManager)) failures.push('safe import commit boundary is missing');
+if (!/aria-live=["']polite["']/.test(operationCenter) || !/Cancel operation/.test(operationCenter)) failures.push('operation UI lacks accessible status or cancellation');
+if (!/LONG_RUNNING_METHODS/.test(nativeTransport) || !/LONG_REQUEST_TIMEOUT_MS/.test(nativeTransport)) failures.push('long native operations retain the interactive request timeout');
+if (!/hydrateSnapshot\(snapshot,[\s\S]*?\}, report, signal\)/.test(persistence)) failures.push('project hydration does not propagate progress and cancellation');
 
 const bundledBinding = await build({
   entryPoints: [resolve(root, 'utils/animationBinding.ts')],

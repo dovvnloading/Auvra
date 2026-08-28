@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import threading
+import time
 import types
 import unittest
 from unittest import mock
@@ -18,6 +20,9 @@ class WebView2HandlerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.received: list[str] = []
         self.frame = WebView2Frame(FrameConfig(FrameMode.DEVELOPMENT, development_origin="http://127.0.0.1:3000", on_message=lambda body, source: self.received.append(body)))
+
+    def tearDown(self) -> None:
+        self.frame.close()
 
     def test_navigation_and_resource_handlers_cancel_external_content(self):
         allowed = navigation("http://127.0.0.1:3000/")
@@ -64,6 +69,50 @@ class WebView2HandlerTests(unittest.TestCase):
         asset = resource(f"{ASSET_ORIGIN}/v1/get/" + "a" * 43)
         self.frame._on_resource(None, asset)
         self.assertTrue(asset.Cancel)
+
+    def test_deferred_asset_request_does_not_block_webview_callback(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def handle(request):
+            started.set()
+            if not release.wait(3):
+                raise RuntimeError("test asset handler timed out")
+            return AssetResourceResponse(204, "No Content", {"Cache-Control": "no-store"})
+
+        frame = WebView2Frame(FrameConfig(
+            FrameMode.DEVELOPMENT,
+            development_origin="http://127.0.0.1:3000",
+            on_asset_resource=handle,
+        ))
+
+        class Form:
+            InvokeRequired = True
+
+            def BeginInvoke(self, action):
+                action()
+
+        frame._state = FrameState.READY
+        frame._form = Form()
+        args = resource(f"{ASSET_ORIGIN}/v1/get/" + "a" * 43, deferred=True)
+        fake_system = types.ModuleType("System")
+        fake_system.Action = lambda callback: callback
+        try:
+            with mock.patch.dict(sys.modules, {"System": fake_system}):
+                before = time.monotonic()
+                frame._on_resource(None, args)
+                elapsed = time.monotonic() - before
+                self.assertLess(elapsed, 0.2)
+                self.assertTrue(started.wait(1))
+                self.assertIsNone(args.Response)
+                self.assertFalse(args.deferral.completed.is_set())
+                release.set()
+                self.assertTrue(args.deferral.completed.wait(1))
+            self.assertEqual(args.deferral.complete_count, 1)
+            self.assertEqual(args.Response.status, 204)
+        finally:
+            release.set()
+            frame.close()
 
     def test_popup_download_permission_are_denied(self):
         popup = new_window(); self.frame._on_new_window(None, popup)

@@ -1,6 +1,6 @@
 
 import * as THREE from 'three';
-import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { LoadedModelData } from '../types';
 import { optimizeModelMaterials } from './processing/ModelMaterials';
 import { normalizeModel } from './processing/ModelTransforms';
@@ -12,7 +12,66 @@ export { stripGeometry } from './processing/ModelTransforms';
 interface LoadOptions {
   normalize?: boolean;
   manualId?: string;
+  signal?: AbortSignal;
+  onProgress?: (progress: number, phase: string) => void;
 }
+
+type WorkerResponse =
+  | { type: 'progress'; progress: number; phase: string }
+  | { type: 'complete'; glb: ArrayBuffer }
+  | { type: 'error'; message: string };
+
+const abortError = (): DOMException => new DOMException('Asset import was cancelled.', 'AbortError');
+
+const throwIfAborted = (signal?: AbortSignal): void => {
+  if (signal?.aborted) throw abortError();
+};
+
+const parseFBXOffThread = async (
+  file: File,
+  signal?: AbortSignal,
+  onProgress?: (progress: number, phase: string) => void,
+): Promise<{ object: THREE.Group; animations: THREE.AnimationClip[] }> => {
+  if (typeof Worker === 'undefined') throw new Error('Background FBX processing is unavailable in this environment.');
+  throwIfAborted(signal);
+  onProgress?.(0.03, 'Reading source file');
+  const source = await file.arrayBuffer();
+  throwIfAborted(signal);
+  const worker = new Worker(new URL('../workers/fbxImport.worker.ts', import.meta.url), { type: 'module' });
+  try {
+    const glb = await new Promise<ArrayBuffer>((resolve, reject) => {
+      const onAbort = () => {
+        worker.terminate();
+        reject(abortError());
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      worker.onerror = () => {
+        signal?.removeEventListener('abort', onAbort);
+        reject(new Error('Background FBX worker failed.'));
+      };
+      worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+        const message = event.data;
+        if (message.type === 'progress') {
+          onProgress?.(message.progress, message.phase);
+          return;
+        }
+        signal?.removeEventListener('abort', onAbort);
+        if (message.type === 'error') reject(new Error(message.message));
+        else if (message.type === 'complete') resolve(message.glb);
+      };
+      worker.postMessage({ type: 'parse', buffer: source }, [source]);
+    });
+    throwIfAborted(signal);
+    onProgress?.(0.86, 'Creating viewport resources');
+    const loaded = await new GLTFLoader().parseAsync(glb, '');
+    throwIfAborted(signal);
+    const object = loaded.scene;
+    object.animations = loaded.animations;
+    return { object, animations: loaded.animations };
+  } finally {
+    worker.terminate();
+  }
+};
 
 /**
  * Orchestrates the loading of an FBX file.
@@ -26,23 +85,12 @@ export const loadFBXFile = async (file: File, options: LoadOptions = { normalize
   const url = URL.createObjectURL(file);
   
   try {
-    const manager = new THREE.LoadingManager();
-    const loader = new FBXLoader(manager);
-    
-    // NOTE: Do NOT set setResourcePath(url) for blob URLs. 
-    // It breaks relative path resolution for embedded textures in many browsers.
-    // FBXLoader handles embedded blobs internally.
-
-    const object = await new Promise<THREE.Group>((resolve, reject) => {
-      loader.load(
-        url,
-        (obj) => resolve(obj),
-        (progress) => {
-           // Optional: Handle progress
-        },
-        (err) => reject(err)
-      );
-    });
+    // FBXLoader.load() fetches asynchronously but invokes its CPU-heavy
+    // parse() synchronously on the calling renderer thread. Parse and compact
+    // conversion therefore happen in an isolated worker; only the optimized
+    // GLB handoff is materialized into Three objects here.
+    const parsed = await parseFBXOffThread(file, options.signal, options.onProgress);
+    const object = parsed.object;
 
     // --- FILTER ANIMATIONS ---
     // Reject only empty/invalid clips. Short authored clips are valid assets.
@@ -53,6 +101,7 @@ export const loadFBXFile = async (file: File, options: LoadOptions = { normalize
     }
 
     // --- OPTIMIZE MATERIALS ---
+    options.onProgress?.(0.91, 'Optimizing materials');
     optimizeModelMaterials(object);
     
     // --- RENAME ANIMATIONS ---
@@ -75,6 +124,7 @@ export const loadFBXFile = async (file: File, options: LoadOptions = { normalize
     let initialScale: [number, number, number] = [1, 1, 1];
     
     if (options.normalize) {
+      options.onProgress?.(0.96, 'Normalizing model');
       initialScale = normalizeModel(object) as [number, number, number];
     } else {
       // For attachments, scale down only if massive (unit conversion artifact)
@@ -87,6 +137,9 @@ export const loadFBXFile = async (file: File, options: LoadOptions = { normalize
          initialScale = object.scale.toArray() as [number, number, number];
       }
     }
+
+    throwIfAborted(options.signal);
+    options.onProgress?.(1, 'Ready');
 
     return {
       id: options.manualId || crypto.randomUUID(),

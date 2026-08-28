@@ -1,8 +1,12 @@
 
 import { AssetCategory, AttachmentData, Blueprint, SocketData, TextureData, LevelObject, LevelData, AudioData } from '../types';
-import { projectService } from './projectService';
+import { AssetTransferOptions, projectService } from './projectService';
 
 const DB_NAME = 'OmniRenderDB';
+
+const assertTransferActive = (transfer: AssetTransferOptions): void => {
+  if (transfer.signal?.aborted) throw new DOMException('Asset import was cancelled.', 'AbortError');
+};
 
 export interface DBModel {
   id: string;
@@ -189,14 +193,17 @@ class DBOperations {
 
   // --- MODELS ---
 
-  async addModel(model: DBModel): Promise<void> {
+  async addModel(model: DBModel, transfer: AssetTransferOptions = {}): Promise<void> {
     this.requireNativeProject();
-    const modelAssetId = await projectService.uploadAsset(new File([model.file], model.name));
+    const modelAssetId = await projectService.uploadAsset(new File([model.file], model.name), transfer);
+    assertTransferActive(transfer);
     const animationAssets: Array<{ id: string; name: string; assetId: string; modelId: string }> = [];
     for (const animation of (model.animationFiles || [])) {
-      const assetId = await projectService.uploadAsset(new File([animation.file], animation.name));
+      const assetId = await projectService.uploadAsset(new File([animation.file], animation.name), transfer);
+      assertTransferActive(transfer);
       animationAssets.push({ id: assetId, name: animation.name, assetId, modelId: model.id });
     }
+    assertTransferActive(transfer);
     await projectService.applyChanges([{ domain: 'models', operation: 'upsert', id: model.id, value: {
       id: model.id, name: model.name, assetId: modelAssetId,
       category: model.category, isPlacedInScene: model.isPlacedInScene,
@@ -291,13 +298,18 @@ class DBOperations {
     await projectService.applyChanges(changes);
   }
 
-  async addAnimations(modelId: string, files: File[]): Promise<void> {
+  async addAnimations(modelId: string, files: File[], transfer: AssetTransferOptions = {}): Promise<void> {
     this.requireNativeProject();
     const animationAssets: Array<{ id: string; name: string; assetId: string; modelId: string }> = [];
-    for (const file of files) {
-      const assetId = await projectService.uploadAsset(file);
+    for (const [index, file] of files.entries()) {
+      const assetId = await projectService.uploadAsset(file, {
+        ...transfer,
+        onProgress: (progress) => transfer.onProgress?.((index + progress) / Math.max(1, files.length)),
+      });
+      assertTransferActive(transfer);
       animationAssets.push({ id: assetId, name: file.name, assetId, modelId });
     }
+    assertTransferActive(transfer);
     await projectService.applyChanges(animationAssets.map((animation) => ({
       domain: 'animations', operation: 'upsert' as const, id: animation.id, value: animation,
     })));
@@ -305,9 +317,10 @@ class DBOperations {
 
   // --- ATTACHMENTS ---
 
-  async addAttachment(attachment: DBAttachment): Promise<void> {
+  async addAttachment(attachment: DBAttachment, transfer: AssetTransferOptions = {}): Promise<void> {
     this.requireNativeProject();
-    const assetId = await projectService.uploadAsset(new File([attachment.file], attachment.name));
+    const assetId = await projectService.uploadAsset(new File([attachment.file], attachment.name), transfer);
+    assertTransferActive(transfer);
     await projectService.applyChanges([{ domain: 'attachments', operation: 'upsert', id: attachment.id, value: {
       id: attachment.id, name: attachment.name, assetId,
       parentModelId: attachment.parentModelId, boneName: attachment.boneName,
@@ -421,9 +434,10 @@ class DBOperations {
 
   // --- TEXTURES ---
 
-  async addTexture(texture: DBTexture): Promise<void> {
+  async addTexture(texture: DBTexture, transfer: AssetTransferOptions = {}): Promise<void> {
     this.requireNativeProject();
-    const assetId = await projectService.uploadAsset(new File([texture.file], texture.name));
+    const assetId = await projectService.uploadAsset(new File([texture.file], texture.name), transfer);
+    assertTransferActive(transfer);
     await projectService.applyChanges([{ domain: 'textures', operation: 'upsert', id: texture.id, value: {
       id: texture.id, name: texture.name, assetId, dimensions: texture.dimensions,
     } }]);
@@ -466,9 +480,10 @@ class DBOperations {
 
   // --- AUDIO ---
 
-  async addAudio(audio: DBAudio): Promise<void> {
+  async addAudio(audio: DBAudio, transfer: AssetTransferOptions = {}): Promise<void> {
     this.requireNativeProject();
-    const assetId = await projectService.uploadAsset(new File([audio.file], audio.name));
+    const assetId = await projectService.uploadAsset(new File([audio.file], audio.name), transfer);
+    assertTransferActive(transfer);
     await projectService.applyChanges([{ domain: 'audio', operation: 'upsert', id: audio.id, value: {
       id: audio.id, name: audio.name, assetId, type: audio.type, duration: audio.duration,
     } }]);

@@ -6,6 +6,11 @@ const MAX_MESSAGE_BYTES = 256 * 1024;
 const MAX_PENDING = 64;
 const MAX_COMPLETED_IDS = 256;
 const REQUEST_TIMEOUT_MS = 15_000;
+const LONG_REQUEST_TIMEOUT_MS = 120_000;
+const LONG_RUNNING_METHODS = new Set<Request['method']>([
+  'project.create', 'project.open', 'project.openRecent', 'project.save', 'project.saveAs',
+  'project.exportPack', 'project.importPack', 'project.importLegacy',
+]);
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export interface NativeTransportOptions {
@@ -115,11 +120,14 @@ export class NativeHostTransport implements HostTransport {
     if (encodedSize > MAX_MESSAGE_BYTES) return Promise.reject(new NativeTransportError("Host request exceeds message limit"));
 
     return new Promise<Response>((resolve, reject) => {
+      const requestTimeout = LONG_RUNNING_METHODS.has(request.method)
+        ? Math.max(this.timeoutMs, LONG_REQUEST_TIMEOUT_MS)
+        : this.timeoutMs;
       const timer = setTimeout(() => {
         this.pending.delete(request.id);
         this.rememberCompleted(request.id);
         reject(new NativeTransportError("Host request timed out"));
-      }, this.timeoutMs);
+      }, requestTimeout);
       this.pending.set(request.id, { resolve, reject, timer });
       try {
         this.webview.postMessage(request);
