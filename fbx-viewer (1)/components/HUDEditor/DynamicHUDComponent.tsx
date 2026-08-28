@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import * as Babel from "@babel/standalone";
 import { AlertTriangle, Loader2 } from "lucide-react";
+import { frontendDiagnostics } from "../../diagnostics/runtime";
 
 interface DynamicHUDComponentProps {
   code: string;
@@ -50,6 +51,7 @@ export const DynamicHUDComponent: React.FC<DynamicHUDComponentProps> = ({ code, 
       setCompiledCode(clean);
       setError(null);
     } catch (caught) {
+      frontendDiagnostics.failure('hud_compile_failed', caught);
       let message = caught instanceof Error ? caught.message : "HUD compile failed";
       if (message.includes("return outside of function")) message = "Code error: Ensure 'return' is inside logic.";
       else if (message.includes("Adjacent JSX elements")) message = "JSX Error: Wrap elements in <>.</> .";
@@ -80,6 +82,9 @@ export const DynamicHUDComponent: React.FC<DynamicHUDComponentProps> = ({ code, 
       if (!value || typeof value !== "object" || Array.isArray(value)) return;
       const candidate = value as Record<string, unknown>;
       if (candidate.type === "error" && typeof candidate.message === "string") setError(candidate.message.slice(0, 256));
+      if (candidate.type === "diagnostic" && candidate.code === "runtime_error") {
+        frontendDiagnostics.failure('hud_runtime_failed');
+      }
     };
     channel.port1.start();
     // The sandbox has an opaque origin because allow-same-origin is omitted.
@@ -101,6 +106,7 @@ export const DynamicHUDComponent: React.FC<DynamicHUDComponentProps> = ({ code, 
     try {
       port.postMessage(message);
     } catch {
+      frontendDiagnostics.failure('hud_transport_failed');
       teardown();
       setError("HUD properties could not be transferred to the sandbox");
     }

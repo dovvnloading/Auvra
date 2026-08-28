@@ -100,5 +100,7 @@ class CaptureRenderer {
   }
 }
 
+frontendDiagnostics.instrumentClass(CaptureRenderer, 'capture_renderer', ['captureThumbnail', 'dispose']);
+
 export const captureRenderer = new CaptureRenderer();
 export const captureThumbnail = (object: THREE.Object3D, width?: number, height?: number, options?: CaptureOptions): string => captureRenderer.captureThumbnail(object, width, height, options);

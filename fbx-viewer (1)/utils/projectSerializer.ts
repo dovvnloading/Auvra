@@ -1,5 +1,6 @@
 import { CameraState } from '../types';
 import { projectService, ProjectSnapshot } from './projectService';
+import { frontendDiagnostics } from '../diagnostics/runtime';
 
 /** @deprecated Project persistence is owned by the native host. */
 export interface SceneState {
@@ -36,4 +37,5 @@ function snapshotToSceneState(snapshot: ProjectSnapshot | null): SceneState {
   };
 }
 
+frontendDiagnostics.instrumentClass(ProjectSerializer, 'project_serializer', ['saveProject', 'loadProject']);
 export const projectSerializer = new ProjectSerializer();

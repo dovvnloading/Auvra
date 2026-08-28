@@ -66,7 +66,7 @@ export const useAttachmentManager = (
         loaded = await loadFBXFile(file, {
           normalize: false,
           signal: operation.signal,
-          diagnostics: { operationId: operation.id, traceId: operation.traceId, assetAlias },
+          diagnostics: { operationId: operation.id, traceId: operation.traceId, spanId: operation.spanId, assetAlias },
           onProgress: (progress, phase) => operation.update({
             phase, progress: progress * 0.7, detail: importPhaseLabel(phase), diagnostic,
           }),
@@ -96,7 +96,7 @@ export const useAttachmentManager = (
             scale: newAttachment.scale,
         }, {
             signal: operation.signal,
-            diagnostics: { operationId: operation.id, traceId: operation.traceId, assetAlias },
+            diagnostics: { operationId: operation.id, traceId: operation.traceId, spanId: operation.spanId, assetAlias },
             onPhase: (phase) => operation.update({ phase, detail: phase === 'project_upload' ? 'Saving attachment source' : 'Finalizing project record', diagnostic }),
             onProgress: (progress) => {
               if (progress >= 1) operation.lockCancellation();
@@ -202,7 +202,7 @@ export const useAttachmentManager = (
     });
   }, []);
 
-  return {
+  return frontendDiagnostics.traceActions('attachment_manager', {
     attachments,
     setAttachments,
     addAttachment,
@@ -210,5 +210,5 @@ export const useAttachmentManager = (
     updateAttachment,
     removeAttachment,
     removeAttachmentsByParentId
-  };
+  });
 };

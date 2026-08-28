@@ -16,6 +16,7 @@ import re
 import secrets
 import shutil
 import threading
+from Auvra.diagnostics import trace_public_class
 import time
 from typing import Any, BinaryIO, Callable, Mapping
 from urllib.parse import urlsplit
@@ -167,6 +168,10 @@ def _hash_file(path: Path, *, max_size: int | None = None) -> tuple[int, str]:
     return size, digest.hexdigest()
 
 
+@trace_public_class("asset_transfer", concise=(
+    "issue_upload", "issue_download", "issue_download_stream", "handle",
+    "claim_upload", "close",
+))
 class AssetTransferRegistry:
     """Own tickets and a private upload staging directory for one host session."""
 

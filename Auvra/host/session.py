@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
+from Auvra.diagnostics.core import trace_public_class
+
 _SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 JSON_SAFE_REVISION_MAX = 9007199254740991
 
@@ -16,6 +18,7 @@ class SessionState:
     status: str = "active"
 
 
+@trace_public_class("host_session", concise=("advance", "close"))
 class SessionManager:
     def __init__(self, session_id: str = "session-0001") -> None:
         if not _SESSION_ID.fullmatch(session_id):

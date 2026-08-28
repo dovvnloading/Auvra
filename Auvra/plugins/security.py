@@ -11,6 +11,7 @@ import re
 import sys
 import tempfile
 from typing import Any, Mapping
+from Auvra.diagnostics import trace_public_class
 
 
 _PLUGIN_ID = re.compile(r"^[a-z][a-z0-9._-]{0,63}$")
@@ -221,6 +222,7 @@ def _state_json(value: Any) -> bytes:
         raise SecurityError("security state is not serializable") from exc
 
 
+@trace_public_class("plugin_security", concise=("load", "save"))
 class PersistentSecurityState:
     """Atomic JSON persistence for public trust, grants, and revocations."""
 

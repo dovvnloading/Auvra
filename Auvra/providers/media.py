@@ -7,6 +7,7 @@ from typing import BinaryIO
 from urllib.parse import unquote, urlsplit
 from .errors import ErrorCode, ProviderError
 from .transport import HttpRequest, Transport
+from Auvra.diagnostics import trace_public_class
 
 @dataclass(frozen=True, slots=True)
 class MediaArtifact:
@@ -16,6 +17,7 @@ class MediaArtifact:
     sha256: str
     committed: bool = False
 
+@trace_public_class("provider_media", concise=("download",))
 class MediaDownloader:
     def __init__(self, *, max_bytes: int = 32 * 1024 * 1024, allowed_origins: tuple[str, ...] = ("https://fal.media", "https://v3.fal.media", "https://v3b.fal.media")):
         if max_bytes <= 0: raise ValueError("media bound must be positive")
@@ -89,6 +91,7 @@ class MediaDownloader:
 
     def _add_size(self, n, size): return size + n
 
+@trace_public_class("provider_media", concise=("ingest", "discard", "commit"))
 class MediaPreviewStore(MediaDownloader):
     """Compatibility name retained as a transfer helper; no bytes are retained."""
     def ingest(self, data: bytes, *, sink: BinaryIO | os.PathLike[str], content_type: str = "application/octet-stream") -> MediaArtifact:

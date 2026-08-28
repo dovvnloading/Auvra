@@ -15,6 +15,7 @@ from typing import Any, Callable, Mapping, Protocol
 from .package import PluginPackage, PackageError
 from .protocol import ProviderProtocolError, read_frame, validate_payload, write_frame
 from .security import PermissionGrantStore, RevocationStore, TrustStore
+from Auvra.diagnostics import trace_public_class
 
 
 class IsolationUnavailable(RuntimeError):
@@ -444,6 +445,7 @@ class ProviderBroker:
         return BrokerDecision(False, "provider-operation-not-allowlisted")
 
 
+@trace_public_class("plugin_loader", concise=("load",))
 class PluginLoader:
     """Validate trust, grants, and revocation before any process launch."""
 
@@ -472,6 +474,7 @@ class PluginLoader:
         return package
 
 
+@trace_public_class("plugin_worker", concise=("start", "request", "disable", "stop"))
 class PluginWorker:
     """Run a validated provider process through an isolation backend."""
 

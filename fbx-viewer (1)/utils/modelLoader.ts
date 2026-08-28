@@ -36,7 +36,7 @@ interface LoadOptions {
   manualId?: string;
   signal?: AbortSignal;
   onProgress?: (progress: number, phase: ImportPhase) => void;
-  diagnostics?: { operationId: string; traceId: string; assetAlias: string };
+  diagnostics?: { operationId: string; traceId: string; spanId?: string; assetAlias: string };
 }
 
 type WorkerResponse =
@@ -54,7 +54,7 @@ const parseFBXOffThread = async (
   file: File,
   signal?: AbortSignal,
   onProgress?: (progress: number, phase: ImportPhase) => void,
-  diagnostics?: { operationId: string; traceId: string; assetAlias: string },
+  diagnostics?: { operationId: string; traceId: string; spanId?: string; assetAlias: string },
 ): Promise<{ object: THREE.Group; animations: THREE.AnimationClip[]; itemCount: number; clipCount: number }> => {
   if (typeof Worker === 'undefined') throw new Error('Background FBX processing is unavailable in this environment.');
   throwIfAborted(signal);

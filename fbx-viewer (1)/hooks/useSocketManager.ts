@@ -86,12 +86,12 @@ export const useSocketManager = () => {
       });
   }, []);
 
-  return {
+  return frontendDiagnostics.traceActions('socket_manager', {
       sockets,
       setSockets, // Exposed for persistence loading
       addSocket,
       updateSocket,
       removeSocket,
       removeSocketsByParentId
-  };
+  });
 };

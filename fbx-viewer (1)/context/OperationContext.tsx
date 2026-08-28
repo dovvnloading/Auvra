@@ -6,6 +6,7 @@ export type OperationOutcome = 'success' | 'failure' | 'cancelled';
 export interface OperationView {
   id: string;
   traceId: string;
+  spanId: string;
   kind: string;
   phase: string;
   label: string;
@@ -36,6 +37,7 @@ interface OperationUpdate {
 export interface OperationHandle {
   readonly id: string;
   readonly traceId: string;
+  readonly spanId: string;
   readonly signal: AbortSignal;
   update: (update: OperationUpdate) => void;
   lockCancellation: () => void;
@@ -73,6 +75,10 @@ export const OperationProvider: React.FC<{ children: ReactNode }> = ({ children 
     const id = crypto.randomUUID();
     const traceId = crypto.randomUUID();
     const controller = new AbortController();
+    const rootSpan = frontendDiagnostics.startSpan('operation', input.kind, {
+      context: { traceId }, operationId: id, category: 'user_operation', detailedOnly: true,
+    });
+    const spanId = rootSpan.context.spanId!;
     const startedAt = performance.now();
     let currentPhase = input.phase;
     let currentProgress = clampProgress(input.progress);
@@ -81,6 +87,7 @@ export const OperationProvider: React.FC<{ children: ReactNode }> = ({ children 
     setOperations((current) => [...current, {
       id,
       traceId,
+      spanId,
       kind: input.kind,
       phase: input.phase,
       label: input.label,
@@ -95,11 +102,12 @@ export const OperationProvider: React.FC<{ children: ReactNode }> = ({ children 
       queueState: 'frontend_active',
       ...(currentBucket === null ? {} : { progressBucket: currentBucket }),
       ...(input.diagnostic ?? {}),
-    }, { operationId: id, traceId });
+    }, rootSpan.context);
     let finished = false;
     return {
       id,
       traceId,
+      spanId,
       signal: controller.signal,
       update: (update) => {
         if (finished) return;
@@ -115,7 +123,7 @@ export const OperationProvider: React.FC<{ children: ReactNode }> = ({ children 
             queueState: 'frontend_active',
             ...(currentBucket === null ? {} : { progressBucket: currentBucket }),
             ...(update.diagnostic ?? {}),
-          }, { operationId: id, traceId });
+          }, rootSpan.context);
         } else if (nextBucket !== null && nextBucket !== currentBucket) {
           currentBucket = nextBucket;
           frontendDiagnostics.record('operation', 'operation.progress', {
@@ -124,7 +132,7 @@ export const OperationProvider: React.FC<{ children: ReactNode }> = ({ children 
             queueState: 'frontend_active',
             progressBucket: currentBucket,
             ...(update.diagnostic ?? {}),
-          }, { operationId: id, traceId });
+          }, rootSpan.context);
         }
         currentProgress = nextProgress;
         setOperations((current) => current.map((operation) => operation.id === id ? {
@@ -155,7 +163,9 @@ export const OperationProvider: React.FC<{ children: ReactNode }> = ({ children 
           outcome,
           durationMs: performance.now() - startedAt,
           ...(outcome === 'failure' ? { code: 'operation_failed', errorType: diagnosticErrorType(error) } : {}),
-        }, { operationId: id, traceId }, true);
+        }, rootSpan.context, true);
+        if (outcome === 'failure') rootSpan.fail(error);
+        rootSpan.finish(outcome);
         setOperations((current) => current.filter((operation) => operation.id !== id));
       },
     };

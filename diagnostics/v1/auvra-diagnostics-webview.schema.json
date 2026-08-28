@@ -42,7 +42,7 @@
       "required": ["component", "event", "attributes"],
       "additionalProperties": false,
       "properties": {
-        "component": { "enum": ["frontend", "worker", "operation", "renderer"] },
+        "component": { "enum": ["frontend", "worker", "operation", "renderer", "activity", "runtime"] },
         "event": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:[._][a-z0-9]+)*$" },
         "operationId": { "$ref": "#/$defs/id" },
         "traceId": { "$ref": "#/$defs/id" },

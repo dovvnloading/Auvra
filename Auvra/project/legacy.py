@@ -8,6 +8,7 @@ from typing import Any
 from .archive import validate_archive
 from .assets import sniff_mime
 from .errors import ArchiveValidationError
+from Auvra.diagnostics.core import trace_public_class
 
 @dataclass
 class LegacyMigrationReport:
@@ -15,6 +16,7 @@ class LegacyMigrationReport:
     domains: dict[str, int] = field(default_factory=dict)
     assets: int = 0
 
+@trace_public_class("project_legacy", concise=("inspect", "migrate", "open_asset"))
 class LegacyArchive:
     """Parse, validate, and report a legacy archive without modifying it."""
     def __init__(self, path: str | Path) -> None:

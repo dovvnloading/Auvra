@@ -9,6 +9,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Iterable
+from Auvra.diagnostics import trace_public_class
 
 _HASH = re.compile(r"^[0-9a-f]{64}$")
 _MANIFEST_LOCK = threading.RLock()
@@ -20,6 +21,7 @@ class AssetReference:
     mime: str | None = None
     name: str | None = None
 
+@trace_public_class("asset_store", concise=("put_stream",))
 class AssetStore:
     def __init__(self, root: str | os.PathLike[str], *, max_size: int = 2 * 1024**3) -> None:
         self.root = Path(root)

@@ -2,6 +2,7 @@
 import React, { useRef, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { AnimationGraphData } from '../../../types';
+import { frontendDiagnostics } from '../../../diagnostics/runtime';
 
 export const useGraphStateMachine = (
     graph: AnimationGraphData,
@@ -47,8 +48,12 @@ export const useGraphStateMachine = (
             });
 
             if (allMet) {
+                const span = frontendDiagnostics.startSpan('animation_runtime', 'state_transition', {
+                    category: 'runtime_transition',
+                });
                 activeStateRef.current = t.toStateId;
                 if (onActiveStateChange) onActiveStateChange(t.toStateId);
+                span.finish('success');
                 break; // Take first valid transition
             }
         }

@@ -12,6 +12,7 @@ import secrets
 import threading
 import time
 from typing import Any, Callable
+from Auvra.diagnostics import trace_public_class
 
 from Auvra.host.dispatcher import HostOperationError
 from Auvra.project import (
@@ -35,6 +36,7 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SNAPSHOT_SOFT_LIMIT = 192 * 1024
 
 
+@trace_public_class("project_host", concise=("handle", "asset_resource", "shutdown"))
 class NativeProjectHost:
     """Keep dialogs, paths, streams, and indexes behind one protocol adapter."""
 

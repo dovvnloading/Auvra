@@ -7,7 +7,9 @@ from contextlib import contextmanager
 import contextvars
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import wraps
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
@@ -17,7 +19,7 @@ import secrets
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, Callable, ParamSpec, TypeVar
 
 
 DIAGNOSTIC_SCHEMA = "auvra.diagnostics/1"
@@ -29,6 +31,9 @@ STRING_MAX_CHARS = 256
 ATTRIBUTE_MAX_ITEMS = 16
 ARRAY_MAX_ITEMS = 16
 STACK_MAX_FRAMES = 12
+PROFILE_CODE_CACHE_MAX = 4096
+PROFILE_SUMMARY_MAX = 2048
+PROFILE_STACK_MAX = 256
 NORMAL_QUEUE_RECORDS = 1024
 PRIORITY_QUEUE_RECORDS = 128
 RING_MAX_RECORDS = 1000
@@ -98,6 +103,10 @@ _COMMON = frozenset({
     "clipCount", "bindingMode", "progressBucket", "workerState", "queueState",
     "activeCount", "visibility", "averageFrameMs", "p95FrameMs", "budgetMs",
     "failedDeliveryCount", "batchCount", "surfaceRole",
+    "subsystem", "action", "codeSite", "category", "threadRole",
+    "taskKind", "resultClass", "callCount", "totalDurationMs",
+    "maxDurationMs", "slowThresholdMs",
+    "commitCount", "totalRenderMs", "maxRenderMs",
 })
 _STARTUP = frozenset({
     "phase", "outcome", "durationMs", "code", "errorType", "success", "port",
@@ -152,9 +161,9 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     "native.request_timed_out": _spec("native", "error", _REQUEST),
     "native.protocol_rejected": _spec("native", "error", _REQUEST | frozenset({"reason"})),
     "native.diagnostic_invalid": _spec("native", "warning", frozenset({"code", "reason", "count"})),
-    "native.child_record": _spec("native", "info", frozenset({"state", "code", "source", "revision"})),
-    "native.child_warning": _spec("native", "warning", frozenset({"state", "code", "source", "revision"})),
-    "native.child_error": _spec("native", "error", frozenset({"state", "code", "source", "revision"})),
+    "native.child_record": _spec("native", "info", frozenset({"state", "code", "source", "revision", "method", "phase", "outcome", "durationMs"})),
+    "native.child_warning": _spec("native", "warning", frozenset({"state", "code", "source", "revision", "method", "phase", "outcome", "durationMs"})),
+    "native.child_error": _spec("native", "error", frozenset({"state", "code", "source", "revision", "method", "phase", "outcome", "durationMs"})),
     "diagnostics.capture_started": _spec("diagnostics", "info", frozenset({"mode", "minutes"})),
     "diagnostics.capture_ended": _spec("diagnostics", "info", frozenset({"mode", "reason"})),
     "diagnostics.records_dropped": _spec("diagnostics", "warning", _DIAGNOSTIC),
@@ -191,7 +200,19 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     "renderer.capture_failed": _spec("renderer", "error", frozenset({"code", "errorType"})),
     "renderer.performance_degraded": _spec("renderer", "warning", frozenset({"averageFrameMs", "p95FrameMs", "budgetMs", "count", "surfaceRole"})),
     "renderer.performance_recovered": _spec("renderer", "info", frozenset({"durationMs", "surfaceRole"})),
+    "activity.started": _spec("activity", "info", _COMMON),
+    "activity.phase": _spec("activity", "info", _COMMON),
+    "activity.completed": _spec("activity", "info", _COMMON),
+    "activity.failed": _spec("activity", "error", _COMMON),
+    "activity.cancelled": _spec("activity", "info", _COMMON),
+    "runtime.function_summary": _spec("runtime", "debug", _COMMON),
+    "runtime.function_completed": _spec("runtime", "debug", _COMMON),
+    "runtime.react_summary": _spec("runtime", "debug", _COMMON),
+    "runtime.coverage_ready": _spec("runtime", "info", frozenset({"count", "category", "mode"})),
 }
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
 def _utc_now() -> str:
@@ -305,10 +326,14 @@ def atomic_json(path: Path, value: object) -> None:
 @contextmanager
 def bind_diagnostic_context(*, session_id: str | None = None,
                             request_id: str | None = None,
-                            trace_id: str | None = None) -> Iterator[None]:
+                            trace_id: str | None = None,
+                            operation_id: str | None = None,
+                            span_id: str | None = None,
+                            parent_span_id: str | None = None) -> Iterator[None]:
     current = dict(_CONTEXT.get())
     for key, value in (("sessionId", session_id), ("requestId", request_id),
-                       ("traceId", trace_id)):
+                       ("traceId", trace_id), ("operationId", operation_id),
+                       ("spanId", span_id), ("parentSpanId", parent_span_id)):
         safe = _safe_id(value)
         if safe is not None:
             current[key] = safe
@@ -489,6 +514,259 @@ class DiagnosticActivity:
         self.finish()
 
 
+class DiagnosticSpan:
+    """Hierarchical, privacy-safe runtime span with bounded stall tracking."""
+
+    def __init__(self, session: "DiagnosticsSession", subsystem: str, action: str, *,
+                 operation_id: str | None = None, trace_id: str | None = None,
+                 parent_span_id: str | None = None, detailed_only: bool = False,
+                 stall_after: float = 5.0, category: str = "operation") -> None:
+        context = current_diagnostic_context()
+        self._session = session
+        self.subsystem = _stable_token(subsystem, "runtime")
+        self.action = _stable_token(action, "call")
+        self.category = _stable_token(category, "operation")
+        self.operation_id = _safe_id(operation_id) or context.get("operationId")
+        self.trace_id = (_safe_id(trace_id) or context.get("traceId") or
+                         f"trace-{secrets.token_urlsafe(12)}")
+        self.parent_span_id = (_safe_id(parent_span_id) or context.get("spanId") or
+                               context.get("parentSpanId"))
+        self.span_id = f"span-{secrets.token_urlsafe(10)}"
+        self._started = time.monotonic()
+        self._detailed_only = bool(detailed_only)
+        self._recording = not self._detailed_only or session.detailed
+        self._activity = session.begin_activity(
+            self.subsystem, f"{self.subsystem}.{self.action}",
+            operation_id=self.operation_id, trace_id=self.trace_id,
+            stall_after=stall_after, capture_stack=True,
+        ) if self._recording else None
+        self._context_manager: Any = None
+        self._closed = False
+        self._failed = False
+
+    @property
+    def context(self) -> dict[str, str]:
+        result = {"traceId": self.trace_id, "spanId": self.span_id}
+        if self.parent_span_id:
+            result["parentSpanId"] = self.parent_span_id
+        if self.operation_id:
+            result["operationId"] = self.operation_id
+        return result
+
+    def __enter__(self) -> "DiagnosticSpan":
+        self._context_manager = bind_diagnostic_context(
+            trace_id=self.trace_id, operation_id=self.operation_id,
+            span_id=self.span_id, parent_span_id=self.parent_span_id,
+        )
+        self._context_manager.__enter__()
+        if self._recording:
+            self._emit("activity.started", {"subsystem": self.subsystem,
+                                             "action": self.action,
+                                             "category": self.category})
+        return self
+
+    def phase(self, phase: str, **attributes: Any) -> None:
+        safe_phase = _stable_token(phase, "phase")
+        if self._activity is not None:
+            self._activity.progress(phase=safe_phase)
+        if self._recording:
+            self._emit("activity.phase", {"subsystem": self.subsystem,
+                                           "action": self.action,
+                                           "category": self.category,
+                                           "phase": safe_phase, **attributes})
+
+    def fail(self, error: BaseException | None = None, *, code: str = "operation_failed") -> None:
+        if self._closed or self._failed:
+            return
+        self._failed = True
+        self._emit("activity.failed", {
+            "subsystem": self.subsystem, "action": self.action,
+            "category": self.category, "outcome": "failure",
+            "durationMs": round((time.monotonic() - self._started) * 1000, 3),
+            "code": _stable_token(code, "operation_failed"),
+            "errorType": type(error).__name__ if error is not None else "Error",
+        })
+
+    def finish(self, *, outcome: str = "success", result_class: str | None = None) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        duration_ms = round((time.monotonic() - self._started) * 1000, 3)
+        if self._recording and not self._failed:
+            terminal = "activity.cancelled" if outcome == "cancelled" else "activity.completed"
+            attributes: dict[str, Any] = {
+                "subsystem": self.subsystem, "action": self.action,
+                "category": self.category, "outcome": outcome,
+                "durationMs": duration_ms,
+            }
+            if result_class is not None:
+                attributes["resultClass"] = _stable_token(result_class, "result")
+            self._emit(terminal, attributes)
+        if self._activity is not None:
+            self._activity.finish()
+        if self._context_manager is not None:
+            self._context_manager.__exit__(None, None, None)
+            self._context_manager = None
+
+    def _emit(self, event: str, attributes: Mapping[str, Any]) -> None:
+        self._session.emit(
+            "activity", event, operation_id=self.operation_id,
+            trace_id=self.trace_id, span_id=self.span_id,
+            parent_span_id=self.parent_span_id, attributes=attributes,
+            deduplicate=False,
+        )
+
+    def __exit__(self, error_type: object, error: object, traceback: object) -> None:
+        if isinstance(error, BaseException):
+            self.fail(error)
+        self.finish(outcome="failure" if error is not None else "success")
+
+
+class PythonProgramProfiler:
+    """Detailed-capture profiler with bounded code-site timing summaries."""
+
+    def __init__(self, session: "DiagnosticsSession") -> None:
+        self.session = session
+        self._lock = threading.RLock()
+        self._local = threading.local()
+        self._code_sites: dict[object, str | None] = {}
+        self._summaries: dict[str, list[float]] = {}
+        self._active = False
+        self._previous_sys: Any = None
+        self._previous_thread: Any = None
+        self._slow_emitted = 0
+
+    @property
+    def active(self) -> bool:
+        return self._active
+
+    def start(self) -> None:
+        if self._active:
+            return
+        self._previous_sys = sys.getprofile()
+        self._previous_thread = threading.getprofile()
+        if self._previous_sys is not None or self._previous_thread is not None:
+            self.session.emit("diagnostics", "diagnostics.record_rejected", attributes={
+                "recordEvent": "runtime.profiler", "code": "profiler_already_active",
+            }, deduplicate=False)
+            return
+        self._active = True
+        threading.setprofile(self._profile)
+        sys.setprofile(self._profile)
+        self.session.emit("runtime", "runtime.coverage_ready", attributes={
+            "count": 0, "category": "python", "mode": "detailed",
+        }, deduplicate=False)
+
+    def stop(self) -> None:
+        if not self._active:
+            return
+        self._active = False
+        sys.setprofile(self._previous_sys)
+        threading.setprofile(self._previous_thread)
+        self.flush(force=True)
+
+    def flush(self, *, force: bool = False) -> None:
+        with self._lock:
+            if not self._summaries:
+                self._slow_emitted = 0
+                return
+            ordered = sorted(
+                self._summaries.items(), key=lambda item: (item[1][1], item[1][2]),
+                reverse=True,
+            )
+            limit = len(ordered) if force else min(64, len(ordered))
+            selected = ordered[:limit]
+            for site, _summary in selected:
+                self._summaries.pop(site, None)
+            self._slow_emitted = 0
+        for code_site, summary in selected:
+            self.session.emit("runtime", "runtime.function_summary", attributes={
+                "codeSite": code_site, "callCount": int(summary[0]),
+                "totalDurationMs": round(summary[1], 3),
+                "maxDurationMs": round(summary[2], 3), "category": "python",
+            }, deduplicate=False)
+
+    def _profile(self, frame: Any, event: str, _arg: Any) -> None:
+        if not self._active or event not in {"call", "return"}:
+            return
+        if event == "call":
+            code_site = self._code_site(frame.f_code)
+            if code_site is None:
+                return
+            stack = getattr(self._local, "stack", None)
+            if stack is None:
+                stack = []
+                self._local.stack = stack
+                self._local.counter = 0
+            if len(stack) >= PROFILE_STACK_MAX:
+                return
+            self._local.counter += 1
+            context = current_diagnostic_context()
+            parent_span = stack[-1][5] if stack else context.get("spanId")
+            span_id = f"py-{threading.get_ident()}-{self._local.counter}"
+            trace_id = context.get("traceId") or f"trace-{self.session.run_id}"
+            stack.append((id(frame), time.perf_counter(), code_site, trace_id,
+                          context.get("operationId"), span_id, parent_span))
+            return
+        stack = getattr(self._local, "stack", None)
+        if not stack:
+            return
+        frame_id = id(frame)
+        index = len(stack) - 1
+        while index >= 0 and stack[index][0] != frame_id:
+            index -= 1
+        if index < 0:
+            return
+        call = stack.pop(index)
+        duration_ms = (time.perf_counter() - call[1]) * 1000.0
+        code_site, trace_id, operation_id, span_id, parent_span = call[2:]
+        with self._lock:
+            summary = self._summaries.get(code_site)
+            if summary is None:
+                if len(self._summaries) >= PROFILE_SUMMARY_MAX:
+                    return
+                summary = [0.0, 0.0, 0.0]
+                self._summaries[code_site] = summary
+            summary[0] += 1
+            summary[1] += duration_ms
+            summary[2] = max(summary[2], duration_ms)
+            emit_slow = duration_ms >= 10.0 and self._slow_emitted < 128
+            if emit_slow:
+                self._slow_emitted += 1
+        if emit_slow:
+            self.session.emit("runtime", "runtime.function_completed",
+                              operation_id=operation_id, trace_id=trace_id,
+                              span_id=span_id, parent_span_id=parent_span,
+                              attributes={"codeSite": code_site,
+                                          "durationMs": round(duration_ms, 3),
+                                          "slowThresholdMs": 10,
+                                          "category": "python"},
+                              deduplicate=False)
+
+    def _code_site(self, code: Any) -> str | None:
+        with self._lock:
+            if code in self._code_sites:
+                return self._code_sites[code]
+        filename = str(getattr(code, "co_filename", ""))
+        site: str | None = None
+        source_root = self.session.source_root
+        if source_root is not None and filename:
+            try:
+                relative = Path(filename).absolute().relative_to(source_root)
+                parts = list(relative.with_suffix("").parts)
+                if parts and parts[0].lower() == "auvra" and "generated" not in parts:
+                    module = ".".join(parts)
+                    if module != "Auvra.diagnostics.core":
+                        function = str(getattr(code, "co_qualname", getattr(code, "co_name", "call")))
+                        site = _stable_token(f"{module}.{function}", "runtime.call")
+            except (OSError, ValueError):
+                site = None
+        with self._lock:
+            if len(self._code_sites) < PROFILE_CODE_CACHE_MAX:
+                self._code_sites[code] = site
+        return site
+
+
 class DiagnosticsSession:
     """Python-owned bounded writer, run manifest, ring, and stall monitor."""
 
@@ -541,6 +819,7 @@ class DiagnosticsSession:
         self._frontend_visibility = "starting"
         self._frontend_active_count = 0
         self._frontend_unresponsive_at: float | None = None
+        self._program_profiler = PythonProgramProfiler(self)
 
     @property
     def detailed(self) -> bool:
@@ -597,10 +876,14 @@ class DiagnosticsSession:
         self._detailed_until = time.monotonic() + bounded * 60
         self.emit("diagnostics", "diagnostics.capture_started",
                   attributes={"mode": "detailed", "minutes": bounded})
+        self._program_profiler.start()
 
     def stop_detailed_capture(self, *, reason: str = "user") -> None:
         if not self.detailed and self._detailed_until == 0:
             return
+        if not self.detailed:
+            self._detailed_until = time.monotonic() + 1.0
+        self._program_profiler.stop()
         self._detailed_until = 0
         self.emit("diagnostics", "diagnostics.capture_ended",
                   attributes={"mode": "concise", "reason": reason})
@@ -618,6 +901,17 @@ class DiagnosticsSession:
         with self._state_lock:
             self._activities[token] = state
         return DiagnosticActivity(self, token)
+
+    def begin_span(self, subsystem: str, action: str, *,
+                   operation_id: str | None = None, trace_id: str | None = None,
+                   parent_span_id: str | None = None, detailed_only: bool = False,
+                   stall_after: float = 5.0, category: str = "operation") -> DiagnosticSpan:
+        return DiagnosticSpan(
+            self, subsystem, action, operation_id=operation_id,
+            trace_id=trace_id, parent_span_id=parent_span_id,
+            detailed_only=detailed_only, stall_after=stall_after,
+            category=category,
+        )
 
     def touch_activity(self, token: str, *, phase: str | None = None,
                        progress_bucket: int | None = None,
@@ -748,6 +1042,10 @@ class DiagnosticsSession:
             "durationMs": round((time.monotonic() - self._monotonic) * 1000, 3),
             "clean": bounded_outcome != "unclean",
         }, deduplicate=False)
+        if self._program_profiler.active and not self.detailed:
+            self._detailed_until = time.monotonic() + 1.0
+        self._program_profiler.stop()
+        self._detailed_until = 0
         self._closed = True
         self._stop.set()
         self._flush_requested.set()
@@ -955,12 +1253,20 @@ class DiagnosticsSession:
                   attributes={"droppedCount": total}, deduplicate=False)
 
     def _monitor_loop(self) -> None:
+        last_profile_flush = time.monotonic()
         while not self._stop.wait(1.0):
             if self._detailed_until and not self.detailed:
+                # Keep the detailed gate open only long enough to persist the
+                # profiler's final bounded summaries.
+                self._detailed_until = time.monotonic() + 1.0
+                self._program_profiler.stop()
                 self._detailed_until = 0
                 self.emit("diagnostics", "diagnostics.capture_ended",
                           attributes={"mode": "concise", "reason": "expired"})
             now = time.monotonic()
+            if self._program_profiler.active and now - last_profile_flush >= 10.0:
+                self._program_profiler.flush()
+                last_profile_flush = now
             with self._state_lock:
                 states = list(self._activities.values())
                 frontend_expected = self._frontend_expected
@@ -1201,6 +1507,14 @@ def _safe_id(value: object) -> str | None:
     return None
 
 
+def _stable_token(value: object, fallback: str) -> str:
+    text = str(value).strip().lower().replace("-", "_")
+    text = re.sub(r"[^a-z0-9._]+", "_", text).strip("._")
+    if not text or not _EVENT_PATTERN.fullmatch(text):
+        return fallback
+    return text[:96]
+
+
 def _run_group_size(root: Path, summary: Mapping[str, Any]) -> int:
     total = 0
     run_id = summary.get("runId")
@@ -1246,6 +1560,106 @@ def install_diagnostics(session: DiagnosticsSession | None) -> DiagnosticsSessio
         previous = _ACTIVE_SESSION
         _ACTIVE_SESSION = session
         return previous
+
+
+class _NullDiagnosticSpan:
+    trace_id = ""
+    span_id = ""
+    parent_span_id = None
+    operation_id = None
+    context: dict[str, str] = {}
+
+    def __enter__(self) -> "_NullDiagnosticSpan":
+        return self
+
+    def __exit__(self, _type: object, _value: object, _traceback: object) -> None:
+        return None
+
+    def phase(self, _phase: str, **_attributes: Any) -> None:
+        return None
+
+    def fail(self, _error: BaseException | None = None, *, code: str = "operation_failed") -> None:
+        return None
+
+    def finish(self, *, outcome: str = "success", result_class: str | None = None) -> None:
+        return None
+
+
+def start_diagnostic_span(subsystem: str, action: str, *,
+                          operation_id: str | None = None,
+                          trace_id: str | None = None,
+                          parent_span_id: str | None = None,
+                          detailed_only: bool = False,
+                          stall_after: float = 5.0,
+                          category: str = "operation") -> DiagnosticSpan | _NullDiagnosticSpan:
+    session = active_diagnostics()
+    if session is None:
+        return _NullDiagnosticSpan()
+    return session.begin_span(
+        subsystem, action, operation_id=operation_id, trace_id=trace_id,
+        parent_span_id=parent_span_id, detailed_only=detailed_only,
+        stall_after=stall_after, category=category,
+    )
+
+
+def traced(subsystem: str, action: str | None = None, *,
+           detailed_only: bool = True, stall_after: float = 5.0,
+           category: str = "utility") -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
+    """Trace a callable without recording arguments, return values, or locals."""
+
+    def decorate(function: Callable[_P, _R]) -> Callable[_P, _R]:
+        call_action = action or function.__name__
+        if inspect.iscoroutinefunction(function):
+            @wraps(function)
+            async def async_wrapped(*args: _P.args, **kwargs: _P.kwargs) -> Any:
+                with start_diagnostic_span(
+                    subsystem, call_action, detailed_only=detailed_only,
+                    stall_after=stall_after, category=category,
+                ):
+                    return await function(*args, **kwargs)
+            return async_wrapped
+
+        @wraps(function)
+        def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> Any:
+            with start_diagnostic_span(
+                subsystem, call_action, detailed_only=detailed_only,
+                stall_after=stall_after, category=category,
+            ):
+                return function(*args, **kwargs)
+        return wrapped
+
+    return decorate
+
+
+def trace_public_class(subsystem: str, *, concise: Sequence[str] = (),
+                       exclude: Sequence[str] = ()) -> Callable[[type[_R]], type[_R]]:
+    """Instrument public class methods; selected boundaries remain concise-mode visible."""
+
+    concise_names = frozenset(concise)
+    excluded_names = frozenset(exclude)
+
+    def decorate(cls: type[_R]) -> type[_R]:
+        for name, member in list(vars(cls).items()):
+            if name.startswith("_") or name in excluded_names or isinstance(member, property):
+                continue
+            descriptor: type[staticmethod] | type[classmethod] | None = None
+            function: Any = member
+            if isinstance(member, staticmethod):
+                descriptor = staticmethod
+                function = member.__func__
+            elif isinstance(member, classmethod):
+                descriptor = classmethod
+                function = member.__func__
+            if not callable(function):
+                continue
+            wrapped = traced(
+                subsystem, name, detailed_only=name not in concise_names,
+                category="service" if name in concise_names else "utility",
+            )(function)
+            setattr(cls, name, descriptor(wrapped) if descriptor is not None else wrapped)
+        return cls
+
+    return decorate
 
 
 def process_ring() -> DiagnosticRing:

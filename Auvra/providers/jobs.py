@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Mapping
 from .descriptors import Capability, ProviderRegistry
+from Auvra.diagnostics import trace_public_class
 
 
 class JobState(StrEnum):
@@ -83,6 +84,10 @@ class JobEvent:
     at: float
 
 
+@trace_public_class("provider_jobs", concise=(
+    "create", "transition", "request_cancel", "cancel", "retry", "add_cost",
+    "reserve_cost", "reconcile_restart", "reconcile", "close",
+))
 class SQLiteJobStore:
     """SQLite-backed state machine. Prompts, payloads, responses, and secrets are never accepted."""
 

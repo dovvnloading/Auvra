@@ -322,7 +322,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       initLevels();
   }, []);
 
-  return {
+  return frontendDiagnostics.traceActions('level_manager', {
       levels,
       currentLevelId,
       createLevel,
@@ -342,5 +342,5 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       canUndo,
       canRedo,
       snapshotHistory
-  };
+  });
 };

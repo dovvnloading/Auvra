@@ -10,6 +10,7 @@ from typing import BinaryIO, Iterable, Iterator, Mapping, Protocol
 from urllib.parse import urljoin, urlsplit
 
 from .errors import ErrorCode, ProviderError, from_http_status
+from Auvra.diagnostics import trace_public_class
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +49,7 @@ class Transport(Protocol):
     def upload(self, request: HttpRequest, source: BinaryIO, *, size: int) -> HttpResponse: ...
 
 
+@trace_public_class("provider_transport", concise=("request", "stream", "upload"))
 class StdlibTransport:
     """Production HTTP transport with TLS/loopback policy and bounded reads."""
 
@@ -183,6 +185,7 @@ def _content_length(headers: Mapping[str, str]) -> int | None:
     return result
 
 
+@trace_public_class("provider_transport", concise=("request", "stream", "upload"))
 class BoundedTransport:
     """Injectable transport guard; it does not create network connections itself."""
 

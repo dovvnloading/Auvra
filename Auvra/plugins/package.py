@@ -12,6 +12,7 @@ import re
 import unicodedata
 import zipfile
 from typing import Any, Mapping, Protocol
+from Auvra.diagnostics import trace_public_class
 
 
 MAX_MEMBER_BYTES = 32 * 1024 * 1024
@@ -225,6 +226,7 @@ def attach_signature(package_path: str | os.PathLike[str], destination: str | os
 
 
 @dataclass(frozen=True, slots=True)
+@trace_public_class("plugin_package", concise=("open",))
 class PluginPackage:
     path: Path
     package_digest: str

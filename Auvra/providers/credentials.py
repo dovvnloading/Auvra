@@ -6,6 +6,8 @@ import ctypes
 import sys
 from typing import Protocol
 
+from Auvra.diagnostics.core import trace_public_class
+
 
 class CredentialError(RuntimeError):
     def __str__(self) -> str:
@@ -18,6 +20,7 @@ class CredentialBackend(Protocol):
     def delete(self, target: str) -> None: ...
 
 
+@trace_public_class("credential_store", concise=("write", "delete", "clear"))
 class MemoryCredentialStore:
     """Explicit, process-lifetime credential store; never persisted."""
 
@@ -97,6 +100,7 @@ class _WinCredNative:
             raise CredentialError()
 
 
+@trace_public_class("credential_store", concise=("write", "delete"))
 class WindowsCredentialManager:
     """Thin injectable wrapper around CredRead/CredWrite/CredDelete."""
 

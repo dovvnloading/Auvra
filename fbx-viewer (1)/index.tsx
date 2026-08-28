@@ -4,6 +4,7 @@ import App from './App';
 import './styles.css';
 import { bootstrapHostTransport } from './host/bootstrap';
 import { frontendDiagnostics } from './diagnostics/runtime';
+import { RuntimeDiagnosticsBoundary, RuntimeDiagnosticsProfiler } from './diagnostics/RuntimeDiagnosticsBoundary';
 
 // The host boundary is established before React can mount any UI. Production
 // pages fail closed when they are opened outside the native frame; development
@@ -19,6 +20,10 @@ if (!rootElement) {
 const root = ReactDOM.createRoot(rootElement);
 root.render(
   <React.StrictMode>
-    <App />
+    <RuntimeDiagnosticsBoundary>
+      <RuntimeDiagnosticsProfiler subsystem="editor">
+        <App />
+      </RuntimeDiagnosticsProfiler>
+    </RuntimeDiagnosticsBoundary>
   </React.StrictMode>
 );

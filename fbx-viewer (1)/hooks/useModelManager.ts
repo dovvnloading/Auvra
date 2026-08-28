@@ -48,7 +48,7 @@ export const useModelManager = (
       newModel = await loadFBXFile(file, {
         normalize: category !== 'Animation',
         signal: operation.signal,
-        diagnostics: { operationId: operation.id, traceId: operation.traceId, assetAlias },
+        diagnostics: { operationId: operation.id, traceId: operation.traceId, spanId: operation.spanId, assetAlias },
         onProgress: (progress, phase) => operation.update({
           phase, progress: progress * 0.68, detail: importPhaseLabel(phase), diagnostic,
         }),
@@ -80,7 +80,7 @@ export const useModelManager = (
         textureOverrides: {},
       }, {
         signal: operation.signal,
-        diagnostics: { operationId: operation.id, traceId: operation.traceId, assetAlias },
+        diagnostics: { operationId: operation.id, traceId: operation.traceId, spanId: operation.spanId, assetAlias },
         onPhase: (phase) => operation.update({ phase, detail: phase === 'project_upload' ? 'Saving source asset' : 'Finalizing project record', diagnostic }),
         onProgress: (progress) => {
           if (progress >= 1) operation.lockCancellation();
@@ -186,7 +186,7 @@ export const useModelManager = (
         const loaded = await loadFBXFile(file, {
           normalize: false,
           signal: operation.signal,
-          diagnostics: { operationId: operation.id, traceId: operation.traceId, assetAlias },
+          diagnostics: { operationId: operation.id, traceId: operation.traceId, spanId: operation.spanId, assetAlias },
           onProgress: (progress, phase) => operation.update({
             phase,
             progress: ((index + progress) / Math.max(1, files.length)) * 0.7,
@@ -213,7 +213,7 @@ export const useModelManager = (
       operation.update({ phase: 'project_upload', progress: 0.72, detail: 'Saving animation sources', diagnostic: initialDiagnostic });
       await dbOperations.addAnimations(modelId, files, {
         signal: operation.signal,
-        diagnostics: { operationId: operation.id, traceId: operation.traceId, assetAlias: aliases[0] },
+        diagnostics: { operationId: operation.id, traceId: operation.traceId, spanId: operation.spanId, assetAlias: aliases[0] },
         onPhase: (phase) => operation.update({ phase, detail: phase === 'project_upload' ? 'Saving animation sources' : 'Finalizing project records', diagnostic: initialDiagnostic }),
         onProgress: (progress) => {
           if (progress >= 1) operation.lockCancellation();
@@ -386,7 +386,7 @@ export const useModelManager = (
     }
   }, [models, setIsLoading]);
 
-  return {
+  return frontendDiagnostics.traceActions('model_manager', {
     models,
     setModels,
     selectedModelId,
@@ -400,5 +400,5 @@ export const useModelManager = (
     retextureModel,
     previewTexture,
     resetModelTexture
-  };
+  });
 };

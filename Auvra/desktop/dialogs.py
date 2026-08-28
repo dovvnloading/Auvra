@@ -7,6 +7,8 @@ from pathlib import Path
 import re
 from typing import Any, Callable
 
+from Auvra.diagnostics.core import trace_public_class
+
 
 _SAFE_NAME = re.compile(r"^[^<>:\"/\\|?*\x00-\x1f]{1,96}$")
 
@@ -29,6 +31,10 @@ def _validated_name(value: str, fallback: str = "AuvraProject") -> str:
     return candidate
 
 
+@trace_public_class("project_dialogs", concise=(
+    "choose_create_location", "choose_open_project", "choose_save_as_location",
+    "choose_export_pack", "choose_import_pack", "choose_import_legacy",
+))
 class WinFormsProjectDialogs:
     """Use the already-approved Windows/.NET dialog surface lazily."""
 

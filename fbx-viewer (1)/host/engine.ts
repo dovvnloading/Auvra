@@ -1,5 +1,6 @@
 import { getHostTransport } from "./bootstrap";
 import type { Event, Response } from "./generated/protocolV1";
+import { frontendDiagnostics, type DiagnosticContext } from '../diagnostics/runtime';
 
 export interface NativeEngineStatus {
   protocol: "auvra.native/1";
@@ -46,6 +47,7 @@ const STOPPED: NativeEngineStatus = {
   worldRevision: 0,
   viewport: "closed",
 };
+const QUIET_ENGINE_METHODS = new Set(['engine.getStatus', 'engine.getSnapshot', 'engine.getMetrics']);
 
 /** UI-side client for the host-owned, long-lived native engine process. */
 export class NativeEngineService {
@@ -86,19 +88,33 @@ export class NativeEngineService {
   recover(): Promise<NativeEngineStatus> { return this.call("engine.recover", {}); }
 
   private call<T extends NativeEngineStatus>(method: string, payload: Record<string, unknown>): Promise<T> {
-    const run = () => this.performCall<T>(method, payload);
+    const span = frontendDiagnostics.startSpan('engine', method, {
+      category: 'service', detailedOnly: QUIET_ENGINE_METHODS.has(method),
+    });
+    span.phase('queued', { method });
+    const run = () => {
+      span.phase('executing', { method });
+      return this.performCall<T>(method, payload, span.context);
+    };
     const result = this.queue.then(run, run);
     this.queue = result.catch(() => undefined);
+    void result.then(
+      () => span.finish('success', 'engine_status'),
+      (error) => { span.fail(error, 'engine_operation_failed'); span.finish('failure'); },
+    );
     return result;
   }
 
-  private async performCall<T extends NativeEngineStatus>(method: string, payload: Record<string, unknown>): Promise<T> {
+  private async performCall<T extends NativeEngineStatus>(method: string, payload: Record<string, unknown>, diagnostics: DiagnosticContext): Promise<T> {
     await this.ensureSession();
     if (!this.session) throw new Error("The native engine host is not ready");
-    const response = await this.getHost().request({
-      protocol: "auvra.host/1", type: "request", id: `engine-${++this.counter}`,
+    const requestNumber = ++this.counter;
+    const traceId = diagnostics.traceId ?? '';
+    const response = await frontendDiagnostics.withContext(diagnostics, () => this.getHost().request({
+      protocol: "auvra.host/1", type: "request",
+      id: traceId ? `${traceId}.req-${requestNumber}` : `engine-${requestNumber}`,
       session: this.session, revision: this.wireRevision, method, payload,
-    });
+    }));
     if (typeof response.revision === "number") this.wireRevision = response.revision;
     if (!response.ok) throw new Error(response.error.message || response.error.code);
     const result = response.result as unknown as T;
@@ -141,4 +157,5 @@ export class NativeEngineService {
   }
 }
 
+frontendDiagnostics.instrumentClass(NativeEngineService, 'engine_service');
 export const nativeEngine = new NativeEngineService();

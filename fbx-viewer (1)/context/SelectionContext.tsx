@@ -1,5 +1,6 @@
 
 import React, { createContext, useContext, useState, ReactNode } from 'react';
+import { frontendDiagnostics } from '../diagnostics/runtime';
 
 interface SelectionContextType {
   selectedModelId: string | null;
@@ -30,12 +31,12 @@ export const SelectionProvider: React.FC<{ children: ReactNode }> = ({ children 
     if (id) setSelectedModelId(null);
   };
 
-  const value = {
+  const value = frontendDiagnostics.traceActions('selection', {
     selectedModelId,
     selectedBlueprintId,
     selectModel,
     selectBlueprint
-  };
+  });
 
   return (
     <SelectionContext.Provider value={value}>

@@ -67,7 +67,7 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
             dimensions: newTexture.dimensions,
         }, {
             signal: operation.signal,
-            diagnostics: { operationId: operation.id, traceId: operation.traceId, assetAlias },
+            diagnostics: { operationId: operation.id, traceId: operation.traceId, spanId: operation.spanId, assetAlias },
             onPhase: (phase) => operation.update({ phase, detail: phase === 'project_upload' ? 'Saving texture source' : 'Finalizing project record', diagnostic }),
             onProgress: (progress) => {
               if (progress >= 1) operation.lockCancellation();
@@ -132,11 +132,11 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
       }
   }, [addNotification]);
 
-  return {
+  return frontendDiagnostics.traceActions('texture_manager', {
       textures,
       setTextures, // Exposed for persistence loading
       addTexture,
       saveTextureToLibrary,
       removeTexture
-  };
+  });
 };

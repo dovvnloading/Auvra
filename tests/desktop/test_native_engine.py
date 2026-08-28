@@ -222,6 +222,40 @@ class NativeEngineTests(unittest.TestCase):
         self.assertNotIn("do-not-print-this-token", encoded)
         self.assertNotIn("x" * 9000, encoded)
 
+    def test_native_operation_diagnostic_preserves_only_safe_correlation(self) -> None:
+        engine = self.make_engine()
+        accepted = engine._diagnostics_append({
+            "schema": "auvra.native-diagnostic/1",
+            "level": "debug",
+            "event": "native.operation_completed",
+            "method": "world.applyTransaction",
+            "traceId": "trace-native-test",
+            "spanId": "native-42",
+            "parentSpanId": "span-host-test",
+            "phase": "complete",
+            "outcome": "success",
+            "durationMs": 12.5,
+        })
+        self.assertTrue(accepted)
+        record = next(
+            item for item in reversed(self.diagnostic_session.snapshot())
+            if item.get("attributes", {}).get("state") == "native.operation_completed"
+        )
+        self.assertEqual(record["traceId"], "trace-native-test")
+        self.assertEqual(record["spanId"], "native-42")
+        self.assertEqual(record["parentSpanId"], "span-host-test")
+        self.assertEqual(record["attributes"]["method"], "world.applyTransaction")
+        self.assertEqual(record["attributes"]["durationMs"], 12.5)
+        self.assertFalse(engine._diagnostics_append({
+            "schema": "auvra.native-diagnostic/1",
+            "level": "debug",
+            "event": "native.operation_completed",
+            "method": "unknown.utility",
+            "phase": "complete",
+            "outcome": "success",
+            "durationMs": 1,
+        }))
+
     def test_host_maps_engine_methods_and_drains_bounded_events(self) -> None:
         engine = self.make_engine()
         host = NativeEngineHost(engine)

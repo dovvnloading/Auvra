@@ -18,12 +18,17 @@ import { EnvironmentEditor } from './components/Environment/EnvironmentEditor';
 import { installRendererDiagnostics } from './renderer/diagnostics';
 import { OperationProvider } from './context/OperationContext';
 import { OperationCenter } from './components/UI/OperationCenter';
+import { frontendDiagnostics } from './diagnostics/runtime';
 
 const AppContent: React.FC = () => {
   const { models, selectedModelId } = useScene();
   
   // App Mode
   const [activeTab, setActiveTab] = useState<'scene' | 'graph' | 'blueprint' | 'sandbox' | 'hud' | 'retexture' | 'environment'>('scene');
+  const changeActiveTab = React.useMemo(
+    () => frontendDiagnostics.wrap('editor_mode', 'change', setActiveTab, { category: 'action' }),
+    [],
+  );
 
   // Scene State
   const [activeClip, setActiveClip] = useState<THREE.AnimationClip | null>(null);
@@ -51,7 +56,7 @@ const AppContent: React.FC = () => {
       {/* Top Header */}
       <Header 
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={changeActiveTab}
       />
 
       <div className="flex flex-1 min-h-0 relative">
@@ -160,7 +165,12 @@ const AppContent: React.FC = () => {
 
 const App: React.FC = () => {
   React.useEffect(() => {
-    return installRendererDiagnostics();
+    const span = frontendDiagnostics.startSpan('editor', 'mounted', { category: 'lifecycle' });
+    const uninstallRendererDiagnostics = installRendererDiagnostics();
+    return () => {
+      uninstallRendererDiagnostics();
+      span.finish('success');
+    };
   }, []);
 
   return (

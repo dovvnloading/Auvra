@@ -4,7 +4,9 @@ import os, socket
 from pathlib import Path
 from typing import IO
 from .errors import LockError
+from Auvra.diagnostics.core import trace_public_class
 
+@trace_public_class("project_lock", concise=("acquire", "release"))
 class ProjectLock:
     def __init__(self, path: str | os.PathLike[str]) -> None:
         self.path = Path(path); self._file: IO[bytes] | None = None

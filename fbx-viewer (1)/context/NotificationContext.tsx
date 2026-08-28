@@ -1,5 +1,6 @@
 
 import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import { frontendDiagnostics } from '../diagnostics/runtime';
 
 export type NotificationType = 'info' | 'success' | 'error' | 'loading';
 
@@ -67,7 +68,9 @@ export const NotificationProvider: React.FC<{ children: ReactNode }> = ({ childr
   }, [removeNotification]);
 
   return (
-    <NotificationContext.Provider value={{ notifications, addNotification, updateNotification, removeNotification }}>
+    <NotificationContext.Provider value={frontendDiagnostics.traceActions(
+      'notifications', { notifications, addNotification, updateNotification, removeNotification }, [],
+    )}>
       {children}
     </NotificationContext.Provider>
   );

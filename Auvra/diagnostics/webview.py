@@ -26,7 +26,7 @@ WEBVIEW_QUERY_MAX_RECORDS = 100
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SAFE_TEXT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 _FILE_LIKE = re.compile(r"\.(?:fbx|gltf|glb|png|jpe?g|webp|wav|mp3|ogg|flac|auvra)$", re.IGNORECASE)
-_BROWSER_COMPONENTS = frozenset({"frontend", "worker", "operation", "renderer"})
+_BROWSER_COMPONENTS = frozenset({"frontend", "worker", "operation", "renderer", "activity", "runtime"})
 _TERMINAL_EVENTS = frozenset({"operation.completed", "operation.failed", "operation.cancelled"})
 
 

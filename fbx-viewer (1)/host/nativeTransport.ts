@@ -1,7 +1,7 @@
 import type { Event, Request, Response, Session } from "./generated/protocolV1";
 import { assertRequest, assertResponse, isValidMessage } from "./protocol";
 import type { HostTransport } from "./transport";
-import { frontendDiagnostics } from "../diagnostics/runtime";
+import { frontendDiagnostics, type FrontendDiagnosticSpan } from "../diagnostics/runtime";
 
 const MAX_MESSAGE_BYTES = 256 * 1024;
 const MAX_PENDING = 64;
@@ -30,6 +30,7 @@ interface PendingRequest {
   readonly resolve: (response: Response) => void;
   readonly reject: (error: Error) => void;
   readonly timer: ReturnType<typeof setTimeout>;
+  readonly span: FrontendDiagnosticSpan;
 }
 
 /**
@@ -120,6 +121,12 @@ export class NativeHostTransport implements HostTransport {
     const encodedSize = this.messageSize(request);
     if (encodedSize > MAX_MESSAGE_BYTES) return Promise.reject(new NativeTransportError("Host request exceeds message limit"));
 
+    const span = frontendDiagnostics.startSpan('host', 'request', {
+      context: frontendDiagnostics.currentContext(), category: 'boundary',
+      detailedOnly: !LONG_RUNNING_METHODS.has(request.method),
+    });
+    span.phase('queued', { method: request.method, queueDepth: this.pending.size });
+
     return new Promise<Response>((resolve, reject) => {
       const requestTimeout = LONG_RUNNING_METHODS.has(request.method)
         ? Math.max(this.timeoutMs, LONG_REQUEST_TIMEOUT_MS)
@@ -127,16 +134,21 @@ export class NativeHostTransport implements HostTransport {
       const timer = setTimeout(() => {
         this.pending.delete(request.id);
         this.rememberCompleted(request.id);
+        span.fail(undefined, 'request_timeout');
+        span.finish('failure');
         frontendDiagnostics.transportFailure('request_timeout', request.method, undefined, requestTimeout);
         reject(new NativeTransportError("Host request timed out"));
       }, requestTimeout);
-      this.pending.set(request.id, { resolve, reject, timer });
+      this.pending.set(request.id, { resolve, reject, timer, span });
       try {
+        span.phase('dispatching', { method: request.method });
         this.webview.postMessage(request);
       } catch (error) {
         clearTimeout(timer);
         this.pending.delete(request.id);
         this.rememberCompleted(request.id);
+        span.fail(error, 'post_message_failed');
+        span.finish('failure');
         frontendDiagnostics.transportFailure('post_message_failed', request.method, error);
         reject(new NativeTransportError("Host request failed"));
       }
@@ -155,6 +167,8 @@ export class NativeHostTransport implements HostTransport {
     this.webview.removeEventListener("message", this.handleMessage);
     for (const [id, pending] of this.pending) {
       clearTimeout(pending.timer);
+      pending.span.fail(undefined, 'transport_closed');
+      pending.span.finish('cancelled');
       pending.reject(new NativeTransportError("Host transport closed"));
       this.rememberCompleted(id);
     }
@@ -236,6 +250,11 @@ export class NativeHostTransport implements HostTransport {
     this.pending.delete(response.id);
     this.rememberCompleted(response.id);
     this.revision = response.revision;
+    if (response.ok) pending.span.finish('success', 'response');
+    else {
+      pending.span.fail(undefined, response.error?.code || 'host_request_failed');
+      pending.span.finish('failure');
+    }
     pending.resolve(response);
   }
 

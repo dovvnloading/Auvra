@@ -13,6 +13,7 @@ import { useBlueprintManager } from '../hooks/useBlueprintManager';
 import { useGraphManager } from '../hooks/useGraphManager';
 import { useDebugTools } from '../hooks/useDebugTools';
 import { useSelection } from './SelectionContext';
+import { frontendDiagnostics } from '../diagnostics/runtime';
 
 interface AssetContextType {
   // Models
@@ -157,7 +158,7 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     updateSocket: socketManager.updateSocket,
     removeSocket: socketManager.removeSocket,
     setSockets: socketManager.setSockets,
-    triggerSocketFlash,
+    triggerSocketFlash: frontendDiagnostics.wrap('asset_context', 'trigger_socket_flash', triggerSocketFlash),
     flashTriggers,
 
     // Textures
@@ -190,7 +191,7 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
 
     // Runtime
     characterFireTriggers,
-    triggerCharacterFire,
+    triggerCharacterFire: frontendDiagnostics.wrap('asset_context', 'trigger_character_fire', triggerCharacterFire),
 
     // Debug
     debugProjectile: debugTools.debugProjectile,
