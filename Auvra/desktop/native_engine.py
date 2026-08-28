@@ -18,9 +18,11 @@ import secrets
 import struct
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Mapping, Sequence
 
+from Auvra.diagnostics.core import active_diagnostics, current_diagnostic_context
 from Auvra.host.dispatcher import HostOperationError
 from Auvra.host.logging import redact
 
@@ -33,6 +35,15 @@ MAX_FRAME_BYTES = 64 * 1024
 _MAX_DIAGNOSTIC_BYTES = 64 * 1024
 _MAX_DIAGNOSTIC_RECORD_BYTES = 8 * 1024
 _MAX_DIAGNOSTIC_RECORDS = 256
+_NATIVE_DIAGNOSTIC_SCHEMA = "auvra.native-diagnostic/1"
+_NATIVE_DIAGNOSTIC_EVENTS = frozenset({
+    "native.ready", "native.stopped", "native.eof", "native.protocol_failed",
+    "native.configuration_failed", "native.fatal", "native.diagnostic_failure",
+})
+_NATIVE_DIAGNOSTIC_CODES = frozenset({
+    "fatal_protocol_error", "invalid_session_token", "fatal_error",
+    "serialization_failed",
+})
 _ENGINE_FEATURES = (
     "pbr_metallic_roughness", "skeletal_animation", "frustum_culling",
     "deterministic_lod", "instance_batching", "directional_lights",
@@ -112,7 +123,7 @@ class NativeEngineState(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class NativeDiagnostic:
-    """One bounded structured NDJSON record from native stderr."""
+    """Compatibility view of one canonical native-component record."""
 
     record: Mapping[str, Any]
 
@@ -204,7 +215,8 @@ class NativeEngine:
                  request_timeout: float = 10.0, shutdown_timeout: float = 5.0,
                  environment: Mapping[str, str] | None = None,
                  source_root: Path | str | None = None,
-                 derived_root: Path | str | None = None) -> None:
+                 derived_root: Path | str | None = None,
+                 diagnostics: Any = None) -> None:
         if not command or isinstance(command, (str, bytes)) or any(not isinstance(item, str) or not item for item in command):
             raise NativeEngineConfigurationError("native command must be a non-empty argument sequence")
         for name, value in (("startup", startup_timeout), ("request", request_timeout), ("shutdown", shutdown_timeout)):
@@ -217,6 +229,7 @@ class NativeEngine:
         self._environment = dict(environment or os.environ)
         self.source_root = Path(source_root).expanduser().absolute() if source_root is not None else None
         self.derived_root = Path(derived_root).expanduser().absolute() if derived_root is not None else None
+        self._runtime_diagnostics = diagnostics if diagnostics is not None else active_diagnostics()
         self._process: subprocess.Popen[bytes] | None = None
         self._token: str | None = None
         self._state = NativeEngineState.NEW
@@ -226,10 +239,6 @@ class NativeEngine:
         self._response_queue: queue.Queue[dict[str, Any] | BaseException | None] = queue.Queue()
         self._ready = threading.Event()
         self._stderr_done = threading.Event()
-        self._diagnostics: list[NativeDiagnostic] = []
-        self._diagnostic_sizes: list[int] = []
-        self._diagnostic_bytes = 0
-        self._diagnostics_lock = threading.Lock()
 
     @property
     def process(self) -> subprocess.Popen[bytes] | None:
@@ -241,14 +250,17 @@ class NativeEngine:
 
     @property
     def status(self) -> NativeStatus:
-        with self._diagnostics_lock:
-            diagnostics = tuple(self._diagnostics)
+        diagnostics = self.diagnostics
         pid = self._process.pid if self._process is not None else None
         return NativeStatus(self._state, pid, self._revision, diagnostics)
 
     @property
     def diagnostics(self) -> tuple[NativeDiagnostic, ...]:
-        return self.status.diagnostics
+        if self._runtime_diagnostics is None:
+            return ()
+        records = [record for record in self._runtime_diagnostics.snapshot()
+                   if record.get("component") == "native"][-_MAX_DIAGNOSTIC_RECORDS:]
+        return tuple(NativeDiagnostic(record) for record in records)
 
     def start(self, *, editor_session: str = "editor") -> NativeStatus:
         if self._state is not NativeEngineState.NEW:
@@ -256,6 +268,9 @@ class NativeEngine:
         if not editor_session or len(editor_session) > 128:
             raise NativeEngineConfigurationError("editor session is invalid")
         self._state = NativeEngineState.STARTING
+        if self._runtime_diagnostics is not None:
+            self._runtime_diagnostics.emit("native", "native.lifecycle",
+                                           attributes={"state": "starting", "protocol": PROTOCOL_VERSION})
         self._token = secrets.token_hex(32)
         environment = dict(self._environment)
         environment[SESSION_TOKEN_ENV] = self._token
@@ -273,6 +288,10 @@ class NativeEngine:
             )
         except (OSError, ValueError) as exc:
             self._state = NativeEngineState.FAILED
+            if self._runtime_diagnostics is not None:
+                self._runtime_diagnostics.emit("native", "native.lifecycle",
+                                               attributes={"state": "failed", "code": "process_start_failed",
+                                                           "errorType": type(exc).__name__})
             raise NativeEngineStartupError("native process could not be started") from exc
         assert self._process.stderr is not None
         assert self._process.stdout is not None
@@ -283,10 +302,18 @@ class NativeEngine:
                          name="auvra-native-stdout").start()
         if not self._ready.wait(self.startup_timeout):
             self._state = NativeEngineState.FAILED
+            if self._runtime_diagnostics is not None:
+                self._runtime_diagnostics.emit("native", "native.lifecycle",
+                                               attributes={"state": "failed", "code": "startup_timeout",
+                                                           "timeoutMs": round(self.startup_timeout * 1000, 3)})
             self.close(timeout=min(self.shutdown_timeout, 1.0))
             raise NativeEngineStartupError("native process did not report ready before timeout")
         if self._process.poll() is not None:
             self._state = NativeEngineState.FAILED
+            if self._runtime_diagnostics is not None:
+                self._runtime_diagnostics.emit("native", "native.lifecycle",
+                                               attributes={"state": "exited", "code": "child_exited",
+                                                           "returnCode": self._process.returncode})
             raise NativeEngineChildExitedError(self._process.returncode)
         try:
             self._call("session.hello", {"editorSession": editor_session})
@@ -295,6 +322,9 @@ class NativeEngine:
             self.close(timeout=min(self.shutdown_timeout, 1.0))
             raise
         self._state = NativeEngineState.READY
+        if self._runtime_diagnostics is not None:
+            self._runtime_diagnostics.emit("native", "native.lifecycle",
+                                           attributes={"state": "ready", "protocol": PROTOCOL_VERSION})
         return self.status
 
     def restart(self, *, editor_session: str = "editor") -> NativeStatus:
@@ -331,31 +361,52 @@ class NativeEngine:
                 if not isinstance(record, dict):
                     self._diagnostics_append({"level": "error", "code": "invalid_diagnostic"})
                     continue
-                self._diagnostics_append(record)
-                if record.get("event") == "native.ready":
+                accepted = self._diagnostics_append(record)
+                if accepted and record.get("event") == "native.ready":
                     ready.set()
+                    if self._runtime_diagnostics is not None:
+                        self._runtime_diagnostics.emit("native", "native.lifecycle",
+                                                       attributes={"state": "child_ready",
+                                                                   "source": "stderr"})
         finally:
             done.set()
             if process.poll() is not None:
                 ready.set()
+                if self._runtime_diagnostics is not None:
+                    self._runtime_diagnostics.emit("native", "native.lifecycle",
+                                                   attributes={"state": "stderr_closed",
+                                                               "returnCode": process.returncode})
 
-    def _diagnostics_append(self, record: dict[str, Any]) -> None:
+    def _diagnostics_append(self, record: dict[str, Any]) -> bool:
         safe = redact(record, max_depth=6, max_items=64, max_string=512)
         if not isinstance(safe, dict):
             safe = {"level": "error", "code": "invalid_diagnostic"}
         encoded = json.dumps(safe, ensure_ascii=True, separators=(",", ":"))
-        size = len(encoded.encode("utf-8"))
-        if size > _MAX_DIAGNOSTIC_RECORD_BYTES:
+        if len(encoded.encode("utf-8")) > _MAX_DIAGNOSTIC_RECORD_BYTES:
             safe = {"level": "warning", "code": "diagnostic_truncated"}
-            size = len(json.dumps(safe, ensure_ascii=True, separators=(",", ":")).encode("utf-8"))
-        with self._diagnostics_lock:
-            self._diagnostics.append(NativeDiagnostic(safe))
-            self._diagnostic_sizes.append(size)
-            self._diagnostic_bytes += size
-            while (len(self._diagnostics) > _MAX_DIAGNOSTIC_RECORDS
-                   or self._diagnostic_bytes > _MAX_DIAGNOSTIC_BYTES):
-                self._diagnostics.pop(0)
-                self._diagnostic_bytes -= self._diagnostic_sizes.pop(0)
+        diagnostics = self._runtime_diagnostics
+        if (set(safe) - {"schema", "level", "event", "method", "code"}
+                or safe.get("schema") != _NATIVE_DIAGNOSTIC_SCHEMA
+                or safe.get("level") not in {"debug", "info", "warning", "error", "critical"}
+                or safe.get("event") not in _NATIVE_DIAGNOSTIC_EVENTS
+                or ("method" in safe and not isinstance(safe.get("method"), str))
+                or ("code" in safe and safe.get("code") not in _NATIVE_DIAGNOSTIC_CODES)):
+            if diagnostics is not None:
+                diagnostics.emit("native", "native.diagnostic_invalid",
+                                 attributes={"code": "invalid_diagnostic"}, deduplicate=False)
+            return False
+        if diagnostics is None:
+            return True
+        code = safe.get("code") if isinstance(safe.get("code"), str) else None
+        child_event = safe.get("event") if isinstance(safe.get("event"), str) else "native.diagnostic"
+        level = safe.get("level")
+        event = ("native.child_error" if level in {"error", "critical"} else
+                 "native.child_warning" if level == "warning" else "native.child_record")
+        attributes: dict[str, Any] = {"state": child_event, "source": "stderr"}
+        if code is not None:
+            attributes["code"] = code
+        diagnostics.emit("native", event, attributes=attributes)
+        return True
 
     def _read_stdout(self, stream: BinaryIO,
                      response_queue: queue.Queue[dict[str, Any] | BaseException | None]) -> None:
@@ -383,8 +434,8 @@ class NativeEngine:
         except subprocess.TimeoutExpired:
             return process.poll()
 
-    def _call(self, method: str, params: Mapping[str, Any] | None = None,
-              *, timeout: float | None = None) -> dict[str, Any]:
+    def _call_transport(self, method: str, params: Mapping[str, Any] | None = None,
+                        *, timeout: float | None = None) -> dict[str, Any]:
         if not method or not isinstance(method, str):
             raise NativeEngineConfigurationError("native method is required")
         process = self._process
@@ -433,6 +484,52 @@ class NativeEngine:
             raise NativeEngineRevisionConflictError(error["message"])
         raise NativeEngineResponseError(code, error["message"], error.get("details"))
 
+    def _call(self, method: str, params: Mapping[str, Any] | None = None,
+              *, timeout: float | None = None) -> dict[str, Any]:
+        started = time.monotonic()
+        request_id = f"native-{self._request_number + 1}"
+        diagnostics = self._runtime_diagnostics
+        context = current_diagnostic_context()
+        trace_id = context.get("traceId") or request_id
+        session_id = context.get("sessionId")
+        activity = (diagnostics.begin_activity("native", method, request_id=request_id,
+                                               trace_id=trace_id)
+                    if diagnostics is not None else None)
+        if diagnostics is not None:
+            diagnostics.emit("native", "native.request_started", session_id=session_id,
+                             request_id=request_id, trace_id=trace_id,
+                             attributes={"method": method})
+        try:
+            result = self._call_transport(method, params, timeout=timeout)
+            if diagnostics is not None:
+                diagnostics.emit("native", "native.request_completed", session_id=session_id,
+                                 request_id=request_id, trace_id=trace_id,
+                                 attributes={"method": method, "outcome": "success",
+                                             "durationMs": round((time.monotonic() - started) * 1000, 3),
+                                             "revision": self._revision})
+            return result
+        except NativeEngineTimeoutError as exc:
+            if diagnostics is not None:
+                diagnostics.emit("native", "native.request_timed_out", session_id=session_id,
+                                 request_id=request_id, trace_id=trace_id,
+                                 attributes={"method": method, "outcome": "failure",
+                                             "code": "timeout", "errorType": type(exc).__name__,
+                                             "timeoutMs": round((self.request_timeout if timeout is None else timeout) * 1000, 3),
+                                             "durationMs": round((time.monotonic() - started) * 1000, 3)})
+            raise
+        except NativeEngineError as exc:
+            if diagnostics is not None:
+                diagnostics.emit("native", "native.request_failed", session_id=session_id,
+                                 request_id=request_id, trace_id=trace_id,
+                                 attributes={"method": method, "outcome": "failure",
+                                             "code": getattr(exc, "code", type(exc).__name__),
+                                             "errorType": type(exc).__name__,
+                                             "durationMs": round((time.monotonic() - started) * 1000, 3)})
+            raise
+        finally:
+            if activity is not None:
+                activity.finish()
+
     def call(self, method: str, params: Mapping[str, Any] | None = None,
              *, timeout: float | None = None) -> dict[str, Any]:
         """Call an allowed native method with exact response correlation."""
@@ -476,6 +573,9 @@ class NativeEngine:
             return
         process = self._process
         self._state = NativeEngineState.CLOSING
+        if self._runtime_diagnostics is not None:
+            self._runtime_diagnostics.emit("native", "native.lifecycle",
+                                           attributes={"state": "closing"})
         wait_for = self.shutdown_timeout if timeout is None else max(0.05, timeout)
         acknowledged = False
         if process is not None and process.poll() is None and process.stdin is not None:
@@ -502,7 +602,10 @@ class NativeEngine:
                         stream.close()
                     except OSError:
                         pass
-        _ = acknowledged  # lifecycle evidence remains available in diagnostics
+        if self._runtime_diagnostics is not None:
+            self._runtime_diagnostics.emit("native", "native.lifecycle",
+                                           attributes={"state": "closed", "acknowledged": acknowledged,
+                                                       "returnCode": process.returncode if process is not None else None})
 
     def __enter__(self) -> "NativeEngine":
         self.start()

@@ -98,8 +98,9 @@ class PackagedReleaseTests(unittest.TestCase):
             self.assertEqual(result, cli.ExitCode.OK)
             expected = begin.call_args.args[0]
             self.assertEqual(expected.launcher_state, local / "Auvra" / "stable")
-            begin.assert_called_once_with(expected)
-            finish.assert_called_once_with(expected)
+            begin.assert_called_once_with(expected, mode="packaged")
+            finish.assert_called_once_with(expected, outcome="success", exit_code=cli.ExitCode.OK,
+                                           interrupted=False)
 
 
 if __name__ == "__main__":

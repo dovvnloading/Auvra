@@ -23,6 +23,8 @@
   <ItemGroup>
     <Compile Include="__init__.py" />
     <Compile Include="Auvra.py" />
+    <Compile Include="diagnostics\__init__.py" />
+    <Compile Include="diagnostics\core.py" />
     <Compile Include="launcher\__init__.py" />
     <Compile Include="launcher\bootstrap.py" />
     <Compile Include="launcher\cli.py" />
@@ -79,6 +81,7 @@
     <Compile Include="project\service.py" />
   </ItemGroup>
   <ItemGroup>
+    <Folder Include="diagnostics\" />
     <Folder Include="desktop\" />
     <Folder Include="host\" />
     <Folder Include="host\generated\" />

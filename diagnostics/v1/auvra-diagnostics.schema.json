@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://auvra.dev/diagnostics/v1/auvra-diagnostics.schema.json",
+  "title": "Auvra diagnostics record v1",
+  "type": "object",
+  "required": ["schema", "sequence", "timestampUtc", "elapsedMs", "level", "component", "event", "runId"],
+  "properties": {
+    "schema": { "const": "auvra.diagnostics/1" },
+    "sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "timestampUtc": { "type": "string", "format": "date-time", "maxLength": 40 },
+    "elapsedMs": { "type": "number", "minimum": 0 },
+    "level": { "enum": ["debug", "info", "warning", "error", "critical"] },
+    "component": { "type": "string", "pattern": "^[a-z][a-z0-9.-]{0,63}$" },
+    "event": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:[._][a-z0-9]+)*$", "maxLength": 96 },
+    "runId": { "$ref": "#/$defs/id" },
+    "sessionId": { "$ref": "#/$defs/id" },
+    "operationId": { "$ref": "#/$defs/id" },
+    "requestId": { "$ref": "#/$defs/id" },
+    "traceId": { "$ref": "#/$defs/id" },
+    "spanId": { "$ref": "#/$defs/id" },
+    "parentSpanId": { "$ref": "#/$defs/id" },
+    "attributes": {
+      "type": "object",
+      "maxProperties": 16,
+      "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9]{0,63}$" },
+      "additionalProperties": { "$ref": "#/$defs/value" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "value": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "integer" },
+        { "type": "number" },
+        { "type": "string", "maxLength": 256 },
+        {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "oneOf": [
+              { "type": "null" },
+              { "type": "boolean" },
+              { "type": "integer" },
+              { "type": "number" },
+              { "type": "string", "maxLength": 256 }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

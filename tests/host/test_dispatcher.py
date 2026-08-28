@@ -1,17 +1,55 @@
+from pathlib import Path
+import tempfile
 import unittest
-from Auvra.host.dispatcher import HostDispatcher
+
+from Auvra.diagnostics.core import DiagnosticsSession, install_diagnostics
+from Auvra.host.dispatcher import HostDispatcher, HostOperationError
 from Auvra.host.fake import FakeHost
 from Auvra.host.session import SessionManager
 
 
 class DispatcherTests(unittest.TestCase):
     def setUp(self): self.dispatcher = HostDispatcher(SessionManager("s1"))
+    def tearDown(self): install_diagnostics(None)
     def request(self, **kwargs):
         value = {"protocol":"auvra.host/1","type":"request","id":"r1","session":"s1","revision":0,"method":"host.ping","payload":{}}
         value.update(kwargs); return value
     def test_success(self):
         response = self.dispatcher.dispatch(self.request())
         self.assertTrue(response["ok"]); self.assertEqual(response["result"], {"pong": True})
+
+    def test_mutating_boundaries_are_correlated_but_successful_reads_are_quiet(self):
+        with tempfile.TemporaryDirectory(prefix="auvra dispatcher diagnostics ") as raw:
+            session = DiagnosticsSession(Path(raw) / "diagnostics", run_id="run-dispatch", mode="test")
+            session.start()
+            install_diagnostics(session)
+            self.assertTrue(self.dispatcher.dispatch(self.request())["ok"])
+            created = self.dispatcher.dispatch(self.request(
+                id="create-1", method="project.create", payload={"name": "Demo"},
+            ))
+            self.assertTrue(created["ok"])
+            failing = HostDispatcher(
+                SessionManager("s2"),
+                methods={"project.create": lambda _payload: (_ for _ in ()).throw(
+                    HostOperationError("import_failed", "Import failed")
+                )},
+            )
+            failed = failing.dispatch({
+                "protocol": "auvra.host/1", "type": "request", "id": "import-1",
+                "session": "s2", "revision": 0, "method": "project.create",
+                "payload": {"name": "Demo"},
+            })
+            self.assertFalse(failed["ok"])
+            records = session.snapshot()
+            self.assertFalse(any(record.get("event") == "host.request_completed"
+                                 and record.get("requestId") == "r1" for record in records))
+            self.assertTrue(any(record.get("event") == "host.request_completed"
+                                and record.get("traceId") == "create-1" for record in records))
+            self.assertTrue(any(record.get("event") == "host.request_failed"
+                                and record.get("traceId") == "import-1"
+                                and record.get("attributes", {}).get("code") == "import_failed"
+                                for record in records))
+            session.close(outcome="failure")
     def test_session_unknown_and_invalid(self):
         self.assertEqual(self.dispatcher.dispatch(self.request(session="other"))["error"]["code"], "session_mismatch")
         self.assertEqual(self.dispatcher.dispatch(self.request(method="host.nope"))["error"]["code"], "unknown_method")

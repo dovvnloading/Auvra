@@ -14,6 +14,7 @@ import time
 from typing import Any, Callable, Sequence
 from urllib.parse import urlsplit
 
+from Auvra.diagnostics.core import active_diagnostics
 from Auvra.host.dispatcher import HostDispatcher
 from Auvra.host.session import SessionManager
 from Auvra.host.validation import validate_response
@@ -119,6 +120,7 @@ class FrameController:
         self.preview_store = preview_store
         self.asset_registry = asset_registry
         self.native_engine_host = native_engine_host
+        self.diagnostics = active_diagnostics()
         self.profile_path = profile_path
         self._profile_lease = profile_lease
         self.poll_interval = max(0.02, poll_interval)
@@ -396,30 +398,70 @@ class FrameController:
     def on_message(self, body: str, source: str) -> None:
         """Queue a source-gated request without blocking WebView2's STA thread."""
         if not isinstance(source, str) or not self.policy.allow_message(source):
+            if self.diagnostics is not None:
+                self.diagnostics.emit("webview", "webview.message_rejected",
+                                      attributes={"code": "source_rejected"})
             return
         if not isinstance(body, str) or len(body.encode("utf-8", "replace")) > MESSAGE_MAX_BYTES:
+            if self.diagnostics is not None:
+                self.diagnostics.emit("webview", "webview.message_rejected",
+                                      attributes={"code": "message_too_large"})
             return
         try:
             request = json.loads(body)
         except (TypeError, ValueError, json.JSONDecodeError):
+            if self.diagnostics is not None:
+                self.diagnostics.emit("webview", "webview.message_rejected",
+                                      attributes={"code": "invalid_json"})
             request = None
         self._submit_host(self._dispatch_message, request)
 
     def _submit_host(self, callback: Callable[..., Any], *args: Any) -> Future[Any] | None:
         if not self._host_slots.acquire(blocking=False):
+            if self.diagnostics is not None:
+                with self._lock:
+                    queue_depth = len(self._host_futures)
+                self.diagnostics.emit("host", "host.queue_saturated",
+                                      attributes={"code": "queue_full",
+                                                  "queueDepth": queue_depth,
+                                                  "queueCapacity": 64})
             return None
+        activity = None
+        if self.diagnostics is not None:
+            method = "host.work"
+            request_id = None
+            if args and isinstance(args[0], dict):
+                candidate_method = args[0].get("method")
+                candidate_id = args[0].get("id")
+                if isinstance(candidate_method, str):
+                    method = candidate_method
+                if isinstance(candidate_id, str):
+                    request_id = candidate_id
+            activity = self.diagnostics.begin_activity(
+                "host", method, request_id=request_id, trace_id=request_id,
+            )
         with self._lock:
             if self._closed:
                 self._host_slots.release()
+                if activity is not None:
+                    activity.finish()
                 return None
             try:
-                future = self._host_executor.submit(callback, *args)
+                future = self._host_executor.submit(self._run_host_job, callback, args, activity)
             except RuntimeError:
                 self._host_slots.release()
+                if activity is not None:
+                    activity.finish()
                 return None
             self._host_futures.add(future)
         future.add_done_callback(self._host_request_finished)
         return future
+
+    @staticmethod
+    def _run_host_job(callback: Callable[..., Any], args: tuple[Any, ...], activity: Any) -> Any:
+        if activity is not None:
+            activity.finish()
+        return callback(*args)
 
     def _dispatch_message(self, request: Any) -> None:
         """Run one protocol request on the bounded serial host owner."""
@@ -458,6 +500,10 @@ class FrameController:
             # host failure for shutdown diagnostics.
             with self._lock:
                 self.cleanup_error = self.cleanup_error or exc
+            if self.diagnostics is not None:
+                self.diagnostics.emit("host", "host.worker_failed",
+                                      attributes={"code": "worker_exception",
+                                                  "errorType": type(exc).__name__})
 
     def wait_for_host_idle(self, timeout: float = 5.0) -> bool:
         """Wait for a snapshot of queued host work; used by lifecycle/tests."""
@@ -504,6 +550,24 @@ class FrameController:
             self._post(event)
 
     def on_lifecycle(self, event: str, fields: dict[str, Any] | None = None) -> None:
+        if self.diagnostics is not None:
+            incoming = fields if isinstance(fields, dict) else {}
+            attributes: dict[str, object] = {"state": event}
+            if isinstance(incoming.get("code"), str):
+                attributes["code"] = incoming["code"]
+            exception_type = incoming.get("exception_type")
+            if isinstance(exception_type, str):
+                attributes["errorType"] = exception_type
+            if isinstance(incoming.get("success"), bool):
+                attributes["success"] = incoming["success"]
+            diagnostic_event = ("webview.message_rejected" if event == "message_rejected" else
+                                "webview.policy_rejected" if event == "policy_rejected" else
+                                "webview.process_failed" if incoming.get("code") == "renderer_process_failed" else
+                                "webview.lifecycle")
+            if diagnostic_event in {"webview.message_rejected", "webview.policy_rejected"}:
+                attributes.pop("state", None)
+            self.diagnostics.emit("webview", diagnostic_event, attributes=attributes,
+                                  deduplicate=event not in {"failure", "closed"})
         # NavigationCompleted is the authoritative document boundary.  The
         # native adapter also emits ``ready`` for the first successful load;
         # that signal is state-only so the initial document gets exactly one
@@ -582,6 +646,11 @@ class FrameController:
                 _remove_profile(self._profile_lease)
             except OSError as exc:
                 self.cleanup_error = self.cleanup_error or exc
+        if self.diagnostics is not None:
+            self.diagnostics.emit("webview", "webview.lifecycle",
+                                  attributes={"state": "controller_closed",
+                                              "success": self.cleanup_error is None},
+                                  deduplicate=False)
 
 
 def _new_profile(parent: Path) -> _ProfileLease:

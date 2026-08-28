@@ -20,20 +20,26 @@ const PROTOCOL: &str = "auvra.native/1";
 
 #[derive(Debug, Serialize)]
 struct Diagnostic<'a> {
+    schema: &'static str,
+    level: &'static str,
     event: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     method: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    detail: Option<String>,
+    code: Option<&'a str>,
 }
 
-fn diagnostic(event: &'static str, method: Option<&str>, detail: Option<String>) {
+fn diagnostic(level: &'static str, event: &'static str, method: Option<&str>, code: Option<&str>) {
     let line = serde_json::to_string(&Diagnostic {
+        schema: "auvra.native-diagnostic/1",
+        level,
         event,
         method,
-        detail,
+        code,
     })
-    .unwrap_or_else(|_| "{\"event\":\"diagnostic_failure\"}".to_string());
+    .unwrap_or_else(|_| {
+        "{\"schema\":\"auvra.native-diagnostic/1\",\"level\":\"error\",\"event\":\"native.diagnostic_failure\",\"code\":\"serialization_failed\"}".to_string()
+    });
     eprintln!("{line}");
 }
 
@@ -1528,35 +1534,38 @@ fn reference_input(revision: u64, tick: u64) -> WorldRenderInput {
 
 fn run_ipc() -> Result<(), String> {
     let mut app = App::new()?;
-    diagnostic("native.ready", None, Some(PROTOCOL.into()));
+    diagnostic("info", "native.ready", None, None);
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut input = stdin.lock();
     let mut output = stdout.lock();
     loop {
         let Some(bytes) = read_frame(&mut input)? else {
-            diagnostic("eof", None, None);
+            diagnostic("info", "native.eof", None, None);
             return Ok(());
         };
         let req: Request =
             serde_json::from_slice(&bytes).map_err(|e| format!("invalid request schema: {e}"))?;
         let method = req.method.clone();
-        let id = req.id;
         let result = app.dispatch(req);
         match result {
             Ok(resp) => {
                 write_frame(&mut output, &resp)?;
                 if method == "shutdown" {
-                    diagnostic("shutdown", Some(&method), Some("clean".into()));
+                    diagnostic("info", "native.stopped", Some(&method), None);
                     return Ok(());
                 }
             }
-            Err(e) => {
-                diagnostic("fatal_protocol_error", Some(&method), Some(e));
+            Err(_error) => {
+                diagnostic(
+                    "error",
+                    "native.protocol_failed",
+                    Some(&method),
+                    Some("fatal_protocol_error"),
+                );
                 return Err("fatal protocol error".into());
             }
         }
-        diagnostic("request_complete", Some(&method), Some(format!("id={id}")));
     }
 }
 
@@ -1779,9 +1788,10 @@ fn main() {
         Ok(token) if token.len() == 64 && token.bytes().all(|byte| byte.is_ascii_hexdigit()) => (),
         _ => {
             diagnostic(
-                "fatal_configuration_error",
+                "error",
+                "native.configuration_failed",
                 None,
-                Some("AUVRA_NATIVE_SESSION_TOKEN must be a 256-bit hex secret".into()),
+                Some("invalid_session_token"),
             );
             std::process::exit(2);
         }
@@ -1793,8 +1803,8 @@ fn main() {
     } else {
         run_ipc()
     };
-    if let Err(error) = result {
-        diagnostic("fatal_error", None, Some(error));
+    if let Err(_error) = result {
+        diagnostic("error", "native.fatal", None, Some("fatal_error"));
         std::process::exit(1);
     }
 }

@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import Auvra.desktop.contracts as contracts
+from Auvra.diagnostics.core import DiagnosticsSession, install_diagnostics
 from Auvra.desktop.controller import FrameController, FrameProcessExitedError
 from Auvra.desktop.contracts import FrameConfig, FrameConfigurationError, FrameFailure, FrameMode, FrameStartupError, FrameState
 from Auvra.desktop.policy import FramePolicy
@@ -43,6 +44,9 @@ class FakeFrame:
 
 
 class ControllerTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        install_diagnostics(None)
+
     def test_development_allows_cold_vite_navigation_to_finish(self):
         process = Mock(is_alive=Mock(return_value=True))
         with tempfile.TemporaryDirectory() as temp, patch.object(
@@ -58,6 +62,29 @@ class ControllerTests(unittest.TestCase):
                 self.assertEqual(controller.frame.config.startup_timeout, 45.0)
             finally:
                 controller.close()
+
+    def test_webview_lifecycle_and_rejections_feed_the_process_session(self):
+        with tempfile.TemporaryDirectory(prefix="auvra controller diagnostics ") as raw:
+            session = DiagnosticsSession(Path(raw) / "diagnostics", run_id="run-frame", mode="test")
+            session.start()
+            install_diagnostics(session)
+            process = Mock(is_alive=Mock(return_value=True))
+            frame = FakeFrame(FrameConfig(
+                FrameMode.DEVELOPMENT,
+                development_origin="http://127.0.0.1:3099",
+            ))
+            controller = FrameController(process, frame=frame)
+            controller.on_lifecycle("initialization_completed", {"success": True})
+            controller.on_lifecycle("message_rejected", {"code": "invalid_message"})
+            controller.on_lifecycle("process_failed", {"code": "renderer_process_failed"})
+            controller.close()
+            records = session.snapshot()
+            self.assertTrue(any(record["event"] == "webview.lifecycle"
+                                and record.get("attributes", {}).get("state") == "initialization_completed"
+                                for record in records))
+            self.assertTrue(any(record["event"] == "webview.message_rejected" for record in records))
+            self.assertTrue(any(record["event"] == "webview.process_failed" for record in records))
+            session.close(outcome="failure")
 
     def test_development_binds_supplied_native_owner_and_closes_it_once(self):
         class FakeNativeEngine:

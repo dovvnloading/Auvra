@@ -19,8 +19,10 @@ from .dependencies import prepare_dependencies, remove_scoped_tree
 from .diagnostics import (
     begin_diagnostics_run, check_node, check_npm, check_python, collect_diagnostics,
     delete_local_diagnostics, emit, export_support_bundle, finish_diagnostics_run,
-    record_diagnostics_crash, redact,
+    follow_records, inspect_records, latest_run_summary, record_diagnostics_crash,
+    redact,
 )
+from Auvra.diagnostics.core import active_diagnostics
 from .process import OwnedProcess, ProcessCleanupError, ProcessLaunchError
 from .readiness import wait_for_readiness
 from Auvra.desktop.controller import FrameController, FrameProcessExitedError
@@ -63,11 +65,40 @@ def _parser() -> argparse.ArgumentParser:
     support.add_argument("--delete-local", action="store_true", help="delete launcher-owned local diagnostics")
     support.add_argument("--yes", action="store_true", help="confirm local diagnostics deletion")
     support.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    diagnostics = sub.add_parser("diagnostics", help="inspect current or latest local diagnostics")
+    diagnostics.add_argument("--follow", action="store_true", help="follow the active run until it closes")
+    diagnostics.add_argument("--level", choices=("debug", "info", "warning", "error", "critical"),
+                             help="show this severity and higher")
+    diagnostics.add_argument("--component", help="filter by exact component")
+    diagnostics.add_argument("--trace", help="filter by exact trace ID")
+    diagnostics.add_argument("--limit", type=int, default=200, help="show at most 1-1000 records")
+    diagnostics.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     return parser
 
 
 def _json_mode(args: argparse.Namespace) -> bool:
     return bool(getattr(args, "json", False))
+
+
+def _diagnostic_phase(phase: str, outcome: str, *, started: float | None = None,
+                      **attributes: object) -> float:
+    now = time.monotonic()
+    session = active_diagnostics()
+    if session is None:
+        return now
+    fields: dict[str, object] = {"phase": phase}
+    fields.update(attributes)
+    if started is not None:
+        fields["durationMs"] = round((now - started) * 1000, 3)
+    event = {
+        "started": "startup.phase_started",
+        "completed": "startup.phase_completed",
+        "failed": "startup.phase_failed",
+    }[outcome]
+    if outcome != "started":
+        fields["outcome"] = "success" if outcome == "completed" else "failure"
+    session.emit("launcher", event, attributes=fields, deduplicate=False)
+    return now
 
 
 @contextmanager
@@ -248,6 +279,49 @@ def run_support(paths: Paths, *, output: Path | None, delete_local: bool, yes: b
         return ExitCode.CLEANUP
 
 
+def _print_diagnostic_record(record: dict[str, object], *, json_mode: bool) -> None:
+    if json_mode:
+        print(json.dumps(record, ensure_ascii=True, sort_keys=True, separators=(",", ":")), flush=True)
+        return
+    elapsed = float(record.get("elapsedMs", 0.0)) / 1000.0
+    level = str(record.get("level", "info")).upper()
+    component = str(record.get("component", "diagnostics"))
+    event = str(record.get("event", "unknown"))
+    attributes = record.get("attributes")
+    suffix = ""
+    if isinstance(attributes, dict) and attributes:
+        suffix = " " + " ".join(f"{key}={attributes[key]}" for key in sorted(attributes))
+    print(f"{elapsed:9.3f}s {level:8} {component:12} {event}{suffix}", flush=True)
+
+
+def run_diagnostics(paths: Paths, *, follow: bool, level: str | None,
+                    component: str | None, trace: str | None, limit: int,
+                    json_mode: bool) -> int:
+    if not 1 <= limit <= 1000:
+        emit({"command": "diagnostics", "ok": False,
+              "error": "--limit must be between 1 and 1000"}, json_mode=json_mode)
+        return ExitCode.USAGE
+    summary = latest_run_summary(paths.diagnostics_root)
+    if summary is None:
+        emit({"command": "diagnostics", "ok": False,
+              "error": "no diagnostics runs are available"}, json_mode=json_mode)
+        return ExitCode.RUNTIME
+    records = inspect_records(paths.diagnostics_root, level=level, component=component,
+                              trace_id=trace, limit=limit)
+    for record in records:
+        _print_diagnostic_record(record, json_mode=json_mode)
+    if follow:
+        initial_run_id = str(summary.get("runId", ""))
+        initial_sequence = int(summary.get("lastSequence", 0))
+        for record in follow_records(paths.diagnostics_root, level=level,
+                                     component=component, trace_id=trace):
+            if (record.get("runId") == initial_run_id
+                    and int(record.get("sequence", 0)) <= initial_sequence):
+                continue
+            _print_diagnostic_record(record, json_mode=json_mode)
+    return ExitCode.OK
+
+
 class _PackagedOwner:
     def __init__(self) -> None:
         self.stopped = False
@@ -326,14 +400,22 @@ def _packaged_diagnostics_paths(packaged_root: Path, fallback: Paths) -> Paths |
 
 
 def run_packaged(paths: Paths, *, packaged_root: Path, json_mode: bool) -> int:
+    release_started = _diagnostic_phase("package-validation", "started")
     if not packaged_root.is_dir():
+        _diagnostic_phase("package-validation", "failed", started=release_started,
+                          code="package_missing")
         emit({"command": "start", "ok": False, "error": "packaged frontend directory does not exist"}, json_mode=json_mode)
         return ExitCode.DEPENDENCIES
     owner = _PackagedOwner()
     controller: FrameController | None = None
+    frame_started: float | None = None
+    frame_ready = False
+    package_validated = False
     exit_code = ExitCode.OK
     try:
         release = _release_packaged_inputs(packaged_root)
+        _diagnostic_phase("package-validation", "completed", started=release_started)
+        package_validated = True
         if release is None:
             launch_paths, resolved_root, sdk, runtime, native = paths, packaged_root, None, None, None
         else:
@@ -343,13 +425,30 @@ def run_packaged(paths: Paths, *, packaged_root: Path, json_mode: bool) -> int:
             sdk=sdk, browser_executable_folder=runtime,
             native_command=[str(native.resolve())] if native is not None else None,
         )
+        frame_started = _diagnostic_phase("desktop-frame-creation", "started")
         controller.start()
+        _diagnostic_phase("desktop-frame-creation", "completed", started=frame_started)
+        frame_ready = True
+        session = active_diagnostics()
+        if session is not None:
+            session.emit("launcher", "run.ready",
+                         attributes={"mode": "packaged"}, deduplicate=False)
         emit({"command": "start", "ok": True, "packaged": True, "root": str(resolved_root)}, json_mode=json_mode)
         controller.run()
     except FrameConfigurationError as exc:
+        if package_validated:
+            _diagnostic_phase("desktop-frame-creation", "failed", started=frame_started,
+                              code="frame_configuration", errorType=type(exc).__name__)
+        else:
+            _diagnostic_phase("package-validation", "failed", started=release_started,
+                              code="package_configuration", errorType=type(exc).__name__)
         emit({"command": "start", "ok": False, "error": str(exc)[:240]}, json_mode=json_mode)
         exit_code = ExitCode.DEPENDENCIES
     except (FrameStartupError, SdkError) as exc:
+        _diagnostic_phase("desktop-runtime" if frame_ready else "desktop-frame-creation",
+                          "failed", started=frame_started,
+                          code="frame_startup",
+                          errorType=type(exc).__name__)
         emit({"command": "start", "ok": False, "error": str(exc)[:240]}, json_mode=json_mode)
         exit_code = ExitCode.RUNTIME
     except FrameProcessExitedError as exc:
@@ -363,49 +462,73 @@ def run_packaged(paths: Paths, *, packaged_root: Path, json_mode: bool) -> int:
               "error": "interrupted by user"}, json_mode=json_mode)
         exit_code = ExitCode.INTERRUPTED
     finally:
+        shutdown_started = _diagnostic_phase("shutdown", "started")
         if controller is not None:
             controller.close()
             if controller.cleanup_error is not None:
+                _diagnostic_phase("shutdown", "failed", started=shutdown_started,
+                                  code="frame_cleanup")
                 emit({"command": "start", "ok": False,
                       "error": "desktop frame cleanup failed"}, json_mode=json_mode)
                 exit_code = ExitCode.CLEANUP
+            else:
+                _diagnostic_phase("shutdown", "completed", started=shutdown_started)
+        else:
+            _diagnostic_phase("shutdown", "completed", started=shutdown_started)
     return exit_code
 
 
 def _run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool, packaged_root: Path | None = None) -> int:
     if packaged_root is not None:
         return run_packaged(paths, packaged_root=packaged_root, json_mode=json_mode)
+    runtime_started = _diagnostic_phase("runtime-checks", "started")
     ok_runtime, checks = _runtime_ok(paths)
     if not ok_runtime:
+        _diagnostic_phase("runtime-checks", "failed", started=runtime_started,
+                          code="unsupported_runtime")
         emit({"command": "start", "ok": False, "error": "runtime check failed", "runtimes": checks}, json_mode=json_mode)
         if not json_mode:
             _human_runtime(checks)
         return ExitCode.RUNTIME
+    _diagnostic_phase("runtime-checks", "completed", started=runtime_started)
+    port_started = _diagnostic_phase("port-selection", "started")
     try:
         port = choose_port(explicit_port)
     except (OSError, ValueError) as exc:
+        _diagnostic_phase("port-selection", "failed", started=port_started,
+                          code="port_unavailable", errorType=type(exc).__name__)
         emit({"command": "start", "ok": False, "error": str(exc)[:240]}, json_mode=json_mode)
         return ExitCode.PORT
     used_fallback = explicit_port is None and port != DEFAULT_PORT
+    _diagnostic_phase("port-selection", "completed", started=port_started,
+                      port=port, preferredPort=DEFAULT_PORT, fallback=used_fallback)
     if used_fallback and not json_mode:
         print(f"port {DEFAULT_PORT} is occupied; using loopback port {port}")
     _, npm = _node_npm()
+    dependencies_started = _diagnostic_phase("dependency-checks", "started")
     try:
         ready, state, install_output = prepare_dependencies(paths, npm)
     except ProcessCleanupError as exc:
+        _diagnostic_phase("dependency-checks", "failed", started=dependencies_started,
+                          code="dependency_cleanup", errorType=type(exc).__name__)
         emit({"command": "start", "ok": False,
               "error": f"dependency cleanup failed: {exc}"}, json_mode=json_mode)
         return ExitCode.CLEANUP
     except ProcessLaunchError as exc:
+        _diagnostic_phase("dependency-checks", "failed", started=dependencies_started,
+                          code="dependency_launch", errorType=type(exc).__name__)
         emit({"command": "start", "ok": False,
               "error": f"dependency child launch failed: {exc}"}, json_mode=json_mode)
         return ExitCode.CHILD
     except (OSError, ValueError) as exc:
         ready, state, install_output = False, None, str(exc)
     if not ready:
+        _diagnostic_phase("dependency-checks", "failed", started=dependencies_started,
+                          code="dependencies_unavailable")
         emit({"command": "start", "ok": False, "error": "dependency preparation failed",
               "port": port, "dependencies": state.to_dict() if state else {}, "output": install_output[-4000:]}, json_mode=json_mode)
         return ExitCode.DEPENDENCIES
+    _diagnostic_phase("dependency-checks", "completed", started=dependencies_started)
     node, _ = _node_npm()
     command = [node, str(paths.vite_script), "--host", HOST, "--port", str(port), "--strictPort"]
     def log(line: str) -> None:
@@ -413,11 +536,26 @@ def _run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool, pack
             print(str(redact(line)), flush=True)
     owned: OwnedProcess | None = None
     controller: FrameController | None = None
+    frame_ready = False
+    session = active_diagnostics()
     exit_code = ExitCode.OK
+    active_phase = "vite-launch"
+    active_phase_started: float | None = None
     try:
+        vite_started = _diagnostic_phase("vite-launch", "started")
+        active_phase_started = vite_started
         owned = OwnedProcess.launch(command, paths.frontend_root, on_output=log)
+        _diagnostic_phase("vite-launch", "completed", started=vite_started, port=port)
+        if session is not None:
+            session.emit("launcher", "child.started",
+                         attributes={"processRole": "vite", "port": port, "state": "running"})
+        readiness_started = _diagnostic_phase("vite-readiness", "started")
+        active_phase = "vite-readiness"
+        active_phase_started = readiness_started
         result = wait_for_readiness(HOST, port, owned.is_alive, timeout=READINESS_TIMEOUT)
         if not result.ready:
+            _diagnostic_phase("vite-readiness", "failed", started=readiness_started,
+                              code=str(result.reason or "readiness_failed"))
             emit({"command": "start", "ok": False, "error": "frontend readiness failed",
                   "url": result.url, "detail": result.detail, "reason": result.reason,
                   "attempts": result.attempts}, json_mode=json_mode)
@@ -427,6 +565,11 @@ def _run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool, pack
             )
             exit_code = ExitCode.CHILD if child_exited else ExitCode.READINESS
         else:
+            _diagnostic_phase("vite-readiness", "completed", started=readiness_started,
+                              port=port)
+            if session is not None:
+                session.emit("launcher", "child.ready",
+                             attributes={"processRole": "vite", "port": port, "state": "ready"})
             if not owned.is_alive():
                 child_code = int(owned.poll() or 0)
                 emit({"command": "start", "ok": False,
@@ -434,19 +577,35 @@ def _run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool, pack
                 exit_code = ExitCode.CHILD
             else:
                 try:
+                    frame_started = _diagnostic_phase("desktop-frame-creation", "started")
+                    active_phase = "desktop-frame-creation"
+                    active_phase_started = frame_started
                     controller = FrameController.development(
                         owned, result.url, profile_parent=paths.launcher_state,
                         native_command=_native_engine_command(paths),
                     )
                     controller.start()
+                    _diagnostic_phase("desktop-frame-creation", "completed", started=frame_started)
+                    frame_ready = True
+                    if session is not None:
+                        session.emit("launcher", "run.ready", attributes={"mode": "development"},
+                                     deduplicate=False)
                     emit({"command": "start", "ok": True, "url": result.url, "port": port,
                           "preferred_port": DEFAULT_PORT, "fallback": used_fallback}, json_mode=json_mode)
+                    active_phase = "desktop-runtime"
+                    active_phase_started = time.monotonic()
                     controller.run()
                 except FrameProcessExitedError as exc:
+                    _diagnostic_phase("desktop-runtime" if frame_ready else "desktop-frame-creation",
+                                      "failed", started=frame_started,
+                                      code="frame_process_exited", errorType=type(exc).__name__)
                     emit({"command": "start", "ok": False,
                           "error": str(exc)[:240]}, json_mode=json_mode)
                     exit_code = ExitCode.CHILD
                 except (FrameStartupError, SdkError, FrameConfigurationError) as exc:
+                    _diagnostic_phase("desktop-runtime" if frame_ready else "desktop-frame-creation",
+                                      "failed", started=frame_started,
+                                      code="frame_startup", errorType=type(exc).__name__)
                     emit({"command": "start", "ok": False,
                           "error": str(exc)[:240]}, json_mode=json_mode)
                     exit_code = ExitCode.RUNTIME
@@ -455,22 +614,47 @@ def _run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool, pack
               "error": "interrupted by user"}, json_mode=json_mode)
         exit_code = ExitCode.INTERRUPTED
     except (OSError, ProcessLaunchError) as exc:
+        _diagnostic_phase(active_phase, "failed", started=active_phase_started,
+                          code="process_failure", errorType=type(exc).__name__)
         emit({"command": "start", "ok": False, "error": str(exc)[:240]}, json_mode=json_mode)
         exit_code = ExitCode.CHILD
     finally:
+        shutdown_started = _diagnostic_phase("shutdown", "started")
+        shutdown_failed = False
         if controller is not None:
             controller.close()
             if controller.cleanup_error is not None:
+                shutdown_failed = True
                 emit({"command": "start", "ok": False,
                       "error": "desktop frame cleanup failed"}, json_mode=json_mode)
                 exit_code = ExitCode.CLEANUP
+        if shutdown_failed:
+            _diagnostic_phase("shutdown", "failed", started=shutdown_started,
+                              code="frame_cleanup")
+        else:
+            _diagnostic_phase("shutdown", "completed", started=shutdown_started)
+        cleanup_started = _diagnostic_phase("cleanup", "started")
         if owned is not None:
             try:
                 owned.terminate()
+                if session is not None:
+                    session.emit("launcher", "child.exited",
+                                 attributes={"processRole": "vite", "state": "stopped",
+                                             "returnCode": owned.poll()})
             except ProcessCleanupError as exc:
+                _diagnostic_phase("cleanup", "failed", started=cleanup_started,
+                                  code="child_cleanup", errorType=type(exc).__name__)
+                if session is not None:
+                    session.emit("launcher", "child.cleanup_failed",
+                                 attributes={"processRole": "vite", "code": "cleanup_failed",
+                                             "errorType": type(exc).__name__})
                 emit({"command": "start", "ok": False,
                       "error": f"owned-process cleanup failed: {exc}"}, json_mode=json_mode)
                 exit_code = ExitCode.CLEANUP
+            else:
+                _diagnostic_phase("cleanup", "completed", started=cleanup_started)
+        else:
+            _diagnostic_phase("cleanup", "completed", started=cleanup_started)
     return exit_code
 
 
@@ -478,7 +662,8 @@ def run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool, packa
     """Run start with an atomic local crash marker and bounded retention."""
     diagnostic_paths = _packaged_diagnostics_paths(packaged_root, paths) if packaged_root is not None else paths
     if diagnostic_paths is not None:
-        begin_diagnostics_run(diagnostic_paths)
+        begin_diagnostics_run(diagnostic_paths, mode="packaged" if packaged_root is not None else "development")
+    result = ExitCode.UNEXPECTED
     try:
         result = _run_start(paths, explicit_port=explicit_port, json_mode=json_mode, packaged_root=packaged_root)
         # Persist only unexpected owned-process or cleanup failures. Expected
@@ -493,7 +678,9 @@ def run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool, packa
         raise
     finally:
         if diagnostic_paths is not None:
-            finish_diagnostics_run(diagnostic_paths)
+            outcome = "success" if result == ExitCode.OK else ("cancelled" if result == ExitCode.INTERRUPTED else "failure")
+            finish_diagnostics_run(diagnostic_paths, outcome=outcome, exit_code=result,
+                                   interrupted=result == ExitCode.INTERRUPTED)
 
 
 def _native_engine_command(paths: Paths) -> list[str] | None:
@@ -534,6 +721,10 @@ def main(argv: list[str] | None = None, *, paths: Paths | None = None) -> int:
     if command == "support":
         return run_support(paths, output=args.output, delete_local=args.delete_local,
                            yes=args.yes, json_mode=json_mode)
+    if command == "diagnostics":
+        return run_diagnostics(paths, follow=args.follow, level=args.level,
+                               component=args.component, trace=args.trace,
+                               limit=args.limit, json_mode=json_mode)
     try:
         with _shutdown_signal_handlers():
             if getattr(args, "packaged_root", None) is not None:
