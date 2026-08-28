@@ -81,6 +81,8 @@ check(!source.transport.includes("eval(") && !source.transport.includes("new Fun
 check(!/\b(eval|Function|require)\s*\(/.test(source.protocol), "browser protocol validator exposes dynamic evaluation or require");
 check(source.desktopController.includes('ThreadPoolExecutor(max_workers=1') && source.desktopController.includes('_dispatcher_lock'), "desktop protocol work is not serialized off the WebView callback");
 check(source.desktopWebView.includes('GetDeferral') && source.desktopWebView.includes('ThreadPoolExecutor(max_workers=2'), "asset resource work is not deferred to a bounded background owner");
+check(source.desktopWebView.includes('CoreWebView2CreationProperties') && source.desktopWebView.includes('control.EnsureCoreWebView2Async()'), "WebView2 startup does not use non-blocking WinForms initialization");
+check(!source.desktopWebView.includes('CreateAsync(\n                    str(browser_folder)') && !source.desktopWebView.includes('.GetAwaiter().GetResult()'), "WebView2 startup synchronously blocks its STA message pump");
 check(source.desktopProjectHost.includes('"project.progress"') && source.desktopProjectHost.includes('set_event_sink'), "project progress cannot stream while a host operation is active");
 check(source.bootstrap.includes("isDevelopment") && source.bootstrap.includes("FakeHost"), "development FakeHost fallback is not explicit");
 check(source.bootstrap.includes("requires the packaged WebView2 host"), "production fallback does not fail closed");

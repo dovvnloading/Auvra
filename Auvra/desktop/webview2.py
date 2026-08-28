@@ -364,7 +364,10 @@ class WebView2Frame:
             from System import Action  # type: ignore[import-not-found]
             from System.Windows.Forms import Application, DockStyle, Form  # type: ignore[import-not-found]
             from Microsoft.Web.WebView2.Core import CoreWebView2Environment  # type: ignore[import-not-found]
-            from Microsoft.Web.WebView2.WinForms import WebView2  # type: ignore[import-not-found]
+            from Microsoft.Web.WebView2.WinForms import (  # type: ignore[import-not-found]
+                CoreWebView2CreationProperties,
+                WebView2,
+            )
         except ImportError as exc:
             raise FrameUnavailableError("Python.NET and the WebView2 WinForms SDK are required on Windows") from exc
         browser_folder = self.config.browser_executable_folder
@@ -380,6 +383,12 @@ class WebView2Frame:
             runtime_kind = "fixed" if browser_folder is not None else "Evergreen"
             raise FrameUnavailableError(f"the {runtime_kind} WebView2 Runtime cannot be loaded") from exc
 
+        profile = self.config.user_data_folder
+        profile.mkdir(parents=True, exist_ok=True)
+        creation = CoreWebView2CreationProperties()
+        creation.BrowserExecutableFolder = str(browser_folder) if browser_folder is not None else None
+        creation.UserDataFolder = str(profile)
+
         form = Form()
         form.Text = self.config.title
         form.Width, form.Height = 1280, 800
@@ -390,6 +399,11 @@ class WebView2Frame:
         form.Visible = False
         form.FormClosed += lambda sender, args: self._closed.set()
         control = WebView2()
+        # CreationProperties lets the WinForms wrapper create its environment
+        # as part of implicit initialization.  Do not synchronously wait on a
+        # WebView2 task from this STA: WebView2 needs this message pump to
+        # deliver initialization and shutdown callbacks.
+        control.CreationProperties = creation
         control.Dock = DockStyle.Fill
         form.Controls.Add(control)
         self._form, self._control = form, control
@@ -408,7 +422,12 @@ class WebView2Frame:
                 form.Close()
                 return
             try:
-                self._configure_core(control.CoreWebView2)
+                core = control.CoreWebView2
+                environment = getattr(core, "Environment", None)
+                if environment is None:
+                    raise RuntimeError("WebView2 environment is unavailable")
+                self._environment = environment
+                self._configure_core(core)
             except Exception as exc:
                 self._fail("native_configuration_failed", "WebView2 frame policy configuration failed")
                 self._signal("configuration_failed", {"exception_type": type(exc).__name__})
@@ -418,14 +437,9 @@ class WebView2Frame:
 
         def shown(sender: Any, args: Any) -> None:
             try:
-                profile = self.config.user_data_folder
-                profile.mkdir(parents=True, exist_ok=True)
-                environment = CoreWebView2Environment.CreateAsync(
-                    str(browser_folder) if browser_folder is not None else None,
-                    str(profile),
-                ).GetAwaiter().GetResult()
-                self._environment = environment
-                control.EnsureCoreWebView2Async(environment)
+                # InitializationCompleted is the completion boundary.  The
+                # returned task is deliberately not waited synchronously.
+                control.EnsureCoreWebView2Async()
                 if self.config.visible:
                     form.Show()
             except Exception:
