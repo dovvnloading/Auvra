@@ -41,6 +41,22 @@ class FakeFrame:
 
 
 class ControllerTests(unittest.TestCase):
+    def test_development_allows_cold_vite_navigation_to_finish(self):
+        process = Mock(is_alive=Mock(return_value=True))
+        with tempfile.TemporaryDirectory() as temp, patch.object(
+            contracts, "_CONTROLLED_TEST_PROFILE_PARENTS", {Path(temp)}
+        ):
+            controller = FrameController.development(
+                process,
+                "http://127.0.0.1:3099",
+                profile_parent=Path(temp),
+                frame_factory=FakeFrame,
+            )
+            try:
+                self.assertEqual(controller.frame.config.startup_timeout, 45.0)
+            finally:
+                controller.close()
+
     def test_development_binds_supplied_native_owner_and_closes_it_once(self):
         class FakeNativeEngine:
             def __init__(self, command):

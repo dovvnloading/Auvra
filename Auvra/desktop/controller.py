@@ -42,6 +42,9 @@ from .webview2 import WebView2Frame
 from .webview2 import MESSAGE_MAX_BYTES
 
 
+_DEVELOPMENT_FRAME_STARTUP_TIMEOUT = 45.0
+
+
 class FrameProcessExitedError(RuntimeError):
     """The launcher-owned frontend stopped before the user closed the frame."""
 
@@ -187,7 +190,8 @@ class FrameController:
                                  user_data_folder=profile,
                                  on_message=lambda body, source: holder["controller"].on_message(body, source),
                                  on_lifecycle=lambda event, fields=None: holder["controller"].on_lifecycle(event, fields),
-                                 on_asset_resource=lambda request: holder["controller"].on_asset_resource(request))
+                                 on_asset_resource=lambda request: holder["controller"].on_asset_resource(request),
+                                 startup_timeout=_DEVELOPMENT_FRAME_STARTUP_TIMEOUT)
             if frame_factory is WebView2Frame:
                 sdk = acquire_sdk(profile.parent / "webview2-sdk")
                 frame = frame_factory(config, sdk=sdk)
