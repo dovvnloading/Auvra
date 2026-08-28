@@ -638,6 +638,15 @@ class DBOperations {
   }
 }
 
+frontendDiagnostics.instrumentClass(DBOperations, 'project_documents', [
+  'addLevel', 'deleteLevel', 'addModel', 'updateModelPlacement',
+  'updateModelTextureOverrides', 'addModelTextureOverride', 'deleteModel',
+  'addAnimations', 'addAttachment', 'updateAttachment', 'deleteAttachment',
+  'addSocket', 'updateSocket', 'deleteSocket', 'addLevelObject',
+  'updateLevelObject', 'deleteLevelObject', 'addTexture', 'deleteTexture',
+  'addAudio', 'deleteAudio', 'saveBlueprint', 'deleteBlueprint',
+  'migrateLegacyDatabase', 'clearDatabase', 'deleteEntireDatabase',
+]);
 export const dbOperations = new DBOperations();
 
 function nativeDomainRecords(snapshot: Awaited<ReturnType<typeof projectService.getSnapshotAll>>, domain: string): Array<Record<string, any>> {

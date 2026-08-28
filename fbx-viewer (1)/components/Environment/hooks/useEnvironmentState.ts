@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { InteractionMode, PaintMode, PaintSettings, TransformSettings, ViewportLayout, SculptSettings } from '../types';
 import { useScene } from '../../../context/SceneContext';
 import { projectService } from '../../../utils/projectService';
+import { frontendDiagnostics } from '../../../diagnostics/runtime';
 
 export const useEnvironmentState = () => {
     const { cameraState, levelObjects } = useScene();
@@ -135,7 +136,7 @@ export const useEnvironmentState = () => {
             cameraSpeed,
             isMuted
         },
-        actions: {
+        actions: frontendDiagnostics.traceActions('environment_editor', {
             setInteractionMode,
             setPaintMode,
             setSelectedBrushId,
@@ -149,6 +150,6 @@ export const useEnvironmentState = () => {
             setLayout,
             setCameraSpeed,
             toggleMute
-        }
+        })
     };
 };

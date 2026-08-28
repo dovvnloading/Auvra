@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import { AnimationGraphData, GraphState, GraphTransition } from '../../../types';
+import { frontendDiagnostics } from '../../../diagnostics/runtime';
 
 interface UseGraphActionsProps {
     graph: AnimationGraphData;
@@ -102,5 +103,5 @@ export const useGraphActions = ({
         updateGraph(modelId, { transitions: [...graph.transitions, newTrans] });
     }, [graph.transitions, modelId, updateGraph]);
 
-    return { addState, addTransition };
+    return frontendDiagnostics.traceActions('animation_graph', { addState, addTransition });
 };

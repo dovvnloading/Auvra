@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
+from Auvra.diagnostics.core import trace_public_class
+
 
 _SAFE_LABEL = re.compile(r"^[A-Za-z0-9 ._+()/:-]{1,96}$")
 
@@ -13,6 +15,7 @@ class CredentialPromptUnavailableError(RuntimeError):
     """The supported native credential prompt cannot be created."""
 
 
+@trace_public_class("credential_prompt", concise=("prompt",))
 class WinFormsCredentialPrompt:
     """Collect a provider secret in a native masked input.
 

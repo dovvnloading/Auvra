@@ -6,6 +6,7 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
+from Auvra.diagnostics import trace_public_class
 from .archive import export_folder, validate_archive
 from .assets import AssetStore, sniff_mime
 from .errors import (InvalidProjectError, ReadOnlyError, RevisionConflictError,
@@ -39,6 +40,10 @@ class ProjectSnapshot:
     page: int = 0
     page_size: int = 100
 
+@trace_public_class("repository", concise=(
+    "create", "apply_changes", "save", "save_as", "autosave",
+    "restore_recovery", "export_pack", "import_pack", "import_legacy", "close",
+))
 class ProjectRepository:
     """One project handle. All mutating methods require the acquired lock."""
     def __init__(self, path: str | os.PathLike[str], *, read_only: bool = False,

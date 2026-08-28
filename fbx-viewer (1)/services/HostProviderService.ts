@@ -1,5 +1,11 @@
 import { getHostTransport } from '../host/bootstrap';
 import { projectService } from '../utils/projectService';
+import { frontendDiagnostics } from '../diagnostics/runtime';
+
+const QUIET_PROVIDER_METHODS = new Set([
+  'provider.list', 'provider.getStatus', 'provider.listModels', 'provider.health',
+  'inference.get', 'inference.list',
+]);
 
 /**
  * Stage 4 deliberately talks to the native host through a tiny structural
@@ -289,14 +295,20 @@ export class HostProviderService {
   }
 
   private call<T = unknown>(method: string, payload: Record<string, unknown>): Promise<T> {
+    const span = frontendDiagnostics.startSpan('provider', method, {
+      category: 'service', detailedOnly: QUIET_PROVIDER_METHODS.has(method),
+    });
+    span.phase('queued', { method });
     const run = async (): Promise<T> => {
+      span.phase('executing', { method });
       const host = await this.getHost();
       const wireRevision = typeof host.currentRevision === 'number' ? host.currentRevision : this.revision;
       this.revision = wireRevision;
-      const response = await host.request({
-        protocol: 'auvra.host/1', type: 'request', id: `provider-${++this.sequence}`,
+      const response = await frontendDiagnostics.withContext(span.context, () => host.request({
+        protocol: 'auvra.host/1', type: 'request',
+        id: `${span.context.traceId}.req-${++this.sequence}`,
         session: this.session, revision: wireRevision, method, payload,
-      });
+      }));
       if (typeof response.revision === 'number') this.revision = response.revision;
       const responseResult = response.result && typeof response.result === 'object' ? response.result as Record<string, unknown> : {};
       if (typeof responseResult.projectRevision === 'number') this.projectRevision = responseResult.projectRevision;
@@ -309,6 +321,10 @@ export class HostProviderService {
     };
     const result = this.queue.then(run, run);
     this.queue = result.catch(() => undefined);
+    void result.then(
+      () => span.finish('success', 'provider_result'),
+      (error) => { span.fail(error, 'provider_operation_failed'); span.finish('failure'); },
+    );
     return result;
   }
 
@@ -400,4 +416,5 @@ function normalizeJob(value: unknown): InferenceJob {
   } as InferenceJob;
 }
 
+frontendDiagnostics.instrumentClass(HostProviderService, 'provider_service');
 export const hostProviderService = new HostProviderService();

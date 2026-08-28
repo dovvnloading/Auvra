@@ -45,6 +45,9 @@ jobs:
       - name: Verify renderer contracts and ownership
         run: npm run renderer:verify
 
+      - name: Verify whole-program diagnostics coverage
+        run: npm run diagnostics:verify
+
       - name: Verify desktop frame boundaries
         run: node scripts/frame/verify.mjs
 
@@ -170,6 +173,11 @@ jobs:
 
       - name: Prepare locked Python environment
         run: uv sync --locked --no-install-project --no-dev
+
+      - name: Verify correlated native runtime diagnostics
+        env:
+          AUVRA_NATIVE_TRACE_SMOKE: "1"
+        run: uv run --locked --no-sync python -W error::ResourceWarning -m unittest tests.desktop.test_native_trace_smoke -v
 
       - name: Run real WebView2 project lifecycle
         env:

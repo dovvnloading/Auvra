@@ -1,0 +1,57 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import tempfile
+import unittest
+
+from Auvra.desktop.native_engine import NativeEngine
+from Auvra.diagnostics.core import DiagnosticsSession, install_diagnostics
+
+
+@unittest.skipUnless(os.environ.get("AUVRA_NATIVE_TRACE_SMOKE") == "1",
+                     "set AUVRA_NATIVE_TRACE_SMOKE=1 after building the native release binary")
+@unittest.skipUnless(os.name == "nt", "native trace smoke is Windows-only")
+class NativeTraceSmokeTests(unittest.TestCase):
+    def test_real_native_child_emits_correlated_operation_records(self) -> None:
+        repository = Path(__file__).parents[2]
+        binary = repository / "native" / "target" / "release" / "auvra-native.exe"
+        self.assertTrue(binary.is_file(), "build the native release binary first")
+        with tempfile.TemporaryDirectory(prefix="auvra native trace smoke ") as raw:
+            session = DiagnosticsSession(
+                Path(raw) / "diagnostics",
+                source_root=repository,
+                run_id="run-native-trace-smoke",
+                mode="test",
+            )
+            session.start()
+            session.start_detailed_capture()
+            install_diagnostics(session)
+            engine = NativeEngine([str(binary)], startup_timeout=5, request_timeout=5,
+                                  shutdown_timeout=2)
+            try:
+                engine.start(editor_session="trace-smoke")
+                engine.snapshot_world()
+            finally:
+                engine.close(timeout=2)
+                session.close(outcome="success")
+                install_diagnostics(None)
+            operation_records = [
+                record for record in session.snapshot()
+                if str(record.get("attributes", {}).get("state", "")).startswith("native.operation_")
+            ]
+            self.assertTrue(any(
+                record["attributes"]["state"] == "native.operation_started"
+                for record in operation_records
+            ))
+            self.assertTrue(any(
+                record["attributes"]["state"] == "native.operation_completed"
+                and record["attributes"].get("method") == "world.getSnapshot"
+                and record.get("traceId")
+                and record.get("spanId")
+                for record in operation_records
+            ))
+
+
+if __name__ == "__main__":
+    unittest.main()

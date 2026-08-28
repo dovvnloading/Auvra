@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { LevelBlueprintData, LevelObject } from '../types';
 import { SandboxEntityHandle } from '../components/Sandbox/SandboxEntity';
 import { GraphRuntimeAPI } from '../components/AnimationGraph/GraphRuntime';
+import { frontendDiagnostics } from '../diagnostics/runtime';
 
 /**
  * Interface for the Level Blueprint Runtime.
@@ -286,7 +287,18 @@ export const useLevelBlueprintRuntime = ({
     // --- Event: BeginPlay ---
     useEffect(() => {
         const beginNodes = blueprint.nodes.filter(n => n.name === 'Event BeginPlay');
-        beginNodes.forEach(node => executeNode(node.id, {}));
+        const span = frontendDiagnostics.startSpan('level_blueprint_runtime', 'begin_play', {
+            category: 'runtime_event',
+        });
+        try {
+            span.phase('execute', { count: beginNodes.length });
+            beginNodes.forEach(node => executeNode(node.id, {}));
+            span.finish('success');
+        } catch (error) {
+            span.fail(error);
+            span.finish('failure');
+            throw error;
+        }
     }, [blueprint.nodes, executeNode]); 
 
     // --- Event: Tick & Overlap Physics ---

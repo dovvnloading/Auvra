@@ -16,6 +16,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
+from Auvra.diagnostics import trace_public_class
 from typing import Any, Callable, Mapping
 
 from Auvra.host.dispatcher import HostOperationError
@@ -77,6 +78,7 @@ def _assert_state_path_safe(path: Path) -> None:
             raise OSError("provider state path cannot contain links")
 
 
+@trace_public_class("provider_host", concise=("handle", "shutdown"))
 class NativeProviderHost:
     """Implement provider protocol methods without exposing provider authority."""
 

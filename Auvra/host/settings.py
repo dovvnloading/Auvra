@@ -7,6 +7,8 @@ from collections.abc import Iterable, Mapping
 import math
 from typing import Any
 
+from Auvra.diagnostics.core import trace_public_class
+
 
 class SettingsError(ValueError):
     pass
@@ -16,6 +18,7 @@ class SettingsConflict(SettingsError):
     pass
 
 
+@trace_public_class("host_settings", concise=("update",))
 class SettingsStore:
     """In-memory settings store whose backing state is explicitly injected."""
 

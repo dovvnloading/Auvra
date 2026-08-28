@@ -1,11 +1,12 @@
 
 import * as THREE from 'three';
 import { LoadedModelData } from '../../types';
+import { frontendDiagnostics } from '../../diagnostics/runtime';
 
 /**
  * Clean up existing object URLs to prevent memory leaks.
  */
-export const disposeModel = (model: LoadedModelData) => {
+const disposeModelImplementation = (model: LoadedModelData) => {
   if (model.url) {
     URL.revokeObjectURL(model.url);
   }
@@ -13,6 +14,10 @@ export const disposeModel = (model: LoadedModelData) => {
     disposeObject(model.object);
   }
 };
+
+export const disposeModel = frontendDiagnostics.wrap(
+  'model_lifecycle', 'dispose_model', disposeModelImplementation, { category: 'resource_lifecycle' },
+);
 
 /**
  * Recursively disposes of geometries and materials within an object hierarchy.

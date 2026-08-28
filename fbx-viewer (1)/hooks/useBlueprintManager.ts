@@ -83,7 +83,7 @@ export const useBlueprintManager = () => {
     });
   }, []);
 
-  return {
+  return frontendDiagnostics.traceActions('blueprint_manager', {
     blueprints,
     setBlueprints, // Exposed for persistence layer
     selectedBlueprintId,
@@ -92,5 +92,5 @@ export const useBlueprintManager = () => {
     updateBlueprint,
     removeBlueprint,
     unlinkModelFromBlueprints
-  };
+  });
 };

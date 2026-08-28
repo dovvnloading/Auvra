@@ -7,6 +7,7 @@ use auvra_native::render_world::{
     RenderExtraction, WorldRenderEntity, WorldRenderInput, WorldRenderLight, extract_render_world,
 };
 use auvra_native::world::{Entity, World as NativeWorld, WorldCommand, WorldTransaction};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, Read, Write};
 use std::sync::Arc;
@@ -27,6 +28,18 @@ struct Diagnostic<'a> {
     method: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     code: Option<&'a str>,
+    #[serde(rename = "traceId", skip_serializing_if = "Option::is_none")]
+    trace_id: Option<&'a str>,
+    #[serde(rename = "spanId", skip_serializing_if = "Option::is_none")]
+    span_id: Option<&'a str>,
+    #[serde(rename = "parentSpanId", skip_serializing_if = "Option::is_none")]
+    parent_span_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    phase: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outcome: Option<&'a str>,
+    #[serde(rename = "durationMs", skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<f64>,
 }
 
 fn diagnostic(level: &'static str, event: &'static str, method: Option<&str>, code: Option<&str>) {
@@ -36,11 +49,178 @@ fn diagnostic(level: &'static str, event: &'static str, method: Option<&str>, co
         event,
         method,
         code,
+        trace_id: None,
+        span_id: None,
+        parent_span_id: None,
+        phase: None,
+        outcome: None,
+        duration_ms: None,
     })
     .unwrap_or_else(|_| {
         "{\"schema\":\"auvra.native-diagnostic/1\",\"level\":\"error\",\"event\":\"native.diagnostic_failure\",\"code\":\"serialization_failed\"}".to_string()
     });
     eprintln!("{line}");
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct DiagnosticContext {
+    #[serde(default)]
+    trace_id: Option<String>,
+    #[serde(default)]
+    span_id: Option<String>,
+    #[serde(default)]
+    parent_span_id: Option<String>,
+    #[serde(default)]
+    detailed: bool,
+}
+
+#[derive(Clone, Debug)]
+struct ActiveNativeTrace {
+    method: String,
+    context: DiagnosticContext,
+    span_id: String,
+    started: Instant,
+    recording: bool,
+}
+
+thread_local! {
+    static ACTIVE_NATIVE_TRACE: RefCell<Option<ActiveNativeTrace>> = const { RefCell::new(None) };
+}
+
+fn stable_diagnostic_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+}
+
+fn emit_native_operation(
+    trace: &ActiveNativeTrace,
+    level: &'static str,
+    event: &'static str,
+    phase: Option<&str>,
+    outcome: Option<&str>,
+    code: Option<&str>,
+) {
+    let line = serde_json::to_string(&Diagnostic {
+        schema: "auvra.native-diagnostic/1",
+        level,
+        event,
+        method: Some(&trace.method),
+        code,
+        trace_id: trace.context.trace_id.as_deref(),
+        span_id: Some(&trace.span_id),
+        parent_span_id: trace.context.span_id.as_deref().or(trace.context.parent_span_id.as_deref()),
+        phase,
+        outcome,
+        duration_ms: Some(trace.started.elapsed().as_secs_f64() * 1000.0),
+    })
+    .unwrap_or_else(|_| {
+        "{\"schema\":\"auvra.native-diagnostic/1\",\"level\":\"error\",\"event\":\"native.diagnostic_failure\",\"code\":\"serialization_failed\"}".to_string()
+    });
+    eprintln!("{line}");
+}
+
+fn native_phase(phase: &'static str) {
+    ACTIVE_NATIVE_TRACE.with(|active| {
+        if let Some(trace) = active.borrow().as_ref()
+            && trace.recording
+        {
+            emit_native_operation(
+                trace,
+                "debug",
+                "native.operation_phase",
+                Some(phase),
+                None,
+                None,
+            );
+        }
+    });
+}
+
+fn in_native_phase<T>(phase: &'static str, work: impl FnOnce() -> T) -> T {
+    native_phase(phase);
+    work()
+}
+
+struct NativeTraceGuard {
+    trace: ActiveNativeTrace,
+}
+
+impl NativeTraceGuard {
+    fn begin(method: &str, context: DiagnosticContext) -> Self {
+        let quiet = matches!(
+            method,
+            "world.getSnapshot" | "renderer.getMetrics" | "asset.status"
+        );
+        let trace = ActiveNativeTrace {
+            method: method.to_string(),
+            span_id: format!(
+                "native-{}",
+                stable_id(&format!(
+                    "{method}:{}",
+                    context.trace_id.as_deref().unwrap_or("run")
+                ))
+            ),
+            recording: context.detailed || !quiet,
+            context,
+            started: Instant::now(),
+        };
+        if trace.recording {
+            emit_native_operation(
+                &trace,
+                "debug",
+                "native.operation_started",
+                Some("dispatch"),
+                None,
+                None,
+            );
+        }
+        ACTIVE_NATIVE_TRACE.with(|active| *active.borrow_mut() = Some(trace.clone()));
+        Self { trace }
+    }
+
+    fn finish(self, succeeded: bool) {
+        if self.trace.recording || !succeeded {
+            emit_native_operation(
+                &self.trace,
+                if succeeded { "debug" } else { "error" },
+                if succeeded {
+                    "native.operation_completed"
+                } else {
+                    "native.operation_failed"
+                },
+                Some("complete"),
+                Some(if succeeded { "success" } else { "failure" }),
+                if succeeded {
+                    None
+                } else {
+                    Some("operation_failed")
+                },
+            );
+        }
+        ACTIVE_NATIVE_TRACE.with(|active| *active.borrow_mut() = None);
+    }
+}
+
+fn take_diagnostic_context(params: &mut Value) -> DiagnosticContext {
+    let Some(object) = params.as_object_mut() else {
+        return DiagnosticContext::default();
+    };
+    let Some(value) = object.remove("__diagnostics") else {
+        return DiagnosticContext::default();
+    };
+    let Ok(mut context) = serde_json::from_value::<DiagnosticContext>(value) else {
+        return DiagnosticContext::default();
+    };
+    context.trace_id = context.trace_id.filter(|value| stable_diagnostic_id(value));
+    context.span_id = context.span_id.filter(|value| stable_diagnostic_id(value));
+    context.parent_span_id = context
+        .parent_span_id
+        .filter(|value| stable_diagnostic_id(value));
+    context
 }
 
 #[derive(Debug, Deserialize)]
@@ -531,35 +711,58 @@ impl App {
             return Err("session.hello required".into());
         }
         let result = match req.method.as_str() {
-            "world.getSnapshot" => self.world_snapshot(&req.params),
-            "world.apply" => self.apply_legacy(&req.params),
-            "world.applyTransaction" | "world.applyCommands" => self.apply_transaction(&req.params),
-            "world.validateHydration" => self.validate_hydration(&req.params),
-            "world.hydrate" => self.hydrate_world(&req.params),
-            "world.beginHydration" => self.begin_hydration(&req.params),
-            "world.appendHydration" => self.append_hydration(&req.params),
-            "world.commitHydration" => self.commit_hydration(),
-            "world.abortHydration" => self.abort_hydration(),
-            "world.closeProject" => self.close_project(),
-            "world.advance" => self.advance_world(&req.params),
+            "world.getSnapshot" => {
+                in_native_phase("world_validate", || self.world_snapshot(&req.params))
+            }
+            "world.apply" => in_native_phase("world_commit", || self.apply_legacy(&req.params)),
+            "world.applyTransaction" | "world.applyCommands" => {
+                in_native_phase("world_commit", || self.apply_transaction(&req.params))
+            }
+            "world.validateHydration" => in_native_phase("hydration_validate", || {
+                self.validate_hydration(&req.params)
+            }),
+            "world.hydrate" => {
+                in_native_phase("hydration_commit", || self.hydrate_world(&req.params))
+            }
+            "world.beginHydration" => {
+                in_native_phase("hydration_validate", || self.begin_hydration(&req.params))
+            }
+            "world.appendHydration" => {
+                in_native_phase("hydration_validate", || self.append_hydration(&req.params))
+            }
+            "world.commitHydration" => {
+                in_native_phase("hydration_commit", || self.commit_hydration())
+            }
+            "world.abortHydration" => {
+                in_native_phase("hydration_commit", || self.abort_hydration())
+            }
+            "world.closeProject" => in_native_phase("world_commit", || self.close_project()),
+            "world.advance" => in_native_phase("world_advance", || self.advance_world(&req.params)),
             "world.getReplay" => self.replay_snapshot(),
             "renderer.getCapabilities" => Ok(self.renderer.capabilities()),
             "renderer.renderReference" => {
+                native_phase("render_extract");
                 let extraction = self.build_extraction(&req.params)?;
+                native_phase("render_submit");
                 self.renderer.render_production(&req.params, &extraction)
             }
-            "renderer.extract" => self.render_extract(&req.params),
+            "renderer.extract" => {
+                in_native_phase("render_extract", || self.render_extract(&req.params))
+            }
             "renderer.getMetrics" => Ok(self.renderer.metrics()),
-            "renderer.recover" => self.recover_renderer(),
-            "asset.submit" | "asset.beginCook" => self.submit_asset(&req.params),
-            "asset.status" => self.asset_status(&req.params),
-            "asset.cancel" => self.cancel_asset(&req.params),
-            "viewport.open" => self.open_viewport(&req.params),
+            "renderer.recover" => in_native_phase("renderer_recover", || self.recover_renderer()),
+            "asset.submit" | "asset.beginCook" => {
+                in_native_phase("asset_submit", || self.submit_asset(&req.params))
+            }
+            "asset.status" => in_native_phase("asset_status", || self.asset_status(&req.params)),
+            "asset.cancel" => in_native_phase("asset_status", || self.cancel_asset(&req.params)),
+            "viewport.open" => in_native_phase("viewport_open", || self.open_viewport(&req.params)),
             "viewport.close" => {
+                native_phase("viewport_close");
                 self.viewport = None;
                 Ok(json!({"open": false, "world_revision": self.world.revision()}))
             }
-            "shutdown" => Ok(json!({"stopped": true})),
+            "shutdown" => in_native_phase("shutdown", || Ok(json!({"stopped": true}))),
             _ => Ok(
                 json!({"__error": {"code": "unknown_method", "message": "method is not part of auvra.native/1"}}),
             ),
@@ -1544,10 +1747,14 @@ fn run_ipc() -> Result<(), String> {
             diagnostic("info", "native.eof", None, None);
             return Ok(());
         };
-        let req: Request =
+        let mut req: Request =
             serde_json::from_slice(&bytes).map_err(|e| format!("invalid request schema: {e}"))?;
         let method = req.method.clone();
+        let diagnostic_context = take_diagnostic_context(&mut req.params);
+        let trace = NativeTraceGuard::begin(&method, diagnostic_context);
         let result = app.dispatch(req);
+        let succeeded = result.as_ref().is_ok_and(|response| response.ok);
+        trace.finish(succeeded);
         match result {
             Ok(resp) => {
                 write_frame(&mut output, &resp)?;

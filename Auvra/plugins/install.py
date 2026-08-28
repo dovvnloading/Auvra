@@ -13,6 +13,7 @@ from typing import Callable
 import zipfile
 
 from .package import PluginPackage, PackageError
+from Auvra.diagnostics import trace_public_class
 
 
 class InstallError(PackageError):
@@ -83,6 +84,7 @@ def _remove_staging(path: Path) -> None:
         raise InstallError("failed plugin installation left staging data")
 
 
+@trace_public_class("plugin_install", concise=("install",))
 class PluginInstaller:
     """Install only a fully validated package into a digest-addressed directory."""
 

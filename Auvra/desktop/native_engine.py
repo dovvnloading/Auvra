@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import queue
+import re
 import secrets
 import struct
 import subprocess
@@ -22,7 +23,7 @@ import time
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Mapping, Sequence
 
-from Auvra.diagnostics.core import active_diagnostics, current_diagnostic_context
+from Auvra.diagnostics.core import active_diagnostics, current_diagnostic_context, trace_public_class
 from Auvra.host.dispatcher import HostOperationError
 from Auvra.host.logging import redact
 
@@ -39,10 +40,28 @@ _NATIVE_DIAGNOSTIC_SCHEMA = "auvra.native-diagnostic/1"
 _NATIVE_DIAGNOSTIC_EVENTS = frozenset({
     "native.ready", "native.stopped", "native.eof", "native.protocol_failed",
     "native.configuration_failed", "native.fatal", "native.diagnostic_failure",
+    "native.operation_started", "native.operation_phase",
+    "native.operation_completed", "native.operation_failed",
 })
 _NATIVE_DIAGNOSTIC_CODES = frozenset({
     "fatal_protocol_error", "invalid_session_token", "fatal_error",
     "serialization_failed",
+    "operation_failed",
+})
+_NATIVE_DIAGNOSTIC_PHASES = frozenset({
+    "dispatch", "complete", "world_validate", "world_commit", "world_advance",
+    "hydration_validate", "hydration_commit", "asset_submit", "asset_status",
+    "render_extract", "render_plan", "render_submit", "viewport_open",
+    "viewport_close", "renderer_recover", "session_start", "shutdown",
+})
+_NATIVE_DIAGNOSTIC_METHODS = frozenset({
+    "session.hello", "world.getSnapshot", "world.apply", "world.applyTransaction",
+    "world.applyCommands", "world.validateHydration", "world.hydrate",
+    "world.beginHydration", "world.appendHydration", "world.commitHydration",
+    "world.abortHydration", "world.closeProject", "world.advance", "world.getReplay",
+    "renderer.getCapabilities", "renderer.renderReference", "renderer.extract",
+    "renderer.getMetrics", "renderer.recover", "asset.submit", "asset.beginCook",
+    "asset.status", "asset.cancel", "viewport.open", "viewport.close", "shutdown",
 })
 _ENGINE_FEATURES = (
     "pbr_metallic_roughness", "skeletal_animation", "frustum_culling",
@@ -208,6 +227,10 @@ def _validate_json_data(value: Any) -> None:
             raise NativeEngineProtocolError("native protocol does not carry paths or binary data")
 
 
+@trace_public_class("native_engine", concise=(
+    "start", "restart", "call", "session_hello", "apply_world",
+    "open_viewport", "close_viewport", "render_reference", "recover", "close",
+))
 class NativeEngine:
     """Own one long-lived native child and its authenticated request channel."""
 
@@ -385,12 +408,21 @@ class NativeEngine:
         if len(encoded.encode("utf-8")) > _MAX_DIAGNOSTIC_RECORD_BYTES:
             safe = {"level": "warning", "code": "diagnostic_truncated"}
         diagnostics = self._runtime_diagnostics
-        if (set(safe) - {"schema", "level", "event", "method", "code"}
+        if (set(safe) - {"schema", "level", "event", "method", "code", "traceId",
+                         "spanId", "parentSpanId", "phase", "outcome", "durationMs"}
                 or safe.get("schema") != _NATIVE_DIAGNOSTIC_SCHEMA
                 or safe.get("level") not in {"debug", "info", "warning", "error", "critical"}
                 or safe.get("event") not in _NATIVE_DIAGNOSTIC_EVENTS
-                or ("method" in safe and not isinstance(safe.get("method"), str))
-                or ("code" in safe and safe.get("code") not in _NATIVE_DIAGNOSTIC_CODES)):
+                or ("method" in safe and safe.get("method") not in _NATIVE_DIAGNOSTIC_METHODS)
+                or ("code" in safe and safe.get("code") not in _NATIVE_DIAGNOSTIC_CODES)
+                or any(key in safe and (not isinstance(safe.get(key), str)
+                                        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", safe[key]))
+                       for key in ("traceId", "spanId", "parentSpanId"))
+                or ("phase" in safe and safe.get("phase") not in _NATIVE_DIAGNOSTIC_PHASES)
+                or ("outcome" in safe and safe.get("outcome") not in {"success", "failure", "cancelled"})
+                or ("durationMs" in safe and (not isinstance(safe.get("durationMs"), (int, float))
+                                               or isinstance(safe.get("durationMs"), bool)
+                                               or not 0 <= safe["durationMs"] <= 86_400_000))):
             if diagnostics is not None:
                 diagnostics.emit("native", "native.diagnostic_invalid",
                                  attributes={"code": "invalid_diagnostic"}, deduplicate=False)
@@ -405,7 +437,17 @@ class NativeEngine:
         attributes: dict[str, Any] = {"state": child_event, "source": "stderr"}
         if code is not None:
             attributes["code"] = code
-        diagnostics.emit("native", event, attributes=attributes)
+        for key in ("method", "phase", "outcome", "durationMs"):
+            if key in safe:
+                attributes[key] = safe[key]
+        diagnostics.emit(
+            "native", event,
+            trace_id=safe.get("traceId") if isinstance(safe.get("traceId"), str) else None,
+            span_id=safe.get("spanId") if isinstance(safe.get("spanId"), str) else None,
+            parent_span_id=(safe.get("parentSpanId")
+                            if isinstance(safe.get("parentSpanId"), str) else None),
+            attributes=attributes,
+        )
         return True
 
     def _read_stdout(self, stream: BinaryIO,
@@ -443,6 +485,16 @@ class NativeEngine:
             raise NativeEngineClosedError("native process is unavailable")
         request_params = dict(params or {})
         _validate_json_data(request_params)
+        diagnostic_context = current_diagnostic_context()
+        trace_id = diagnostic_context.get("traceId")
+        span_id = diagnostic_context.get("spanId")
+        parent_span_id = diagnostic_context.get("parentSpanId")
+        request_params["__diagnostics"] = {
+            **({"traceId": trace_id} if trace_id else {}),
+            **({"spanId": span_id} if span_id else {}),
+            **({"parentSpanId": parent_span_id} if parent_span_id else {}),
+            "detailed": bool(self._runtime_diagnostics and self._runtime_diagnostics.detailed),
+        }
         request_id = self._next_request_id()
         request = {"protocol": PROTOCOL_VERSION, "id": request_id,
                    "method": method, "params": request_params}
@@ -615,6 +667,10 @@ class NativeEngine:
         self.close()
 
 
+@trace_public_class("native_engine_host", concise=(
+    "start", "restart", "close", "stage_asset", "validate_project",
+    "hydrate_project", "close_project", "handle",
+))
 class NativeEngineHost:
     """Adapt UI ``engine.*`` calls to the fixed native child methods."""
 
@@ -1189,6 +1245,7 @@ class NativeEngineHost:
             raise self._translate_error(error) from error
 
 
+@trace_public_class("native_engine_host", concise=("start", "restart", "handle"))
 class NativeEngineUnavailableHost:
     """Declared web fallback when the development native binary is unavailable."""
 

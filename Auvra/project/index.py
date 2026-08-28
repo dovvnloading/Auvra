@@ -3,7 +3,9 @@ from __future__ import annotations
 import os, sqlite3, time
 from pathlib import Path
 import threading
+from Auvra.diagnostics.core import trace_public_class
 
+@trace_public_class("project_index", concise=("record", "rebuild", "close"))
 class ProjectIndex:
     def __init__(self, path: str | os.PathLike[str] | None = None) -> None:
         # Native WebView callbacks may invoke project operations on a thread

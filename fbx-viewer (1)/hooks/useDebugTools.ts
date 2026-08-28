@@ -1,6 +1,7 @@
 
 import { useState, useCallback } from 'react';
 import { DebugProjectile } from '../types';
+import { frontendDiagnostics } from '../diagnostics/runtime';
 
 export const useDebugTools = () => {
   const [debugProjectile, setDebugProjectile] = useState<DebugProjectile>({ 
@@ -17,8 +18,8 @@ export const useDebugTools = () => {
       }));
   }, []);
 
-  return {
+  return frontendDiagnostics.traceActions('debug_tools', {
     debugProjectile,
     triggerDebugProjectile
-  };
+  });
 };

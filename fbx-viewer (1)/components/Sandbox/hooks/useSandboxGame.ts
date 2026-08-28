@@ -2,6 +2,7 @@ import { useState, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { GraphRuntimeAPI } from '../../AnimationGraph/GraphRuntime';
 import { LoadedModelData } from '../../types';
+import { frontendDiagnostics } from '../../../diagnostics/runtime';
 
 interface UseSandboxGameProps {
     playerModel: LoadedModelData | undefined;
@@ -53,9 +54,7 @@ export const useSandboxGame = ({ playerModel, enemyModel }: UseSandboxGameProps)
 
     return {
         isPlaying,
-        startGame,
-        stopGame,
-        resetPositions,
+        ...frontendDiagnostics.traceActions('sandbox', { startGame, stopGame, resetPositions }),
         playerApiRef,
         enemyApiRef
     };

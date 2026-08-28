@@ -81,6 +81,7 @@ export const useProjectManager = ({
   const contextFor = useCallback((handle: OperationHandle): DiagnosticContext => ({
     operationId: handle.id,
     traceId: handle.traceId,
+    spanId: handle.spanId,
   }), []);
 
   const hydrate = useCallback(async (handle: OperationHandle, base: number, span: number) => {
@@ -168,8 +169,8 @@ export const useProjectManager = ({
     }, 'Project closed.');
   }, [contextFor, resetScene, run]);
 
-  return {
+  return frontendDiagnostics.traceActions('project_manager', {
     saveProject, saveProjectAs, exportProject, importProject, importLegacyProject, migrateLegacyBrowserProject,
     loadProject, openRecentProject, recoverProject, createNewProject, closeProject, projectStatus,
-  };
+  });
 };

@@ -4,6 +4,7 @@ from .core import (
     DIAGNOSTIC_SCHEMA,
     REDACTED,
     DiagnosticActivity,
+    DiagnosticSpan,
     DiagnosticRing,
     DiagnosticsSession,
     active_diagnostics,
@@ -15,6 +16,9 @@ from .core import (
     latest_run_summary,
     redact,
     safe_diagnostics_root,
+    start_diagnostic_span,
+    trace_public_class,
+    traced,
 )
 from .webview import DiagnosticWebViewLane, WEBVIEW_DIAGNOSTIC_PROTOCOL
 
@@ -22,6 +26,7 @@ __all__ = [
     "DIAGNOSTIC_SCHEMA",
     "REDACTED",
     "DiagnosticActivity",
+    "DiagnosticSpan",
     "DiagnosticRing",
     "DiagnosticsSession",
     "active_diagnostics",
@@ -33,6 +38,9 @@ __all__ = [
     "latest_run_summary",
     "redact",
     "safe_diagnostics_root",
+    "start_diagnostic_span",
+    "trace_public_class",
+    "traced",
     "DiagnosticWebViewLane",
     "WEBVIEW_DIAGNOSTIC_PROTOCOL",
 ]

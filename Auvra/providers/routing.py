@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 
 from .descriptors import Capability, ProviderRegistry
 from .errors import ErrorCode, ProviderError
+from Auvra.diagnostics import trace_public_class
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +62,7 @@ class Budget:
         self.monthly_cost += amount
 
 
+@trace_public_class("provider_route", concise=("select", "execute"))
 class RoutePolicy:
     def __init__(self, registry: ProviderRegistry | None = None, *, max_retries: int = 2,
                  budget: Budget | None = None) -> None:

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 from .descriptors import Capability, ProviderRegistry
+from Auvra.diagnostics.core import trace_public_class
 
 @dataclass(frozen=True, slots=True)
 class ProviderSettings:
@@ -18,6 +19,7 @@ class ProviderSettings:
     max_monthly_cost_micro_usd: int
     revision: int
 
+@trace_public_class("provider_settings", concise=("set", "close"))
 class ProviderSettingsStore:
     def __init__(self, database: str = ":memory:", *, registry: ProviderRegistry | None = None) -> None:
         self.registry, self._lock = registry or ProviderRegistry(), threading.RLock()

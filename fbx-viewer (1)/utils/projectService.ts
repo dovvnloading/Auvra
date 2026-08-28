@@ -1,6 +1,6 @@
 import { getHostTransport } from '../host/bootstrap';
 import type { Event, Response } from '../host/generated/protocolV1';
-import type { DiagnosticContext } from '../diagnostics/runtime';
+import { frontendDiagnostics, type DiagnosticContext } from '../diagnostics/runtime';
 
 /** Host-owned project state. Paths and binary data intentionally never enter this type. */
 export interface ProjectStatus {
@@ -60,6 +60,7 @@ const EMPTY_STATUS: ProjectStatus = {
   recoveryPoints: [],
   recentProjects: [],
 };
+const QUIET_PROJECT_METHODS = new Set(['project.getStatus', 'project.getSnapshot', 'asset.resolve']);
 
 /**
  * The only browser-side entry point for project persistence. It speaks the
@@ -255,9 +256,20 @@ export class ProjectService {
 
 
   private call<T = unknown>(method: string, payload: Record<string, unknown>, diagnostics?: DiagnosticContext): Promise<T | null> {
-    const run = () => this.performCall<T>(method, payload, diagnostics);
+    const span = frontendDiagnostics.startSpan('project', method, {
+      context: diagnostics, category: 'service', detailedOnly: QUIET_PROJECT_METHODS.has(method),
+    });
+    span.phase('queued', { method });
+    const run = () => {
+      span.phase('executing', { method });
+      return this.performCall<T>(method, payload, span.context);
+    };
     const result = this.requestQueue.then(run, run);
     this.requestQueue = result.catch(() => undefined);
+    void result.then(
+      () => span.finish('success', 'project_result'),
+      (error) => { span.fail(error, 'project_operation_failed'); span.finish('failure'); },
+    );
     return result;
   }
 
@@ -284,7 +296,10 @@ export class ProjectService {
       method,
       payload: effectivePayload,
     };
-    const response = await host.request(request);
+    const response = await frontendDiagnostics.withContext(
+      diagnostics ?? {},
+      () => host.request(request),
+    );
     const envelopeRevision = (response as unknown as { revision?: unknown })?.revision;
     if (typeof envelopeRevision === 'number' && Number.isSafeInteger(envelopeRevision) && envelopeRevision >= 0) {
       this.wireRevision = envelopeRevision;
@@ -405,4 +420,5 @@ function sanitizeJson(value: unknown): unknown {
   return undefined;
 }
 
+frontendDiagnostics.instrumentClass(ProjectService, 'project_service');
 export const projectService = new ProjectService();

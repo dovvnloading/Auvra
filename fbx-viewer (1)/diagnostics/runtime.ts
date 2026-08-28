@@ -1,6 +1,6 @@
 /// <reference path="../host/webview2.d.ts" />
 
-export type DiagnosticComponent = 'frontend' | 'worker' | 'operation' | 'renderer';
+export type DiagnosticComponent = 'frontend' | 'worker' | 'operation' | 'renderer' | 'activity' | 'runtime';
 export type DiagnosticScalar = null | boolean | number | string;
 export type DiagnosticValue = DiagnosticScalar | DiagnosticScalar[];
 export type DiagnosticAttributes = Record<string, DiagnosticValue>;
@@ -34,11 +34,13 @@ const FLUSH_MS = 250;
 const ACK_TIMEOUT_MS = 5_000;
 const HEARTBEAT_MS = 1_000;
 const EVENT_LOOP_STALL_MS = 2_500;
+const RUNTIME_SUMMARY_MS = 10_000;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const CODE_PATTERN = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 const ATTRIBUTE_TEXT = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const FILE_LIKE = /\.(?:fbx|gltf|glb|png|jpe?g|webp|wav|mp3|ogg|flac|auvra)$/i;
 const URL_OR_PATH = /(?:\b(?:https?|file|data|blob):\/\/|(?:^|\s)[A-Za-z]:[\\/]|\\\\|(?:^|\s)\/(?:[^\s/]+\/)+)/i;
+const INSTRUMENTED = Symbol('auvra.diagnostics.instrumented');
 const SAFE_ATTRIBUTE_KEYS = new Set([
   'phase', 'outcome', 'durationMs', 'code', 'errorType', 'method', 'status',
   'success', 'timeoutMs', 'queueDepth', 'queueCapacity', 'fallback', 'backend',
@@ -47,7 +49,24 @@ const SAFE_ATTRIBUTE_KEYS = new Set([
   'itemCount', 'clipCount', 'bindingMode', 'progressBucket', 'workerState',
   'queueState', 'activeCount', 'visibility', 'averageFrameMs', 'p95FrameMs',
   'budgetMs', 'failedDeliveryCount', 'batchCount', 'surfaceRole', 'reason',
+  'subsystem', 'action', 'codeSite', 'category', 'threadRole', 'taskKind',
+  'resultClass', 'callCount', 'totalDurationMs', 'maxDurationMs', 'slowThresholdMs',
+  'commitCount', 'totalRenderMs', 'maxRenderMs',
 ]);
+
+export interface FrontendDiagnosticSpan {
+  readonly context: DiagnosticContext;
+  phase: (phase: string, attributes?: DiagnosticAttributes) => void;
+  fail: (error?: unknown, code?: string) => void;
+  finish: (outcome?: 'success' | 'failure' | 'cancelled', resultClass?: string) => void;
+}
+
+interface SpanOptions {
+  context?: DiagnosticContext;
+  operationId?: string;
+  category?: string;
+  detailedOnly?: boolean;
+}
 
 const encodedSize = (value: unknown): number => {
   try {
@@ -85,6 +104,12 @@ const safeString = (value: string): string | null => {
   return value;
 };
 
+const stableToken = (value: string, fallback: string): string => {
+  const token = value.trim().replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase().replace(/-/g, '_').replace(/[^a-z0-9._]+/g, '_').replace(/^[._]+|[._]+$/g, '');
+  return token && CODE_PATTERN.test(token) ? token.slice(0, 96) : fallback;
+};
+
 const safeAttributes = (attributes: DiagnosticAttributes): DiagnosticAttributes => {
   const result: DiagnosticAttributes = {};
   for (const [key, raw] of Object.entries(attributes).slice(0, 16)) {
@@ -116,9 +141,14 @@ class FrontendDiagnostics {
   private session: string | null = null;
   private flushTimer: ReturnType<typeof setInterval> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private runtimeSummaryTimer: ReturnType<typeof setInterval> | null = null;
   private lastHeartbeat = 0;
   private eventLoopStalledAt: number | null = null;
   private started = false;
+  private detailed = false;
+  private readonly contextStack: DiagnosticContext[] = [];
+  private readonly wrappedFunctions = new WeakMap<Function, Map<string, Function>>();
+  private readonly renderSummaries = new Map<string, { count: number; totalMs: number; maxMs: number }>();
 
   start(): void {
     if (this.started || typeof window === 'undefined') return;
@@ -131,6 +161,7 @@ class FrontendDiagnostics {
     document.addEventListener('visibilitychange', this.sendHeartbeat);
     this.flushTimer = setInterval(() => this.flush(), FLUSH_MS);
     this.heartbeatTimer = setInterval(this.heartbeat, HEARTBEAT_MS);
+    this.runtimeSummaryTimer = setInterval(this.flushRuntimeSummaries, RUNTIME_SUMMARY_MS);
     this.record('frontend', 'frontend.session_started', {
       state: 'ready', visibility: this.visibility(),
     });
@@ -143,8 +174,10 @@ class FrontendDiagnostics {
     this.started = false;
     if (this.flushTimer) clearInterval(this.flushTimer);
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    if (this.runtimeSummaryTimer) clearInterval(this.runtimeSummaryTimer);
     this.flushTimer = null;
     this.heartbeatTimer = null;
+    this.runtimeSummaryTimer = null;
     this.webview?.removeEventListener('message', this.onMessage);
     window.removeEventListener('error', this.onGlobalError);
     window.removeEventListener('unhandledrejection', this.onUnhandledRejection);
@@ -167,9 +200,212 @@ class FrontendDiagnostics {
     return `asset-${this.assetCounter}`;
   }
 
+  isDetailed(): boolean {
+    return this.detailed;
+  }
+
+  currentContext(): DiagnosticContext {
+    return { ...(this.contextStack[this.contextStack.length - 1] ?? {}) };
+  }
+
+  withContext<T>(context: DiagnosticContext, callback: () => T): T {
+    this.contextStack.push(context);
+    try {
+      return callback();
+    } finally {
+      this.contextStack.pop();
+    }
+  }
+
+  recordRenderCommit(subsystem: string, durationMs: number): void {
+    if (!this.detailed || !Number.isFinite(durationMs) || durationMs < 0) return;
+    const key = stableToken(subsystem, 'react');
+    let summary = this.renderSummaries.get(key);
+    if (!summary) {
+      if (this.renderSummaries.size >= 32) return;
+      summary = { count: 0, totalMs: 0, maxMs: 0 };
+    }
+    summary.count += 1;
+    summary.totalMs += durationMs;
+    summary.maxMs = Math.max(summary.maxMs, durationMs);
+    this.renderSummaries.set(key, summary);
+  }
+
+  startSpan(subsystem: string, action: string, options: SpanOptions = {}): FrontendDiagnosticSpan {
+    const parent = options.context ?? this.currentContext();
+    const stableSubsystem = stableToken(subsystem, 'frontend');
+    const stableAction = stableToken(action, 'action');
+    const traceId = parent.traceId && ID_PATTERN.test(parent.traceId)
+      ? parent.traceId : `trace-${crypto.randomUUID()}`;
+    const spanId = `span-${crypto.randomUUID()}`;
+    const parentSpanId = parent.spanId && ID_PATTERN.test(parent.spanId)
+      ? parent.spanId : parent.parentSpanId;
+    const operationId = options.operationId && ID_PATTERN.test(options.operationId)
+      ? options.operationId : parent.operationId;
+    const context: DiagnosticContext = {
+      traceId, spanId,
+      ...(parentSpanId ? { parentSpanId } : {}),
+      ...(operationId ? { operationId } : {}),
+    };
+    const started = performance.now();
+    const recording = options.detailedOnly !== true || this.detailed;
+    let closed = false;
+    let failed = false;
+    if (recording) {
+      this.record('activity', 'activity.started', {
+        subsystem: stableSubsystem, action: stableAction,
+        category: stableToken(options.category ?? 'operation', 'operation'),
+      }, context);
+    }
+    return {
+      context,
+      phase: (phase, attributes = {}) => {
+        if (!recording || closed) return;
+        this.record('activity', 'activity.phase', {
+          subsystem: stableSubsystem, action: stableAction,
+          category: stableToken(options.category ?? 'operation', 'operation'),
+          phase: stableToken(phase, 'phase'), ...attributes,
+        }, context);
+      },
+      fail: (error, code = 'operation_failed') => {
+        if (closed || failed) return;
+        failed = true;
+        this.record('activity', 'activity.failed', {
+          subsystem: stableSubsystem, action: stableAction,
+          category: stableToken(options.category ?? 'operation', 'operation'),
+          outcome: 'failure', durationMs: performance.now() - started,
+          code: stableToken(code, 'operation_failed'),
+          errorType: diagnosticErrorType(error),
+        }, context, true);
+      },
+      finish: (outcome = 'success', resultClass) => {
+        if (closed) return;
+        closed = true;
+        if (!recording || failed) return;
+        this.record('activity', outcome === 'cancelled' ? 'activity.cancelled' : 'activity.completed', {
+          subsystem: stableSubsystem, action: stableAction,
+          category: stableToken(options.category ?? 'operation', 'operation'),
+          outcome, durationMs: performance.now() - started,
+          ...(resultClass ? { resultClass: stableToken(resultClass, 'result') } : {}),
+        }, context, true);
+      },
+    };
+  }
+
+  run<T>(subsystem: string, action: string, callback: (span: FrontendDiagnosticSpan) => T,
+         options: SpanOptions = {}): T {
+    const span = this.startSpan(subsystem, action, options);
+    this.contextStack.push(span.context);
+    try {
+      const result = callback(span);
+      span.finish('success');
+      return result;
+    } catch (error) {
+      span.fail(error);
+      span.finish('failure');
+      throw error;
+    } finally {
+      this.contextStack.pop();
+    }
+  }
+
+  async runAsync<T>(subsystem: string, action: string,
+                    callback: (span: FrontendDiagnosticSpan) => Promise<T>,
+                    options: SpanOptions = {}): Promise<T> {
+    const span = this.startSpan(subsystem, action, options);
+    this.contextStack.push(span.context);
+    let promise: Promise<T>;
+    try {
+      promise = callback(span);
+    } catch (error) {
+      this.contextStack.pop();
+      span.fail(error);
+      span.finish('failure');
+      throw error;
+    }
+    this.contextStack.pop();
+    try {
+      const result = await promise;
+      span.finish('success');
+      return result;
+    } catch (error) {
+      span.fail(error);
+      span.finish('failure');
+      throw error;
+    }
+  }
+
+  wrap<T extends (...args: never[]) => unknown>(subsystem: string, action: string, callback: T,
+                                                options: SpanOptions = {}): T {
+    const cacheKey = `${stableToken(subsystem, 'frontend')}:${stableToken(action, 'action')}:${options.detailedOnly === true ? 'd' : 'c'}`;
+    const cached = this.wrappedFunctions.get(callback)?.get(cacheKey);
+    if (cached) return cached as T;
+    const diagnostics = this;
+    const wrapped = function tracedCallable(this: unknown, ...args: never[]): unknown {
+      const span = diagnostics.startSpan(subsystem, action, options);
+      diagnostics.contextStack.push(span.context);
+      let result: unknown;
+      try {
+        result = callback.apply(this, args);
+      } catch (error) {
+        diagnostics.contextStack.pop();
+        span.fail(error);
+        span.finish('failure');
+        throw error;
+      }
+      diagnostics.contextStack.pop();
+      if (result && typeof (result as PromiseLike<unknown>).then === 'function') {
+        return Promise.resolve(result).then(
+          (value) => { span.finish('success'); return value; },
+          (error) => { span.fail(error); span.finish('failure'); throw error; },
+        );
+      }
+      span.finish('success');
+      return result;
+    } as T;
+    const callbacks = this.wrappedFunctions.get(callback) ?? new Map<string, Function>();
+    if (callbacks.size < 16) callbacks.set(cacheKey, wrapped);
+    this.wrappedFunctions.set(callback, callbacks);
+    return wrapped;
+  }
+
+  instrumentClass(ctor: { prototype: object }, subsystem: string,
+                  concise: readonly string[] = []): void {
+    const prototype = ctor.prototype as Record<string | symbol, unknown>;
+    if (prototype[INSTRUMENTED]) return;
+    Object.defineProperty(prototype, INSTRUMENTED, { value: true, configurable: false });
+    const conciseNames = new Set(concise);
+    for (const name of Object.getOwnPropertyNames(prototype)) {
+      if (name === 'constructor') continue;
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+      if (!descriptor || typeof descriptor.value !== 'function') continue;
+      Object.defineProperty(prototype, name, {
+        ...descriptor,
+        value: this.wrap(subsystem, name, descriptor.value as (...args: never[]) => unknown, {
+          category: conciseNames.has(name) ? 'service' : 'utility',
+          detailedOnly: !conciseNames.has(name),
+        }),
+      });
+    }
+  }
+
+  traceActions<T extends Record<string, unknown>>(subsystem: string, actions: T,
+                                                  concise: readonly string[] = Object.keys(actions)): T {
+    const conciseNames = new Set(concise);
+    const traced = { ...actions } as Record<string, unknown>;
+    for (const [name, value] of Object.entries(actions)) {
+      if (typeof value !== 'function') continue;
+      traced[name] = this.wrap(subsystem, name, value as (...args: never[]) => unknown, {
+        category: conciseNames.has(name) ? 'action' : 'utility',
+        detailedOnly: !conciseNames.has(name),
+      });
+    }
+    return traced as T;
+  }
+
   record(component: DiagnosticComponent, event: string, attributes: DiagnosticAttributes = {},
          context: DiagnosticContext = {}, immediate = false): void {
-    if (!CODE_PATTERN.test(event) || !['frontend', 'worker', 'operation', 'renderer'].includes(component)) return;
+    if (!CODE_PATTERN.test(event) || !['frontend', 'worker', 'operation', 'renderer', 'activity', 'runtime'].includes(component)) return;
     const value: BrowserRecord = { component, event, attributes: safeAttributes(attributes) };
     for (const key of ['operationId', 'traceId', 'spanId', 'parentSpanId'] as const) {
       const candidate = context[key];
@@ -254,8 +490,12 @@ class FrontendDiagnostics {
   }
 
   private readonly onMessage = (event: WebView2MessageEvent): void => {
-    const value = event.data as { protocol?: unknown; type?: unknown; id?: unknown; ok?: unknown } | null;
+    const value = event.data as { protocol?: unknown; type?: unknown; id?: unknown; ok?: unknown; result?: unknown } | null;
     if (!value || value.protocol !== PROTOCOL || value.type !== 'response' || typeof value.id !== 'string') return;
+    const result = value.result as { capture?: unknown } | null;
+    if (result?.capture === 'detailed' || result?.capture === 'concise') {
+      this.detailed = result.capture === 'detailed';
+    }
     const pending = this.pending.get(value.id);
     if (!pending) return;
     clearTimeout(pending.timer);
@@ -280,6 +520,21 @@ class FrontendDiagnostics {
       this.eventLoopStalledAt = null;
     }
     this.sendHeartbeat();
+  };
+
+  private readonly flushRuntimeSummaries = (): void => {
+    if (!this.detailed || !this.renderSummaries.size) return;
+    const summaries = Array.from(this.renderSummaries.entries()).slice(0, 32);
+    this.renderSummaries.clear();
+    for (const [subsystem, summary] of summaries) {
+      this.record('runtime', 'runtime.react_summary', {
+        subsystem,
+        category: 'react',
+        commitCount: summary.count,
+        totalRenderMs: summary.totalMs,
+        maxRenderMs: summary.maxMs,
+      });
+    }
   };
 
   private readonly sendHeartbeat = (): void => {
@@ -314,6 +569,7 @@ class FrontendDiagnostics {
   };
 
   private readonly onBeforeUnload = (): void => {
+    this.flushRuntimeSummaries();
     if (this.webview) {
       try {
         this.webview.postMessage({ protocol: PROTOCOL, type: 'heartbeat', visibility: 'closing', activeCount: 0 });

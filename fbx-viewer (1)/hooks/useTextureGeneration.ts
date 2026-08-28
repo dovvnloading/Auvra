@@ -1,5 +1,6 @@
 
 import { useState, useCallback } from 'react';
+import { frontendDiagnostics } from '../diagnostics/runtime';
 import { textureService, TextureGenerationResult } from '../services/TextureGenerationService';
 
 interface UseTextureGenerationResult {
@@ -85,7 +86,7 @@ export const useTextureGeneration = (initialTexture: string | null = null): UseT
     setPreview(null); setError(null); setProgress(0); setJobId(null);
   }, []);
 
-  return {
+  return frontendDiagnostics.traceActions('texture_generation', {
     currentTextureBase64,
     generatedTextureUrl: preview?.previewUrl || null,
     previewAssetId: preview?.assetId || null,
@@ -100,5 +101,5 @@ export const useTextureGeneration = (initialTexture: string | null = null): UseT
     discard,
     cancel,
     retry
-  };
+  });
 };

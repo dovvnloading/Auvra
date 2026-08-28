@@ -49,6 +49,7 @@ function renderMessage(value: RenderMessage): void {
     const Component = getComponent(React) as React.ComponentType<Record<string, unknown>>;
     root.render(React.createElement(Component, value.props));
   } catch (error) {
+    channel?.postMessage({ type: "diagnostic", code: "runtime_error" });
     root.render(React.createElement("div", {
       style: { color: "#ef4444", fontSize: "10px", fontFamily: "sans-serif", padding: "4px", background: "rgba(0,0,0,.8)" },
     }, `Runtime Error: ${error instanceof Error ? error.message.slice(0, 256) : "unknown error"}`));

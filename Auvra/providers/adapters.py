@@ -13,6 +13,7 @@ from .descriptors import Capability, ProviderDescriptor, ProviderRegistry
 from .errors import ErrorCode, ProviderError, normalize_error
 from .media import MediaArtifact, MediaDownloader
 from .transport import BoundedTransport, HttpRequest, HttpResponse, Transport
+from Auvra.diagnostics import trace_public_class
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +40,7 @@ class MediaJob:
         return f"MediaJob(provider={self.provider!r}, model={self.model!r}, request_id_present={bool(self.request_id)})"
 
 
+@trace_public_class("provider_adapter", concise=("health", "list_models"))
 class Adapter:
     def __init__(self, transport: Transport, *, credential_store: Any = None,
                  registry: ProviderRegistry | None = None, endpoint: str | None = None) -> None:
@@ -113,6 +115,7 @@ class Adapter:
         return value
 
 
+@trace_public_class("provider_adapter", concise=("complete",))
 class TextAdapter(Adapter):
     """Common text and structured-command contract for cloud and local providers."""
     provider_id = ""
@@ -218,6 +221,9 @@ class OllamaAdapter(TextAdapter): provider_id = "ollama"
 class LlamaCppAdapter(TextAdapter): provider_id = "llama.cpp"
 
 
+@trace_public_class("provider_adapter", concise=(
+    "submit", "status", "result", "cancel", "upload_input", "download_output",
+))
 class FalAdapter(Adapter):
     provider_id = "fal"
 

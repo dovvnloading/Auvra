@@ -365,6 +365,7 @@ export const useScenePersistence = ({
       const activeDiagnostics = diagnostics || (ownedOperation ? {
         operationId: ownedOperation.id,
         traceId: ownedOperation.traceId,
+        spanId: ownedOperation.spanId,
       } : undefined);
       const report: HydrationProgress = onProgress || ((progress, detail, phase, diagnostic) => ownedOperation?.update({
         progress,
@@ -666,5 +667,5 @@ export const useScenePersistence = ({
     void restoreSession().catch((error) => frontendDiagnostics.failure('initial_project_restore_failed', error));
   }, []);
 
-  return { restoreSession };
+  return frontendDiagnostics.traceActions('scene_persistence', { restoreSession });
 };

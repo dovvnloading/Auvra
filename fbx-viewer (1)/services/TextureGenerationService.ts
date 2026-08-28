@@ -1,5 +1,6 @@
 import { hostProviderService, HostProviderError, InferenceJob, MediaPreview } from './HostProviderService';
 import { projectService } from '../utils/projectService';
+import { frontendDiagnostics } from '../diagnostics/runtime';
 
 export interface TextureGenerationResult extends MediaPreview { previewUrl: string; }
 export interface TextureGenerationOptions {
@@ -86,4 +87,7 @@ export class TextureGenerationService {
   }
 }
 
+frontendDiagnostics.instrumentClass(TextureGenerationService, 'texture_generation', [
+  'generateTexture', 'cancel', 'retry', 'discard', 'commit',
+]);
 export const textureService = new TextureGenerationService();

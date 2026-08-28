@@ -28,11 +28,13 @@ from .contracts import (
 )
 from .policy import FramePolicy
 from .sdk import SdkLayout, acquire_sdk
+from Auvra.diagnostics.core import trace_public_class
 from Auvra.host.validation import ProtocolValidationError, validate_message
 
 MESSAGE_MAX_BYTES = 256 * 1024
 
 
+@trace_public_class("webview_frame", concise=("start", "close", "post_message"))
 class WebView2Frame:
     """Own a WinForms/WebView2 UI loop on one dedicated STA thread.
 

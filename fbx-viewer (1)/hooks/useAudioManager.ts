@@ -75,7 +75,7 @@ export const useAudioManager = (setIsLoading: (loading: boolean) => void) => {
             duration: newAudio.duration,
         }, {
             signal: operation.signal,
-            diagnostics: { operationId: operation.id, traceId: operation.traceId, assetAlias },
+            diagnostics: { operationId: operation.id, traceId: operation.traceId, spanId: operation.spanId, assetAlias },
             onPhase: (phase) => operation.update({ phase, detail: phase === 'project_upload' ? 'Saving audio source' : 'Finalizing project record', diagnostic }),
             onProgress: (progress) => {
               if (progress >= 1) operation.lockCancellation();
@@ -121,10 +121,10 @@ export const useAudioManager = (setIsLoading: (loading: boolean) => void) => {
       }
   }, [addNotification]);
 
-  return {
+  return frontendDiagnostics.traceActions('audio_manager', {
       audioAssets,
       setAudioAssets, // Exposed for persistence loading
       addAudio,
       removeAudio
-  };
+  });
 };

@@ -8,10 +8,16 @@ from __future__ import annotations
 from pathlib import Path
 import os, shutil, tempfile
 from typing import BinaryIO, Iterable
+from Auvra.diagnostics import trace_public_class
 from .assets import AssetReference
 from .repository import ProjectRepository, ProjectSnapshot, ProjectStatus
 from .index import ProjectIndex
 
+@trace_public_class("project", concise=(
+    "create", "open", "close", "shutdown", "open_recent", "apply_changes",
+    "save", "save_as", "export_pack", "import_pack", "import_legacy",
+    "migrate_legacy", "begin_upload", "restore_recovery",
+))
 class ProjectService:
     def __init__(self, index: ProjectIndex | None = None) -> None:
         self.active: ProjectRepository | None = None

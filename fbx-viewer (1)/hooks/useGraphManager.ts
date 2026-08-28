@@ -46,11 +46,11 @@ export const useGraphManager = () => {
       setGraphData(graphs);
   }, []);
 
-  return {
+  return frontendDiagnostics.traceActions('animation_graph_manager', {
     graphData,
     updateGraph,
     removeGraphData,
     resetGraphs
     ,hydrateGraphs
-  };
+  });
 };

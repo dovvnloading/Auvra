@@ -17,7 +17,8 @@
     "protocol:verify": "node scripts/protocol/generate.mjs --check && npm run protocol:check && npm run protocol:tsc && node scripts/protocol/verify.mjs --fake-host",
     "project:verify": "node scripts/project/verify.mjs",
     "provider:verify": "node scripts/providers/verify.mjs",
-    "renderer:verify": "node scripts/renderer/verify.mjs"
+    "renderer:verify": "node scripts/renderer/verify.mjs",
+    "diagnostics:verify": "node scripts/diagnostics/verify.mjs"
   },
   "dependencies": {
     "@babel/standalone": "7.23.6",
