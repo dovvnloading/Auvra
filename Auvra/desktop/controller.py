@@ -15,6 +15,7 @@ from typing import Any, Callable, Sequence
 from urllib.parse import urlsplit
 
 from Auvra.diagnostics.core import active_diagnostics
+from Auvra.diagnostics.webview import DiagnosticWebViewLane, diagnostic_message_size
 from Auvra.host.dispatcher import HostDispatcher
 from Auvra.host.session import SessionManager
 from Auvra.host.validation import validate_response
@@ -131,6 +132,11 @@ class FrameController:
         self._host_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="auvra-host")
         self._host_slots = threading.BoundedSemaphore(64)
         self._host_futures: set[Future[Any]] = set()
+        self._diagnostic_lane = DiagnosticWebViewLane(
+            self.diagnostics,
+            session_id=self.dispatcher.session.session_id,
+            post=self._post,
+        )
         self.cleanup_error: Exception | None = None
         if self.project_host is not None:
             set_ui_invoker = getattr(self.project_host, "set_ui_invoker", None)
@@ -414,6 +420,9 @@ class FrameController:
                 self.diagnostics.emit("webview", "webview.message_rejected",
                                       attributes={"code": "invalid_json"})
             request = None
+        if self._diagnostic_lane.recognizes(request):
+            self._diagnostic_lane.handle(request, encoded_size=diagnostic_message_size(request))
+            return
         self._submit_host(self._dispatch_message, request)
 
     def _submit_host(self, callback: Callable[..., Any], *args: Any) -> Future[Any] | None:
@@ -427,6 +436,7 @@ class FrameController:
                                                   "queueCapacity": 64})
             return None
         activity = None
+        queue_context = None
         if self.diagnostics is not None:
             method = "host.work"
             request_id = None
@@ -437,8 +447,17 @@ class FrameController:
                     method = candidate_method
                 if isinstance(candidate_id, str):
                     request_id = candidate_id
+            trace_id = request_id
+            if isinstance(request_id, str):
+                candidate_trace, marker, suffix = request_id.partition(".req-")
+                if marker and suffix.isdigit():
+                    trace_id = candidate_trace
             activity = self.diagnostics.begin_activity(
-                "host", method, request_id=request_id, trace_id=request_id,
+                "host", method, request_id=request_id, trace_id=trace_id,
+            )
+            activity.progress(queue_state="queued")
+            queue_context = (
+                self.diagnostics, method, request_id, trace_id, time.monotonic(),
             )
         with self._lock:
             if self._closed:
@@ -447,7 +466,9 @@ class FrameController:
                     activity.finish()
                 return None
             try:
-                future = self._host_executor.submit(self._run_host_job, callback, args, activity)
+                future = self._host_executor.submit(
+                    self._run_host_job, callback, args, activity, queue_context,
+                )
             except RuntimeError:
                 self._host_slots.release()
                 if activity is not None:
@@ -458,9 +479,21 @@ class FrameController:
         return future
 
     @staticmethod
-    def _run_host_job(callback: Callable[..., Any], args: tuple[Any, ...], activity: Any) -> Any:
+    def _run_host_job(callback: Callable[..., Any], args: tuple[Any, ...], activity: Any,
+                      queue_context: tuple[Any, str, str | None, str | None, float] | None) -> Any:
         if activity is not None:
+            activity.progress(queue_state="dequeued")
             activity.finish()
+        if queue_context is not None:
+            diagnostics, method, request_id, trace_id, queued_at = queue_context
+            diagnostics.emit(
+                "host", "host.queue_wait", request_id=request_id, trace_id=trace_id,
+                attributes={
+                    "method": method,
+                    "durationMs": round((time.monotonic() - queued_at) * 1000, 3),
+                    "queueState": "dequeued",
+                },
+            )
         return callback(*args)
 
     def _dispatch_message(self, request: Any) -> None:
@@ -573,6 +606,8 @@ class FrameController:
         # that signal is state-only so the initial document gets exactly one
         # session envelope, just like every subsequent full reload.
         if event == "navigation_completed":
+            if self.diagnostics is not None:
+                self.diagnostics.expect_frontend_heartbeat()
             self._post(self.dispatcher.session.envelope())
         elif event == "closed":
             self._stop_process()
@@ -606,6 +641,7 @@ class FrameController:
             if self._closed:
                 return
             self._closed = True
+        self._diagnostic_lane.close()
         try:
             self.frame.close()
         except Exception as exc:

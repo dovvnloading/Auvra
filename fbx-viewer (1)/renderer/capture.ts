@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { rendererCoordinator } from "./registry";
+import { diagnosticErrorType, frontendDiagnostics } from "../diagnostics/runtime";
 
 export interface CaptureOptions { mime?: string; quality?: number; }
 
@@ -40,6 +41,11 @@ class CaptureRenderer {
       renderer.render(scene, camera);
       const dataUrl = renderer.domElement.toDataURL(options.mime ?? "image/png", options.quality);
       return dataUrl;
+    } catch (error) {
+      frontendDiagnostics.record("renderer", "renderer.capture_failed", {
+        code: "thumbnail_capture_failed", errorType: diagnosticErrorType(error),
+      }, {}, true);
+      throw error;
     } finally {
       scene?.clear();
       this.busy = false;

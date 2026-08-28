@@ -4,6 +4,7 @@ import { LevelObject, LoadedModelData, LevelObjectType, LevelData, LevelBlueprin
 import { dbOperations } from '../utils/db';
 import { projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
+import { frontendDiagnostics } from '../diagnostics/runtime';
 
 const DEFAULT_LEVEL_ID = 'default_level';
 
@@ -115,7 +116,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       try {
           for (const [id, updates] of batch.entries()) await dbOperations.updateLevelObject(id, updates);
       } catch (e) {
-          console.error("Error saving batched level updates", e);
+          frontendDiagnostics.failure('level_batch_persist_failed', e);
       }
   }, []);
 
@@ -151,7 +152,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
               }
           }
       } catch (e) {
-          console.error("Failed to init levels", e);
+          frontendDiagnostics.failure('level_initialize_failed', e);
       }
   }, [currentLevelId]);
 
@@ -160,7 +161,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
           if (!projectService.getStatus().projectId) {
               dbOperations.getLevelObjects(currentLevelId).then(objects => {
                   setLevelObjects(objects);
-              }).catch(console.error);
+              }).catch((error) => frontendDiagnostics.failure('level_initialize_persist_failed', error));
           }
           
           const lvl = levels.find(l => l.id === currentLevelId);
@@ -184,7 +185,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
           setLevels(prev => [...prev, newLevel]);
           addNotification({ message: `Level "${name}" created.`, type: 'success' });
       } catch (e) {
-          console.error("Failed to create level", e);
+          frontendDiagnostics.failure('level_create_failed', e);
           addNotification({ message: "Failed to create level.", type: 'error' });
       }
   }, [addNotification]);
@@ -214,7 +215,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
           }
           addNotification({ message: "Level deleted.", type: 'info' });
       } catch (e) {
-          console.error("Failed to delete level", e);
+          frontendDiagnostics.failure('level_delete_failed', e);
           addNotification({ message: "Failed to delete level.", type: 'error' });
       }
   }, [currentLevelId, levels, loadLevel, initLevels, addNotification]);
@@ -263,7 +264,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
         await dbOperations.addLevelObject(newObj); 
         return newObj.id;
     } catch(e) { 
-        console.error(e); 
+        frontendDiagnostics.failure('level_object_add_failed', e);
         return undefined;
     }
   }, [models, currentLevelId, snapshotHistory]);
@@ -272,7 +273,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       projectService.assertWritable();
       snapshotHistory();
       setLevelObjects(prev => prev.filter(o => o.id !== id));
-      try { await dbOperations.deleteLevelObject(id); } catch(e) { console.error(e); }
+      try { await dbOperations.deleteLevelObject(id); } catch(e) { frontendDiagnostics.failure('level_object_delete_failed', e); }
   }, [snapshotHistory]);
 
   const removeLevelObjects = useCallback(async (ids: string[]) => {
@@ -280,7 +281,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       if (ids.length === 0) return;
       snapshotHistory();
       setLevelObjects(prev => prev.filter(o => !ids.includes(o.id)));
-      try { for (const id of ids) await dbOperations.deleteLevelObject(id); } catch(e) { console.error("Batch delete failed", e); }
+      try { for (const id of ids) await dbOperations.deleteLevelObject(id); } catch(e) { frontendDiagnostics.failure('level_object_batch_delete_failed', e); }
   }, [snapshotHistory]);
 
   const updateLevelObject = useCallback((id: string, updates: Partial<LevelObject>) => {
@@ -299,7 +300,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
           if (currentLevelId) {
               const lvl = levels.find(l => l.id === currentLevelId);
               if (lvl) {
-                  dbOperations.addLevel({ ...lvl, blueprint: next }).catch(console.error);
+                  dbOperations.addLevel({ ...lvl, blueprint: next }).catch((error) => frontendDiagnostics.failure('level_blueprint_persist_failed', error));
               }
           }
           return next;

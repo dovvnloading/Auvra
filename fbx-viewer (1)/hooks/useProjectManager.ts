@@ -4,6 +4,14 @@ import { ProjectStatus, projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
 import { dbOperations } from '../utils/db';
 import { OperationHandle, useOperationActions } from '../context/OperationContext';
+import { frontendDiagnostics, type DiagnosticAttributes, type DiagnosticContext } from '../diagnostics/runtime';
+
+type HydrationProgress = (
+  progress: number,
+  detail: string,
+  phase?: string,
+  diagnostic?: DiagnosticAttributes,
+) => void;
 
 interface UseProjectManagerProps {
   setIsLoading: (loading: boolean) => void;
@@ -13,7 +21,7 @@ interface UseProjectManagerProps {
   selectedBlueprintId: string | null;
   selectModel: (id: string | null) => void;
   selectBlueprint: (id: string | null) => void;
-  restoreSession: (onProgress?: (progress: number, detail: string) => void, signal?: AbortSignal) => Promise<void>;
+  restoreSession: (onProgress?: HydrationProgress, signal?: AbortSignal, diagnostics?: DiagnosticContext) => Promise<void>;
   resetScene: () => Promise<void>;
 }
 
@@ -33,113 +41,132 @@ export const useProjectManager = ({
         activeOperation.current.update({ progress: status.progress * 0.38, detail: 'Preparing project repository' });
       }
     });
-    projectService.refreshStatus().catch((error) => console.warn('[ProjectManager] Initial host status unavailable', error));
+    projectService.refreshStatus().catch((error) => frontendDiagnostics.failure('project_status_unavailable', error));
     return unsubscribe;
   }, []);
 
   const run = useCallback(async (
+    kind: string,
     label: string,
     operation: (handle: OperationHandle) => Promise<unknown>,
     success: string,
   ) => {
-    const handle = startOperation({ label, detail: 'Starting…', progress: null, cancellable: false });
+    const handle = startOperation({
+      kind,
+      phase: 'host_request',
+      label,
+      detail: 'Starting…',
+      progress: null,
+      cancellable: false,
+    });
     activeOperation.current = handle;
+    let outcome: 'success' | 'failure' = 'success';
+    let failure: unknown;
     setIsLoading(true);
     try {
       await operation(handle);
       addNotification({ message: success, type: 'success' });
     } catch (error) {
-      console.error('[ProjectManager] host operation failed', error);
+      outcome = 'failure';
+      failure = error;
       addNotification({ message: error instanceof Error ? error.message : 'Project operation failed.', type: 'error' });
       throw error;
     } finally {
       if (activeOperation.current?.id === handle.id) activeOperation.current = null;
-      handle.finish();
+      handle.finish(outcome, failure);
       setIsLoading(false);
     }
   }, [addNotification, setIsLoading, startOperation]);
 
+  const contextFor = useCallback((handle: OperationHandle): DiagnosticContext => ({
+    operationId: handle.id,
+    traceId: handle.traceId,
+  }), []);
+
+  const hydrate = useCallback(async (handle: OperationHandle, base: number, span: number) => {
+    handle.update({ phase: 'project_hydration', progress: base, detail: 'Loading project assets' });
+    await restoreSession((progress, detail, phase, diagnostic) => handle.update({
+      progress: base + progress * span,
+      detail,
+      ...(phase ? { phase } : {}),
+      ...(diagnostic ? { diagnostic } : {}),
+    }), handle.signal, contextFor(handle));
+  }, [contextFor, restoreSession]);
+
   const saveProject = useCallback(async () => {
-    await run('Saving project', () => projectService.save(), 'Project saved.');
-  }, [run]);
+    await run('project.save', 'Saving project', (handle) => projectService.save(contextFor(handle)), 'Project saved.');
+  }, [contextFor, run]);
 
   const saveProjectAs = useCallback(async () => {
-    await run('Saving project as', () => projectService.saveAs(), 'Project saved as a new project.');
-  }, [run]);
+    await run('project.save_as', 'Saving project as', (handle) => projectService.saveAs(undefined, contextFor(handle)), 'Project saved as a new project.');
+  }, [contextFor, run]);
 
   const exportProject = useCallback(async () => {
-    await run('Exporting project package', () => projectService.exportPack(), 'Project package exported.');
-  }, [run]);
+    await run('project.export', 'Exporting project package', (handle) => projectService.exportPack(contextFor(handle)), 'Project package exported.');
+  }, [contextFor, run]);
 
   const importProject = useCallback(async () => {
-    await run('Importing project package', async (handle) => {
-      await projectService.importPack();
-      handle.update({ progress: 0.4, detail: 'Loading imported assets' });
-      await restoreSession((progress, detail) => handle.update({ progress: 0.4 + progress * 0.58, detail }));
+    await run('project.import', 'Importing project package', async (handle) => {
+      await projectService.importPack(contextFor(handle));
+      await hydrate(handle, 0.4, 0.58);
     }, 'Project package imported.');
-  }, [restoreSession, run]);
+  }, [contextFor, hydrate, run]);
 
   const importLegacyProject = useCallback(async () => {
-    await run('Importing legacy project', async (handle) => {
-      await projectService.importLegacy();
-      handle.update({ progress: 0.4, detail: 'Loading migrated assets' });
-      await restoreSession((progress, detail) => handle.update({ progress: 0.4 + progress * 0.58, detail }));
+    await run('project.import_legacy', 'Importing legacy project', async (handle) => {
+      await projectService.importLegacy(contextFor(handle));
+      await hydrate(handle, 0.4, 0.58);
     }, 'Legacy project imported.');
-  }, [restoreSession, run]);
+  }, [contextFor, hydrate, run]);
 
   const migrateLegacyBrowserProject = useCallback(async () => {
     let migrated = 0;
-    await run('Migrating browser project', async (handle) => {
+    await run('project.migrate_legacy', 'Migrating browser project', async (handle) => {
       migrated = await dbOperations.migrateLegacyDatabase();
-      handle.update({ progress: 0.4, detail: 'Loading migrated assets' });
-      await restoreSession((progress, detail) => handle.update({ progress: 0.4 + progress * 0.58, detail }));
+      await hydrate(handle, 0.4, 0.58);
     }, 'Legacy browser project migrated.');
     return migrated;
-  }, [restoreSession, run]);
+  }, [hydrate, run]);
 
   const loadProject = useCallback(async () => {
-    await run('Opening project', async (handle) => {
-      const snapshot = await projectService.open();
-      handle.update({ progress: 0.4, detail: 'Loading project assets' });
-      await restoreSession((progress, detail) => handle.update({ progress: 0.4 + progress * 0.58, detail }));
+    await run('project.open', 'Opening project', async (handle) => {
+      const snapshot = await projectService.open(undefined, contextFor(handle));
+      await hydrate(handle, 0.4, 0.58);
       const state = snapshot as Record<string, unknown> | null;
       if (state?.cameraState) setCameraState(state.cameraState as CameraState);
       selectModel(typeof state?.selectedModelId === 'string' ? state.selectedModelId : null);
       selectBlueprint(typeof state?.selectedBlueprintId === 'string' ? state.selectedBlueprintId : null);
     }, 'Project opened.');
-  }, [restoreSession, run, selectBlueprint, selectModel, setCameraState]);
+  }, [contextFor, hydrate, run, selectBlueprint, selectModel, setCameraState]);
 
   const openRecentProject = useCallback(async (projectId: string) => {
-    await run('Opening recent project', async (handle) => {
-      await projectService.openRecent(projectId);
-      handle.update({ progress: 0.4, detail: 'Loading project assets' });
-      await restoreSession((progress, detail) => handle.update({ progress: 0.4 + progress * 0.58, detail }));
+    await run('project.open_recent', 'Opening recent project', async (handle) => {
+      await projectService.openRecent(projectId, undefined, contextFor(handle));
+      await hydrate(handle, 0.4, 0.58);
     }, 'Recent project opened.');
-  }, [restoreSession, run]);
+  }, [contextFor, hydrate, run]);
 
   const recoverProject = useCallback(async (recoveryId: string) => {
-    await run('Opening recovery point', async (handle) => {
-      await projectService.recover(recoveryId);
-      handle.update({ progress: 0.4, detail: 'Loading recovered assets' });
-      await restoreSession((progress, detail) => handle.update({ progress: 0.4 + progress * 0.58, detail }));
+    await run('project.recover', 'Opening recovery point', async (handle) => {
+      await projectService.recover(recoveryId, contextFor(handle));
+      await hydrate(handle, 0.4, 0.58);
     }, 'Recovery point opened.');
-  }, [restoreSession, run]);
+  }, [contextFor, hydrate, run]);
 
   const createNewProject = useCallback(async () => {
-    await run('Creating project', async (handle) => {
-      await projectService.create();
+    await run('project.create', 'Creating project', async (handle) => {
+      await projectService.create('Untitled', contextFor(handle));
       await resetScene();
-      handle.update({ progress: 0.65, detail: 'Initializing project' });
-      await restoreSession((progress, detail) => handle.update({ progress: 0.65 + progress * 0.33, detail }));
+      await hydrate(handle, 0.65, 0.33);
     }, 'New project created.');
-  }, [resetScene, restoreSession, run]);
+  }, [contextFor, hydrate, resetScene, run]);
 
   const closeProject = useCallback(async () => {
-    await run('Closing project', async () => {
-      await projectService.close();
+    await run('project.close', 'Closing project', async (handle) => {
+      await projectService.close(contextFor(handle));
       await resetScene();
     }, 'Project closed.');
-  }, [resetScene, run]);
+  }, [contextFor, resetScene, run]);
 
   return {
     saveProject, saveProjectAs, exportProject, importProject, importLegacyProject, migrateLegacyBrowserProject,

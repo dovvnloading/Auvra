@@ -1,6 +1,7 @@
 
 import { AssetCategory, AttachmentData, Blueprint, SocketData, TextureData, LevelObject, LevelData, AudioData } from '../types';
 import { AssetTransferOptions, projectService } from './projectService';
+import { frontendDiagnostics } from '../diagnostics/runtime';
 
 const DB_NAME = 'OmniRenderDB';
 
@@ -63,7 +64,7 @@ class DBOperations {
       const request = indexedDB.open(DB_NAME);
 
       request.onerror = () => {
-        console.error("Database error", request.error);
+        frontendDiagnostics.failure('legacy_database_request_failed', request.error);
         reject(request.error);
       };
 
@@ -204,12 +205,13 @@ class DBOperations {
       animationAssets.push({ id: assetId, name: animation.name, assetId, modelId: model.id });
     }
     assertTransferActive(transfer);
+    transfer.onPhase?.('project_record_commit');
     await projectService.applyChanges([{ domain: 'models', operation: 'upsert', id: model.id, value: {
       id: model.id, name: model.name, assetId: modelAssetId,
       category: model.category, isPlacedInScene: model.isPlacedInScene,
     } }, ...animationAssets.map((animation) => ({
       domain: 'animations', operation: 'upsert' as const, id: animation.id, value: animation,
-    }))]);
+    }))], transfer.diagnostics);
   }
 
   async getAllModels(): Promise<DBModel[]> {
@@ -310,9 +312,10 @@ class DBOperations {
       animationAssets.push({ id: assetId, name: file.name, assetId, modelId });
     }
     assertTransferActive(transfer);
+    transfer.onPhase?.('project_record_commit');
     await projectService.applyChanges(animationAssets.map((animation) => ({
       domain: 'animations', operation: 'upsert' as const, id: animation.id, value: animation,
-    })));
+    })), transfer.diagnostics);
   }
 
   // --- ATTACHMENTS ---
@@ -321,11 +324,12 @@ class DBOperations {
     this.requireNativeProject();
     const assetId = await projectService.uploadAsset(new File([attachment.file], attachment.name), transfer);
     assertTransferActive(transfer);
+    transfer.onPhase?.('project_record_commit');
     await projectService.applyChanges([{ domain: 'attachments', operation: 'upsert', id: attachment.id, value: {
       id: attachment.id, name: attachment.name, assetId,
       parentModelId: attachment.parentModelId, boneName: attachment.boneName,
       position: attachment.position, rotation: attachment.rotation, scale: attachment.scale,
-    } }]);
+    } }], transfer.diagnostics);
   }
 
   async getAllAttachments(): Promise<DBAttachment[]> {
@@ -438,9 +442,10 @@ class DBOperations {
     this.requireNativeProject();
     const assetId = await projectService.uploadAsset(new File([texture.file], texture.name), transfer);
     assertTransferActive(transfer);
+    transfer.onPhase?.('project_record_commit');
     await projectService.applyChanges([{ domain: 'textures', operation: 'upsert', id: texture.id, value: {
       id: texture.id, name: texture.name, assetId, dimensions: texture.dimensions,
-    } }]);
+    } }], transfer.diagnostics);
   }
 
   async getAllTextures(): Promise<DBTexture[]> {
@@ -484,9 +489,10 @@ class DBOperations {
     this.requireNativeProject();
     const assetId = await projectService.uploadAsset(new File([audio.file], audio.name), transfer);
     assertTransferActive(transfer);
+    transfer.onPhase?.('project_record_commit');
     await projectService.applyChanges([{ domain: 'audio', operation: 'upsert', id: audio.id, value: {
       id: audio.id, name: audio.name, assetId, type: audio.type, duration: audio.duration,
-    } }]);
+    } }], transfer.diagnostics);
   }
 
   async getAllAudio(): Promise<DBAudio[]> {

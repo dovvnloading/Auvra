@@ -320,6 +320,85 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(json.loads(frame.posts[-1])["type"], "response")
         controller.close()
 
+    def test_diagnostics_lane_remains_live_while_host_worker_is_blocked(self):
+        with tempfile.TemporaryDirectory(prefix="auvra blocked host diagnostics ") as raw:
+            session = DiagnosticsSession(Path(raw) / "diagnostics", run_id="run-host-block", mode="test")
+            session.start()
+            install_diagnostics(session)
+            process = Mock(is_alive=Mock(return_value=True))
+            frame = FakeFrame(FrameConfig(
+                FrameMode.DEVELOPMENT,
+                development_origin="http://127.0.0.1:3099",
+            ))
+            frame.state = FrameState.READY
+            controller = FrameController(process, frame=frame)
+            blocked = threading.Event()
+            release = threading.Event()
+
+            def occupy_host_worker() -> None:
+                blocked.set()
+                if not release.wait(3):
+                    raise RuntimeError("test host worker timed out")
+
+            self.assertIsNotNone(controller._submit_host(occupy_host_worker))
+            self.assertTrue(blocked.wait(1))
+            diagnostic = {
+                "protocol": "auvra.diagnostics/1",
+                "type": "event-batch",
+                "id": "batch-while-blocked",
+                "records": [{
+                    "component": "frontend",
+                    "event": "frontend.warning",
+                    "attributes": {"code": "host_worker_blocked_fixture", "count": 1},
+                }],
+            }
+            before = time.monotonic()
+            controller.on_message(json.dumps(diagnostic), "http://127.0.0.1:3099/")
+            elapsed = time.monotonic() - before
+
+            self.assertLess(elapsed, 0.2)
+            response = json.loads(frame.posts[-1])
+            self.assertEqual(response["protocol"], "auvra.diagnostics/1")
+            self.assertTrue(response["ok"])
+            self.assertTrue(any(record["event"] == "frontend.warning"
+                                for record in session.snapshot()))
+            release.set()
+            self.assertTrue(controller.wait_for_host_idle())
+            controller.close()
+            session.close(outcome="success")
+
+    def test_browser_trace_id_correlates_host_request_records(self):
+        with tempfile.TemporaryDirectory(prefix="auvra host trace diagnostics ") as raw:
+            session = DiagnosticsSession(Path(raw) / "diagnostics", run_id="run-host-trace", mode="test")
+            session.start()
+            session.start_detailed_capture()
+            install_diagnostics(session)
+            process = Mock(is_alive=Mock(return_value=True))
+            frame = FakeFrame(FrameConfig(
+                FrameMode.DEVELOPMENT,
+                development_origin="http://127.0.0.1:3099",
+            ))
+            frame.state = FrameState.READY
+            controller = FrameController(process, frame=frame)
+            request = {
+                "protocol": "auvra.host/1",
+                "type": "request",
+                "id": "trace-import-1.req-1",
+                "session": controller.dispatcher.session.session_id,
+                "revision": 0,
+                "method": "project.create",
+                "payload": {"name": "Untitled"},
+            }
+            controller.on_message(json.dumps(request), "http://127.0.0.1:3099/")
+            self.assertTrue(controller.wait_for_host_idle())
+            traced = [record for record in session.snapshot()
+                      if record.get("requestId") == "trace-import-1.req-1"]
+            self.assertTrue(traced)
+            self.assertTrue(all(record.get("traceId") == "trace-import-1" for record in traced))
+            self.assertTrue(any(record["event"] == "host.queue_wait" for record in traced))
+            controller.close()
+            session.close(outcome="success")
+
     def test_adapter_without_origin_policy_is_rejected(self):
         class UnsafeFrame(FakeFrame):
             def __init__(self, config):

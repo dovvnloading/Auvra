@@ -94,6 +94,10 @@ _COMMON = frozenset({
     "segment", "operationKind", "stallMs", "escalation", "thread", "frames",
     "acknowledged", "reason", "mode", "minutes", "runState", "recordEvent",
     "initial", "source", "state", "requestClass", "clean", "interrupted",
+    "assetAlias", "assetKind", "mimeCategory", "extensionCategory", "itemCount",
+    "clipCount", "bindingMode", "progressBucket", "workerState", "queueState",
+    "activeCount", "visibility", "averageFrameMs", "p95FrameMs", "budgetMs",
+    "failedDeliveryCount", "batchCount", "surfaceRole",
 })
 _STARTUP = frozenset({
     "phase", "outcome", "durationMs", "code", "errorType", "success", "port",
@@ -137,6 +141,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     "host.request_completed": _spec("host", "info", _REQUEST),
     "host.request_failed": _spec("host", "error", _REQUEST),
     "host.request_timed_out": _spec("host", "error", _REQUEST),
+    "host.queue_wait": _spec("host", "debug", frozenset({"method", "durationMs", "queueState"})),
     "host.queue_saturated": _spec("host", "warning", _REQUEST),
     "host.worker_failed": _spec("host", "error", _REQUEST),
     "host.dispatch_failed": _spec("host", "error", _REQUEST),
@@ -159,6 +164,33 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     "diagnostics.operation_recovered": _spec("diagnostics", "info", _DIAGNOSTIC),
     "diagnostics.support_exported": _spec("diagnostics", "info", frozenset({"count", "bytes"})),
     "diagnostics.support_export_failed": _spec("diagnostics", "error", frozenset({"code", "errorType"})),
+    "frontend.session_started": _spec("frontend", "info", frozenset({"state", "visibility"})),
+    "frontend.global_error": _spec("frontend", "error", frozenset({"code", "errorType"})),
+    "frontend.unhandled_rejection": _spec("frontend", "error", frozenset({"code", "errorType"})),
+    "frontend.transport_failed": _spec("frontend", "error", frozenset({"code", "errorType", "method", "timeoutMs"})),
+    "frontend.failure": _spec("frontend", "error", _COMMON),
+    "frontend.warning": _spec("frontend", "warning", frozenset({"code", "count"})),
+    "frontend.event_loop_stalled": _spec("frontend", "warning", frozenset({"durationMs", "visibility"})),
+    "frontend.event_loop_recovered": _spec("frontend", "info", frozenset({"durationMs"})),
+    "frontend.unresponsive": _spec("frontend", "warning", frozenset({"stallMs", "activeCount", "visibility"})),
+    "frontend.responsive": _spec("frontend", "info", frozenset({"durationMs", "activeCount"})),
+    "worker.phase": _spec("worker", "info", frozenset({"phase", "workerState", "queueState", "assetAlias", "progressBucket", "itemCount", "clipCount"})),
+    "worker.failed": _spec("worker", "error", frozenset({"phase", "workerState", "assetAlias", "code", "errorType"})),
+    "operation.started": _spec("operation", "info", _COMMON),
+    "operation.phase": _spec("operation", "info", _COMMON),
+    "operation.progress": _spec("operation", "info", _COMMON),
+    "operation.completed": _spec("operation", "info", _COMMON),
+    "operation.failed": _spec("operation", "error", _COMMON),
+    "operation.cancelled": _spec("operation", "info", _COMMON),
+    "renderer.backend_selected": _spec("renderer", "info", frozenset({"backend", "fallback", "fallbackReason", "surfaceRole"})),
+    "renderer.backend_failed": _spec("renderer", "error", frozenset({"backend", "fallback", "code", "errorType", "surfaceRole"})),
+    "renderer.context_lost": _spec("renderer", "error", frozenset({"code", "surfaceRole"})),
+    "renderer.recovery_started": _spec("renderer", "warning", frozenset({"code", "count", "surfaceRole"})),
+    "renderer.recovered": _spec("renderer", "info", frozenset({"durationMs", "count", "surfaceRole"})),
+    "renderer.recovery_failed": _spec("renderer", "error", frozenset({"backend", "code", "surfaceRole"})),
+    "renderer.capture_failed": _spec("renderer", "error", frozenset({"code", "errorType"})),
+    "renderer.performance_degraded": _spec("renderer", "warning", frozenset({"averageFrameMs", "p95FrameMs", "budgetMs", "count", "surfaceRole"})),
+    "renderer.performance_recovered": _spec("renderer", "info", frozenset({"durationMs", "surfaceRole"})),
 }
 
 
@@ -419,6 +451,11 @@ class _ActiveState:
     started: float
     last_progress: float
     stall_after: float
+    phase: str | None = None
+    progress_bucket: int | None = None
+    worker_state: str | None = None
+    queue_state: str | None = None
+    capture_stack: bool = True
     warned: bool = False
     escalated: bool = False
 
@@ -431,9 +468,13 @@ class DiagnosticActivity:
         self.token = token
         self._finished = False
 
-    def progress(self) -> None:
+    def progress(self, *, phase: str | None = None, progress_bucket: int | None = None,
+                 worker_state: str | None = None, queue_state: str | None = None) -> None:
         if not self._finished:
-            self._session.touch_activity(self.token)
+            self._session.touch_activity(
+                self.token, phase=phase, progress_bucket=progress_bucket,
+                worker_state=worker_state, queue_state=queue_state,
+            )
 
     def finish(self) -> None:
         if self._finished:
@@ -495,6 +536,11 @@ class DiagnosticsSession:
         self._dedup: dict[tuple[Any, ...], _DedupState] = {}
         self._activities: dict[str, _ActiveState] = {}
         self._detailed_until = 0.0
+        self._frontend_expected = False
+        self._frontend_last_heartbeat: float | None = None
+        self._frontend_visibility = "starting"
+        self._frontend_active_count = 0
+        self._frontend_unresponsive_at: float | None = None
 
     @property
     def detailed(self) -> bool:
@@ -561,23 +607,59 @@ class DiagnosticsSession:
 
     def begin_activity(self, component: str, kind: str, *, operation_id: str | None = None,
                        request_id: str | None = None, trace_id: str | None = None,
-                       stall_after: float = 5.0) -> DiagnosticActivity:
+                       stall_after: float = 5.0, capture_stack: bool = True) -> DiagnosticActivity:
         token = secrets.token_urlsafe(12)
         now = time.monotonic()
         state = _ActiveState(
             token, component, _redact_text(kind, 64), _safe_id(operation_id),
             _safe_id(request_id), _safe_id(trace_id), threading.get_ident(), now, now,
-            max(1.0, min(float(stall_after), 120.0)),
+            max(1.0, min(float(stall_after), 120.0)), capture_stack=capture_stack,
         )
         with self._state_lock:
             self._activities[token] = state
         return DiagnosticActivity(self, token)
 
-    def touch_activity(self, token: str) -> None:
+    def touch_activity(self, token: str, *, phase: str | None = None,
+                       progress_bucket: int | None = None,
+                       worker_state: str | None = None,
+                       queue_state: str | None = None) -> None:
         with self._state_lock:
             state = self._activities.get(token)
             if state is not None:
                 state.last_progress = time.monotonic()
+                if isinstance(phase, str):
+                    state.phase = _redact_text(phase, 64)
+                if isinstance(progress_bucket, int) and progress_bucket in {0, 25, 50, 75, 100}:
+                    state.progress_bucket = progress_bucket
+                if isinstance(worker_state, str):
+                    state.worker_state = _redact_text(worker_state, 64)
+                if isinstance(queue_state, str):
+                    state.queue_state = _redact_text(queue_state, 64)
+
+    def expect_frontend_heartbeat(self) -> None:
+        with self._state_lock:
+            self._frontend_expected = True
+            self._frontend_last_heartbeat = time.monotonic()
+            self._frontend_visibility = "starting"
+            self._frontend_unresponsive_at = None
+
+    def frontend_heartbeat(self, *, visibility: str, active_count: int) -> None:
+        if visibility not in {"active", "hidden", "starting", "closing"}:
+            return
+        now = time.monotonic()
+        recovered_at: float | None = None
+        with self._state_lock:
+            recovered_at = self._frontend_unresponsive_at
+            self._frontend_expected = visibility != "closing"
+            self._frontend_last_heartbeat = now
+            self._frontend_visibility = visibility
+            self._frontend_active_count = max(0, min(int(active_count), 64))
+            self._frontend_unresponsive_at = None
+        if recovered_at is not None:
+            self.emit("frontend", "frontend.responsive", attributes={
+                "durationMs": round((now - recovered_at) * 1000, 3),
+                "activeCount": self._frontend_active_count,
+            }, deduplicate=False)
 
     def finish_activity(self, token: str) -> None:
         with self._state_lock:
@@ -587,6 +669,7 @@ class DiagnosticsSession:
                       operation_id=state.operation_id, request_id=state.request_id,
                       trace_id=state.trace_id,
                       attributes={"operationKind": state.kind,
+                                  "phase": state.phase,
                                   "durationMs": round((time.monotonic() - state.started) * 1000, 3)})
 
     def emit(self, component: str, event: str, *, level: str | None = None,
@@ -880,23 +963,45 @@ class DiagnosticsSession:
             now = time.monotonic()
             with self._state_lock:
                 states = list(self._activities.values())
+                frontend_expected = self._frontend_expected
+                frontend_last = self._frontend_last_heartbeat
+                frontend_visibility = self._frontend_visibility
+                frontend_active_count = self._frontend_active_count
+                frontend_unresponsive_at = self._frontend_unresponsive_at
+            if (frontend_expected and frontend_last is not None and
+                    frontend_visibility == "active" and now - frontend_last >= 5.0 and
+                    frontend_unresponsive_at is None):
+                with self._state_lock:
+                    if self._frontend_unresponsive_at is None:
+                        self._frontend_unresponsive_at = now
+                self.emit("frontend", "frontend.unresponsive", attributes={
+                    "stallMs": round((now - frontend_last) * 1000, 3),
+                    "activeCount": frontend_active_count,
+                    "visibility": frontend_visibility,
+                }, deduplicate=False)
             for state in states:
                 stalled = now - state.last_progress
                 escalate = stalled >= 30.0
                 if stalled < state.stall_after or (state.warned and (state.escalated or not escalate)):
                     continue
-                frames = self._safe_stack(state.thread_id)
+                frames = self._safe_stack(state.thread_id) if state.capture_stack else []
+                attributes: dict[str, Any] = {
+                    "operationKind": state.kind,
+                    "stallMs": round(stalled * 1000, 3),
+                    "durationMs": round((now - state.started) * 1000, 3),
+                    "escalation": escalate,
+                    "thread": _redact_text(state.component, 64),
+                    "phase": state.phase,
+                    "progressBucket": state.progress_bucket,
+                    "workerState": state.worker_state,
+                    "queueState": state.queue_state,
+                }
+                if frames:
+                    attributes["frames"] = frames
                 self.emit("diagnostics", "diagnostics.operation_stalled",
                           operation_id=state.operation_id, request_id=state.request_id,
                           trace_id=state.trace_id,
-                          attributes={
-                              "operationKind": state.kind,
-                              "stallMs": round(stalled * 1000, 3),
-                              "durationMs": round((now - state.started) * 1000, 3),
-                              "escalation": escalate,
-                              "thread": _redact_text(state.component, 64),
-                              "frames": frames,
-                          }, deduplicate=False)
+                          attributes=attributes, deduplicate=False)
                 with self._state_lock:
                     current = self._activities.get(state.token)
                     if current is not None:
@@ -984,6 +1089,10 @@ class DiagnosticsSession:
                     "traceId": activity.trace_id,
                     "elapsedMs": round((now - activity.started) * 1000, 3),
                     "stalled": activity.warned,
+                    "lastPhase": activity.phase,
+                    "progressBucket": activity.progress_bucket,
+                    "workerState": activity.worker_state,
+                    "queueState": activity.queue_state,
                 }
                 for activity in self._activities.values()
             ][:64]

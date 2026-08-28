@@ -3,6 +3,7 @@ import React, { useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { ProjectileManagerHandle } from '../ProjectileManager';
 import { SandboxEntityHandle } from '../SandboxEntity';
+import { frontendDiagnostics } from '../../../diagnostics/runtime';
 
 interface CombatConfig {
     FIRE_RATE: number;
@@ -41,7 +42,7 @@ export const usePlayerCombat = (
         weaponSounds.forEach(url => {
             loader.load(url, (buffer) => {
                 soundBuffers.current.push(buffer);
-            }, undefined, (err) => console.error("Failed to load weapon sound", err));
+            }, undefined, (err) => frontendDiagnostics.failure('weapon_sound_load_failed', err));
         });
         
     }, [weaponSounds]);
@@ -57,7 +58,7 @@ export const usePlayerCombat = (
         
         // If not found, log warning (PlayerController should have added it)
         if (!listener) {
-            console.warn("AudioListener missing on camera. Gunshot audio failed.");
+            frontendDiagnostics.warning('weapon_audio_listener_missing');
             return;
         }
 

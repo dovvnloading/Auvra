@@ -23,6 +23,7 @@ import { useNotification } from '../../context/NotificationContext';
 import { useLevelBlueprintRuntime } from '../../hooks/useLevelBlueprintRuntime';
 import { LevelObject, LoadedModelData, Blueprint, AttachmentData, SocketData } from '../../types';
 import { TerrainObject } from './Terrain/TerrainObject';
+import { frontendDiagnostics } from '../../diagnostics/runtime';
 
 interface LevelGameLoopProps {
     onExit: () => void;
@@ -147,7 +148,7 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
             clonedObject.scale.set(1,1,1);
             return { ...playerModel, object: clonedObject, id: `runtime_player_${restartKey}` };
         } catch(e) {
-            console.error("Failed to clone player model", e);
+            frontendDiagnostics.failure('player_model_clone_failed', e);
             return null;
         }
     }, [playerModel, restartKey]);
@@ -268,7 +269,7 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
                     onDecline={() => setDpr(1)} 
                     flipflops={3} 
                     onFallback={() => {
-                        console.warn("Performance Critical: Disabling High Quality FX");
+                        frontendDiagnostics.warning('renderer_quality_reduced');
                         setHighQuality(false); // Force low quality
                     }}
                 />
@@ -434,7 +435,7 @@ const RuntimeEnemyController: React.FC<{
                 object: clonedObject
             };
         } catch(e) {
-            console.error("Failed to clone enemy model", e);
+            frontendDiagnostics.failure('enemy_model_clone_failed', e);
             return null;
         }
     }, [assets.model, data.instanceId]);

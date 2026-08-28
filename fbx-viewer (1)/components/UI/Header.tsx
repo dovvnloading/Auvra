@@ -16,11 +16,9 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
 
   const handleNewProject = async () => {
       if (resetConfirm) {
-          console.log("[Header] Creating a new native project");
           await createNewProject();
           setResetConfirm(false);
       } else {
-          console.log("[Header] Requesting new project confirmation...");
           setResetConfirm(true);
           // Auto-reset state after 3s to prevent accidental clicks later
           setTimeout(() => setResetConfirm(false), 3000);

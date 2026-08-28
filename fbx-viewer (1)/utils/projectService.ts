@@ -1,5 +1,6 @@
 import { getHostTransport } from '../host/bootstrap';
 import type { Event, Response } from '../host/generated/protocolV1';
+import type { DiagnosticContext } from '../diagnostics/runtime';
 
 /** Host-owned project state. Paths and binary data intentionally never enter this type. */
 export interface ProjectStatus {
@@ -35,6 +36,8 @@ export interface ProjectChange {
 export interface AssetTransferOptions {
   signal?: AbortSignal;
   onProgress?: (progress: number) => void;
+  onPhase?: (phase: 'project_upload' | 'project_record_commit') => void;
+  diagnostics?: DiagnosticContext & { assetAlias?: string };
 }
 
 type HostLike = {
@@ -98,23 +101,23 @@ export class ProjectService {
     return () => this.listeners.delete(listener);
   }
 
-  async create(name = 'Untitled'): Promise<ProjectSnapshot | null> {
-    return this.call<ProjectSnapshot>('project.create', { name });
+  async create(name = 'Untitled', diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> {
+    return this.call<ProjectSnapshot>('project.create', { name }, diagnostics);
   }
-  async open(recoveryId?: string): Promise<ProjectSnapshot | null> {
-    return this.call<ProjectSnapshot>('project.open', { projectHandle: 'dialog', ...(recoveryId ? { recoveryId } : {}) });
+  async open(recoveryId?: string, diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> {
+    return this.call<ProjectSnapshot>('project.open', { projectHandle: 'dialog', ...(recoveryId ? { recoveryId } : {}) }, diagnostics);
   }
-  async openRecent(projectId?: string, recoveryId?: string): Promise<ProjectSnapshot | null> {
-    return this.call<ProjectSnapshot>('project.openRecent', { recentId: projectId || 'dialog', ...(recoveryId ? { recoveryId } : {}) });
+  async openRecent(projectId?: string, recoveryId?: string, diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> {
+    return this.call<ProjectSnapshot>('project.openRecent', { recentId: projectId || 'dialog', ...(recoveryId ? { recoveryId } : {}) }, diagnostics);
   }
-  async recover(recoveryId: string): Promise<ProjectSnapshot | null> {
+  async recover(recoveryId: string, diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> {
     if (!recoveryId || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(recoveryId)) throw new Error('Recovery identity is invalid');
     return this.status.projectId
-      ? this.openRecent(this.status.projectId, recoveryId)
-      : this.open(recoveryId);
+      ? this.openRecent(this.status.projectId, recoveryId, diagnostics)
+      : this.open(recoveryId, diagnostics);
   }
-  async close(): Promise<void> {
-    await this.call('project.close', { projectId: this.requireProjectId(), expectedRevision: this.status.revision });
+  async close(diagnostics?: DiagnosticContext): Promise<void> {
+    await this.call('project.close', { projectId: this.requireProjectId(), expectedRevision: this.status.revision }, diagnostics);
     this.setStatus({ ...EMPTY_STATUS });
   }
   /** Refresh the authoritative host status. Empty payload is valid when no project is open. */
@@ -122,21 +125,21 @@ export class ProjectService {
     await this.call<ProjectSnapshot>('project.getStatus', this.status.projectId ? { projectId: this.status.projectId } : {});
     return this.getStatus();
   }
-  async getSnapshot(domain?: string, cursor?: string): Promise<ProjectSnapshot | null> {
+  async getSnapshot(domain?: string, cursor?: string, diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> {
     const payload: Record<string, unknown> = {};
     payload.projectId = this.requireProjectId();
     if (domain) payload.domain = domain;
     if (cursor) payload.cursor = cursor;
     payload.pageSize = 128;
-    return this.call<ProjectSnapshot>('project.getSnapshot', payload);
+    return this.call<ProjectSnapshot>('project.getSnapshot', payload, diagnostics);
   }
-  async getSnapshotAll(domain?: string): Promise<ProjectSnapshot | null> {
+  async getSnapshotAll(domain?: string, diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> {
     const documents: unknown[] = [];
     const domains: Record<string, unknown[]> = {};
     let latest: ProjectSnapshot | null = null;
     let cursor: string | undefined;
     do {
-      const page = await this.getSnapshot(domain, cursor);
+      const page = await this.getSnapshot(domain, cursor, diagnostics);
       if (!page) break;
       latest = page;
       if (Array.isArray(page.documents)) documents.push(...page.documents);
@@ -155,31 +158,31 @@ export class ProjectService {
     if (!latest) return null;
     return { ...latest, documents, domains };
   }
-  async applyChanges(changes: ProjectChange[]): Promise<ProjectSnapshot | null> {
+  async applyChanges(changes: ProjectChange[], diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> {
     return this.call<ProjectSnapshot>('project.applyChanges', {
       projectId: this.requireProjectId(), expectedRevision: this.status.revision,
       changes: changes.map(sanitizeChange),
-    });
+    }, diagnostics);
   }
-  async save(): Promise<ProjectSnapshot | null> { return this.call<ProjectSnapshot>('project.save', { projectId: this.requireProjectId(), expectedRevision: this.status.revision }); }
-  async saveAs(name = this.status.name || 'Untitled'): Promise<ProjectSnapshot | null> { return this.call<ProjectSnapshot>('project.saveAs', { projectId: this.requireProjectId(), expectedRevision: this.status.revision, name }); }
-  async exportPack(): Promise<void> { await this.call('project.exportPack', { projectId: this.requireProjectId(), expectedRevision: this.status.revision, destinationHandle: 'dialog' }); }
-  async importPack(): Promise<ProjectSnapshot | null> { return this.call<ProjectSnapshot>('project.importPack', { sourceHandle: 'dialog' }); }
-  async importLegacy(): Promise<ProjectSnapshot | null> { return this.call<ProjectSnapshot>('project.importLegacy', { sourceHandle: 'dialog' }); }
+  async save(diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> { return this.call<ProjectSnapshot>('project.save', { projectId: this.requireProjectId(), expectedRevision: this.status.revision }, diagnostics); }
+  async saveAs(name = this.status.name || 'Untitled', diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> { return this.call<ProjectSnapshot>('project.saveAs', { projectId: this.requireProjectId(), expectedRevision: this.status.revision, name }, diagnostics); }
+  async exportPack(diagnostics?: DiagnosticContext): Promise<void> { await this.call('project.exportPack', { projectId: this.requireProjectId(), expectedRevision: this.status.revision, destinationHandle: 'dialog' }, diagnostics); }
+  async importPack(diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> { return this.call<ProjectSnapshot>('project.importPack', { sourceHandle: 'dialog' }, diagnostics); }
+  async importLegacy(diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> { return this.call<ProjectSnapshot>('project.importLegacy', { sourceHandle: 'dialog' }, diagnostics); }
 
-  async beginAssetUpload(file: Blob, mime: string, name: string): Promise<{ url: string; method: 'PUT'; mime: string }> {
+  async beginAssetUpload(file: Blob, mime: string, name: string, diagnostics?: DiagnosticContext): Promise<{ url: string; method: 'PUT'; mime: string }> {
     const result = await this.call<{ url?: string; method?: string; mime?: string }>('asset.beginUpload', {
       projectId: this.requireProjectId(), expectedRevision: this.status.revision,
       size: file.size, mime, name,
-    });
+    }, diagnostics);
     if (!result?.url || !/^https:\/\/assets\.auvra\.local\/v1\/put\/[A-Za-z0-9_-]{43}$/.test(result.url)) throw new Error('Host returned an invalid asset upload URL');
     if (result.method !== 'PUT' || result.mime !== mime) throw new Error('Host returned an invalid asset upload ticket');
     return { url: result.url, method: 'PUT', mime: result.mime };
   }
 
-  async resolveAsset(assetId: string): Promise<string> {
+  async resolveAsset(assetId: string, diagnostics?: DiagnosticContext): Promise<string> {
     if (!/^[A-Fa-f0-9]{64}$/.test(assetId)) throw new Error('Asset identity is invalid');
-    const result = await this.call<{ url?: string; method?: string }>('asset.resolve', { projectId: this.requireProjectId(), assetId });
+    const result = await this.call<{ url?: string; method?: string }>('asset.resolve', { projectId: this.requireProjectId(), assetId }, diagnostics);
     if (!result?.url || !/^https:\/\/assets\.auvra\.local\/v1\/get\/[A-Za-z0-9_-]{43}$/.test(result.url)) throw new Error('Host returned an invalid asset URL');
     if (result.method !== 'GET') throw new Error('Host returned an invalid asset resolve ticket');
     return result.url;
@@ -188,7 +191,8 @@ export class ProjectService {
   async uploadAsset(file: File, options: AssetTransferOptions = {}): Promise<string> {
     if (options.signal?.aborted) throw new DOMException('Asset upload was cancelled.', 'AbortError');
     const mime = file.type || 'application/octet-stream';
-    const ticket = await this.beginAssetUpload(file, mime, file.name);
+    options.onPhase?.('project_upload');
+    const ticket = await this.beginAssetUpload(file, mime, file.name, options.diagnostics);
     const assetId = await this.putAsset(ticket, file, options);
     if (!assetId || !/^[A-Fa-f0-9]{64}$/.test(assetId)) throw new Error('Asset upload did not return a verified SHA-256 asset id');
     return assetId.toLowerCase();
@@ -250,14 +254,14 @@ export class ProjectService {
   }
 
 
-  private call<T = unknown>(method: string, payload: Record<string, unknown>): Promise<T | null> {
-    const run = () => this.performCall<T>(method, payload);
+  private call<T = unknown>(method: string, payload: Record<string, unknown>, diagnostics?: DiagnosticContext): Promise<T | null> {
+    const run = () => this.performCall<T>(method, payload, diagnostics);
     const result = this.requestQueue.then(run, run);
     this.requestQueue = result.catch(() => undefined);
     return result;
   }
 
-  private async performCall<T = unknown>(method: string, payload: Record<string, unknown>): Promise<T | null> {
+  private async performCall<T = unknown>(method: string, payload: Record<string, unknown>, diagnostics?: DiagnosticContext): Promise<T | null> {
     await this.ensureSession();
     const host = this.getHost();
     if (!this.session) throw new Error('The native project host is not ready');
@@ -269,9 +273,12 @@ export class ProjectService {
     ) {
       effectivePayload.expectedRevision = this.status.revision;
     }
+    const requestNumber = ++this.requestCounter;
+    const traceId = diagnostics?.traceId && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,100}$/.test(diagnostics.traceId)
+      ? diagnostics.traceId : null;
     const request = {
       protocol: 'auvra.host/1', type: 'request',
-      id: `project-${++this.requestCounter}`,
+      id: traceId ? `${traceId}.req-${requestNumber}` : `project-${requestNumber}`,
       session: this.session,
       revision: this.wireRevision,
       method,

@@ -4,6 +4,7 @@ import { Blueprint, BlueprintType } from '../types';
 import { dbOperations } from '../utils/db';
 import { projectService } from '../utils/projectService';
 import { DEFAULT_BLUEPRINTS, PLAYER_GRAPH, ENEMY_GRAPH } from '../data/blueprints';
+import { frontendDiagnostics } from '../diagnostics/runtime';
 
 export const useBlueprintManager = () => {
   const [blueprints, setBlueprints] = useState<Blueprint[]>(DEFAULT_BLUEPRINTS);
@@ -15,7 +16,7 @@ export const useBlueprintManager = () => {
     
     // ENFORCE SINGLETON PLAYER CONSTRAINT
     if (isPlayer && blueprints.some(bp => bp.type === 'Player Character')) {
-        console.warn("Attempted to create multiple Player Characters. Operation blocked.");
+        frontendDiagnostics.warning('duplicate_player_blueprint_blocked');
         return; 
     }
 
@@ -42,7 +43,7 @@ export const useBlueprintManager = () => {
         setBlueprints(prev => [...prev, newBP]);
         setSelectedBlueprintId(newBP.id);
     } catch (err) {
-        console.error("Failed to add blueprint:", err);
+        frontendDiagnostics.failure('blueprint_add_failed', err);
     }
   }, [blueprints]);
 
@@ -52,7 +53,7 @@ export const useBlueprintManager = () => {
         if (bp.id === id) {
             const updated = { ...bp, ...updates };
             // Save to DB asynchronously
-            dbOperations.saveBlueprint(updated).catch(err => console.error("Failed to save blueprint", err));
+            dbOperations.saveBlueprint(updated).catch((err) => frontendDiagnostics.failure('blueprint_save_failed', err));
             return updated;
         }
         return bp;
@@ -71,7 +72,7 @@ export const useBlueprintManager = () => {
 
     // 3. Persist
     dbOperations.deleteBlueprint(id).catch(err => {
-        console.error("Failed to delete blueprint", err);
+        frontendDiagnostics.failure('blueprint_delete_failed', err);
     });
   }, [selectedBlueprintId]);
 

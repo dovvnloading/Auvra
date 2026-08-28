@@ -116,6 +116,7 @@ async function runTransportTests() {
   const temporary = await mkdtemp(join(tmpdir(), "auvra-frame-"));
   try {
     const output = join(temporary, "nativeTransport.mjs");
+    const diagnosticOutput = join(temporary, "diagnosticsRuntime.mjs");
     const esbuild = resolve(root, "node_modules/esbuild/bin/esbuild");
     const esbuildArgs = ["host/nativeTransport.ts", "--bundle", "--platform=browser", "--format=esm", `--outfile=${output}`];
     // npm installs the Unix esbuild entry point as the native executable, while
@@ -124,6 +125,11 @@ async function runTransportTests() {
       ? spawnSync(process.execPath, [esbuild, ...esbuildArgs], { cwd: root, encoding: "utf8", windowsHide: true })
       : spawnSync(esbuild, esbuildArgs, { cwd: root, encoding: "utf8" });
     if (result.status !== 0) throw new Error(`transport bundle failed: ${result.stderr || result.stdout}`);
+    const diagnosticArgs = ["diagnostics/runtime.ts", "--bundle", "--platform=browser", "--format=esm", `--outfile=${diagnosticOutput}`];
+    const diagnosticResult = process.platform === "win32"
+      ? spawnSync(process.execPath, [esbuild, ...diagnosticArgs], { cwd: root, encoding: "utf8", windowsHide: true })
+      : spawnSync(esbuild, diagnosticArgs, { cwd: root, encoding: "utf8" });
+    if (diagnosticResult.status !== 0) throw new Error(`diagnostics bundle failed: ${diagnosticResult.stderr || diagnosticResult.stdout}`);
     const { NativeHostTransport } = await import(`${pathToFileURL(output).href}?frame-tests=${Date.now()}`);
     const session = { protocol: "auvra.host/1", type: "session", session: "test-session", revision: 0, status: "active" };
     const request = { protocol: "auvra.host/1", type: "request", id: "request-1", session: "test-session", revision: 0, method: "host.ping", payload: {} };
@@ -242,6 +248,55 @@ async function runTransportTests() {
       const replacement = makeTransport();
       replacement.wire.emit({ ...session, session: "other-session" });
       await expectReject(replacement.transport.ready(), "session replacement");
+    }
+    { // diagnostics batching stays bounded and strips display/file content
+      const wire = new FakeWebView();
+      const eventListeners = new Map();
+      const documentListeners = new Map();
+      globalThis.window = {
+        chrome: { webview: wire },
+        addEventListener: (type, listener) => eventListeners.set(type, listener),
+        removeEventListener: (type) => eventListeners.delete(type),
+      };
+      globalThis.document = {
+        visibilityState: "visible",
+        addEventListener: (type, listener) => documentListeners.set(type, listener),
+        removeEventListener: (type) => documentListeners.delete(type),
+      };
+      const { frontendDiagnostics, assetDiagnosticAttributes } = await import(`${pathToFileURL(diagnosticOutput).href}?diagnostics-tests=${Date.now()}`);
+      frontendDiagnostics.start();
+      try {
+        const safeAsset = assetDiagnosticAttributes({ name: "private-character.fbx", type: "application/octet-stream", size: 2048 }, "model", frontendDiagnostics.nextAssetAlias());
+        if (JSON.stringify(safeAsset).includes("private-character")) throw new Error("asset diagnostics retained a filename");
+        for (let index = 0; index < 300; index += 1) {
+          frontendDiagnostics.warning(`bounded_warning_${index % 8}`);
+        }
+        frontendDiagnostics.record("operation", "operation.phase", {
+          operationKind: "asset.model.import",
+          phase: "private-character.fbx",
+        }, { operationId: "operation-safe", traceId: "trace-safe" });
+        let cursor = 0;
+        let delivered = 0;
+        let reportedLoss = 0;
+        for (let iteration = 0; iteration < 32; iteration += 1) {
+          frontendDiagnostics.flush();
+          while (cursor < wire.sent.length && wire.sent[cursor]?.type !== "event-batch") cursor += 1;
+          const envelope = wire.sent[cursor++];
+          if (!envelope) break;
+          if (envelope.protocol !== "auvra.diagnostics/1") throw new Error("diagnostics used the host protocol lane");
+          const bytes = new TextEncoder().encode(JSON.stringify(envelope)).byteLength;
+          if (envelope.records.length > 16 || bytes > 32 * 1024) throw new Error("diagnostic batch exceeded its contract");
+          if (JSON.stringify(envelope).includes("private-character")) throw new Error("diagnostic batch retained a filename");
+          delivered += envelope.records.length;
+          reportedLoss += envelope.failedDeliveryCount ?? 0;
+          wire.emit({ protocol: "auvra.diagnostics/1", type: "response", id: envelope.id, ok: true, result: { accepted: envelope.records.length } });
+        }
+        if (delivered > 256 || reportedLoss < 40) throw new Error("browser diagnostic retention did not remain bounded or report loss");
+      } finally {
+        frontendDiagnostics.stop();
+        delete globalThis.window;
+        delete globalThis.document;
+      }
     }
     return true;
   } finally {

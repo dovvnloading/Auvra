@@ -5,6 +5,7 @@ import { dbOperations } from '../utils/db';
 import { projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
 import { isAbortError, useOperationActions } from '../context/OperationContext';
+import { assetDiagnosticAttributes, frontendDiagnostics } from '../diagnostics/runtime';
 
 export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
   const [textures, setTextures] = useState<TextureData[]>([]);
@@ -13,13 +14,20 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
 
   const addTexture = useCallback(async (file: File): Promise<string | null> => {
     projectService.assertWritable();
+    const assetAlias = frontendDiagnostics.nextAssetAlias();
+    const diagnostic = assetDiagnosticAttributes(file, 'texture', assetAlias);
     const operation = startOperation({
+      kind: 'asset.texture.import',
+      phase: 'source_read',
       label: `Importing ${file.name}`,
       detail: 'Reading image metadata',
       progress: 0,
       cancellable: true,
+      diagnostic,
     });
     let url: string | null = null;
+    let outcome: 'success' | 'failure' | 'cancelled' = 'success';
+    let failure: unknown;
     setIsLoading(true);
     try {
         url = URL.createObjectURL(file);
@@ -51,7 +59,7 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
             dimensions
         };
 
-        operation.update({ progress: 0.2, detail: 'Saving texture source' });
+        operation.update({ phase: 'project_upload', progress: 0.2, detail: 'Saving texture source', diagnostic });
         await dbOperations.addTexture({
             id: newTexture.id,
             name: newTexture.name,
@@ -59,6 +67,8 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
             dimensions: newTexture.dimensions,
         }, {
             signal: operation.signal,
+            diagnostics: { operationId: operation.id, traceId: operation.traceId, assetAlias },
+            onPhase: (phase) => operation.update({ phase, detail: phase === 'project_upload' ? 'Saving texture source' : 'Finalizing project record', diagnostic }),
             onProgress: (progress) => {
               if (progress >= 1) operation.lockCancellation();
               operation.update({ progress: 0.2 + progress * 0.76, detail: progress >= 1 ? 'Finalizing project record' : 'Saving texture source' });
@@ -66,13 +76,15 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
         });
 
         if (operation.signal.aborted) throw new DOMException('Texture import was cancelled.', 'AbortError');
+        operation.update({ phase: 'library_publication', progress: 0.98, detail: 'Publishing texture', diagnostic });
         setTextures(prev => [...prev, newTexture]);
         url = null;
         addNotification({ message: `Texture "${newTexture.name}" saved to library.`, type: 'success' });
         return newTexture.id;
 
     } catch (e) {
-        console.error("Failed to add texture", e);
+        outcome = isAbortError(e) ? 'cancelled' : 'failure';
+        failure = e;
         if (url) URL.revokeObjectURL(url);
         addNotification({
           message: isAbortError(e) ? `Cancelled import of "${file.name}".` : 'Failed to save texture to the project.',
@@ -80,7 +92,7 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
         });
         return null;
     } finally {
-        operation.finish();
+        operation.finish(outcome, failure);
         setIsLoading(false);
     }
   }, [setIsLoading, addNotification, startOperation]);
@@ -96,7 +108,7 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
           
           return await addTexture(file);
       } catch (e) {
-          console.error("Failed to save texture to library", e);
+          frontendDiagnostics.failure('texture_library_save_failed', e);
           addNotification({ message: "Failed to process texture data.", type: 'error' });
           return null;
       } finally {
@@ -115,7 +127,7 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
           });
           addNotification({ message: "Texture deleted.", type: 'info' });
       } catch (e) {
-          console.error("Failed to delete texture", e);
+          frontendDiagnostics.failure('texture_remove_failed', e);
           addNotification({ message: "Failed to delete texture.", type: 'error' });
       }
   }, [addNotification]);

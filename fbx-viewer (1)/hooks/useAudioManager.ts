@@ -5,6 +5,7 @@ import { dbOperations } from '../utils/db';
 import { projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
 import { isAbortError, useOperationActions } from '../context/OperationContext';
+import { assetDiagnosticAttributes, frontendDiagnostics } from '../diagnostics/runtime';
 
 export const useAudioManager = (setIsLoading: (loading: boolean) => void) => {
   const [audioAssets, setAudioAssets] = useState<AudioData[]>([]);
@@ -13,13 +14,20 @@ export const useAudioManager = (setIsLoading: (loading: boolean) => void) => {
 
   const addAudio = useCallback(async (file: File): Promise<string | null> => {
     projectService.assertWritable();
+    const assetAlias = frontendDiagnostics.nextAssetAlias();
+    const diagnostic = assetDiagnosticAttributes(file, 'audio', assetAlias);
     const operation = startOperation({
+      kind: 'asset.audio.import',
+      phase: 'source_read',
       label: `Importing ${file.name}`,
       detail: 'Reading audio metadata',
       progress: 0,
       cancellable: true,
+      diagnostic,
     });
     let url: string | null = null;
+    let outcome: 'success' | 'failure' | 'cancelled' = 'success';
+    let failure: unknown;
     setIsLoading(true);
     try {
         // Basic validation
@@ -58,7 +66,7 @@ export const useAudioManager = (setIsLoading: (loading: boolean) => void) => {
             duration
         };
 
-        operation.update({ progress: 0.2, detail: 'Saving audio source' });
+        operation.update({ phase: 'project_upload', progress: 0.2, detail: 'Saving audio source', diagnostic });
         await dbOperations.addAudio({
             id: newAudio.id,
             name: newAudio.name,
@@ -67,6 +75,8 @@ export const useAudioManager = (setIsLoading: (loading: boolean) => void) => {
             duration: newAudio.duration,
         }, {
             signal: operation.signal,
+            diagnostics: { operationId: operation.id, traceId: operation.traceId, assetAlias },
+            onPhase: (phase) => operation.update({ phase, detail: phase === 'project_upload' ? 'Saving audio source' : 'Finalizing project record', diagnostic }),
             onProgress: (progress) => {
               if (progress >= 1) operation.lockCancellation();
               operation.update({ progress: 0.2 + progress * 0.76, detail: progress >= 1 ? 'Finalizing project record' : 'Saving audio source' });
@@ -74,13 +84,15 @@ export const useAudioManager = (setIsLoading: (loading: boolean) => void) => {
         });
 
         if (operation.signal.aborted) throw new DOMException('Audio import was cancelled.', 'AbortError');
+        operation.update({ phase: 'library_publication', progress: 0.98, detail: 'Publishing audio', diagnostic });
         setAudioAssets(prev => [...prev, newAudio]);
         url = null;
         addNotification({ message: `Audio "${newAudio.name}" imported.`, type: 'success' });
         return newAudio.id;
 
     } catch (e: any) {
-        console.error("Failed to add audio", e);
+        outcome = isAbortError(e) ? 'cancelled' : 'failure';
+        failure = e;
         if (url) URL.revokeObjectURL(url);
         addNotification({
           message: isAbortError(e) ? `Cancelled import of "${file.name}".` : `Failed to import audio: ${e.message}`,
@@ -88,7 +100,7 @@ export const useAudioManager = (setIsLoading: (loading: boolean) => void) => {
         });
         return null;
     } finally {
-        operation.finish();
+        operation.finish(outcome, failure);
         setIsLoading(false);
     }
   }, [setIsLoading, addNotification, startOperation]);
@@ -104,7 +116,7 @@ export const useAudioManager = (setIsLoading: (loading: boolean) => void) => {
           });
           addNotification({ message: "Audio deleted.", type: 'info' });
       } catch (e) {
-          console.error("Failed to delete audio", e);
+          frontendDiagnostics.failure('audio_remove_failed', e);
           addNotification({ message: "Failed to delete audio.", type: 'error' });
       }
   }, [addNotification]);

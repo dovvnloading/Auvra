@@ -142,6 +142,7 @@ async function staticChecks(files) {
     for (const match of preserve) check(match[1] === "true" ? rel === "renderer/capture.ts" : true, `${rel} violates preserveDrawingBuffer policy`);
     if (rel === "renderer/AuvraCanvas.tsx") check(/preserveDrawingBuffer\s*:\s*false/.test(text), "AuvraCanvas presentation wrapper must explicitly disable preserveDrawingBuffer");
     if (rel === "renderer/capture.ts") check(/preserveDrawingBuffer\s*:\s*true/.test(text), "capture renderer must explicitly enable preserveDrawingBuffer");
+    if (!rel.startsWith("scripts/")) check(!/console\.(?:log|info|warn|error|debug)\s*\(/.test(text), `${rel} retains production console logging`);
     if (rel === "App.tsx") check(!/console\s*\.\s*(?:log|warn|error|info|debug)\s*=/.test(text), "App.tsx replaces a console method");
   }
   const surfaces = [];

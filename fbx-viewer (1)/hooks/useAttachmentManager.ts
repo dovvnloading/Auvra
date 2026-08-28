@@ -2,12 +2,13 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { AttachmentData, LoadedModelData } from '../types';
-import { loadFBXFile } from '../utils/modelLoader';
+import { importPhaseLabel, loadFBXFile } from '../utils/modelLoader';
 import { disposeObject } from '../utils/processing/ModelLifecycle';
 import { dbOperations } from '../utils/db';
 import { projectService } from '../utils/projectService';
 import { isAbortError, useOperationActions } from '../context/OperationContext';
 import { useNotification } from '../context/NotificationContext';
+import { assetDiagnosticAttributes, frontendDiagnostics } from '../diagnostics/runtime';
 
 export const useAttachmentManager = (
   models: LoadedModelData[],
@@ -30,7 +31,7 @@ export const useAttachmentManager = (
       try {
           for (const [id, updates] of batch.entries()) await dbOperations.updateAttachment(id, updates);
       } catch (e) {
-          console.error("Error saving batched updates", e);
+          frontendDiagnostics.failure('attachment_batch_save_failed', e);
       }
   }, []);
 
@@ -46,19 +47,29 @@ export const useAttachmentManager = (
 
   const addAttachment = useCallback(async (file: File, parentModelId: string) => {
     projectService.assertWritable();
+    const assetAlias = frontendDiagnostics.nextAssetAlias();
+    const diagnostic = assetDiagnosticAttributes(file, 'attachment', assetAlias);
     const operation = startOperation({
+      kind: 'asset.attachment.import',
+      phase: 'source_read',
       label: `Importing ${file.name}`,
       detail: 'Reading attachment source',
       progress: 0,
       cancellable: true,
+      diagnostic,
     });
     let loaded: LoadedModelData | null = null;
+    let outcome: 'success' | 'failure' | 'cancelled' = 'success';
+    let failure: unknown;
     setIsLoading(true);
     try {
         loaded = await loadFBXFile(file, {
           normalize: false,
           signal: operation.signal,
-          onProgress: (progress, phase) => operation.update({ progress: progress * 0.7, detail: phase }),
+          diagnostics: { operationId: operation.id, traceId: operation.traceId, assetAlias },
+          onProgress: (progress, phase) => operation.update({
+            phase, progress: progress * 0.7, detail: importPhaseLabel(phase), diagnostic,
+          }),
         });
         
         const newAttachment: AttachmentData = {
@@ -73,7 +84,7 @@ export const useAttachmentManager = (
             scale: [1, 1, 1]
         };
 
-        operation.update({ progress: 0.72, detail: 'Saving attachment source' });
+        operation.update({ phase: 'project_upload', progress: 0.72, detail: 'Saving attachment source', diagnostic });
         await dbOperations.addAttachment({
             id: newAttachment.id,
             name: newAttachment.name,
@@ -85,18 +96,22 @@ export const useAttachmentManager = (
             scale: newAttachment.scale,
         }, {
             signal: operation.signal,
+            diagnostics: { operationId: operation.id, traceId: operation.traceId, assetAlias },
+            onPhase: (phase) => operation.update({ phase, detail: phase === 'project_upload' ? 'Saving attachment source' : 'Finalizing project record', diagnostic }),
             onProgress: (progress) => {
               if (progress >= 1) operation.lockCancellation();
               operation.update({ progress: 0.72 + progress * 0.25, detail: progress >= 1 ? 'Finalizing project record' : 'Saving attachment source' });
             },
         });
         if (operation.signal.aborted) throw new DOMException('Attachment import was cancelled.', 'AbortError');
+        operation.update({ phase: 'library_publication', progress: 0.98, detail: 'Publishing attachment', diagnostic });
         setAttachments(prev => [...prev, newAttachment]);
         loaded = null;
         addNotification({ message: `Imported attachment "${file.name}".`, type: 'success' });
 
     } catch (error) {
-        console.error("Failed to load attachment:", error);
+        outcome = isAbortError(error) ? 'cancelled' : 'failure';
+        failure = error;
         if (loaded) {
           URL.revokeObjectURL(loaded.url);
           disposeObject(loaded.object);
@@ -106,7 +121,7 @@ export const useAttachmentManager = (
           type: isAbortError(error) ? 'info' : 'error',
         });
     } finally {
-        operation.finish();
+        operation.finish(outcome, failure);
         setIsLoading(false);
     }
   }, [setIsLoading, startOperation, addNotification]);
@@ -124,7 +139,7 @@ export const useAttachmentManager = (
         
         await addAttachment(file, parentModelId);
     } catch (e) {
-        console.error("Failed to add attachment from library", e);
+        frontendDiagnostics.failure('attachment_library_add_failed', e);
         alert("Failed to add attachment from library.");
     } finally {
         setIsLoading(false);
@@ -171,7 +186,7 @@ export const useAttachmentManager = (
               return prev.filter(a => a.id !== id);
           });
       } catch (e) {
-          console.error("Failed to remove attachment from DB", e);
+          frontendDiagnostics.failure('attachment_remove_failed', e);
       }
   }, []);
 

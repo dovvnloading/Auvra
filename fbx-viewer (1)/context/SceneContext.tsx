@@ -15,6 +15,7 @@ import { LevelProvider, useLevel } from './LevelContext';
 import { useScenePersistence } from '../hooks/useScenePersistence';
 import { useProjectManager } from '../hooks/useProjectManager';
 import { useOperationBusy } from './OperationContext';
+import { frontendDiagnostics } from '../diagnostics/runtime';
 
 // Export granular hooks for high-performance consumption
 export { useViewport, useSelection, useAssets, useLevel };
@@ -45,8 +46,6 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
     const resetScene = useCallback(async () => {
         setIsLoading(true);
         try {
-            console.log("[SceneContext] Resetting scene...");
-
             // 1. Dispose Three.js Resources
             assets.models.forEach(m => disposeModel(m));
             assets.attachments.forEach(a => {
@@ -75,7 +74,7 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
             viewport.setCameraState({ position: [4, 4, 8], target: [0, 1, 0] });
 
         } catch(e) {
-            console.error("Error resetting scene:", e);
+            frontendDiagnostics.failure('scene_reset_failed', e);
             addNotification({ message: "Failed to reset scene.", type: 'error' });
         } finally {
             setIsLoading(false);

@@ -5,8 +5,9 @@ import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 
 type ImportRequest = { type: 'parse'; buffer: ArrayBuffer };
-type ImportProgress = { type: 'progress'; progress: number; phase: string };
-type ImportComplete = { type: 'complete'; glb: ArrayBuffer };
+type ImportPhase = 'fbx_structure_parse' | 'embedded_texture_decode' | 'runtime_asset_construction' | 'runtime_asset_transfer';
+type ImportProgress = { type: 'progress'; progress: number; phase: ImportPhase; workerState: 'parsing' | 'decoding' | 'constructing' | 'transferring' };
+type ImportComplete = { type: 'complete'; glb: ArrayBuffer; itemCount: number; clipCount: number };
 type ImportFailure = { type: 'error'; message: string };
 
 const scope = self as unknown as DedicatedWorkerGlobalScope;
@@ -83,8 +84,8 @@ workerGlobal.document = {
     : new OffscreenCanvas(1, 1),
 };
 
-const report = (progress: number, phase: string): void => {
-  scope.postMessage({ type: 'progress', progress, phase } satisfies ImportProgress);
+const report = (progress: number, phase: ImportPhase, workerState: ImportProgress['workerState']): void => {
+  scope.postMessage({ type: 'progress', progress, phase, workerState } satisfies ImportProgress);
 };
 
 const replaceWorkerImages = (object: THREE.Object3D): ImageBitmap[] => {
@@ -114,12 +115,12 @@ scope.onmessage = async (event: MessageEvent<ImportRequest>) => {
   if (event.data?.type !== 'parse' || !(event.data.buffer instanceof ArrayBuffer)) return;
   let bitmaps: ImageBitmap[] = [];
   try {
-    report(0.12, 'Parsing FBX structure');
+    report(0.12, 'fbx_structure_parse', 'parsing');
     const object = new FBXLoader().parse(event.data.buffer, '');
-    report(0.48, 'Decoding embedded textures');
+    report(0.48, 'embedded_texture_decode', 'decoding');
     await Promise.all(pendingImages);
     bitmaps = replaceWorkerImages(object);
-    report(0.64, 'Building optimized runtime asset');
+    report(0.64, 'runtime_asset_construction', 'constructing');
     const exported = await new GLTFExporter().parseAsync(object, {
       binary: true,
       animations: object.animations || [],
@@ -127,8 +128,10 @@ scope.onmessage = async (event: MessageEvent<ImportRequest>) => {
       trs: false,
     });
     if (!(exported instanceof ArrayBuffer)) throw new Error('FBX worker did not produce a binary runtime asset');
-    report(0.82, 'Transferring runtime asset');
-    scope.postMessage({ type: 'complete', glb: exported } satisfies ImportComplete, [exported]);
+    let itemCount = 0;
+    object.traverse(() => { itemCount += 1; });
+    report(0.82, 'runtime_asset_transfer', 'transferring');
+    scope.postMessage({ type: 'complete', glb: exported, itemCount, clipCount: object.animations?.length ?? 0 } satisfies ImportComplete, [exported]);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Background FBX processing failed';
     scope.postMessage({ type: 'error', message } satisfies ImportFailure);
