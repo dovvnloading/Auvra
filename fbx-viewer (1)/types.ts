@@ -420,36 +420,3 @@ export interface SceneContextType {
   debugProjectile: DebugProjectile;
   triggerDebugProjectile: (origin: [number, number, number], direction: [number, number, number]) => void;
 }
-
-// React Three Fiber Intrinsic Elements Augmentation
-interface ThreeElements {
-  primitive: any;
-  group: any;
-  mesh: any;
-  ambientLight: any;
-  directionalLight: any;
-  pointLight: any;
-  spotLight: any;
-  color: any;
-  fog: any;
-  planeGeometry: any;
-  sphereGeometry: any;
-  boxGeometry: any;
-  ringGeometry: any;
-  circleGeometry: any;
-  meshBasicMaterial: any;
-  meshStandardMaterial: any;
-  arrowHelper: any;
-  boxHelper: any;
-  gridHelper: any;
-  axesHelper: any;
-  instancedMesh: any;
-  billboard: any;
-  [key: string]: any;
-}
-
-declare global {
-  namespace JSX {
-    interface IntrinsicElements extends ThreeElements {}
-  }
-}

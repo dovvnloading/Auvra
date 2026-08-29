@@ -51,7 +51,7 @@ export const useTextureGeneration = (initialTexture: string | null = null): UseT
     if (!preview?.assetId) return null;
     try {
       const committed = await textureService.commit(preview.assetId, payload);
-      const next = committed.previewUrl || preview.previewUrl || null;
+      const next = typeof committed.previewUrl === 'string' ? committed.previewUrl : preview.previewUrl || null;
       setCurrentTextureBase64(next); setPreview(null); setError(null); return next;
     } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Could not commit generated texture.'); return null; }
   }, [preview]);

@@ -268,7 +268,7 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
 
             {/* Selection Grid Overlay */}
             {isSelected && !sculptingEnabled && (
-                <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.05, 0]} pointerEvents="none">
+                <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.05, 0]} raycast={() => undefined}>
                     <planeGeometry args={[width, depth, resolution, resolution]} />
                     <meshBasicMaterial color="#3b82f6" wireframe transparent opacity={0.15} depthTest={false} />
                 </mesh>

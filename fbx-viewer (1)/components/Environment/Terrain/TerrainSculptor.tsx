@@ -228,9 +228,9 @@ export const TerrainSculptor: React.FC<TerrainSculptorProps> = ({
     return (
         <group>
             {/* Visual Cursor Ring */}
-            <mesh ref={cursorRef} rotation={[-Math.PI / 2, 0, 0]} visible={false} ignoreRaycast>
+            <mesh ref={cursorRef} rotation={[-Math.PI / 2, 0, 0]} visible={false} raycast={() => undefined} renderOrder={999}>
                 <ringGeometry args={[0.9, 1.0, 64]} />
-                <meshBasicMaterial transparent opacity={0.8} depthTest={false} depthWrite={false} renderOrder={999} />
+                <meshBasicMaterial transparent opacity={0.8} depthTest={false} depthWrite={false} />
             </mesh>
         </group>
     );

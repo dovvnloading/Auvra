@@ -3,6 +3,7 @@ import { CheckCircle2, Cloud, Cpu, KeyRound, RefreshCw, Settings2, ShieldAlert, 
 import {
   hostProviderService,
   ProviderDescriptor,
+  ProviderCapability,
   ProviderHealth,
   ProviderModel,
   ProviderRoute,
@@ -71,11 +72,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
   const persistConfiguration = async (nextModels = selectedModels, nextBudgets = budgets, nextCost = requireCostConfirmation, nextEnabled = enabled) => {
     if (!selected) return;
     try {
-      const routes = Object.entries(nextModels).flatMap(([capability, modelId]) => {
-        if (!modelId) return [];
-        if (capability === 'media') return [{ capability: 'media.generate', modelId }, { capability: 'media.edit', modelId }];
-        return [{ capability, modelId }];
-      });
+      const routes = Object.entries(nextModels).reduce<Array<{ capability: ProviderCapability; modelId: string }>>((result, [capability, modelId]) => {
+        if (!modelId) return result;
+        if (capability === 'media') {
+          result.push({ capability: 'media.generate', modelId }, { capability: 'media.edit', modelId });
+        } else if (capability === 'text' || capability === 'code' || capability === 'commands') {
+          result.push({ capability, modelId });
+        }
+        return result;
+      }, []);
       const result = await hostProviderService.configure(selected.id, {
         enabled: nextEnabled,
         routes,

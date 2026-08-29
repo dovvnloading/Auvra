@@ -142,7 +142,7 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
     const runtimePlayerModel = useMemo(() => {
         if (!playerModel || !playerModel.object) return null;
         try {
-            const clonedObject = SkeletonUtils.clone(playerModel.object);
+            const clonedObject = SkeletonUtils.clone(playerModel.object) as THREE.Group;
             clonedObject.position.set(0,0,0);
             clonedObject.rotation.set(0,0,0);
             clonedObject.scale.set(1,1,1);
@@ -279,7 +279,7 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
 
                 {/* --- GPU POST PROCESSING PIPELINE --- */}
                 {highQuality && (
-                    <EffectComposer disableNormalPass>
+                    <EffectComposer enableNormalPass={false}>
                         <Bloom luminanceThreshold={1.2} mipmapBlur intensity={0.6} />
                         <Vignette eskil={false} offset={0.1} darkness={1.1} />
                         {/* Additional effects like ToneMapping, Noise, or SMAA can be added here */}
@@ -425,7 +425,7 @@ const RuntimeEnemyController: React.FC<{
 
     const instanceModel = useMemo(() => {
         try {
-            const clonedObject = SkeletonUtils.clone(assets.model.object);
+            const clonedObject = SkeletonUtils.clone(assets.model.object) as THREE.Group;
             clonedObject.position.set(0, 0, 0);
             clonedObject.rotation.set(0, 0, 0);
             clonedObject.scale.set(1, 1, 1);
