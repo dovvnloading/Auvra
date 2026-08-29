@@ -175,7 +175,7 @@ class WholeProgramTraceTests(unittest.TestCase):
         }
         quiet = {"world.getReplay", "renderer.getCapabilities", "renderer.getMetrics"}
         self.assertEqual(methods, phased | quiet)
-        self.assertIn("NativeTraceGuard::begin(&method, diagnostic_context)", source)
+        self.assertIn("NativeTraceGuard::begin(&method, req.id, diagnostic_context)", source)
         for phase in (
             "world_commit", "hydration_validate", "hydration_commit", "world_advance",
             "render_extract", "render_submit", "asset_submit", "viewport_open",

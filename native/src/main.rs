@@ -150,7 +150,7 @@ struct NativeTraceGuard {
 }
 
 impl NativeTraceGuard {
-    fn begin(method: &str, context: DiagnosticContext) -> Self {
+    fn begin(method: &str, request_id: u64, context: DiagnosticContext) -> Self {
         let quiet = matches!(
             method,
             "world.getSnapshot" | "renderer.getMetrics" | "asset.status"
@@ -160,7 +160,7 @@ impl NativeTraceGuard {
             span_id: format!(
                 "native-{}",
                 stable_id(&format!(
-                    "{method}:{}",
+                    "{method}:{request_id}:{}",
                     context.trace_id.as_deref().unwrap_or("run")
                 ))
             ),
@@ -1751,7 +1751,7 @@ fn run_ipc() -> Result<(), String> {
             serde_json::from_slice(&bytes).map_err(|e| format!("invalid request schema: {e}"))?;
         let method = req.method.clone();
         let diagnostic_context = take_diagnostic_context(&mut req.params);
-        let trace = NativeTraceGuard::begin(&method, diagnostic_context);
+        let trace = NativeTraceGuard::begin(&method, req.id, diagnostic_context);
         let result = app.dispatch(req);
         let succeeded = result.as_ref().is_ok_and(|response| response.ok);
         trace.finish(succeeded);
@@ -2019,6 +2019,22 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_trace_span_ids_include_request_identity() {
+        let context = DiagnosticContext {
+            trace_id: Some("trace-repeat".into()),
+            span_id: Some("parent-span".into()),
+            ..DiagnosticContext::default()
+        };
+        let first = NativeTraceGuard::begin("world.getReplay", 41, context.clone());
+        let first_id = first.trace.span_id.clone();
+        first.finish(true);
+        let second = NativeTraceGuard::begin("world.getReplay", 42, context);
+        let second_id = second.trace.span_id.clone();
+        second.finish(true);
+        assert_ne!(first_id, second_id);
+    }
 
     fn project_payload() -> Value {
         json!({"projectId":"test-project","projectRevision":4,"domains":{"levels":{"schemaVersion":1,"documents":[{"id":"level"}]},"models":{"schemaVersion":1,"documents":[{"id":"model","name":"Model","assetId":"0000000000000000000000000000000000000000000000000000000000000000"}]},"objects":{"schemaVersion":1,"documents":[{"id":"object","levelId":"level","modelId":"model","name":"Object","type":"mesh","position":[1.0,2.0,3.0]}]}}})
