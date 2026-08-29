@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { GraphRuntimeAPI } from '../../AnimationGraph/GraphRuntime';
-import { LoadedModelData } from '../../types';
+import { LoadedModelData } from '../../../types';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
 
 interface UseSandboxGameProps {

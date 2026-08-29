@@ -30,7 +30,7 @@ export const usePlayerCombat = (
     const wasFiring = useRef(false);
     
     // Audio Buffers Cache
-    const soundBuffers = useRef<THREE.AudioBuffer[]>([]);
+    const soundBuffers = useRef<AudioBuffer[]>([]);
     
     // Preload sounds
     useEffect(() => {

@@ -48,7 +48,7 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
           };
           operation.signal.addEventListener('abort', abort, { once: true });
           img.onload = () => { cleanup(); resolve(); };
-          img.onerror = () => { cleanup(); resolve(); };
+          img.onerror = () => { cleanup(); reject(new Error('Texture metadata could not be read.')); };
         });
         const dimensions = { width: img.naturalWidth || 0, height: img.naturalHeight || 0 };
 

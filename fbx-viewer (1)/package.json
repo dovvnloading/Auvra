@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "typecheck": "tsc --noEmit",
     "preview": "vite preview",
     "protocol:generate": "node scripts/protocol/generate.mjs",
     "protocol:check": "node scripts/protocol/verify.mjs",

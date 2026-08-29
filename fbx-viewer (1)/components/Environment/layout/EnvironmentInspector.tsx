@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { Box, Move, RotateCw, Scaling, Trash2, X, RotateCcw, Skull, Timer, Users, UserPlus, Hash, Music, Volume2, Radio, Ear, Repeat, VolumeX, Mountain, Layers, Plus, CircleDashed, Hammer, ArrowUp, ArrowDown, Minus, Activity, Wind, AlertTriangle, Grid, Sun, CloudFog } from 'lucide-react';
 import { EditorState } from '../types';
-import { LevelObject } from '../../types';
+import { LevelObject } from '../../../types';
 import { EnvironmentBrushPanel } from '../EnvironmentBrushPanel';
 import { EnvironmentMaskTool } from '../EnvironmentMaskTool';
 import { ScrubbableInput } from '../../UI/Properties/ScrubbableInput';

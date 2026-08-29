@@ -72,7 +72,7 @@ const upgradeMaterial = (mat: THREE.Material): THREE.Material => {
  */
 const processMaterial = (mat: THREE.Material): THREE.Material => {
     // 1. Upgrade Material to Standard for better HDR lighting response
-    const standardMat = upgradeMaterial(mat);
+    const standardMat = upgradeMaterial(mat) as THREE.MeshStandardMaterial;
     
     // 2. Fix Texture Encoding
     if ((standardMat as any).map) {

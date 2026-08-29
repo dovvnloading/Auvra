@@ -505,7 +505,9 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                             onMouseDown={onTransformMouseDown}
                             onChange={onTransformChange}
                             onMouseUp={onTransformEnd}
-                            snap={transformSettings.snapEnabled ? (transformSettings.tool === 'rotate' ? THREE.MathUtils.degToRad(transformSettings.snapAngle) : transformSettings.snapGrid) : null}
+                            translationSnap={transformSettings.snapEnabled && transformSettings.tool === 'translate' ? transformSettings.snapGrid : null}
+                            rotationSnap={transformSettings.snapEnabled && transformSettings.tool === 'rotate' ? THREE.MathUtils.degToRad(transformSettings.snapAngle) : null}
+                            scaleSnap={transformSettings.snapEnabled && transformSettings.tool === 'scale' ? transformSettings.snapGrid : null}
                             size={0.8}
                         />
                     )}

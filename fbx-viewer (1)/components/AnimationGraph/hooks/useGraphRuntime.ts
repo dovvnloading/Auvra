@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
-import { AnimationGraphData } from '../../types';
+import { AnimationGraphData } from '../../../types';
 import { useAnimationMixer } from './useAnimationMixer';
 import { useInputHandler } from './useInputHandler';
 import { useGraphStateMachine } from './useGraphStateMachine';

@@ -252,7 +252,8 @@ export class NativeHostTransport implements HostTransport {
     this.revision = response.revision;
     if (response.ok) pending.span.finish('success', 'response');
     else {
-      pending.span.fail(undefined, response.error?.code || 'host_request_failed');
+      const error = 'error' in response ? response.error : undefined;
+      pending.span.fail(undefined, error?.code || 'host_request_failed');
       pending.span.finish('failure');
     }
     pending.resolve(response);

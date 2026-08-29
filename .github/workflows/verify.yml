@@ -51,6 +51,9 @@ jobs:
       - name: Verify desktop frame boundaries
         run: node scripts/frame/verify.mjs
 
+      - name: Typecheck the full editor program
+        run: npm run typecheck
+
       - name: Build editor
         run: npm run build
 

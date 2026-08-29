@@ -116,7 +116,10 @@ export class NativeEngineService {
       session: this.session, revision: this.wireRevision, method, payload,
     }));
     if (typeof response.revision === "number") this.wireRevision = response.revision;
-    if (!response.ok) throw new Error(response.error.message || response.error.code);
+    if (response.ok !== true) {
+      const error = 'error' in response ? response.error : undefined;
+      throw new Error(error?.message || error?.code || 'Native engine request failed');
+    }
     const result = response.result as unknown as T;
     this.update(result);
     return result;

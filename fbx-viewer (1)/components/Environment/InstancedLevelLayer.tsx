@@ -134,8 +134,10 @@ const PartInstancer: React.FC<{
                 onClick={interactive ? handleClick : undefined}
                 onPointerOver={interactive ? (e) => { e.stopPropagation(); setHoveredInstanceId(e.instanceId!); } : undefined}
                 onPointerOut={interactive ? (e) => { e.stopPropagation(); setHoveredInstanceId(null); } : undefined}
-                // If not interactive, ignore pointer events completely for raycasting optimization
-                pointerEvents={interactive ? undefined : 'none'} 
+                // If not interactive, skip raycasting entirely.  R3F exposes
+                // this through the Object3D raycast hook rather than a DOM
+                // pointerEvents prop.
+                raycast={interactive ? undefined : () => undefined}
             />
 
             {/* Highlight Overlay */}
@@ -144,6 +146,7 @@ const PartInstancer: React.FC<{
                     ref={setHighlightRef}
                     geometry={part.geometry} 
                     matrixAutoUpdate={false}
+                    raycast={() => undefined}
                 >
                     <meshBasicMaterial 
                         color="#a5f3fc" 

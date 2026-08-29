@@ -17,7 +17,9 @@ interface AudioSystemProps {
 export const AudioSystem: React.FC<AudioSystemProps> = ({ levelObjects, audioAssets, isMuted }) => {
     const { camera, scene } = useThree();
     const listenerRef = useRef<THREE.AudioListener | null>(null);
-    const sourcesRef = useRef<Map<string, THREE.Audio | THREE.PositionalAudio>>(new Map());
+    // PositionalAudio specializes THREE.Audio with a PannerNode output.  The
+    // map intentionally stores both variants behind the common Audio API.
+    const sourcesRef = useRef<Map<string, THREE.Audio<any>>>(new Map());
     
     // Store latest config per object ID to access inside async callbacks (avoiding stale closures)
     const latestConfigsRef = useRef<Map<string, AudioConfig>>(new Map());
@@ -163,7 +165,8 @@ export const AudioSystem: React.FC<AudioSystemProps> = ({ levelObjects, audioAss
                         
                         // Update Loop Start
                         const targetLoopStart = config.loopStart || 0;
-                        if (sound.source && sound.source.loopStart !== targetLoopStart) {
+                        const source = sound.source;
+                        if (source && 'loopStart' in source && source.loopStart !== targetLoopStart) {
                             sound.setLoopStart(targetLoopStart);
                         }
 
@@ -177,9 +180,10 @@ export const AudioSystem: React.FC<AudioSystemProps> = ({ levelObjects, audioAss
                                 targetLoopEnd = duration;
                             }
                             // Apply immediately to the playing source node if it exists
-                            if (sound.source && sound.isPlaying) {
-                                sound.source.loopEnd = targetLoopEnd;
-                                sound.source.loopStart = targetLoopStart;
+                            if (source && 'loopEnd' in source && sound.isPlaying) {
+                                const bufferSource = source as AudioBufferSourceNode;
+                                bufferSource.loopEnd = targetLoopEnd;
+                                bufferSource.loopStart = targetLoopStart;
                             }
                         }
                         
