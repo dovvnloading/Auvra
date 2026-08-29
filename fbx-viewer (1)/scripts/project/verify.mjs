@@ -18,6 +18,7 @@ const animationBinding = await readFile(resolve(root, 'utils/animationBinding.ts
 const app = await readFile(resolve(root, 'App.tsx'), 'utf8');
 const modelLoader = await readFile(resolve(root, 'utils/modelLoader.ts'), 'utf8');
 const importWorker = await readFile(resolve(root, 'workers/fbxImport.worker.ts'), 'utf8');
+const textureManager = await readFile(resolve(root, 'hooks/useTextureManager.ts'), 'utf8');
 const operationContext = await readFile(resolve(root, 'context/OperationContext.tsx'), 'utf8');
 const operationCenter = await readFile(resolve(root, 'components/UI/OperationCenter.tsx'), 'utf8');
 const nativeTransport = await readFile(resolve(root, 'host/nativeTransport.ts'), 'utf8');
@@ -64,6 +65,7 @@ if (!/new Worker\(new URL\(['"]\.\.\/workers\/fbxImport\.worker\.ts['"]/.test(mo
 if (/import\s*\{\s*FBXLoader\s*\}/.test(modelLoader)) failures.push('renderer model loader still imports FBXLoader directly');
 if (!/new FBXLoader\(\)\.parse/.test(importWorker) || !/new GLTFExporter\(\)\.parseAsync/.test(importWorker)) failures.push('FBX worker does not own parse and transient runtime conversion');
 if (!/signal\?\.addEventListener\(['"]abort/.test(modelLoader) || !/worker\.terminate\(\)/.test(modelLoader)) failures.push('FBX worker cancellation or teardown is missing');
+if (/img\.onerror\s*=\s*\(\)\s*=>\s*\{[^}]*resolve\(\)/.test(textureManager)) failures.push('texture metadata decode failures are treated as successful imports');
 if (!/request\.upload\.onprogress/.test(service) || !/XMLHttpRequest/.test(service)) failures.push('asset upload has no byte progress surface');
 if (!/OperationProvider/.test(app) || !/OperationCenter/.test(app) || !/AbortController/.test(operationContext)) failures.push('global operation lifecycle is not mounted');
 if (!/lockCancellation/.test(operationContext) || !/operation\.lockCancellation\(\)/.test(modelManager)) failures.push('safe import commit boundary is missing');
