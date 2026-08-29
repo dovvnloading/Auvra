@@ -183,6 +183,22 @@ class WholeProgramTraceTests(unittest.TestCase):
         ):
             self.assertIn(f'"{phase}"', dispatch)
 
+    def test_native_trace_spans_include_request_identity(self) -> None:
+        """Repeated native calls on one trace must remain independently correlated."""
+        source = (REPOSITORY_ROOT / "native" / "src" / "main.rs").read_text(encoding="utf-8")
+        guard_start = source.index("impl NativeTraceGuard")
+        guard_end = source.index("fn take_diagnostic_context", guard_start)
+        guard = source[guard_start:guard_end]
+        self.assertIn(
+            "fn begin(method: &str, request_id: u64, context: DiagnosticContext)",
+            guard,
+        )
+        self.assertIn('"{method}:{request_id}:{}"', guard)
+        self.assertIn(
+            "NativeTraceGuard::begin(&method, req.id, diagnostic_context)",
+            source,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
