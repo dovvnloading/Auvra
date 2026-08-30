@@ -14,6 +14,8 @@ $assemble = @('-m', 'release.pipeline', 'assemble', '--input-root', $InputRoot,
               '--output', $OutputRoot, '--channel', $Channel, '--version', $Version)
 if ($AppInstallerUri) { $assemble += @('--appinstaller-uri', $AppInstallerUri) }
 python @assemble
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($MsixOutput) {
     python -m release.pipeline package --staging $OutputRoot --output $MsixOutput
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
