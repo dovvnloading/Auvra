@@ -42,7 +42,7 @@ export interface AssetTransferOptions {
 
 type HostLike = {
   session?: string | null;
-  currentRevision?: number;
+  currentRevision: number;
   ready?: () => Promise<unknown>;
   request: (request: unknown) => Promise<Response>;
   subscribe: (listener: (event: Event) => void) => () => void;
@@ -71,7 +71,6 @@ export class ProjectService {
   private host: HostLike | null;
   private status: ProjectStatus = { ...EMPTY_STATUS };
   private session: string | null = null;
-  private wireRevision = 0;
   private requestCounter = 0;
   private requestQueue: Promise<unknown> = Promise.resolve();
   private listeners = new Set<(status: ProjectStatus) => void>();
@@ -292,7 +291,7 @@ export class ProjectService {
       protocol: 'auvra.host/1', type: 'request',
       id: traceId ? `${traceId}.req-${requestNumber}` : `project-${requestNumber}`,
       session: this.session,
-      revision: this.wireRevision,
+      revision: host.currentRevision,
       method,
       payload: effectivePayload,
     };
@@ -300,10 +299,6 @@ export class ProjectService {
       diagnostics ?? {},
       () => host.request(request),
     );
-    const envelopeRevision = (response as unknown as { revision?: unknown })?.revision;
-    if (typeof envelopeRevision === 'number' && Number.isSafeInteger(envelopeRevision) && envelopeRevision >= 0) {
-      this.wireRevision = envelopeRevision;
-    }
     if (!response || !(response as unknown as { ok?: boolean }).ok) {
       const error = (response as unknown as { error?: { message?: string; code?: string } })?.error;
       throw new Error(error?.message || error?.code || `Project operation failed: ${method}`);
@@ -320,7 +315,6 @@ export class ProjectService {
       const envelope = await host.ready() as { session?: string; revision?: number };
       if (envelope?.session) {
         this.session = envelope.session;
-        this.wireRevision = envelope.revision ?? this.wireRevision;
         this.publish();
         return;
       }
@@ -341,7 +335,6 @@ export class ProjectService {
     if (value.event === 'host.session') {
       this.session = value.session || this.session || this.host?.session || null;
     }
-    if (typeof value.revision === 'number') this.wireRevision = value.revision;
     const payload = value.payload || {};
     if (value.event?.startsWith('project.')) this.updateFromResult(payload);
     if (value.event === 'project.opening' || value.event === 'project.closing') this.setStatus({ ...this.status, busy: true });

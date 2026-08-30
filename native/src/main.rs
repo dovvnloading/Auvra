@@ -9,6 +9,7 @@ use auvra_native::render_world::{
 use auvra_native::world::{Entity, World as NativeWorld, WorldCommand, WorldTransaction};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt;
 use std::io::{self, Read, Write};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -322,16 +323,80 @@ fn read_frame(input: &mut impl Read) -> Result<Option<Vec<u8>>, String> {
     Ok(Some(body))
 }
 
-fn write_frame(output: &mut impl Write, value: &impl Serialize) -> Result<(), String> {
-    let body = serde_json::to_vec(value).map_err(|e| e.to_string())?;
+#[derive(Debug)]
+enum FrameWriteError {
+    Serialization(String),
+    TooLarge,
+    Io(String),
+}
+
+impl fmt::Display for FrameWriteError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Serialization(error) => {
+                write!(formatter, "response serialization failed: {error}")
+            }
+            Self::TooLarge => formatter.write_str("response exceeds 64 KiB protocol limit"),
+            Self::Io(error) => write!(formatter, "response write failed: {error}"),
+        }
+    }
+}
+
+fn write_frame(output: &mut impl Write, value: &impl Serialize) -> Result<(), FrameWriteError> {
+    let body = serde_json::to_vec(value)
+        .map_err(|error| FrameWriteError::Serialization(error.to_string()))?;
     if body.is_empty() || body.len() > MAX_FRAME {
-        return Err("response exceeds 64 KiB protocol limit".into());
+        return Err(FrameWriteError::TooLarge);
     }
     output
         .write_all(&(body.len() as u32).to_be_bytes())
-        .map_err(|e| e.to_string())?;
-    output.write_all(&body).map_err(|e| e.to_string())?;
-    output.flush().map_err(|e| e.to_string())
+        .map_err(|error| FrameWriteError::Io(error.to_string()))?;
+    output
+        .write_all(&body)
+        .map_err(|error| FrameWriteError::Io(error.to_string()))?;
+    output
+        .flush()
+        .map_err(|error| FrameWriteError::Io(error.to_string()))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum ResponseWriteOutcome {
+    Written,
+    ReplacedWithError,
+}
+
+impl ResponseWriteOutcome {
+    fn operation_succeeded(&self, response_ok: bool) -> bool {
+        response_ok && matches!(self, Self::Written)
+    }
+}
+
+fn write_response(
+    output: &mut impl Write,
+    response: &Response,
+) -> Result<ResponseWriteOutcome, FrameWriteError> {
+    match write_frame(output, response) {
+        Ok(()) => Ok(ResponseWriteOutcome::Written),
+        Err(FrameWriteError::TooLarge) => {
+            let fallback = error_response(
+                response.id,
+                "operation_failed",
+                "native response exceeds 64 KiB protocol limit",
+            );
+            write_frame(output, &fallback)?;
+            Ok(ResponseWriteOutcome::ReplacedWithError)
+        }
+        Err(FrameWriteError::Serialization(_)) => {
+            let fallback = error_response(
+                response.id,
+                "operation_failed",
+                "native response could not be serialized",
+            );
+            write_frame(output, &fallback)?;
+            Ok(ResponseWriteOutcome::ReplacedWithError)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 struct Renderer {
@@ -1742,8 +1807,16 @@ fn run_ipc() -> Result<(), String> {
     let stdout = io::stdout();
     let mut input = stdin.lock();
     let mut output = stdout.lock();
+    run_ipc_loop(&mut app, &mut input, &mut output)
+}
+
+fn run_ipc_loop(
+    app: &mut App,
+    input: &mut impl Read,
+    output: &mut impl Write,
+) -> Result<(), String> {
     loop {
-        let Some(bytes) = read_frame(&mut input)? else {
+        let Some(bytes) = read_frame(input)? else {
             diagnostic("info", "native.eof", None, None);
             return Ok(());
         };
@@ -1753,17 +1826,30 @@ fn run_ipc() -> Result<(), String> {
         let diagnostic_context = take_diagnostic_context(&mut req.params);
         let trace = NativeTraceGuard::begin(&method, req.id, diagnostic_context);
         let result = app.dispatch(req);
-        let succeeded = result.as_ref().is_ok_and(|response| response.ok);
-        trace.finish(succeeded);
         match result {
             Ok(resp) => {
-                write_frame(&mut output, &resp)?;
+                let response_ok = resp.ok;
+                let write_outcome = match write_response(output, &resp) {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        trace.finish(false);
+                        diagnostic(
+                            "error",
+                            "native.protocol_failed",
+                            Some(&method),
+                            Some("fatal_protocol_error"),
+                        );
+                        return Err(format!("fatal response write error: {error}"));
+                    }
+                };
+                trace.finish(write_outcome.operation_succeeded(response_ok));
                 if method == "shutdown" {
                     diagnostic("info", "native.stopped", Some(&method), None);
                     return Ok(());
                 }
             }
             Err(_error) => {
+                trace.finish(false);
                 diagnostic(
                     "error",
                     "native.protocol_failed",
@@ -2034,6 +2120,84 @@ mod tests {
         let second_id = second.trace.span_id.clone();
         second.finish(true);
         assert_ne!(first_id, second_id);
+    }
+
+    #[test]
+    fn oversized_replay_response_is_bounded_and_followup_still_writes() {
+        let mut app = App::new().unwrap();
+        app.authenticated = true;
+        let entities = (0..1024)
+            .map(|index| Entity {
+                id: format!("entity-{index:04}"),
+                position: [0.0, 0.0, 0.0],
+                color: [0.7, 0.7, 0.7, 1.0],
+                generation: 0,
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0, 1.0, 1.0],
+                velocity: [0.0, 0.0, 0.0],
+                render: None,
+                light: None,
+                animation: None,
+            })
+            .collect();
+        app.world.hydrate(0, entities).unwrap();
+        assert!(
+            serde_json::to_vec(&app.world.replay_snapshot())
+                .unwrap()
+                .len()
+                > MAX_FRAME
+        );
+
+        let mut input = Vec::new();
+        for (id, method) in [
+            (41, "world.getReplay"),
+            (42, "world.getSnapshot"),
+            (43, "shutdown"),
+        ] {
+            let body = serde_json::to_vec(&json!({
+                "id": id,
+                "protocol": PROTOCOL,
+                "method": method,
+                "params": {},
+            }))
+            .unwrap();
+            input.extend_from_slice(&(body.len() as u32).to_be_bytes());
+            input.extend_from_slice(&body);
+        }
+        let mut output = Vec::new();
+        run_ipc_loop(&mut app, &mut input.as_slice(), &mut output).unwrap();
+
+        let first_length = u32::from_be_bytes(output[0..4].try_into().unwrap()) as usize;
+        assert!(first_length <= MAX_FRAME);
+        let first: Value = serde_json::from_slice(&output[4..4 + first_length]).unwrap();
+        assert_eq!(first.get("id").and_then(Value::as_u64), Some(41));
+        assert_eq!(first.get("ok").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            first
+                .get("error")
+                .and_then(|error| error.get("code"))
+                .and_then(Value::as_str),
+            Some("operation_failed")
+        );
+
+        let second_start = 4 + first_length;
+        let second_length =
+            u32::from_be_bytes(output[second_start..second_start + 4].try_into().unwrap()) as usize;
+        assert!(second_length <= MAX_FRAME);
+        let second: Value =
+            serde_json::from_slice(&output[second_start + 4..second_start + 4 + second_length])
+                .unwrap();
+        assert_eq!(second.get("id").and_then(Value::as_u64), Some(42));
+        assert_eq!(second.get("ok").and_then(Value::as_bool), Some(true));
+
+        let third_start = second_start + 4 + second_length;
+        let third_length =
+            u32::from_be_bytes(output[third_start..third_start + 4].try_into().unwrap()) as usize;
+        let third: Value =
+            serde_json::from_slice(&output[third_start + 4..third_start + 4 + third_length])
+                .unwrap();
+        assert_eq!(third.get("id").and_then(Value::as_u64), Some(43));
+        assert_eq!(third.get("ok").and_then(Value::as_bool), Some(true));
     }
 
     fn project_payload() -> Value {

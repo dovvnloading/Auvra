@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -15,6 +17,66 @@ from release.runtime_verify import verify_installed_package
 
 
 class ReleasePipelineTests(unittest.TestCase):
+    @staticmethod
+    def _powershell() -> str | None:
+        if os.name != "nt":
+            return None
+        return shutil.which("pwsh") or shutil.which("powershell")
+
+    def _run_wrapper(self, script: str, *arguments: str) -> subprocess.CompletedProcess[str]:
+        powershell = self._powershell()
+        if powershell is None:
+            self.skipTest("PowerShell is required for release-wrapper regression tests")
+        command = [powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                   "-File", str(Path(__file__).parents[2] / "release" / script), *arguments]
+        return subprocess.run(command, cwd=Path(__file__).parents[2], capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", check=False)
+
+    @unittest.skipUnless(os.name == "nt", "release wrappers require Windows PowerShell")
+    def test_build_wrapper_propagates_python_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            result = self._run_wrapper(
+                "build.ps1", "-InputRoot", str(root / "missing-input"),
+                "-OutputRoot", str(root / "package"), "-Channel", "stable", "-Version", "1.0.0",
+            )
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+
+    @unittest.skipUnless(os.name == "nt", "release wrappers require Windows PowerShell")
+    def test_verify_wrapper_propagates_python_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            result = self._run_wrapper(
+                "verify.ps1", "-PackageRoot", str(Path(temporary) / "missing-package"),
+                "-Channel", "stable",
+            )
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+
+    @unittest.skipUnless(os.name == "nt", "release wrappers require Windows PowerShell")
+    def test_stage_inputs_wrapper_propagates_python_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            directories = {
+                name: root / name
+                for name in (
+                    "frontend", "python-embed", "python-site-packages", "webview2-sdk",
+                    "webview2-fixed", "native", "host", "licenses",
+                )
+            }
+            for directory in directories.values():
+                directory.mkdir()
+            native = directories["native"] / "auvra-native.exe"
+            native.write_bytes(b"native")
+            result = self._run_wrapper(
+                "stage_inputs.ps1", "-Frontend", str(directories["frontend"]),
+                "-PythonEmbed", str(directories["python-embed"]),
+                "-PythonSitePackages", str(directories["python-site-packages"]),
+                "-WebView2Sdk", str(directories["webview2-sdk"]),
+                "-WebView2Fixed", str(directories["webview2-fixed"]),
+                "-NativeBinary", str(native), "-HostInput", str(directories["host"]),
+                "-Licenses", str(directories["licenses"]), "-Output", str(root / "staged"),
+            )
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+
     def staged_inputs(self, root: Path) -> Path:
         staged = root / "inputs"
         files = {

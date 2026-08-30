@@ -35,7 +35,7 @@ export interface NativeEngineStatus {
 
 type HostLike = {
   session?: string | null;
-  currentRevision?: number;
+  currentRevision: number;
   ready?: () => Promise<unknown>;
   request: (request: unknown) => Promise<Response>;
   subscribe: (listener: (event: Event) => void) => () => void;
@@ -53,7 +53,6 @@ const QUIET_ENGINE_METHODS = new Set(['engine.getStatus', 'engine.getSnapshot', 
 export class NativeEngineService {
   private host: HostLike | null = null;
   private session: string | null = null;
-  private wireRevision = 0;
   private counter = 0;
   private queue: Promise<unknown> = Promise.resolve();
   private value: NativeEngineStatus = { ...STOPPED };
@@ -108,14 +107,14 @@ export class NativeEngineService {
   private async performCall<T extends NativeEngineStatus>(method: string, payload: Record<string, unknown>, diagnostics: DiagnosticContext): Promise<T> {
     await this.ensureSession();
     if (!this.session) throw new Error("The native engine host is not ready");
+    const host = this.getHost();
     const requestNumber = ++this.counter;
     const traceId = diagnostics.traceId ?? '';
-    const response = await frontendDiagnostics.withContext(diagnostics, () => this.getHost().request({
+    const response = await frontendDiagnostics.withContext(diagnostics, () => host.request({
       protocol: "auvra.host/1", type: "request",
       id: traceId ? `${traceId}.req-${requestNumber}` : `engine-${requestNumber}`,
-      session: this.session, revision: this.wireRevision, method, payload,
+      session: this.session, revision: host.currentRevision, method, payload,
     }));
-    if (typeof response.revision === "number") this.wireRevision = response.revision;
     if (response.ok !== true) {
       const error = 'error' in response ? response.error : undefined;
       throw new Error(error?.message || error?.code || 'Native engine request failed');
@@ -131,10 +130,8 @@ export class NativeEngineService {
     if (host.ready) {
       const envelope = await host.ready() as { session?: string; revision?: number };
       this.session = envelope.session ?? null;
-      this.wireRevision = envelope.revision ?? this.wireRevision;
     } else {
       this.session = host.session ?? null;
-      this.wireRevision = host.currentRevision ?? this.wireRevision;
     }
   }
 
@@ -147,7 +144,6 @@ export class NativeEngineService {
   }
 
   private handleEvent(event: Event): void {
-    if (typeof event.revision === "number") this.wireRevision = event.revision;
     if (event.event === "host.session") this.session = event.session;
     if (event.event.startsWith("engine.")) this.update(event.payload as unknown as Partial<NativeEngineStatus>);
   }

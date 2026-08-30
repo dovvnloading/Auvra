@@ -38,3 +38,4 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Output 'native') | Out-Nul
 Copy-Item -LiteralPath $native -Destination (Join-Path $Output 'native\auvra-native.exe') -Force
 
 python -m release.pipeline inventory --input-root $Output --output (Join-Path $Output 'inputs-manifest.json')
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

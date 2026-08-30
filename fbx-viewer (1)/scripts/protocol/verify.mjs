@@ -45,7 +45,37 @@ if (process.argv.includes("--fake-host")) {
   let fake = await readFile(resolve(root, "fbx-viewer (1)", "host", "fakeHost.ts"), "utf8");
   fake = fake.replaceAll('"./protocol"', '"./protocol.ts"').replaceAll('"./transport"', '"./transport.ts"').replaceAll('"./generated/protocolV1"', '"./generated/protocolV1.ts"');
   await writeFile(resolve(temp, "host", "fakeHost.ts"), fake, "utf8");
+  const copyRuntimeModule = async (source, target, replacements = []) => {
+    let contents = await readFile(resolve(root, "fbx-viewer (1)", source), "utf8");
+    for (const [from, to] of replacements) contents = contents.replaceAll(from, to);
+    await mkdir(resolve(temp, target, ".."), { recursive: true });
+    await writeFile(resolve(temp, target), contents, "utf8");
+  };
+  await copyRuntimeModule("host/bootstrap.ts", "host/bootstrap.ts", [
+    ['"./fakeHost"', '"./fakeHost.ts"'], ['"./nativeTransport"', '"./nativeTransport.ts"'],
+    ['"./transport"', '"./transport.ts"'], ['"../diagnostics/runtime"', '"../diagnostics/runtime.ts"'],
+  ]);
+  await copyRuntimeModule("host/nativeTransport.ts", "host/nativeTransport.ts", [
+    ['"./protocol"', '"./protocol.ts"'], ['"./transport"', '"./transport.ts"'],
+    ['"./generated/protocolV1"', '"./generated/protocolV1.ts"'], ['"../diagnostics/runtime"', '"../diagnostics/runtime.ts"'],
+  ]);
+  await copyRuntimeModule("host/transport.ts", "host/transport.ts", [['"./generated/protocolV1"', '"./generated/protocolV1.ts"']]);
+  await copyRuntimeModule("host/protocol.ts", "host/protocol.ts", [
+    ['"./generated/protocolV1"', '"./generated/protocolV1.ts"'],
+    ['"./generated/validateProtocolV1"', '"./generated/validateProtocolV1.ts"'],
+  ]);
+  await copyRuntimeModule("diagnostics/runtime.ts", "diagnostics/runtime.ts");
+  await copyRuntimeModule("host/engine.ts", "host/engine.ts", [
+    ['"./bootstrap"', '"./bootstrap.ts"'], ['"./generated/protocolV1"', '"./generated/protocolV1.ts"'],
+    ["'../diagnostics/runtime'", "'../diagnostics/runtime.ts'"],
+  ]);
+  await copyRuntimeModule("utils/projectService.ts", "utils/projectService.ts", [
+    ["'../host/bootstrap'", "'../host/bootstrap.ts'"], ["'../host/generated/protocolV1'", "'../host/generated/protocolV1.ts'"],
+    ["'../diagnostics/runtime'", "'../diagnostics/runtime.ts'"],
+  ]);
   await writeFile(resolve(temp, "run.ts"), `import { FakeHost } from "./host/fakeHost.ts";
+import { NativeEngineService } from "./host/engine.ts";
+import { ProjectService } from "./utils/projectService.ts";
 const host = new FakeHost();
 const request = { protocol: "auvra.host/1", type: "request", id: "r1", session: host.session, revision: 0, method: "host.ping", payload: {} };
 const reply = await host.request(request);
@@ -110,6 +140,22 @@ const engineRecover = await engineCall("engine-recover", "engine.recover");
 if (!engineRecover.ok || engineRecover.result.kind !== "engine.recover") throw new Error("engine recovery behavior failed");
 const engineReloadSnapshot = await engineCall("engine-reload", "engine.getSnapshot");
 if (!engineReloadSnapshot.ok || engineReloadSnapshot.result.entities.length !== 1 || engineReloadSnapshot.result.worldRevision !== 1) throw new Error("engine world did not survive editor reload");
+const interleavedBackend = new FakeHost("interleaved-session");
+const sentRevisions = [];
+const sharedHost = {
+  get session() { return interleavedBackend.session; },
+  get currentRevision() { return interleavedBackend.currentRevision; },
+  request(request) { sentRevisions.push({ id: request.id, revision: request.revision, method: request.method }); return interleavedBackend.request(request); },
+  subscribe(listener) { return interleavedBackend.subscribe(listener); },
+};
+const interleavedProject = new ProjectService(sharedHost);
+const interleavedEngine = new NativeEngineService();
+(interleavedEngine as unknown as { host: typeof sharedHost }).host = sharedHost;
+await interleavedEngine.openViewport();
+await interleavedProject.create("Interleaved");
+await interleavedEngine.closeViewport();
+await interleavedProject.applyChanges([{ domain: "objects", operation: "upsert", id: "object-1", value: { id: "object-1" } }]);
+if (sentRevisions.map(({ revision }) => revision).join(",") !== "0,1,2,3") throw new Error("interleaved services sent a stale host revision");
 console.log("fake host behavior passed");
 ` , "utf8");
   let buildError;
