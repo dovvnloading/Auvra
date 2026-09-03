@@ -404,6 +404,8 @@ All render textures use `sample_count: 1` (`native/src/gpu.rs:513`). Requesting 
 
 Startup checks only that `AUVRA_NATIVE_SESSION_TOKEN` exists and has a valid shape (`native/src/main.rs:1993`). `session.hello` then authenticates unconditionally without receiving or comparing the token (`native/src/main.rs:703`); the Python hello payload contains only an editor session ID (`Auvra/desktop/native_engine.py:297`). Private inherited stdio limits exposure, but the token should not be described as an authentication control.
 
+**Status:** Completed — native `session.hello` now requires a fresh challenge and constant-time HMAC-SHA256 proof derived from the inherited session token; the token never crosses the request frame, invalid proofs remain unauthenticated, and native, Python, and live transport validation passed.
+
 ### F-048 — GPU initialization is mandatory for non-renderer native services
 
 **Severity:** Medium · **Classification:** Reliability concern

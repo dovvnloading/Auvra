@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import hashlib
+import hmac
 import json
 import os
 import queue
@@ -64,6 +65,13 @@ _NATIVE_DIAGNOSTIC_METHODS = frozenset({
     "renderer.getMetrics", "renderer.recover", "asset.submit", "asset.beginCook",
     "asset.status", "asset.cancel", "viewport.open", "viewport.close", "shutdown",
 })
+
+
+def _session_proof(token: str, challenge: str, editor_session: str) -> str:
+    message = f"{challenge}\n{editor_session}".encode("utf-8")
+    return hmac.new(token.encode("ascii"), message, hashlib.sha256).hexdigest()
+
+
 _ENGINE_FEATURES = (
     "pbr_metallic_roughness", "skeletal_animation", "frustum_culling",
     "deterministic_lod", "instance_batching", "directional_lights",
@@ -572,6 +580,14 @@ class NativeEngine:
         if process is None or process.stdin is None or process.stdout is None:
             raise NativeEngineClosedError("native process is unavailable")
         request_params = dict(params or {})
+        if method == "session.hello":
+            token = self._token
+            editor_session = request_params.get("editorSession")
+            if token is None or not isinstance(editor_session, str) or not editor_session:
+                raise NativeEngineAuthenticationError("native session proof cannot be constructed")
+            challenge = secrets.token_hex(32)
+            request_params["challenge"] = challenge
+            request_params["proof"] = _session_proof(token, challenge, editor_session)
         _validate_json_data(request_params)
         diagnostic_context = current_diagnostic_context()
         trace_id = diagnostic_context.get("traceId")

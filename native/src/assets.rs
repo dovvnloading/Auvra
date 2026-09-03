@@ -1824,11 +1824,16 @@ impl<'a> JsonScanner<'a> {
     }
 }
 
-#[cfg(test)]
-fn sha256_hex(bytes: &[u8]) -> String {
+pub fn sha256_digest(bytes: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    hasher.finalize_hex()
+    hasher.finalize_bytes()
+}
+
+#[cfg(test)]
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = sha256_digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[derive(Clone)]
@@ -1863,7 +1868,7 @@ impl Sha256 {
             }
         }
     }
-    fn finalize_hex(mut self) -> String {
+    fn finalize_bytes(mut self) -> [u8; 32] {
         self.buffer[self.buffer_len] = 0x80;
         self.buffer_len += 1;
         if self.buffer_len > 56 {
@@ -1876,11 +1881,17 @@ impl Sha256 {
         self.buffer[56..].copy_from_slice(&self.bit_len.to_be_bytes());
         let block = self.buffer;
         self.compress(&block);
-        let mut output = String::with_capacity(64);
-        for word in self.state {
-            output.push_str(&format!("{word:08x}"));
+        let mut output = [0_u8; 32];
+        for (index, word) in self.state.iter().enumerate() {
+            output[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
         }
         output
+    }
+    fn finalize_hex(self) -> String {
+        self.finalize_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
     fn compress(&mut self, block: &[u8; 64]) {
         const K: [u32; 64] = [

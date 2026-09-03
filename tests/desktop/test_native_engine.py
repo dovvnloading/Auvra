@@ -68,7 +68,10 @@ FAKE_CHILD = textwrap.dedent(
             method = request.get("method")
             params = request.get("params", {})
             if method == "session.hello":
-                result = {"authenticated": len(token) == 64, "requestTokenField": "token" in request}
+                result = {"authenticated": len(token) == 64,
+                          "requestTokenField": "token" in request,
+                          "challengePresent": "challenge" in params,
+                          "proofPresent": "proof" in params}
             elif method == "world.apply":
                 if params.get("expectedRevision") != revision:
                     write_frame({"protocol":PROTOCOL,"id":request_id,"ok":False,"error":{"code":"revision_conflict","message":"expected revision does not match"}})
@@ -195,6 +198,8 @@ class NativeEngineTests(unittest.TestCase):
         hello = engine.session_hello("editor-before-reload")
         self.assertTrue(hello["authenticated"])
         self.assertFalse(hello["requestTokenField"])
+        self.assertTrue(hello["challengePresent"])
+        self.assertTrue(hello["proofPresent"])
         applied = engine.apply_world(0, [{"id": "cube", "position": [1, 2, 3]}])
         self.assertEqual(applied["revision"], 1)
         with self.assertRaises(NativeEngineRevisionConflictError):

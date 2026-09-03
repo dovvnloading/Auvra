@@ -1,4 +1,6 @@
-use auvra_native::assets::{CancellationToken, CookConfig, CookWorker, cook_source};
+use auvra_native::assets::{
+    CancellationToken, CookConfig, CookWorker, cook_source, sha256_digest,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 mod gpu;
@@ -830,8 +832,50 @@ fn configure_viewport_surface(
     );
 }
 
+fn valid_session_token(token: &str) -> bool {
+    token.len() == 64 && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn session_proof(token: &str, challenge: &str, editor_session: &str) -> String {
+    const BLOCK_BYTES: usize = 64;
+    let mut key = [0_u8; BLOCK_BYTES];
+    let token_bytes = token.as_bytes();
+    key[..token_bytes.len().min(BLOCK_BYTES)]
+        .copy_from_slice(&token_bytes[..token_bytes.len().min(BLOCK_BYTES)]);
+    let mut inner = [0x36_u8; BLOCK_BYTES];
+    let mut outer = [0x5c_u8; BLOCK_BYTES];
+    for index in 0..BLOCK_BYTES {
+        inner[index] ^= key[index];
+        outer[index] ^= key[index];
+    }
+    let mut message = Vec::with_capacity(BLOCK_BYTES + challenge.len() + editor_session.len() + 1);
+    message.extend_from_slice(&inner);
+    message.extend_from_slice(challenge.as_bytes());
+    message.push(b'\n');
+    message.extend_from_slice(editor_session.as_bytes());
+    let inner_digest = sha256_digest(&message);
+    let mut outer_message = Vec::with_capacity(BLOCK_BYTES + inner_digest.len());
+    outer_message.extend_from_slice(&outer);
+    outer_message.extend_from_slice(&inner_digest);
+    sha256_digest(&outer_message)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right)
+        .fold(0_u8, |difference, (left, right)| difference | (left ^ right))
+        == 0
+}
+
 struct App {
     authenticated: bool,
+    session_token: Option<String>,
     world: NativeWorld,
     project_id: Option<String>,
     project_revision: Option<u64>,
@@ -895,6 +939,9 @@ impl Default for ProjectRenderState {
 
 impl App {
     fn new() -> Result<Self, String> {
+        let session_token = std::env::var("AUVRA_NATIVE_SESSION_TOKEN")
+            .ok()
+            .filter(|token| valid_session_token(token));
         let world = NativeWorld::new();
         let cooker = match (
             std::env::var_os("AUVRA_NATIVE_SOURCE_ROOT"),
@@ -907,6 +954,7 @@ impl App {
         };
         Ok(Self {
             authenticated: false,
+            session_token,
             world,
             project_id: None,
             project_revision: None,
@@ -925,6 +973,44 @@ impl App {
             return Err("unsupported protocol version".into());
         }
         if req.method == "session.hello" {
+            let Some(params) = req.params.as_object() else {
+                return Ok(error_response(
+                    req.id,
+                    "authentication_failed",
+                    "session.hello requires an editor session, challenge, and proof",
+                ));
+            };
+            let editor_session = params
+                .get("editorSession")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty() && value.len() <= 128);
+            let challenge = params
+                .get("challenge")
+                .and_then(Value::as_str)
+                .filter(|value| valid_session_token(value));
+            let proof = params
+                .get("proof")
+                .and_then(Value::as_str)
+                .filter(|value| valid_session_token(value));
+            let authenticated = match (
+                self.session_token.as_deref(),
+                editor_session,
+                challenge,
+                proof,
+            ) {
+                (Some(token), Some(editor_session), Some(challenge), Some(proof)) => {
+                    let expected = session_proof(token, challenge, editor_session);
+                    constant_time_equal(expected.as_bytes(), proof.as_bytes())
+                }
+                _ => false,
+            };
+            if !authenticated {
+                return Ok(error_response(
+                    req.id,
+                    "authentication_failed",
+                    "session proof is invalid",
+                ));
+            }
             self.authenticated = true;
             return Ok(response(
                 req.id,
@@ -2816,11 +2902,18 @@ fn run_ipc_loop(
 fn run_self_test() -> Result<(), String> {
     let started = Instant::now();
     let mut app = App::new()?;
+    let token = std::env::var("AUVRA_NATIVE_SESSION_TOKEN")
+        .map_err(|_| "session token is unavailable for self-test")?;
+    let challenge = "0000000000000000000000000000000000000000000000000000000000000001";
     let hello = app.dispatch(Request {
         id: 1,
         protocol: PROTOCOL.into(),
         method: "session.hello".into(),
-        params: Value::Null,
+        params: json!({
+            "editorSession": "self-test",
+            "challenge": challenge,
+            "proof": session_proof(&token, challenge, "self-test"),
+        }),
     })?;
     let applied = app.dispatch(Request { id: 2, protocol: PROTOCOL.into(), method: "world.apply".into(), params: json!({"expectedRevision": 0, "entities": [{"id":"reference","position":[1.25,-0.5,0.0],"color":[0.2,0.6,1.0,1.0]}]}) })?;
     let rendered = app.dispatch(Request {
@@ -2904,11 +2997,18 @@ fn run_self_test() -> Result<(), String> {
 fn run_headless_self_test() -> Result<(), String> {
     let started = Instant::now();
     let mut app = App::new()?;
+    let token = std::env::var("AUVRA_NATIVE_SESSION_TOKEN")
+        .map_err(|_| "session token is unavailable for self-test")?;
+    let challenge = "0000000000000000000000000000000000000000000000000000000000000002";
     let hello = app.dispatch(Request {
         id: 1,
         protocol: PROTOCOL.into(),
         method: "session.hello".into(),
-        params: Value::Null,
+        params: json!({
+            "editorSession": "headless-self-test",
+            "challenge": challenge,
+            "proof": session_proof(&token, challenge, "headless-self-test"),
+        }),
     })?;
     let asset_id = "0000000000000000000000000000000000000000000000000000000000000000";
     let hydrated = app.dispatch(Request { id: 2, protocol: PROTOCOL.into(), method: "world.hydrate".into(), params: json!({"projectId":"headless-reference","projectRevision":7,"domains":{"objects":{"schemaVersion":1,"documents":[{"id":"reference","levelId":"level","modelId":"model","name":"Reference","type":"mesh","position":[0.0,0.0,0.0],"color":[0.2,0.6,1.0,1.0]}]},"models":{"schemaVersion":1,"documents":[{"id":"model","name":"Reference","assetId":asset_id}]},"levels":{"schemaVersion":1,"documents":[{"id":"level"}]}},"assetIds":[]}) })?;
@@ -3029,7 +3129,7 @@ fn run_headless_self_test() -> Result<(), String> {
 
 fn main() {
     match std::env::var("AUVRA_NATIVE_SESSION_TOKEN") {
-        Ok(token) if token.len() == 64 && token.bytes().all(|byte| byte.is_ascii_hexdigit()) => (),
+        Ok(token) if valid_session_token(&token) => (),
         _ => {
             diagnostic(
                 "error",
@@ -3071,6 +3171,29 @@ mod tests {
         let second_id = second.trace.span_id.clone();
         second.finish(true);
         assert_ne!(first_id, second_id);
+    }
+
+    #[test]
+    fn session_hello_rejects_missing_or_invalid_proof() {
+        let mut app = App::new().unwrap();
+        let response = app
+            .dispatch(Request {
+                id: 1,
+                protocol: PROTOCOL.into(),
+                method: "session.hello".into(),
+                params: json!({
+                    "editorSession": "test",
+                    "challenge": "0000000000000000000000000000000000000000000000000000000000000001",
+                    "proof": "0000000000000000000000000000000000000000000000000000000000000000",
+                }),
+            })
+            .unwrap();
+        assert!(!response.ok);
+        assert_eq!(
+            response.error.as_ref().map(|error| error.code),
+            Some("authentication_failed")
+        );
+        assert!(!app.authenticated);
     }
 
     #[test]
