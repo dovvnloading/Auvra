@@ -1617,9 +1617,19 @@ impl App {
             format!("unsupported_capability|native renderer unavailable: {error}")
         })?;
         let extraction = self.build_extraction(&Value::Null)?;
-        let viewport_reopened = if let Some(viewport) = self.viewport.as_mut() {
-            viewport.recover(&mut renderer, &extraction)?;
-            true
+        // Rebuilding the renderer can race a hidden/occluded desktop surface
+        // on Windows.  Keep the offscreen renderer recovery successful while
+        // dropping only the visible viewport when its swapchain is no longer
+        // supported by the backend.
+        let viewport_reopened = if let Some(mut viewport) = self.viewport.take() {
+            match viewport.recover(&mut renderer, &extraction) {
+                Ok(()) => {
+                    self.viewport = Some(viewport);
+                    true
+                }
+                Err(error) if viewport_capability_error(&error) => false,
+                Err(error) => return Err(error),
+            }
         } else {
             false
         };
@@ -1888,6 +1898,10 @@ impl App {
             json!({"open": true, "alreadyOpen": false, "width": width, "height": height, "ownership": "separate-native-surface", "dockSupport": "unsupported", "dockActive": false, "dockReason": "same-build-native-parenting-gate-not-passed"}),
         )
     }
+}
+
+fn viewport_capability_error(error: &str) -> bool {
+    error.starts_with("unsupported_capability|") || error.starts_with("surface acquire failed:")
 }
 
 fn world_error_message(error: auvra_native::world::WorldError) -> String {
@@ -3118,6 +3132,14 @@ fn run_self_test() -> Result<(), String> {
         .and_then(|v| v.get("viewport_reopened"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let viewport_recovery_unsupported = opened.ok
+        && recovered.ok
+        && recovered
+            .result
+            .as_ref()
+            .and_then(|v| v.get("viewport_reopened"))
+            .and_then(Value::as_bool)
+            == Some(false);
     let clean_shutdown = stopped.ok
         && stopped
             .result
@@ -3130,14 +3152,17 @@ fn run_self_test() -> Result<(), String> {
         && rendered.ok
         && cached.ok
         && cache_hit
-        && ((opened.ok && recovered.ok && viewport_reopened && closed.ok)
+        && ((opened.ok
+            && recovered.ok
+            && (viewport_reopened || viewport_recovery_unsupported)
+            && closed.ok)
             || (viewport_unsupported && recovered.ok && !viewport_reopened && closed.ok))
         && clean_shutdown
         && app.world.revision() == 1)
     {
         return Err("native self-test acceptance failed".into());
     }
-    let evidence = json!({"probe": "auvra-native-self-test", "protocol": PROTOCOL, "hello_ok": hello.ok, "world_apply_ok": applied.ok, "world_revision": app.world.revision(), "reference_render_ok": rendered.ok, "reference": rendered.result, "pipeline_cache_hit": cache_hit, "viewport_open_ok": opened.ok, "viewport_unsupported": viewport_unsupported, "recovery_ok": recovered.ok, "viewport_reopened": viewport_reopened, "viewport_close_ok": closed.ok, "clean_shutdown": clean_shutdown, "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0});
+    let evidence = json!({"probe": "auvra-native-self-test", "protocol": PROTOCOL, "hello_ok": hello.ok, "world_apply_ok": applied.ok, "world_revision": app.world.revision(), "reference_render_ok": rendered.ok, "reference": rendered.result, "pipeline_cache_hit": cache_hit, "viewport_open_ok": opened.ok, "viewport_unsupported": viewport_unsupported, "recovery_ok": recovered.ok, "viewport_reopened": viewport_reopened, "viewport_recovery_unsupported": viewport_recovery_unsupported, "viewport_close_ok": closed.ok, "clean_shutdown": clean_shutdown, "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0});
     println!(
         "{}",
         serde_json::to_string(&evidence).map_err(|e| e.to_string())?

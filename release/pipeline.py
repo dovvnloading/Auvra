@@ -33,9 +33,10 @@ POLICY_PATH = ROOT / "policy.json"
 FORBIDDEN_SUFFIXES = {".pfx", ".p12", ".pem", ".key", ".env"}
 FORBIDDEN_CONTENT_SUFFIXES = {".map", ".log", ".dmp", ".dump", ".pdb", ".ilk", ".obj", ".lib", ".exp", ".pyc", ".pyproj", ".sln"}
 FORBIDDEN_CONTENT_NAMES = {"vite.config.ts", "vite.config.js", "tsconfig.json", "cargo.toml", "cargo.lock", "pyproject.toml", "uv.lock", "package.json", "package-lock.json", "auvra.py", "auvra.pyproj", "bootstrap.py"}
-# Compiled/runtime payloads can legitimately contain toolchain source paths
-# and URLs in debug/resource strings.  Keep secret/private-content checks for
-# those files, but apply text-only path/CDN checks to actual text payloads.
+# Compiled/runtime payloads can legitimately contain toolchain source paths,
+# URLs, and generic prose in debug/resource strings.  Keep the credential
+# pattern for those files, but apply path/CDN/private-content checks to actual
+# text payloads.
 BINARY_CONTENT_SUFFIXES = {
     ".bin", ".cab", ".dat", ".dll", ".dylib", ".exe", ".msix", ".msixbundle",
     ".nupkg", ".pak", ".pyd", ".so", ".ttf", ".woff", ".woff2", ".zip",
@@ -142,7 +143,7 @@ def _scan_release_content(root: Path, policy: Mapping[str, Any], *, include_mani
     def violation(data: bytes, *, text_content: bool) -> bool:
         return bool(
             SECRET_PATTERN.search(data)
-            or PRIVATE_CONTENT_PATTERN.search(data)
+            or (text_content and PRIVATE_CONTENT_PATTERN.search(data))
             or (text_content and ABSOLUTE_PATH_PATTERN.search(data))
             or (text_content and RUNTIME_CDN_PATTERN.search(data))
         )

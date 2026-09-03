@@ -358,6 +358,24 @@ class NativeEngineTests(unittest.TestCase):
         self.assertIn("engine.recovery", names)
         self.assertEqual(host.drain_events(), [])
 
+    def test_recovery_closes_viewport_when_native_surface_is_unsupported(self) -> None:
+        class Engine:
+            state = NativeEngineState.READY
+
+            def call(self, method: str, _params: dict[str, object] | None = None) -> dict[str, object]:
+                if method == "renderer.recover":
+                    return {"viewport_reopened": False, "capabilities": {}}
+                raise AssertionError(method)
+
+        host = NativeEngineHost(Engine())
+        host._viewport = "open"
+        recovered = host.handle("engine.recover", {})
+        self.assertEqual(recovered["viewport"], "closed")
+        self.assertEqual(
+            recovered["dockReason"],
+            "native viewport was unavailable after renderer recovery",
+        )
+
     def test_native_asset_staging_verifies_hash_and_keeps_protocol_pathless(self) -> None:
         engine = self.make_engine()
         source = Path(self.temp.name) / "native-source"

@@ -91,6 +91,10 @@ class ReleasePipelineTests(unittest.TestCase):
             "webview2-sdk/Microsoft.Web.WebView2.Core.dll": b"sdk",
             "webview2-sdk/.auvra-sdk.sha256": b"d3934f482d484b89fb4825df720c710664e1143a1e90f7b3a60794ef33f473d2\n",
             "webview2-fixed/msedgewebview2.exe": b"runtime",
+            # Resource archives contain arbitrary prose strings; these must
+            # not be mistaken for release-private text merely because the
+            # bytes happen to include a policy phrase.
+            "webview2-fixed/resources.pak": b"\x00internal roadmap\x00",
             "webview2-fixed/Auvra.runtime-pin.json": b'{"schema":1,"kind":"webview2Fixed","version":"151.0.4129.107","sha256":"f1e1c2c9b34c79ba4d88df77fb79a05441e1bd7481d6a985d76dd377cda45f33"}',
             "native/auvra-native.exe": b"native",
             "host/Auvra/__init__.py": b"",

@@ -1375,6 +1375,7 @@ class NativeEngineHost:
                 }
                 result = self._canonical("engine.metrics")
             else:  # engine.recover
+                had_viewport = self._viewport == "open"
                 try:
                     recovered = self.engine.call("renderer.recover")
                 except (NativeEngineTimeoutError, NativeEngineChildExitedError,
@@ -1385,6 +1386,12 @@ class NativeEngineHost:
                     self._dock_reason = "native viewport must be reopened after process recovery"
                     recovered = {"capabilities": self._capabilities()}
                 self._ingest_native_result(recovered)
+                viewport_reopened = recovered.get("viewport_reopened")
+                if isinstance(viewport_reopened, bool):
+                    self._viewport = "open" if viewport_reopened else "closed"
+                    if had_viewport and not viewport_reopened:
+                        self._dock_active = False
+                        self._dock_reason = "native viewport was unavailable after renderer recovery"
                 self._recovery_count += 1
                 if self._metrics is not None:
                     self._metrics["recoveryCount"] = self._recovery_count
