@@ -415,7 +415,7 @@ class NativeEngineTests(unittest.TestCase):
                 self.calls.append((method, params or {}))
                 if method == "renderer.getCapabilities":
                     return {
-                        "backend": "wgpu", "adapter": "reference",
+                        "backend": "wgpu", "adapter": "reference", "device_type": "Cpu",
                         "dockSupport": "same-build", "dockReason": None,
                         "featureCapabilities": [
                             {"feature": feature, "supported": True, "fallbackReason": None}
@@ -449,6 +449,7 @@ class NativeEngineTests(unittest.TestCase):
         host = NativeEngineHost(engine)
         host.set_dock_target_provider(lambda: {"parentHandle": 99, "width": 640, "height": 480})
         host.handle("engine.getStatus", {})
+        self.assertEqual(host._canonical("engine.status")["deviceType"], "Cpu")
         snapshot = host.handle("engine.getSnapshot", {})
         self.assertEqual(snapshot["tick"], 12)
         self.assertEqual(snapshot["projectRevision"], 9)

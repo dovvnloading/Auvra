@@ -856,6 +856,7 @@ class NativeEngineHost:
         self._viewport = "closed"
         self._backend: str | None = None
         self._adapter: str | None = None
+        self._device_type: str | None = None
         self._fallback_reason: str | None = None
         self._metrics: dict[str, Any] | None = None
         self._native_fields: dict[str, Any] = {}
@@ -1098,6 +1099,8 @@ class NativeEngineHost:
             self._backend = value["backend"]
         if isinstance(value.get("adapter"), str) and 0 < len(value["adapter"]) <= 256:
             self._adapter = value["adapter"]
+        if value.get("device_type") in {"Cpu", "IntegratedGpu", "DiscreteGpu", "VirtualGpu", "Other"}:
+            self._device_type = value["device_type"]
         if "fallback" in value and isinstance(value.get("fallback"), str):
             self._fallback_reason = value["fallback"][:256]
         if "fallbackReason" in value and (isinstance(value.get("fallbackReason"), str) or value.get("fallbackReason") is None):
@@ -1194,6 +1197,8 @@ class NativeEngineHost:
             result["backend"] = self._backend
         if self._adapter is not None:
             result["adapter"] = self._adapter
+        if self._device_type is not None:
+            result["deviceType"] = self._device_type
         if self._fallback_reason is not None:
             result["fallbackReason"] = self._fallback_reason
         if self._metrics is not None:
@@ -1407,7 +1412,7 @@ class NativeEngineHost:
                     },
                 })
             self._event("engine.status", {key: value for key, value in result.items()
-                                           if key in {"status", "worldRevision", "viewport", "backend", "adapter", "fallbackReason"}})
+                                           if key in {"status", "worldRevision", "viewport", "backend", "adapter", "deviceType", "fallbackReason"}})
             return result
         except HostOperationError:
             raise
