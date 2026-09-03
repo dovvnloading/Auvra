@@ -4,6 +4,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { LoadedModelData } from '../types';
 import { optimizeModelMaterials } from './processing/ModelMaterials';
 import { normalizeModel } from './processing/ModelTransforms';
+import { disposeObject } from './processing/ModelLifecycle';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 
 // Re-export specific utilities for consumers (hooks) to maintain API compatibility
@@ -110,7 +111,33 @@ const parseFBXOffThread = async (
     });
     throwIfAborted(signal);
     onProgress?.(0.86, 'viewport_materialization');
-    const loaded = await new GLTFLoader().parseAsync(converted.glb, '');
+    // GLTFLoader has no AbortSignal parameter. Race its main-thread
+    // materialization against cancellation so callers stop waiting
+    // immediately, and dispose a late scene if parsing finishes afterwards.
+    const parsedPromise = new GLTFLoader().parseAsync(converted.glb, '').then((loaded) => {
+      if (signal?.aborted) {
+        try { disposeObject(loaded.scene); } catch { /* best effort on cancellation */ }
+        throw abortError();
+      }
+      return loaded;
+    });
+    // Promise.race observes the eventual parse rejection even if cancellation
+    // wins first, preventing an unhandled rejection from a late parser.
+    void parsedPromise.catch(() => undefined);
+    let loaded: Awaited<ReturnType<GLTFLoader['parseAsync']>>;
+    if (signal) {
+      const cancelled = new Promise<never>((_, reject) => {
+        const onAbort = () => reject(abortError());
+        signal.addEventListener('abort', onAbort, { once: true });
+        parsedPromise.then(
+          () => signal.removeEventListener('abort', onAbort),
+          () => signal.removeEventListener('abort', onAbort),
+        );
+      });
+      loaded = await Promise.race([parsedPromise, cancelled]);
+    } else {
+      loaded = await parsedPromise;
+    }
     throwIfAborted(signal);
     const object = loaded.scene;
     object.animations = loaded.animations;
@@ -130,14 +157,14 @@ const parseFBXOffThread = async (
 export const loadFBXFile = async (file: File, options: LoadOptions = { normalize: true }): Promise<LoadedModelData> => {
   // Create object URL for the file
   const url = URL.createObjectURL(file);
-  
+  let object: THREE.Group | null = null;
   try {
     // FBXLoader.load() fetches asynchronously but invokes its CPU-heavy
     // parse() synchronously on the calling renderer thread. Parse and compact
     // conversion therefore happen in an isolated worker; only the optimized
     // GLB handoff is materialized into Three objects here.
     const parsed = await parseFBXOffThread(file, options.signal, options.onProgress, options.diagnostics);
-    const object = parsed.object;
+    object = parsed.object;
 
     // --- FILTER ANIMATIONS ---
     // Reject only empty/invalid clips. Short authored clips are valid assets.
@@ -200,7 +227,12 @@ export const loadFBXFile = async (file: File, options: LoadOptions = { normalize
     };
 
   } catch (err) {
-      // Clean up URL if loading fails
+      // Parsing can finish after cancellation or a later normalization step
+      // can fail. The partially materialized scene is owned by this call until
+      // it is returned, so release it before dropping the URL.
+      if (object) {
+        try { disposeObject(object); } catch { /* best effort during failure */ }
+      }
       URL.revokeObjectURL(url);
       throw err;
   }

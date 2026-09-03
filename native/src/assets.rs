@@ -40,6 +40,7 @@ pub const DEFAULT_MAX_VERTICES: usize = 1_000_000;
 pub const DEFAULT_MAX_POLYGON_INDICES: usize = 3_000_000;
 pub const DEFAULT_QUEUE_CAPACITY: usize = 8;
 pub const MAX_RETAINED_JOBS: usize = 256;
+const MAX_DEFERRED_JOBS: usize = 4096;
 pub const READ_CHUNK_BYTES: usize = 1024 * 1024;
 
 const SHA256_HEX_LENGTH: usize = 64;
@@ -297,6 +298,9 @@ impl CookWorker {
                         }
                     }
                     if job.cancellation.is_cancelled() {
+                        let (lock, _) = &*worker_state;
+                        let mut guard = lock.lock().expect("asset queue mutex poisoned");
+                        trim_completed_jobs(&mut guard);
                         continue;
                     }
                     let result = cook_source(&worker_config, &job.source_id, &job.cancellation);
@@ -330,6 +334,22 @@ impl CookWorker {
     }
 
     pub fn submit(&self, source_id: &str) -> Result<CookSubmission, CookError> {
+        self.submit_inner(source_id, true)
+    }
+
+    /// Queue a hydration job without treating normal worker backpressure as a
+    /// permanent deferral.  The queue remains bounded by a generous safety
+    /// ceiling, while the regular interactive submission API keeps its fast
+    /// queue-full behavior.
+    pub fn submit_deferred(&self, source_id: &str) -> Result<CookSubmission, CookError> {
+        self.submit_inner(source_id, false)
+    }
+
+    fn submit_inner(
+        &self,
+        source_id: &str,
+        enforce_capacity: bool,
+    ) -> Result<CookSubmission, CookError> {
         validate_source_id(source_id)?;
         let job_id = self.next_job.fetch_add(1, Ordering::Relaxed);
         let cancellation = CancellationToken::new();
@@ -343,13 +363,17 @@ impl CookWorker {
         if guard.stopping {
             return Err(CookError::new("worker_stopped", "asset worker is stopped"));
         }
-        if guard
+        let active_jobs = guard
             .jobs
             .values()
             .filter(|record| matches!(record.state, JobState::Queued | JobState::Running))
-            .count()
-            >= guard.capacity
-        {
+            .count();
+        let limit = if enforce_capacity {
+            guard.capacity
+        } else {
+            guard.capacity.saturating_add(MAX_DEFERRED_JOBS)
+        };
+        if active_jobs >= limit {
             return Err(CookError::new("queue_full", "asset cooking queue is full"));
         }
         guard.jobs.insert(
@@ -1800,11 +1824,16 @@ impl<'a> JsonScanner<'a> {
     }
 }
 
-#[cfg(test)]
-fn sha256_hex(bytes: &[u8]) -> String {
+pub fn sha256_digest(bytes: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    hasher.finalize_hex()
+    hasher.finalize_bytes()
+}
+
+#[cfg(test)]
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = sha256_digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[derive(Clone)]
@@ -1839,7 +1868,7 @@ impl Sha256 {
             }
         }
     }
-    fn finalize_hex(mut self) -> String {
+    fn finalize_bytes(mut self) -> [u8; 32] {
         self.buffer[self.buffer_len] = 0x80;
         self.buffer_len += 1;
         if self.buffer_len > 56 {
@@ -1852,11 +1881,17 @@ impl Sha256 {
         self.buffer[56..].copy_from_slice(&self.bit_len.to_be_bytes());
         let block = self.buffer;
         self.compress(&block);
-        let mut output = String::with_capacity(64);
-        for word in self.state {
-            output.push_str(&format!("{word:08x}"));
+        let mut output = [0_u8; 32];
+        for (index, word) in self.state.iter().enumerate() {
+            output[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
         }
         output
+    }
+    fn finalize_hex(self) -> String {
+        self.finalize_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
     fn compress(&mut self, block: &[u8; 64]) {
         const K: [u32; 64] = [
@@ -2313,6 +2348,27 @@ mod tests {
             }
         }
         assert!(worker.status(cancelled.job_id).is_none());
+        drop(worker);
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(derived);
+    }
+
+    #[test]
+    fn deferred_submission_accepts_hydration_tail_beyond_interactive_capacity() {
+        let root = temp_root("worker-deferred");
+        let derived = temp_root("worker-deferred-derived");
+        fs::create_dir_all(&root).unwrap();
+        let worker =
+            CookWorker::new(CookConfig::new(&root, &derived).with_queue_capacity(1)).unwrap();
+        let ids = (0..32)
+            .map(|index| format!("{index:064x}"))
+            .collect::<Vec<_>>();
+        let submissions = ids
+            .iter()
+            .map(|id| worker.submit_deferred(id))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(submissions.len(), ids.len());
         drop(worker);
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(derived);

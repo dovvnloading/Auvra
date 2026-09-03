@@ -17,6 +17,7 @@ from Auvra.diagnostics.core import (
     NORMAL_QUEUE_RECORDS,
     PRIORITY_QUEUE_RECORDS,
     RECORD_MAX_BYTES,
+    RUN_MARKER_NAME,
     DiagnosticsSession,
     inspect_records,
     install_diagnostics,
@@ -115,6 +116,45 @@ class DiagnosticsCoreTests(unittest.TestCase):
                 self.assertEqual(prior_summary["state"], "unclean")
             finally:
                 second.close(outcome="success")
+
+    def test_close_retains_marker_until_stalled_writer_exits(self) -> None:
+        gate = threading.Event()
+        entered = threading.Event()
+
+        class BlockingSession(DiagnosticsSession):
+            def _write_record(self, record):
+                entered.set()
+                gate.wait(5)
+                super()._write_record(record)
+
+        with tempfile.TemporaryDirectory(prefix="auvra diagnostics ") as raw:
+            root = Path(raw) / "diagnostics"
+            session = BlockingSession(root, run_id="run-close-drain", mode="test")
+            session.start()
+            session.emit("launcher", "startup.phase_started",
+                         attributes={"phase": "close-drain"}, deduplicate=False)
+            self.assertTrue(entered.wait(2), "writer did not enter the stalled write")
+
+            session.close(outcome="success")
+            marker = root / RUN_MARKER_NAME
+            self.assertTrue(marker.exists(), "an active writer must retain the run marker")
+            summary = latest_run_summary(root)
+            self.assertIsNotNone(summary)
+            assert summary is not None
+            self.assertTrue(summary["drainIncomplete"])
+            self.assertIsNotNone(session._stream, "the writer-owned stream must remain open")
+
+            gate.set()
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and (marker.exists() or session._writer.is_alive()):
+                time.sleep(0.02)
+            self.assertFalse(marker.exists(), "the deferred close must remove a drained marker")
+            self.assertFalse(session._writer.is_alive())
+            self.assertIsNone(session._stream)
+            summary = latest_run_summary(root)
+            self.assertIsNotNone(summary)
+            assert summary is not None
+            self.assertFalse(summary["drainIncomplete"])
 
     def test_segments_and_run_retention_are_bounded(self) -> None:
         with tempfile.TemporaryDirectory(prefix="auvra diagnostics ") as raw, \

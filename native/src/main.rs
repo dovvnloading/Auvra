@@ -1,18 +1,19 @@
-use auvra_native::assets::{CancellationToken, CookConfig, CookWorker, cook_source};
+use auvra_native::assets::{CancellationToken, CookConfig, CookWorker, cook_source, sha256_digest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 mod gpu;
 use auvra_native::render_world::{
     AnimationInput, Frustum, IblInput, LightKind, LodLevel, MaterialReference, Plane, PostEffect,
-    RenderExtraction, WorldRenderEntity, WorldRenderInput, WorldRenderLight, extract_render_world,
+    RenderCapabilities, RenderExtraction, RenderFeatureBits, WorldRenderEntity, WorldRenderInput,
+    WorldRenderLight, extract_render_world,
 };
 use auvra_native::world::{Entity, World as NativeWorld, WorldCommand, WorldTransaction};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::io::{self, Read, Write};
-use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, mpsc};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use winit::{
     event_loop::EventLoop, platform::run_on_demand::EventLoopExtRunOnDemand, window::Window,
 };
@@ -412,6 +413,7 @@ struct Renderer {
     last_memory_bytes: u64,
     last_hash: Option<String>,
     production_pipelines: gpu::ProductionPipelines,
+    gpu_timing: Option<gpu::GpuTiming>,
     gpu_timing_supported: bool,
     gpu_timing_fallback: Option<String>,
     pipeline_cache_hits: u64,
@@ -433,9 +435,15 @@ impl Renderer {
         let info = adapter.get_info();
         gpu::validate_adapter(&adapter)?;
         let available = adapter.features();
-        let gpu_timing_supported = available.contains(wgpu::Features::TIMESTAMP_QUERY)
+        // A CPU software adapter may expose timestamp-query features, but its
+        // elapsed values measure software rasterization rather than a
+        // production GPU frame.  Keep the renderer usable while publishing an
+        // explicit timing fallback instead of qualifying it against the GPU
+        // budget.
+        let software_adapter = matches!(info.device_type, wgpu::DeviceType::Cpu);
+        let timestamp_features_available = available.contains(wgpu::Features::TIMESTAMP_QUERY)
             && available.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES);
-        let required_features = if gpu_timing_supported {
+        let required_features = if timestamp_features_available {
             wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES
         } else {
             wgpu::Features::empty()
@@ -451,6 +459,10 @@ impl Renderer {
         .map_err(|e| format!("device request failed: {e:?}"))?;
         let production_pipelines =
             gpu::ProductionPipelines::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let gpu_timing = (timestamp_features_available && !software_adapter)
+            .then(|| gpu::GpuTiming::new(&device, &queue))
+            .flatten();
+        let gpu_timing_supported = gpu_timing.is_some();
         Ok(Self {
             instance,
             adapter,
@@ -464,9 +476,15 @@ impl Renderer {
             last_memory_bytes: 0,
             last_hash: None,
             production_pipelines,
+            gpu_timing,
             gpu_timing_supported,
-            gpu_timing_fallback: (!gpu_timing_supported)
-                .then(|| "timestamp_query_unavailable_cpu_submit".into()),
+            gpu_timing_fallback: (!gpu_timing_supported).then(|| {
+                if software_adapter {
+                    "software_adapter_gpu_timing_unavailable".into()
+                } else {
+                    "timestamp_query_unavailable_cpu_submit".into()
+                }
+            }),
             pipeline_cache_hits: 0,
             pipeline_cache_misses: 0,
         })
@@ -487,7 +505,8 @@ impl Renderer {
             &self.device,
             &self.queue,
             self.format,
-            &self.production_pipelines,
+            &mut self.production_pipelines,
+            self.gpu_timing.as_ref(),
             extraction,
             width,
             height,
@@ -496,9 +515,14 @@ impl Renderer {
         // GPU completion, readback mapping, and signature hashing are separate
         // acceptance work and must not be compared with the CPU frame budget.
         self.last_frame_ms = Some(frame.cpu_submit_ms);
+        self.last_gpu_ms = frame.gpu_ms;
         self.last_hash = Some(format!("0x{:016x}", frame.pixel_hash));
-        self.last_memory_bytes = u64::from(width) * u64::from(height) * 4;
-        self.pipeline_cache_hits = self.pipeline_cache_hits.saturating_add(1);
+        self.last_memory_bytes = frame.memory_bytes;
+        if frame.pipeline_cache_hit {
+            self.pipeline_cache_hits = self.pipeline_cache_hits.saturating_add(1);
+        } else {
+            self.pipeline_cache_misses = self.pipeline_cache_misses.saturating_add(1);
+        }
         Ok(
             json!({"referenceScene":"basic", "referenceVersion":1, "width":width, "height":height, "signature":format!("{:016x}", frame.pixel_hash), "pixel_hash_fnv1a64":format!("0x{:016x}", frame.pixel_hash), "geometryCount":frame.geometry_count, "batchCount":frame.batch_count, "passCount":frame.pass_count, "fallbackCount":frame.fallback_count, "executedPasses":frame.executed_passes, "extractionHash":extraction.snapshot.extraction_hash, "capabilities":gpu::capabilities().features, "pipeline_cache_hits":self.pipeline_cache_hits, "pipeline_cache_misses":self.pipeline_cache_misses, "frame_submit_ms":self.last_frame_ms}),
         )
@@ -507,7 +531,9 @@ impl Renderer {
     fn present_surface(
         &mut self,
         surface: &wgpu::Surface<'_>,
-        _format: wgpu::TextureFormat,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
         extraction: &RenderExtraction,
     ) -> Result<(), String> {
         let frame = match surface.get_current_texture() {
@@ -518,13 +544,25 @@ impl Renderer {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        gpu::present_extraction(
+        let submission = gpu::present_production(
             &self.device,
             &self.queue,
             &view,
-            &self.production_pipelines,
+            format,
+            &mut self.production_pipelines,
+            self.gpu_timing.as_ref(),
             extraction,
+            width,
+            height,
         )?;
+        self.last_frame_ms = Some(submission.cpu_submit_ms);
+        self.last_gpu_ms = submission.gpu_ms;
+        self.last_memory_bytes = submission.memory_bytes;
+        if submission.pipeline_cache_hit {
+            self.pipeline_cache_hits = self.pipeline_cache_hits.saturating_add(1);
+        } else {
+            self.pipeline_cache_misses = self.pipeline_cache_misses.saturating_add(1);
+        }
         self.queue.present(frame);
         Ok(())
     }
@@ -551,9 +589,11 @@ fn dimensions(params: &Value) -> Result<(u32, u32), String> {
 }
 
 struct Viewport {
-    _event_loop: EventLoop<()>,
-    _window: Arc<Window>,
-    _surface: Option<wgpu::Surface<'static>>,
+    event_loop: EventLoop<()>,
+    app: ViewportApp,
+    window: Arc<Window>,
+    surface: Option<wgpu::Surface<'static>>,
+    format: wgpu::TextureFormat,
     width: u32,
     height: u32,
 }
@@ -563,12 +603,14 @@ struct ViewportApp {
     width: u32,
     height: u32,
     title: String,
+    close_requested: bool,
+    resized: Option<(u32, u32)>,
+    redraw_requested: bool,
 }
 
 impl winit::application::ApplicationHandler for ViewportApp {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         if self.window.is_some() {
-            event_loop.exit();
             return;
         }
         let attrs = Window::default_attributes()
@@ -577,7 +619,6 @@ impl winit::application::ApplicationHandler for ViewportApp {
         match event_loop.create_window(attrs) {
             Ok(window) => {
                 self.window = Some(Arc::new(window));
-                event_loop.exit();
             }
             Err(_) => {
                 event_loop.exit();
@@ -590,11 +631,29 @@ impl winit::application::ApplicationHandler for ViewportApp {
         _window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
-        if matches!(event, winit::event::WindowEvent::CloseRequested) {
-            event_loop.exit();
+        match event {
+            winit::event::WindowEvent::CloseRequested => {
+                self.close_requested = true;
+                event_loop.exit();
+            }
+            winit::event::WindowEvent::Resized(size) if size.width > 0 && size.height > 0 => {
+                self.width = size.width;
+                self.height = size.height;
+                self.resized = Some((size.width, size.height));
+            }
+            winit::event::WindowEvent::RedrawRequested => {
+                self.redraw_requested = true;
+            }
+            _ => {}
         }
     }
     fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+        // ``run_app_on_demand`` is used as a bounded event pump by the IPC
+        // loop. Return after this batch so requests and window events share
+        // the native thread without starving either side.
         event_loop.exit();
     }
 }
@@ -613,11 +672,17 @@ impl Viewport {
             width,
             height,
             title: title.clone(),
+            close_requested: false,
+            resized: None,
+            redraw_requested: false,
         };
         event_loop
             .run_app_on_demand(&mut app)
             .map_err(|e| e.to_string())?;
-        let window = app.window.take().ok_or("viewport window creation failed")?;
+        let window = app
+            .window
+            .clone()
+            .ok_or("viewport window creation failed")?;
         let surface = renderer
             .instance
             .create_surface(window.clone())
@@ -638,31 +703,72 @@ impl Viewport {
             .first()
             .copied()
             .ok_or("viewport surface has no alpha modes")?;
-        renderer
-            .production_pipelines
-            .ensure_surface_format(&renderer.device, format);
-        surface.configure(
-            &renderer.device,
-            &wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                format,
-                color_space: wgpu::SurfaceColorSpace::Auto,
+        configure_viewport_surface(
+            renderer,
+            &surface,
+            format,
+            width,
+            height,
+            present_mode,
+            alpha_mode,
+        )?;
+        renderer.present_surface(&surface, format, width, height, extraction)?;
+        Ok(Self {
+            event_loop,
+            app,
+            window,
+            surface: Some(surface),
+            format,
+            width,
+            height,
+        })
+    }
+
+    fn pump_events(
+        &mut self,
+        renderer: &mut Renderer,
+        extraction: &RenderExtraction,
+    ) -> Result<bool, String> {
+        self.app.resized = None;
+        self.app.redraw_requested = false;
+        self.event_loop
+            .run_app_on_demand(&mut self.app)
+            .map_err(|e| e.to_string())?;
+        if self.app.close_requested {
+            return Ok(false);
+        }
+        let Some(surface) = self.surface.as_ref() else {
+            return Ok(false);
+        };
+        if let Some((width, height)) = self.app.resized {
+            self.width = width;
+            self.height = height;
+            let caps = surface.get_capabilities(&renderer.adapter);
+            let present_mode = caps
+                .present_modes
+                .first()
+                .copied()
+                .ok_or("viewport surface has no present modes")?;
+            let alpha_mode = caps
+                .alpha_modes
+                .first()
+                .copied()
+                .ok_or("viewport surface has no alpha modes")?;
+            configure_viewport_surface(
+                renderer,
+                surface,
+                self.format,
                 width,
                 height,
                 present_mode,
                 alpha_mode,
-                view_formats: vec![],
-                desired_maximum_frame_latency: 2,
-            },
-        );
-        renderer.present_surface(&surface, format, extraction)?;
-        Ok(Self {
-            _event_loop: event_loop,
-            _window: window,
-            _surface: Some(surface),
-            width,
-            height,
-        })
+            )?;
+        }
+        // Present on every bounded pump, not only on the first open or after
+        // explicit recovery. This keeps world mutations and redraw/resize
+        // events visible while the IPC loop remains responsive.
+        renderer.present_surface(surface, self.format, self.width, self.height, extraction)?;
+        Ok(true)
     }
 
     fn recover(
@@ -670,10 +776,10 @@ impl Viewport {
         renderer: &mut Renderer,
         extraction: &RenderExtraction,
     ) -> Result<(), String> {
-        drop(self._surface.take());
+        drop(self.surface.take());
         let surface = renderer
             .instance
-            .create_surface(self._window.clone())
+            .create_surface(self.window.clone())
             .map_err(|e| e.to_string())?;
         let caps = surface.get_capabilities(&renderer.adapter);
         let format = caps
@@ -691,39 +797,126 @@ impl Viewport {
             .first()
             .copied()
             .ok_or("recovered viewport surface has no alpha modes")?;
-        renderer
-            .production_pipelines
-            .ensure_surface_format(&renderer.device, format);
+        configure_viewport_surface(
+            renderer,
+            &surface,
+            format,
+            self.width,
+            self.height,
+            present_mode,
+            alpha_mode,
+        )?;
+        renderer.present_surface(&surface, format, self.width, self.height, extraction)?;
+        self.format = format;
+        self.surface = Some(surface);
+        Ok(())
+    }
+}
+
+fn configure_viewport_surface(
+    renderer: &mut Renderer,
+    surface: &wgpu::Surface<'_>,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+    present_mode: wgpu::PresentMode,
+    alpha_mode: wgpu::CompositeAlphaMode,
+) -> Result<(), String> {
+    renderer
+        .production_pipelines
+        .ensure_surface_format(&renderer.device, format);
+    // ``Surface::configure`` reports backend failures through wgpu's error
+    // handler, which otherwise panics when no error scope is active.  A
+    // hidden/occluded Windows desktop (for example a CI runner session) can
+    // legitimately reject a swapchain even though offscreen rendering works.
+    // Keep that capability failure inside the request boundary instead of
+    // terminating the native process.
+    let error_scope = renderer
+        .device
+        .push_error_scope(wgpu::ErrorFilter::Validation);
+    let configured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         surface.configure(
             &renderer.device,
             &wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 format,
                 color_space: wgpu::SurfaceColorSpace::Auto,
-                width: self.width,
-                height: self.height,
+                width,
+                height,
                 present_mode,
                 alpha_mode,
                 view_formats: vec![],
                 desired_maximum_frame_latency: 2,
             },
         );
-        renderer.present_surface(&surface, format, extraction)?;
-        self._surface = Some(surface);
-        Ok(())
+    }));
+    let scoped_error = pollster::block_on(error_scope.pop());
+    if configured.is_err() || scoped_error.is_some() {
+        return Err(
+            "unsupported_capability|viewport surface configuration was rejected by the backend"
+                .into(),
+        );
     }
+    Ok(())
+}
+
+fn valid_session_token(token: &str) -> bool {
+    token.len() == 64 && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn session_proof(token: &str, challenge: &str, editor_session: &str) -> String {
+    const BLOCK_BYTES: usize = 64;
+    let mut key = [0_u8; BLOCK_BYTES];
+    let token_bytes = token.as_bytes();
+    key[..token_bytes.len().min(BLOCK_BYTES)]
+        .copy_from_slice(&token_bytes[..token_bytes.len().min(BLOCK_BYTES)]);
+    let mut inner = [0x36_u8; BLOCK_BYTES];
+    let mut outer = [0x5c_u8; BLOCK_BYTES];
+    for index in 0..BLOCK_BYTES {
+        inner[index] ^= key[index];
+        outer[index] ^= key[index];
+    }
+    let mut message = Vec::with_capacity(BLOCK_BYTES + challenge.len() + editor_session.len() + 1);
+    message.extend_from_slice(&inner);
+    message.extend_from_slice(challenge.as_bytes());
+    message.push(b'\n');
+    message.extend_from_slice(editor_session.as_bytes());
+    let inner_digest = sha256_digest(&message);
+    let mut outer_message = Vec::with_capacity(BLOCK_BYTES + inner_digest.len());
+    outer_message.extend_from_slice(&outer);
+    outer_message.extend_from_slice(&inner_digest);
+    sha256_digest(&outer_message)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right)
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
 }
 
 struct App {
     authenticated: bool,
+    session_token: Option<String>,
     world: NativeWorld,
     project_id: Option<String>,
     project_revision: Option<u64>,
-    renderer: Renderer,
+    renderer: Option<Renderer>,
+    renderer_error: Option<String>,
     viewport: Option<Viewport>,
     cooker: Option<CookWorker>,
     asset_jobs: HashMap<u64, CancellationToken>,
+    pending_asset_ids: BTreeSet<String>,
     hydration: Option<HydrationDraft>,
+    render_state: ProjectRenderState,
 }
 
 #[derive(Clone)]
@@ -736,8 +929,62 @@ struct HydrationDraft {
     document_count: usize,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct ProjectRenderState {
+    materials: BTreeMap<u64, MaterialReference>,
+    model_base_color_textures: BTreeMap<String, u64>,
+    object_materials: BTreeMap<String, u64>,
+    object_lods: BTreeMap<String, Vec<LodLevel>>,
+    object_animations: BTreeMap<String, AnimationInput>,
+    object_visibility: BTreeMap<String, bool>,
+    object_selected: BTreeSet<String>,
+    object_radii: BTreeMap<String, f32>,
+    lights: Vec<WorldRenderLight>,
+    camera_position: [f32; 3],
+    ibl: Option<IblInput>,
+    post_effects: Vec<PostEffect>,
+    msaa_samples: u8,
+    fxaa: bool,
+}
+
+impl Default for ProjectRenderState {
+    fn default() -> Self {
+        Self {
+            materials: BTreeMap::new(),
+            model_base_color_textures: BTreeMap::new(),
+            object_materials: BTreeMap::new(),
+            object_lods: BTreeMap::new(),
+            object_animations: BTreeMap::new(),
+            object_visibility: BTreeMap::new(),
+            object_selected: BTreeSet::new(),
+            object_radii: BTreeMap::new(),
+            lights: Vec::new(),
+            camera_position: [0.0; 3],
+            ibl: None,
+            post_effects: Vec::new(),
+            msaa_samples: 0,
+            fxaa: false,
+        }
+    }
+}
+
 impl App {
     fn new() -> Result<Self, String> {
+        let session_token = std::env::var("AUVRA_NATIVE_SESSION_TOKEN")
+            .ok()
+            .filter(|token| valid_session_token(token));
+        let (renderer, renderer_error) = match Renderer::new() {
+            Ok(renderer) => (Some(renderer), None),
+            Err(error) => {
+                diagnostic(
+                    "warning",
+                    "native.renderer_unavailable",
+                    None,
+                    Some("renderer_initialization_failed"),
+                );
+                (None, Some(error))
+            }
+        };
         let world = NativeWorld::new();
         let cooker = match (
             std::env::var_os("AUVRA_NATIVE_SOURCE_ROOT"),
@@ -750,14 +997,18 @@ impl App {
         };
         Ok(Self {
             authenticated: false,
+            session_token,
             world,
             project_id: None,
             project_revision: None,
-            renderer: Renderer::new()?,
+            renderer,
+            renderer_error,
             viewport: None,
             cooker,
             asset_jobs: HashMap::new(),
+            pending_asset_ids: BTreeSet::new(),
             hydration: None,
+            render_state: ProjectRenderState::default(),
         })
     }
 
@@ -766,6 +1017,44 @@ impl App {
             return Err("unsupported protocol version".into());
         }
         if req.method == "session.hello" {
+            let Some(params) = req.params.as_object() else {
+                return Ok(error_response(
+                    req.id,
+                    "authentication_failed",
+                    "session.hello requires an editor session, challenge, and proof",
+                ));
+            };
+            let editor_session = params
+                .get("editorSession")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty() && value.len() <= 128);
+            let challenge = params
+                .get("challenge")
+                .and_then(Value::as_str)
+                .filter(|value| valid_session_token(value));
+            let proof = params
+                .get("proof")
+                .and_then(Value::as_str)
+                .filter(|value| valid_session_token(value));
+            let authenticated = match (
+                self.session_token.as_deref(),
+                editor_session,
+                challenge,
+                proof,
+            ) {
+                (Some(token), Some(editor_session), Some(challenge), Some(proof)) => {
+                    let expected = session_proof(token, challenge, editor_session);
+                    constant_time_equal(expected.as_bytes(), proof.as_bytes())
+                }
+                _ => false,
+            };
+            if !authenticated {
+                return Ok(error_response(
+                    req.id,
+                    "authentication_failed",
+                    "session proof is invalid",
+                ));
+            }
             self.authenticated = true;
             return Ok(response(
                 req.id,
@@ -775,6 +1064,8 @@ impl App {
         if !self.authenticated {
             return Err("session.hello required".into());
         }
+        self.reap_asset_jobs();
+        self.retry_pending_asset_jobs();
         let result = match req.method.as_str() {
             "world.getSnapshot" => {
                 in_native_phase("world_validate", || self.world_snapshot(&req.params))
@@ -804,17 +1095,26 @@ impl App {
             "world.closeProject" => in_native_phase("world_commit", || self.close_project()),
             "world.advance" => in_native_phase("world_advance", || self.advance_world(&req.params)),
             "world.getReplay" => self.replay_snapshot(),
-            "renderer.getCapabilities" => Ok(self.renderer.capabilities()),
+            "renderer.getCapabilities" => Ok(self.renderer_capabilities()),
             "renderer.renderReference" => {
+                if self.renderer.is_none() {
+                    return Ok(Self::operation_error_response(
+                        req.id,
+                        &self.renderer_unavailable_error(),
+                    ));
+                }
                 native_phase("render_extract");
                 let extraction = self.build_extraction(&req.params)?;
                 native_phase("render_submit");
-                self.renderer.render_production(&req.params, &extraction)
+                self.renderer
+                    .as_mut()
+                    .expect("renderer presence was checked above")
+                    .render_production(&req.params, &extraction)
             }
             "renderer.extract" => {
                 in_native_phase("render_extract", || self.render_extract(&req.params))
             }
-            "renderer.getMetrics" => Ok(self.renderer.metrics()),
+            "renderer.getMetrics" => Ok(self.renderer_metrics()),
             "renderer.recover" => in_native_phase("renderer_recover", || self.recover_renderer()),
             "asset.submit" | "asset.beginCook" => {
                 in_native_phase("asset_submit", || self.submit_asset(&req.params))
@@ -890,21 +1190,22 @@ impl App {
     }
 
     fn world_snapshot(&self, params: &Value) -> Result<Value, String> {
-        let snapshot = self.world.snapshot();
         let object = params.as_object();
         let offset = object
             .and_then(|v| v.get("offset"))
             .and_then(Value::as_u64)
             .unwrap_or(0)
-            .min(snapshot.entities.len() as u64) as usize;
+            .min(self.world.len() as u64) as usize;
         let limit = object
             .and_then(|v| v.get("limit"))
             .and_then(Value::as_u64)
             .unwrap_or(128)
             .clamp(1, 256) as usize;
-        let end = offset.saturating_add(limit).min(snapshot.entities.len());
+        let total = self.world.len();
+        let snapshot = self.world.snapshot_page(offset, limit);
+        let end = offset.saturating_add(snapshot.entities.len()).min(total);
         Ok(
-            json!({"revision": snapshot.revision, "tick": snapshot.tick, "worldHash": snapshot.world_hash, "worldRevision": snapshot.revision, "projectId": self.project_id, "projectRevision": self.project_revision, "replayHash": self.world.replay_hash(), "entities": &snapshot.entities[offset..end], "page": {"offset": offset, "limit": limit, "total": snapshot.entities.len(), "hasMore": end < snapshot.entities.len()}}),
+            json!({"revision": snapshot.revision, "tick": snapshot.tick, "worldHash": snapshot.world_hash, "worldRevision": snapshot.revision, "projectId": self.project_id, "projectRevision": self.project_revision, "replayHash": self.world.replay_hash(), "entities": &snapshot.entities, "page": {"offset": offset, "limit": limit, "total": total, "hasMore": end < total}}),
         )
     }
 
@@ -990,7 +1291,7 @@ impl App {
     }
 
     fn validate_hydration(&self, params: &Value) -> Result<Value, String> {
-        let (_, revision, entities, _) = project_candidate(params)?;
+        let (_, revision, entities, _, _) = project_candidate(params)?;
         let mut candidate = NativeWorld::new();
         candidate
             .hydrate(revision, entities)
@@ -1173,7 +1474,8 @@ impl App {
             })
             .collect::<serde_json::Map<_, _>>();
         let params = json!({"projectId": draft.project_id, "projectRevision": draft.project_revision, "domains": domains, "assetIds": draft.asset_ids});
-        let (project_id, project_revision, entities, asset_ids) = project_candidate(&params)?;
+        let (project_id, project_revision, entities, asset_ids, render_state) =
+            project_candidate(&params)?;
         let mut candidate = NativeWorld::new();
         let snapshot = candidate
             .hydrate(project_revision, entities)
@@ -1187,6 +1489,7 @@ impl App {
         self.world = candidate;
         self.project_id = Some(project_id.clone());
         self.project_revision = Some(project_revision);
+        self.render_state = render_state;
         let (queued_assets, deferred_assets) = self.submit_asset_ids(&asset_ids);
         let mut result = self.snapshot_value(snapshot, &Value::Null)?;
         if let Some(object) = result.as_object_mut() {
@@ -1205,7 +1508,8 @@ impl App {
     }
 
     fn hydrate_world(&mut self, params: &Value) -> Result<Value, String> {
-        let (project_id, project_revision, entities, asset_ids) = project_candidate(params)?;
+        let (project_id, project_revision, entities, asset_ids, render_state) =
+            project_candidate(params)?;
         let mut candidate = NativeWorld::new();
         let snapshot = candidate
             .hydrate(project_revision, entities)
@@ -1213,6 +1517,7 @@ impl App {
         self.world = candidate;
         self.project_id = Some(project_id.clone());
         self.project_revision = Some(project_revision);
+        self.render_state = render_state;
         let (queued_assets, deferred_assets) = self.submit_asset_ids(&asset_ids);
         let mut result = self.snapshot_value(snapshot, params)?;
         if let Some(object) = result.as_object_mut() {
@@ -1229,27 +1534,67 @@ impl App {
         self.world = NativeWorld::new();
         self.project_id = None;
         self.project_revision = None;
+        self.render_state = ProjectRenderState::default();
+        for cancellation in self.asset_jobs.values() {
+            cancellation.cancel();
+        }
         self.asset_jobs.clear();
+        self.pending_asset_ids.clear();
         self.world_snapshot(&Value::Null)
     }
 
     fn submit_asset_ids(&mut self, asset_ids: &[String]) -> (usize, usize) {
+        self.pending_asset_ids.extend(asset_ids.iter().cloned());
+        self.retry_pending_asset_jobs()
+    }
+
+    fn retry_pending_asset_jobs(&mut self) -> (usize, usize) {
         let Some(cooker) = self.cooker.as_ref() else {
-            return (0, asset_ids.len().min(256));
+            return (0, self.pending_asset_ids.len());
         };
         let mut queued = 0;
-        let mut deferred = 0;
-        for source_id in asset_ids.iter().take(256) {
-            match cooker.submit(source_id) {
+        let mut failed = 0;
+        for source_id in self.pending_asset_ids.clone() {
+            match cooker.submit_deferred(&source_id) {
                 Ok(submission) => {
                     self.asset_jobs
                         .insert(submission.job_id, submission.cancellation);
+                    self.pending_asset_ids.remove(&source_id);
                     queued += 1;
                 }
-                Err(_) => deferred += 1,
+                Err(error) if error.code == "queue_full" => break,
+                Err(_) => {
+                    self.pending_asset_ids.remove(&source_id);
+                    failed += 1;
+                }
             }
         }
-        (queued, deferred + asset_ids.len().saturating_sub(256))
+        (queued, self.pending_asset_ids.len() + failed)
+    }
+
+    fn reap_asset_jobs(&mut self) {
+        let Some(cooker) = self.cooker.as_ref() else {
+            self.asset_jobs.clear();
+            return;
+        };
+        let finished = self
+            .asset_jobs
+            .keys()
+            .copied()
+            .filter(|job_id| {
+                cooker.status(*job_id).is_some_and(|status| {
+                    matches!(
+                        status.state,
+                        auvra_native::assets::JobState::Completed
+                            | auvra_native::assets::JobState::Failed
+                            | auvra_native::assets::JobState::Cancelled
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        for job_id in finished {
+            self.asset_jobs.remove(&job_id);
+        }
     }
 
     fn advance_world(&mut self, params: &Value) -> Result<Value, String> {
@@ -1279,17 +1624,80 @@ impl App {
     }
 
     fn recover_renderer(&mut self) -> Result<Value, String> {
-        self.renderer = Renderer::new()?;
+        let mut renderer = Renderer::new().map_err(|error| {
+            format!("unsupported_capability|native renderer unavailable: {error}")
+        })?;
         let extraction = self.build_extraction(&Value::Null)?;
-        let viewport_reopened = if let Some(viewport) = self.viewport.as_mut() {
-            viewport.recover(&mut self.renderer, &extraction)?;
-            true
+        // Rebuilding the renderer can race a hidden/occluded desktop surface
+        // on Windows.  Keep the offscreen renderer recovery successful while
+        // dropping only the visible viewport when its swapchain is no longer
+        // supported by the backend.
+        let viewport_reopened = if let Some(mut viewport) = self.viewport.take() {
+            match viewport.recover(&mut renderer, &extraction) {
+                Ok(()) => {
+                    self.viewport = Some(viewport);
+                    true
+                }
+                Err(error) if viewport_capability_error(&error) => false,
+                Err(error) => return Err(error),
+            }
         } else {
             false
         };
+        let capabilities = renderer.capabilities();
+        self.renderer = Some(renderer);
+        self.renderer_error = None;
         Ok(
-            json!({"recovered": true, "viewport_reopened": viewport_reopened, "capabilities": self.renderer.capabilities(), "world_revision": self.world.revision()}),
+            json!({"recovered": true, "viewport_reopened": viewport_reopened, "capabilities": capabilities, "world_revision": self.world.revision()}),
         )
+    }
+
+    fn renderer_unavailable_error(&self) -> String {
+        match self.renderer_error.as_deref() {
+            Some(error) if !error.is_empty() => {
+                format!("unsupported_capability|native renderer unavailable: {error}")
+            }
+            _ => "unsupported_capability|native renderer unavailable".into(),
+        }
+    }
+
+    fn renderer_capabilities(&self) -> Value {
+        if let Some(renderer) = self.renderer.as_ref() {
+            return renderer.capabilities();
+        }
+        let capabilities = RenderCapabilities::from_bits(RenderFeatureBits(0));
+        json!({
+            "available": false,
+            "backend": "unavailable",
+            "adapter": "unavailable",
+            "format": "unavailable",
+            "fallback": self.renderer_error.as_deref().unwrap_or("native renderer unavailable"),
+            "gpu_timing": {"supported": false, "fallback": "renderer_initialization_failed"},
+            "pipeline_cache_key": "production-v1|immutable-extraction",
+            "pipeline_cache_hits": 0,
+            "pipeline_cache_misses": 0,
+            "featureCapabilities": capabilities.features,
+            "dockSupport": "unsupported",
+            "dockActive": false,
+            "dockReason": "native renderer unavailable",
+        })
+    }
+
+    fn renderer_metrics(&self) -> Value {
+        if let Some(renderer) = self.renderer.as_ref() {
+            return renderer.metrics();
+        }
+        json!({
+            "startup_ms": null,
+            "last_frame_submit_ms": null,
+            "gpu_frame_ms": null,
+            "memory_bytes": 0,
+            "last_readback_hash": null,
+            "backend": "unavailable",
+            "adapter": "unavailable",
+            "fallback": self.renderer_error.as_deref().unwrap_or("native renderer unavailable"),
+            "gpu_timing": {"supported": false, "fallback": "renderer_initialization_failed"},
+        })
     }
 
     fn submit_asset(&mut self, params: &Value) -> Result<Value, String> {
@@ -1343,53 +1751,105 @@ impl App {
         let render_entities = snapshot
             .entities
             .iter()
-            .map(|entity| WorldRenderEntity {
-                id: stable_id(&entity.id),
-                mesh_id: entity
+            .filter_map(|entity| {
+                if entity.render.as_ref().is_some_and(|render| !render.visible)
+                    || self
+                        .render_state
+                        .object_visibility
+                        .get(&entity.id)
+                        .is_some_and(|visible| !visible)
+                {
+                    return None;
+                }
+                let asset_hash = entity
                     .render
                     .as_ref()
-                    .and_then(|render| render.asset_hash.as_deref())
-                    .map(stable_id)
-                    .unwrap_or(1),
-                position: entity.position.map(|value| value as f32),
-                radius: 1.0,
-                material: MaterialReference {
-                    material_id: 1,
-                    base_color_factor: entity.color.map(|value| value.clamp(0.0, 1.0) as f32),
-                    metallic: 0.0,
-                    roughness: 1.0,
-                    base_color_texture: None,
-                    normal_texture: None,
-                    metallic_roughness_texture: None,
-                },
-                lods: vec![LodLevel {
-                    level: 0,
-                    max_distance: f32::MAX,
-                }],
-                animation: None,
-                selected: false,
+                    .and_then(|render| render.asset_hash.as_deref());
+                let material_id = self
+                    .render_state
+                    .object_materials
+                    .get(&entity.id)
+                    .copied()
+                    .unwrap_or(1);
+                let material = self
+                    .render_state
+                    .materials
+                    .get(&material_id)
+                    .copied()
+                    .unwrap_or(MaterialReference {
+                        material_id,
+                        base_color_factor: entity.color.map(|value| value.clamp(0.0, 1.0) as f32),
+                        metallic: 0.0,
+                        roughness: 1.0,
+                        base_color_texture: asset_hash
+                            .and_then(|asset| {
+                                self.render_state.model_base_color_textures.get(asset)
+                            })
+                            .copied(),
+                        normal_texture: None,
+                        metallic_roughness_texture: None,
+                    });
+                Some(WorldRenderEntity {
+                    id: stable_id(&entity.id),
+                    mesh_id: asset_hash.map(stable_id).unwrap_or(1),
+                    position: entity.position.map(|value| value as f32),
+                    rotation: entity.rotation.map(|value| value as f32),
+                    scale: entity.scale.map(|value| value as f32),
+                    radius: self
+                        .render_state
+                        .object_radii
+                        .get(&entity.id)
+                        .copied()
+                        .unwrap_or(1.0),
+                    material,
+                    lods: self
+                        .render_state
+                        .object_lods
+                        .get(&entity.id)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            vec![LodLevel {
+                                level: 0,
+                                max_distance: f32::MAX,
+                            }]
+                        }),
+                    animation: self
+                        .render_state
+                        .object_animations
+                        .get(&entity.id)
+                        .copied()
+                        .or_else(|| entity.animation.as_ref().map(world_animation_input)),
+                    selected: self.render_state.object_selected.contains(&entity.id),
+                })
             })
             .collect();
+        let mut lights = self.render_state.lights.clone();
+        lights.extend(snapshot.entities.iter().filter_map(|entity| {
+            entity
+                .light
+                .as_ref()
+                .and_then(|light| world_light_input(&entity.id, entity.position, light))
+        }));
         let mut input = WorldRenderInput {
             world_revision: snapshot.revision,
             fixed_tick: snapshot.tick,
-            camera_position: [0.0; 3],
+            camera_position: self.render_state.camera_position,
             frustum: wide_frustum(),
             entities: render_entities,
-            lights: Vec::new(),
-            ibl: None,
-            post_effects: Vec::<PostEffect>::new(),
+            lights,
+            ibl: self.render_state.ibl,
+            post_effects: self.render_state.post_effects.clone(),
             msaa_samples: params
                 .as_object()
                 .and_then(|v| v.get("msaaSamples"))
                 .and_then(Value::as_u64)
-                .unwrap_or(0)
+                .unwrap_or(u64::from(self.render_state.msaa_samples))
                 .min(16) as u8,
             fxaa: params
                 .as_object()
                 .and_then(|v| v.get("fxaa"))
                 .and_then(Value::as_bool)
-                .unwrap_or(false),
+                .unwrap_or(self.render_state.fxaa),
         };
         if params
             .as_object()
@@ -1436,8 +1896,10 @@ impl App {
             return Err("invalid viewport dimensions or title".into());
         }
         let extraction = self.build_extraction(&Value::Null)?;
+        let renderer_error = self.renderer_unavailable_error();
+        let renderer = self.renderer.as_mut().ok_or(renderer_error)?;
         self.viewport = Some(Viewport::open(
-            &mut self.renderer,
+            renderer,
             width as u32,
             height as u32,
             title,
@@ -1449,6 +1911,10 @@ impl App {
     }
 }
 
+fn viewport_capability_error(error: &str) -> bool {
+    error.starts_with("unsupported_capability|") || error.starts_with("surface acquire failed:")
+}
+
 fn world_error_message(error: auvra_native::world::WorldError) -> String {
     match error {
         auvra_native::world::WorldError::RevisionConflict { expected, actual } => format!(
@@ -1458,7 +1924,9 @@ fn world_error_message(error: auvra_native::world::WorldError) -> String {
     }
 }
 
-fn project_candidate(params: &Value) -> Result<(String, u64, Vec<Entity>, Vec<String>), String> {
+fn project_candidate(
+    params: &Value,
+) -> Result<(String, u64, Vec<Entity>, Vec<String>, ProjectRenderState), String> {
     let object = params
         .as_object()
         .ok_or("invalid_project|project hydration must be an object")?;
@@ -1603,6 +2071,7 @@ fn project_candidate(params: &Value) -> Result<(String, u64, Vec<Entity>, Vec<St
             animation: None,
         });
     }
+    let render_state = project_render_state(&documents, &model_assets)?;
     let mut asset_ids = std::collections::BTreeSet::new();
     if let Some(values) = object.get("assetIds").and_then(Value::as_array) {
         for value in values {
@@ -1625,7 +2094,668 @@ fn project_candidate(params: &Value) -> Result<(String, u64, Vec<Entity>, Vec<St
         project_revision,
         entities,
         asset_ids.into_iter().collect(),
+        render_state,
     ))
+}
+
+fn project_render_state(
+    documents: &serde_json::Map<String, Value>,
+    _model_assets: &BTreeMap<String, String>,
+) -> Result<ProjectRenderState, String> {
+    let mut state = ProjectRenderState::default();
+    let mut animations = BTreeMap::<String, AnimationInput>::new();
+
+    for document in domain_values(documents, "animations") {
+        let object = document
+            .as_object()
+            .ok_or("invalid_project|animation document is invalid")?;
+        let id = required_string(object, "id", "animation id")?;
+        let duration_ticks = optional_u64(object, "durationTicks")
+            .or_else(|| optional_u64(object, "duration"))
+            .unwrap_or(1)
+            .max(1);
+        let speed_numerator = optional_u64(object, "speedNumerator")
+            .unwrap_or(1)
+            .min(u64::from(u32::MAX)) as u32;
+        let speed_denominator = optional_u64(object, "speedDenominator")
+            .unwrap_or(1)
+            .min(u64::from(u32::MAX)) as u32;
+        if speed_numerator == 0 || speed_denominator == 0 {
+            return Err("invalid_project|animation speed must be positive".into());
+        }
+        let looped = object
+            .get("looped")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        animations.insert(
+            id.to_owned(),
+            AnimationInput {
+                clip_id: stable_id(id),
+                duration_ticks,
+                speed_numerator,
+                speed_denominator,
+                looped,
+            },
+        );
+    }
+
+    for document in domain_values(documents, "materials") {
+        let object = document
+            .as_object()
+            .ok_or("invalid_project|material document is invalid")?;
+        let id = required_string(object, "id", "material id")?;
+        let base_color_factor = fixed_vec4(
+            object
+                .get("baseColorFactor")
+                .or_else(|| object.get("baseColor")),
+            [0.7, 0.7, 0.7, 1.0],
+            "material baseColorFactor",
+        )?;
+        let metallic = optional_f32(object, "metallic")?.unwrap_or(0.0);
+        let roughness = optional_f32(object, "roughness")?.unwrap_or(1.0);
+        if !(0.0..=1.0).contains(&metallic) || !(0.0..=1.0).contains(&roughness) {
+            return Err("invalid_project|material metallic/roughness is out of range".into());
+        }
+        let texture_ids = object
+            .get("textureIds")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(stable_id)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let base_color_texture = string_handle(
+            object
+                .get("baseColorTexture")
+                .or_else(|| object.get("baseColorTextureId")),
+        )?
+        .or_else(|| texture_ids.first().copied());
+        let normal_texture = string_handle(
+            object
+                .get("normalTexture")
+                .or_else(|| object.get("normalTextureId")),
+        )?;
+        let metallic_roughness_texture = string_handle(
+            object
+                .get("metallicRoughnessTexture")
+                .or_else(|| object.get("metallicRoughnessTextureId")),
+        )?;
+        state.materials.insert(
+            stable_id(id),
+            MaterialReference {
+                material_id: stable_id(id),
+                base_color_factor,
+                metallic,
+                roughness,
+                base_color_texture,
+                normal_texture,
+                metallic_roughness_texture,
+            },
+        );
+    }
+
+    for document in domain_values(documents, "models") {
+        let object = document
+            .as_object()
+            .ok_or("invalid_project|model document is invalid")?;
+        let _model_id = required_string(object, "id", "model id")?;
+        let asset_id = required_string(object, "assetId", "model assetId")?;
+        if let Some(texture_id) = object
+            .get("textureOverrides")
+            .and_then(Value::as_object)
+            .and_then(|overrides| overrides.values().find_map(Value::as_str))
+        {
+            state
+                .model_base_color_textures
+                .insert(asset_id.to_owned(), stable_id(texture_id));
+        }
+    }
+
+    for document in domain_values(documents, "objects") {
+        let object = document
+            .as_object()
+            .ok_or("invalid_project|object document is invalid")?;
+        let id = required_string(object, "id", "object id")?;
+        if let Some(material_id) = object
+            .get("materialId")
+            .or_else(|| object.get("material"))
+            .and_then(Value::as_str)
+        {
+            state
+                .object_materials
+                .insert(id.to_owned(), stable_id(material_id));
+        } else if let Some(material) = object.get("material").and_then(Value::as_object) {
+            let material_id = material
+                .get("id")
+                .and_then(Value::as_str)
+                .map(stable_id)
+                .unwrap_or_else(|| stable_id(&format!("object-material:{id}")));
+            state
+                .materials
+                .insert(material_id, material_reference(material, material_id)?);
+            state.object_materials.insert(id.to_owned(), material_id);
+        }
+        if let Some(render) = object.get("render").and_then(Value::as_object) {
+            if let Some(visible) = render.get("visible").and_then(Value::as_bool) {
+                state.object_visibility.insert(id.to_owned(), visible);
+            }
+            if let Some(radius) = render.get("radius") {
+                state
+                    .object_radii
+                    .insert(id.to_owned(), bounded_radius(radius)?);
+            }
+            if render
+                .get("selected")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                state.object_selected.insert(id.to_owned());
+            }
+            if let Some(lods) = render.get("lods") {
+                state.object_lods.insert(id.to_owned(), parse_lods(lods)?);
+            }
+        }
+        if let Some(radius) = object.get("radius") {
+            state
+                .object_radii
+                .insert(id.to_owned(), bounded_radius(radius)?);
+        }
+        if object
+            .get("selected")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            state.object_selected.insert(id.to_owned());
+        }
+        if let Some(lods) = object.get("lods") {
+            state.object_lods.insert(id.to_owned(), parse_lods(lods)?);
+        }
+        if let Some(animation_id) = object.get("animationId").and_then(Value::as_str) {
+            if let Some(animation) = animations.get(animation_id) {
+                state.object_animations.insert(id.to_owned(), *animation);
+            }
+        } else if let Some(animation) = object.get("animation").and_then(Value::as_object) {
+            state.object_animations.insert(
+                id.to_owned(),
+                animation_input(animation, &format!("object {id} animation"))?,
+            );
+        }
+    }
+
+    let mut lights = BTreeMap::new();
+    for domain in ["worlds", "scenes", "levels", "environment", "lights"] {
+        for (index, document) in domain_values(documents, domain).into_iter().enumerate() {
+            if domain == "lights"
+                && document
+                    .get("kind")
+                    .or_else(|| document.get("type"))
+                    .and_then(Value::as_str)
+                    .is_some()
+            {
+                let light = parse_render_light(document, index)?;
+                lights.insert(light.id, light);
+            } else {
+                collect_render_settings(document, &mut state, &mut lights)?;
+            }
+        }
+    }
+    state.lights = lights.into_values().collect();
+    Ok(state)
+}
+
+fn domain_values<'a>(
+    documents: &'a serde_json::Map<String, Value>,
+    domain: &str,
+) -> Vec<&'a Value> {
+    documents
+        .get(domain)
+        .and_then(Value::as_array)
+        .map(|values| values.iter().collect())
+        .unwrap_or_default()
+}
+
+fn required_string<'a>(
+    object: &'a serde_json::Map<String, Value>,
+    key: &str,
+    label: &str,
+) -> Result<&'a str, String> {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("invalid_project|{label} is required"))
+}
+
+fn optional_u64(object: &serde_json::Map<String, Value>, key: &str) -> Option<u64> {
+    object.get(key).and_then(Value::as_u64)
+}
+
+fn optional_f32(object: &serde_json::Map<String, Value>, key: &str) -> Result<Option<f32>, String> {
+    object
+        .get(key)
+        .map(|value| finite_f32(value, key).map(Some))
+        .unwrap_or(Ok(None))
+}
+
+fn finite_f32(value: &Value, label: &str) -> Result<f32, String> {
+    let number = value
+        .as_f64()
+        .ok_or_else(|| format!("invalid_project|{label} must be numeric"))?;
+    if !number.is_finite() || number.abs() > f64::from(f32::MAX) {
+        return Err(format!("invalid_project|{label} is not finite"));
+    }
+    Ok(number as f32)
+}
+
+fn fixed_vec3(value: Option<&Value>, default: [f32; 3], label: &str) -> Result<[f32; 3], String> {
+    let Some(value) = value else {
+        return Ok(default);
+    };
+    if let Some(values) = value.as_array() {
+        if values.len() != 3 {
+            return Err(format!("invalid_project|{label} must contain three values"));
+        }
+        return Ok([
+            finite_f32(&values[0], label)?,
+            finite_f32(&values[1], label)?,
+            finite_f32(&values[2], label)?,
+        ]);
+    }
+    let object = value
+        .as_object()
+        .ok_or_else(|| format!("invalid_project|{label} is invalid"))?;
+    Ok([
+        finite_f32(
+            object
+                .get("x")
+                .ok_or_else(|| format!("invalid_project|{label}.x is required"))?,
+            label,
+        )?,
+        finite_f32(
+            object
+                .get("y")
+                .ok_or_else(|| format!("invalid_project|{label}.y is required"))?,
+            label,
+        )?,
+        finite_f32(
+            object
+                .get("z")
+                .ok_or_else(|| format!("invalid_project|{label}.z is required"))?,
+            label,
+        )?,
+    ])
+}
+
+fn fixed_vec4(value: Option<&Value>, default: [f32; 4], label: &str) -> Result<[f32; 4], String> {
+    let Some(value) = value else {
+        return Ok(default);
+    };
+    let values = value
+        .as_array()
+        .ok_or_else(|| format!("invalid_project|{label} is invalid"))?;
+    if values.len() != 4 {
+        return Err(format!("invalid_project|{label} must contain four values"));
+    }
+    Ok([
+        finite_f32(&values[0], label)?,
+        finite_f32(&values[1], label)?,
+        finite_f32(&values[2], label)?,
+        finite_f32(&values[3], label)?,
+    ])
+}
+
+fn string_handle(value: Option<&Value>) -> Result<Option<u64>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    if let Some(id) = value.as_str() {
+        return Ok(Some(stable_id(id)));
+    }
+    value
+        .as_u64()
+        .filter(|id| *id > 0)
+        .map(Some)
+        .ok_or("invalid_project|renderer asset handle is invalid".into())
+}
+
+fn material_reference(
+    object: &serde_json::Map<String, Value>,
+    material_id: u64,
+) -> Result<MaterialReference, String> {
+    let base_color_factor = fixed_vec4(
+        object
+            .get("baseColorFactor")
+            .or_else(|| object.get("baseColor")),
+        [0.7, 0.7, 0.7, 1.0],
+        "material baseColorFactor",
+    )?;
+    let metallic = object
+        .get("metallic")
+        .map(|value| finite_f32(value, "material metallic"))
+        .transpose()?
+        .unwrap_or(0.0);
+    let roughness = object
+        .get("roughness")
+        .map(|value| finite_f32(value, "material roughness"))
+        .transpose()?
+        .unwrap_or(1.0);
+    if !(0.0..=1.0).contains(&metallic) || !(0.0..=1.0).contains(&roughness) {
+        return Err("invalid_project|material metallic/roughness is out of range".into());
+    }
+    Ok(MaterialReference {
+        material_id,
+        base_color_factor,
+        metallic,
+        roughness,
+        base_color_texture: string_handle(
+            object
+                .get("baseColorTexture")
+                .or_else(|| object.get("baseColorTextureId")),
+        )?,
+        normal_texture: string_handle(
+            object
+                .get("normalTexture")
+                .or_else(|| object.get("normalTextureId")),
+        )?,
+        metallic_roughness_texture: string_handle(
+            object
+                .get("metallicRoughnessTexture")
+                .or_else(|| object.get("metallicRoughnessTextureId")),
+        )?,
+    })
+}
+
+fn bounded_radius(value: &Value) -> Result<f32, String> {
+    let radius = finite_f32(value, "object radius")?;
+    if !(0.0..=1_000_000.0).contains(&radius) {
+        return Err("invalid_project|object radius is out of range".into());
+    }
+    Ok(radius)
+}
+
+fn parse_lods(value: &Value) -> Result<Vec<LodLevel>, String> {
+    let values = value
+        .as_array()
+        .ok_or("invalid_project|object LODs must be an array")?;
+    if values.is_empty() || values.len() > 8 {
+        return Err("invalid_project|object LOD count is out of range".into());
+    }
+    let mut result = Vec::with_capacity(values.len());
+    for value in values {
+        let object = value
+            .as_object()
+            .ok_or("invalid_project|object LOD is invalid")?;
+        let level = object
+            .get("level")
+            .and_then(Value::as_u64)
+            .filter(|level| *level <= u64::from(u8::MAX))
+            .ok_or("invalid_project|object LOD level is invalid")?;
+        let max_distance = object
+            .get("maxDistance")
+            .map(|value| finite_f32(value, "object LOD maxDistance"))
+            .transpose()?
+            .unwrap_or(f32::MAX);
+        if max_distance < 0.0 {
+            return Err("invalid_project|object LOD maxDistance is invalid".into());
+        }
+        result.push(LodLevel {
+            level: level as u8,
+            max_distance,
+        });
+    }
+    Ok(result)
+}
+
+fn animation_input(
+    object: &serde_json::Map<String, Value>,
+    label: &str,
+) -> Result<AnimationInput, String> {
+    let clip_id = object
+        .get("clipId")
+        .or_else(|| object.get("id"))
+        .and_then(Value::as_str)
+        .map(stable_id)
+        .unwrap_or_else(|| stable_id(label));
+    let duration_ticks = object
+        .get("durationTicks")
+        .and_then(Value::as_u64)
+        .or_else(|| object.get("duration").and_then(Value::as_u64))
+        .unwrap_or(1)
+        .max(1);
+    let speed_numerator = object
+        .get("speedNumerator")
+        .and_then(Value::as_u64)
+        .unwrap_or(1)
+        .min(u64::from(u32::MAX)) as u32;
+    let speed_denominator = object
+        .get("speedDenominator")
+        .and_then(Value::as_u64)
+        .unwrap_or(1)
+        .min(u64::from(u32::MAX)) as u32;
+    if speed_numerator == 0 || speed_denominator == 0 {
+        return Err(format!("invalid_project|{label} speed must be positive"));
+    }
+    Ok(AnimationInput {
+        clip_id,
+        duration_ticks,
+        speed_numerator,
+        speed_denominator,
+        looped: object
+            .get("looped")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+    })
+}
+
+fn collect_render_settings(
+    value: &Value,
+    state: &mut ProjectRenderState,
+    lights: &mut BTreeMap<u64, WorldRenderLight>,
+) -> Result<(), String> {
+    let Some(object) = value.as_object() else {
+        return Ok(());
+    };
+    apply_render_settings(object, state, lights)?;
+    for key in ["settings", "lighting", "render", "camera"] {
+        if let Some(nested) = object.get(key).and_then(Value::as_object) {
+            apply_render_settings(nested, state, lights)?;
+        }
+    }
+    Ok(())
+}
+
+fn apply_render_settings(
+    object: &serde_json::Map<String, Value>,
+    state: &mut ProjectRenderState,
+    lights: &mut BTreeMap<u64, WorldRenderLight>,
+) -> Result<(), String> {
+    if let Some(camera) = object.get("camera").and_then(Value::as_object) {
+        if let Some(position) = camera.get("position") {
+            state.camera_position =
+                fixed_vec3(Some(position), state.camera_position, "camera position")?;
+        }
+    }
+    if let Some(position) = object.get("cameraPosition") {
+        state.camera_position =
+            fixed_vec3(Some(position), state.camera_position, "camera position")?;
+    }
+    if let Some(ibl) = object.get("ibl").and_then(Value::as_object) {
+        let environment_id = string_handle(ibl.get("environmentId"))?;
+        let irradiance_id = string_handle(ibl.get("irradianceId"))?;
+        let prefiltered_id = string_handle(ibl.get("prefilteredId"))?;
+        let brdf_lut_id = string_handle(ibl.get("brdfLutId").or_else(|| ibl.get("brdfLUTId")))?;
+        if let (
+            Some(environment_id),
+            Some(irradiance_id),
+            Some(prefiltered_id),
+            Some(brdf_lut_id),
+        ) = (environment_id, irradiance_id, prefiltered_id, brdf_lut_id)
+        {
+            state.ibl = Some(IblInput {
+                environment_id,
+                irradiance_id,
+                prefiltered_id,
+                brdf_lut_id,
+            });
+        }
+    }
+    if let Some(effects) = object.get("postEffects").and_then(Value::as_array) {
+        for effect in effects {
+            let name = effect
+                .as_str()
+                .or_else(|| effect.get("type").and_then(Value::as_str))
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let parsed = match name.as_str() {
+                "bloom" => Some(PostEffect::Bloom),
+                "colorgrading" | "color_grading" | "color-grading" => {
+                    Some(PostEffect::ColorGrading)
+                }
+                "vignette" => Some(PostEffect::Vignette),
+                "sharpen" => Some(PostEffect::Sharpen),
+                "fxaa" => Some(PostEffect::Fxaa),
+                _ => None,
+            };
+            if let Some(effect) = parsed {
+                if !state.post_effects.contains(&effect) {
+                    state.post_effects.push(effect);
+                }
+            }
+        }
+    }
+    if let Some(samples) = object.get("msaaSamples").and_then(Value::as_u64) {
+        if samples > 16 || samples != 0 && !samples.is_power_of_two() {
+            return Err("invalid_project|MSAA sample count is invalid".into());
+        }
+        state.msaa_samples = samples as u8;
+    }
+    if let Some(fxaa) = object.get("fxaa").and_then(Value::as_bool) {
+        state.fxaa = fxaa;
+    }
+    if let Some(values) = object.get("lights").and_then(Value::as_array) {
+        for (index, value) in values.iter().enumerate() {
+            let light = parse_render_light(value, index)?;
+            lights.insert(light.id, light);
+        }
+    }
+    Ok(())
+}
+
+fn parse_render_light(value: &Value, index: usize) -> Result<WorldRenderLight, String> {
+    let object = value
+        .as_object()
+        .ok_or("invalid_project|render light is invalid")?;
+    let fallback = format!("project-light-{index}");
+    let id = object
+        .get("id")
+        .and_then(Value::as_str)
+        .map(stable_id)
+        .unwrap_or_else(|| stable_id(&fallback));
+    let kind_name = object
+        .get("kind")
+        .or_else(|| object.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or("directional")
+        .to_ascii_lowercase();
+    let kind = match kind_name.as_str() {
+        "directional" | "directional_light" | "directionallight" => LightKind::Directional,
+        "point" | "point_light" | "pointlight" => LightKind::Point,
+        "spot" | "spot_light" | "spotlight" => LightKind::Spot,
+        _ => return Err("invalid_project|render light kind is unsupported".into()),
+    };
+    let position = fixed_vec3(
+        object.get("position"),
+        [0.0, 0.0, 0.0],
+        "render light position",
+    )?;
+    let direction = fixed_vec3(
+        object.get("direction"),
+        [0.0, -1.0, 0.0],
+        "render light direction",
+    )?;
+    let range = object
+        .get("range")
+        .map(|value| finite_f32(value, "render light range"))
+        .transpose()?
+        .unwrap_or(if matches!(kind, LightKind::Directional) {
+            0.0
+        } else {
+            10.0
+        });
+    let inner_angle = object
+        .get("spotInnerAngle")
+        .or_else(|| object.get("spot_inner_angle"))
+        .map(|value| finite_f32(value, "render light inner angle"))
+        .transpose()?
+        .unwrap_or(0.0);
+    let outer_angle = object
+        .get("spotOuterAngle")
+        .or_else(|| object.get("spot_outer_angle"))
+        .map(|value| finite_f32(value, "render light outer angle"))
+        .transpose()?
+        .unwrap_or(std::f32::consts::FRAC_PI_4);
+    if range < 0.0
+        || inner_angle < 0.0
+        || outer_angle < inner_angle
+        || outer_angle > std::f32::consts::PI
+    {
+        return Err("invalid_project|render light values are out of range".into());
+    }
+    Ok(WorldRenderLight {
+        id,
+        kind,
+        position,
+        direction,
+        range,
+        spot_inner_cos: inner_angle.cos(),
+        spot_outer_cos: outer_angle.cos(),
+        casts_shadow: object
+            .get("castsShadow")
+            .or_else(|| object.get("castShadow"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+fn world_light_input(
+    entity_id: &str,
+    position: [f64; 3],
+    light: &auvra_native::world::LightData,
+) -> Option<WorldRenderLight> {
+    let kind = match light.kind.as_str() {
+        "directional" => LightKind::Directional,
+        "point" => LightKind::Point,
+        "spot" => LightKind::Spot,
+        _ => return None,
+    };
+    Some(WorldRenderLight {
+        id: stable_id(&format!("entity-light:{entity_id}")),
+        kind,
+        position: position.map(|value| value as f32),
+        direction: [0.0, -1.0, 0.0],
+        range: light.range as f32,
+        spot_inner_cos: light.spot_inner_angle.cos() as f32,
+        spot_outer_cos: light.spot_outer_angle.cos() as f32,
+        casts_shadow: true,
+    })
+}
+
+fn world_animation_input(animation: &auvra_native::world::AnimationData) -> AnimationInput {
+    AnimationInput {
+        clip_id: stable_id(&animation.clip),
+        duration_ticks: 1,
+        speed_numerator: (animation.speed.abs().round() as u64)
+            .max(1)
+            .min(u64::from(u32::MAX)) as u32,
+        speed_denominator: 1,
+        looped: animation.looping,
+    }
 }
 
 fn vector3(value: Option<&Value>, default: [f64; 3]) -> Result<[f64; 3], String> {
@@ -1719,6 +2849,8 @@ fn reference_input(revision: u64, tick: u64) -> WorldRenderInput {
         id,
         mesh_id: 7,
         position,
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        scale: [1.0, 1.0, 1.0],
         radius: 0.35,
         material: material(3),
         lods: vec![
@@ -1803,11 +2935,120 @@ fn reference_input(revision: u64, tick: u64) -> WorldRenderInput {
 fn run_ipc() -> Result<(), String> {
     let mut app = App::new()?;
     diagnostic("info", "native.ready", None, None);
-    let stdin = io::stdin();
     let stdout = io::stdout();
-    let mut input = stdin.lock();
     let mut output = stdout.lock();
-    run_ipc_loop(&mut app, &mut input, &mut output)
+    let (sender, receiver) = mpsc::channel::<Result<Option<Vec<u8>>, String>>();
+    std::thread::spawn(move || {
+        let stdin = io::stdin();
+        let mut input = stdin.lock();
+        loop {
+            let result = read_frame(&mut input);
+            let finished = matches!(&result, Ok(None) | Err(_));
+            if sender.send(result).is_err() || finished {
+                break;
+            }
+        }
+    });
+    run_ipc_live_loop(&mut app, &receiver, &mut output)
+}
+
+fn pump_viewport(app: &mut App) -> Result<(), String> {
+    if app.viewport.is_none() {
+        return Ok(());
+    }
+    let extraction = app.build_extraction(&Value::Null)?;
+    let Some(renderer) = app.renderer.as_mut() else {
+        app.viewport = None;
+        return Ok(());
+    };
+    let mut viewport = app
+        .viewport
+        .take()
+        .ok_or("viewport disappeared during event pump")?;
+    let still_open = viewport.pump_events(renderer, &extraction)?;
+    if still_open {
+        app.viewport = Some(viewport);
+    }
+    Ok(())
+}
+
+fn dispatch_ipc_frame(
+    app: &mut App,
+    bytes: Vec<u8>,
+    output: &mut impl Write,
+) -> Result<bool, String> {
+    let mut req: Request =
+        serde_json::from_slice(&bytes).map_err(|e| format!("invalid request schema: {e}"))?;
+    let method = req.method.clone();
+    let diagnostic_context = take_diagnostic_context(&mut req.params);
+    let trace = NativeTraceGuard::begin(&method, req.id, diagnostic_context);
+    let result = app.dispatch(req);
+    match result {
+        Ok(resp) => {
+            let response_ok = resp.ok;
+            let write_outcome = match write_response(output, &resp) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    trace.finish(false);
+                    diagnostic(
+                        "error",
+                        "native.protocol_failed",
+                        Some(&method),
+                        Some("fatal_protocol_error"),
+                    );
+                    return Err(format!("fatal response write error: {error}"));
+                }
+            };
+            trace.finish(write_outcome.operation_succeeded(response_ok));
+            Ok(method == "shutdown")
+        }
+        Err(_error) => {
+            trace.finish(false);
+            diagnostic(
+                "error",
+                "native.protocol_failed",
+                Some(&method),
+                Some("fatal_protocol_error"),
+            );
+            Err("fatal protocol error".into())
+        }
+    }
+}
+
+fn run_ipc_live_loop(
+    app: &mut App,
+    receiver: &mpsc::Receiver<Result<Option<Vec<u8>>, String>>,
+    output: &mut impl Write,
+) -> Result<(), String> {
+    loop {
+        if app.viewport.is_some() {
+            pump_viewport(app)?;
+        }
+        let next = if app.viewport.is_some() {
+            receiver.recv_timeout(Duration::from_millis(16))
+        } else {
+            match receiver.recv() {
+                Ok(value) => Ok(value),
+                Err(_) => Err(mpsc::RecvTimeoutError::Disconnected),
+            }
+        };
+        let bytes = match next {
+            Ok(Ok(Some(bytes))) => bytes,
+            Ok(Ok(None)) => {
+                diagnostic("info", "native.eof", None, None);
+                return Ok(());
+            }
+            Ok(Err(error)) => return Err(error),
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("native input channel disconnected".into());
+            }
+        };
+        if dispatch_ipc_frame(app, bytes, output)? {
+            diagnostic("info", "native.stopped", Some("shutdown"), None);
+            return Ok(());
+        }
+    }
 }
 
 fn run_ipc_loop(
@@ -1820,44 +3061,12 @@ fn run_ipc_loop(
             diagnostic("info", "native.eof", None, None);
             return Ok(());
         };
-        let mut req: Request =
-            serde_json::from_slice(&bytes).map_err(|e| format!("invalid request schema: {e}"))?;
-        let method = req.method.clone();
-        let diagnostic_context = take_diagnostic_context(&mut req.params);
-        let trace = NativeTraceGuard::begin(&method, req.id, diagnostic_context);
-        let result = app.dispatch(req);
-        match result {
-            Ok(resp) => {
-                let response_ok = resp.ok;
-                let write_outcome = match write_response(output, &resp) {
-                    Ok(outcome) => outcome,
-                    Err(error) => {
-                        trace.finish(false);
-                        diagnostic(
-                            "error",
-                            "native.protocol_failed",
-                            Some(&method),
-                            Some("fatal_protocol_error"),
-                        );
-                        return Err(format!("fatal response write error: {error}"));
-                    }
-                };
-                trace.finish(write_outcome.operation_succeeded(response_ok));
-                if method == "shutdown" {
-                    diagnostic("info", "native.stopped", Some(&method), None);
-                    return Ok(());
-                }
-            }
-            Err(_error) => {
-                trace.finish(false);
-                diagnostic(
-                    "error",
-                    "native.protocol_failed",
-                    Some(&method),
-                    Some("fatal_protocol_error"),
-                );
-                return Err("fatal protocol error".into());
-            }
+        let shutdown = dispatch_ipc_frame(app, bytes, output)?;
+        if !shutdown {
+            pump_viewport(app)?;
+        } else {
+            diagnostic("info", "native.stopped", Some("shutdown"), None);
+            return Ok(());
         }
     }
 }
@@ -1865,11 +3074,18 @@ fn run_ipc_loop(
 fn run_self_test() -> Result<(), String> {
     let started = Instant::now();
     let mut app = App::new()?;
+    let token = std::env::var("AUVRA_NATIVE_SESSION_TOKEN")
+        .map_err(|_| "session token is unavailable for self-test")?;
+    let challenge = "0000000000000000000000000000000000000000000000000000000000000001";
     let hello = app.dispatch(Request {
         id: 1,
         protocol: PROTOCOL.into(),
         method: "session.hello".into(),
-        params: Value::Null,
+        params: json!({
+            "editorSession": "self-test",
+            "challenge": challenge,
+            "proof": session_proof(&token, challenge, "self-test"),
+        }),
     })?;
     let applied = app.dispatch(Request { id: 2, protocol: PROTOCOL.into(), method: "world.apply".into(), params: json!({"expectedRevision": 0, "entities": [{"id":"reference","position":[1.25,-0.5,0.0],"color":[0.2,0.6,1.0,1.0]}]}) })?;
     let rendered = app.dispatch(Request {
@@ -1908,6 +3124,12 @@ fn run_self_test() -> Result<(), String> {
         method: "shutdown".into(),
         params: Value::Null,
     })?;
+    let viewport_unsupported = !opened.ok
+        && opened
+            .error
+            .as_ref()
+            .map(|error| error.code == "unsupported_capability")
+            .unwrap_or(false);
     let cache_hit = cached
         .result
         .as_ref()
@@ -1921,6 +3143,14 @@ fn run_self_test() -> Result<(), String> {
         .and_then(|v| v.get("viewport_reopened"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let viewport_recovery_unsupported = opened.ok
+        && recovered.ok
+        && recovered
+            .result
+            .as_ref()
+            .and_then(|v| v.get("viewport_reopened"))
+            .and_then(Value::as_bool)
+            == Some(false);
     let clean_shutdown = stopped.ok
         && stopped
             .result
@@ -1933,16 +3163,17 @@ fn run_self_test() -> Result<(), String> {
         && rendered.ok
         && cached.ok
         && cache_hit
-        && opened.ok
-        && recovered.ok
-        && viewport_reopened
-        && closed.ok
+        && ((opened.ok
+            && recovered.ok
+            && (viewport_reopened || viewport_recovery_unsupported)
+            && closed.ok)
+            || (viewport_unsupported && recovered.ok && !viewport_reopened && closed.ok))
         && clean_shutdown
         && app.world.revision() == 1)
     {
         return Err("native self-test acceptance failed".into());
     }
-    let evidence = json!({"probe": "auvra-native-self-test", "protocol": PROTOCOL, "hello_ok": hello.ok, "world_apply_ok": applied.ok, "world_revision": app.world.revision(), "reference_render_ok": rendered.ok, "reference": rendered.result, "pipeline_cache_hit": cache_hit, "viewport_open_ok": opened.ok, "recovery_ok": recovered.ok, "viewport_reopened": viewport_reopened, "viewport_close_ok": closed.ok, "clean_shutdown": clean_shutdown, "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0});
+    let evidence = json!({"probe": "auvra-native-self-test", "protocol": PROTOCOL, "hello_ok": hello.ok, "world_apply_ok": applied.ok, "world_revision": app.world.revision(), "reference_render_ok": rendered.ok, "reference": rendered.result, "pipeline_cache_hit": cache_hit, "viewport_open_ok": opened.ok, "viewport_unsupported": viewport_unsupported, "recovery_ok": recovered.ok, "viewport_reopened": viewport_reopened, "viewport_recovery_unsupported": viewport_recovery_unsupported, "viewport_close_ok": closed.ok, "clean_shutdown": clean_shutdown, "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0});
     println!(
         "{}",
         serde_json::to_string(&evidence).map_err(|e| e.to_string())?
@@ -1953,11 +3184,18 @@ fn run_self_test() -> Result<(), String> {
 fn run_headless_self_test() -> Result<(), String> {
     let started = Instant::now();
     let mut app = App::new()?;
+    let token = std::env::var("AUVRA_NATIVE_SESSION_TOKEN")
+        .map_err(|_| "session token is unavailable for self-test")?;
+    let challenge = "0000000000000000000000000000000000000000000000000000000000000002";
     let hello = app.dispatch(Request {
         id: 1,
         protocol: PROTOCOL.into(),
         method: "session.hello".into(),
-        params: Value::Null,
+        params: json!({
+            "editorSession": "headless-self-test",
+            "challenge": challenge,
+            "proof": session_proof(&token, challenge, "headless-self-test"),
+        }),
     })?;
     let asset_id = "0000000000000000000000000000000000000000000000000000000000000000";
     let hydrated = app.dispatch(Request { id: 2, protocol: PROTOCOL.into(), method: "world.hydrate".into(), params: json!({"projectId":"headless-reference","projectRevision":7,"domains":{"objects":{"schemaVersion":1,"documents":[{"id":"reference","levelId":"level","modelId":"model","name":"Reference","type":"mesh","position":[0.0,0.0,0.0],"color":[0.2,0.6,1.0,1.0]}]},"models":{"schemaVersion":1,"documents":[{"id":"model","name":"Reference","assetId":asset_id}]},"levels":{"schemaVersion":1,"documents":[{"id":"level"}]}},"assetIds":[]}) })?;
@@ -2068,7 +3306,11 @@ fn run_headless_self_test() -> Result<(), String> {
     {
         return Err("headless native self-test acceptance failed".into());
     }
-    let evidence = json!({"probe":"auvra-native-headless-self-test","protocol":PROTOCOL,"hello_ok":hello.ok,"hydration_ok":hydrated.ok,"advance_ok":advanced.ok,"extraction_ok":extracted.ok,"reference_render_ok":rendered.ok,"reference_render_repeat_ok":rendered_twice.ok,"reference_deterministic":render_matches,"replay_matches":replay_matches,"cook_ok":cook_matches,"cook_artifact_sha256":cook_artifact_id,"close_project_ok":closed_ok,"world_revision":app.world.revision(),"world_tick":app.world.tick(),"world_hash":app.world.snapshot().world_hash,"replay_hash":app.world.replay_hash(),"backend":format!("{:?}", app.renderer.info.backend),"adapter":app.renderer.info.name,"reference":rendered.result,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0});
+    let renderer = app
+        .renderer
+        .as_ref()
+        .ok_or("headless self-test renderer disappeared")?;
+    let evidence = json!({"probe":"auvra-native-headless-self-test","protocol":PROTOCOL,"hello_ok":hello.ok,"hydration_ok":hydrated.ok,"advance_ok":advanced.ok,"extraction_ok":extracted.ok,"reference_render_ok":rendered.ok,"reference_render_repeat_ok":rendered_twice.ok,"reference_deterministic":render_matches,"replay_matches":replay_matches,"cook_ok":cook_matches,"cook_artifact_sha256":cook_artifact_id,"close_project_ok":closed_ok,"world_revision":app.world.revision(),"world_tick":app.world.tick(),"world_hash":app.world.snapshot().world_hash,"replay_hash":app.world.replay_hash(),"backend":format!("{:?}", renderer.info.backend),"adapter":renderer.info.name,"reference":rendered.result,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0});
     println!(
         "{}",
         serde_json::to_string(&evidence).map_err(|e| e.to_string())?
@@ -2078,7 +3320,7 @@ fn run_headless_self_test() -> Result<(), String> {
 
 fn main() {
     match std::env::var("AUVRA_NATIVE_SESSION_TOKEN") {
-        Ok(token) if token.len() == 64 && token.bytes().all(|byte| byte.is_ascii_hexdigit()) => (),
+        Ok(token) if valid_session_token(&token) => (),
         _ => {
             diagnostic(
                 "error",
@@ -2120,6 +3362,79 @@ mod tests {
         let second_id = second.trace.span_id.clone();
         second.finish(true);
         assert_ne!(first_id, second_id);
+    }
+
+    #[test]
+    fn session_hello_rejects_missing_or_invalid_proof() {
+        let mut app = App::new().unwrap();
+        let response = app
+            .dispatch(Request {
+                id: 1,
+                protocol: PROTOCOL.into(),
+                method: "session.hello".into(),
+                params: json!({
+                    "editorSession": "test",
+                    "challenge": "0000000000000000000000000000000000000000000000000000000000000001",
+                    "proof": "0000000000000000000000000000000000000000000000000000000000000000",
+                }),
+            })
+            .unwrap();
+        assert!(!response.ok);
+        assert_eq!(
+            response.error.as_ref().map(|error| error.code),
+            Some("authentication_failed")
+        );
+        assert!(!app.authenticated);
+    }
+
+    #[test]
+    fn world_services_survive_renderer_initialization_failure() {
+        let mut app = App::new().unwrap();
+        app.renderer = None;
+        app.renderer_error = Some("test renderer failure".into());
+        app.authenticated = true;
+
+        let snapshot = app
+            .dispatch(Request {
+                id: 1,
+                protocol: PROTOCOL.into(),
+                method: "world.getSnapshot".into(),
+                params: Value::Null,
+            })
+            .unwrap();
+        assert!(snapshot.ok);
+
+        let capabilities = app
+            .dispatch(Request {
+                id: 2,
+                protocol: PROTOCOL.into(),
+                method: "renderer.getCapabilities".into(),
+                params: Value::Null,
+            })
+            .unwrap();
+        assert!(capabilities.ok);
+        assert_eq!(
+            capabilities
+                .result
+                .as_ref()
+                .and_then(|value| value.get("available"))
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+
+        let rendered = app
+            .dispatch(Request {
+                id: 3,
+                protocol: PROTOCOL.into(),
+                method: "renderer.renderReference".into(),
+                params: Value::Null,
+            })
+            .unwrap();
+        assert!(!rendered.ok);
+        assert_eq!(
+            rendered.error.as_ref().map(|error| error.code),
+            Some("unsupported_capability")
+        );
     }
 
     #[test]
@@ -2219,6 +3534,61 @@ mod tests {
                 .and_then(|render| render.asset_hash.as_deref()),
             Some("0000000000000000000000000000000000000000000000000000000000000000")
         );
+    }
+
+    #[test]
+    fn project_render_domains_survive_native_extraction() {
+        let asset = "0000000000000000000000000000000000000000000000000000000000000000";
+        let payload = json!({
+            "projectId": "render-project",
+            "projectRevision": 9,
+            "domains": {
+                "worlds": {"schemaVersion": 1, "documents": []},
+                "levels": {"schemaVersion": 1, "documents": [{
+                    "id": "level",
+                    "cameraPosition": [1.0, 2.0, 3.0],
+                    "lights": [{"id": "key", "kind": "directional", "direction": [0.0, -1.0, 0.0], "castsShadow": true}],
+                    "postEffects": ["bloom", "vignette"],
+                    "msaaSamples": 4,
+                    "fxaa": true,
+                    "ibl": {"environmentId": "environment", "irradianceId": "irradiance", "prefilteredId": "prefiltered", "brdfLutId": "brdf"}
+                }]},
+                "models": {"schemaVersion": 1, "documents": [{"id": "model", "name": "Model", "assetId": asset, "textureOverrides": {"Body": "albedo"}}]},
+                "animations": {"schemaVersion": 1, "documents": [{"id": "run", "name": "Run", "assetId": asset, "modelId": "model", "durationTicks": 120, "speedNumerator": 2, "speedDenominator": 1, "looped": true}]},
+                "materials": {"schemaVersion": 1, "documents": [{"id": "red", "name": "Red", "baseColorFactor": [1.0, 0.1, 0.1, 1.0], "metallic": 0.8, "roughness": 0.25}]},
+                "objects": {"schemaVersion": 1, "documents": [{"id": "object", "levelId": "level", "modelId": "model", "name": "Object", "type": "mesh", "position": [0.0, 0.0, 0.5], "materialId": "red", "radius": 2.0, "lods": [{"level": 0, "maxDistance": 4.0}, {"level": 1, "maxDistance": 40.0}], "animationId": "run", "selected": true}]}
+            }
+        });
+        let mut app = App::new().unwrap();
+        app.authenticated = true;
+        let response = app
+            .dispatch(Request {
+                id: 1,
+                protocol: PROTOCOL.into(),
+                method: "world.hydrate".into(),
+                params: payload,
+            })
+            .unwrap();
+        assert!(response.ok);
+        let extraction = app.build_extraction(&Value::Null).unwrap();
+        let entity = &extraction.snapshot.entities[0];
+        assert_eq!(entity.material.material_id, stable_id("red"));
+        assert_eq!(entity.material.base_color_factor, [1.0, 0.1, 0.1, 1.0]);
+        assert_eq!(entity.material.base_color_texture, None);
+        assert_eq!(entity.lod, 0);
+        assert_eq!(entity.animation.unwrap().clip_id, stable_id("run"));
+        assert_eq!(extraction.snapshot.lights.len(), 1);
+        assert_eq!(
+            extraction.snapshot.post_effects.as_ref(),
+            &[PostEffect::Bloom, PostEffect::Vignette]
+        );
+        assert_eq!(extraction.snapshot.msaa_samples, 4);
+        assert!(extraction.snapshot.fxaa);
+        assert_eq!(
+            extraction.snapshot.ibl.unwrap().environment_id,
+            stable_id("environment")
+        );
+        assert_eq!(extraction.snapshot.gizmos.len(), 1);
     }
 
     #[test]
@@ -2341,5 +3711,91 @@ mod tests {
             .unwrap()
             .ok
         );
+    }
+
+    #[test]
+    fn hydration_asset_submission_does_not_drop_queue_tail() {
+        let root = std::env::temp_dir().join(format!("auvra-main-deferred-{}", std::process::id()));
+        let derived = root.join("derived");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut app = App::new().unwrap();
+        app.cooker =
+            Some(CookWorker::new(CookConfig::new(&root, &derived).with_queue_capacity(1)).unwrap());
+        let ids = (0..32)
+            .map(|index| format!("{index:064x}"))
+            .collect::<Vec<_>>();
+        let (queued, deferred) = app.submit_asset_ids(&ids);
+        assert_eq!(queued, ids.len());
+        assert_eq!(deferred, 0);
+        assert!(app.pending_asset_ids.is_empty());
+        drop(app);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn closing_project_cancels_and_releases_asset_tokens() {
+        let root =
+            std::env::temp_dir().join(format!("auvra-main-close-assets-{}", std::process::id()));
+        let derived = root.join("derived");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut app = App::new().unwrap();
+        app.cooker =
+            Some(CookWorker::new(CookConfig::new(&root, &derived).with_queue_capacity(1)).unwrap());
+        let submission = app
+            .cooker
+            .as_ref()
+            .unwrap()
+            .submit_deferred(&format!("{:064x}", 1))
+            .unwrap();
+        let cancellation = submission.cancellation.clone();
+        app.asset_jobs
+            .insert(submission.job_id, submission.cancellation);
+        app.close_project().unwrap();
+        assert!(cancellation.is_cancelled());
+        assert!(app.asset_jobs.is_empty());
+        assert!(app.pending_asset_ids.is_empty());
+        drop(app);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn terminal_asset_tokens_are_reaped_from_app_bookkeeping() {
+        let root =
+            std::env::temp_dir().join(format!("auvra-main-reap-assets-{}", std::process::id()));
+        let derived = root.join("derived");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut app = App::new().unwrap();
+        app.cooker = Some(CookWorker::new(CookConfig::new(&root, &derived)).unwrap());
+        let submission = app
+            .cooker
+            .as_ref()
+            .unwrap()
+            .submit(&format!("{:064x}", 2))
+            .unwrap();
+        app.asset_jobs
+            .insert(submission.job_id, submission.cancellation);
+        for _ in 0..100 {
+            if app
+                .cooker
+                .as_ref()
+                .unwrap()
+                .status(submission.job_id)
+                .is_some_and(|status| {
+                    matches!(
+                        status.state,
+                        auvra_native::assets::JobState::Completed
+                            | auvra_native::assets::JobState::Failed
+                            | auvra_native::assets::JobState::Cancelled
+                    )
+                })
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        app.reap_asset_jobs();
+        assert!(!app.asset_jobs.contains_key(&submission.job_id));
+        drop(app);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

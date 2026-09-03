@@ -97,12 +97,24 @@ class WebView2HandlerTests(unittest.TestCase):
         args = resource(f"{ASSET_ORIGIN}/v1/get/" + "a" * 43, deferred=True)
         fake_system = types.ModuleType("System")
         fake_system.Action = lambda callback: callback
+        completed = threading.Event()
+        errors: list[BaseException] = []
+
+        def dispatch() -> None:
+            try:
+                frame._on_resource(None, args)
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                completed.set()
+
+        thread = threading.Thread(target=dispatch, name="webview-resource-nonblocking-test")
         try:
             with mock.patch.dict(sys.modules, {"System": fake_system}):
-                before = time.monotonic()
-                frame._on_resource(None, args)
-                elapsed = time.monotonic() - before
-                self.assertLess(elapsed, 0.2)
+                thread.start()
+                self.assertTrue(completed.wait(2), "resource callback blocked behind the asset handler")
+                thread.join(timeout=2)
+                self.assertEqual(errors, [])
                 self.assertTrue(started.wait(1))
                 self.assertIsNone(args.Response)
                 self.assertFalse(args.deferral.completed.is_set())
@@ -112,6 +124,7 @@ class WebView2HandlerTests(unittest.TestCase):
             self.assertEqual(args.Response.status, 204)
         finally:
             release.set()
+            thread.join(timeout=2)
             frame.close()
 
     def test_popup_download_permission_are_denied(self):
@@ -148,6 +161,36 @@ class WebView2HandlerTests(unittest.TestCase):
         self.frame._on_browser_exited(None, object())
         self.assertIsNone(self.frame.failure)
         self.assertTrue(self.frame._browser_exited.is_set())
+
+    def test_hung_sta_still_terminates_owned_browser_before_raising(self):
+        class Form:
+            def BeginInvoke(self, action):
+                action()
+
+            def Close(self):
+                return None
+
+        class HungThread:
+            ManagedThreadId = 424242
+            IsAlive = True
+
+            def Join(self, _milliseconds):
+                return None
+
+        self.frame._state = FrameState.READY
+        self.frame._form = Form()
+        self.frame._thread = HungThread()
+        self.frame._browser_process_id = 4242
+        terminate = mock.patch.object(self.frame, "_terminate_owned_browser")
+        fake_system = types.ModuleType("System")
+        fake_system.Action = lambda callback: callback
+        try:
+            with terminate as kill_browser, mock.patch.dict(sys.modules, {"System": fake_system}):
+                with self.assertRaises(FrameStartupError):
+                    self.frame.close(timeout=0.1)
+                kill_browser.assert_called_once_with()
+        finally:
+            self.frame._state = FrameState.CLOSED
 
     def test_outbound_post_requires_canonical_protocol_message(self):
         posted: list[str] = []

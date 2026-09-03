@@ -15,6 +15,7 @@ export const BlueprintEditor: React.FC<BlueprintEditorProps> = ({ visible }) => 
         addBlueprint, 
         updateBlueprint, 
         removeBlueprint, 
+        isCreatingPlayerBlueprint,
         selectedBlueprintId, 
         selectBlueprint, 
         models 
@@ -50,6 +51,7 @@ export const BlueprintEditor: React.FC<BlueprintEditorProps> = ({ visible }) => 
                 selectedId={selectedBlueprintId}
                 onSelect={selectBlueprint}
                 onAdd={addBlueprint}
+                isCreatingPlayer={isCreatingPlayerBlueprint}
                 onRemove={removeBlueprint}
             />
 

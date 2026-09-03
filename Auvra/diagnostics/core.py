@@ -799,6 +799,8 @@ class DiagnosticsSession:
         self._storage_error_reported = False
         self._active = False
         self._closed = False
+        self._closing = False
+        self._close_finalizer_started = False
         self._counts = {level: 0 for level in _LEVELS}
         self._dropped = {level: 0 for level in _LEVELS}
         self._reported_dropped = {level: 0 for level in _LEVELS}
@@ -1046,6 +1048,7 @@ class DiagnosticsSession:
             self._detailed_until = time.monotonic() + 1.0
         self._program_profiler.stop()
         self._detailed_until = 0
+        self._closing = True
         self._closed = True
         self._stop.set()
         self._flush_requested.set()
@@ -1053,14 +1056,51 @@ class DiagnosticsSession:
             self._writer.join(1.0)
         if self._monitor is not None:
             self._monitor.join(0.25)
-        drain_incomplete = bool((self._writer and self._writer.is_alive()) or
-                                not self._normal.empty() or not self._priority.empty())
+        writer_alive = bool(self._writer and self._writer.is_alive())
+        queues_pending = not self._normal.empty() or not self._priority.empty()
+        drain_incomplete = writer_alive or queues_pending
         self._active = False
-        self._write_summary(bounded_outcome, exit_code=exit_code,
+        if writer_alive:
+            # The writer owns the stream until it exits. Keep the marker and
+            # stream live so the next launch can see an unclean run and the
+            # writer cannot race storage teardown.
+            self._write_summary(bounded_outcome, exit_code=exit_code,
+                                drain_incomplete=True)
+            self._start_deferred_close(outcome=bounded_outcome, exit_code=exit_code)
+            return
+        self._finalize_close(outcome=bounded_outcome, exit_code=exit_code,
+                             drain_incomplete=drain_incomplete)
+
+    def _start_deferred_close(self, *, outcome: str, exit_code: int | None) -> None:
+        if self._close_finalizer_started:
+            return
+        self._close_finalizer_started = True
+        threading.Thread(
+            target=self._deferred_close,
+            kwargs={"outcome": outcome, "exit_code": exit_code},
+            name="auvra-diagnostics-close",
+            daemon=True,
+        ).start()
+
+    def _deferred_close(self, *, outcome: str, exit_code: int | None) -> None:
+        if self._writer is not None:
+            self._writer.join()
+        if self._monitor is not None:
+            self._monitor.join()
+        drain_incomplete = not self._normal.empty() or not self._priority.empty()
+        self._finalize_close(outcome=outcome, exit_code=exit_code,
+                             drain_incomplete=drain_incomplete)
+
+    def _finalize_close(self, *, outcome: str, exit_code: int | None,
+                        drain_incomplete: bool) -> None:
+        self._active = False
+        self._write_summary(outcome, exit_code=exit_code,
                             drain_incomplete=drain_incomplete)
         marker = self.root / RUN_MARKER_NAME
         current = _load_json(marker)
-        if current and current.get("runId") == self.run_id and not _is_link_or_reparse(marker):
+        if not drain_incomplete and not self._storage_failed \
+                and current and current.get("runId") == self.run_id \
+                and not _is_link_or_reparse(marker):
             try:
                 marker.unlink()
             except OSError:
@@ -1213,18 +1253,21 @@ class DiagnosticsSession:
                 if wrote and (requested or now - last_flush >= WRITER_FLUSH_SECONDS):
                     self._flush_stream(durable=bool(getattr(self, "_durable_flush", False)))
                     setattr(self, "_durable_flush", False)
-                    self._write_summary("active")
+                    if not self._closing:
+                        self._write_summary("active")
                     last_flush = now
                 if requested and self._priority.empty() and self._normal.empty():
                     self._flush_stream(durable=bool(getattr(self, "_durable_flush", False)))
                     setattr(self, "_durable_flush", False)
-                    self._write_summary("active")
+                    if not self._closing:
+                        self._write_summary("active")
                     self._flush_requested.clear()
                     self._flush_done.set()
                 if not wrote:
                     self._stop.wait(0.05)
             self._flush_stream(durable=True)
-            self._write_summary("active")
+            if not self._closing:
+                self._write_summary("active")
             self._flush_done.set()
         except Exception as exc:
             self._storage_failed = True
@@ -1727,17 +1770,26 @@ def follow_records(root: Path, *, level: str | None = None, component: str | Non
                    trace_id: str | None = None, poll_seconds: float = 0.25) -> Iterator[dict[str, Any]]:
     """Follow only launcher-owned current-run segments and tolerate rotation."""
 
-    seen: set[tuple[str, int]] = set()
+    # Sequences are monotonic within a run.  Retaining only the current run's
+    # high-water mark gives follow mode duplicate suppression without keeping
+    # every record from every rotated run alive for the process lifetime.
+    active_run_id: str | None = None
+    last_sequence = -1
     while True:
         summary = latest_run_summary(root)
         if summary:
-            for record in inspect_records(root, run_id=str(summary.get("runId", "")),
+            run_id = str(summary.get("runId", ""))
+            if run_id != active_run_id:
+                active_run_id = run_id
+                last_sequence = -1
+            for record in inspect_records(root, run_id=run_id,
                                           level=level, component=component,
                                           trace_id=trace_id, limit=1000):
-                key = (str(record.get("runId", "")), int(record.get("sequence", 0)))
-                if key not in seen:
-                    seen.add(key)
-                    yield record
+                sequence = int(record.get("sequence", 0))
+                if sequence <= last_sequence:
+                    continue
+                last_sequence = sequence
+                yield record
         marker = _load_json(Path(root) / RUN_MARKER_NAME)
         if marker is None:
             return

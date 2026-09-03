@@ -319,6 +319,7 @@ pub struct World {
     accumulator: u128,
     dropped_steps: u64,
     entities: BTreeMap<String, Entity>,
+    world_hash: String,
     replay: ReplayState,
 }
 
@@ -330,12 +331,14 @@ impl Default for World {
 
 impl World {
     pub fn new() -> Self {
+        let entities = BTreeMap::new();
         Self {
             revision: 0,
             tick: 0,
             accumulator: 0,
             dropped_steps: 0,
-            entities: BTreeMap::new(),
+            world_hash: hash_world(0, 0, &entities),
+            entities,
             replay: ReplayState::new(0, 0, Vec::new()),
         }
     }
@@ -368,19 +371,40 @@ impl World {
         self.accumulator = 0;
         self.dropped_steps = 0;
         self.entities = next;
+        self.refresh_world_hash();
         self.replay = ReplayState::new(revision, 0, self.entities.values().cloned().collect());
         Ok(self.snapshot())
     }
 
     pub fn snapshot(&self) -> WorldSnapshot {
         let entities = self.entities.values().cloned().collect::<Vec<_>>();
-        let canonical = (self.revision, self.tick, &entities);
-        let world_hash = hash_serializable(&canonical);
         WorldSnapshot {
             revision: self.revision,
             tick: self.tick,
             entities,
-            world_hash,
+            world_hash: self.world_hash.clone(),
+        }
+    }
+
+    /// Return one bounded page without cloning or hashing the complete world.
+    /// The cached hash is refreshed by every mutating operation before this
+    /// method is exposed to the IPC snapshot path.
+    pub fn snapshot_page(&self, offset: usize, limit: usize) -> WorldSnapshot {
+        let total = self.entities.len();
+        let offset = offset.min(total);
+        let limit = limit.max(1).min(256);
+        let entities = self
+            .entities
+            .values()
+            .skip(offset)
+            .take(limit)
+            .cloned()
+            .collect::<Vec<_>>();
+        WorldSnapshot {
+            revision: self.revision,
+            tick: self.tick,
+            entities,
+            world_hash: self.world_hash.clone(),
         }
     }
 
@@ -430,6 +454,7 @@ impl World {
         let tick_before = self.tick;
         self.entities = candidate;
         self.revision += 1;
+        self.refresh_world_hash();
         let snapshot = self.snapshot();
         self.record(ReplayRecord {
             sequence: self.replay.next_sequence,
@@ -466,12 +491,18 @@ impl World {
             .dropped_steps
             .checked_add(dropped)
             .ok_or(WorldError::TickOverflow)?;
-        let mut candidate = self.clone();
-        candidate.accumulator = next_accumulator % NANOS_PER_SECOND;
-        candidate.dropped_steps = next_dropped;
-        let report = candidate.advance_steps_in_place(steps, requested_workers)?;
-        *self = candidate;
-        Ok(report)
+        let previous_accumulator = self.accumulator;
+        let previous_dropped_steps = self.dropped_steps;
+        self.accumulator = next_accumulator % NANOS_PER_SECOND;
+        self.dropped_steps = next_dropped;
+        match self.advance_steps_in_place(steps, requested_workers) {
+            Ok(report) => Ok(report),
+            Err(error) => {
+                self.accumulator = previous_accumulator;
+                self.dropped_steps = previous_dropped_steps;
+                Err(error)
+            }
+        }
     }
 
     pub fn advance_steps(
@@ -479,10 +510,7 @@ impl World {
         steps: u32,
         requested_workers: usize,
     ) -> Result<SimulationReport, WorldError> {
-        let mut candidate = self.clone();
-        let report = candidate.advance_steps_in_place(steps, requested_workers)?;
-        *self = candidate;
-        Ok(report)
+        self.advance_steps_in_place(steps, requested_workers)
     }
 
     fn advance_steps_in_place(
@@ -491,21 +519,33 @@ impl World {
         requested_workers: usize,
     ) -> Result<SimulationReport, WorldError> {
         let steps = steps.min(MAX_CATCH_UP_STEPS);
+        let tick_before = self.tick;
+        let plan = JobPlan::for_entity_count(self.entities.len(), requested_workers);
+        let updates = if steps > 0 {
+            self.tick
+                .checked_add(u64::from(steps))
+                .ok_or(WorldError::TickOverflow)?;
+            self.compute_motion(&plan, steps)?
+        } else {
+            vec![None; self.entities.len()]
+        };
         if steps > 0 {
             self.checkpoint_replay_if_full();
         }
-        let tick_before = self.tick;
-        let plan = JobPlan::for_entity_count(self.entities.len(), requested_workers);
-        for _ in 0..steps {
-            self.step_once(&plan)?;
+        for (entity, position) in self.entities.values_mut().zip(updates) {
+            if let Some(position) = position {
+                entity.position = position;
+            }
         }
+        self.tick += u64::from(steps);
+        self.refresh_world_hash();
         let report = SimulationReport {
             tick_before,
             tick_after: self.tick,
             steps,
             dropped_steps: self.dropped_steps,
             job_plan: plan,
-            world_hash: self.snapshot().world_hash,
+            world_hash: self.world_hash.clone(),
         };
         if steps > 0 {
             self.record(ReplayRecord {
@@ -520,42 +560,34 @@ impl World {
         Ok(report)
     }
 
-    fn step_once(&mut self, plan: &JobPlan) -> Result<(), WorldError> {
-        if self.tick == u64::MAX {
-            return Err(WorldError::TickOverflow);
+    fn compute_motion(
+        &self,
+        plan: &JobPlan,
+        steps: u32,
+    ) -> Result<Vec<Option<[f64; 3]>>, WorldError> {
+        if steps == 0 || self.entities.is_empty() {
+            return Ok(vec![None; self.entities.len()]);
         }
-        let ordered = self.entities.values().cloned().collect::<Vec<_>>();
-        let mut updates = if plan.worker_count > 1 {
+        let ordered = self.entities.values().collect::<Vec<_>>();
+        if plan.worker_count > 1 {
             std::thread::scope(|scope| {
                 let handles = plan
                     .partitions
                     .iter()
                     .map(|partition| {
                         let slice = &ordered[partition.start..partition.end];
-                        scope.spawn(move || compute_partition_motion(slice))
+                        scope.spawn(move || compute_partition_motion(slice, steps))
                     })
                     .collect::<Vec<_>>();
                 handles
                     .into_iter()
                     .map(|handle| handle.join().map_err(|_| WorldError::WorkerPanic)?)
                     .collect::<Result<Vec<_>, WorldError>>()
-            })?
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
+            })
+            .map(|partitions| partitions.into_iter().flatten().collect())
         } else {
-            compute_partition_motion(&ordered)?
-                .into_iter()
-                .collect::<Vec<_>>()
-        };
-        updates.sort_by(|left, right| left.0.cmp(&right.0));
-        for (id, position) in updates {
-            if let Some(entity) = self.entities.get_mut(&id) {
-                entity.position = position;
-            }
+            compute_partition_motion(&ordered, steps)
         }
-        self.tick += 1;
-        Ok(())
     }
 
     fn record(&mut self, record: ReplayRecord) {
@@ -585,6 +617,7 @@ impl World {
             self.replay.hydration.clone(),
         )?;
         replayed.tick = self.replay.hydration_tick;
+        replayed.refresh_world_hash();
         for record in &self.replay.records {
             if record.commands.is_empty() {
                 replayed
@@ -635,6 +668,7 @@ impl World {
             .revision
             .checked_add(1)
             .ok_or(WorldError::RevisionOverflow)?;
+        self.refresh_world_hash();
         Ok(())
     }
 
@@ -643,24 +677,46 @@ impl World {
         steps: u32,
         requested_workers: usize,
     ) -> Result<(), WorldError> {
-        let plan = JobPlan::for_entity_count(self.entities.len(), requested_workers);
-        for _ in 0..steps.min(MAX_CATCH_UP_STEPS) {
-            self.step_once(&plan)?;
+        let steps = steps.min(MAX_CATCH_UP_STEPS);
+        if steps > 0 {
+            self.tick
+                .checked_add(u64::from(steps))
+                .ok_or(WorldError::TickOverflow)?;
         }
+        let plan = JobPlan::for_entity_count(self.entities.len(), requested_workers);
+        let updates = self.compute_motion(&plan, steps)?;
+        for (entity, position) in self.entities.values_mut().zip(updates) {
+            if let Some(position) = position {
+                entity.position = position;
+            }
+        }
+        self.tick += u64::from(steps);
+        self.refresh_world_hash();
         Ok(())
+    }
+
+    fn refresh_world_hash(&mut self) {
+        self.world_hash = hash_world(self.revision, self.tick, &self.entities);
     }
 }
 
-fn compute_partition_motion(entities: &[Entity]) -> Result<Vec<(String, [f64; 3])>, WorldError> {
-    let mut updates = Vec::new();
+fn compute_partition_motion(
+    entities: &[&Entity],
+    steps: u32,
+) -> Result<Vec<Option<[f64; 3]>>, WorldError> {
+    let mut updates = Vec::with_capacity(entities.len());
     for entity in entities {
         if entity.velocity.iter().any(|value| *value != 0.0) {
             let mut position = entity.position;
-            for axis in 0..3 {
-                position[axis] += entity.velocity[axis] / TICKS_PER_SECOND as f64;
+            for _ in 0..steps {
+                for axis in 0..3 {
+                    position[axis] += entity.velocity[axis] / TICKS_PER_SECOND as f64;
+                }
+                position = quantize_position(position)?;
             }
-            let position = quantize_position(position)?;
-            updates.push((entity.id.clone(), position));
+            updates.push(Some(position));
+        } else {
+            updates.push(None);
         }
     }
     Ok(updates)
@@ -962,6 +1018,11 @@ fn hash_serializable<T: Serialize>(value: &T) -> String {
     format!("{hash:016x}")
 }
 
+fn hash_world(revision: u64, tick: u64, entities: &BTreeMap<String, Entity>) -> String {
+    let ordered = entities.values().cloned().collect::<Vec<_>>();
+    hash_serializable(&(revision, tick, &ordered))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1006,6 +1067,10 @@ mod tests {
             serde_json::json!({"id":"legacy","position":[1.0,2.0,3.0],"color":[1.0,0.0,0.0,1.0]});
         let parsed: Entity = serde_json::from_value(old).unwrap();
         assert_eq!(parsed.rotation, identity_rotation());
+        let page = world.snapshot_page(1, 1);
+        assert_eq!(page.entities.len(), 1);
+        assert_eq!(page.entities[0].id, "z");
+        assert_eq!(page.world_hash, snapshot.world_hash);
     }
 
     #[test]
@@ -1107,6 +1172,21 @@ mod tests {
         world.tick = u64::MAX - 1;
         let before = world.snapshot();
         assert_eq!(world.advance_steps(2, 2), Err(WorldError::TickOverflow));
+        assert_eq!(world.snapshot(), before);
+    }
+
+    #[test]
+    fn invalid_motion_does_not_commit_partial_simulation() {
+        let mut world = World::new();
+        let mut moving = entity("edge");
+        moving.position = [MAX_ABS_POSITION, 0.0, 0.0];
+        moving.velocity = [60.0, 0.0, 0.0];
+        world.hydrate(0, vec![moving]).unwrap();
+        let before = world.snapshot();
+        assert!(matches!(
+            world.advance_steps(2, 4),
+            Err(WorldError::Invalid(_))
+        ));
         assert_eq!(world.snapshot(), before);
     }
 

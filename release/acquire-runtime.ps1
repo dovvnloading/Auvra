@@ -23,11 +23,37 @@ function Get-Verified([string]$Name, $Pin, [string]$Extension) {
     return $archive
 }
 
+function Write-ExtractionAttestation([string]$Root, [string]$Kind, $Pin) {
+    $rootItem = Get-Item -LiteralPath $Root -ErrorAction Stop
+    $entries = @(
+        Get-ChildItem -LiteralPath $Root -File -Recurse -Force |
+            Sort-Object -Property FullName |
+            ForEach-Object {
+                $relative = $_.FullName.Substring($rootItem.FullName.Length).TrimStart('\').Replace('\', '/')
+                [ordered]@{
+                    path = $relative
+                    size = [int64]$_.Length
+                    sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+                }
+            }
+    )
+    if ($entries.Count -eq 0) { throw "$Kind extraction is empty" }
+    $marker = [ordered]@{
+        schema = 1
+        kind = $Kind
+        version = $Pin.version
+        sha256 = $Pin.sha256.ToLowerInvariant()
+        files = $entries
+    }
+    $marker | ConvertTo-Json -Compress -Depth 8 |
+        Set-Content -LiteralPath (Join-Path $Root 'Auvra.runtime-pin.json') -Encoding ascii -NoNewline
+}
+
 $pythonArchive = Get-Verified 'python-embed' $pins.pythonEmbed '.zip'
 $pythonDir = Join-Path $resolved 'python-embed'
 New-Item -ItemType Directory -Force -Path $pythonDir | Out-Null
 Expand-Archive -LiteralPath $pythonArchive -DestinationPath $pythonDir -Force
-('{"schema":1,"kind":"pythonEmbed","version":"' + $pins.pythonEmbed.version + '","sha256":"' + $pins.pythonEmbed.sha256.ToLowerInvariant() + '"}' | Set-Content -LiteralPath (Join-Path $pythonDir 'Auvra.runtime-pin.json') -Encoding ascii -NoNewline)
+Write-ExtractionAttestation $pythonDir 'pythonEmbed' $pins.pythonEmbed
 
 $webviewArchive = Get-Verified 'webview2-fixed-x64' $pins.webview2Fixed '.cab'
 $webviewDir = Join-Path $resolved 'webview2-fixed'
@@ -45,7 +71,7 @@ if ($runtimeExecutable.Directory.FullName -ne (Get-Item -LiteralPath $webviewDir
 if (-not (Test-Path -LiteralPath (Join-Path $webviewDir 'msedgewebview2.exe') -PathType Leaf)) {
     throw 'Pinned WebView2 CAB could not be flattened to webview2-fixed/msedgewebview2.exe'
 }
-('{"schema":1,"kind":"webview2Fixed","version":"' + $pins.webview2Fixed.version + '","sha256":"' + $pins.webview2Fixed.sha256.ToLowerInvariant() + '"}' | Set-Content -LiteralPath (Join-Path $webviewDir 'Auvra.runtime-pin.json') -Encoding ascii -NoNewline)
+Write-ExtractionAttestation $webviewDir 'webview2Fixed' $pins.webview2Fixed
 
 Remove-Item -LiteralPath $pythonArchive, $webviewArchive -Force
 Write-Host "Verified and staged CPython $($pins.pythonEmbed.version) and WebView2 Fixed $($pins.webview2Fixed.version)."

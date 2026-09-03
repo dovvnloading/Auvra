@@ -1,6 +1,7 @@
 """Canonical versioned domain schemas and their strict validator."""
 from __future__ import annotations
 
+import copy
 import json
 import math
 import re
@@ -46,6 +47,8 @@ _NESTED_KEYS = {
     "commands": {"id", "jobId", "providerId", "modelId", "promptSha256", "operationsSha256", "appliedAt"},
     "animationGraph": {"variables", "inputs", "states", "transitions", "activeStateId", "customData"},
     "layout": {"x", "y", "width", "height", "customData"},
+    "lods": {"level", "maxDistance"},
+    "render": {"visible", "radius", "selected", "lods"},
 }
 _FREEFORM_KEYS = {"settings", "overrides", "style", "payload", "data", "customData", "props"}
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -81,13 +84,22 @@ def validate_project_descriptor(value: Any) -> dict[str, Any]:
 def validate_domain(domain: str, value: Any) -> dict[str, Any]:
     if domain not in DOMAIN_NAMES:
         raise ValueError(f"unknown project domain: {domain}")
-    _assert_finite(value)
-    _assert_known_nested(value)
-    _assert_asset_handles(value)
-    errors = sorted(validator_for(domain).iter_errors(value), key=lambda e: list(e.path))
+    # Object transforms are the one v1 compatibility boundary.  Normalize a
+    # legacy document into the canonical authored representation before the
+    # strict JSON Schema is applied.  Work on a copy so callers never observe
+    # an in-place migration.
+    candidate = copy.deepcopy(value)
+    if domain == "objects":
+        _normalize_object_transforms(candidate)
+    elif domain == "sockets":
+        _normalize_socket_transforms(candidate)
+    _assert_finite(candidate)
+    _assert_known_nested(candidate)
+    _assert_asset_handles(candidate)
+    errors = sorted(validator_for(domain).iter_errors(candidate), key=lambda e: list(e.path))
     if errors:
         raise ValueError(f"invalid {domain} project document: {errors[0].message}")
-    return value
+    return candidate
 
 def validate_project_references(
     domains: dict[str, dict[str, Any]],
@@ -161,12 +173,136 @@ def domain_document(domain: str, documents: list[dict[str, Any]]) -> dict[str, A
     return validate_domain(domain, value)
 
 def _assert_finite(value: Any) -> None:
-    if isinstance(value, float) and not math.isfinite(value):
-        raise ValueError("non-finite numbers are not valid project data")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            finite = math.isfinite(value)
+        except (OverflowError, ValueError):
+            finite = False
+        if not finite:
+            raise ValueError("non-finite numbers are not valid project data")
     if isinstance(value, dict):
         for child in value.values(): _assert_finite(child)
     elif isinstance(value, (list, tuple)):
         for child in value: _assert_finite(child)
+
+
+_DEFAULT_POSITION = [0.0, 0.0, 0.0]
+_DEFAULT_ROTATION = [0.0, 0.0, 0.0]
+_DEFAULT_SCALE = [1.0, 1.0, 1.0]
+_MAX_ABS_POSITION = 1_000_000.0
+_MIN_SCALE = 0.0001
+_MAX_SCALE = 1_000_000.0
+_QUATERNION_EPSILON = 1e-12
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _finite_number(value: Any, label: str) -> float:
+    if not _is_number(value):
+        raise ValueError(f"{label} must contain only numbers")
+    try:
+        result = float(value)
+    except (OverflowError, ValueError):
+        raise ValueError(f"{label} must contain only finite numbers") from None
+    if not math.isfinite(result):
+        raise ValueError(f"{label} must contain only finite numbers")
+    return result
+
+
+def _normalize_object_transforms(value: Any) -> None:
+    if not isinstance(value, dict) or not isinstance(value.get("documents"), list):
+        return
+    for index, object_value in enumerate(value["documents"]):
+        if not isinstance(object_value, dict):
+            continue
+        location = object_value.setdefault("position", list(_DEFAULT_POSITION))
+        rotation = object_value.setdefault("rotation", list(_DEFAULT_ROTATION))
+        scale = object_value.setdefault("scale", list(_DEFAULT_SCALE))
+        object_value["position"] = _canonical_vector(location, "position", index, minimum=-_MAX_ABS_POSITION, maximum=_MAX_ABS_POSITION)
+        object_value["rotation"] = _canonical_rotation(rotation, index)
+        object_value["scale"] = _canonical_vector(scale, "scale", index, minimum=_MIN_SCALE, maximum=_MAX_SCALE)
+
+def _normalize_socket_transforms(value: Any) -> None:
+    if not isinstance(value, dict) or not isinstance(value.get("documents"), list):
+        return
+    for index, socket_value in enumerate(value["documents"]):
+        if not isinstance(socket_value, dict):
+            continue
+        if "position" in socket_value:
+            socket_value["position"] = _canonical_vector(
+                socket_value["position"], "position", index,
+                minimum=-_MAX_ABS_POSITION, maximum=_MAX_ABS_POSITION,
+                domain="sockets",
+            )
+        if "rotation" in socket_value:
+            socket_value["rotation"] = _canonical_rotation(
+                socket_value["rotation"], index, domain="sockets",
+            )
+        if "scale" in socket_value:
+            socket_value["scale"] = _canonical_vector(
+                socket_value["scale"], "scale", index,
+                minimum=_MIN_SCALE, maximum=_MAX_SCALE,
+                domain="sockets",
+            )
+
+
+def _canonical_vector(
+    value: Any,
+    label: str,
+    index: int,
+    *,
+    minimum: float,
+    maximum: float,
+    domain: str = "objects",
+) -> list[float | int]:
+    if not isinstance(value, list):
+        raise ValueError(f"{domain} document {index} {label} must be an array")
+    if len(value) != 3:
+        raise ValueError(f"{domain} document {index} {label} must contain exactly three values")
+    result: list[float | int] = []
+    for component in value:
+        number = _finite_number(component, f"{domain} document {index} {label}")
+        if number < minimum or number > maximum:
+            raise ValueError(f"{domain} document {index} {label} exceeds native bounds")
+        result.append(component)
+    return result
+
+
+def _canonical_rotation(value: Any, index: int, *, domain: str = "objects") -> list[float | int]:
+    if not isinstance(value, list):
+        raise ValueError(f"{domain} document {index} rotation must be an array")
+    if len(value) == 3:
+        return [_finite_number(component, f"{domain} document {index} rotation") for component in value]
+    if len(value) != 4:
+        raise ValueError(f"{domain} document {index} rotation must contain three Euler values or four quaternion values")
+
+    quaternion = [_finite_number(component, f"{domain} document {index} rotation") for component in value]
+    norm = math.hypot(*quaternion)
+    if norm < _QUATERNION_EPSILON:
+        raise ValueError(f"{domain} document {index} rotation quaternion has zero length")
+    x, y, z, w = (component / norm for component in quaternion)
+
+    # This is the Three.js Euler order XYZ conversion (radians), including
+    # its deterministic gimbal-lock branch.  The host's private native
+    # boundary converts this canonical Euler form back to a quaternion.
+    m11 = 1.0 - 2.0 * (y * y + z * z)
+    m12 = 2.0 * (x * y - z * w)
+    m13 = 2.0 * (x * z + y * w)
+    m22 = 1.0 - 2.0 * (x * x + z * z)
+    m23 = 2.0 * (y * z - x * w)
+    m32 = 2.0 * (y * z + x * w)
+    m33 = 1.0 - 2.0 * (x * x + y * y)
+    clamped_m13 = max(-1.0, min(1.0, m13))
+    euler_y = math.asin(clamped_m13)
+    if abs(clamped_m13) < 0.9999999:
+        euler_x = math.atan2(-m23, m33)
+        euler_z = math.atan2(-m12, m11)
+    else:
+        euler_x = math.atan2(m32, m22)
+        euler_z = 0.0
+    return [euler_x, euler_y, euler_z]
 
 def _assert_known_nested(value: Any, parent_key: str | None = None) -> None:
     if isinstance(value, dict):

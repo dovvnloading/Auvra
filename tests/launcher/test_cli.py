@@ -5,6 +5,7 @@ import io
 import inspect
 import json
 from pathlib import Path
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -306,6 +307,41 @@ class CliParserTests(unittest.TestCase):
             self.assertEqual(argv, ["node with spaces", str(paths.vite_script), "--host", "127.0.0.1", "--port", "3022", "--strictPort"])
             self.assertEqual(cwd, paths.frontend_root)
 
+    def test_start_holds_port_reservation_until_vite_spawn(self) -> None:
+        events: list[object] = []
+
+        class Reservation:
+            released = False
+
+            def release(self) -> None:
+                self.released = True
+                events.append("release")
+
+        reservation = Reservation()
+        owned = mock.Mock()
+        owned.is_alive.return_value = False
+
+        def launch(*_args: object, **kwargs: object) -> object:
+            events.append(("launch", reservation.released,
+                           kwargs["env"]["AUVRA_READY_TOKEN"]))  # type: ignore[index]
+            return owned
+
+        with tempfile.TemporaryDirectory(prefix="auvra reservation ") as raw:
+            paths = Paths.from_repo_root(Path(raw))
+            with mock.patch.object(cli, "_runtime_ok", return_value=(True, [])), \
+                 mock.patch.object(cli, "choose_port", return_value=3049), \
+                 mock.patch.object(cli, "_reserve_port", return_value=reservation), \
+                 mock.patch.object(cli, "prepare_dependencies", return_value=(True, mock.Mock(to_dict=lambda: {"status": "ready"}), "")), \
+                 mock.patch.object(cli.OwnedProcess, "launch", side_effect=launch), \
+                 mock.patch.object(cli, "wait_for_readiness", return_value=ReadinessResult(False, "http://127.0.0.1:3049/", 1, "child exited", "child-exited")):
+                result = cli.run_start(paths, explicit_port=None, json_mode=True)
+
+        self.assertEqual(result, cli.ExitCode.CHILD)
+        self.assertEqual(events[0][0], "launch")
+        self.assertFalse(events[0][1])
+        self.assertTrue(events[0][2])
+        self.assertEqual(events[1:], ["release"])
+
     def test_child_output_is_redacted_before_human_logging(self) -> None:
         paths = Paths()
         owned = mock.Mock()
@@ -348,6 +384,23 @@ class CliParserTests(unittest.TestCase):
 
 
 class CliPolicyTests(unittest.TestCase):
+    def test_port_reservation_blocks_competing_bind_until_release(self) -> None:
+        picker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        picker.bind((cli.HOST, 0))
+        port = picker.getsockname()[1]
+        picker.close()
+
+        reservation = cli._reserve_port(port)
+        competitor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            with self.assertRaises(OSError):
+                competitor.bind((cli.HOST, port))
+            reservation.release()
+            competitor.bind((cli.HOST, port))
+        finally:
+            reservation.release()
+            competitor.close()
+
     def test_explicit_port_is_strict_and_does_not_fallback(self) -> None:
         with mock.patch.object(cli, "_port_open", return_value=True) as probe:
             with self.assertRaises(OSError):

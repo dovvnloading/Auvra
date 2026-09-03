@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import hashlib
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import queue
 import secrets
 import sys
@@ -71,6 +72,42 @@ class WindowsAppContainerLauncher:
         if sys.platform != "win32":
             raise IsolationUnavailable("Windows AppContainer is unavailable")
         return _create_windows_sandbox_process(executable, package)
+
+
+def _validate_installed_executable(executable: Path, package: PluginPackage) -> Path:
+    """Require the exact manifest entrypoint beneath its digest install root."""
+    candidate = Path(executable).expanduser().absolute()
+    try:
+        stat = candidate.stat()
+    except OSError as exc:
+        raise IsolationUnavailable("plugin executable cannot be inspected") from exc
+    if candidate.is_symlink() or getattr(stat, "st_file_attributes", 0) & 0x400 or not candidate.is_file():
+        raise IsolationUnavailable("plugin executable is linked or reparse-pointed")
+    parts = PurePosixPath(package.manifest["entrypoint"]["path"]).parts
+    if not parts or parts[0] != "payload":
+        raise IsolationUnavailable("plugin entrypoint is outside its payload directory")
+    install_root = candidate
+    for _ in parts:
+        install_root = install_root.parent
+    if install_root.name != package.package_digest:
+        raise IsolationUnavailable("plugin executable is not bound to its digest-addressed install")
+    try:
+        if install_root.is_symlink() or getattr(install_root.stat(), "st_file_attributes", 0) & 0x400:
+            raise IsolationUnavailable("plugin install root is linked or reparse-pointed")
+    except OSError as exc:
+        raise IsolationUnavailable("plugin install root cannot be inspected") from exc
+    expected = install_root.joinpath(*parts)
+    if os.path.normcase(str(expected)) != os.path.normcase(str(candidate)):
+        raise IsolationUnavailable("plugin executable does not match the package entrypoint")
+    current = install_root
+    for part in parts[:-1]:
+        current /= part
+        try:
+            if current.is_symlink() or getattr(current.stat(), "st_file_attributes", 0) & 0x400:
+                raise IsolationUnavailable("plugin entrypoint contains a link or reparse point")
+        except OSError as exc:
+            raise IsolationUnavailable("plugin entrypoint cannot be inspected") from exc
+    return candidate
 
 
 class _SandboxProcess:
@@ -164,16 +201,7 @@ class _SandboxProcess:
 def _create_windows_sandbox_process(executable: Path, package: PluginPackage) -> _SandboxProcess:
     import ctypes
     from ctypes import wintypes
-    try:
-        stat = executable.stat()
-    except OSError as exc:
-        raise IsolationUnavailable("plugin executable cannot be inspected") from exc
-    if (executable.is_symlink() or getattr(stat, "st_file_attributes", 0) & 0x400 or
-            not executable.is_file() or executable.parent.name != "payload" or
-            executable.parent.parent.name != package.package_digest):
-        raise IsolationUnavailable("plugin executable is outside its payload directory")
-    if package.manifest["entrypoint"]["path"].replace("/", "\\") != f"payload\\{executable.name}":
-        raise IsolationUnavailable("plugin executable does not match the package entrypoint")
+    executable = _validate_installed_executable(executable, package)
     expected = package.manifest["entrypoint"]["sha256"]
     digest = hashlib.sha256()
     try:
@@ -492,11 +520,7 @@ class PluginWorker:
             raise IsolationUnavailable("plugin is disabled for this session")
         expected = self.package.manifest["entrypoint"]["sha256"]
         try:
-            candidate = Path(executable).expanduser().absolute()
-            if candidate.is_symlink() or (getattr(candidate.stat(), "st_file_attributes", 0) & 0x400):
-                raise IsolationUnavailable("plugin executable is linked or reparse-pointed")
-            if candidate.parent.name != "payload" or candidate.parent.parent.name != self.package.package_digest:
-                raise IsolationUnavailable("plugin executable is not bound to its digest-addressed install")
+            candidate = _validate_installed_executable(executable, self.package)
             digest = hashlib.sha256()
             with candidate.open("rb") as stream:
                 for block in iter(lambda: stream.read(1024 * 1024), b""):

@@ -5,6 +5,8 @@ import "./styles.css";
 const MAX_MESSAGE_BYTES = 256 * 1024;
 const MAX_CODE_BYTES = 192 * 1024;
 const MAX_PROPS_BYTES = 32 * 1024;
+const MAX_EXECUTION_STEPS = 100_000;
+const MAX_EXECUTION_MS = 50;
 const rootElement = document.getElementById("root");
 if (!rootElement) throw new Error("HUD sandbox root is missing");
 const root: Root = createRoot(rootElement);
@@ -41,12 +43,25 @@ function isRender(value: unknown, nonce: string): value is RenderMessage {
     byteLength(candidate.props) <= MAX_PROPS_BYTES;
 }
 
+function createExecutionGuard(): { tick: () => void } {
+  const started = performance.now();
+  let steps = 0;
+  return {
+    tick: () => {
+      steps += 1;
+      if (steps > MAX_EXECUTION_STEPS || performance.now() - started > MAX_EXECUTION_MS) {
+        throw new Error("HUD execution exceeded the sandbox budget");
+      }
+    },
+  };
+}
+
 function renderMessage(value: RenderMessage): void {
   try {
     // This is the only dynamic evaluation site and is intentionally confined to
     // the opaque-origin, sandboxed HUD document.
-    const getComponent = new Function("React", `return (${value.code});`);
-    const Component = getComponent(React) as React.ComponentType<Record<string, unknown>>;
+    const getComponent = new Function("React", "__auvraHudGuard", `return (${value.code});`);
+    const Component = getComponent(React, createExecutionGuard()) as React.ComponentType<Record<string, unknown>>;
     root.render(React.createElement(Component, value.props));
   } catch (error) {
     channel?.postMessage({ type: "diagnostic", code: "runtime_error" });

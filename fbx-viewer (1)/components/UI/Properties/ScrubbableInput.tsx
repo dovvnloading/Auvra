@@ -26,6 +26,7 @@ export const ScrubbableInput: React.FC<ScrubbableInputProps> = ({
     const isDragging = useRef(false);
     const startX = useRef(0);
     const startVal = useRef(0);
+    const dragValue = useRef(value);
 
     // Determines decimal places for consistency
     const getDecimals = () => step < 0.1 ? 2 : (step < 1 ? 1 : 0);
@@ -45,6 +46,12 @@ export const ScrubbableInput: React.FC<ScrubbableInputProps> = ({
         }
     }, [isEditing]);
 
+    useEffect(() => () => {
+        // A component can unmount while a pointer is captured; never leave the
+        // document cursor in the scrub state in that case.
+        document.body.style.cursor = '';
+    }, []);
+
     // -- SCRUBBING HANDLERS (Label) --
     
     const handlePointerDown = (e: React.PointerEvent) => {
@@ -57,6 +64,7 @@ export const ScrubbableInput: React.FC<ScrubbableInputProps> = ({
         isDragging.current = true;
         startX.current = e.clientX;
         startVal.current = value;
+        dragValue.current = value;
         
         document.body.style.cursor = 'ew-resize';
     };
@@ -84,20 +92,44 @@ export const ScrubbableInput: React.FC<ScrubbableInputProps> = ({
         // CRITICAL FIX: Update local string during drag so input updates visually
         // Otherwise the useEffect is blocked by !isDragging.current
         setLocalStr(rounded.toFixed(getDecimals()));
+        dragValue.current = rounded;
 
         onChange(rounded);
     };
 
-    const handlePointerUp = (e: React.PointerEvent) => {
+    const finishDragging = (e?: React.PointerEvent) => {
         if (isDragging.current) {
             isDragging.current = false;
             document.body.style.cursor = '';
-            const target = e.currentTarget as HTMLElement;
-            target.releasePointerCapture(e.pointerId);
+            if (e) {
+                const target = e.currentTarget as Element;
+                if (target.hasPointerCapture?.(e.pointerId)) target.releasePointerCapture(e.pointerId);
+            }
             
             // Final sync after drag releases to ensure precision
-            setLocalStr(Number(value).toFixed(getDecimals()));
+            setLocalStr(Number(dragValue.current).toFixed(getDecimals()));
         }
+    };
+
+    const handlePointerUp = (e: React.PointerEvent) => finishDragging(e);
+    const handlePointerCancel = (e: React.PointerEvent) => finishDragging(e);
+
+    const roundValue = (rawValue: number) => {
+        const decimals = step < 0.1 ? 3 : (step < 1 ? 2 : 1);
+        const factor = Math.pow(10, decimals);
+        return Math.round(rawValue * factor) / factor;
+    };
+
+    const handleScrubKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+        let direction = 0;
+        if (e.key === 'ArrowRight' || e.key === 'ArrowUp') direction = 1;
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') direction = -1;
+        if (direction === 0) return;
+        e.preventDefault();
+        const multiplier = e.shiftKey ? 0.1 : 1;
+        const next = roundValue(value + direction * step * multiplier);
+        setLocalStr(next.toFixed(getDecimals()));
+        onChange(next);
     };
 
     // -- EDITING HANDLERS (Input) --
@@ -130,20 +162,24 @@ export const ScrubbableInput: React.FC<ScrubbableInputProps> = ({
     return (
         <div className="flex items-center bg-gray-950 border border-gray-800 rounded-md overflow-hidden h-7 transition-colors hover:border-gray-600 focus-within:border-blue-500/50 focus-within:ring-1 focus-within:ring-blue-500/20 group/input">
             {/* Draggable Label */}
-            <div 
+            <button
                 className={`
                     ${labelWidth} h-full flex items-center justify-center 
                     bg-gray-900 border-r border-gray-800 
                     cursor-ew-resize hover:bg-gray-800 hover:text-white transition-colors
-                    select-none px-1
+                    select-none px-1 appearance-none border-0
                 `}
+                type="button"
+                aria-label={`Scrub ${label || 'value'}`}
                 onPointerDown={handlePointerDown}
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
+                onPointerCancel={handlePointerCancel}
+                onKeyDown={handleScrubKeyDown}
                 title="Drag to scrub value"
             >
                 <span className={`text-[10px] font-bold ${labelColor} truncate`}>{label}</span>
-            </div>
+            </button>
 
             {/* Editable Value */}
             <div className="flex-1 h-full relative">
@@ -159,13 +195,15 @@ export const ScrubbableInput: React.FC<ScrubbableInputProps> = ({
                         className="w-full h-full bg-transparent text-[11px] text-white px-2 focus:outline-none font-mono"
                     />
                 ) : (
-                    <div 
+                    <button
+                        type="button"
                         onClick={() => setIsEditing(true)}
-                        className="w-full h-full flex items-center px-2 text-[11px] text-gray-300 font-mono cursor-text hover:text-white truncate"
+                        aria-label={`Edit ${label || 'value'}`}
+                        className="w-full h-full flex items-center px-2 text-[11px] text-gray-300 font-mono cursor-text hover:text-white truncate bg-transparent border-0 text-left"
                         title="Click to edit"
                     >
                         {localStr}
-                    </div>
+                    </button>
                 )}
             </div>
         </div>

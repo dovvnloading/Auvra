@@ -7,6 +7,7 @@ interface BlueprintListPanelProps {
     selectedId: string | null;
     onSelect: (id: string) => void;
     onAdd: (type: BlueprintType) => void;
+    isCreatingPlayer: boolean;
     onRemove: (id: string) => void;
 }
 
@@ -15,9 +16,16 @@ export const BlueprintListPanel: React.FC<BlueprintListPanelProps> = ({
     selectedId,
     onSelect,
     onAdd,
+    isCreatingPlayer,
     onRemove
 }) => {
     const hasPlayerCharacter = blueprints.some(bp => bp.type === 'Player Character');
+    const handleBlueprintKeyDown = (event: React.KeyboardEvent<HTMLDivElement>, id: string) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        onSelect(id);
+    };
 
     return (
         <div className="w-64 bg-gray-900 border-r border-gray-800 flex flex-col shrink-0 z-20">
@@ -27,8 +35,9 @@ export const BlueprintListPanel: React.FC<BlueprintListPanelProps> = ({
                 </span>
                 <div className="flex gap-1">
                     {!hasPlayerCharacter && (
-                        <button 
+                    <button
                             onClick={() => onAdd('Player Character')} 
+                            disabled={isCreatingPlayer}
                             className="p-1 hover:bg-gray-800 rounded text-blue-400 hover:text-white transition-colors" 
                             title="New Player"
                         >
@@ -49,6 +58,10 @@ export const BlueprintListPanel: React.FC<BlueprintListPanelProps> = ({
                     <div 
                         key={bp.id}
                         onClick={() => onSelect(bp.id)}
+                        onKeyDown={(event) => handleBlueprintKeyDown(event, bp.id)}
+                        role="button"
+                        tabIndex={0}
+                        aria-pressed={selectedId === bp.id}
                         className={`
                             group flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-all border relative
                             ${selectedId === bp.id 
@@ -72,7 +85,8 @@ export const BlueprintListPanel: React.FC<BlueprintListPanelProps> = ({
                                 e.preventDefault();
                                 onRemove(bp.id);
                             }}
-                            className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-500 hover:text-red-400 hover:bg-gray-900 rounded transition-all"
+                            aria-label={`Delete ${bp.name}`}
+                            className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 p-1.5 text-gray-500 hover:text-red-400 hover:bg-gray-900 rounded transition-all"
                             title="Delete Blueprint"
                         >
                             <Trash2 size={12} />

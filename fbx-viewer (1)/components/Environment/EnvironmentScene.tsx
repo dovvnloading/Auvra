@@ -238,6 +238,7 @@ interface EnvironmentSceneProps {
     activeViewId: string;
     isOrthographic?: boolean;
     isMuted: boolean;
+    enableAudio?: boolean;
 }
 
 export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({ 
@@ -260,7 +261,8 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
     viewId,
     activeViewId,
     isOrthographic = false,
-    isMuted
+    isMuted,
+    enableAudio = true,
 }) => {
     const { camera, controls } = useThree(); 
     const { audioAssets } = useAssets();
@@ -329,11 +331,9 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
             const o = transformTarget;
             updateLevelObject(selectedId, {
                 position: o.position.toArray(),
-                rotation: [
-                    THREE.MathUtils.radToDeg(o.rotation.x),
-                    THREE.MathUtils.radToDeg(o.rotation.y),
-                    THREE.MathUtils.radToDeg(o.rotation.z)
-                ],
+                // LevelObject.rotation is authored as a Three.js XYZ Euler in radians.
+                // Keep the degree conversion at presentation boundaries only.
+                rotation: [o.rotation.x, o.rotation.y, o.rotation.z],
                 scale: o.scale.toArray()
             });
         }
@@ -402,11 +402,11 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
             />
 
             {/* Audio System */}
-            <AudioSystem 
-                levelObjects={levelObjects} 
-                audioAssets={audioAssets} 
-                isMuted={isMuted} 
-            />
+            {enableAudio && <AudioSystem
+                levelObjects={levelObjects}
+                audioAssets={audioAssets}
+                isMuted={isMuted}
+            />}
 
             {/* Render Terrain */}
             {terrainObjects.map(terrain => (

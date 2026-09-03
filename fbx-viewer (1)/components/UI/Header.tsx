@@ -14,9 +14,17 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
   const [resetConfirm, setResetConfirm] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  const handleNewProject = async () => {
+  // Project actions notify through useProjectManager and retain their rejected
+  // promise for programmatic callers.  Header events are fire-and-forget UI
+  // boundaries, so consume that rejection here to avoid duplicate global
+  // unhandled-rejection diagnostics after a cancelled/failed dialog.
+  const runProjectAction = (action: () => Promise<unknown>) => {
+      void action().catch(() => undefined);
+  };
+
+  const handleNewProject = () => {
       if (resetConfirm) {
-          await createNewProject();
+          runProjectAction(createNewProject);
           setResetConfirm(false);
       } else {
           setResetConfirm(true);
@@ -83,7 +91,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
              aria-label="Recent projects"
              className="max-w-32 bg-gray-900 border border-gray-800 text-[10px] text-gray-500 rounded px-1 py-1"
              value=""
-             onChange={(event) => { if (event.target.value) void openRecentProject(event.target.value); }}
+             onChange={(event) => { if (event.target.value) runProjectAction(() => openRecentProject(event.target.value)); }}
              disabled={isLoading}
            >
              <option value="">Recent</option>
@@ -96,7 +104,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
                aria-label="Recovery points"
                className="max-w-28 bg-gray-900 border border-amber-900 text-[10px] text-amber-300 rounded px-1 py-1"
                value=""
-               onChange={(event) => { if (event.target.value) void recoverProject(event.target.value); }}
+               onChange={(event) => { if (event.target.value) runProjectAction(() => recoverProject(event.target.value)); }}
                disabled={isLoading}
              >
                <option value="">Open recovery…</option>
@@ -120,34 +128,34 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
                </button>
                <div className="w-px h-3 bg-gray-800 mx-1"></div>
                <button 
-                 onClick={saveProject}
+                 onClick={() => runProjectAction(saveProject)}
                  className="flex items-center gap-2 px-3 py-1 text-xs font-bold text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50"
                  title={projectStatus.readOnly ? "Project is read-only" : "Save project"}
                  disabled={isLoading || !projectStatus.projectId || projectStatus.readOnly}
                >
                    <Save size={12} /> Save
                </button>
-               <button onClick={saveProjectAs} disabled={isLoading || !projectStatus.projectId || projectStatus.readOnly} className="flex items-center gap-2 px-3 py-1 text-xs font-bold text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50" title="Save project as">
+               <button onClick={() => runProjectAction(saveProjectAs)} disabled={isLoading || !projectStatus.projectId || projectStatus.readOnly} className="flex items-center gap-2 px-3 py-1 text-xs font-bold text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50" title="Save project as">
                    <Download size={12} /> Save As
                </button>
                <div className="w-px h-3 bg-gray-800 mx-1"></div>
                <button 
-                 onClick={loadProject}
+                 onClick={() => runProjectAction(loadProject)}
                  disabled={isLoading}
                  className="flex items-center gap-2 px-3 py-1 text-xs font-bold text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50"
                  title="Open project"
                >
                    <FolderOpen size={12} /> Open
                </button>
-               <button onClick={importProject} disabled={isLoading} className="flex items-center gap-2 px-3 py-1 text-xs font-bold text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50" title="Import an .auvrapack project">
+               <button onClick={() => runProjectAction(importProject)} disabled={isLoading} className="flex items-center gap-2 px-3 py-1 text-xs font-bold text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50" title="Import an .auvrapack project">
                    <Upload size={12} /> Import
                </button>
-               <button onClick={importLegacyProject} disabled={isLoading} className="flex items-center gap-2 px-2 py-1 text-xs font-bold text-gray-500 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50" title="Import a legacy .forge project">Legacy file</button>
-               <button onClick={migrateLegacyBrowserProject} disabled={isLoading || !projectStatus.projectId || projectStatus.readOnly} className="flex items-center gap-2 px-2 py-1 text-xs font-bold text-gray-500 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50" title="Copy read-only OmniRenderDB data into this empty native project">Browser data</button>
-               <button onClick={exportProject} disabled={isLoading || !projectStatus.projectId} className="flex items-center gap-2 px-3 py-1 text-xs font-bold text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50" title="Export an .auvrapack project">
+               <button onClick={() => runProjectAction(importLegacyProject)} disabled={isLoading} className="flex items-center gap-2 px-2 py-1 text-xs font-bold text-gray-500 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50" title="Import a legacy .forge project">Legacy file</button>
+               <button onClick={() => runProjectAction(migrateLegacyBrowserProject)} disabled={isLoading || !projectStatus.projectId || projectStatus.readOnly} className="flex items-center gap-2 px-2 py-1 text-xs font-bold text-gray-500 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50" title="Copy read-only OmniRenderDB data into this empty native project">Browser data</button>
+               <button onClick={() => runProjectAction(exportProject)} disabled={isLoading || !projectStatus.projectId} className="flex items-center gap-2 px-3 py-1 text-xs font-bold text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50" title="Export an .auvrapack project">
                    <Download size={12} /> Export
                </button>
-               <button onClick={closeProject} disabled={isLoading || !projectStatus.projectId} className="flex items-center gap-2 px-2 py-1 text-xs font-bold text-gray-500 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50" title="Close project">
+               <button onClick={() => runProjectAction(closeProject)} disabled={isLoading || !projectStatus.projectId} className="flex items-center gap-2 px-2 py-1 text-xs font-bold text-gray-500 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50" title="Close project">
                    <X size={12} />
                </button>
            </div>

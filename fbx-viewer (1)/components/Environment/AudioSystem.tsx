@@ -31,10 +31,12 @@ export const AudioSystem: React.FC<AudioSystemProps> = ({ levelObjects, audioAss
     useEffect(() => {
         const existing = camera.children.find(c => c.type === 'AudioListener');
         let listener: THREE.AudioListener;
+        let ownsListener = false;
         
         if (!existing) {
             listener = new THREE.AudioListener();
             camera.add(listener);
+            ownsListener = true;
         } else {
             listener = existing as THREE.AudioListener;
         }
@@ -42,7 +44,10 @@ export const AudioSystem: React.FC<AudioSystemProps> = ({ levelObjects, audioAss
         
         // Initial mute state check
         listener.setMasterVolume(isMuted ? 0 : 1);
-        
+        return () => {
+            if (ownsListener) camera.remove(listener);
+            if (listenerRef.current === listener) listenerRef.current = null;
+        };
     }, [camera]); // Only run when camera changes (e.g. initial mount)
 
     // 2. Handle Mute Toggle
@@ -54,7 +59,8 @@ export const AudioSystem: React.FC<AudioSystemProps> = ({ levelObjects, audioAss
 
     // 3. Sync Audio Objects
     useEffect(() => {
-        if (!listenerRef.current) return;
+        const listener = listenerRef.current;
+        if (!listener) return;
 
         const currentIds = new Set<string>();
 
@@ -89,55 +95,60 @@ export const AudioSystem: React.FC<AudioSystemProps> = ({ levelObjects, audioAss
 
                         // Setup new sound
                         if (config.isSpatial) {
-                            sound = new THREE.PositionalAudio(listenerRef.current);
+                            sound = new THREE.PositionalAudio(listener);
                         } else {
-                            sound = new THREE.Audio(listenerRef.current);
+                            sound = new THREE.Audio(listener);
                         }
 
                         // Create container
                         const dummy = new THREE.Group();
                         dummy.position.set(...obj.position);
-                        dummy.add(sound);
+                        const createdSound = sound;
+                        const createdAssetId = config.audioId;
+                        dummy.add(createdSound);
                         scene.add(dummy);
-                        sound.userData = { parentGroup: dummy };
+                        createdSound.userData = { parentGroup: dummy };
 
                         // Load Buffer
                         const loader = new THREE.AudioLoader();
                         loader.load(audioData.url, (buffer) => {
-                            // Check if this source is still valid/active after load
-                            if (!sourcesRef.current.has(obj.id)) return;
+                            // A source ID can survive an asset/type replacement;
+                            // require both object and asset identity so a late
+                            // decode callback cannot attach to the new source.
+                            if (sourcesRef.current.get(obj.id) !== createdSound
+                                || sourceAssetIdMap.current.get(obj.id) !== createdAssetId) return;
                             
                             // FETCH LATEST CONFIG FROM REF to avoid stale closure issues
                             const currentConfig = latestConfigsRef.current.get(obj.id) || config;
                             
-                            sound!.setBuffer(buffer);
+                            createdSound.setBuffer(buffer);
                             
                             // Apply Spatial Settings safely
-                            if (sound instanceof THREE.PositionalAudio) {
-                                sound.setRefDistance(currentConfig.refDistance);
-                                sound.setMaxDistance(currentConfig.maxDistance);
-                                sound.setRolloffFactor(currentConfig.rolloffFactor);
+                            if (createdSound instanceof THREE.PositionalAudio) {
+                                createdSound.setRefDistance(currentConfig.refDistance);
+                                createdSound.setMaxDistance(currentConfig.maxDistance);
+                                createdSound.setRolloffFactor(currentConfig.rolloffFactor);
                             }
                             
-                            sound!.setLoop(currentConfig.loop);
+                            createdSound.setLoop(currentConfig.loop);
                             
                             // Set Volume considering local mute
-                            sound!.setVolume(currentConfig.muted ? 0 : currentConfig.volume);
+                            createdSound.setVolume(currentConfig.muted ? 0 : currentConfig.volume);
                             
                             // Strict Loop Timing
                             const targetLoopStart = currentConfig.loopStart || 0;
-                            sound!.setLoopStart(targetLoopStart);
+                            createdSound.setLoopStart(targetLoopStart);
                             
                             // If loopEnd is provided and valid, use it. Otherwise use full duration.
                             const targetLoopEnd = (currentConfig.loopEnd && currentConfig.loopEnd > 0) ? currentConfig.loopEnd : buffer.duration;
-                            sound!.setLoopEnd(targetLoopEnd);
+                            createdSound.setLoopEnd(targetLoopEnd);
 
-                            if (currentConfig.autoplay && !sound!.isPlaying) {
-                                sound!.play();
+                            if (currentConfig.autoplay && !createdSound.isPlaying) {
+                                createdSound.play();
                             }
                         });
 
-                        sourcesRef.current.set(obj.id, sound);
+                        sourcesRef.current.set(obj.id, createdSound);
                         sourceAssetIdMap.current.set(obj.id, config.audioId);
 
                     } else {

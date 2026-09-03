@@ -1,7 +1,7 @@
 """Transactional native project repository."""
 from __future__ import annotations
 
-import copy, hashlib, json, os, re, shutil, tempfile, time, uuid
+import copy, hashlib, json, os, re, shutil, tempfile, time, uuid, zipfile
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,8 +9,9 @@ from typing import Any, Iterable
 from Auvra.diagnostics import trace_public_class
 from .archive import export_folder, validate_archive
 from .assets import AssetStore, sniff_mime
-from .errors import (InvalidProjectError, ReadOnlyError, RevisionConflictError,
-                     RecoveryRequiredError, UnsupportedVersionError)
+from .errors import (ArchiveValidationError, InvalidProjectError, ReadOnlyError,
+                     RevisionConflictError, RecoveryRequiredError,
+                     UnsupportedVersionError)
 from .legacy import LegacyArchive
 from .locking import ProjectLock
 from .schemas import (DOMAIN_NAMES, domain_document, validate_domain,
@@ -23,6 +24,7 @@ MANUAL_LIMIT = 5
 AUTOSAVE_LIMIT = 10
 PROJECT_CAP = 2 * 1024**3
 RECOVERY_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
+_RECOVERY_COMPLETE = ".complete"
 
 @dataclass(frozen=True)
 class ProjectStatus:
@@ -137,11 +139,26 @@ class ProjectRepository:
         for journal in txdir.glob("*.json"):
             try: tx = load_json(journal)
             except Exception: raise RecoveryRequiredError("corrupt transaction journal requires recovery")
-            if tx.get("state") == "committed": journal.unlink(missing_ok=True); continue
+            staging_roots: set[Path] = set()
+            entries = tx.get("files", [])
+            if not isinstance(entries, list):
+                raise RecoveryRequiredError("transaction journal files are invalid")
+            for entry in [*entries, tx.get("descriptor", {})]:
+                if isinstance(entry, dict) and entry.get("staged"):
+                    staging_roots.add(_journal_path(self.path, entry.get("staged"), "staging").parent)
+            if tx.get("state") == "committed":
+                journal.unlink(missing_ok=True)
+                # A committed journal intentionally contains only the final
+                # state, so recover any orphaned staging trees left by a crash
+                # between the commit marker and journal cleanup.
+                staging_roots.update(path for path in txdir.parent.glob("tx-*") if path.is_dir())
+                for staging_root in staging_roots:
+                    shutil.rmtree(staging_root, ignore_errors=True)
+                continue
             # Descriptor is the commit point. Restore the old generation when it
             # was not advanced; finish staged documents when it was advanced.
             if self._descriptor.get("revision") == tx.get("newRevision"):
-                for entry in tx.get("files", []):
+                for entry in entries:
                     staged = _journal_path(self.path, entry.get("staged"), "staging")
                     target = _journal_path(self.path, entry.get("target"), "project")
                     if staged.exists(): os.replace(staged, target)
@@ -166,6 +183,8 @@ class ProjectRepository:
             _fsync_directory(self.path / ".auvra")
             journal.unlink(missing_ok=True)
             _fsync_directory(txdir)
+            for staging_root in staging_roots:
+                shutil.rmtree(staging_root, ignore_errors=True)
 
     @property
     def status(self) -> ProjectStatus:
@@ -186,6 +205,40 @@ class ProjectRepository:
         path = self._domain_path(domain)
         if not path.exists(): return domain_document(domain, [])
         return validate_domain(domain, load_json(path))
+
+    def referenced_asset_ids(self, domains: dict[str, Any] | None = None) -> set[str]:
+        """Return the content hashes reachable from the live project documents."""
+
+        references: set[str] = set()
+
+        def collect(value: Any) -> None:
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    if key == "assetId" and isinstance(child, str):
+                        references.add(child)
+                    elif key == "assetIds" and isinstance(child, list):
+                        references.update(item for item in child if isinstance(item, str))
+                    collect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect(child)
+
+        selected = domains or {domain: self.get_domain(domain) for domain in DOMAIN_NAMES}
+        for document in selected.values():
+            collect(document)
+        return references
+
+    def prune_unreferenced_assets(self, candidates: Iterable[str] | None = None) -> set[str]:
+        """Delete blobs no longer reachable from the live project."""
+
+        return self.assets.remove_unreferenced(self.referenced_asset_ids(), candidates)
+
+    def discard_asset_if_unreferenced(self, asset_id: str) -> bool:
+        """Remove one blob only when no live document points to it."""
+
+        if asset_id in self.referenced_asset_ids():
+            return False
+        return self.assets.remove(asset_id)
     def snapshot(self, domains: Iterable[str] | None = None, *, page: int = 0, page_size: int | None = None,
                  offset: int | None = None) -> ProjectSnapshot:
         if not isinstance(page, int) or page < 0: raise ValueError("page must be a non-negative integer")
@@ -204,11 +257,17 @@ class ProjectRepository:
         if expected_revision != self.revision: raise RevisionConflictError("project revision changed")
         validated = {domain: domain_document(domain, copy.deepcopy(docs)) for domain, docs in changes.items()}
         candidate = {domain: (validated[domain] if domain in validated else self.get_domain(domain)) for domain in DOMAIN_NAMES}
+        candidate_refs = self.referenced_asset_ids(candidate)
         try:
             validate_project_references(candidate, asset_exists=self.assets.verify)
         except ValueError as exc:
+            self.prune_unreferenced_assets(candidate_refs - self.referenced_asset_ids())
             raise InvalidProjectError(str(exc)) from exc
-        self._transaction(validated, expected_revision + 1)
+        try:
+            self._transaction(validated, expected_revision + 1)
+        except Exception:
+            self.prune_unreferenced_assets(candidate_refs - self.referenced_asset_ids())
+            raise
         self._dirty = True
         return self.revision
 
@@ -256,11 +315,14 @@ class ProjectRepository:
     def save(self, *, expected_revision: int | None = None) -> int:
         if expected_revision is not None and expected_revision != self.revision: raise RevisionConflictError("project revision changed")
         if self.read_only: raise ReadOnlyError("project is read-only")
-        self._dirty = False; self._retain_recovery("manual")
+        self._retain_recovery("manual")
+        self._dirty = False
         return self.revision
     def save_as(self, destination: str | os.PathLike[str], *, name: str | None = None) -> "ProjectRepository":
         if self.read_only: raise ReadOnlyError("project is read-only")
         destination = Path(destination)
+        if _destination_is_inside(self.path, destination):
+            raise InvalidProjectError("Save As destination must be outside the source project")
         if destination.exists(): raise InvalidProjectError("Save As destination already exists")
         new_name = name or destination.name
         if not new_name or any(c in new_name for c in "/\\"):
@@ -278,16 +340,60 @@ class ProjectRepository:
             if old.resolve() != new.resolve(): old.unlink()
             try: _validate_project_tree(staging)
             except ValueError as exc: raise InvalidProjectError(str(exc)) from exc
+            # Publish the lock/transaction authority as part of the staged
+            # tree; a crash after the rename must still leave an openable copy.
+            (staging / ".auvra" / "transactions").mkdir(parents=True, exist_ok=True)
             _fsync_tree(staging); os.replace(staging, destination)
-            (destination / ".auvra" / "transactions").mkdir(parents=True, exist_ok=True)
             _fsync_directory(destination / ".auvra"); _fsync_directory(parent); staging = None
             return ProjectRepository(destination)
         finally:
             if staging is not None: shutil.rmtree(staging, ignore_errors=True)
     def _retain_recovery(self, kind: str) -> None:
-        root = self.path / ".auvra" / ("autosaves" if kind == "autosave" else "backups"); root.mkdir(parents=True, exist_ok=True)
-        stamp = root / f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"; stamp.mkdir()
-        for src in [self._descriptor_path(), *(self.path / "Project").glob("*.json")]: shutil.copy2(src, stamp / src.name)
+        root = self.path / ".auvra" / ("autosaves" if kind == "autosave" else "backups")
+        root.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=f".{kind}-", dir=root))
+        stamp = root / f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
+        try:
+            # Build the entire point outside its published name. Every domain
+            # is materialized, so restore cannot interpret a missing file as
+            # an empty domain after an interrupted copy.
+            descriptor = self._descriptor_path()
+            shutil.copy2(descriptor, staging / descriptor.name)
+            for domain in DOMAIN_NAMES:
+                dump_json(staging / f"{domain}.json", self.get_domain(domain))
+
+            # Keep the immutable content referenced by the captured documents
+            # alongside their JSON. This prevents later asset cleanup from
+            # making an otherwise valid recovery point unusable.
+            snapshot_content = staging / "Content" / "sha256"
+            snapshot_content.mkdir(parents=True, exist_ok=True)
+            source_content = self.path / "Content" / "sha256"
+            if not source_content.is_dir() or _is_reparse(source_content):
+                raise InvalidProjectError("project asset store is unavailable")
+            for source in source_content.iterdir():
+                if source.name == ".incoming":
+                    continue
+                if not source.is_file() or _is_reparse(source):
+                    raise InvalidProjectError("project asset store contains unsafe content")
+                shutil.copy2(source, snapshot_content / source.name)
+            manifest = self.path / "Content" / "manifest.json"
+            if manifest.is_file() and not _is_reparse(manifest):
+                shutil.copy2(manifest, staging / "Content" / "manifest.json")
+            else:
+                dump_json(staging / "Content" / "manifest.json", {})
+
+            # Publish the completion marker last, then atomically rename the
+            # fully fsynced staging tree under its final recovery-point name.
+            (staging / _RECOVERY_COMPLETE).write_text(
+                "auvra-recovery/1\n", encoding="ascii", newline="\n"
+            )
+            _fsync_tree(staging)
+            os.replace(staging, stamp)
+            _fsync_directory(root)
+            staging = None
+        finally:
+            if staging is not None:
+                shutil.rmtree(staging, ignore_errors=True)
         limit = AUTOSAVE_LIMIT if kind == "autosave" else MANUAL_LIMIT
         points = sorted((p for p in root.iterdir() if p.is_dir()), key=lambda p:p.stat().st_mtime, reverse=True)
         for point in points[limit:]: shutil.rmtree(point, ignore_errors=True)
@@ -322,12 +428,32 @@ class ProjectRepository:
             if not root.exists(): continue
             cutoff = time.time() - RECOVERY_MAX_AGE_SECONDS
             for point in sorted((p for p in root.iterdir() if p.is_dir()), key=lambda p:p.stat().st_mtime, reverse=True):
+                if point.name.startswith("."):
+                    continue
+                marker = point / _RECOVERY_COMPLETE
+                if not marker.is_file() or _is_reparse(marker):
+                    continue
+                if any(not (point / f"{domain}.json").is_file() or _is_reparse(point / f"{domain}.json")
+                       for domain in DOMAIN_NAMES):
+                    continue
+                snapshot_content = point / "Content" / "sha256"
+                snapshot_manifest = point / "Content" / "manifest.json"
+                if (not snapshot_content.is_dir() or _is_reparse(snapshot_content) or
+                        not snapshot_manifest.is_file() or _is_reparse(snapshot_manifest)):
+                    continue
                 try:
                     if point.stat().st_mtime < cutoff:
                         continue
                 except OSError:
                     continue
-                output.append({"kind": selected, "name": point.name, "size": sum(f.stat().st_size for f in point.rglob("*") if f.is_file())})
+                output.append({
+                    "kind": selected,
+                    "name": point.name,
+                    "size": sum(
+                        f.stat().st_size for f in point.rglob("*")
+                        if f.is_file() and not _is_reparse(f)
+                    ),
+                })
         return output
     def restore_recovery(self, kind: str, name: str) -> int:
         if self.read_only: raise ReadOnlyError("project is read-only")
@@ -335,28 +461,125 @@ class ProjectRepository:
             raise InvalidProjectError("invalid recovery point")
         point = self.path / ".auvra" / ("autosaves" if kind == "autosave" else "backups") / name
         if not point.is_dir() or _is_reparse(point): raise InvalidProjectError("recovery point not found")
+        marker = point / _RECOVERY_COMPLETE
+        if not marker.is_file() or _is_reparse(marker):
+            raise InvalidProjectError("recovery point is incomplete")
+        descriptor_files = [path for path in point.glob("*.auvra") if path.is_file() and not _is_reparse(path)]
+        if len(descriptor_files) != 1:
+            raise InvalidProjectError("recovery point descriptor is missing")
+        try:
+            validate_project_descriptor(load_json(descriptor_files[0]))
+        except (OSError, ValueError) as exc:
+            raise InvalidProjectError("recovery point descriptor is invalid") from exc
+        expected_entries = {_RECOVERY_COMPLETE, descriptor_files[0].name, "Content"} | {
+            f"{domain}.json" for domain in DOMAIN_NAMES
+        }
+        for entry in point.iterdir():
+            if entry.name not in expected_entries or _is_reparse(entry):
+                raise InvalidProjectError("recovery point contains unknown data")
+        snapshot_content = point / "Content" / "sha256"
+        snapshot_manifest = point / "Content" / "manifest.json"
+        if (not snapshot_content.is_dir() or _is_reparse(snapshot_content) or
+                not snapshot_manifest.is_file() or _is_reparse(snapshot_manifest)):
+            raise InvalidProjectError("recovery point assets are incomplete")
         docs = {}
         for path in point.glob("*.json"):
-            if path.name == self._descriptor_path().name: continue
             if path.stem not in DOMAIN_NAMES: raise InvalidProjectError("recovery point contains unknown data")
         for domain in DOMAIN_NAMES:
             path = point / f"{domain}.json"
-            docs[domain] = validate_domain(domain, load_json(path)) if path.exists() else domain_document(domain, [])
-        revision = self.revision + 1
-        self._transaction(docs, revision); self._dirty = True
-        return revision
+            if not path.is_file() or _is_reparse(path):
+                raise InvalidProjectError("recovery point domain is incomplete")
+            docs[domain] = validate_domain(domain, load_json(path))
+
+        # Verify the captured content before touching the live project.  The
+        # manifest is opaque metadata, but every stored blob must still match
+        # its content address and every manifest entry must have a blob.
+        try:
+            manifest = load_json(snapshot_manifest)
+        except Exception as exc:
+            raise InvalidProjectError("recovery point asset manifest is invalid") from exc
+        if not isinstance(manifest, dict):
+            raise InvalidProjectError("recovery point asset manifest is invalid")
+        for asset in snapshot_content.iterdir():
+            if not asset.is_file() or _is_reparse(asset) or not re.fullmatch(r"[0-9a-f]{64}", asset.name):
+                raise InvalidProjectError("recovery point contains unsafe asset")
+            digest = hashlib.sha256()
+            with asset.open("rb") as stream:
+                for block in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(block)
+            if digest.hexdigest() != asset.name:
+                raise InvalidProjectError("recovery point asset hash mismatch")
+        for asset_id, metadata in manifest.items():
+            if not re.fullmatch(r"[0-9a-f]{64}", asset_id) or not isinstance(metadata, dict):
+                raise InvalidProjectError("recovery point asset manifest is invalid")
+            if not (snapshot_content / asset_id).is_file():
+                raise InvalidProjectError("recovery point asset manifest is incomplete")
+
+        # Stage captured assets under the project authority before the document
+        # transaction validates cross-domain references. If the transaction
+        # fails, restore the previous manifest; extra immutable blobs are safe.
+        asset_staging = Path(tempfile.mkdtemp(prefix=".recovery-assets-", dir=self.path / ".auvra"))
+        live_content = self.path / "Content" / "sha256"
+        live_manifest = self.path / "Content" / "manifest.json"
+        previous_manifest = asset_staging / "manifest.previous.json"
+        manifest_existed = live_manifest.is_file()
+        try:
+            for source in snapshot_content.iterdir():
+                shutil.copy2(source, asset_staging / source.name)
+            shutil.copy2(snapshot_manifest, asset_staging / "manifest.json")
+            _fsync_tree(asset_staging)
+            for source in snapshot_content.iterdir():
+                staged = asset_staging / source.name
+                target = live_content / source.name
+                if target.exists() and _is_reparse(target):
+                    raise InvalidProjectError("project asset store contains a linked entry")
+                if target.exists() and self.assets.verify(source.name):
+                    staged.unlink(missing_ok=True)
+                else:
+                    os.replace(staged, target)
+            if live_manifest.exists() and _is_reparse(live_manifest):
+                raise InvalidProjectError("project asset manifest is unsafe")
+            if manifest_existed:
+                shutil.copy2(live_manifest, previous_manifest)
+            os.replace(asset_staging / "manifest.json", live_manifest)
+
+            revision = self.revision + 1
+            self._transaction(docs, revision)
+            self._dirty = True
+            return revision
+        except Exception:
+            if previous_manifest.is_file():
+                try:
+                    os.replace(previous_manifest, live_manifest)
+                except OSError:
+                    pass
+            elif not manifest_existed:
+                live_manifest.unlink(missing_ok=True)
+            raise
+        finally:
+            shutil.rmtree(asset_staging, ignore_errors=True)
     def export_pack(self, destination: str | os.PathLike[str]) -> None:
+        if _destination_is_inside(self.path, Path(destination)):
+            raise InvalidProjectError("export destination must be outside the source project")
         _validate_project_tree(self.path, allow_internal=True)
         export_folder(self.path, destination)
     @classmethod
     def import_pack(cls, archive: str | os.PathLike[str], destination: str | os.PathLike[str]) -> "ProjectRepository":
-        validate_archive(archive); destination = Path(destination)
+        destination = Path(destination)
         if destination.exists(): raise InvalidProjectError("import destination already exists")
         destination.parent.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}.import-", dir=destination.parent))
         try:
-            with __import__("zipfile").ZipFile(archive) as z:
-                for info in z.infolist():
+            # Keep validation and extraction on the same open archive handle.
+            # Reopening by pathname after validation permits a replacement
+            # archive to swap in traversal members or oversized content.
+            try:
+                z = zipfile.ZipFile(archive)
+            except (OSError, zipfile.BadZipFile) as exc:
+                raise ArchiveValidationError("invalid ZIP archive") from exc
+            with z:
+                infos = validate_archive(z)
+                for info in infos:
                     if info.is_dir():
                         (staging / Path(info.filename)).mkdir(parents=True, exist_ok=True)
                         continue
@@ -365,8 +588,10 @@ class ProjectRepository:
                     with z.open(info) as src, out.open("wb") as dst: shutil.copyfileobj(src, dst, 1024 * 1024)
             try: _validate_project_tree(staging)
             except ValueError as exc: raise InvalidProjectError(str(exc)) from exc
+            # The authority directory is part of the staged project rather
+            # than a post-rename repair step.
+            (staging / ".auvra" / "transactions").mkdir(parents=True, exist_ok=True)
             _fsync_tree(staging); os.replace(staging, destination)
-            (destination / ".auvra" / "transactions").mkdir(parents=True, exist_ok=True)
             _fsync_directory(destination / ".auvra"); _fsync_directory(destination.parent); staging = None
             return cls(destination)
         except Exception:
@@ -376,6 +601,11 @@ class ProjectRepository:
     @staticmethod
     def import_legacy(source: str | os.PathLike[str]) -> tuple[dict[str, Any], Any]: return LegacyArchive(source).migrate()
     def close(self) -> None:
+        if not self.read_only and self._descriptor:
+            try:
+                self.prune_unreferenced_assets()
+            except (OSError, ValueError):
+                pass
         self._lock.release()
     def __enter__(self): return self
     def __exit__(self, *_): self.close()
@@ -500,6 +730,15 @@ def _is_reparse(path: Path) -> bool:
         return bool(getattr(path.stat(), "st_file_attributes", 0) & 0x400)
     except OSError:
         return True
+
+
+def _destination_is_inside(source: Path, destination: Path) -> bool:
+    """Reject output paths that resolve into the live project tree."""
+    try:
+        Path(destination).resolve(strict=False).relative_to(Path(source).resolve(strict=True))
+        return True
+    except (OSError, ValueError):
+        return False
 
 def _validate_open_boundaries(root: Path) -> None:
     """Reject linked project authority before opening the lock itself."""

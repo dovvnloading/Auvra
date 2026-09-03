@@ -11,6 +11,7 @@ import { GraphRuntime } from './GraphRuntime';
 import { AttachmentController } from '../Scene/AttachmentController';
 import { SocketController } from '../Scene/SocketController';
 import { LocalEnvironment } from '../Scene/LocalEnvironment';
+import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 // Helper component to handle camera persistence and tracking
 const PreviewCamera: React.FC<{ targetObject?: THREE.Object3D }> = ({ targetObject }) => {
@@ -48,6 +49,52 @@ const PreviewCamera: React.FC<{ targetObject?: THREE.Object3D }> = ({ targetObje
     );
 };
 
+interface PreviewResources {
+    object: THREE.Group;
+    materials: Set<THREE.Material>;
+    textures: Set<THREE.Texture>;
+    baseMaps: Map<THREE.Material, THREE.Texture | null>;
+}
+
+/** Clone a model for the preview without sharing mutable material state. */
+const clonePreviewResources = (source: THREE.Object3D): PreviewResources => {
+    const resources: PreviewResources = {
+        object: cloneSkeleton(source) as THREE.Group,
+        materials: new Set(),
+        textures: new Set(),
+        baseMaps: new Map(),
+    };
+    resources.object.traverse((child) => {
+        if (!(child as THREE.Mesh).isMesh) return;
+        const mesh = child as THREE.Mesh;
+        const sourceMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        const previewMaterials = sourceMaterials.map((sourceMaterial) => {
+            const material = sourceMaterial.clone();
+            resources.materials.add(material);
+            for (const key of Object.keys(material)) {
+                const value = (material as unknown as Record<string, unknown>)[key];
+                if (!value || typeof value !== 'object' || !(value as THREE.Texture).isTexture) continue;
+                const texture = (value as THREE.Texture).clone();
+                texture.needsUpdate = true;
+                resources.textures.add(texture);
+                (material as unknown as Record<string, unknown>)[key] = texture;
+            }
+            if ('map' in material) resources.baseMaps.set(material, (material as THREE.MeshStandardMaterial).map ?? null);
+            return material;
+        });
+        mesh.material = Array.isArray(mesh.material) ? previewMaterials : previewMaterials[0];
+    });
+    return resources;
+};
+
+const disposePreviewResources = (resources: PreviewResources): void => {
+    for (const material of resources.materials) material.dispose();
+    for (const texture of resources.textures) texture.dispose();
+    resources.materials.clear();
+    resources.textures.clear();
+    resources.baseMaps.clear();
+};
+
 export const GraphPreview: React.FC<{ 
     graph?: AnimationGraphData;
     allClips: THREE.AnimationClip[];
@@ -64,12 +111,31 @@ export const GraphPreview: React.FC<{
     // If graph is provided as prop (e.g. from Blueprint Editor), use it. 
     // Otherwise fall back to global context graphData (legacy).
     const graph = propGraph || (targetModel && graphData[targetModel.id]);
-    const displayObject = targetModel?.object;
+    const previewResources = useMemo(
+        () => targetModel?.object ? clonePreviewResources(targetModel.object) : null,
+        [targetModel?.id, targetModel?.object],
+    );
+    const displayObject = previewResources?.object;
 
     // Filter attachments for this specific model
-    const modelAttachments = useMemo(() => 
-        targetModel ? attachments.filter(a => a.parentModelId === targetModel.id) : [], 
+    const modelAttachments = useMemo(() =>
+        targetModel
+            ? attachments
+                .filter(a => a.parentModelId === targetModel.id)
+                .map((attachment) => ({ ...attachment, object: cloneSkeleton(attachment.object) as THREE.Group }))
+            : [],
     [targetModel, attachments]);
+
+    // AttachmentController reparents its object. Keep that operation inside
+    // the preview's disposable graph instead of moving the canonical object.
+    useEffect(() => () => {
+        modelAttachments.forEach((attachment) => attachment.object.parent?.remove(attachment.object));
+    }, [modelAttachments]);
+
+    useEffect(() => {
+        if (!previewResources) return;
+        return () => disposePreviewResources(previewResources);
+    }, [previewResources]);
 
     // Filter sockets for this specific model
     const modelSockets = useMemo(() => 
@@ -83,39 +149,43 @@ export const GraphPreview: React.FC<{
 
     // Handle Texture Override
     useEffect(() => {
-        if (!displayObject) return;
-
-        if (textureUrl) {
-            const loader = new THREE.TextureLoader();
-            loader.load(textureUrl, (tex) => {
-                tex.colorSpace = THREE.SRGBColorSpace;
-                tex.flipY = true;
-                
-                displayObject.traverse((child) => {
-                    if ((child as THREE.Mesh).isMesh) {
-                        const mesh = child as THREE.Mesh;
-                        const mat = mesh.material;
-                        // Apply to all standard materials found on mesh
-                        if (Array.isArray(mat)) {
-                            mat.forEach(m => { 
-                                if ((m as any).map !== undefined) { 
-                                    (m as any).map = tex; 
-                                    m.needsUpdate = true;
-                                } 
-                            });
-                        } else {
-                            if ((mat as any).map !== undefined) {
-                                (mat as any).map = tex;
-                                mat.needsUpdate = true;
-                            }
-                        }
-                    }
-                });
-            });
-        } 
-        // Note: Reverting to original texture is complex without deep cloning. 
-        // In this editor context, reloading the model or clearing the selection handles reset naturally.
-    }, [displayObject, textureUrl]);
+        if (!previewResources || !textureUrl) return;
+        let cancelled = false;
+        let appliedTexture: THREE.Texture | null = null;
+        const loader = new THREE.TextureLoader();
+        void loader.loadAsync(textureUrl).then((texture) => {
+            if (cancelled) {
+                texture.dispose();
+                return;
+            }
+            texture.colorSpace = THREE.SRGBColorSpace;
+            texture.flipY = true;
+            previewResources.textures.add(texture);
+            appliedTexture = texture;
+            for (const material of previewResources.materials) {
+                if (!('map' in material)) continue;
+                (material as THREE.MeshStandardMaterial).map = texture;
+                material.needsUpdate = true;
+            }
+        }).catch(() => {
+            // Preview loading is best-effort; a failed override leaves the
+            // cloned material map in its original state.
+        });
+        return () => {
+            cancelled = true;
+            for (const material of previewResources.materials) {
+                if (!('map' in material)) continue;
+                const current = (material as THREE.MeshStandardMaterial).map;
+                if (current !== appliedTexture) continue;
+                (material as THREE.MeshStandardMaterial).map = previewResources.baseMaps.get(material) ?? null;
+                material.needsUpdate = true;
+            }
+            if (appliedTexture) {
+                previewResources.textures.delete(appliedTexture);
+                appliedTexture.dispose();
+            }
+        };
+    }, [previewResources, textureUrl]);
 
     if (!targetModel || !displayObject || !graph) return null;
 

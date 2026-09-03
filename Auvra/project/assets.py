@@ -70,11 +70,15 @@ class AssetStore:
             mime = mime or detected or "application/octet-stream"
             asset_id = digest.hexdigest(); target = self.path_for(asset_id)
             target.parent.mkdir(parents=True, exist_ok=True)
-            if target.exists():
-                tmp.unlink()
-            else:
-                os.replace(tmp, target)
-            self._record(asset_id, total, mime, name)
+            # Serialize same-digest ingestion with manifest publication.  An
+            # existing filename is not proof of valid content: repair a
+            # corrupt or truncated blob with the freshly verified stream.
+            with _MANIFEST_LOCK:
+                if target.exists() and self.verify(asset_id, expected_size=total):
+                    tmp.unlink()
+                else:
+                    os.replace(tmp, target)
+                self._record(asset_id, total, mime, name)
             return AssetReference(asset_id, total, mime, name)
         finally:
             try: tmp.unlink()
@@ -118,6 +122,70 @@ class AssetStore:
         ):
             raise ValueError("asset metadata is invalid")
         return AssetReference(asset_id, size, mime, name)
+
+    def remove(self, asset_id: str) -> bool:
+        """Remove one unreferenced content-addressed blob and its metadata."""
+
+        path = self.path_for(asset_id)
+        if path.is_symlink() or (path.exists() and _is_reparse(path)):
+            raise ValueError("unsafe asset path")
+        manifest = self.root / "manifest.json"
+        with _MANIFEST_LOCK:
+            values: dict[str, object] = {}
+            if manifest.exists():
+                try:
+                    loaded = json.loads(manifest.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as exc:
+                    raise ValueError("asset manifest is corrupt") from exc
+                if not isinstance(loaded, dict):
+                    raise ValueError("asset manifest is corrupt")
+                values = loaded
+            existed = asset_id in values or path.exists()
+            if asset_id in values:
+                values.pop(asset_id)
+                temporary = manifest.with_name(f"manifest.json.tmp-{os.getpid()}-{uuid.uuid4().hex}")
+                try:
+                    temporary.write_text(
+                        json.dumps(values, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+                        encoding="utf-8",
+                        newline="\n",
+                    )
+                    with temporary.open("a", encoding="utf-8") as stream:
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.replace(temporary, manifest)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            path.unlink(missing_ok=True)
+            return existed
+
+    def remove_unreferenced(
+        self,
+        referenced: Iterable[str],
+        candidates: Iterable[str] | None = None,
+    ) -> set[str]:
+        """Remove candidate blobs that are not in the live project references."""
+
+        keep = set(referenced)
+        selected = set(candidates) if candidates is not None else None
+        manifest = self.root / "manifest.json"
+        if not manifest.is_file():
+            return set()
+        try:
+            values = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError("asset manifest is corrupt") from exc
+        if not isinstance(values, dict):
+            raise ValueError("asset manifest is corrupt")
+        removed: set[str] = set()
+        for asset_id in list(values):
+            if not isinstance(asset_id, str) or asset_id in keep:
+                continue
+            if selected is not None and asset_id not in selected:
+                continue
+            if self.remove(asset_id):
+                removed.add(asset_id)
+        return removed
 
     def _record(self, asset_id: str, size: int, mime: str, name: str | None) -> None:
         manifest = self.root / "manifest.json"

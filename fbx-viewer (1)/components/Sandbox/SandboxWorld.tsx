@@ -21,9 +21,9 @@ interface SandboxWorldProps {
     // Refs passed from parent for state coordination
     playerApiRef: React.MutableRefObject<GraphRuntimeAPI | undefined>;
     enemyApiRef: React.MutableRefObject<GraphRuntimeAPI | undefined>;
-    playerEntityRef: React.RefObject<SandboxEntityHandle>;
-    enemyEntityRef: React.RefObject<SandboxEntityHandle>;
-    projectileManagerRef: React.RefObject<ProjectileManagerHandle>;
+    playerEntityRef: React.RefObject<SandboxEntityHandle | null>;
+    enemyEntityRef: React.RefObject<SandboxEntityHandle | null>;
+    projectileManagerRef: React.RefObject<ProjectileManagerHandle | null>;
     onPlayerHealthChange: (current: number, max: number) => void;
     onStaminaChange: (val: number) => void;
     

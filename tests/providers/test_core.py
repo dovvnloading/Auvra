@@ -1,10 +1,14 @@
 from __future__ import annotations
-import hashlib, io, json, sqlite3, tempfile, unittest
+import hashlib, io, json, sqlite3, sys, tempfile, unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 from Auvra.providers import *
 from Auvra.providers.adapters import MediaJob, TextResult, _fal_cdn_url
 from Auvra.providers.descriptors import ProviderFeature
+from Auvra.providers.credentials import _WinCredNative
+import Auvra.providers.jobs as jobs_module
 
 
 class FakeTransport:
@@ -43,6 +47,38 @@ class ProviderCoreTests(unittest.TestCase):
         self.assertEqual(store.read("openai_api_key"), "secret-value")
         self.assertNotIn("secret-value", repr(store))
         with self.assertRaises(CredentialError): store.write("x", "a" * 1300)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows Credential Manager is Windows-only")
+    def test_windows_credential_manager_native_boundary_handles_not_found_and_write(self):
+        class NativeFunction:
+            def __init__(self, result):
+                self.result = result
+                self.calls = []
+
+            def __call__(self, *args):
+                self.calls.append(args)
+                return self.result
+
+        class Advapi:
+            def __init__(self):
+                self.CredReadW = NativeFunction(False)
+                self.CredWriteW = NativeFunction(True)
+                self.CredDeleteW = NativeFunction(False)
+                self.CredFree = NativeFunction(None)
+
+        advapi = Advapi()
+        with mock.patch("Auvra.providers.credentials.ctypes.WinDLL", return_value=advapi), \
+             mock.patch("Auvra.providers.credentials.ctypes.get_last_error", return_value=1168):
+            native = _WinCredNative()
+            self.assertIsNone(native.read("Auvra/provider/native-test"))
+            native.write("Auvra/provider/native-test", "secret-value")
+            native.delete("Auvra/provider/native-test")
+        self.assertEqual(len(advapi.CredReadW.calls), 1)
+        self.assertEqual(len(advapi.CredWriteW.calls), 1)
+        credential = advapi.CredWriteW.calls[0][0]._obj
+        self.assertEqual(credential.TargetName, "Auvra/provider/native-test")
+        self.assertEqual(credential.CredentialBlobSize, len("secret-value".encode("utf-16-le")))
+        self.assertEqual(len(advapi.CredDeleteW.calls), 1)
 
     def test_provider_errors_redact_sensitive_text_in_all_public_forms(self):
         error = ProviderError(ErrorCode.REMOTE, "request failed: api_key=super-secret")
@@ -92,6 +128,89 @@ class ProviderCoreTests(unittest.TestCase):
         bounded = BoundedTransport(UploadTransport([]), max_response_bytes=8, allowed_origins=("https://api.openai.com",))
         with self.assertRaises(ProviderError):
             bounded.upload(HttpRequest("PUT", "https://api.openai.com/file"), io.BytesIO(b"x"), size=1)
+
+    def test_stdlib_upload_reads_large_response_to_eof_and_checks_length(self):
+        class UploadResponse:
+            status = 200
+
+            def __init__(self, body, declared):
+                self.body = body
+                self.declared = declared
+
+            def getheaders(self):
+                return [("Content-Length", str(self.declared))]
+
+            def read(self, limit):
+                chunk, self.body = self.body[:limit], self.body[limit:]
+                return chunk
+
+        class UploadConnection:
+            def __init__(self, response):
+                self.response = response
+                self.sent = bytearray()
+
+            def putrequest(self, *_args): pass
+            def putheader(self, *_args): pass
+            def endheaders(self): pass
+            def send(self, chunk): self.sent.extend(chunk)
+            def getresponse(self): return self.response
+            def close(self): pass
+
+        body = b"x" * (64 * 1024 + 17)
+        connection = UploadConnection(UploadResponse(body, len(body)))
+        with mock.patch("Auvra.providers.transport.http.client.HTTPSConnection", return_value=connection):
+            response = StdlibTransport(max_response_bytes=len(body) + 1).upload(
+                HttpRequest("PUT", "https://uploads.example.test/result"), io.BytesIO(b"a"), size=1,
+            )
+        self.assertEqual(response.body, body)
+        self.assertEqual(connection.sent, b"a")
+
+        connection = UploadConnection(UploadResponse(body, len(body) + 1))
+        with mock.patch("Auvra.providers.transport.http.client.HTTPSConnection", return_value=connection):
+            with self.assertRaises(ProviderError):
+                StdlibTransport(max_response_bytes=len(body) + 1).upload(
+                    HttpRequest("PUT", "https://uploads.example.test/result"), io.BytesIO(b"a"), size=1,
+                )
+
+    def test_stdlib_stream_and_upload_strip_connection_headers(self):
+        class Response:
+            status = 200
+
+            def getheaders(self): return []
+            def read(self, _limit): return b""
+
+        class Connection:
+            def __init__(self): self.request_headers = {}; self.put_headers = []
+            def request(self, _method, _path, *, body, headers): self.request_headers = dict(headers)
+            def putrequest(self, *_args): pass
+            def putheader(self, key, value): self.put_headers.append((key, value))
+            def endheaders(self): pass
+            def send(self, _chunk): pass
+            def getresponse(self): return Response()
+            def close(self): pass
+
+        stream_connection = Connection()
+        with mock.patch("Auvra.providers.transport.http.client.HTTPConnection", return_value=stream_connection):
+            StdlibTransport().stream(
+                HttpRequest("GET", "http://127.0.0.1:8080/result", {
+                    "Host": "attacker.example", "Connection": "close", "X-Test": "ok",
+                }), io.BytesIO(), max_bytes=10,
+            )
+        self.assertNotIn("host", {key.lower() for key in stream_connection.request_headers})
+        self.assertNotIn("connection", {key.lower() for key in stream_connection.request_headers})
+        self.assertEqual(stream_connection.request_headers["X-Test"], "ok")
+
+        upload_connection = Connection()
+        with mock.patch("Auvra.providers.transport.http.client.HTTPSConnection", return_value=upload_connection):
+            StdlibTransport().upload(
+                HttpRequest("PUT", "https://uploads.example.test/result", {
+                    "Host": "attacker.example", "Connection": "close", "Content-Length": "999",
+                }), io.BytesIO(), size=0,
+            )
+        headers = {key.lower(): value for key, value in upload_connection.put_headers}
+        self.assertNotIn("host", headers)
+        self.assertNotIn("connection", headers)
+        self.assertEqual(headers["content-length"], "0")
 
     def test_openai_responses_and_no_raw_payload_exposed(self):
         response = HttpResponse(200, {}, json.dumps({"output": [{"content": [{"type": "output_text", "text": "hello"}]}]}).encode())
@@ -212,6 +331,47 @@ class ProviderCoreTests(unittest.TestCase):
             self.assertEqual(loaded.state, JobState.CANCELLED); self.assertEqual(len(reopened.pending_reconciliation()), 0)
             self.assertNotIn("do not persist", Path(db).read_bytes().decode("latin1", "ignore"))
             reopened.close()
+
+    def test_cancel_requested_remote_success_becomes_terminal_cancelled(self):
+        store = SQLiteJobStore()
+        try:
+            job = store.create(
+                project_id="project-1", provider="fal", model="fal-ai/flux/dev",
+                capability="media.generate", prompt_hash="a" * 64,
+            )
+            store.transition(job.job_id, JobState.SUBMITTING, project_id="project-1")
+            store.transition(job.job_id, JobState.RUNNING, project_id="project-1")
+            store.request_cancel(job.job_id, project_id="project-1")
+            reconciled = store.reconcile(job.job_id, remote_state="succeeded", project_id="project-1")
+            self.assertEqual(reconciled.state, JobState.CANCELLED)
+            self.assertNotIn(job.job_id, {item.job_id for item in store.pending_reconciliation()})
+            self.assertEqual(store.events(job.job_id)[-1].state, JobState.CANCELLED)
+        finally:
+            store.close()
+
+    def test_retry_cost_is_bucketed_by_reservation_time(self):
+        old = datetime(2026, 1, 31, 23, 59, tzinfo=timezone.utc).timestamp()
+        current = datetime(2026, 2, 1, 0, 1, tzinfo=timezone.utc).timestamp()
+        store = SQLiteJobStore()
+        try:
+            with mock.patch.object(jobs_module.time, "time", return_value=old):
+                job = store.create(
+                    project_id="project-1", provider="fal", model="fal-ai/flux/dev",
+                    capability="media.generate", prompt_hash="a" * 64,
+                    cost_micro_usd=10,
+                )
+            with mock.patch.object(jobs_module.time, "time", return_value=current):
+                store.add_cost(job.job_id, 5, project_id="project-1")
+            self.assertEqual(
+                store.cost_totals("fal", at=datetime(2026, 1, 31, 23, 59, tzinfo=timezone.utc)),
+                {"aggregate": 15, "daily": 10, "monthly": 10},
+            )
+            self.assertEqual(
+                store.cost_totals("fal", at=datetime(2026, 2, 1, 0, 1, tzinfo=timezone.utc)),
+                {"aggregate": 15, "daily": 5, "monthly": 5},
+            )
+        finally:
+            store.close()
 
     def test_jobs_are_project_scoped_and_sensitive_events_never_persist(self):
         store = SQLiteJobStore()

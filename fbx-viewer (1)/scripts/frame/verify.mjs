@@ -108,6 +108,8 @@ for (const name of ["viewerScene", "graphPreview", "retextureEditor", "skySystem
 check(source.thumbnailTooltip.includes("model.thumbnail") && !source.thumbnailTooltip.includes("<Canvas") && !source.thumbnailTooltip.includes("LocalEnvironment"), "thumbnail tooltip must use the generated image without owning a live renderer");
 check(source.skySystem.includes("<LocalEnvironment night={isNight}"), "SkySystem no longer distinguishes day and night lighting");
 check(source.dynamic.indexOf("new TextEncoder().encode(code)") < source.dynamic.indexOf("Babel.transform"), "HUD source size is not checked before Babel");
+check(source.dynamic.includes("boundedExecutionPlugin") && source.dynamic.includes("__auvraHudGuard") && source.dynamic.includes("plugins: [boundedExecutionPlugin]"), "HUD code is not instrumented with an execution budget");
+check(source.hudScript.includes("MAX_EXECUTION_STEPS") && source.hudScript.includes("MAX_EXECUTION_MS") && source.hudScript.includes("createExecutionGuard") && source.hudScript.includes("__auvraHudGuard"), "HUD sandbox does not enforce a step/deadline budget");
 check(source.dynamic.includes("try {\n      port.postMessage(message);") && source.dynamic.includes("could not be transferred"), "HUD non-cloneable props are not safely contained");
 check(source.hudScript.includes("event.ports.length !== 1") && source.hudScript.includes("candidate.nonce === nonce"), "HUD port handshake lacks strict port/nonce binding");
 check((source.hudScript.match(/window\.addEventListener\(["']message["']/g) ?? []).length === 1, "HUD bootstrap has a reusable window message listener");

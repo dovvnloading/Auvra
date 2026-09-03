@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import hashlib
+import hmac
 import json
 import os
 import queue
@@ -26,6 +27,7 @@ from typing import Any, BinaryIO, Callable, Mapping, Sequence
 from Auvra.diagnostics.core import active_diagnostics, current_diagnostic_context, trace_public_class
 from Auvra.host.dispatcher import HostOperationError
 from Auvra.host.logging import redact
+from Auvra.launcher.platform import PosixProcessGroup, WindowsJob
 
 
 PROTOCOL_VERSION = "auvra.native/1"
@@ -63,6 +65,13 @@ _NATIVE_DIAGNOSTIC_METHODS = frozenset({
     "renderer.getMetrics", "renderer.recover", "asset.submit", "asset.beginCook",
     "asset.status", "asset.cancel", "viewport.open", "viewport.close", "shutdown",
 })
+
+
+def _session_proof(token: str, challenge: str, editor_session: str) -> str:
+    message = f"{challenge}\n{editor_session}".encode("utf-8")
+    return hmac.new(token.encode("ascii"), message, hashlib.sha256).hexdigest()
+
+
 _ENGINE_FEATURES = (
     "pbr_metallic_roughness", "skeletal_animation", "frustum_culling",
     "deterministic_lod", "instance_batching", "directional_lights",
@@ -254,6 +263,7 @@ class NativeEngine:
         self.derived_root = Path(derived_root).expanduser().absolute() if derived_root is not None else None
         self._runtime_diagnostics = diagnostics if diagnostics is not None else active_diagnostics()
         self._process: subprocess.Popen[bytes] | None = None
+        self._process_owner: Any = None
         self._token: str | None = None
         self._state = NativeEngineState.NEW
         self._revision: int | None = None
@@ -303,13 +313,41 @@ class NativeEngine:
         if self.derived_root is not None:
             self.derived_root.mkdir(parents=True, exist_ok=True)
             environment[NATIVE_DERIVED_ROOT_ENV] = str(self.derived_root)
+        owner: Any = None
         try:
+            owner = WindowsJob() if os.name == "nt" else PosixProcessGroup()
+            launch_kwargs = dict(getattr(owner, "creation_kwargs", {}))
+            if os.name == "nt":
+                launch_kwargs["creationflags"] = int(launch_kwargs.get("creationflags", 0)) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
             self._process = subprocess.Popen(
                 list(self.command), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, env=environment, shell=False, bufsize=0,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **launch_kwargs,
             )
+            self._process_owner = owner
+            if os.name == "nt":
+                owner.assign(self._process)
+            else:
+                owner.attach(self._process)
         except (OSError, ValueError) as exc:
+            if self._process is not None:
+                try:
+                    if owner is not None:
+                        owner.kill(self._process)
+                    else:
+                        self._process.kill()
+                except Exception:
+                    pass
+                try:
+                    self._process.wait(timeout=1)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+            if owner is not None:
+                try:
+                    owner.close()
+                except Exception:
+                    pass
+            self._process_owner = None
             self._state = NativeEngineState.FAILED
             if self._runtime_diagnostics is not None:
                 self._runtime_diagnostics.emit("native", "native.lifecycle",
@@ -337,6 +375,11 @@ class NativeEngine:
                 self._runtime_diagnostics.emit("native", "native.lifecycle",
                                                attributes={"state": "exited", "code": "child_exited",
                                                            "returnCode": self._process.returncode})
+            # A child that exits before readiness may already have spawned
+            # descendants. Close the ownership boundary before surfacing the
+            # typed startup failure so those descendants cannot outlive the
+            # failed launch.
+            self.close(timeout=min(self.shutdown_timeout, 1.0))
             raise NativeEngineChildExitedError(self._process.returncode)
         try:
             self._call("session.hello", {"editorSession": editor_session})
@@ -360,6 +403,7 @@ class NativeEngine:
         # Reader threads from the previous child may finish after close; the
         # new child receives a fresh transport queue and readiness event.
         self._process = None
+        self._process_owner = None
         self._token = None
         self._state = NativeEngineState.NEW
         self._revision = None
@@ -476,6 +520,58 @@ class NativeEngine:
         except subprocess.TimeoutExpired:
             return process.poll()
 
+    def _terminate_owned_process(self, process: subprocess.Popen[bytes], *, timeout: float) -> None:
+        """Stop the native root and its launcher-owned process tree."""
+
+        owner = self._process_owner
+        try:
+            if owner is not None:
+                owner.terminate(process)
+            else:
+                process.terminate()
+        except (OSError, ValueError):
+            pass
+        try:
+            process.wait(timeout=max(0.05, timeout))
+        except subprocess.TimeoutExpired:
+            pass
+        # Kill through the ownership boundary even when the root already
+        # exited: descendants may still be alive in the group/job.
+        try:
+            if owner is not None:
+                owner.kill(process)
+            elif process.poll() is None:
+                process.kill()
+        except (OSError, ValueError):
+            pass
+        if process.poll() is None:
+            try:
+                process.kill()
+                process.wait(timeout=min(max(0.05, timeout), 1.0))
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+
+    def _invalidate_transport(self, *, code: str) -> None:
+        """Fail closed after a response-channel timeout or protocol fault.
+
+        A timed-out request may still produce a late frame.  Retaining the
+        reader and response queue would let that frame be consumed as the
+        response to a later request, permanently shifting correlation.  The
+        queue is therefore replaced and the child is terminated before any
+        subsequent call can be accepted; callers can use the explicit
+        restart path to create a fresh channel.
+        """
+        self._state = NativeEngineState.FAILED
+        self._response_queue = queue.Queue()
+        process = self._process
+        if process is not None:
+            self._terminate_owned_process(process, timeout=min(self.shutdown_timeout, 1.0))
+        if self._runtime_diagnostics is not None:
+            self._runtime_diagnostics.emit(
+                "native", "native.lifecycle",
+                attributes={"state": "failed", "code": code},
+            )
+
     def _call_transport(self, method: str, params: Mapping[str, Any] | None = None,
                         *, timeout: float | None = None) -> dict[str, Any]:
         if not method or not isinstance(method, str):
@@ -484,6 +580,14 @@ class NativeEngine:
         if process is None or process.stdin is None or process.stdout is None:
             raise NativeEngineClosedError("native process is unavailable")
         request_params = dict(params or {})
+        if method == "session.hello":
+            token = self._token
+            editor_session = request_params.get("editorSession")
+            if token is None or not isinstance(editor_session, str) or not editor_session:
+                raise NativeEngineAuthenticationError("native session proof cannot be constructed")
+            challenge = secrets.token_hex(32)
+            request_params["challenge"] = challenge
+            request_params["proof"] = _session_proof(token, challenge, editor_session)
         _validate_json_data(request_params)
         diagnostic_context = current_diagnostic_context()
         trace_id = diagnostic_context.get("traceId")
@@ -511,6 +615,7 @@ class NativeEngine:
             try:
                 response = self._response_queue.get(timeout=wait_for)
             except queue.Empty as exc:
+                self._invalidate_transport(code="response_timeout")
                 raise NativeEngineTimeoutError(f"native method '{method}' timed out") from exc
         if response is None:
             raise NativeEngineChildExitedError(self._returncode(process))
@@ -594,7 +699,54 @@ class NativeEngine:
         return self.call("session.hello", {"editorSession": editor_session})
 
     def snapshot_world(self) -> dict[str, Any]:
-        return self.call("world.getSnapshot")
+        first = self.call("world.getSnapshot", {"offset": 0, "limit": 256})
+        page = first.get("page")
+        # Older development binaries do not return paging metadata. Preserve
+        # their one-page response for compatibility while current binaries
+        # are required to prove that every bounded page was collected.
+        if not isinstance(page, Mapping):
+            return first
+        offset = page.get("offset")
+        limit = page.get("limit")
+        total = page.get("total")
+        has_more = page.get("hasMore")
+        entities = first.get("entities")
+        if (not isinstance(offset, int) or isinstance(offset, bool) or offset != 0
+                or not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 256
+                or not isinstance(total, int) or isinstance(total, bool) or not 0 <= total <= 1024
+                or not isinstance(has_more, bool) or not isinstance(entities, list)
+                or len(entities) > limit or len(entities) > total):
+            raise NativeEngineProtocolError("native snapshot paging metadata is invalid")
+        collected = list(entities)
+        next_offset = len(collected)
+        while has_more:
+            if next_offset >= total:
+                raise NativeEngineProtocolError("native snapshot paging did not advance")
+            current = self.call("world.getSnapshot", {"offset": next_offset, "limit": limit})
+            current_page = current.get("page")
+            current_entities = current.get("entities")
+            if not isinstance(current_page, Mapping) or not isinstance(current_entities, list):
+                raise NativeEngineProtocolError("native snapshot paging metadata is invalid")
+            if (current_page.get("offset") != next_offset
+                    or current_page.get("limit") != limit
+                    or current_page.get("total") != total
+                    or not isinstance(current_page.get("hasMore"), bool)
+                    or len(current_entities) == 0
+                    or len(current_entities) > limit
+                    or len(collected) + len(current_entities) > total):
+                raise NativeEngineProtocolError("native snapshot paging metadata is inconsistent")
+            for key in ("revision", "worldRevision", "tick", "worldHash", "projectId", "projectRevision", "replayHash"):
+                if key in first and current.get(key) != first.get(key):
+                    raise NativeEngineProtocolError("native snapshot changed while paging")
+            collected.extend(current_entities)
+            next_offset = len(collected)
+            has_more = current_page["hasMore"]
+        if next_offset != total:
+            raise NativeEngineProtocolError("native snapshot paging was incomplete")
+        result = dict(first)
+        result["entities"] = collected
+        result["page"] = {"offset": 0, "limit": limit, "total": total, "hasMore": False}
+        return result
 
     def apply_world(self, expected_revision: int, entities: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         if expected_revision < 0 or isinstance(expected_revision, bool):
@@ -637,15 +789,22 @@ class NativeEngine:
             except NativeEngineError:
                 pass
         if process is not None:
-            try:
-                process.wait(timeout=wait_for)
-            except subprocess.TimeoutExpired:
-                process.terminate()
+            if process.poll() is None:
                 try:
-                    process.wait(timeout=min(wait_for, 1.0))
+                    process.wait(timeout=wait_for)
                 except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=min(wait_for, 1.0))
+                    self._terminate_owned_process(process, timeout=min(wait_for, 1.0))
+            else:
+                # Even an exited root may leave descendants in the owned
+                # process group/job, so run the owner kill path once more.
+                self._terminate_owned_process(process, timeout=min(wait_for, 1.0))
+            owner = self._process_owner
+            if owner is not None:
+                try:
+                    owner.close()
+                except OSError:
+                    pass
+                self._process_owner = None
         self._state = NativeEngineState.CLOSED
         if process is not None:
             for stream in (process.stdin, process.stdout, process.stderr):
@@ -697,6 +856,7 @@ class NativeEngineHost:
         self._viewport = "closed"
         self._backend: str | None = None
         self._adapter: str | None = None
+        self._device_type: str | None = None
         self._fallback_reason: str | None = None
         self._metrics: dict[str, Any] | None = None
         self._native_fields: dict[str, Any] = {}
@@ -939,6 +1099,8 @@ class NativeEngineHost:
             self._backend = value["backend"]
         if isinstance(value.get("adapter"), str) and 0 < len(value["adapter"]) <= 256:
             self._adapter = value["adapter"]
+        if value.get("device_type") in {"Cpu", "IntegratedGpu", "DiscreteGpu", "VirtualGpu", "Other"}:
+            self._device_type = value["device_type"]
         if "fallback" in value and isinstance(value.get("fallback"), str):
             self._fallback_reason = value["fallback"][:256]
         if "fallbackReason" in value and (isinstance(value.get("fallbackReason"), str) or value.get("fallbackReason") is None):
@@ -1035,6 +1197,8 @@ class NativeEngineHost:
             result["backend"] = self._backend
         if self._adapter is not None:
             result["adapter"] = self._adapter
+        if self._device_type is not None:
+            result["deviceType"] = self._device_type
         if self._fallback_reason is not None:
             result["fallbackReason"] = self._fallback_reason
         if self._metrics is not None:
@@ -1056,6 +1220,9 @@ class NativeEngineHost:
     def drain_events(self) -> list[tuple[str, dict[str, Any]]]:
         events, self._events = self._events, []
         return events
+
+    def restore_events(self, events: Sequence[tuple[str, dict[str, Any]]]) -> None:
+        self._events[0:0] = list(events)
 
     @staticmethod
     def _translate_error(error: NativeEngineError) -> HostOperationError:
@@ -1112,7 +1279,8 @@ class NativeEngineHost:
                 self._capabilities()
                 result = self._canonical("engine.status")
             elif method == "engine.getSnapshot":
-                snapshot = self.engine.call("world.getSnapshot")
+                snapshot_reader = getattr(self.engine, "snapshot_world", None)
+                snapshot = snapshot_reader() if callable(snapshot_reader) else self.engine.call("world.getSnapshot")
                 self._ingest_native_result(snapshot)
                 result = self._canonical("engine.snapshot", values={"entities": self._host_entities(snapshot.get("entities", []))})
             elif method == "engine.applyChanges":
@@ -1212,6 +1380,7 @@ class NativeEngineHost:
                 }
                 result = self._canonical("engine.metrics")
             else:  # engine.recover
+                had_viewport = self._viewport == "open"
                 try:
                     recovered = self.engine.call("renderer.recover")
                 except (NativeEngineTimeoutError, NativeEngineChildExitedError,
@@ -1222,6 +1391,12 @@ class NativeEngineHost:
                     self._dock_reason = "native viewport must be reopened after process recovery"
                     recovered = {"capabilities": self._capabilities()}
                 self._ingest_native_result(recovered)
+                viewport_reopened = recovered.get("viewport_reopened")
+                if isinstance(viewport_reopened, bool):
+                    self._viewport = "open" if viewport_reopened else "closed"
+                    if had_viewport and not viewport_reopened:
+                        self._dock_active = False
+                        self._dock_reason = "native viewport was unavailable after renderer recovery"
                 self._recovery_count += 1
                 if self._metrics is not None:
                     self._metrics["recoveryCount"] = self._recovery_count
@@ -1237,7 +1412,7 @@ class NativeEngineHost:
                     },
                 })
             self._event("engine.status", {key: value for key, value in result.items()
-                                           if key in {"status", "worldRevision", "viewport", "backend", "adapter", "fallbackReason"}})
+                                           if key in {"status", "worldRevision", "viewport", "backend", "adapter", "deviceType", "fallbackReason"}})
             return result
         except HostOperationError:
             raise

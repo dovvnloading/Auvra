@@ -105,7 +105,7 @@ export const useAudioManager = (setIsLoading: (loading: boolean) => void) => {
     }
   }, [setIsLoading, addNotification, startOperation]);
 
-  const removeAudio = useCallback(async (id: string) => {
+  const removeAudio = useCallback(async (id: string): Promise<boolean> => {
     projectService.assertWritable();
       try {
           await dbOperations.deleteAudio(id);
@@ -115,9 +115,11 @@ export const useAudioManager = (setIsLoading: (loading: boolean) => void) => {
               return prev.filter(a => a.id !== id);
           });
           addNotification({ message: "Audio deleted.", type: 'info' });
+          return true;
       } catch (e) {
           frontendDiagnostics.failure('audio_remove_failed', e);
           addNotification({ message: "Failed to delete audio.", type: 'error' });
+          return false;
       }
   }, [addNotification]);
 

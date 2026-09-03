@@ -15,6 +15,7 @@ export interface NativeEngineStatus {
   viewport: "closed" | "opening" | "open" | "recovering";
   backend?: string;
   adapter?: string;
+  deviceType?: "Cpu" | "IntegratedGpu" | "DiscreteGpu" | "VirtualGpu" | "Other";
   fallbackReason?: string | null;
   featureCapabilities?: Array<{
     feature: "pbr_metallic_roughness" | "skeletal_animation" | "frustum_culling" | "deterministic_lod" | "instance_batching" | "directional_lights" | "point_lights" | "spot_lights" | "shadow_maps" | "image_based_lighting" | "entity_picking" | "editor_gizmos" | "hdr_intermediate" | "aces_tone_mapping" | "msaa_or_fxaa" | "post_processing_chain";

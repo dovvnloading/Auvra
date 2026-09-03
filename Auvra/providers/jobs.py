@@ -112,6 +112,12 @@ class SQLiteJobStore:
               sequence INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL REFERENCES jobs(job_id),
               state TEXT NOT NULL, message TEXT, at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS cost_events (
+              event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+              job_id TEXT NOT NULL REFERENCES jobs(job_id), provider TEXT NOT NULL,
+              amount_micro_usd INTEGER NOT NULL CHECK (amount_micro_usd >= 0),
+              occurred_at REAL NOT NULL
+            );
         """)
         columns = {row[1] for row in self._db.execute("PRAGMA table_info(jobs)").fetchall()}
         if "project_id" not in columns:
@@ -120,6 +126,15 @@ class SQLiteJobStore:
             # fails closed instead of attaching work to whichever project is
             # open next.
             self._db.execute("ALTER TABLE jobs ADD COLUMN project_id TEXT")
+        # Backfill one reservation event for legacy rows. Future retries are
+        # recorded separately at their actual reservation time.
+        self._db.execute("""
+            INSERT INTO cost_events (job_id, provider, amount_micro_usd, occurred_at)
+            SELECT jobs.job_id, jobs.provider, jobs.cost_micro_usd, jobs.created_at
+            FROM jobs
+            WHERE jobs.cost_micro_usd > 0
+              AND NOT EXISTS (SELECT 1 FROM cost_events WHERE cost_events.job_id = jobs.job_id)
+        """)
         self._db.commit()
 
     def close(self) -> None:
@@ -151,6 +166,11 @@ class SQLiteJobStore:
                     (identifier, project_id, provider, model, capability, JobState.QUEUED.value, prompt_hash,
                      artifact_hash, None, 0, cost_micro_usd, "{}", json.dumps(dict(provenance or {}), sort_keys=True), now, now))
                 self._event(identifier, JobState.QUEUED, None, now)
+                if cost_micro_usd:
+                    self._db.execute(
+                        "INSERT INTO cost_events (job_id, provider, amount_micro_usd, occurred_at) VALUES (?,?,?,?)",
+                        (identifier, provider, cost_micro_usd, now),
+                    )
                 self._db.commit()
             except sqlite3.IntegrityError as exc: raise ValueError("job id already exists") from exc
         return self.get(identifier)
@@ -198,8 +218,14 @@ class SQLiteJobStore:
             _safe_json(reconcile or {})
             now = time.time()
             if cost_micro_usd is not None and (not isinstance(cost_micro_usd, int) or cost_micro_usd < 0): raise ValueError("invalid cost")
+            new_cost = current.cost_micro_usd if cost_micro_usd is None else cost_micro_usd
             self._db.execute("UPDATE jobs SET state=?, remote_id=COALESCE(?,remote_id), artifact_hash=COALESCE(?,artifact_hash), reconcile_json=?, cost_micro_usd=COALESCE(?,cost_micro_usd), updated_at=? WHERE job_id=?",
                 (state.value, remote_id, artifact_hash, json.dumps(dict(reconcile or current.reconcile), sort_keys=True), cost_micro_usd, now, job_id))
+            if new_cost > current.cost_micro_usd:
+                self._db.execute(
+                    "INSERT INTO cost_events (job_id, provider, amount_micro_usd, occurred_at) VALUES (?,?,?,?)",
+                    (job_id, current.provider, new_cost - current.cost_micro_usd, now),
+                )
             self._event(job_id, state, _safe_message(message), now)
             self._db.commit()
         return self.get(job_id)
@@ -232,8 +258,14 @@ class SQLiteJobStore:
             raise ValueError("invalid cost")
         with self._lock:
             current = self.get(job_id, project_id=project_id)
+            now = time.time()
             self._db.execute("UPDATE jobs SET cost_micro_usd=?, updated_at=? WHERE job_id=?",
-                             (current.cost_micro_usd + amount_micro_usd, time.time(), job_id))
+                             (current.cost_micro_usd + amount_micro_usd, now, job_id))
+            if amount_micro_usd:
+                self._db.execute(
+                    "INSERT INTO cost_events (job_id, provider, amount_micro_usd, occurred_at) VALUES (?,?,?,?)",
+                    (job_id, current.provider, amount_micro_usd, now),
+                )
             self._db.commit()
         return self.get(job_id, project_id=project_id)
 
@@ -251,13 +283,24 @@ class SQLiteJobStore:
             if current.cost_micro_usd == amount_micro_usd: return current
             if current.cost_micro_usd != 0: raise ValueError("job cost is already reserved")
             if current.state not in {JobState.QUEUED, JobState.SUBMITTING}: raise ValueError("job is not reservable")
-            self._db.execute("UPDATE jobs SET cost_micro_usd=?, updated_at=? WHERE job_id=?", (amount_micro_usd, time.time(), job_id)); self._db.commit()
+            now = time.time()
+            self._db.execute("UPDATE jobs SET cost_micro_usd=?, updated_at=? WHERE job_id=?", (amount_micro_usd, now, job_id))
+            if amount_micro_usd:
+                self._db.execute(
+                    "INSERT INTO cost_events (job_id, provider, amount_micro_usd, occurred_at) VALUES (?,?,?,?)",
+                    (job_id, current.provider, amount_micro_usd, now),
+                )
+            self._db.commit()
         return self.get(job_id)
 
     def cost_totals(self, provider: str, *, at: datetime | None = None) -> dict[str, int]:
         """Return durable aggregate/day/month micro-USD totals using UTC timestamps."""
         point = at or datetime.now(timezone.utc); day, month = point.date().isoformat(), point.strftime("%Y-%m")
-        with self._lock: rows = self._db.execute("SELECT cost_micro_usd,created_at FROM jobs WHERE provider=?", (provider,)).fetchall()
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT amount_micro_usd, occurred_at FROM cost_events WHERE provider=?",
+                (provider,),
+            ).fetchall()
         daily = monthly = aggregate = 0
         for row in rows:
             amount = int(row[0]); aggregate += amount; stamp = datetime.fromtimestamp(row[1], timezone.utc)
@@ -298,7 +341,19 @@ class SQLiteJobStore:
             self.transition(job_id, JobState.SUBMITTING, remote_id=remote_id, reconcile=metadata or {}, project_id=project_id)
             current = self.get(job_id, project_id=project_id)
         if target == current.state: return current
-        if target == JobState.SUCCEEDED and current.state == JobState.CANCEL_REQUESTED: return current
+        if target == JobState.SUCCEEDED and current.state == JobState.CANCEL_REQUESTED:
+            # Cancellation wins the local lifecycle race. The remote may have
+            # completed before its cancel acknowledgement arrived, but leaving
+            # the durable row in ``cancel_requested`` would make it look
+            # perpetually in flight and require restart recovery.
+            return self.transition(
+                job_id,
+                JobState.CANCELLED,
+                message="cancelled after remote completion",
+                remote_id=remote_id,
+                reconcile=metadata or {},
+                project_id=project_id,
+            )
         return self.transition(job_id, target, remote_id=remote_id, reconcile=metadata or {}, project_id=project_id)
 
     def _event(self, job_id: str, state: JobState, message: str | None, at: float) -> None:

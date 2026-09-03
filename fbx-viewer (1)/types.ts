@@ -401,6 +401,7 @@ export interface SceneContextType {
 
   // Blueprint Actions
   blueprints: Blueprint[];
+  isCreatingPlayerBlueprint: boolean;
   selectedBlueprintId: string | null;
   selectBlueprint: (id: string | null) => void;
   addBlueprint: (type: BlueprintType) => Promise<void>;

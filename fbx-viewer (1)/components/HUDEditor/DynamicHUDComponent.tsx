@@ -11,6 +11,40 @@ interface DynamicHUDComponentProps {
 const MAX_MESSAGE_BYTES = 256 * 1024;
 const MAX_CODE_BYTES = 192 * 1024;
 const MAX_PROPS_BYTES = 32 * 1024;
+const HUD_GUARD_IDENTIFIER = "__auvraHudGuard";
+
+// Babel compiles user code before it crosses the sandbox boundary. Every
+// loop and function body receives a cheap guard tick, allowing the iframe to
+// terminate infinite loops and recursive components without blocking the
+// editor renderer indefinitely.
+const boundedExecutionPlugin = ({ types: t }: any) => {
+  const tick = () => t.expressionStatement(
+    t.callExpression(
+      t.memberExpression(t.identifier(HUD_GUARD_IDENTIFIER), t.identifier("tick")),
+      [],
+    ),
+  );
+  const guardBody = (node: any): any => {
+    if (t.isBlockStatement(node)) {
+      node.body.unshift(tick());
+      return node;
+    }
+    return t.blockStatement([tick(), node]);
+  };
+  return {
+    name: "auvra-hud-execution-budget",
+    visitor: {
+      ForStatement(path: any) { path.node.body = guardBody(path.node.body); },
+      ForInStatement(path: any) { path.node.body = guardBody(path.node.body); },
+      ForOfStatement(path: any) { path.node.body = guardBody(path.node.body); },
+      WhileStatement(path: any) { path.node.body = guardBody(path.node.body); },
+      DoWhileStatement(path: any) { path.node.body = guardBody(path.node.body); },
+      FunctionDeclaration(path: any) { path.node.body = guardBody(path.node.body); },
+      FunctionExpression(path: any) { path.node.body = guardBody(path.node.body); },
+      ArrowFunctionExpression(path: any) { path.node.body = guardBody(path.node.body); },
+    },
+  };
+};
 
 function byteLength(value: unknown): number {
   try {
@@ -44,8 +78,14 @@ export const DynamicHUDComponent: React.FC<DynamicHUDComponentProps> = ({ code, 
       if (new TextEncoder().encode(code).byteLength > MAX_CODE_BYTES) {
         throw new Error("HUD code exceeds the sandbox limit");
       }
+      if (new RegExp(`\\b${HUD_GUARD_IDENTIFIER}\\b`).test(code)) {
+        throw new Error("HUD code uses a reserved sandbox identifier");
+      }
       const sourceForBabel = `function GeneratedComponent(props) {${code}}`;
-      const compiled = Babel.transform(sourceForBabel, { presets: ["react"] }).code;
+      const compiled = Babel.transform(sourceForBabel, {
+        presets: ["react"],
+        plugins: [boundedExecutionPlugin],
+      }).code;
       const clean = compiled?.replace('"use strict";', "").trim() || null;
       if (!clean || byteLength(clean) > MAX_CODE_BYTES) throw new Error("HUD code exceeds the sandbox limit");
       setCompiledCode(clean);

@@ -255,17 +255,82 @@ class ControllerTests(unittest.TestCase):
             "method": "host.ping", "payload": {},
         }
 
-        before = time.monotonic()
-        controller.on_message(json.dumps(request), "http://127.0.0.1:3099/")
-        elapsed = time.monotonic() - before
+        completed = threading.Event()
+        errors: list[BaseException] = []
 
-        self.assertLess(elapsed, 0.2)
-        self.assertTrue(started.wait(1))
-        self.assertEqual(frame.posts, [])
-        release.set()
-        self.assertTrue(controller.wait_for_host_idle())
+        def dispatch() -> None:
+            try:
+                controller.on_message(json.dumps(request), "http://127.0.0.1:3099/")
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                completed.set()
+
+        thread = threading.Thread(target=dispatch, name="controller-nonblocking-test")
+        thread.start()
+        try:
+            self.assertTrue(completed.wait(2), "host request dispatch blocked behind the handler")
+            self.assertEqual(errors, [])
+            self.assertTrue(started.wait(1))
+            self.assertEqual(frame.posts, [])
+        finally:
+            release.set()
+            self.assertTrue(controller.wait_for_host_idle(timeout=5))
+            thread.join(timeout=2)
+            controller.close()
         self.assertTrue(json.loads(frame.posts[-1])["ok"])
-        controller.close()
+
+    def test_host_queue_saturation_returns_immediate_retryable_response(self):
+        process = Mock(is_alive=Mock(return_value=True))
+        frame = FakeFrame(FrameConfig(
+            FrameMode.DEVELOPMENT,
+            development_origin="http://127.0.0.1:3099",
+        ))
+        frame.state = FrameState.READY
+        controller = FrameController(process, frame=frame)
+        started = threading.Event()
+        release = threading.Event()
+
+        def occupy_host_slot() -> None:
+            started.set()
+            if not release.wait(3):
+                raise RuntimeError("test saturated host worker timed out")
+
+        try:
+            futures = [controller._submit_host(occupy_host_slot) for _ in range(64)]
+            self.assertTrue(all(future is not None for future in futures))
+            self.assertTrue(started.wait(1))
+            request = {
+                "protocol": "auvra.host/1", "type": "request", "id": "busy-1",
+                "session": controller.dispatcher.session.session_id, "revision": 0,
+                "method": "host.ping", "payload": {},
+            }
+            completed = threading.Event()
+            errors: list[BaseException] = []
+
+            def dispatch() -> None:
+                try:
+                    controller.on_message(json.dumps(request), "http://127.0.0.1:3099/")
+                except BaseException as exc:
+                    errors.append(exc)
+                finally:
+                    completed.set()
+
+            thread = threading.Thread(target=dispatch, name="controller-saturation-test")
+            thread.start()
+            self.assertTrue(completed.wait(2), "saturated host dispatch blocked")
+            thread.join(timeout=2)
+            self.assertEqual(errors, [])
+            self.assertEqual(len(frame.posts), 1)
+            response = json.loads(frame.posts[0])
+            self.assertEqual(response["id"], "busy-1")
+            self.assertFalse(response["ok"])
+            self.assertEqual(response["error"]["code"], "locking")
+            self.assertTrue(response["error"]["details"]["retryable"])
+        finally:
+            release.set()
+            self.assertTrue(controller.wait_for_host_idle(timeout=5))
+            controller.close()
 
     def test_project_progress_is_streamed_while_handler_is_running(self):
         class StreamingProjectService:
@@ -352,11 +417,22 @@ class ControllerTests(unittest.TestCase):
                     "attributes": {"code": "host_worker_blocked_fixture", "count": 1},
                 }],
             }
-            before = time.monotonic()
-            controller.on_message(json.dumps(diagnostic), "http://127.0.0.1:3099/")
-            elapsed = time.monotonic() - before
+            completed = threading.Event()
+            errors: list[BaseException] = []
 
-            self.assertLess(elapsed, 0.2)
+            def dispatch() -> None:
+                try:
+                    controller.on_message(json.dumps(diagnostic), "http://127.0.0.1:3099/")
+                except BaseException as exc:
+                    errors.append(exc)
+                finally:
+                    completed.set()
+
+            thread = threading.Thread(target=dispatch, name="controller-diagnostics-lane-test")
+            thread.start()
+            self.assertTrue(completed.wait(2), "diagnostics dispatch blocked behind the host worker")
+            thread.join(timeout=2)
+            self.assertEqual(errors, [])
             response = json.loads(frame.posts[-1])
             self.assertEqual(response["protocol"], "auvra.diagnostics/1")
             self.assertTrue(response["ok"])

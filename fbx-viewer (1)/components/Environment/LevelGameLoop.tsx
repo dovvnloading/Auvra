@@ -413,7 +413,7 @@ const RuntimeEnemyController: React.FC<{
     data: any;
     assets: EnemyAssetBundle;
     playerObject: THREE.Object3D;
-    projectileManagerRef: React.RefObject<ProjectileManagerHandle>;
+    projectileManagerRef: React.RefObject<ProjectileManagerHandle | null>;
     boundarySize: number;
     enabled: boolean;
     onDespawn: () => void;

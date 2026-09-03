@@ -20,6 +20,7 @@ from Auvra.diagnostics import trace_public_class
 from typing import Any, Callable, Mapping
 
 from Auvra.host.dispatcher import HostOperationError
+from Auvra.project import InvalidProjectError
 from Auvra.providers import (
     AnthropicAdapter, Capability, CommandProposal, FalAdapter,
     LlamaCppAdapter, OllamaAdapter, OpenAIAdapter, OpenRouterAdapter,
@@ -57,6 +58,7 @@ _PROVIDER_ERRORS = {
     "not_found": "provider_not_found",
     "invalid_request": "invalid_request",
 }
+_SHUTDOWN_GRACE_SECONDS = 5.0
 
 
 def _assert_state_path_safe(path: Path) -> None:
@@ -128,6 +130,9 @@ class NativeProviderHost:
         self._provided_adapters = frozenset(self._adapters)
         self._lock = threading.RLock()
         self._closed = False
+        self._shutdown_event = threading.Event()
+        self._stores_closed = False
+        self._stores_closing = False
         self._now = now
         self._initialize_vault()
         self._restore_configured_models()
@@ -195,6 +200,10 @@ class NativeProviderHost:
             events, self._events = self._events, []
         return events
 
+    def restore_events(self, events: list[tuple[str, dict[str, Any]]]) -> None:
+        with self._lock:
+            self._events[0:0] = list(events)
+
     def tick(self) -> None:
         """Advance adapter polling hooks without blocking the UI thread."""
         with self._lock:
@@ -225,20 +234,29 @@ class NativeProviderHost:
 
     def _recover_fal_job(self, job_id: str) -> None:
         try:
+            if self._shutdown_event.is_set():
+                return
             job = self.jobs.get(job_id)
             adapter = self._adapter("fal")
             remote = MediaJob("fal", job.model, job.remote_id or "")
             self.jobs.transition(job_id, "running")
             for _ in range(120):
+                if self._shutdown_event.is_set():
+                    return
                 state = adapter.status_state(adapter.status(remote))
                 if state == "succeeded":
+                    if self._shutdown_event.is_set():
+                        return
                     self._ingest_media(job_id, adapter.result(remote), adapter, self._meta[job_id])
+                    if self._shutdown_event.is_set():
+                        return
                     self.jobs.transition(job_id, "succeeded", artifact_hash=self._meta[job_id].get("artifactHash"))
                     self._queue_job_event(job_id, "succeeded", 1, self.registry.get("fal"))
                     return
                 if state in {"failed", "cancelled"}:
                     raise ProviderError("remote", "durable media request failed", "fal")
-                time.sleep(0.05)
+                if self._shutdown_event.wait(0.05):
+                    return
             raise ProviderError("timeout", "durable media request timed out", "fal")
         except Exception as exc:
             try:
@@ -248,29 +266,69 @@ class NativeProviderHost:
             except Exception:
                 pass
 
+    def _close_stores(self) -> None:
+        with self._lock:
+            if self._stores_closed or self._stores_closing:
+                return
+            self._stores_closing = True
+        try:
+            self.jobs.close()
+        finally:
+            try:
+                self.settings.close()
+            finally:
+                with self._lock:
+                    self._stores_closed = True
+                    self._stores_closing = False
+
+    def _finish_shutdown(self, futures: tuple[Future[Any], ...]) -> None:
+        """Close durable stores after in-flight work exits without blocking shutdown."""
+
+        for future in futures:
+            try:
+                future.result()
+            except Exception:
+                pass
+        self._close_stores()
+
     def shutdown(self) -> None:
         with self._lock:
             if self._closed:
                 return
             self._closed = True
+            self._shutdown_event.set()
             futures = tuple(self._futures.values())
             self._futures.clear()
         for future in futures:
             future.cancel()
+        deadline = time.monotonic() + _SHUTDOWN_GRACE_SECONDS
         for future in futures:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             try:
-                future.result(timeout=5)
+                future.result(timeout=remaining)
             except Exception:
                 pass
         if self._owns_executor:
-            self._executor.shutdown(wait=True, cancel_futures=True)
+            # Running provider calls may be inside an uninterruptible network
+            # operation.  Never make host shutdown wait on those threads.
+            self._executor.shutdown(wait=False, cancel_futures=True)
         for store in self._memory.values():
             store.clear()
         self._memory.clear()
-        try:
-            self.jobs.close()
-        finally:
-            self.settings.close()
+        if all(future.done() for future in futures):
+            self._close_stores()
+        else:
+            # Keep SQLite open until active workers have returned; the daemon
+            # reaper prevents a late worker from racing a closed connection
+            # while keeping the caller's shutdown bounded.
+            threading.Thread(
+                target=self._finish_shutdown,
+                args=(futures,),
+                daemon=True,
+                name="auvra-provider-shutdown",
+            ).start()
 
     def _provider_list(self, _payload: dict[str, Any]) -> dict[str, Any]:
         values = []
@@ -400,11 +458,12 @@ class NativeProviderHost:
 
     def _list_models(self, payload: dict[str, Any]) -> dict[str, Any]:
         descriptor = self.registry.get(payload["providerId"])
-        if descriptor.provider_id in self.transports or descriptor.provider_id in self._adapters:
-            models = self._adapter(descriptor.provider_id).list_models()
-            self.registry.discover_models(descriptor.provider_id, models)
-        else:
-            models = self.registry.models(descriptor.provider_id)
+        # Discovery is itself the operation that should instantiate the
+        # provider adapter. Do not make it depend on an earlier health call or
+        # an injected transport; local providers otherwise remain model-less
+        # and cannot be configured on a fresh host.
+        models = self._adapter(descriptor.provider_id).list_models()
+        self.registry.discover_models(descriptor.provider_id, models)
         capability = payload.get("capability")
         return {"kind": "provider.models", "providerId": descriptor.provider_id, "models":[
             {"modelId": model, "displayName": model, "capabilities": sorted(cap.value for cap in descriptor.capabilities if capability is None or cap.value == capability)}
@@ -548,10 +607,11 @@ class NativeProviderHost:
 
     def _discard(self, payload: dict[str, Any]) -> dict[str, Any]:
         job = self._require_job_project(payload)
-        preview = self.preview_store.get(job.job_id, payload["previewAssetId"]) if self.preview_store is not None else None
+        preview = (self.preview_store.get(job.job_id, payload["previewAssetId"], project_id=payload["projectId"])
+                   if self.preview_store is not None else None)
         if preview is None:
             raise HostOperationError("invalid_job", "Generated preview is unavailable")
-        self.preview_store.discard(job.job_id, preview.asset_id)
+        self.preview_store.discard(job.job_id, preview.asset_id, project_id=payload["projectId"])
         return {"kind": "media.discard", "projectId": payload["projectId"], "jobId": job.job_id,
                 "previewAssetId": payload["previewAssetId"], "projectRevision": self._project_revision(payload["projectId"])}
 
@@ -561,17 +621,17 @@ class NativeProviderHost:
         if job.state.value != "succeeded" or job.capability not in {Capability.MEDIA_GENERATE.value, Capability.MEDIA_EDIT.value}:
             raise HostOperationError("invalid_job", "Media job is not complete")
         meta = self._meta.get(job.job_id, {})
-        preview = self.preview_store.get(job.job_id, payload["previewAssetId"]) if self.preview_store is not None else None
+        preview = (self.preview_store.get(job.job_id, payload["previewAssetId"], project_id=active.project_id)
+                   if self.preview_store is not None else None)
         if preview is None:
             raise HostOperationError("invalid_job", "Generated preview is unavailable")
-        with self.preview_store.open(preview.asset_id) as stream:
-            reference = self.project_host.service.begin_upload(stream, project_id=active.project_id, size=preview.size, mime=preview.mime, name=payload["name"])
+        artifact_id = preview.asset_id
         generation = {
             "providerId": job.provider, "modelId": job.model, "jobId": job.job_id,
             "createdAt": meta.get("createdAt", self._now()),
             "routeOrigin": meta.get("route", "cloud"), "routeConsent": "explicit",
             "promptSha256": job.prompt_hash, "settingsSha256": meta.get("settingsHash", self._settings_hash(self.settings.get(job.provider))),
-            "artifactSha256": reference.asset_id, "inputAssetIds": meta.get("assetIds", []),
+            "artifactSha256": artifact_id, "inputAssetIds": meta.get("assetIds", []),
         }
         if isinstance(meta.get("modelVersion"), str):
             generation["modelVersion"] = meta["modelVersion"]
@@ -579,7 +639,7 @@ class NativeProviderHost:
             generation["seed"] = meta["seed"]
         if isinstance(meta.get("costMicroUsd"), int) and not isinstance(meta.get("costMicroUsd"), bool):
             generation["costMicroUsd"] = meta["costMicroUsd"]
-        texture = {"id": payload["textureId"], "name": payload["name"], "assetId": reference.asset_id, "dimensions": {"width": preview.width, "height": preview.height}, "generation": generation}
+        texture = {"id": payload["textureId"], "name": payload["name"], "assetId": artifact_id, "dimensions": {"width": preview.width, "height": preview.height}, "generation": generation}
         # apply_changes expects document records, not a replacement domain
         # singleton.  Merge the generated record into the complete canonical
         # textures document, replacing only a matching texture identity.
@@ -608,8 +668,44 @@ class NativeProviderHost:
             model_documents[model_index] = model
             # Keep every model record and only update the selected model.
             changes["models"] = model_documents
-        status = self.project_host.service.apply_changes(changes, project_id=active.project_id, expected_revision=payload["expectedRevision"])
-        self.preview_store.discard(job.job_id, preview.asset_id)
+        existing = active.assets.verify(artifact_id, expected_size=preview.size)
+        try:
+            with self.preview_store.open(preview.asset_id, project_id=active.project_id) as stream:
+                reference = self.project_host.service.begin_upload(
+                    stream,
+                    project_id=active.project_id,
+                    size=preview.size,
+                    mime=preview.mime,
+                    name=payload["name"],
+                )
+            if reference.asset_id != artifact_id:
+                raise InvalidProjectError("generated asset hash changed during ingestion")
+        except Exception:
+            if not existing:
+                try:
+                    active.discard_asset_if_unreferenced(artifact_id)
+                except (OSError, ValueError):
+                    pass
+            raise
+        try:
+            status = self.project_host.service.apply_changes(
+                changes,
+                project_id=active.project_id,
+                expected_revision=payload["expectedRevision"],
+            )
+        except Exception:
+            if not existing:
+                try:
+                    active.discard_asset_if_unreferenced(artifact_id)
+                except (OSError, ValueError):
+                    pass
+            raise
+        try:
+            self.preview_store.discard(job.job_id, preview.asset_id, project_id=active.project_id)
+        except Exception:
+            # The project mutation is already durable.  A cleanup failure must
+            # not report a false commit failure; session shutdown will retry it.
+            pass
         return {"kind": "media.commit", "projectId": active.project_id, "jobId": job.job_id, "previewAssetId": preview.asset_id, "projectRevision": status.revision, "assetId": reference.asset_id, "provenance": generation}
 
     def _preview_command(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -724,12 +820,16 @@ class NativeProviderHost:
         transaction = self._last_transaction
         if transaction is None or transaction["projectId"] != active.project_id or payload["transactionId"] != transaction["transactionId"]:
             raise HostOperationError("invalid_command", "Only the last approved transaction can be undone")
+        if payload["expectedRevision"] != transaction["revision"]:
+            raise HostOperationError("revision_conflict", "Project changed after the approved transaction")
         result = self.project_host.service.apply_changes({"hud": copy.deepcopy(transaction["hud"])}, project_id=active.project_id, expected_revision=payload["expectedRevision"])
         self._last_transaction = None
         return {"kind": "command.undo", "projectId": active.project_id, "projectRevision": result.revision, "transactionId": payload["transactionId"]}
 
     def _run_job(self, job_id: str, provider_id: str, model: str, capability: Capability) -> None:
         try:
+            if self._shutdown_event.is_set():
+                return
             job = self.jobs.get(job_id)
             if job.state.value == "cancel_requested":
                 job = self.jobs.reconcile(job_id, remote_state="cancelled", project_id=job.project_id)
@@ -737,10 +837,24 @@ class NativeProviderHost:
                 return
             self.jobs.transition(job_id, "submitting")
             self.jobs.transition(job_id, "running")
+            if self._shutdown_event.is_set():
+                return
             adapter = self._adapter(provider_id)
             meta = self._meta[job_id]
             if capability in {Capability.TEXT, Capability.CODE, Capability.COMMANDS}:
-                result = adapter.complete(model=model, prompt=meta["prompt"], capability=capability, structured_command=capability == Capability.COMMANDS)
+                complete_args = {
+                    "model": model,
+                    "prompt": meta["prompt"],
+                    "capability": capability,
+                    "structured_command": capability == Capability.COMMANDS,
+                }
+                if capability == Capability.COMMANDS:
+                    # Bind update/delete proposals to the host-selected
+                    # element before provider output is validated.
+                    complete_args["target_element_id"] = meta.get("targetElementName")
+                result = adapter.complete(**complete_args)
+                if self._shutdown_event.is_set():
+                    return
                 if isinstance(result, CommandProposal):
                     meta["proposal"] = validate_command(
                         {"commands": [dict(item) for item in result.commands]},
@@ -761,17 +875,21 @@ class NativeProviderHost:
                     if references:
                         media_payload["image_url"] = references[0]
                 result = adapter.submit(model=model, capability=capability, payload=media_payload)
+                if self._shutdown_event.is_set():
+                    return
                 request_id = getattr(result, "request_id", None)
                 self.jobs.transition(job_id, "running", remote_id=request_id, reconcile={"durable": True, "remote_request_id": request_id or "", "provider": provider_id, "model": model, "route": meta["route"]})
                 for _ in range(120):
+                    if self._shutdown_event.is_set():
+                        return
                     status = adapter.status(result)
                     state = adapter.status_state(status)
                     if state == "succeeded":
                         if status.get("error") or status.get("error_type"):
                             raise ProviderError("remote", "media provider reported a failed result", provider_id)
                         if self.jobs.get(job_id).state.value == "cancel_requested":
-                            self.jobs.reconcile(job_id, remote_state="succeeded", project_id=meta.get("projectId"))
-                            self._queue_job_event(job_id, "cancel_requested", None, self.registry.get(provider_id))
+                            job = self.jobs.reconcile(job_id, remote_state="succeeded", project_id=meta.get("projectId"))
+                            self._queue_job_event(job_id, job.state.value, None, self.registry.get(provider_id))
                             return
                         break
                     if state in {"failed", "cancelled"}:
@@ -780,11 +898,16 @@ class NativeProviderHost:
                             self._queue_job_event(job_id, job.state.value, 1, self.registry.get(provider_id))
                             return
                         raise ProviderError("remote", "media job did not complete", provider_id)
-                    time.sleep(0.05)
+                    if self._shutdown_event.wait(0.05):
+                        return
                 else:
                     raise ProviderError("timeout", "media job timed out", provider_id)
                 output = adapter.result(result)
+                if self._shutdown_event.is_set():
+                    return
                 self._ingest_media(job_id, output, adapter, meta)
+                if self._shutdown_event.is_set():
+                    return
             if self.jobs.get(job_id).state.value == "cancel_requested":
                 job = self.jobs.reconcile(job_id, remote_state="succeeded", project_id=meta.get("projectId"))
                 self._queue_job_event(job_id, job.state.value, None, self.registry.get(provider_id))
@@ -823,7 +946,11 @@ class NativeProviderHost:
         with tempfile.NamedTemporaryFile() as temp:
             artifact = adapter.download_output(url, sink=temp)
             temp.flush(); temp.seek(0)
-            record = self.preview_store.ingest(job_id, temp, declared_mime=artifact.content_type, provenance=self._preview_provenance(job_id, meta))
+            record = self.preview_store.ingest(
+                job_id, temp, project_id=meta.get("projectId"),
+                declared_mime=artifact.content_type,
+                provenance=self._preview_provenance(job_id, meta),
+            )
         meta["artifactHash"] = record.asset_id
         meta["preview"] = record
 

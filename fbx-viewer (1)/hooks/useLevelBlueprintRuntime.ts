@@ -7,6 +7,9 @@ import { SandboxEntityHandle } from '../components/Sandbox/SandboxEntity';
 import { GraphRuntimeAPI } from '../components/AnimationGraph/GraphRuntime';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 
+const MAX_BLUEPRINT_EVALUATION_DEPTH = 128;
+const MAX_BLUEPRINT_EXECUTION_DEPTH = 256;
+
 /**
  * Interface for the Level Blueprint Runtime.
  */
@@ -64,13 +67,20 @@ export const useLevelBlueprintRuntime = ({
      * @returns The evaluated value (number, boolean, string, etc.) or null.
      */
     const evaluateInput = useCallback((nodeId: string, inputPinId: string): any => {
+        const evaluate = (currentNodeId: string, currentInputPinId: string, path: Set<string>, depth: number): any => {
+        if (depth >= MAX_BLUEPRINT_EVALUATION_DEPTH) return null;
+        const pathKey = `${currentNodeId}:${currentInputPinId}`;
+        if (path.has(pathKey)) return null;
+        const nextPath = new Set(path);
+        nextPath.add(pathKey);
+
         // Find the connection feeding into this pin
-        const connection = blueprint.connections.find(c => c.toNodeId === nodeId && c.toPinId === inputPinId);
+        const connection = blueprint.connections.find(c => c.toNodeId === currentNodeId && c.toPinId === currentInputPinId);
         
         // If no connection, return default value (stored in node.data)
         if (!connection) {
-            const node = blueprint.nodes.find(n => n.id === nodeId);
-            const pin = node?.inputs.find(p => p.id === inputPinId);
+            const node = blueprint.nodes.find(n => n.id === currentNodeId);
+            const pin = node?.inputs.find(p => p.id === currentInputPinId);
             if (node && pin) {
                 return node.data?.[`default_${pin.name}`] ?? null;
             }
@@ -101,7 +111,7 @@ export const useLevelBlueprintRuntime = ({
             }
 
             case 'ToString': {
-                const val = evaluateInput(sourceNode.id, sourceNode.inputs[0].id);
+                const val = evaluate(sourceNode.id, sourceNode.inputs[0].id, nextPath, depth + 1);
                 return val !== null && val !== undefined ? String(val) : '';
             }
 
@@ -119,30 +129,30 @@ export const useLevelBlueprintRuntime = ({
 
             // --- MATH OPERATIONS ---
             case 'Add': {
-                const a = Number(evaluateInput(sourceNode.id, sourceNode.inputs[0].id) || 0);
-                const b = Number(evaluateInput(sourceNode.id, sourceNode.inputs[1].id) || 0);
+                const a = Number(evaluate(sourceNode.id, sourceNode.inputs[0].id, nextPath, depth + 1) ?? 0);
+                const b = Number(evaluate(sourceNode.id, sourceNode.inputs[1].id, nextPath, depth + 1) ?? 0);
                 // Check if outputs expect Int to determine rounding, or rely on JS floats
                 const isInt = sourceNode.outputs[0].dataType === 'Integer';
                 const result = a + b;
                 return isInt ? Math.floor(result) : result;
             }
             case 'Subtract': {
-                const a = Number(evaluateInput(sourceNode.id, sourceNode.inputs[0].id) || 0);
-                const b = Number(evaluateInput(sourceNode.id, sourceNode.inputs[1].id) || 0);
+                const a = Number(evaluate(sourceNode.id, sourceNode.inputs[0].id, nextPath, depth + 1) ?? 0);
+                const b = Number(evaluate(sourceNode.id, sourceNode.inputs[1].id, nextPath, depth + 1) ?? 0);
                 const isInt = sourceNode.outputs[0].dataType === 'Integer';
                 const result = a - b;
                 return isInt ? Math.floor(result) : result;
             }
             case 'Multiply': {
-                const a = Number(evaluateInput(sourceNode.id, sourceNode.inputs[0].id) || 0);
-                const b = Number(evaluateInput(sourceNode.id, sourceNode.inputs[1].id) || 0);
+                const a = Number(evaluate(sourceNode.id, sourceNode.inputs[0].id, nextPath, depth + 1) ?? 0);
+                const b = Number(evaluate(sourceNode.id, sourceNode.inputs[1].id, nextPath, depth + 1) ?? 0);
                 const isInt = sourceNode.outputs[0].dataType === 'Integer';
                 const result = a * b;
                 return isInt ? Math.floor(result) : result;
             }
             case 'Divide': {
-                const a = Number(evaluateInput(sourceNode.id, sourceNode.inputs[0].id) || 0);
-                const b = Number(evaluateInput(sourceNode.id, sourceNode.inputs[1].id) || 1);
+                const a = Number(evaluate(sourceNode.id, sourceNode.inputs[0].id, nextPath, depth + 1) ?? 0);
+                const b = Number(evaluate(sourceNode.id, sourceNode.inputs[1].id, nextPath, depth + 1) ?? 0);
                 const isInt = sourceNode.outputs[0].dataType === 'Integer';
                 const result = b !== 0 ? a / b : 0;
                 return isInt ? Math.floor(result) : result;
@@ -155,8 +165,8 @@ export const useLevelBlueprintRuntime = ({
             case 'Equal': { 
                 const pinA = sourceNode.inputs.find(p => p.name === 'A');
                 const pinB = sourceNode.inputs.find(p => p.name === 'B');
-                const valA = pinA ? evaluateInput(sourceNode.id, pinA.id) : 0;
-                const valB = pinB ? evaluateInput(sourceNode.id, pinB.id) : 0;
+                const valA = pinA ? evaluate(sourceNode.id, pinA.id, nextPath, depth + 1) : 0;
+                const valB = pinB ? evaluate(sourceNode.id, pinB.id, nextPath, depth + 1) : 0;
 
                 // Explicit Logic Nodes
                 if (sourceNode.type === 'Greater') return valA > valB;
@@ -173,20 +183,22 @@ export const useLevelBlueprintRuntime = ({
             case 'And': {
                 const pinA = sourceNode.inputs.find(p => p.name === 'A');
                 const pinB = sourceNode.inputs.find(p => p.name === 'B');
-                return (pinA ? evaluateInput(sourceNode.id, pinA.id) : false) && 
-                       (pinB ? evaluateInput(sourceNode.id, pinB.id) : false);
+                return (pinA ? evaluate(sourceNode.id, pinA.id, nextPath, depth + 1) : false) &&
+                       (pinB ? evaluate(sourceNode.id, pinB.id, nextPath, depth + 1) : false);
             }
 
             case 'Or': {
                 const pinA = sourceNode.inputs.find(p => p.name === 'A');
                 const pinB = sourceNode.inputs.find(p => p.name === 'B');
-                return (pinA ? evaluateInput(sourceNode.id, pinA.id) : false) || 
-                       (pinB ? evaluateInput(sourceNode.id, pinB.id) : false);
+                return (pinA ? evaluate(sourceNode.id, pinA.id, nextPath, depth + 1) : false) ||
+                       (pinB ? evaluate(sourceNode.id, pinB.id, nextPath, depth + 1) : false);
             }
 
             default:
                 return null;
         }
+        };
+        return evaluate(nodeId, inputPinId, new Set(), 0);
     }, [blueprint, playerApiRef, enemyApiRef]);
 
     // -------------------------------------------------------------------------
@@ -199,7 +211,10 @@ export const useLevelBlueprintRuntime = ({
      * @param nodeId The ID of the node to execute.
      * @param context Contextual data passed from the event trigger (e.g. Other Actor ID).
      */
-    const executeNode = useCallback((nodeId: string, context: any) => {
+    const executeNode = useCallback((nodeId: string, context: any, path: Set<string> = new Set(), depth = 0) => {
+        if (depth >= MAX_BLUEPRINT_EXECUTION_DEPTH || path.has(nodeId)) return;
+        const nextPath = new Set(path);
+        nextPath.add(nodeId);
         const node = blueprint.nodes.find(n => n.id === nodeId);
         if (!node) return;
 
@@ -275,7 +290,7 @@ export const useLevelBlueprintRuntime = ({
             const connection = blueprint.connections.find(c => c.fromPinId === activePin.id);
             if (connection) {
                 // Recursively call next node
-                executeNode(connection.toNodeId, context);
+                executeNode(connection.toNodeId, context, nextPath, depth + 1);
             }
         }
     }, [blueprint, evaluateInput, removeLevelObject, addNotification, playerApiRef, enemyApiRef, onRestart, onEndLevel]);

@@ -1,23 +1,35 @@
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Blueprint, BlueprintType } from '../types';
 import { dbOperations } from '../utils/db';
 import { projectService } from '../utils/projectService';
 import { DEFAULT_BLUEPRINTS, PLAYER_GRAPH, ENEMY_GRAPH } from '../data/blueprints';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 
-export const useBlueprintManager = () => {
+export const useBlueprintManager = (
+  selectedBlueprintId: string | null,
+  selectBlueprint: (id: string | null) => void,
+  clearSelectedBlueprint: (id: string) => void,
+) => {
   const [blueprints, setBlueprints] = useState<Blueprint[]>(DEFAULT_BLUEPRINTS);
-  const [selectedBlueprintId, setSelectedBlueprintId] = useState<string | null>(null);
+  const blueprintsRef = useRef(blueprints);
+  const playerCreationInFlightRef = useRef(false);
+  const [isCreatingPlayer, setIsCreatingPlayer] = useState(false);
+  useEffect(() => { blueprintsRef.current = blueprints; }, [blueprints]);
 
   const addBlueprint = useCallback(async (type: BlueprintType) => {
     projectService.assertWritable();
     const isPlayer = type === 'Player Character';
     
     // ENFORCE SINGLETON PLAYER CONSTRAINT
-    if (isPlayer && blueprints.some(bp => bp.type === 'Player Character')) {
+    if (isPlayer && (playerCreationInFlightRef.current || blueprintsRef.current.some(bp => bp.type === 'Player Character'))) {
         frontendDiagnostics.warning('duplicate_player_blueprint_blocked');
         return; 
+    }
+
+    if (isPlayer) {
+        playerCreationInFlightRef.current = true;
+        setIsCreatingPlayer(true);
     }
 
     const graphTemplate = isPlayer ? PLAYER_GRAPH : ENEMY_GRAPH;
@@ -40,57 +52,88 @@ export const useBlueprintManager = () => {
     
     try {
         await dbOperations.saveBlueprint(newBP);
-        setBlueprints(prev => [...prev, newBP]);
-        setSelectedBlueprintId(newBP.id);
+        setBlueprints(prev => {
+          const next = [...prev, newBP];
+          blueprintsRef.current = next;
+          return next;
+        });
+        selectBlueprint(newBP.id);
     } catch (err) {
         frontendDiagnostics.failure('blueprint_add_failed', err);
+    } finally {
+        if (isPlayer) {
+            playerCreationInFlightRef.current = false;
+            setIsCreatingPlayer(false);
+        }
+    }
+  }, [selectBlueprint]);
+
+  const updateBlueprint = useCallback(async (id: string, updates: Partial<Blueprint>) => {
+    projectService.assertWritable();
+    const previous = blueprintsRef.current.find((blueprint) => blueprint.id === id);
+    if (!previous) return;
+    const updated = { ...previous, ...updates };
+    blueprintsRef.current = blueprintsRef.current.map(blueprint => blueprint.id === id ? updated : blueprint);
+    setBlueprints(current => current.map(blueprint => blueprint.id === id ? updated : blueprint));
+    try {
+      await dbOperations.saveBlueprint(updated);
+    } catch (error) {
+      if (blueprintsRef.current.find((blueprint) => blueprint.id === id) === updated) {
+        blueprintsRef.current = blueprintsRef.current.map(blueprint => blueprint.id === id ? previous : blueprint);
+        setBlueprints(blueprintsRef.current);
+      }
+      frontendDiagnostics.failure('blueprint_save_failed', error);
     }
   }, [blueprints]);
 
-  const updateBlueprint = useCallback((id: string, updates: Partial<Blueprint>) => {
+  const removeBlueprint = useCallback(async (id: string) => {
     projectService.assertWritable();
-    setBlueprints(prev => prev.map(bp => {
-        if (bp.id === id) {
-            const updated = { ...bp, ...updates };
-            // Save to DB asynchronously
-            dbOperations.saveBlueprint(updated).catch((err) => frontendDiagnostics.failure('blueprint_save_failed', err));
-            return updated;
-        }
-        return bp;
-    }));
-  }, []);
-
-  const removeBlueprint = useCallback((id: string) => {
-    projectService.assertWritable();
-    // 1. Optimistic Update
-    setBlueprints(prev => prev.filter(bp => bp.id !== id));
-    
-    // 2. Handle Selection
-    if (selectedBlueprintId === id) {
-        setSelectedBlueprintId(null);
-    }
-
-    // 3. Persist
-    dbOperations.deleteBlueprint(id).catch(err => {
+    try {
+      await dbOperations.deleteBlueprint(id);
+      setBlueprints(prev => {
+        const next = prev.filter(bp => bp.id !== id);
+        blueprintsRef.current = next;
+        return next;
+      });
+      clearSelectedBlueprint(id);
+    } catch (err) {
         frontendDiagnostics.failure('blueprint_delete_failed', err);
-    });
-  }, [selectedBlueprintId]);
+    }
+  }, [clearSelectedBlueprint]);
 
   const unlinkModelFromBlueprints = useCallback((modelId: string) => {
     setBlueprints(prev => {
         const next = prev.map(bp => bp.linkedModelId === modelId ? { ...bp, linkedModelId: null } : bp);
+        blueprintsRef.current = next;
         return next;
     });
+  }, []);
+
+  const removeTextureReference = useCallback((textureId: string) => {
+    setBlueprints(prev => prev.map(blueprint => blueprint.textureId === textureId
+      ? { ...blueprint, textureId: null }
+      : blueprint));
+  }, []);
+
+  const removeAudioReference = useCallback((audioId: string) => {
+    setBlueprints(prev => prev.map(blueprint => {
+      const weaponSounds = blueprint.weaponSounds;
+      if (!weaponSounds?.includes(audioId)) return blueprint;
+      return { ...blueprint, weaponSounds: weaponSounds.filter(id => id !== audioId) };
+    }));
   }, []);
 
   return frontendDiagnostics.traceActions('blueprint_manager', {
     blueprints,
     setBlueprints, // Exposed for persistence layer
     selectedBlueprintId,
-    setSelectedBlueprintId,
+    isCreatingPlayer,
+    setSelectedBlueprintId: selectBlueprint,
     addBlueprint,
     updateBlueprint,
     removeBlueprint,
-    unlinkModelFromBlueprints
+    unlinkModelFromBlueprints,
+    removeTextureReference,
+    removeAudioReference,
   });
 };

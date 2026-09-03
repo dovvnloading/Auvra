@@ -1,5 +1,5 @@
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { AnimationGraphData } from '../types';
 import { PLAYER_GRAPH } from '../data/blueprints';
 import { projectService } from '../utils/projectService';
@@ -8,28 +8,39 @@ import { frontendDiagnostics } from '../diagnostics/runtime';
 export const useGraphManager = () => {
   // Stores graph data per model ID (Legacy support for raw mesh editing)
   const [graphData, setGraphData] = useState<Record<string, AnimationGraphData>>({});
+  const graphDataRef = useRef(graphData);
+  useEffect(() => { graphDataRef.current = graphData; }, [graphData]);
 
-  const updateGraph = useCallback((modelId: string, data: Partial<AnimationGraphData>) => {
+  const updateGraph = useCallback(async (modelId: string, data: Partial<AnimationGraphData>) => {
     projectService.assertWritable();
-    setGraphData(prev => {
-      const existing = prev[modelId] || JSON.parse(JSON.stringify(PLAYER_GRAPH));
-      const next = { ...existing, ...data };
-      projectService.applyChanges([{ domain: 'graphs', operation: 'upsert', id: modelId, value: { id: modelId, modelId, ...next } }]).catch((error) => {
-        frontendDiagnostics.failure('animation_graph_persist_failed', error);
-      });
-      return {
-        ...prev,
-        [modelId]: next
-      };
-    });
+    const previous = graphDataRef.current[modelId];
+    const existing = previous || JSON.parse(JSON.stringify(PLAYER_GRAPH));
+    const next = { ...existing, ...data };
+    graphDataRef.current = { ...graphDataRef.current, [modelId]: next };
+    setGraphData(prev => ({ ...prev, [modelId]: next }));
+    try {
+      await projectService.applyChanges([{ domain: 'graphs', operation: 'upsert', id: modelId, value: { id: modelId, modelId, ...next } }]);
+    } catch (error) {
+      if (graphDataRef.current[modelId] === next) {
+        const restored = previous === undefined
+          ? Object.fromEntries(Object.entries(graphDataRef.current).filter(([id]) => id !== modelId))
+          : { ...graphDataRef.current, [modelId]: previous };
+        graphDataRef.current = restored;
+        setGraphData(restored);
+      }
+      frontendDiagnostics.failure('animation_graph_persist_failed', error);
+    }
   }, []);
 
-  const removeGraphData = useCallback((modelId: string, persist = true) => {
+  const removeGraphData = useCallback(async (modelId: string, persist = true) => {
     if (persist) {
       projectService.assertWritable();
-      projectService.applyChanges([{ domain: 'graphs', operation: 'remove', id: modelId }]).catch((error) => {
+      try {
+        await projectService.applyChanges([{ domain: 'graphs', operation: 'remove', id: modelId }]);
+      } catch (error) {
         frontendDiagnostics.failure('animation_graph_remove_failed', error);
-      });
+        return;
+      }
     }
     setGraphData(prev => {
         const next = { ...prev };

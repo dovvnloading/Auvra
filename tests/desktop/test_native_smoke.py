@@ -107,7 +107,7 @@ class _SmokeProjectDialogs:
         self.project_path = parent / "Native Smoke Project"
 
     def choose_create_location(self, _suggested_name: str) -> DialogSelection:
-        return DialogSelection(self.project_path)
+        return DialogSelection(self.parent / _suggested_name)
 
     def choose_open_project(self) -> DialogSelection:
         return DialogSelection(self.project_path / "Native Smoke Project.auvra")
@@ -212,6 +212,7 @@ def _script_for_project_lifecycle(prefix: str) -> str:
       const state = {{ session: null, revision: 0, projectId: null, projectRevision: 0,
         assetId: null, jobId: null, poll: 0, sent: new Set() }};
       window.__auvraNativeProjectSmoke = state;
+      document.title = "AUVRA_LISTENER_READY:{prefix}";
       const request = (id, method, payload) => {{
         if (state.sent.has(id)) return;
         state.sent.add(id);
@@ -263,9 +264,19 @@ def _script_for_project_lifecycle(prefix: str) -> str:
                   document: {{ id: "project", name: "Native Smoke Project" }} }},
                 {{ domain: "levels", documentId: "level", operation: "upsert",
                   document: {{ id: "level", name: "Native Smoke Level" }} }},
+                {{ domain: "levels", documentId: "a1", operation: "upsert",
+                  document: {{ id: "a1", name: "A1" }} }},
+                {{ domain: "levels", documentId: "a2", operation: "upsert",
+                  document: {{ id: "a2", name: "A2" }} }},
                 {{ domain: "objects", documentId: "reference", operation: "upsert",
                   document: {{ id: "reference", levelId: "level", name: "Reference", type: "mesh",
-                    position: [0.25, -0.5, 0.0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] }} }},
+                  position: [0.25, -0.5, 0.0], rotation: [0.2, -0.4, 0.6], scale: [1, 1, 1] }} }},
+                {{ domain: "objects", documentId: "shared-object", operation: "upsert",
+                  document: {{ id: "shared-object", levelId: "a1", name: "A1 Object", type: "mesh",
+                  position: [1, 1, 1], rotation: [0, 0, 0], scale: [1, 1, 1] }} }},
+                {{ domain: "objects", documentId: "a2-object", operation: "upsert",
+                  document: {{ id: "a2-object", levelId: "a2", name: "A2 Object", type: "mesh",
+                  position: [2, 2, 2], rotation: [0, 0, 0], scale: [1, 1, 1] }} }},
                 {{ domain: "textures", documentId: "smoke-asset", operation: "upsert",
                   document: {{ id: "smoke-asset", name: "smoke.bin", assetId: state.assetId,
                     dimensions: {{ width: 1, height: 1 }} }} }}
@@ -342,6 +353,7 @@ def _script_for_engine_lifecycle(prefix: str, *, resume: bool) -> str:
     return f"""
     (() => {{
       const state = {{ session: null, revision: 0, sent: new Set() }};
+      document.title = "AUVRA_LISTENER_READY:{prefix}";
       const request = (id, method, payload) => {{
         if (state.sent.has(id)) return;
         state.sent.add(id);
@@ -372,6 +384,104 @@ def _script_for_engine_lifecycle(prefix: str, *, resume: bool) -> str:
           request("{prefix}-close", "engine.closeViewport", {{}});
         }}
       }});
+    }})();
+    """
+
+
+def _script_for_stage9_project_loop(
+    prefix: str,
+    project_id: str,
+    project_revision: int,
+    session_id: str,
+    transport_revision: int,
+) -> str:
+    """Exercise project replacement and stale level writes over real WebView2."""
+
+    return f"""
+    (() => {{
+      const state = {{ session: {json.dumps(session_id)}, revision: {transport_revision},
+        projectId: {json.dumps(project_id)}, projectRevision: {project_revision},
+        replacementId: null, replacementRevision: 0, sent: new Set(), stale: null }};
+      const finish = value => document.title = "AUVRA_STAGE9_LOOP:" + JSON.stringify(value);
+      const progress = value => document.title = "AUVRA_STAGE9_PROGRESS:" + value;
+      progress("started");
+      const request = (id, method, payload) => {{
+        if (state.sent.has(id)) return;
+        state.sent.add(id);
+        chrome.webview.postMessage({{ protocol: "auvra.host/1", type: "request", id,
+          session: state.session, revision: state.revision, method, payload }});
+      }};
+      const start = () => request("{prefix}-a-apply", "project.applyChanges", {{
+        projectId: state.projectId, expectedRevision: state.projectRevision,
+        changes: [{{ domain: "levels", documentId: "a1", operation: "upsert",
+          document: {{ id: "a1", name: "A1" }} }},
+          {{ domain: "levels", documentId: "a2", operation: "upsert",
+            document: {{ id: "a2", name: "A2" }} }},
+          {{ domain: "objects", documentId: "shared-object", operation: "upsert",
+            document: {{ id: "shared-object", levelId: "a1", name: "A1 Object",
+              type: "mesh", position: [1, 1, 1], rotation: [0, 0, 0], scale: [1, 1, 1] }} }},
+          {{ domain: "objects", documentId: "a2-object", operation: "upsert",
+            document: {{ id: "a2-object", levelId: "a2", name: "A2 Object",
+              type: "mesh", position: [2, 2, 2], rotation: [0, 0, 0], scale: [1, 1, 1] }} }}]
+      }});
+      chrome.webview.addEventListener("message", event => {{
+        const message = event.data;
+        if (!message || typeof message !== "object") return;
+        if (typeof message.revision === "number") state.revision = message.revision;
+        if (message.type === "session" && !state.session) {{ state.session = message.session; start(); return; }}
+        if (message.type !== "response" || !message.id) return;
+        if (message.id.startsWith("{prefix}-")) progress(message.id);
+        if (message.id === "{prefix}-a-apply") {{
+          if (!message.ok) return finish({{ error: "A level setup failed: " + JSON.stringify(message.error) }});
+          state.projectRevision = message.result.revision;
+          request("{prefix}-replacement", "project.create", {{ name: "Native Smoke Replacement" }});
+        }} else if (message.id === "{prefix}-replacement") {{
+          if (!message.ok) return finish({{ error: "replacement create failed: " + JSON.stringify(message.error) }});
+          state.replacementId = message.result.projectId;
+          state.replacementRevision = message.result.revision;
+          request("{prefix}-replacement-apply", "project.applyChanges", {{
+            projectId: state.replacementId, expectedRevision: state.replacementRevision,
+            changes: [{{ domain: "levels", documentId: "shared-level", operation: "upsert",
+              document: {{ id: "shared-level", name: "Replacement Level" }} }},
+              {{ domain: "objects", documentId: "shared-object", operation: "upsert",
+                document: {{ id: "shared-object", levelId: "shared-level", name: "Replacement Object",
+                  type: "mesh", position: [9, 9, 9], rotation: [0, 0, 0], scale: [1, 1, 1] }} }}]
+          }});
+        }} else if (message.id === "{prefix}-replacement-apply") {{
+          if (!message.ok) return finish({{ error: "replacement apply failed: " + JSON.stringify(message.error) }});
+          state.replacementRevision = message.result.revision;
+          request("{prefix}-stale", "project.applyChanges", {{
+            projectId: state.projectId, expectedRevision: state.projectRevision,
+            changes: [{{ domain: "objects", documentId: "shared-object", operation: "upsert",
+              document: {{ id: "shared-object", levelId: "shared-level", name: "Stale A Object",
+                type: "mesh", position: [7, 7, 7], rotation: [0, 0, 0], scale: [1, 1, 1] }} }}]
+          }});
+        }} else if (message.id === "{prefix}-stale") {{
+          state.stale = message;
+          request("{prefix}-replacement-close", "project.close", {{
+            projectId: state.replacementId, expectedRevision: state.replacementRevision
+          }});
+        }} else if (message.id === "{prefix}-replacement-close") {{
+          if (!message.ok) return finish({{ error: "replacement close failed: " + JSON.stringify(message.error) }});
+          request("{prefix}-reopen", "project.open", {{ projectHandle: "dialog" }});
+        }} else if (message.id === "{prefix}-reopen") {{
+          if (!message.ok) return finish({{ error: "project reopen failed: " + JSON.stringify(message.error) }});
+          if (message.result.projectId !== state.projectId)
+            return finish({{ error: "project reopen changed identity" }});
+          request("{prefix}-snapshot", "project.getSnapshot", {{
+            projectId: state.projectId, domain: "objects", pageSize: 100
+          }});
+        }} else if (message.id === "{prefix}-snapshot") {{
+          if (!message.ok) return finish({{ error: "project snapshot failed: " + JSON.stringify(message.error) }});
+          const documents = (((message.result || {{}}).domains || {{}}).objects || {{}}).documents || [];
+          const a1 = documents.filter(document => document.levelId === "a1").map(document => document.id).sort();
+          const a2 = documents.filter(document => document.levelId === "a2").map(document => document.id).sort();
+          finish({{ staleCode: state.stale && state.stale.error && state.stale.error.code,
+            staleAccepted: Boolean(state.stale && state.stale.ok),
+            a1, a2, hasStaleReplacementObject: documents.some(document => document.position && document.position[0] === 7) }});
+        }}
+      }});
+      if (state.session) start();
     }})();
     """
 
@@ -565,12 +675,12 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         # ExecuteScriptAsync queues work on the document thread; wait until
         # the listener is installed before sending the synthetic navigation
         # boundary below.
-        time.sleep(0.25)
-        # The native script API is asynchronous; a short repeated boundary
-        # keeps this opt-in smoke deterministic across runner load variance.
-        for _ in range(4):
-            controller.on_lifecycle("navigation_completed", {"success": True})
-            time.sleep(0.2)
+        _wait_until(
+            lambda: self._document_title(controller.frame) == f"AUVRA_LISTENER_READY:{prefix}",
+            5.0,
+            f"{prefix} WebView listener",
+        )
+        controller.on_lifecycle("navigation_completed", {"success": True})
         expected = {
             f"{prefix}-create", f"{prefix}-begin-upload", f"{prefix}-apply",
             f"{prefix}-resolve", f"{prefix}-snapshot",
@@ -637,6 +747,33 @@ class NativeWebView2SmokeTests(unittest.TestCase):
             "projectId": responses[f"{prefix}-create"]["result"]["projectId"],
             "projectRevision": responses[f"{prefix}-save"]["result"]["revision"],
         }
+
+    def _stage9_project_loop(self, controller: FrameController, project: dict[str, Any]) -> dict[str, Any]:
+        self._execute_script(controller.frame, _script_for_stage9_project_loop(
+            "stage9",
+            project["projectId"],
+            project["projectRevision"],
+            controller.dispatcher.session.session_id,
+            controller.dispatcher.session.revision,
+        ))
+        raw: list[str] = []
+        try:
+            _wait_until(
+                lambda: (raw.clear() or raw.append(self._document_title(controller.frame)) or True)
+                and raw[0].startswith("AUVRA_STAGE9_LOOP:"),
+                30.0,
+                "Stage 9 project replacement loop",
+            )
+        except AssertionError as error:
+            self.fail(f"{error}; last title: {self._document_title(controller.frame)}")
+        result = json.loads(raw[0][len("AUVRA_STAGE9_LOOP:"):])
+        self.assertNotIn("error", result, result)
+        self.assertEqual(result["staleCode"], "invalid_project", result)
+        self.assertFalse(result["staleAccepted"], result)
+        self.assertEqual(result["a1"], ["shared-object"], result)
+        self.assertEqual(result["a2"], ["a2-object"], result)
+        self.assertFalse(result["hasStaleReplacementObject"], result)
+        return result
 
     def _make_controller(
         self,
@@ -706,7 +843,11 @@ class NativeWebView2SmokeTests(unittest.TestCase):
     def _engine_lifecycle(self, controller: FrameController, prefix: str,
                           seen: list[dict[str, Any]], *, resume: bool) -> dict[str, Any]:
         self._execute_script(controller.frame, _script_for_engine_lifecycle(prefix, resume=resume))
-        time.sleep(0.25)
+        _wait_until(
+            lambda: self._document_title(controller.frame) == f"AUVRA_LISTENER_READY:{prefix}",
+            5.0,
+            f"{prefix} WebView listener",
+        )
         controller.on_lifecycle("navigation_completed", {"success": True})
         expected = ({f"{prefix}-first", f"{prefix}-metrics", f"{prefix}-recover", f"{prefix}-close"}
                     if resume else
@@ -714,13 +855,24 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         _wait_until(lambda: expected.issubset({item.get("id") for item in seen if item.get("type") == "response"}),
                     30.0, "native engine lifecycle")
         responses = {item["id"]: item for item in seen if item.get("id") in expected and item.get("type") == "response"}
-        self.assertTrue(all(item.get("ok") is True for item in responses.values()), responses)
+        successful = expected - ({f"{prefix}-open"} if not resume else set())
+        self.assertTrue(all(responses[item].get("ok") is True for item in successful), responses)
+        if not resume and not responses[f"{prefix}-open"].get("ok"):
+            # The native renderer can render offscreen while a Windows runner
+            # has no usable swapchain (for example an occluded session).  The
+            # capability-gated error is the truthful result for that host.
+            self.assertEqual(
+                responses[f"{prefix}-open"].get("error", {}).get("code"),
+                "unsupported_capability",
+                responses,
+            )
         return responses
 
     def _application_engine_resume(self, frame: WebView2Frame, label: str) -> dict[str, Any]:
         """Exercise the engine through the application's owned transport."""
 
         prefix = "AUVRA_ENGINE_RESUME:"
+        expected_prefix = f'{prefix}{{"label":{json.dumps(label)}'
         script = f"""
         (() => {{
           const finish = value => document.title = "{prefix}" + JSON.stringify(value);
@@ -743,7 +895,8 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         self._execute_script(frame, script)
         raw: list[str] = []
         _wait_until(
-            lambda: (raw.clear() or raw.append(self._document_title(frame)) or True) and raw[0].startswith(prefix),
+            lambda: (raw.clear() or raw.append(self._document_title(frame)) or True)
+            and raw[0].startswith(expected_prefix),
             30.0,
             f"{label} application engine resume",
         )
@@ -799,11 +952,28 @@ class NativeWebView2SmokeTests(unittest.TestCase):
             initial_snapshot = engine_initial["engine-1-snapshot"]["result"]
             self.assertEqual(initial_snapshot["projectId"], project["projectId"])
             self.assertEqual(initial_snapshot["projectRevision"], project["projectRevision"])
-            self.assertEqual([entity["id"] for entity in initial_snapshot["entities"]], ["reference"])
+            self.assertEqual(
+                sorted(entity["id"] for entity in initial_snapshot["entities"]),
+                ["a2-object", "reference", "shared-object"],
+            )
+            native_snapshot = dev.native_engine_host.engine.snapshot_world()
+            reference_entity = next(
+                entity for entity in native_snapshot["entities"] if entity["id"] == "reference"
+            )
+            expected_rotation = [
+                0.035055873238191954,
+                -0.21776257154014744,
+                0.2692345473910746,
+                0.9374770966156204,
+            ]
+            for actual, expected in zip(reference_entity["rotation"], expected_rotation):
+                self.assertAlmostEqual(actual, expected, places=12)
             self.assertIsInstance(initial_snapshot.get("worldHash"), str)
-            self.assertEqual(engine_initial["engine-1-open"]["result"]["viewport"], "open")
-            self.assertFalse(engine_initial["engine-1-open"]["result"]["dockActive"])
-            self.assertIsInstance(engine_initial["engine-1-open"]["result"]["dockReason"], str)
+            initial_open = engine_initial["engine-1-open"]
+            if initial_open.get("ok"):
+                self.assertEqual(initial_open["result"]["viewport"], "open")
+                self.assertFalse(initial_open["result"]["dockActive"])
+                self.assertIsInstance(initial_open["result"]["dockReason"], str)
 
             nav_before = dev_lifecycle.count("navigation_completed")
             self._ui(dev.frame, lambda core: core.Reload())
@@ -832,16 +1002,15 @@ class NativeWebView2SmokeTests(unittest.TestCase):
             self.assertEqual(restarted_snapshot["worldHash"], initial_snapshot["worldHash"])
             self.assertEqual(dev.dispatcher.session.session_id, session_id)
             self.assertEqual(dev.frame.state, FrameState.READY)
+            self._stage9_project_loop(dev, project)
 
             trusted = f"http://127.0.0.1:{port}/"
             self._ui(dev.frame, lambda core: core.Navigate("https://example.com/"))
-            time.sleep(0.7)
-            self.assertTrue(self._source(dev.frame).startswith(trusted))
+            _wait_until(lambda: self._source(dev.frame).startswith(trusted), 5.0, "external navigation rejection")
             probe = dev_profile_parent / "blocked-file.txt"
             probe.write_text("must not navigate", encoding="utf-8")
             self._ui(dev.frame, lambda core: core.Navigate(probe.as_uri()))
-            time.sleep(0.7)
-            self.assertTrue(self._source(dev.frame).startswith(trusted))
+            _wait_until(lambda: self._source(dev.frame).startswith(trusted), 5.0, "file navigation rejection")
             self.assertEqual(self.trap.hits, [], "external image/popup reached the trap server")
         finally:
             if dev is not None:

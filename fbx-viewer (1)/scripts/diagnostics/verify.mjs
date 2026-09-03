@@ -4,7 +4,7 @@ import process from 'node:process';
 import ts from 'typescript';
 
 const root = path.resolve(import.meta.dirname, '..', '..');
-const ignoredDirectories = new Set(['dist', 'node_modules', 'scripts']);
+const ignoredDirectories = new Set(['dist', 'node_modules', 'scripts', 'tests']);
 const generatedPrefixes = ['host/generated/'];
 
 // These modules are intentionally observed through a parent boundary. The list
@@ -59,6 +59,9 @@ const EXEMPT = new Map(Object.entries({
   'renderer/registry.ts': 'renderer-child-boundary',
   'renderer/renderGraph.ts': 'renderer-child-boundary',
   'utils/animationBinding.ts': 'pure-utility',
+  'utils/domainCascade.ts': 'event-boundary',
+  'utils/editorSession.ts': 'pure-utility',
+  'utils/editorState.ts': 'data-model',
   'utils/processing/ModelMaterials.ts': 'import-child-phase',
   'utils/processing/ModelTransforms.ts': 'import-child-phase',
   'utils/textureUtils.ts': 'pure-utility',
@@ -100,7 +103,7 @@ for (const [relative, evidence] of REQUIRED_EVIDENCE) {
 }
 for (const absolute of files.sort()) {
   const relative = path.relative(root, absolute).replaceAll('\\', '/');
-  if (relative === 'vite.config.ts') continue;
+  if (relative === 'vite.config.ts' || relative === 'vitest.config.ts') continue;
   if (generatedPrefixes.some((prefix) => relative.startsWith(prefix))) {
     results.push([relative, 'generated']);
     continue;

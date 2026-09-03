@@ -10,8 +10,10 @@ import textwrap
 import unittest
 import hashlib
 import io
+from unittest import mock
 
 from Auvra.diagnostics.core import DiagnosticsSession, bind_diagnostic_context
+from Auvra.host.validation import validate_message
 from Auvra.desktop.native_engine import (
     MAX_FRAME_BYTES,
     NativeEngine,
@@ -20,6 +22,8 @@ from Auvra.desktop.native_engine import (
     NativeEngineFrameTooLargeError,
     NativeEngineHost,
     NativeEngineRevisionConflictError,
+    NativeEngineTimeoutError,
+    NativeEngineClosedError,
     NativeEngineState,
     PROTOCOL_VERSION,
     _encode_frame,
@@ -29,7 +33,7 @@ from Auvra.desktop.native_engine import (
 
 FAKE_CHILD = textwrap.dedent(
     r'''
-    import json, os, struct, sys
+    import json, os, struct, sys, time
 
     PROTOCOL = "auvra.native/1"
     MAX_FRAME = 64 * 1024
@@ -65,7 +69,10 @@ FAKE_CHILD = textwrap.dedent(
             method = request.get("method")
             params = request.get("params", {})
             if method == "session.hello":
-                result = {"authenticated": len(token) == 64, "requestTokenField": "token" in request}
+                result = {"authenticated": len(token) == 64,
+                          "requestTokenField": "token" in request,
+                          "challengePresent": "challenge" in params,
+                          "proofPresent": "proof" in params}
             elif method == "world.apply":
                 if params.get("expectedRevision") != revision:
                     write_frame({"protocol":PROTOCOL,"id":request_id,"ok":False,"error":{"code":"revision_conflict","message":"expected revision does not match"}})
@@ -75,6 +82,9 @@ FAKE_CHILD = textwrap.dedent(
                 result = {"revision": revision, "entities": entities}
             elif method == "world.getSnapshot":
                 result = {"revision": revision, "entities": entities}
+            elif method == "sleep":
+                time.sleep(float(params.get("seconds", 0)))
+                result = {"slept": True}
             elif method == "shutdown":
                 write_frame({"protocol":PROTOCOL,"id":request_id,"ok":True,"result":{"stopped":True}})
                 print(json.dumps({"schema":"auvra.native-diagnostic/1","level":"info","event":"native.stopped","method":"shutdown"}), file=sys.stderr, flush=True)
@@ -147,11 +157,50 @@ class NativeEngineTests(unittest.TestCase):
 
         self.assertEqual(_read_frame(FragmentedReader(encoded)), value)
 
+    def test_snapshot_world_collects_all_native_pages(self) -> None:
+        engine = NativeEngine(["fake-native"])
+        engine._state = NativeEngineState.READY
+        common = {"revision": 4, "worldRevision": 4, "tick": 2,
+                  "worldHash": "a" * 16, "replayHash": "b" * 16,
+                  "projectId": None, "projectRevision": None}
+        pages = [
+            {**common, "entities": [{"id": "one"}],
+             "page": {"offset": 0, "limit": 256, "total": 3, "hasMore": True}},
+            {**common, "entities": [{"id": "two"}, {"id": "three"}],
+             "page": {"offset": 1, "limit": 256, "total": 3, "hasMore": False}},
+        ]
+        with mock.patch.object(engine, "call", side_effect=pages) as call:
+            snapshot = engine.snapshot_world()
+        self.assertEqual([item["id"] for item in snapshot["entities"]], ["one", "two", "three"])
+        self.assertEqual(call.call_args_list, [
+            mock.call("world.getSnapshot", {"offset": 0, "limit": 256}),
+            mock.call("world.getSnapshot", {"offset": 1, "limit": 256}),
+        ])
+
+    def test_engine_snapshot_publishes_the_aggregated_world(self) -> None:
+        class Engine:
+            state = NativeEngineState.READY
+
+            def snapshot_world(self):
+                return {
+                    "worldRevision": 3,
+                    "entities": [
+                        {"id": str(index), "position": [0, 0, 0], "color": [1, 1, 1, 1]}
+                        for index in range(300)
+                    ],
+                }
+
+        result = NativeEngineHost(Engine()).handle("engine.getSnapshot", {})
+        self.assertEqual(len(result["entities"]), 300)
+        self.assertEqual(result["entities"][-1]["id"], "299")
+
     def test_framing_authentication_revision_and_reload_continuity(self) -> None:
         engine = self.make_engine()
         hello = engine.session_hello("editor-before-reload")
         self.assertTrue(hello["authenticated"])
         self.assertFalse(hello["requestTokenField"])
+        self.assertTrue(hello["challengePresent"])
+        self.assertTrue(hello["proofPresent"])
         applied = engine.apply_world(0, [{"id": "cube", "position": [1, 2, 3]}])
         self.assertEqual(applied["revision"], 1)
         with self.assertRaises(NativeEngineRevisionConflictError):
@@ -181,6 +230,16 @@ class NativeEngineTests(unittest.TestCase):
         with self.assertRaises(NativeEngineFrameTooLargeError):
             engine.call("world.apply", {"payload": "x" * MAX_FRAME_BYTES})
 
+    def test_timeout_invalidates_response_channel_before_late_frame_arrives(self) -> None:
+        engine = self.make_engine()
+        engine.request_timeout = 0.1
+        with self.assertRaises(NativeEngineTimeoutError):
+            engine.call("sleep", {"seconds": 0.4})
+        self.assertEqual(engine.state, NativeEngineState.FAILED)
+        with self.assertRaises(NativeEngineClosedError):
+            engine.call("world.getSnapshot")
+        self.assertEqual(engine._response_queue.qsize(), 0)
+
     def test_clean_shutdown_reports_lifecycle_and_does_not_kill(self) -> None:
         engine = self.make_engine()
         process = engine.process
@@ -195,6 +254,26 @@ class NativeEngineTests(unittest.TestCase):
         self.assertTrue(any(item.get("event") == "native.lifecycle"
                             and item.get("attributes", {}).get("state") == "closed"
                             for item in records))
+
+    def test_native_child_is_attached_to_a_private_process_tree_owner(self) -> None:
+        engine = self.make_engine()
+        process = engine.process
+        owner = engine._process_owner
+        assert process is not None
+        self.assertIsNotNone(owner)
+        if os.name == "posix":
+            self.assertEqual(type(owner).__name__, "PosixProcessGroup")
+            self.assertEqual(os.getpgid(process.pid), process.pid)
+        else:
+            self.assertEqual(type(owner).__name__, "WindowsJob")
+
+    def test_native_viewport_has_a_live_event_and_redraw_pump(self) -> None:
+        source = (Path(__file__).parents[2] / "native" / "src" / "main.rs").read_text(encoding="utf-8")
+        self.assertIn("fn pump_events(", source)
+        self.assertIn("WindowEvent::Resized", source)
+        self.assertIn("WindowEvent::RedrawRequested", source)
+        self.assertIn("window.request_redraw()", source)
+        self.assertIn("receiver.recv_timeout(Duration::from_millis(16))", source)
 
     def test_child_exit_is_typed_and_cleanup_is_bounded(self) -> None:
         engine = self.make_engine()
@@ -280,6 +359,24 @@ class NativeEngineTests(unittest.TestCase):
         self.assertIn("engine.recovery", names)
         self.assertEqual(host.drain_events(), [])
 
+    def test_recovery_closes_viewport_when_native_surface_is_unsupported(self) -> None:
+        class Engine:
+            state = NativeEngineState.READY
+
+            def call(self, method: str, _params: dict[str, object] | None = None) -> dict[str, object]:
+                if method == "renderer.recover":
+                    return {"viewport_reopened": False, "capabilities": {}}
+                raise AssertionError(method)
+
+        host = NativeEngineHost(Engine())
+        host._viewport = "open"
+        recovered = host.handle("engine.recover", {})
+        self.assertEqual(recovered["viewport"], "closed")
+        self.assertEqual(
+            recovered["dockReason"],
+            "native viewport was unavailable after renderer recovery",
+        )
+
     def test_native_asset_staging_verifies_hash_and_keeps_protocol_pathless(self) -> None:
         engine = self.make_engine()
         source = Path(self.temp.name) / "native-source"
@@ -319,7 +416,7 @@ class NativeEngineTests(unittest.TestCase):
                 self.calls.append((method, params or {}))
                 if method == "renderer.getCapabilities":
                     return {
-                        "backend": "wgpu", "adapter": "reference",
+                        "backend": "wgpu", "adapter": "reference", "device_type": "Cpu",
                         "dockSupport": "same-build", "dockReason": None,
                         "featureCapabilities": [
                             {"feature": feature, "supported": True, "fallbackReason": None}
@@ -353,6 +450,12 @@ class NativeEngineTests(unittest.TestCase):
         host = NativeEngineHost(engine)
         host.set_dock_target_provider(lambda: {"parentHandle": 99, "width": 640, "height": 480})
         host.handle("engine.getStatus", {})
+        self.assertEqual(host._canonical("engine.status")["deviceType"], "Cpu")
+        validate_message({
+            "protocol": "auvra.host/1", "type": "response", "id": "engine-status",
+            "session": "session-1", "revision": 0, "ok": True,
+            "result": host._canonical("engine.status"),
+        })
         snapshot = host.handle("engine.getSnapshot", {})
         self.assertEqual(snapshot["tick"], 12)
         self.assertEqual(snapshot["projectRevision"], 9)

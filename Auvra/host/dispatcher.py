@@ -41,6 +41,8 @@ MUTATING_METHODS = frozenset({
     "project.applyChanges", "project.save", "project.saveAs", "project.exportPack",
     "project.importPack", "project.importLegacy", "asset.beginUpload",
     "media.commit", "command.approve", "command.undo",
+    "provider.configureCredential", "provider.deleteCredential", "provider.configure",
+    "media.discard",
     "engine.applyChanges", "engine.openViewport", "engine.closeViewport",
     "engine.recover",
 })
@@ -288,8 +290,16 @@ class HostDispatcher:
         """
         if event_name not in EVENTS:
             raise ValueError("unsupported host event")
+        revision = self.session.revision + (1 if advance else 0)
+        event = self._build_event(event_name, payload, revision)
         if advance:
             self.session.advance()
+        return event
+
+    def _build_event(self, event_name: str, payload: Mapping[str, Any] | None,
+                     revision: int) -> dict[str, Any]:
+        """Normalize and validate an event without mutating session state."""
+
         event_payload = dict(payload or {})
         if event_name.startswith("project."):
             defaults: dict[str, Any] = {
@@ -309,10 +319,24 @@ class HostDispatcher:
             event_payload = defaults
         event = {
             "protocol": "auvra.host/1", "type": "event", "event": event_name,
-            "session": self.session.session_id, "revision": self.session.revision,
+            "session": self.session.session_id, "revision": revision,
             "payload": event_payload,
         }
         return validate_message(event)
+
+    @staticmethod
+    def _restore_drained_events(service: Any, items: list[Any]) -> None:
+        """Best-effort rollback for a service queue when batch conversion fails."""
+
+        restore = getattr(service, "restore_events", None)
+        if callable(restore):
+            restore(items)
+            return
+        for attribute in ("_events", "events"):
+            queue = getattr(service, attribute, None)
+            if isinstance(queue, list):
+                queue[0:0] = items
+                return
 
     def drain_bound_events(self) -> list[dict[str, Any]]:
         """Drain native service events into validated, ordered envelopes.
@@ -322,22 +346,35 @@ class HostDispatcher:
         the service never controls protocol/session metadata or filesystem
         authority.  Each drained event advances the host session revision.
         """
-        envelopes: list[dict[str, Any]] = []
+        batches: list[tuple[Any, list[Any]]] = []
         seen: set[int] = set()
-        for service in (self._project_service, self._asset_service, self._provider_service, self._engine_service):
-            if service is None or id(service) in seen:
-                continue
-            seen.add(id(service))
-            drain = getattr(service, "drain_events", None)
-            if not callable(drain):
-                continue
-            for item in drain() or []:
-                if not isinstance(item, (tuple, list)) or len(item) != 2:
-                    raise ValueError("bound event must be (name, payload)")
-                name, payload = item
-                if not isinstance(name, str) or not isinstance(payload, Mapping):
-                    raise ValueError("bound event has invalid shape")
-                envelopes.append(self.make_event(name, payload))
+        try:
+            for service in (self._project_service, self._asset_service, self._provider_service, self._engine_service):
+                if service is None or id(service) in seen:
+                    continue
+                seen.add(id(service))
+                drain = getattr(service, "drain_events", None)
+                if not callable(drain):
+                    continue
+                batches.append((service, list(drain() or [])))
+
+            envelopes: list[dict[str, Any]] = []
+            revision = self.session.revision
+            for _service, items in batches:
+                for item in items:
+                    if not isinstance(item, (tuple, list)) or len(item) != 2:
+                        raise ValueError("bound event must be (name, payload)")
+                    name, payload = item
+                    if not isinstance(name, str) or not isinstance(payload, Mapping):
+                        raise ValueError("bound event has invalid shape")
+                    revision += 1
+                    envelopes.append(self._build_event(name, payload, revision))
+        except Exception:
+            for service, items in reversed(batches):
+                self._restore_drained_events(service, items)
+            raise
+        for _ in envelopes:
+            self.session.advance()
         return envelopes
 
     def _bound_handler(self, method: str) -> Handler | None:
@@ -538,6 +575,7 @@ class HostDispatcher:
     def _configure_credential(self, payload: dict[str, Any]) -> dict[str, Any]:
         pid, _name, _route, _capabilities = self._provider_info(payload["providerId"])
         self._provider_configured.add(pid)
+        self.session.advance()
         return {"kind": "provider.credential", "providerId": pid,
                 "storageMode": payload["storageMode"], "configured": True,
                 "credentialStatus": "memoryOnly" if payload["storageMode"] == "memoryOnly" else "configured"}
@@ -545,6 +583,7 @@ class HostDispatcher:
     def _delete_credential(self, payload: dict[str, Any]) -> dict[str, Any]:
         pid, _name, _route, _capabilities = self._provider_info(payload["providerId"])
         self._provider_configured.discard(pid)
+        self.session.advance()
         return self._provider_status({"providerId": pid})
 
     def _configure_provider(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -555,6 +594,7 @@ class HostDispatcher:
             raise HostOperationError("revision_conflict", "Provider settings revision does not match")
         self._provider_settings[pid] = dict(payload["settings"])
         self._provider_settings_revision[pid] = current + 1
+        self.session.advance()
         return self._provider_status({"providerId": pid})
 
     def _list_models(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -667,6 +707,7 @@ class HostDispatcher:
         job = self._jobs.get(payload["jobId"])
         if job is None or job.get("preview", {}).get("previewAssetId") != payload["previewAssetId"]:
             raise HostOperationError("invalid_job", "Media preview is unavailable")
+        self.session.advance()
         return {"kind": "media.discard", "projectId": self._project_id,
                 "projectRevision": self._project_revision, "jobId": payload["jobId"],
                 "previewAssetId": payload["previewAssetId"]}

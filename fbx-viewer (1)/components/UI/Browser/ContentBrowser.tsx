@@ -21,6 +21,7 @@ export const ContentBrowser: React.FC = () => {
         placeInScene, 
         isLoading, 
         blueprints, 
+        isCreatingPlayerBlueprint,
         selectBlueprint, 
         addBlueprint,
         textures,
@@ -140,6 +141,7 @@ export const ContentBrowser: React.FC = () => {
                 onAddBlueprint={addBlueprint}
                 isLoading={isLoading}
                 hasPlayerCharacter={hasPlayerCharacter}
+                isCreatingPlayerBlueprint={isCreatingPlayerBlueprint}
                 animationTargetName={animationTarget?.name}
             />
 

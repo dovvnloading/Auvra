@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 import xml.etree.ElementTree as ET
 
 from release.asset_cooking import cook_assets
 from release.cross_backend import verify_cross_backend
 from release.lifecycle import LifecycleState
-from release.pipeline import ReleaseError, assemble, verify_package, write_input_inventory
+from release.pipeline import ReleaseError, assemble, sign_msix, verify_package, write_input_inventory
 from release.runtime_verify import verify_installed_package
+from release.windows_lifecycle import WINDOWS_LIFECYCLE_SCRIPT, run_windows_lifecycle_smoke
 
 
 class ReleasePipelineTests(unittest.TestCase):
@@ -88,6 +91,10 @@ class ReleasePipelineTests(unittest.TestCase):
             "webview2-sdk/Microsoft.Web.WebView2.Core.dll": b"sdk",
             "webview2-sdk/.auvra-sdk.sha256": b"d3934f482d484b89fb4825df720c710664e1143a1e90f7b3a60794ef33f473d2\n",
             "webview2-fixed/msedgewebview2.exe": b"runtime",
+            # Resource archives contain arbitrary prose strings; these must
+            # not be mistaken for release-private text merely because the
+            # bytes happen to include a policy phrase.
+            "webview2-fixed/resources.pak": b"\x00internal roadmap\x00",
             "webview2-fixed/Auvra.runtime-pin.json": b'{"schema":1,"kind":"webview2Fixed","version":"151.0.4129.107","sha256":"f1e1c2c9b34c79ba4d88df77fb79a05441e1bd7481d6a985d76dd377cda45f33"}',
             "native/auvra-native.exe": b"native",
             "host/Auvra/__init__.py": b"",
@@ -99,7 +106,74 @@ class ReleasePipelineTests(unittest.TestCase):
             path = staged / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
+        for directory, kind, version, digest in (
+            ("python-embed", "pythonEmbed", "3.14.7", "d297e5ff019966817ad8502465176139f2d3d840fa4ed84b13bed399a6ab1f15"),
+            ("webview2-fixed", "webview2Fixed", "151.0.4129.107", "f1e1c2c9b34c79ba4d88df77fb79a05441e1bd7481d6a985d76dd377cda45f33"),
+        ):
+            root = staged / directory
+            entries = []
+            for path in sorted(
+                    (item for item in root.rglob("*") if item.is_file() and item.name != "Auvra.runtime-pin.json"),
+                    key=lambda item: item.as_posix().lower()):
+                entries.append({"path": path.relative_to(root).as_posix(), "size": path.stat().st_size,
+                                "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+            marker = {"schema": 1, "kind": kind, "version": version, "sha256": digest, "files": entries}
+            (root / "Auvra.runtime-pin.json").write_text(json.dumps(marker, separators=(",", ":")), encoding="ascii")
         return staged
+
+    def test_runtime_pin_attestation_rejects_modified_extracted_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            inputs = self.staged_inputs(Path(temporary))
+            (inputs / "python-embed" / "pythonw.exe").write_bytes(b"tampered")
+            with self.assertRaisesRegex(ReleaseError, "contents do not match"):
+                write_input_inventory(inputs, inputs / "inventory.json")
+
+    def test_signing_uses_timestamp_and_post_verifies_without_password_argument(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "Auvra.msix"
+            certificate = root / "release.pfx"
+            package.write_bytes(b"unsigned package")
+            certificate.write_bytes(b"certificate")
+            responses = [
+                subprocess.CompletedProcess([], 0, stdout="signed", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="verified", stderr=""),
+            ]
+            with mock.patch("release.pipeline.subprocess.run", side_effect=responses) as run:
+                sign_msix(package, signtool="signtool.exe", certificate=certificate)
+            self.assertEqual(run.call_count, 2)
+            sign_command = run.call_args_list[0].args[0]
+            self.assertNotIn("/p", sign_command)
+            self.assertEqual(sign_command[sign_command.index("/tr") + 1], "https://timestamp.digicert.com")
+            self.assertEqual(sign_command[sign_command.index("/td") + 1], "SHA256")
+            verify_command = run.call_args_list[1].args[0]
+            self.assertEqual(verify_command[1:5], ["verify", "/pa", "/all", "/q"])
+
+    def test_signing_accepts_certificate_store_thumbprint_and_rejects_bad_timestamp(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            package = Path(temporary) / "Auvra.msix"
+            package.write_bytes(b"unsigned package")
+            with mock.patch("release.pipeline.subprocess.run", return_value=subprocess.CompletedProcess([], 0, stderr="")) as run:
+                sign_msix(package, signtool="signtool.exe", thumbprint="a" * 40)
+            self.assertIn("/sha1", run.call_args_list[0].args[0])
+            with self.assertRaisesRegex(ReleaseError, "HTTPS"):
+                sign_msix(package, signtool="signtool.exe", thumbprint="a" * 40,
+                          timestamp_url="http://timestamp.example")
+
+    def test_hosted_appinstaller_requires_secure_public_origin(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs = self.staged_inputs(root)
+            for uri in (
+                "http://updates.example/Auvra.appinstaller",
+                "file:///tmp/Auvra.appinstaller",
+                "https://localhost/Auvra.appinstaller",
+                "https://127.0.0.1/Auvra.appinstaller",
+                "https://user:password@updates.example/Auvra.appinstaller",
+            ):
+                with self.assertRaises(ReleaseError):
+                    assemble(inputs, root / "bad", channel="stable", version="1.0.0",
+                             appinstaller_uri=uri)
 
     def test_assemble_verify_and_appinstaller_are_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -113,6 +187,11 @@ class ReleasePipelineTests(unittest.TestCase):
             first_times = {path.relative_to(output).as_posix(): path.stat().st_mtime_ns
                            for path in output.rglob("*") if path.is_file()}
             verify_package(output, expected_channel="beta")
+            sbom = json.loads((output / "sbom.json").read_text(encoding="utf-8"))
+            names = {(item.get("purl"), item.get("name")) for item in sbom["components"]}
+            self.assertIn(("pkg:npm/react@18.2.0", "react"), names)
+            self.assertTrue(any(item.get("purl", "").startswith("pkg:cargo/wgpu@") for item in sbom["components"]))
+            self.assertTrue(any(item.get("purl", "").startswith("pkg:pypi/jsonschema@") for item in sbom["components"]))
             # MakeAppx adds container metadata when an MSIX is unpacked. It is
             # validated by MakeAppx itself and is not part of Auvra's payload.
             (output / "AppxBlockMap.xml").write_bytes(b"<BlockMap />")
@@ -144,6 +223,28 @@ class ReleasePipelineTests(unittest.TestCase):
             self.assertIn("except SystemExit as exc:", sitecustomize)
             self.assertIn("os._exit(code)", sitecustomize)
 
+    def test_default_local_release_contract_smoke_verifies_staged_package(self) -> None:
+        """Run a real package assembly/verification smoke in ordinary discovery.
+
+        The WebView2/native process smoke is intentionally Windows-only, but
+        local discovery must still exercise the release boundary instead of
+        relying solely on mocked launcher calls or skipped hardware tests.
+        """
+        with tempfile.TemporaryDirectory(prefix="auvra local release contract ") as temporary:
+            root = Path(temporary)
+            inputs = self.staged_inputs(root)
+            output = root / "package"
+            assemble(inputs, output, channel="stable", version="9.9.9",
+                     appinstaller_uri="https://updates.example/stable/9.9.9/Auvra.appinstaller")
+            verify_package(output, expected_channel="stable")
+            manifest = verify_installed_package(output)
+
+            self.assertEqual(manifest.get("channel"), "stable")
+            self.assertTrue((output / "runtime" / "python").is_dir())
+            self.assertTrue((output / "runtime" / "webview2").is_dir())
+            self.assertTrue((output / "native" / "auvra-native.exe").is_file())
+            self.assertTrue((output / "release-manifest.json").is_file())
+
     def test_integrity_and_forbidden_inputs_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -162,6 +263,12 @@ class ReleasePipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             inputs = self.staged_inputs(root)
+            (inputs / "native" / "auvra-native.exe").write_bytes(
+                rb"native build path: C:\Users\runneradmin\source\Auvra\native\src\main.rs"
+            )
+            binary_package = root / "binary-package"
+            assemble(inputs, binary_package, channel="stable", version="1.0.0")
+            self.assertTrue((binary_package / "native" / "auvra-native.exe").is_file())
             (inputs / "host" / "secret.txt").write_text("api_key='0123456789abcdef0123456789'", encoding="utf-8")
             with self.assertRaises(ReleaseError):
                 assemble(inputs, root / "bad-package", channel="stable", version="1.0.0")
@@ -191,6 +298,16 @@ class ReleasePipelineTests(unittest.TestCase):
                 assemble(inputs, root / "dev-package", channel="dev", version="1.0.0",
                          appinstaller_uri="https://updates.example/dev.appinstaller")
 
+    def test_content_scan_rejects_nul_encoded_secret(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs = self.staged_inputs(root)
+            (inputs / "host" / "utf16.txt").write_bytes(
+                "api_key='0123456789abcdef0123456789'".encode("utf-16-le")
+            )
+            with self.assertRaisesRegex(ReleaseError, "secret-like"):
+                assemble(inputs, root / "nul-package", channel="stable", version="1.0.0")
+
     def test_lifecycle_upgrade_rollback_and_uninstall_preserve_data(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -207,6 +324,81 @@ class ReleasePipelineTests(unittest.TestCase):
             self.assertEqual(state.install(one, channel="stable", force_any_version=True)["action"], "rollback")
             state.uninstall(channel="stable")
             self.assertEqual(state.user_data, {"project.auvra": b"keep"})
+
+    def test_windows_lifecycle_runner_requires_three_msix_files_and_proves_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            packages = [root / name for name in ("initial.msix", "upgrade.msix", "rollback.msix")]
+            for package in packages:
+                package.write_bytes(b"signed package placeholder")
+            response = {
+                "schema": 1,
+                "identity": "Auvra",
+                "initialVersion": "1.0.0.0",
+                "upgradeVersion": "2.0.0.0",
+                "rollbackVersion": "1.0.0.0",
+                "installed": True,
+                "upgraded": True,
+                "rolledBack": True,
+                "uninstalled": True,
+                "userDataPreserved": True,
+            }
+            with mock.patch("release.windows_lifecycle.os.name", "nt"), \
+                 mock.patch("release.windows_lifecycle.Path", type(root)), \
+                 mock.patch("release.windows_lifecycle.subprocess.run",
+                            return_value=subprocess.CompletedProcess([], 0, json.dumps(response), "")) as run:
+                result = run_windows_lifecycle_smoke(
+                    packages[0], packages[1], packages[2], identity="Auvra", powershell="powershell.exe",
+                )
+            self.assertEqual(result, response)
+            command = run.call_args.args[0]
+            self.assertEqual(command[:5], ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"])
+            self.assertIn("-ForceUpdateFromAnyVersion", WINDOWS_LIFECYCLE_SCRIPT)
+            self.assertIn("-PreserveApplicationData", WINDOWS_LIFECYCLE_SCRIPT)
+
+    def test_windows_lifecycle_runner_rejects_missing_package_before_starting_shell(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            packages = [root / name for name in ("initial.msix", "upgrade.msix")]
+            for package in packages:
+                package.write_bytes(b"placeholder")
+            with mock.patch("release.windows_lifecycle.os.name", "nt"), \
+                 mock.patch("release.windows_lifecycle.Path", type(root)), \
+                 mock.patch("release.windows_lifecycle.subprocess.run") as run:
+                with self.assertRaisesRegex(ReleaseError, "rollback package is missing"):
+                    run_windows_lifecycle_smoke(
+                        packages[0], packages[1], root / "rollback.msix", identity="Auvra", powershell="powershell.exe",
+                    )
+            run.assert_not_called()
+
+    @unittest.skipUnless(os.name == "nt", "PowerShell lifecycle scripts require Windows")
+    def test_windows_lifecycle_powershell_body_parses(self) -> None:
+        powershell = self._powershell()
+        if powershell is None:
+            self.skipTest("PowerShell is required for lifecycle script syntax validation")
+        with tempfile.TemporaryDirectory() as temporary:
+            script = Path(temporary) / "lifecycle.ps1"
+            script.write_text(WINDOWS_LIFECYCLE_SCRIPT, encoding="utf-8")
+            environment = os.environ.copy()
+            environment["AUVRA_LIFECYCLE_PARSE_TARGET"] = str(script)
+            parse = subprocess.run(
+                [
+                    powershell,
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "$tokens=$null; $errors=$null; "
+                    "[System.Management.Automation.Language.Parser]::ParseFile($env:AUVRA_LIFECYCLE_PARSE_TARGET,[ref]$tokens,[ref]$errors) | Out-Null; "
+                    "if($errors.Count){$errors | ForEach-Object Message; exit 1}; exit 0",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                env=environment,
+            )
+        self.assertEqual(parse.returncode, 0, parse.stdout + parse.stderr)
 
     def test_asset_cooking_and_cross_backend_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -225,21 +417,29 @@ class ReleasePipelineTests(unittest.TestCase):
                             for path in cooked.rglob("*") if path.is_file()}
             self.assertEqual(first, second)
             self.assertEqual(first_bytes, second_bytes)
-            evidence = verify_cross_backend(
-                {"sceneId": "basic", "selected": "webgl2", "pixelSignature": "web",
+            with self.assertRaisesRegex(ReleaseError, "pixel signatures differ"):
+                verify_cross_backend(
+                {"sceneId": "basic", "selected": "webgl2", "pixelSignature": "a" * 32,
                  "results": [{"backend": "webgl2", "supported": True, "qualified": True,
-                              "pixelSignature": "web"}]},
+                              "pixelSignature": "a" * 32}]},
                 {"probe": "auvra-native-self-test", "reference": {"width": 96, "height": 80,
-                 "pixel_hash_fnv1a64": "0x1234"}},
+                 "pixel_hash_fnv1a64": "0x" + "b" * 16}},
+                )
+            evidence = verify_cross_backend(
+                {"sceneId": "basic", "selected": "webgl2", "pixelSignature": "0x" + "a" * 16,
+                 "results": [{"backend": "webgl2", "supported": True, "qualified": True,
+                              "pixelSignature": "A" * 16}]},
+                {"probe": "auvra-native-self-test", "reference": {"width": 96, "height": 80,
+                 "pixel_hash_fnv1a64": "0x" + "a" * 16}},
             )
-            self.assertFalse(evidence["pixelSignaturesMatch"])
+            self.assertTrue(evidence["pixelSignaturesMatch"])
             with self.assertRaises(ReleaseError):
                 verify_cross_backend(
-                    {"sceneId": "basic", "selected": "webgl2", "pixelSignature": "web",
+                    {"sceneId": "basic", "selected": "webgl2", "pixelSignature": "a" * 32,
                      "results": [{"backend": "webgl2", "supported": True, "qualified": True,
-                                  "pixelSignature": "web"}], "width": 32, "height": 32},
+                                  "pixelSignature": "a" * 32}], "width": 32, "height": 32},
                     {"probe": "auvra-native-self-test", "reference": {"width": 96, "height": 80,
-                     "pixel_hash_fnv1a64": "0x1234"}},
+                     "pixel_hash_fnv1a64": "0x" + "a" * 16}},
                 )
 
 

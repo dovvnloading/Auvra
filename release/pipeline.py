@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -20,7 +21,9 @@ import subprocess
 import struct
 import sys
 import tempfile
+import tomllib
 from typing import Any, Iterable, Mapping
+from urllib.parse import urlsplit
 import xml.etree.ElementTree as ET
 import zlib
 
@@ -30,6 +33,14 @@ POLICY_PATH = ROOT / "policy.json"
 FORBIDDEN_SUFFIXES = {".pfx", ".p12", ".pem", ".key", ".env"}
 FORBIDDEN_CONTENT_SUFFIXES = {".map", ".log", ".dmp", ".dump", ".pdb", ".ilk", ".obj", ".lib", ".exp", ".pyc", ".pyproj", ".sln"}
 FORBIDDEN_CONTENT_NAMES = {"vite.config.ts", "vite.config.js", "tsconfig.json", "cargo.toml", "cargo.lock", "pyproject.toml", "uv.lock", "package.json", "package-lock.json", "auvra.py", "auvra.pyproj", "bootstrap.py"}
+# Compiled/runtime payloads can legitimately contain toolchain source paths,
+# URLs, and generic prose in debug/resource strings.  Keep the credential
+# pattern for those files, but apply path/CDN/private-content checks to actual
+# text payloads.
+BINARY_CONTENT_SUFFIXES = {
+    ".bin", ".cab", ".dat", ".dll", ".dylib", ".exe", ".msix", ".msixbundle",
+    ".nupkg", ".pak", ".pyd", ".so", ".ttf", ".woff", ".woff2", ".zip",
+}
 SECRET_PATTERN = re.compile(
     rb"-----BEGIN [^-]*PRIVATE KEY-----"
     rb"|(?:password|passwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*[\"'][A-Za-z0-9_./+=:-]{12,}[\"']"
@@ -129,6 +140,14 @@ def _assert_no_forbidden(path: str, policy: Mapping[str, Any]) -> None:
 def _scan_release_content(root: Path, policy: Mapping[str, Any], *, include_manifest: bool = False) -> None:
     """Reject accidental developer artifacts and secret-like text."""
 
+    def violation(data: bytes, *, text_content: bool) -> bool:
+        return bool(
+            SECRET_PATTERN.search(data)
+            or (text_content and PRIVATE_CONTENT_PATTERN.search(data))
+            or (text_content and ABSOLUTE_PATH_PATTERN.search(data))
+            or (text_content and RUNTIME_CDN_PATTERN.search(data))
+        )
+
     for path in sorted(root.rglob("*"), key=lambda item: item.as_posix().lower()):
         if path.is_symlink() or _is_reparse(path):
             raise ReleaseError(f"release contains a link or reparse point: {_relative(path, root)}")
@@ -141,19 +160,20 @@ def _scan_release_content(root: Path, policy: Mapping[str, Any], *, include_mani
         lower_name = path.name.lower()
         if path.suffix.lower() in FORBIDDEN_CONTENT_SUFFIXES or lower_name in FORBIDDEN_CONTENT_NAMES:
             raise ReleaseError(f"development or diagnostic file is not releasable: {relative}")
+        text_content = path.suffix.lower() not in BINARY_CONTENT_SUFFIXES
         try:
             with path.open("rb") as stream:
                 sample = stream.read(4096)
-                if b"\x00" in sample:
-                    continue
                 rolling = sample
+                normalized = sample.replace(b"\x00", b"")
+                if violation(rolling, text_content=text_content) or violation(normalized, text_content=text_content):
+                    raise ReleaseError(f"secret-like or private content in release: {relative}")
                 for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                     rolling = (rolling + chunk)[-1024 * 1024:]
-                    if (SECRET_PATTERN.search(rolling) or ABSOLUTE_PATH_PATTERN.search(rolling)
-                            or PRIVATE_CONTENT_PATTERN.search(rolling) or RUNTIME_CDN_PATTERN.search(rolling)):
+                    normalized = (normalized + chunk.replace(b"\x00", b""))[-1024 * 1024:]
+                    if violation(rolling, text_content=text_content) or violation(normalized, text_content=text_content):
                         raise ReleaseError(f"secret-like or private content in release: {relative}")
-                if (SECRET_PATTERN.search(rolling) or ABSOLUTE_PATH_PATTERN.search(rolling)
-                        or PRIVATE_CONTENT_PATTERN.search(rolling) or RUNTIME_CDN_PATTERN.search(rolling)):
+                if violation(rolling, text_content=text_content) or violation(normalized, text_content=text_content):
                     raise ReleaseError(f"secret-like or private content in release: {relative}")
         except OSError as exc:
             raise ReleaseError(f"release content could not be scanned: {relative}") from exc
@@ -195,6 +215,43 @@ def _validate_runtime_pin_markers(input_root: Path, policy: Mapping[str, Any]) -
         if (value.get("version") != expected.get("version") or not isinstance(marker_hash, str)
                 or marker_hash.lower() != str(expected.get("sha256", "")).lower()):
             raise ReleaseError(f"{directory} runtime pin does not match release policy")
+        attested = value.get("files")
+        if not isinstance(attested, list):
+            raise ReleaseError(f"{directory} runtime pin is missing its extracted-file attestation")
+        expected_files: list[dict[str, Any]] = []
+        runtime_root = input_root / directory
+        marker_relative = "Auvra.runtime-pin.json"
+        for path in sorted(runtime_root.rglob("*"), key=lambda item: item.as_posix().lower()):
+            if path.is_symlink() or _is_reparse(path):
+                raise ReleaseError(f"{directory} runtime contains a link or reparse point")
+            if not path.is_file():
+                continue
+            relative = _relative(path, runtime_root)
+            if relative == marker_relative:
+                continue
+            expected_files.append({
+                "path": relative,
+                "size": path.stat().st_size,
+                "sha256": sha256(path),
+            })
+        normalized_attestation: list[dict[str, Any]] = []
+        for entry in attested:
+            if not isinstance(entry, Mapping) or not isinstance(entry.get("path"), str):
+                raise ReleaseError(f"{directory} runtime pin file attestation is invalid")
+            relative = _safe_manifest_path(entry["path"])
+            if relative == marker_relative or not isinstance(entry.get("size"), int) or entry["size"] < 0:
+                raise ReleaseError(f"{directory} runtime pin file attestation is invalid")
+            digest = entry.get("sha256")
+            if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+                raise ReleaseError(f"{directory} runtime pin file attestation is invalid")
+            normalized_attestation.append({
+                "path": relative,
+                "size": entry["size"],
+                "sha256": digest.lower(),
+            })
+        normalized_attestation.sort(key=lambda entry: entry["path"].lower())
+        if normalized_attestation != expected_files:
+            raise ReleaseError(f"{directory} extracted runtime contents do not match its attestation")
     sdk_marker = input_root / "webview2-sdk" / ".auvra-sdk.sha256"
     expected_sdk = pins.get("webview2Sdk")
     try:
@@ -305,7 +362,100 @@ def _write_png(path: Path, width: int, height: int) -> None:
     path.write_bytes(png)
 
 
-def _write_sbom(output_root: Path, inventory: Mapping[str, Any], policy: Mapping[str, Any]) -> None:
+def _sbom_component(
+    ecosystem: str,
+    name: str,
+    version: str,
+    *,
+    digest: str | None = None,
+    license_name: str | None = None,
+) -> dict[str, Any]:
+    component: dict[str, Any] = {
+        "type": "library",
+        "name": name,
+        "version": version,
+        "purl": f"pkg:{ecosystem}/{name}@{version}",
+    }
+    if digest is not None and re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+        component["hashes"] = [{"alg": "SHA-256", "content": digest.lower()}]
+    if license_name:
+        component["licenses"] = [{"license": {"name": license_name}}]
+    return component
+
+
+def _locked_dependency_components(input_root: Path) -> list[dict[str, Any]]:
+    """Collect identities for dependencies that can be shipped in a release."""
+
+    components: list[dict[str, Any]] = []
+    package_lock = ROOT.parent / "fbx-viewer (1)" / "package-lock.json"
+    try:
+        lock = json.loads(package_lock.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        lock = {}
+    for relative, metadata in sorted(lock.get("packages", {}).items() if isinstance(lock, dict) else []):
+        if not relative or not isinstance(metadata, Mapping) or metadata.get("dev") is True:
+            continue
+        name = metadata.get("name")
+        if not isinstance(name, str) or not name:
+            name = relative.removeprefix("node_modules/")
+        version = metadata.get("version")
+        if not isinstance(version, str) or not version:
+            continue
+        components.append(_sbom_component("npm", name, version))
+
+    cargo_lock = ROOT.parent / "native" / "Cargo.lock"
+    try:
+        lock = tomllib.loads(cargo_lock.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        lock = {}
+    for package in lock.get("package", []) if isinstance(lock, dict) else []:
+        if not isinstance(package, Mapping):
+            continue
+        name, version = package.get("name"), package.get("version")
+        if not isinstance(name, str) or not isinstance(version, str):
+            continue
+        components.append(_sbom_component("cargo", name, version, digest=package.get("checksum")))
+
+    uv_lock = ROOT.parent / "uv.lock"
+    try:
+        lock = tomllib.loads(uv_lock.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        lock = {}
+    for package in lock.get("package", []) if isinstance(lock, dict) else []:
+        if not isinstance(package, Mapping):
+            continue
+        name, version = package.get("name"), package.get("version")
+        if not isinstance(name, str) or not isinstance(version, str):
+            continue
+        digest = None
+        wheels = package.get("wheels")
+        if isinstance(wheels, list) and wheels and isinstance(wheels[0], Mapping):
+            candidate = wheels[0].get("hash")
+            if isinstance(candidate, str) and candidate.startswith("sha256:"):
+                digest = candidate.removeprefix("sha256:")
+        components.append(_sbom_component("pypi", name, version, digest=digest))
+
+    site_packages = input_root / "python-site-packages"
+    if site_packages.is_dir():
+        for metadata_path in sorted(site_packages.glob("*.dist-info/METADATA"), key=lambda item: item.as_posix().lower()):
+            try:
+                fields = metadata_path.read_text(encoding="utf-8", errors="strict").splitlines()
+            except (OSError, UnicodeDecodeError):
+                continue
+            values: dict[str, str] = {}
+            for line in fields:
+                key, separator, value = line.partition(":")
+                if separator and key in {"Name", "Version", "License"}:
+                    values[key] = value.strip()
+            if values.get("Name") and values.get("Version"):
+                components.append(_sbom_component("pypi", values["Name"], values["Version"], license_name=values.get("License")))
+    deduplicated: dict[str, dict[str, Any]] = {}
+    for component in components:
+        deduplicated[component["purl"]] = component
+    return sorted(deduplicated.values(), key=lambda item: (item["type"], item["name"].casefold(), item["version"], item["purl"]))
+
+
+def _write_sbom(output_root: Path, inventory: Mapping[str, Any], policy: Mapping[str, Any], *, input_root: Path) -> None:
     pins = policy["runtimePins"]
     components = [
         {"type": "application", "name": "Auvra", "version": "release"},
@@ -313,6 +463,7 @@ def _write_sbom(output_root: Path, inventory: Mapping[str, Any], policy: Mapping
         {"type": "library", "name": "Microsoft.Web.WebView2 SDK", "version": pins["webview2Sdk"]["version"], "licenses": ["Microsoft-WebView2-SDK"]},
         {"type": "framework", "name": "Microsoft WebView2 Fixed Runtime", "version": pins["webview2Fixed"]["version"], "licenses": ["Microsoft-WebView2-Runtime"]},
     ]
+    components.extend(_locked_dependency_components(input_root))
     artifacts = []
     for entry in inventory["inputs"].get("python-site-packages", []):
         artifacts.append({"path": "runtime/python/Lib/site-packages/" + entry["path"], "sha256": entry["sha256"]})
@@ -324,6 +475,8 @@ def _write_sbom(output_root: Path, inventory: Mapping[str, Any], policy: Mapping
 
 
 def _appinstaller(identity: str, publisher: str, version: tuple[int, int, int, int], uri: str, updates: bool) -> bytes:
+    if updates:
+        _validate_appinstaller_uri(uri)
     ns = "http://schemas.microsoft.com/appx/appinstaller/2021"
     ET.register_namespace("", ns)
     root = ET.Element(f"{{{ns}}}AppInstaller", Version=".".join(str(item) for item in version), Uri=uri)
@@ -339,6 +492,24 @@ def _appinstaller(identity: str, publisher: str, version: tuple[int, int, int, i
     if not updates:
         settings.remove(on_launch)
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _validate_appinstaller_uri(uri: str) -> str:
+    parsed = urlsplit(uri)
+    if (parsed.scheme.lower() != "https" or not parsed.hostname or parsed.username or parsed.password
+            or parsed.fragment or not parsed.path.lower().endswith(".appinstaller")):
+        raise ReleaseError("hosted App Installer URI must be an HTTPS .appinstaller URL without credentials or fragments")
+    hostname = parsed.hostname.rstrip(".").lower()
+    if hostname == "localhost":
+        raise ReleaseError("hosted App Installer URI cannot target localhost")
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        address = None
+    if address is not None and (address.is_private or address.is_loopback or address.is_link_local
+                                or address.is_reserved or address.is_multicast):
+        raise ReleaseError("hosted App Installer URI cannot target a private or local address")
+    return uri
 
 
 def _validate_appinstaller(data: bytes, *, hosted: bool) -> None:
@@ -461,12 +632,14 @@ def _assemble_into(input_root: Path, output_root: Path, *, channel: str, version
     _write_png(assets / "logo_44.png", 44, 44)
     _write_png(assets / "logo_150.png", 150, 150)
     _write_png(assets / "logo.png", 256, 256)
-    _write_sbom(output_root, inventory, policy)
+    _write_sbom(output_root, inventory, policy, input_root=input_root)
     manifest = _manifest_xml(channel_policy["identity"], channel_policy["publisher"], version_parts)
     (output_root / "AppxManifest.xml").write_bytes(manifest)
     companion: dict[str, Any] | None = None
     if appinstaller_uri:
         uri = appinstaller_uri.replace("{channel}", channel).replace("{version}", ".".join(str(item) for item in version_parts))
+        if channel_policy["updates"]:
+            _validate_appinstaller_uri(uri)
         companion_path = output_root.parent / f"{channel_policy['identity']}.appinstaller"
         companion_bytes = _appinstaller(channel_policy["identity"], channel_policy["publisher"], version_parts, uri, bool(channel_policy["updates"]))
         _validate_appinstaller(companion_bytes, hosted=bool(channel_policy["updates"]))
@@ -512,6 +685,8 @@ def assemble(input_root: Path, output_root: Path, *, channel: str, version: str,
             policy = _read_policy()
             channel_policy = policy["channels"][channel]
             uri = appinstaller_uri.replace("{channel}", channel).replace("{version}", manifest["version"])
+            if channel_policy["updates"]:
+                _validate_appinstaller_uri(uri)
             companion_bytes = _appinstaller(channel_policy["identity"], channel_policy["publisher"], _version_parts(manifest["version"]), uri, bool(channel_policy["updates"]))
             _validate_appinstaller(companion_bytes, hosted=bool(channel_policy["updates"]))
             (destination.parent / f"{channel_policy['identity']}.appinstaller").write_bytes(companion_bytes)
@@ -587,21 +762,57 @@ def make_msix(package_root: Path, output: Path, *, makeappx: str | None = None) 
     return output
 
 
-def sign_msix(package: Path, *, signtool: str | None, certificate: Path | None, password: str | None = None) -> None:
-    if certificate is None:
-        raise ReleaseError("certificate must be supplied out-of-band for signing")
-    if not certificate.is_file() or certificate.suffix.lower() not in {".pfx", ".p12"}:
+DEFAULT_TIMESTAMP_URL = "https://timestamp.digicert.com"
+
+
+def _validate_timestamp_url(value: str) -> str:
+    parsed = urlsplit(value)
+    if parsed.scheme.lower() != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise ReleaseError("timestamp URL must be an HTTPS origin without credentials")
+    return value
+
+
+def sign_msix(
+    package: Path,
+    *,
+    signtool: str | None,
+    certificate: Path | None = None,
+    thumbprint: str | None = None,
+    timestamp_url: str = DEFAULT_TIMESTAMP_URL,
+) -> None:
+    if certificate is None and thumbprint is None:
+        raise ReleaseError("a certificate file or certificate-store thumbprint is required")
+    if certificate is not None and thumbprint is not None:
+        raise ReleaseError("certificate file and certificate-store thumbprint are mutually exclusive")
+    if certificate is not None and (not certificate.is_file() or certificate.suffix.lower() not in {".pfx", ".p12"}):
         raise ReleaseError("signing certificate must be an existing PFX/P12 file")
+    if thumbprint is not None and not re.fullmatch(r"[0-9a-fA-F]{40}", thumbprint):
+        raise ReleaseError("certificate-store thumbprint must be 40 hexadecimal characters")
+    if not package.is_file() or package.suffix.lower() != ".msix":
+        raise ReleaseError("package to sign must be an existing MSIX file")
+    timestamp_url = _validate_timestamp_url(timestamp_url)
     tool = signtool or os.environ.get("AUVRA_SIGNTOOL") or shutil.which("SignTool.exe")
     if not tool:
         raise ReleaseError("SignTool.exe is required; set AUVRA_SIGNTOOL or install the Windows SDK")
-    command = [tool, "sign", "/fd", "SHA256", "/f", str(certificate)]
-    if password:
-        command.extend(["/p", password])
+    command = [tool, "sign", "/fd", "SHA256", "/tr", timestamp_url, "/td", "SHA256"]
+    if certificate is not None:
+        command.extend(["/f", str(certificate)])
+    else:
+        command.extend(["/sha1", thumbprint])
     command.append(str(package))
     result = subprocess.run(command, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if result.returncode:
         raise ReleaseError(f"SignTool failed with status {result.returncode}: {result.stderr[-1000:]}")
+    verify = subprocess.run(
+        [tool, "verify", "/pa", "/all", "/q", str(package)],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if verify.returncode:
+        raise ReleaseError(f"SignTool verification failed with status {verify.returncode}: {verify.stderr[-1000:]}")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -625,9 +836,11 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--channel")
     sign = sub.add_parser("sign")
     sign.add_argument("--package", type=Path, required=True)
-    sign.add_argument("--certificate", type=Path, required=True)
+    certificate = sign.add_mutually_exclusive_group(required=True)
+    certificate.add_argument("--certificate", type=Path)
+    certificate.add_argument("--thumbprint")
     sign.add_argument("--signtool")
-    sign.add_argument("--password")
+    sign.add_argument("--timestamp-url", default=DEFAULT_TIMESTAMP_URL)
     return parser
 
 
@@ -644,7 +857,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "verify":
             verify_package(args.package_root, expected_channel=args.channel)
         else:
-            sign_msix(args.package, signtool=args.signtool, certificate=args.certificate, password=args.password)
+            sign_msix(args.package, signtool=args.signtool, certificate=args.certificate,
+                      thumbprint=args.thumbprint, timestamp_url=args.timestamp_url)
     except (OSError, ValueError, ReleaseError, json.JSONDecodeError) as exc:
         print(f"release pipeline failed: {exc}", file=sys.stderr)
         return 2

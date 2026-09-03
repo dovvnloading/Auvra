@@ -1,11 +1,39 @@
 from __future__ import annotations
 
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import threading
 import unittest
 
-from Auvra.launcher.readiness import wait_for_readiness
+from Auvra.launcher.readiness import probe_http, wait_for_readiness
 
 
 class ReadinessTests(unittest.TestCase):
+    def test_probe_requires_launch_identity_token(self) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("X-Auvra-Ready-Token", "actual-token")
+                self.end_headers()
+                self.wfile.write(b"ready\n")
+
+            def log_message(self, *_args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            port = server.server_address[1]
+            self.assertEqual(probe_http("127.0.0.1", port, expected_token="wrong"),
+                             (False, "Auvra readiness identity mismatch"))
+            self.assertEqual(probe_http("127.0.0.1", port, expected_token="actual-token"),
+                             (True, "Auvra Vite readiness identity verified"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
     def test_success_requires_child_alive_and_reports_url(self) -> None:
         alive = iter([True, True, True])
         probes: list[tuple[str, int]] = []

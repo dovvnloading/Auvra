@@ -7,6 +7,7 @@ import { useAssets, useLevel } from '../../context/SceneContext';
 import { LoadedModelData } from '../../types';
 import { InteractionMode, PaintMode, PaintSettings, TransformSettings, ViewportLayout, SculptSettings } from './types';
 import { EnvironmentScene } from './EnvironmentScene';
+import { editorSession } from '../../utils/editorSession';
 
 interface EnvironmentViewportProps {
     activeModelId: string | null;
@@ -27,8 +28,9 @@ const ViewportSceneContent: React.FC<{
     activeViewId: string;
     gridRotation?: [number, number, number];
     isOrthographic?: boolean;
+    enableAudio?: boolean;
     sceneProps: any;
-}> = ({ viewId, activeViewId, gridRotation, isOrthographic, sceneProps }) => {
+}> = ({ viewId, activeViewId, gridRotation, isOrthographic, enableAudio = true, sceneProps }) => {
     return (
         <EnvironmentScene 
             {...sceneProps}
@@ -36,6 +38,7 @@ const ViewportSceneContent: React.FC<{
             activeViewId={activeViewId}
             gridRotation={gridRotation}
             isOrthographic={isOrthographic}
+            enableAudio={enableAudio}
         />
     );
 };
@@ -71,6 +74,8 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
         activeModelId ? models.find(m => m.id === activeModelId) || null : null, 
     [models, activeModelId]);
 
+    const canEdit = () => editorSession.captureReady() !== null;
+
     useEffect(() => {
         if (interactionMode !== 'select' && interactionMode !== 'sculpt') {
             setSelectedId(null);
@@ -78,22 +83,26 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
     }, [interactionMode]);
 
     const handleViewSelect = (id: string | null, viewId: string) => {
+        if (!canEdit()) return;
         setActiveView(viewId);
         setSelectedId(id);
         onSelectObject(id);
     };
 
     const handlePlace = (pos: THREE.Vector3, rotY: number) => {
+        if (!canEdit()) return;
         if (!activeModelId) return;
         addLevelObject(activeModelId, pos.toArray(), [0, rotY, 0], [1, 1, 1], 'prop');
     };
 
     const handlePaint = (pos: THREE.Vector3, rot: THREE.Euler, scale: THREE.Vector3) => {
+        if (!canEdit()) return;
         if (!activeModelId) return;
         addLevelObject(activeModelId, pos.toArray(), [rot.x, rot.y, rot.z], scale.toArray(), 'foliage');
     };
 
     const handleErase = (ids: string[]) => {
+        if (!canEdit()) return;
         removeLevelObjects(ids);
     };
 
@@ -107,11 +116,13 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
         onErase: handleErase,
         models,
         levelObjects,
-        updateLevelObject,
+        updateLevelObject: (id: string, updates: Parameters<typeof updateLevelObject>[1]) => {
+            if (canEdit()) updateLevelObject(id, updates);
+        },
         transformSettings,
         paintSettings,
         sculptSettings,
-        onSnapshot: snapshotHistory,
+        onSnapshot: () => { if (canEdit()) snapshotHistory(); },
         selectedId,
         isMuted
     };
@@ -178,11 +189,11 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                 surfaceId="editor-environment-viewport"
                 role="editor"
                 className="absolute inset-0 pointer-events-none"
-                eventSource={containerRef}
+                eventSource={containerRef as React.MutableRefObject<HTMLElement>}
                 shadows
             >
                 {layout === 'single' && (
-                    <View track={viewMain}>
+                    <View track={viewMain as React.MutableRefObject<HTMLElement>}>
                         <PerspectiveCamera makeDefault position={[10, 10, 10]} fov={45} />
                         <OrbitControls 
                             makeDefault 
@@ -200,7 +211,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
 
                 {layout === 'quad' && (
                     <>
-                        <View track={viewLeft}>
+                        <View track={viewLeft as React.MutableRefObject<HTMLElement>}>
                             <ambientLight intensity={0.8} />
                             <OrthographicCamera makeDefault position={[50, 0, 0]} zoom={20} near={-100} far={100} />
                             <OrbitControls makeDefault enableRotate={false} panSpeed={cameraSpeed} zoomSpeed={cameraSpeed} mouseButtons={controlConfig.mouseButtons} />
@@ -209,11 +220,12 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                                 activeViewId={activeView}
                                 gridRotation={[0, 0, -Math.PI / 2]} 
                                 isOrthographic 
+                                enableAudio
                                 sceneProps={{...baseSceneProps, onSelectObject: (id: string | null) => handleViewSelect(id, 'left')}}
                             />
                         </View>
 
-                        <View track={viewRight}>
+                        <View track={viewRight as React.MutableRefObject<HTMLElement>}>
                             <ambientLight intensity={0.8} />
                             <OrthographicCamera makeDefault position={[-50, 0, 0]} zoom={20} near={-100} far={100} />
                             <OrbitControls makeDefault enableRotate={false} panSpeed={cameraSpeed} zoomSpeed={cameraSpeed} mouseButtons={controlConfig.mouseButtons} />
@@ -222,11 +234,12 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                                 activeViewId={activeView}
                                 gridRotation={[0, 0, Math.PI / 2]} 
                                 isOrthographic 
+                                enableAudio={false}
                                 sceneProps={{...baseSceneProps, onSelectObject: (id: string | null) => handleViewSelect(id, 'right')}}
                             />
                         </View>
 
-                        <View track={viewTop}>
+                        <View track={viewTop as React.MutableRefObject<HTMLElement>}>
                             <ambientLight intensity={0.8} />
                             <OrthographicCamera makeDefault position={[0, 50, 0]} zoom={20} near={-100} far={100} />
                             <OrbitControls makeDefault enableRotate={false} panSpeed={cameraSpeed} zoomSpeed={cameraSpeed} mouseButtons={controlConfig.mouseButtons} />
@@ -234,11 +247,12 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                                 viewId="top" 
                                 activeViewId={activeView}
                                 isOrthographic 
+                                enableAudio={false}
                                 sceneProps={{...baseSceneProps, onSelectObject: (id: string | null) => handleViewSelect(id, 'top')}}
                             />
                         </View>
 
-                        <View track={viewBottom}>
+                        <View track={viewBottom as React.MutableRefObject<HTMLElement>}>
                             <ambientLight intensity={0.8} />
                             <OrthographicCamera makeDefault position={[0, -50, 0]} zoom={20} near={-100} far={100} />
                             <OrbitControls makeDefault enableRotate={false} panSpeed={cameraSpeed} zoomSpeed={cameraSpeed} mouseButtons={controlConfig.mouseButtons} />
@@ -247,6 +261,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                                 activeViewId={activeView}
                                 gridRotation={[Math.PI, 0, 0]} 
                                 isOrthographic 
+                                enableAudio={false}
                                 sceneProps={{...baseSceneProps, onSelectObject: (id: string | null) => handleViewSelect(id, 'bottom')}}
                             />
                         </View>

@@ -6,13 +6,15 @@ from collections import defaultdict
 from dataclasses import asdict
 import errno
 import json
+import math
 from pathlib import Path
 import re
 import secrets
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 from Auvra.diagnostics import trace_public_class
+from Auvra.diagnostics.core import active_diagnostics
 
 from Auvra.host.dispatcher import HostOperationError
 from Auvra.project import (
@@ -34,6 +36,7 @@ from .dialogs import DialogSelection, WinFormsProjectDialogs
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SNAPSHOT_SOFT_LIMIT = 192 * 1024
+_AUTOSAVE_RETRY_DELAY = 5.0
 
 
 @trace_public_class("project_host", concise=("handle", "asset_resource", "shutdown"))
@@ -59,11 +62,13 @@ class NativeProjectHost:
         self._now = now
         self._dirty_since: float | None = None
         self._last_mutation: float | None = None
+        self._autosave_retry_at = 0.0
         self._events: list[tuple[str, dict[str, Any]]] = []
         self._recovery_by_id: dict[str, tuple[str, str, str]] = {}
         self._recovery_id_by_key: dict[tuple[str, str, str], str] = {}
         self._native_engine: Any = None
         self._native_staged_assets: set[str] = set()
+        self._pending_assets: dict[str, set[str]] = defaultdict(set)
         self._operation_lock = threading.RLock()
         self._event_lock = threading.Lock()
         self._event_sink: Callable[[str, dict[str, Any]], None] | None = None
@@ -137,6 +142,10 @@ class NativeProjectHost:
             events, self._events = self._events, []
             return events
 
+    def restore_events(self, events: Sequence[tuple[str, dict[str, Any]]]) -> None:
+        with self._event_lock:
+            self._events[0:0] = list(events)
+
     def tick(self) -> None:
         if not self._operation_lock.acquire(blocking=False):
             return
@@ -144,14 +153,33 @@ class NativeProjectHost:
             active = self.service.active
             if active is None:
                 return
+            now = self._now()
+            if now < self._autosave_retry_at:
+                return
             if active.autosave_due(
                 dirty_since=self._dirty_since,
                 last_mutation=self._last_mutation,
-                now=self._now(),
+                now=now,
             ):
-                active.autosave()
-                recoveries = len(active.recovery_points())
-                self._queue("project.recovery", self._status_value(available=recoveries))
+                try:
+                    active.autosave()
+                    recoveries = len(active.recovery_points())
+                except Exception as exc:
+                    # Autosave is a background convenience operation.  A disk
+                    # or permissions failure must leave the live project and
+                    # controller usable; retain the dirty period and retry at
+                    # a bounded cadence instead of escaping the desktop loop.
+                    self._autosave_retry_at = now + _AUTOSAVE_RETRY_DELAY
+                    diagnostics = active_diagnostics()
+                    if diagnostics is not None:
+                        diagnostics.emit(
+                            "operation", "operation.failed",
+                            attributes={"code": "autosave_failed",
+                                        "errorType": type(exc).__name__},
+                        )
+                    return
+                self._autosave_retry_at = 0.0
+                self._queue("project.recovery", self._recovery_event_value("autosave", available=recoveries))
                 # One recovery point per dirty period. A later mutation starts a
                 # new 60-second window instead of duplicating an unchanged state.
                 self._dirty_since = None
@@ -164,6 +192,9 @@ class NativeProjectHost:
                 self._native_engine.close_project()
             except Exception:
                 pass
+        active = self.service.active
+        if active is not None:
+            self._discard_pending_assets(active.project_id, active)
         self.service.shutdown()
 
     @staticmethod
@@ -180,25 +211,116 @@ class NativeProjectHost:
                     found.add(asset_id)
         return found
 
+    def _record_pending_asset(self, project_id: str, asset_id: str) -> None:
+        self._pending_assets[project_id].add(asset_id)
+
+    def _discard_pending_assets(self, project_id: str, active: Any | None = None) -> None:
+        pending = self._pending_assets.get(project_id)
+        if not pending:
+            return
+        active = active or self.service.active
+        if active is None or getattr(active, "project_id", None) != project_id:
+            return
+        live = getattr(active, "referenced_asset_ids", lambda: set())()
+        for asset_id in list(pending):
+            if asset_id in live:
+                pending.discard(asset_id)
+                continue
+            try:
+                discard = getattr(active, "discard_asset_if_unreferenced", None)
+                if callable(discard):
+                    discard(asset_id)
+            except (OSError, ValueError):
+                continue
+            pending.discard(asset_id)
+        if not pending:
+            self._pending_assets.pop(project_id, None)
+
+    def _retire_active_pending_assets(self) -> None:
+        active = self.service.active
+        if active is not None:
+            self._discard_pending_assets(active.project_id, active)
+
     def _native_domains(self, active: Any) -> dict[str, Any]:
-        # Only world-authority fields cross the private native boundary. Large
-        # HUD/graph/terrain/provider documents remain solely in the project
-        # repository and cannot inflate a native protocol frame.
-        fields = {
-            "levels": ("id",),
-            "models": ("id", "assetId"),
-            "animations": ("id", "assetId", "modelId"),
-            "objects": ("id", "levelId", "modelId", "position", "rotation", "scale"),
+        # Only renderer-authority fields cross the private native boundary.
+        # Large HUD/graph/terrain/provider documents remain solely in the
+        # project repository and cannot inflate a native protocol frame.
+        fields = self._native_fields()
+        authored = {
+            domain: active.get_domain(domain)
+            for domain in fields
         }
+        return self._native_domains_from_documents(authored, fields)
+
+    @staticmethod
+    def _native_fields() -> dict[str, tuple[str, ...]]:
+        return {
+            "worlds": ("id", "name", "camera", "cameraPosition", "lights", "lighting", "postEffects", "msaaSamples", "fxaa"),
+            "scenes": ("id", "name", "camera", "cameraPosition", "lights", "lighting", "postEffects", "msaaSamples", "fxaa"),
+            "levels": ("id", "name", "camera", "cameraPosition", "lights", "lighting", "postEffects", "msaaSamples", "fxaa"),
+            "environment": ("id", "name", "settings", "skyConfig", "fog", "camera", "cameraPosition", "lights", "lighting", "ibl", "postEffects", "msaaSamples", "fxaa"),
+            "models": ("id", "assetId", "category", "textureOverrides"),
+            "animations": ("id", "assetId", "modelId", "durationTicks", "duration", "speedNumerator", "speedDenominator", "looped"),
+            "materials": ("id", "name", "textureIds", "overrides", "baseColorFactor", "baseColor", "metallic", "roughness", "baseColorTexture", "baseColorTextureId", "normalTexture", "normalTextureId", "metallicRoughnessTexture", "metallicRoughnessTextureId"),
+            "objects": ("id", "levelId", "modelId", "position", "rotation", "scale", "color", "materialId", "material", "radius", "lods", "animationId", "animation", "render", "selected"),
+        }
+
+    @staticmethod
+    def _euler_to_native_quaternion(rotation: Any) -> list[float]:
+        """Convert authored Three.js XYZ-radian Euler angles for native only.
+
+        Project files intentionally keep the editor-facing Euler representation.
+        The native world consumes normalized quaternions, so this conversion is
+        kept at the private host boundary and never written back to a project.
+        """
+        if (not isinstance(rotation, (list, tuple)) or len(rotation) != 3 or
+                any(isinstance(value, bool) or not isinstance(value, (int, float)) or
+                    not math.isfinite(value) for value in rotation)):
+            raise ValueError("object rotation must be three finite Euler radians")
+        x, y, z = (float(value) for value in rotation)
+        half_x, half_y, half_z = x / 2.0, y / 2.0, z / 2.0
+        sx, cx = math.sin(half_x), math.cos(half_x)
+        sy, cy = math.sin(half_y), math.cos(half_y)
+        sz, cz = math.sin(half_z), math.cos(half_z)
+        quaternion = [
+            sx * cy * cz + cx * sy * sz,
+            cx * sy * cz - sx * cy * sz,
+            cx * cy * sz + sx * sy * cz,
+            cx * cy * cz - sx * sy * sz,
+        ]
+        length = math.sqrt(sum(value * value for value in quaternion))
+        if not math.isfinite(length) or length <= 1e-12:
+            raise ValueError("object rotation quaternion is not normalizable")
+        return [value / length for value in quaternion]
+
+    @classmethod
+    def _native_domains_from_documents(
+        cls,
+        domains: dict[str, Any],
+        fields: dict[str, tuple[str, ...]] | None = None,
+    ) -> dict[str, Any]:
+        fields = fields or cls._native_fields()
         result: dict[str, dict[str, Any]] = {}
         for domain, allowed in fields.items():
-            documents = active.get_domain(domain).get("documents", [])
+            value = domains.get(domain, {})
+            documents = value.get("documents", []) if isinstance(value, dict) else []
+            if not isinstance(documents, list):
+                raise ValueError(f"{domain} documents are invalid")
+            native_documents = []
+            for document in documents:
+                if not isinstance(document, dict):
+                    raise ValueError(f"{domain} document is invalid")
+                native_document = {
+                    key: document[key] for key in allowed if key in document
+                }
+                if domain == "objects" and "rotation" in native_document:
+                    native_document["rotation"] = cls._euler_to_native_quaternion(
+                        native_document["rotation"]
+                    )
+                native_documents.append(native_document)
             result[domain] = {
                 "schemaVersion": 1,
-                "documents": [
-                    {key: document[key] for key in allowed if key in document}
-                    for document in documents
-                ],
+                "documents": native_documents,
             }
         return result
 
@@ -222,26 +344,62 @@ class NativeProjectHost:
             native.hydrate_project(active.project_id, active.revision, domains, asset_ids=sorted(asset_ids))
             if progress is not None:
                 progress(1.0)
-        except Exception:
-            # Durable project state wins. A native child can be restarted and
-            # rehydrated from the repository on the next lifecycle boundary.
-            # Use the existing project recovery event shape; no new protocol
-            # event is invented for a transient native-runtime failure.
-            self._queue("project.recovery", self._status_value(available=len(self._recovery_values())))
+        except Exception as exc:
+            # A durable repository commit is still authoritative, but the
+            # native world is no longer a trustworthy view of it.  Invalidate
+            # the whole in-memory session before surfacing the existing,
+            # fail-closed recovery error.  In particular, do not let callers
+            # observe an opened/revision/dirty success for a world that did
+            # not hydrate.
+            self._invalidate_native_session(active)
+            raise HostOperationError(
+                "recovery_required",
+                "Native project hydration failed; recovery is required",
+                {"projectId": active.project_id, "revision": active.revision},
+            ) from exc
+
+    def _invalidate_native_session(self, active: Any) -> None:
+        """Close native and repository state after a failed native boundary."""
+        native = self._native_engine
+        if native is not None:
+            try:
+                native.close_project(active.project_id)
+            except Exception:
+                # The native child is already considered unusable.  The
+                # repository must still be closed and the protocol must still
+                # expose the canonical closed state.
+                pass
+        self._native_staged_assets.clear()
+        self._discard_pending_assets(active.project_id, active)
+        if self.service.active is active:
+            self.service.close()
+        else:
+            try:
+                active.close()
+            except Exception:
+                pass
+        self._dirty_since = self._last_mutation = None
+        self._queue("project.closed", self._status_value())
 
     def _validate_native_candidate(self, active: Any, revision: int, domains: dict[str, Any]) -> None:
         native = self._native_engine
         if native is None or not callable(getattr(native, "validate_project", None)):
             return
         try:
-            native.validate_project(active.project_id, revision, domains)
+            native.validate_project(
+                active.project_id,
+                revision,
+                self._native_domains_from_documents(domains),
+            )
+        except HostOperationError:
+            raise
         except Exception as exc:
             raise HostOperationError("invalid_project", "Native world rejected the project candidate") from exc
 
     def _queue(self, name: str, payload: dict[str, Any]) -> None:
         event_fields = {
             "projectId", "revision", "name", "dirty", "readOnly", "busy",
-            "progress", "recoveryAvailable", "recoveryId", "recoveryKind",
+            "progress", "recoveryAvailable", "recoveryId", "recoveryKind", "recoveryPoints",
             "recentProjects", "status", "domains", "dirtySince", "operation",
             "available",
         }
@@ -276,6 +434,21 @@ class NativeProjectHost:
                 self._recovery_by_id[recovery_id] = key
             values.append({"recoveryId": recovery_id, "kind": point["kind"], "size": point["size"]})
         return values
+
+    def _recovery_event_value(self, kind: str, **extra: Any) -> dict[str, Any]:
+        """Publish the full recovery list and identify the newly-created point."""
+        payload = self._status_value(**extra)
+        active = self.service.active
+        if active is None:
+            return payload
+        points = active.recovery_points(kind)
+        if not points:
+            return payload
+        key = (active.project_id, kind, points[0]["name"])
+        recovery_id = self._recovery_id_by_key.get(key)
+        if recovery_id is not None:
+            payload.update({"recoveryId": recovery_id, "recoveryKind": kind})
+        return payload
 
     def _restore_requested(self, payload: dict[str, Any], status: Any) -> Any:
         recovery_id = payload.get("recoveryId")
@@ -366,6 +539,7 @@ class NativeProjectHost:
         name = payload["name"]
         destination = self._choose(lambda: self.dialogs.choose_create_location(name))
         self._queue("project.opening", self._status_value(busy=True, progress=0.0, operation="create"))
+        self._retire_active_pending_assets()
         status = self.service.create(destination, name)
         self._progress("create", 0.6)
         self._native_staged_assets.clear()
@@ -380,6 +554,7 @@ class NativeProjectHost:
             raise HostOperationError("invalid_project", "Project handle is not available")
         descriptor = self._choose(self.dialogs.choose_open_project)
         self._queue("project.opening", self._status_value(busy=True, progress=0.0, operation="open"))
+        self._retire_active_pending_assets()
         status = self.service.open(descriptor.parent)
         self._progress("open", 0.5)
         status = self._restore_requested(payload, status)
@@ -394,6 +569,7 @@ class NativeProjectHost:
 
     def _open_recent(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._queue("project.opening", self._status_value(busy=True, progress=0.0, operation="openRecent"))
+        self._retire_active_pending_assets()
         status = self.service.open_recent(payload["recentId"])
         self._progress("openRecent", 0.5)
         status = self._restore_requested(payload, status)
@@ -413,6 +589,7 @@ class NativeProjectHost:
                 self._native_engine.close_project(project_id)
             except Exception:
                 pass
+        self._discard_pending_assets(project_id, active)
         self.service.close()
         self._native_staged_assets.clear()
         self._dirty_since = self._last_mutation = None
@@ -452,37 +629,44 @@ class NativeProjectHost:
             page_size = max(1, page_size // 2)
 
     def _apply(self, payload: dict[str, Any]) -> dict[str, Any]:
-        active = self._require(payload, expected=True)
-        changed: dict[str, list[dict[str, Any]]] = {}
-        grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for change in payload["changes"]:
-            grouped[change["domain"]].append(change)
-        for domain, operations in grouped.items():
-            documents = {
-                document["id"]: document
-                for document in active.get_domain(domain)["documents"]
+        active = self.service.active
+        try:
+            active = self._require(payload, expected=True)
+            changed: dict[str, list[dict[str, Any]]] = {}
+            grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for change in payload["changes"]:
+                grouped[change["domain"]].append(change)
+            for domain, operations in grouped.items():
+                documents = {
+                    document["id"]: document
+                    for document in active.get_domain(domain)["documents"]
+                }
+                for change in operations:
+                    document_id = change["documentId"]
+                    if change["operation"] == "remove":
+                        documents.pop(document_id, None)
+                    else:
+                        document = change.get("document")
+                        if not isinstance(document, dict) or document.get("id") != document_id:
+                            raise HostOperationError("invalid_request", "Project document identity does not match")
+                        documents[document_id] = document
+                changed[domain] = [documents[key] for key in sorted(documents)]
+            candidate = {
+                domain: {"schemaVersion": 1, "documents":
+                         (changed[domain] if domain in changed else active.get_domain(domain)["documents"])}
+                for domain in DOMAIN_NAMES
             }
-            for change in operations:
-                document_id = change["documentId"]
-                if change["operation"] == "remove":
-                    documents.pop(document_id, None)
-                else:
-                    document = change.get("document")
-                    if not isinstance(document, dict) or document.get("id") != document_id:
-                        raise HostOperationError("invalid_request", "Project document identity does not match")
-                    documents[document_id] = document
-            changed[domain] = [documents[key] for key in sorted(documents)]
-        candidate = {
-            domain: {"schemaVersion": 1, "documents":
-                     (changed[domain] if domain in changed else active.get_domain(domain)["documents"])}
-            for domain in DOMAIN_NAMES
-        }
-        self._validate_native_candidate(active, active.revision + 1, candidate)
-        status = self.service.apply_changes(
-            changed,
-            project_id=active.project_id,
-            expected_revision=payload["expectedRevision"],
-        )
+            self._validate_native_candidate(active, active.revision + 1, candidate)
+            status = self.service.apply_changes(
+                changed,
+                project_id=active.project_id,
+                expected_revision=payload["expectedRevision"],
+            )
+        except Exception:
+            if active is not None and payload.get("projectId") == getattr(active, "project_id", None):
+                self._discard_pending_assets(active.project_id, active)
+            raise
+        self._discard_pending_assets(active.project_id, self.service.active)
         now = self._now()
         self._dirty_since = self._dirty_since or now
         self._last_mutation = now
@@ -501,13 +685,14 @@ class NativeProjectHost:
         self._dirty_since = self._last_mutation = None
         result = self._status_value(status)
         self._queue("project.dirty", result)
-        self._queue("project.recovery", self._status_value(available=len(active.recovery_points())))
+        self._queue("project.recovery", self._recovery_event_value("manual", available=len(active.recovery_points())))
         return result
 
     def _save_as(self, payload: dict[str, Any]) -> dict[str, Any]:
         active = self._require(payload, expected=True)
         name = payload["name"]
         destination = self._choose(lambda: self.dialogs.choose_save_as_location(name))
+        self._retire_active_pending_assets()
         status = self.service.save_as(destination, project_id=active.project_id, name=name)
         self._native_staged_assets.clear()
         self._hydrate_native(self.service.active)
@@ -527,6 +712,7 @@ class NativeProjectHost:
         name = payload.get("name") or source.stem
         destination = self._choose(lambda: self.dialogs.choose_create_location(name))
         self._queue("project.opening", self._status_value(busy=True, progress=0.0, operation="importPack"))
+        self._retire_active_pending_assets()
         status = self.service.import_pack(source, destination)
         self._progress("importPack", 0.65)
         self._native_staged_assets.clear()
@@ -541,6 +727,7 @@ class NativeProjectHost:
         name = payload.get("name") or source.stem
         destination = self._choose(lambda: self.dialogs.choose_create_location(name))
         self._queue("project.opening", self._status_value(busy=True, progress=0.0, operation="importLegacy"))
+        self._retire_active_pending_assets()
         migrate = getattr(self.service, "migrate_legacy", None)
         if not callable(migrate):
             raise HostOperationError("migration_failed", "Legacy migration is unavailable")
@@ -571,16 +758,27 @@ class NativeProjectHost:
             current = self.service.active
             if current is None or current.project_id != project_id or current.read_only:
                 raise ReadOnlyError("project upload is no longer writable")
-            with upload.path.open("rb") as stream:
-                reference = self.service.begin_upload(
-                    stream,
-                    project_id=project_id,
-                    size=upload.size,
-                    mime=upload.mime_type,
-                    name=name,
-                )
+            already_present = current.assets.verify(upload.sha256, expected_size=upload.size)
+            try:
+                with upload.path.open("rb") as stream:
+                    reference = self.service.begin_upload(
+                        stream,
+                        project_id=project_id,
+                        size=upload.size,
+                        mime=upload.mime_type,
+                        name=name,
+                    )
+            except Exception:
+                if not already_present:
+                    try:
+                        current.discard_asset_if_unreferenced(upload.sha256)
+                    except (OSError, ValueError):
+                        pass
+                raise
             if reference.asset_id != upload.sha256:
                 raise InvalidProjectError("uploaded asset hash changed during ingestion")
+            if not already_present:
+                self._record_pending_asset(project_id, upload.sha256)
 
         ticket = self.assets.issue_upload(
             mime_type=mime,
@@ -612,8 +810,8 @@ class NativeProjectHost:
             if self.preview_store is None:
                 raise
             try:
-                preview = self.preview_store.find(asset_id)
-                stream = self.preview_store.open(asset_id)
+                preview = self.preview_store.find(asset_id, project_id=active.project_id)
+                stream = self.preview_store.open(asset_id, project_id=active.project_id)
                 mime, size = preview.mime, preview.size
             except Exception:
                 raise HostOperationError("invalid_job", "Generated preview is unavailable") from None

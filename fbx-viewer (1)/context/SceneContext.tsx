@@ -1,5 +1,6 @@
 
-import React, { createContext, useContext, useState, ReactNode, useCallback } from 'react';
+import React, { createContext, useContext, useState, ReactNode, useCallback, useRef } from 'react';
+import { flushSync } from 'react-dom';
 import { SceneContextType } from '../types';
 import { useNotification } from './NotificationContext';
 import { disposeModel, disposeObject } from '../utils/processing/ModelLifecycle';
@@ -16,6 +17,7 @@ import { useScenePersistence } from '../hooks/useScenePersistence';
 import { useProjectManager } from '../hooks/useProjectManager';
 import { useOperationBusy } from './OperationContext';
 import { frontendDiagnostics } from '../diagnostics/runtime';
+import type { DetachedHydration } from '../hooks/useScenePersistence';
 
 // Export granular hooks for high-performance consumption
 export { useViewport, useSelection, useAssets, useLevel };
@@ -41,6 +43,61 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
     const selection = useSelection();
     const assets = useAssets();
     const level = useLevel();
+
+    const hydrationCommitRef = useRef({ assets, level, selection, viewport });
+    hydrationCommitRef.current = { assets, level, selection, viewport };
+    const publishedResourcesRef = useRef({
+        models: assets.models,
+        attachments: assets.attachments,
+        textures: assets.textures,
+        audioAssets: assets.audioAssets,
+    });
+    publishedResourcesRef.current = {
+        models: assets.models,
+        attachments: assets.attachments,
+        textures: assets.textures,
+        audioAssets: assets.audioAssets,
+    };
+
+    const commitHydration = useCallback((state: DetachedHydration) => {
+        // Dispose the currently published project immediately before the one
+        // explicit React commit. If hydration fails or goes stale this path is
+        // never entered, so the old project remains fully usable.
+        const previous = publishedResourcesRef.current;
+        previous.models.forEach((model) => disposeModel(model));
+        previous.attachments.forEach((attachment) => {
+            if (attachment.url) URL.revokeObjectURL(attachment.url);
+            disposeObject(attachment.object);
+        });
+        previous.textures.forEach((texture) => URL.revokeObjectURL(texture.url));
+        previous.audioAssets.forEach((audio) => URL.revokeObjectURL(audio.url));
+        publishedResourcesRef.current = {
+            models: state.models,
+            attachments: state.attachments,
+            textures: state.textures,
+            audioAssets: state.audioAssets,
+        };
+        const targets = hydrationCommitRef.current;
+        flushSync(() => {
+            targets.assets.setModels(state.models);
+            targets.assets.setAttachments(state.attachments);
+            targets.assets.setSockets(state.sockets);
+            targets.assets.setBlueprints(state.blueprints);
+            targets.assets.setTextures(state.textures);
+            targets.assets.setAudioAssets(state.audioAssets);
+            targets.level.hydrateProjectState(state.levels, state.levelObjects, state.currentLevelId);
+            targets.assets.hydrateGraphs(state.graphs);
+            targets.viewport.setCameraState(state.cameraState);
+            if (state.selectedModelId) {
+                targets.selection.selectModel(state.selectedModelId);
+            } else if (state.selectedBlueprintId) {
+                targets.selection.selectBlueprint(state.selectedBlueprintId);
+            } else {
+                targets.selection.selectModel(null);
+                targets.selection.selectBlueprint(null);
+            }
+        });
+    }, []);
 
     // --- Scene Reset (SPA-Friendly) ---
     const resetScene = useCallback(async () => {
@@ -89,12 +146,15 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
         setBlueprints: assets.setBlueprints,
         setTextures: assets.setTextures,
         setAudioAssets: assets.setAudioAssets,
-        setLevelObjects: level.setLevelObjects,
+        setCameraState: viewport.setCameraState,
         setSelectedModelId: selection.selectModel,
+        setSelectedBlueprintId: selection.selectBlueprint,
         setIsLoading,
         defaultBlueprints: DEFAULT_BLUEPRINTS
         ,hydrateProjectState: level.hydrateProjectState
         ,hydrateGraphs: assets.hydrateGraphs
+        ,getCurrentLevelId: level.getCurrentLevelId
+        ,commitHydration
     });
 
     const projectManager = useProjectManager({
@@ -106,7 +166,8 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
         selectModel: selection.selectModel,
         selectBlueprint: selection.selectBlueprint,
         restoreSession,
-        resetScene
+        resetScene,
+        getCurrentLevelId: level.getCurrentLevelId,
     });
 
     // --- Compose Unified Context ---
@@ -157,6 +218,7 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
         removeAudio: assets.removeAudio,
 
         blueprints: assets.blueprints,
+        isCreatingPlayerBlueprint: assets.isCreatingPlayerBlueprint,
         addBlueprint: assets.addBlueprint,
         updateBlueprint: assets.updateBlueprint,
         removeBlueprint: assets.removeBlueprint,

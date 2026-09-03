@@ -11,14 +11,16 @@ import { dbOperations } from '../utils/db';
 import { projectService } from '../utils/projectService';
 import { isAbortError, useOperationActions } from '../context/OperationContext';
 import { useNotification } from '../context/NotificationContext';
-import { assetDiagnosticAttributes, frontendDiagnostics } from '../diagnostics/runtime';
+import { assetDiagnosticAttributes, frontendDiagnostics, type DiagnosticAttributes } from '../diagnostics/runtime';
 
 export const useModelManager = (
   setIsLoading: (loading: boolean) => void,
-  onModelRemoved: (id: string) => void
+  onModelRemoved: (id: string) => void,
+  selectedModelId: string | null,
+  selectModel: (id: string | null) => void,
+  clearSelectedModel: (id: string) => void,
 ) => {
   const [models, setModels] = useState<LoadedModelData[]>([]);
-  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const { startOperation } = useOperationActions();
   const { addNotification } = useNotification();
 
@@ -117,50 +119,56 @@ export const useModelManager = (
 
   const placeInScene = useCallback(async (id: string) => {
       projectService.assertWritable();
-      setModels(prev => prev.map(m => m.id === id ? { ...m, isPlacedInScene: true } : m));
-      setSelectedModelId(id);
       try {
           await dbOperations.updateModelPlacement(id, true);
+          setModels(prev => prev.map(m => m.id === id ? { ...m, isPlacedInScene: true } : m));
+          selectModel(id);
       } catch(e) { frontendDiagnostics.failure('model_placement_update_failed', e); }
-  }, []);
+  }, [selectModel]);
 
   const removeFromScene = useCallback(async (id: string) => {
       projectService.assertWritable();
-      setModels(prev => prev.map(m => m.id === id ? { ...m, isPlacedInScene: false } : m));
-      if (selectedModelId === id) setSelectedModelId(null);
       try {
           await dbOperations.updateModelPlacement(id, false);
+          setModels(prev => prev.map(m => m.id === id ? { ...m, isPlacedInScene: false } : m));
+          clearSelectedModel(id);
       } catch(e) { frontendDiagnostics.failure('model_placement_remove_failed', e); }
-  }, [selectedModelId]);
+  }, [clearSelectedModel]);
 
   const removeModel = useCallback(async (id: string) => {
     projectService.assertWritable();
     try {
         await dbOperations.deleteModel(id);
-        
-        setModels(prev => {
-          const modelToRemove = prev.find(m => m.id === id);
-          if (modelToRemove) {
-              disposeModel(modelToRemove);
-          }
-          return prev.filter(m => m.id !== id);
-        });
+        const modelToRemove = models.find((model) => model.id === id);
+        if (modelToRemove) disposeModel(modelToRemove);
+        setModels(prev => prev.filter(m => m.id !== id));
         
         // Callback to cleanup attachments in the other hook
         onModelRemoved(id);
 
-        if (selectedModelId === id) {
-          setSelectedModelId(null);
-        }
+        clearSelectedModel(id);
     } catch (e) {
         frontendDiagnostics.failure('model_delete_failed', e);
     }
-  }, [selectedModelId, onModelRemoved]);
+  }, [clearSelectedModel, models, onModelRemoved]);
+
+  const removeTextureReference = useCallback((textureId: string) => {
+    setModels((previous) => previous.map((model) => {
+      const overrides = model.textureOverrides;
+      if (!overrides) return model;
+      const nextOverrides = Object.fromEntries(
+        Object.entries(overrides).filter(([, referencedTextureId]) => referencedTextureId !== textureId),
+      );
+      return Object.keys(nextOverrides).length === Object.keys(overrides).length
+        ? model
+        : { ...model, textureOverrides: nextOverrides };
+    }));
+  }, []);
 
   const addAnimations = useCallback(async (files: File[], modelId: string) => {
     projectService.assertWritable();
     const aliases = files.map(() => frontendDiagnostics.nextAssetAlias());
-    const initialDiagnostic = files[0]
+    const initialDiagnostic: DiagnosticAttributes = files[0]
       ? { ...assetDiagnosticAttributes(files[0], 'animation', aliases[0]), itemCount: files.length }
       : { assetAlias: frontendDiagnostics.nextAssetAlias(), assetKind: 'animation', itemCount: 0 };
     const operation = startOperation({
@@ -390,10 +398,11 @@ export const useModelManager = (
     models,
     setModels,
     selectedModelId,
-    setSelectedModelId, // Exposed for useScenePersistence
-    selectModel: setSelectedModelId, // Alias
+    setSelectedModelId: selectModel, // Exposed for useScenePersistence
+    selectModel,
     addModel,
     removeModel,
+    removeTextureReference,
     placeInScene,
     removeFromScene,
     addAnimations,

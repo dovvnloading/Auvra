@@ -22,28 +22,40 @@ def _safe_name(name: str) -> bool:
         for p in parts
     )
 
-def validate_archive(path: str | os.PathLike[str], *, max_total: int = MAX_MEMBER) -> list[zipfile.ZipInfo]:
+def _validate_archive_members(archive: zipfile.ZipFile, *, max_total: int) -> list[zipfile.ZipInfo]:
+    infos = archive.infolist()
+    if len(infos) > MAX_MEMBERS: raise ArchiveValidationError("archive has too many members")
+    total = 0; seen = set()
+    for info in infos:
+        folded = unicodedata.normalize("NFC", info.filename).casefold()
+        if folded in seen or not _safe_name(info.filename): raise ArchiveValidationError("unsafe or duplicate archive path")
+        seen.add(folded)
+        # Symlink entries can escape the extraction root even when their
+        # textual name looks safe.  Portable project archives contain
+        # regular files and directories only.
+        if ((info.external_attr >> 16) & 0o170000) == 0o120000:
+            raise ArchiveValidationError("symbolic links are not allowed in archives")
+        if info.file_size < 0 or info.file_size > MAX_MEMBER: raise ArchiveValidationError("invalid archive member size")
+        if info.is_dir(): continue
+        if info.file_size and (not info.compress_size or info.file_size / info.compress_size > 1000): raise ArchiveValidationError("suspicious compression ratio")
+        total += info.file_size
+        if total > max_total: raise ArchiveValidationError("archive exceeds size limit")
+    return infos
+
+
+def validate_archive(path: str | os.PathLike[str] | zipfile.ZipFile, *, max_total: int = MAX_MEMBER) -> list[zipfile.ZipInfo]:
+    """Validate an archive path, or an already-open archive handle.
+
+    Callers that will later extract should pass the same open ``ZipFile`` so
+    validation and extraction share one file handle and cannot be separated by
+    a pathname replacement.
+    """
+    if isinstance(path, zipfile.ZipFile):
+        return _validate_archive_members(path, max_total=max_total)
     try: archive = zipfile.ZipFile(path)
     except (OSError, zipfile.BadZipFile) as exc: raise ArchiveValidationError("invalid ZIP archive") from exc
     with archive:
-        infos = archive.infolist()
-        if len(infos) > MAX_MEMBERS: raise ArchiveValidationError("archive has too many members")
-        total = 0; seen = set()
-        for info in infos:
-            folded = unicodedata.normalize("NFC", info.filename).casefold()
-            if folded in seen or not _safe_name(info.filename): raise ArchiveValidationError("unsafe or duplicate archive path")
-            seen.add(folded)
-            # Symlink entries can escape the extraction root even when their
-            # textual name looks safe.  Portable project archives contain
-            # regular files and directories only.
-            if ((info.external_attr >> 16) & 0o170000) == 0o120000:
-                raise ArchiveValidationError("symbolic links are not allowed in archives")
-            if info.file_size < 0 or info.file_size > MAX_MEMBER: raise ArchiveValidationError("invalid archive member size")
-            if info.is_dir(): continue
-            if info.file_size and (not info.compress_size or info.file_size / info.compress_size > 1000): raise ArchiveValidationError("suspicious compression ratio")
-            total += info.file_size
-            if total > max_total: raise ArchiveValidationError("archive exceeds size limit")
-        return infos
+        return _validate_archive_members(archive, max_total=max_total)
 
 def export_folder(folder: str | os.PathLike[str], destination: str | os.PathLike[str]) -> None:
     folder = Path(folder); destination = Path(destination)
