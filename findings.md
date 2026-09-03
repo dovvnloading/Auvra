@@ -362,6 +362,8 @@ Project close clears the app's token map without cancelling tokens (`native/src/
 
 **Severity:** High · **Classification:** Confirmed and locally reproduced
 
+**Status:** Completed — object transforms are canonicalized and bounded before the native boundary converts Euler rotations to normalized four-value quaternions; socket transforms now enforce the same finite, fixed-width contract (including native-safe position and scale bounds), with legacy quaternions normalized before schema validation. Full Python validation passed (`344 passed, 5 skipped, 77 subtests`).
+
 The object schema constrains `position` but leaves `rotation` and `scale` as arbitrary arrays (`project/v1/objects.schema.json:1`); socket transforms are similarly unconstrained (`project/v1/sockets.schema.json:1`). Native hydration requires exactly four numeric rotation values and three numeric scale values (`native/src/main.rs:1510`, `native/src/main.rs:1566`, `native/src/main.rs:1602`). The Python validator accepted `rotation: ["not", "a", "quaternion"]`, creating project data that passes persistence validation but cannot hydrate natively.
 
 ### F-043 — The visible viewport bypasses the production render pipeline

@@ -579,6 +579,34 @@ class SchemaTests(unittest.TestCase):
         result = validate_domain("objects", candidate)["documents"][0]
         self.assertEqual(result["rotation"], authored)
 
+    def test_socket_transform_contract_rejects_invalid_shapes_values_and_bounds(self):
+        base = {
+            "id": "socket", "name": "Socket", "parentModelId": "model",
+            "position": [0, 0, 0], "rotation": [0, 0, 0], "scale": [1, 1, 1],
+        }
+        cases = (
+            ("position", [0, 0]), ("position", [0, 0, 0, 0]),
+            ("position", [1_000_001, 0, 0]), ("position", [float("inf"), 0, 0]),
+            ("rotation", [0, 0]), ("rotation", [0, 0, 0, 1, 0]),
+            ("rotation", [float("nan"), 0, 0]), ("rotation", [0, 0, 0, 0]),
+            ("scale", [0, 1, 1]), ("scale", [0.00009, 1, 1]),
+            ("scale", [1_000_001, 1, 1]), ("scale", [1, True, 1]),
+        )
+        for field, replacement in cases:
+            candidate = {"schemaVersion": 1, "documents": [{**base, field: replacement}]}
+            with self.assertRaises(ValueError, msg=f"{field}={replacement!r}"):
+                validate_domain("sockets", candidate)
+
+    def test_socket_legacy_quaternion_is_canonicalized_before_schema_validation(self):
+        candidate = {"schemaVersion": 1, "documents": [{
+            "id": "socket", "name": "Socket", "parentModelId": "model",
+            "rotation": [0, 0, 2 ** -0.5, 2 ** -0.5],
+        }]}
+        result = validate_domain("sockets", candidate)["documents"][0]
+        self.assertAlmostEqual(result["rotation"][0], 0.0, places=7)
+        self.assertAlmostEqual(result["rotation"][1], 0.0, places=7)
+        self.assertAlmostEqual(result["rotation"][2], 1.5707963267948966, places=7)
+
 class LegacyTests(unittest.TestCase):
     def test_legacy_source_is_not_modified(self):
         with tempfile.TemporaryDirectory() as root:

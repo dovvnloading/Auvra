@@ -89,6 +89,8 @@ def validate_domain(domain: str, value: Any) -> dict[str, Any]:
     candidate = copy.deepcopy(value)
     if domain == "objects":
         _normalize_object_transforms(candidate)
+    elif domain == "sockets":
+        _normalize_socket_transforms(candidate)
     _assert_finite(candidate)
     _assert_known_nested(candidate)
     _assert_asset_handles(candidate)
@@ -220,33 +222,64 @@ def _normalize_object_transforms(value: Any) -> None:
         object_value["rotation"] = _canonical_rotation(rotation, index)
         object_value["scale"] = _canonical_vector(scale, "scale", index, minimum=_MIN_SCALE, maximum=_MAX_SCALE)
 
+def _normalize_socket_transforms(value: Any) -> None:
+    if not isinstance(value, dict) or not isinstance(value.get("documents"), list):
+        return
+    for index, socket_value in enumerate(value["documents"]):
+        if not isinstance(socket_value, dict):
+            continue
+        if "position" in socket_value:
+            socket_value["position"] = _canonical_vector(
+                socket_value["position"], "position", index,
+                minimum=-_MAX_ABS_POSITION, maximum=_MAX_ABS_POSITION,
+                domain="sockets",
+            )
+        if "rotation" in socket_value:
+            socket_value["rotation"] = _canonical_rotation(
+                socket_value["rotation"], index, domain="sockets",
+            )
+        if "scale" in socket_value:
+            socket_value["scale"] = _canonical_vector(
+                socket_value["scale"], "scale", index,
+                minimum=_MIN_SCALE, maximum=_MAX_SCALE,
+                domain="sockets",
+            )
 
-def _canonical_vector(value: Any, label: str, index: int, *, minimum: float, maximum: float) -> list[float | int]:
+
+def _canonical_vector(
+    value: Any,
+    label: str,
+    index: int,
+    *,
+    minimum: float,
+    maximum: float,
+    domain: str = "objects",
+) -> list[float | int]:
     if not isinstance(value, list):
-        raise ValueError(f"objects document {index} {label} must be an array")
+        raise ValueError(f"{domain} document {index} {label} must be an array")
     if len(value) != 3:
-        raise ValueError(f"objects document {index} {label} must contain exactly three values")
+        raise ValueError(f"{domain} document {index} {label} must contain exactly three values")
     result: list[float | int] = []
     for component in value:
-        number = _finite_number(component, f"objects document {index} {label}")
+        number = _finite_number(component, f"{domain} document {index} {label}")
         if number < minimum or number > maximum:
-            raise ValueError(f"objects document {index} {label} exceeds native bounds")
+            raise ValueError(f"{domain} document {index} {label} exceeds native bounds")
         result.append(component)
     return result
 
 
-def _canonical_rotation(value: Any, index: int) -> list[float | int]:
+def _canonical_rotation(value: Any, index: int, *, domain: str = "objects") -> list[float | int]:
     if not isinstance(value, list):
-        raise ValueError(f"objects document {index} rotation must be an array")
+        raise ValueError(f"{domain} document {index} rotation must be an array")
     if len(value) == 3:
-        return [_finite_number(component, f"objects document {index} rotation") for component in value]
+        return [_finite_number(component, f"{domain} document {index} rotation") for component in value]
     if len(value) != 4:
-        raise ValueError(f"objects document {index} rotation must contain three Euler values or four quaternion values")
+        raise ValueError(f"{domain} document {index} rotation must contain three Euler values or four quaternion values")
 
-    quaternion = [_finite_number(component, f"objects document {index} rotation") for component in value]
+    quaternion = [_finite_number(component, f"{domain} document {index} rotation") for component in value]
     norm = math.hypot(*quaternion)
     if norm < _QUATERNION_EPSILON:
-        raise ValueError(f"objects document {index} rotation quaternion has zero length")
+        raise ValueError(f"{domain} document {index} rotation quaternion has zero length")
     x, y, z, w = (component / norm for component in quaternion)
 
     # This is the Three.js Euler order XYZ conversion (radians), including
