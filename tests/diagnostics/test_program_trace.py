@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 import re
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from Auvra.diagnostics.core import (
     DiagnosticsSession,
     PROFILE_CODE_CACHE_MAX,
     PROFILE_SUMMARY_MAX,
+    follow_records,
     install_diagnostics,
     traced,
 )
@@ -63,11 +66,18 @@ class WholeProgramTraceTests(unittest.TestCase):
             relative = path.relative_to(REPOSITORY_ROOT).as_posix()
             if path.name == "__init__.py" or "/generated/" in f"/{relative}":
                 continue
-            source = path.read_text(encoding="utf-8")
-            if any(token in source for token in (
-                "trace_public_class", "@traced", ".emit(", "DiagnosticsSession",
-                "start_diagnostic_span", "active_diagnostics", "process_ring",
-            )):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            has_trace_call = any(
+                (isinstance(node, ast.Call) and (
+                    (isinstance(node.func, ast.Name) and node.func.id in {
+                        "trace_public_class", "traced", "start_diagnostic_span",
+                        "active_diagnostics", "process_ring",
+                    })
+                    or (isinstance(node.func, ast.Attribute) and node.func.attr == "emit")
+                ))
+                for node in ast.walk(tree)
+            )
+            if has_trace_call:
                 continue
             if relative in PYTHON_EXEMPTIONS:
                 seen_exemptions.add(relative)
@@ -153,6 +163,38 @@ class WholeProgramTraceTests(unittest.TestCase):
                 profiler._profile(frame, "return", None)
             profiler._active = False
             self.assertEqual(len(profiler._summaries), PROFILE_SUMMARY_MAX)
+
+    def test_follow_records_bounds_duplicate_state_to_current_run(self) -> None:
+        summaries = [
+            {"runId": "run-a"},
+            {"runId": "run-a"},
+            {"runId": "run-b"},
+            None,
+        ]
+        inspected: list[str] = []
+
+        def latest(_root: Path) -> dict[str, str] | None:
+            return summaries.pop(0)
+
+        def inspect(_root: Path, *, run_id: str, **_filters: object) -> list[dict[str, object]]:
+            inspected.append(run_id)
+            return [
+                {"runId": run_id, "sequence": 1},
+                {"runId": run_id, "sequence": 2},
+            ]
+
+        def marker(_path: Path) -> dict[str, str] | None:
+            return {} if summaries else None
+
+        with mock.patch("Auvra.diagnostics.core.latest_run_summary", side_effect=latest), \
+             mock.patch("Auvra.diagnostics.core.inspect_records", side_effect=inspect), \
+             mock.patch("Auvra.diagnostics.core._load_json", side_effect=marker), \
+             mock.patch("Auvra.diagnostics.core.time.sleep"):
+            records = list(follow_records(Path("diagnostics")))
+        self.assertEqual([(record["runId"], record["sequence"]) for record in records], [
+            ("run-a", 1), ("run-a", 2), ("run-b", 1), ("run-b", 2),
+        ])
+        self.assertEqual(inspected, ["run-a", "run-a", "run-b"])
 
     def test_every_native_dispatch_method_has_a_trace_phase_or_quiet_classification(self) -> None:
         native_modules = {path.name for path in (REPOSITORY_ROOT / "native" / "src").glob("*.rs")}

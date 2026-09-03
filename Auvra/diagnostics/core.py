@@ -1727,17 +1727,26 @@ def follow_records(root: Path, *, level: str | None = None, component: str | Non
                    trace_id: str | None = None, poll_seconds: float = 0.25) -> Iterator[dict[str, Any]]:
     """Follow only launcher-owned current-run segments and tolerate rotation."""
 
-    seen: set[tuple[str, int]] = set()
+    # Sequences are monotonic within a run.  Retaining only the current run's
+    # high-water mark gives follow mode duplicate suppression without keeping
+    # every record from every rotated run alive for the process lifetime.
+    active_run_id: str | None = None
+    last_sequence = -1
     while True:
         summary = latest_run_summary(root)
         if summary:
-            for record in inspect_records(root, run_id=str(summary.get("runId", "")),
+            run_id = str(summary.get("runId", ""))
+            if run_id != active_run_id:
+                active_run_id = run_id
+                last_sequence = -1
+            for record in inspect_records(root, run_id=run_id,
                                           level=level, component=component,
                                           trace_id=trace_id, limit=1000):
-                key = (str(record.get("runId", "")), int(record.get("sequence", 0)))
-                if key not in seen:
-                    seen.add(key)
-                    yield record
+                sequence = int(record.get("sequence", 0))
+                if sequence <= last_sequence:
+                    continue
+                last_sequence = sequence
+                yield record
         marker = _load_json(Path(root) / RUN_MARKER_NAME)
         if marker is None:
             return

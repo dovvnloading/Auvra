@@ -32,6 +32,18 @@ class NativeTraceSmokeTests(unittest.TestCase):
             try:
                 engine.start(editor_session="trace-smoke")
                 engine.snapshot_world()
+                # Exercise representative quiet and phased dispatch paths so
+                # this smoke proves runtime trace behavior beyond one
+                # snapshot call.  Detailed capture records quiet operations.
+                engine.call("world.getReplay")
+                engine.call("renderer.getCapabilities")
+                engine.open_viewport(width=320, height=240, title="Auvra trace smoke")
+                engine.render_reference(width=32, height=32)
+                engine.call("renderer.extract")
+                engine.reference_metrics()
+                engine.recover()
+                engine.close_viewport()
+                engine.call("world.closeProject")
             finally:
                 engine.close(timeout=2)
                 session.close(outcome="success")
@@ -51,6 +63,16 @@ class NativeTraceSmokeTests(unittest.TestCase):
                 and record.get("spanId")
                 for record in operation_records
             ))
+            completed_methods = {
+                record["attributes"].get("method")
+                for record in operation_records
+                if record["attributes"]["state"] == "native.operation_completed"
+            }
+            self.assertTrue({
+                "world.getReplay", "renderer.getCapabilities", "viewport.open",
+                "renderer.renderReference", "renderer.extract", "renderer.getMetrics",
+                "renderer.recover", "viewport.close", "world.closeProject",
+            } <= completed_methods, completed_methods)
 
 
 if __name__ == "__main__":

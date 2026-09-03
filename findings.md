@@ -632,6 +632,8 @@ The repository's “nested content” test uses an invalid descriptor and fails 
 
 Diagnostics follow mode retains every `(runId, sequence)` in `seen` for the process lifetime (`Auvra/diagnostics/core.py:1726`). Long-running use across rotations can grow memory indefinitely. Program-trace tests classify Python and Rust paths using imports, `.emit(` tokens, and raw source strings (`tests/diagnostics/test_program_trace.py:58`, `tests/diagnostics/test_program_trace.py:157`), so comments or dead code can satisfy parts of the gate; the real native trace smoke invokes only `world.getSnapshot` (`tests/desktop/test_native_trace_smoke.py:30`).
 
+**Status:** Completed — follow mode now keeps only the active run’s monotonic sequence high-water mark, so rotation cannot grow process-lifetime state; a rotation/dedup regression test passes. Python trace classification now parses executable AST call nodes rather than comments/string tokens, and the real native trace smoke exercises replay, capabilities, viewport, render, extract, metrics, recovery, and project-close dispatches. Diagnostics coverage passes (7 tests) and the built Windows native trace smoke passes.
+
 ### F-076 — Some tests can hang, false-pass, or become green skips
 
 **Severity:** Low to Medium · **Classification:** Gap
