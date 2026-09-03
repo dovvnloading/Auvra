@@ -11,8 +11,8 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::io::{self, Read, Write};
-use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::sync::{mpsc, Arc};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use winit::{
     event_loop::EventLoop, platform::run_on_demand::EventLoopExtRunOnDemand, window::Window,
 };
@@ -551,9 +551,11 @@ fn dimensions(params: &Value) -> Result<(u32, u32), String> {
 }
 
 struct Viewport {
-    _event_loop: EventLoop<()>,
-    _window: Arc<Window>,
-    _surface: Option<wgpu::Surface<'static>>,
+    event_loop: EventLoop<()>,
+    app: ViewportApp,
+    window: Arc<Window>,
+    surface: Option<wgpu::Surface<'static>>,
+    format: wgpu::TextureFormat,
     width: u32,
     height: u32,
 }
@@ -563,12 +565,14 @@ struct ViewportApp {
     width: u32,
     height: u32,
     title: String,
+    close_requested: bool,
+    resized: Option<(u32, u32)>,
+    redraw_requested: bool,
 }
 
 impl winit::application::ApplicationHandler for ViewportApp {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         if self.window.is_some() {
-            event_loop.exit();
             return;
         }
         let attrs = Window::default_attributes()
@@ -577,7 +581,6 @@ impl winit::application::ApplicationHandler for ViewportApp {
         match event_loop.create_window(attrs) {
             Ok(window) => {
                 self.window = Some(Arc::new(window));
-                event_loop.exit();
             }
             Err(_) => {
                 event_loop.exit();
@@ -590,11 +593,31 @@ impl winit::application::ApplicationHandler for ViewportApp {
         _window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
-        if matches!(event, winit::event::WindowEvent::CloseRequested) {
-            event_loop.exit();
+        match event {
+            winit::event::WindowEvent::CloseRequested => {
+                self.close_requested = true;
+                event_loop.exit();
+            }
+            winit::event::WindowEvent::Resized(size)
+                if size.width > 0 && size.height > 0 =>
+            {
+                self.width = size.width;
+                self.height = size.height;
+                self.resized = Some((size.width, size.height));
+            }
+            winit::event::WindowEvent::RedrawRequested => {
+                self.redraw_requested = true;
+            }
+            _ => {}
         }
     }
     fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+        // ``run_app_on_demand`` is used as a bounded event pump by the IPC
+        // loop. Return after this batch so requests and window events share
+        // the native thread without starving either side.
         event_loop.exit();
     }
 }
@@ -613,11 +636,17 @@ impl Viewport {
             width,
             height,
             title: title.clone(),
+            close_requested: false,
+            resized: None,
+            redraw_requested: false,
         };
         event_loop
             .run_app_on_demand(&mut app)
             .map_err(|e| e.to_string())?;
-        let window = app.window.take().ok_or("viewport window creation failed")?;
+        let window = app
+            .window
+            .clone()
+            .ok_or("viewport window creation failed")?;
         let surface = renderer
             .instance
             .create_surface(window.clone())
@@ -638,31 +667,72 @@ impl Viewport {
             .first()
             .copied()
             .ok_or("viewport surface has no alpha modes")?;
-        renderer
-            .production_pipelines
-            .ensure_surface_format(&renderer.device, format);
-        surface.configure(
-            &renderer.device,
-            &wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                format,
-                color_space: wgpu::SurfaceColorSpace::Auto,
+        configure_viewport_surface(
+            renderer,
+            &surface,
+            format,
+            width,
+            height,
+            present_mode,
+            alpha_mode,
+        );
+        renderer.present_surface(&surface, format, extraction)?;
+        Ok(Self {
+            event_loop,
+            app,
+            window,
+            surface: Some(surface),
+            format,
+            width,
+            height,
+        })
+    }
+
+    fn pump_events(
+        &mut self,
+        renderer: &mut Renderer,
+        extraction: &RenderExtraction,
+    ) -> Result<bool, String> {
+        self.app.resized = None;
+        self.app.redraw_requested = false;
+        self.event_loop
+            .run_app_on_demand(&mut self.app)
+            .map_err(|e| e.to_string())?;
+        if self.app.close_requested {
+            return Ok(false);
+        }
+        let Some(surface) = self.surface.as_ref() else {
+            return Ok(false);
+        };
+        if let Some((width, height)) = self.app.resized {
+            self.width = width;
+            self.height = height;
+            let caps = surface.get_capabilities(&renderer.adapter);
+            let present_mode = caps
+                .present_modes
+                .first()
+                .copied()
+                .ok_or("viewport surface has no present modes")?;
+            let alpha_mode = caps
+                .alpha_modes
+                .first()
+                .copied()
+                .ok_or("viewport surface has no alpha modes")?;
+            configure_viewport_surface(
+                renderer,
+                surface,
+                self.format,
                 width,
                 height,
                 present_mode,
                 alpha_mode,
-                view_formats: vec![],
-                desired_maximum_frame_latency: 2,
-            },
-        );
-        renderer.present_surface(&surface, format, extraction)?;
-        Ok(Self {
-            _event_loop: event_loop,
-            _window: window,
-            _surface: Some(surface),
-            width,
-            height,
-        })
+            );
+        }
+        // Present on every bounded pump, not only on the first open or after
+        // explicit recovery. This keeps world mutations and redraw/resize
+        // events visible while the IPC loop remains responsive.
+        renderer.present_surface(surface, self.format, extraction)?;
+        Ok(true)
     }
 
     fn recover(
@@ -670,10 +740,10 @@ impl Viewport {
         renderer: &mut Renderer,
         extraction: &RenderExtraction,
     ) -> Result<(), String> {
-        drop(self._surface.take());
+        drop(self.surface.take());
         let surface = renderer
             .instance
-            .create_surface(self._window.clone())
+            .create_surface(self.window.clone())
             .map_err(|e| e.to_string())?;
         let caps = surface.get_capabilities(&renderer.adapter);
         let format = caps
@@ -691,27 +761,48 @@ impl Viewport {
             .first()
             .copied()
             .ok_or("recovered viewport surface has no alpha modes")?;
-        renderer
-            .production_pipelines
-            .ensure_surface_format(&renderer.device, format);
-        surface.configure(
-            &renderer.device,
-            &wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                format,
-                color_space: wgpu::SurfaceColorSpace::Auto,
-                width: self.width,
-                height: self.height,
-                present_mode,
-                alpha_mode,
-                view_formats: vec![],
-                desired_maximum_frame_latency: 2,
-            },
+        configure_viewport_surface(
+            renderer,
+            &surface,
+            format,
+            self.width,
+            self.height,
+            present_mode,
+            alpha_mode,
         );
         renderer.present_surface(&surface, format, extraction)?;
-        self._surface = Some(surface);
+        self.format = format;
+        self.surface = Some(surface);
         Ok(())
     }
+}
+
+fn configure_viewport_surface(
+    renderer: &mut Renderer,
+    surface: &wgpu::Surface<'_>,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+    present_mode: wgpu::PresentMode,
+    alpha_mode: wgpu::CompositeAlphaMode,
+) {
+    renderer
+        .production_pipelines
+        .ensure_surface_format(&renderer.device, format);
+    surface.configure(
+        &renderer.device,
+        &wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            color_space: wgpu::SurfaceColorSpace::Auto,
+            width,
+            height,
+            present_mode,
+            alpha_mode,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        },
+    );
 }
 
 struct App {
@@ -1803,11 +1894,116 @@ fn reference_input(revision: u64, tick: u64) -> WorldRenderInput {
 fn run_ipc() -> Result<(), String> {
     let mut app = App::new()?;
     diagnostic("info", "native.ready", None, None);
-    let stdin = io::stdin();
     let stdout = io::stdout();
-    let mut input = stdin.lock();
     let mut output = stdout.lock();
-    run_ipc_loop(&mut app, &mut input, &mut output)
+    let (sender, receiver) = mpsc::channel::<Result<Option<Vec<u8>>, String>>();
+    std::thread::spawn(move || {
+        let stdin = io::stdin();
+        let mut input = stdin.lock();
+        loop {
+            let result = read_frame(&mut input);
+            let finished = matches!(&result, Ok(None) | Err(_));
+            if sender.send(result).is_err() || finished {
+                break;
+            }
+        }
+    });
+    run_ipc_live_loop(&mut app, &receiver, &mut output)
+}
+
+fn pump_viewport(app: &mut App) -> Result<(), String> {
+    if app.viewport.is_none() {
+        return Ok(());
+    }
+    let extraction = app.build_extraction(&Value::Null)?;
+    let mut viewport = app
+        .viewport
+        .take()
+        .ok_or("viewport disappeared during event pump")?;
+    let still_open = viewport.pump_events(&mut app.renderer, &extraction)?;
+    if still_open {
+        app.viewport = Some(viewport);
+    }
+    Ok(())
+}
+
+fn dispatch_ipc_frame(
+    app: &mut App,
+    bytes: Vec<u8>,
+    output: &mut impl Write,
+) -> Result<bool, String> {
+    let mut req: Request =
+        serde_json::from_slice(&bytes).map_err(|e| format!("invalid request schema: {e}"))?;
+    let method = req.method.clone();
+    let diagnostic_context = take_diagnostic_context(&mut req.params);
+    let trace = NativeTraceGuard::begin(&method, req.id, diagnostic_context);
+    let result = app.dispatch(req);
+    match result {
+        Ok(resp) => {
+            let response_ok = resp.ok;
+            let write_outcome = match write_response(output, &resp) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    trace.finish(false);
+                    diagnostic(
+                        "error",
+                        "native.protocol_failed",
+                        Some(&method),
+                        Some("fatal_protocol_error"),
+                    );
+                    return Err(format!("fatal response write error: {error}"));
+                }
+            };
+            trace.finish(write_outcome.operation_succeeded(response_ok));
+            Ok(method == "shutdown")
+        }
+        Err(_error) => {
+            trace.finish(false);
+            diagnostic(
+                "error",
+                "native.protocol_failed",
+                Some(&method),
+                Some("fatal_protocol_error"),
+            );
+            Err("fatal protocol error".into())
+        }
+    }
+}
+
+fn run_ipc_live_loop(
+    app: &mut App,
+    receiver: &mpsc::Receiver<Result<Option<Vec<u8>>, String>>,
+    output: &mut impl Write,
+) -> Result<(), String> {
+    loop {
+        if app.viewport.is_some() {
+            pump_viewport(app)?;
+        }
+        let next = if app.viewport.is_some() {
+            receiver.recv_timeout(Duration::from_millis(16))
+        } else {
+            match receiver.recv() {
+                Ok(value) => Ok(value),
+                Err(_) => Err(mpsc::RecvTimeoutError::Disconnected),
+            }
+        };
+        let bytes = match next {
+            Ok(Ok(Some(bytes))) => bytes,
+            Ok(Ok(None)) => {
+                diagnostic("info", "native.eof", None, None);
+                return Ok(());
+            }
+            Ok(Err(error)) => return Err(error),
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("native input channel disconnected".into());
+            }
+        };
+        if dispatch_ipc_frame(app, bytes, output)? {
+            diagnostic("info", "native.stopped", Some("shutdown"), None);
+            return Ok(());
+        }
+    }
 }
 
 fn run_ipc_loop(
@@ -1820,44 +2016,12 @@ fn run_ipc_loop(
             diagnostic("info", "native.eof", None, None);
             return Ok(());
         };
-        let mut req: Request =
-            serde_json::from_slice(&bytes).map_err(|e| format!("invalid request schema: {e}"))?;
-        let method = req.method.clone();
-        let diagnostic_context = take_diagnostic_context(&mut req.params);
-        let trace = NativeTraceGuard::begin(&method, req.id, diagnostic_context);
-        let result = app.dispatch(req);
-        match result {
-            Ok(resp) => {
-                let response_ok = resp.ok;
-                let write_outcome = match write_response(output, &resp) {
-                    Ok(outcome) => outcome,
-                    Err(error) => {
-                        trace.finish(false);
-                        diagnostic(
-                            "error",
-                            "native.protocol_failed",
-                            Some(&method),
-                            Some("fatal_protocol_error"),
-                        );
-                        return Err(format!("fatal response write error: {error}"));
-                    }
-                };
-                trace.finish(write_outcome.operation_succeeded(response_ok));
-                if method == "shutdown" {
-                    diagnostic("info", "native.stopped", Some(&method), None);
-                    return Ok(());
-                }
-            }
-            Err(_error) => {
-                trace.finish(false);
-                diagnostic(
-                    "error",
-                    "native.protocol_failed",
-                    Some(&method),
-                    Some("fatal_protocol_error"),
-                );
-                return Err("fatal protocol error".into());
-            }
+        let shutdown = dispatch_ipc_frame(app, bytes, output)?;
+        if !shutdown {
+            pump_viewport(app)?;
+        } else {
+            diagnostic("info", "native.stopped", Some("shutdown"), None);
+            return Ok(());
         }
     }
 }

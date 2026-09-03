@@ -26,6 +26,7 @@ from typing import Any, BinaryIO, Callable, Mapping, Sequence
 from Auvra.diagnostics.core import active_diagnostics, current_diagnostic_context, trace_public_class
 from Auvra.host.dispatcher import HostOperationError
 from Auvra.host.logging import redact
+from Auvra.launcher.platform import PosixProcessGroup, WindowsJob
 
 
 PROTOCOL_VERSION = "auvra.native/1"
@@ -254,6 +255,7 @@ class NativeEngine:
         self.derived_root = Path(derived_root).expanduser().absolute() if derived_root is not None else None
         self._runtime_diagnostics = diagnostics if diagnostics is not None else active_diagnostics()
         self._process: subprocess.Popen[bytes] | None = None
+        self._process_owner: Any = None
         self._token: str | None = None
         self._state = NativeEngineState.NEW
         self._revision: int | None = None
@@ -303,13 +305,41 @@ class NativeEngine:
         if self.derived_root is not None:
             self.derived_root.mkdir(parents=True, exist_ok=True)
             environment[NATIVE_DERIVED_ROOT_ENV] = str(self.derived_root)
+        owner: Any = None
         try:
+            owner = WindowsJob() if os.name == "nt" else PosixProcessGroup()
+            launch_kwargs = dict(getattr(owner, "creation_kwargs", {}))
+            if os.name == "nt":
+                launch_kwargs["creationflags"] = int(launch_kwargs.get("creationflags", 0)) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
             self._process = subprocess.Popen(
                 list(self.command), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, env=environment, shell=False, bufsize=0,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **launch_kwargs,
             )
+            self._process_owner = owner
+            if os.name == "nt":
+                owner.assign(self._process)
+            else:
+                owner.attach(self._process)
         except (OSError, ValueError) as exc:
+            if self._process is not None:
+                try:
+                    if owner is not None:
+                        owner.kill(self._process)
+                    else:
+                        self._process.kill()
+                except Exception:
+                    pass
+                try:
+                    self._process.wait(timeout=1)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+            if owner is not None:
+                try:
+                    owner.close()
+                except Exception:
+                    pass
+            self._process_owner = None
             self._state = NativeEngineState.FAILED
             if self._runtime_diagnostics is not None:
                 self._runtime_diagnostics.emit("native", "native.lifecycle",
@@ -337,6 +367,11 @@ class NativeEngine:
                 self._runtime_diagnostics.emit("native", "native.lifecycle",
                                                attributes={"state": "exited", "code": "child_exited",
                                                            "returnCode": self._process.returncode})
+            # A child that exits before readiness may already have spawned
+            # descendants. Close the ownership boundary before surfacing the
+            # typed startup failure so those descendants cannot outlive the
+            # failed launch.
+            self.close(timeout=min(self.shutdown_timeout, 1.0))
             raise NativeEngineChildExitedError(self._process.returncode)
         try:
             self._call("session.hello", {"editorSession": editor_session})
@@ -360,6 +395,7 @@ class NativeEngine:
         # Reader threads from the previous child may finish after close; the
         # new child receives a fresh transport queue and readiness event.
         self._process = None
+        self._process_owner = None
         self._token = None
         self._state = NativeEngineState.NEW
         self._revision = None
@@ -476,6 +512,37 @@ class NativeEngine:
         except subprocess.TimeoutExpired:
             return process.poll()
 
+    def _terminate_owned_process(self, process: subprocess.Popen[bytes], *, timeout: float) -> None:
+        """Stop the native root and its launcher-owned process tree."""
+
+        owner = self._process_owner
+        try:
+            if owner is not None:
+                owner.terminate(process)
+            else:
+                process.terminate()
+        except (OSError, ValueError):
+            pass
+        try:
+            process.wait(timeout=max(0.05, timeout))
+        except subprocess.TimeoutExpired:
+            pass
+        # Kill through the ownership boundary even when the root already
+        # exited: descendants may still be alive in the group/job.
+        try:
+            if owner is not None:
+                owner.kill(process)
+            elif process.poll() is None:
+                process.kill()
+        except (OSError, ValueError):
+            pass
+        if process.poll() is None:
+            try:
+                process.kill()
+                process.wait(timeout=min(max(0.05, timeout), 1.0))
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+
     def _invalidate_transport(self, *, code: str) -> None:
         """Fail closed after a response-channel timeout or protocol fault.
 
@@ -489,18 +556,8 @@ class NativeEngine:
         self._state = NativeEngineState.FAILED
         self._response_queue = queue.Queue()
         process = self._process
-        if process is not None and process.poll() is None:
-            try:
-                process.terminate()
-                process.wait(timeout=min(self.shutdown_timeout, 1.0))
-            except subprocess.TimeoutExpired:
-                try:
-                    process.kill()
-                    process.wait(timeout=min(self.shutdown_timeout, 1.0))
-                except (OSError, subprocess.TimeoutExpired):
-                    pass
-            except OSError:
-                pass
+        if process is not None:
+            self._terminate_owned_process(process, timeout=min(self.shutdown_timeout, 1.0))
         if self._runtime_diagnostics is not None:
             self._runtime_diagnostics.emit(
                 "native", "native.lifecycle",
@@ -669,15 +726,22 @@ class NativeEngine:
             except NativeEngineError:
                 pass
         if process is not None:
-            try:
-                process.wait(timeout=wait_for)
-            except subprocess.TimeoutExpired:
-                process.terminate()
+            if process.poll() is None:
                 try:
-                    process.wait(timeout=min(wait_for, 1.0))
+                    process.wait(timeout=wait_for)
                 except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=min(wait_for, 1.0))
+                    self._terminate_owned_process(process, timeout=min(wait_for, 1.0))
+            else:
+                # Even an exited root may leave descendants in the owned
+                # process group/job, so run the owner kill path once more.
+                self._terminate_owned_process(process, timeout=min(wait_for, 1.0))
+            owner = self._process_owner
+            if owner is not None:
+                try:
+                    owner.close()
+                except OSError:
+                    pass
+                self._process_owner = None
         self._state = NativeEngineState.CLOSED
         if process is not None:
             for stream in (process.stdin, process.stdout, process.stderr):

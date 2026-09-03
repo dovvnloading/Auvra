@@ -170,7 +170,13 @@ class OwnedProcessTests(unittest.TestCase):
                 owned.terminate(grace=2)
                 if owned.process.stdout is not None:
                     owned.process.stdout.close()
-            self.assertFalse(owned.is_alive())
+        self.assertFalse(owned.is_alive())
+
+    def test_windows_job_contains_child_before_resuming_it(self) -> None:
+        source = (Path(__file__).parents[2] / "Auvra" / "launcher" / "platform" / "windows_job.py").read_text(encoding="utf-8")
+        self.assertIn("CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED", source)
+        self.assertIn("AssignProcessToJobObject", source)
+        self.assertIn("_resume_primary_thread", source)
 
     @unittest.skipUnless(os.name == "nt", "Windows Job Objects only")
     def test_windows_job_reports_forced_termination_and_close_failures(self) -> None:

@@ -149,6 +149,36 @@ class WebView2HandlerTests(unittest.TestCase):
         self.assertIsNone(self.frame.failure)
         self.assertTrue(self.frame._browser_exited.is_set())
 
+    def test_hung_sta_still_terminates_owned_browser_before_raising(self):
+        class Form:
+            def BeginInvoke(self, action):
+                action()
+
+            def Close(self):
+                return None
+
+        class HungThread:
+            ManagedThreadId = 424242
+            IsAlive = True
+
+            def Join(self, _milliseconds):
+                return None
+
+        self.frame._state = FrameState.READY
+        self.frame._form = Form()
+        self.frame._thread = HungThread()
+        self.frame._browser_process_id = 4242
+        terminate = mock.patch.object(self.frame, "_terminate_owned_browser")
+        fake_system = types.ModuleType("System")
+        fake_system.Action = lambda callback: callback
+        try:
+            with terminate as kill_browser, mock.patch.dict(sys.modules, {"System": fake_system}):
+                with self.assertRaises(FrameStartupError):
+                    self.frame.close(timeout=0.1)
+                kill_browser.assert_called_once_with()
+        finally:
+            self.frame._state = FrameState.CLOSED
+
     def test_outbound_post_requires_canonical_protocol_message(self):
         posted: list[str] = []
 

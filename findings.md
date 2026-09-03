@@ -144,11 +144,15 @@ Import validates an archive, closes it, and later reopens the same path for extr
 
 **Severity:** High · **Classification:** Confirmed
 
+**Status:** Completed — recovery points are atomically staged and marker-published, require every domain, and snapshot/restore the content store and manifest; repository recovery coverage passed (43 passed, 1 skipped).
+
 The final recovery directory is created before its files are copied, with no completion marker (`Auvra/project/repository.py:287`, `Auvra/project/repository.py:317`). Every directory can be listed as a recovery point, and restore substitutes an empty domain document for any missing file (`Auvra/project/repository.py:342`). A crash or copy failure can expose a partial point whose restore silently deletes domain data. Recovery points also do not snapshot assets, so otherwise complete JSON can later reference missing content.
 
 ### F-016 — Re-ingesting authentic content cannot repair a corrupt hash-named asset
 
 **Severity:** High · **Classification:** Confirmed
+
+**Status:** Completed — same-digest ingestion now verifies existing content and atomically repairs corrupt/truncated blobs before manifest publication; the asset repair regression and repository suite passed (44 passed, 1 skipped).
 
 Asset ingestion verifies the new temporary content, but if the digest-named target already exists it discards the new file without verifying the existing blob (`Auvra/project/assets.py:66`, `Auvra/project/assets.py:71`). A corrupt file at the correct name is therefore preserved even when authentic content is re-uploaded, and ingestion reports the expected asset ID.
 
@@ -156,11 +160,15 @@ Asset ingestion verifies the new temporary content, but if the digest-named targ
 
 **Severity:** High · **Classification:** Confirmed crash-consistency bug
 
+**Status:** Completed — Save As and import now create the `.auvra/transactions` authority inside the staged tree before atomic publication; repository tests passed (45 passed, 1 skipped), including rename-boundary assertions.
+
 Save-as and import move staging into the visible destination before creating required `.auvra` internal directories (`Auvra/project/repository.py:281`, `Auvra/project/repository.py:368`). Open-time boundary validation requires those directories (`Auvra/project/repository.py:504`). A crash between publication and directory creation leaves a destination that exists but cannot be opened.
 
 ### F-018 — Command undo can erase unrelated changes made after approval
 
 **Severity:** High · **Classification:** Confirmed
+
+**Status:** Completed — command undo now requires the live project revision to equal the approved transaction revision and rejects intervening edits; provider-host regression coverage passed (4 tests).
 
 Provider command approval stores a full pre-change HUD snapshot (`Auvra/desktop/provider_host.py:657`). Undo checks project and transaction identity but does not require the current revision to match the approved transaction's result revision (`Auvra/desktop/provider_host.py:700`). Restoring the old full snapshot after a later HUD edit deletes the intervening work.
 
@@ -168,11 +176,15 @@ Provider command approval stores a full pre-change HUD snapshot (`Auvra/desktop/
 
 **Severity:** High · **Classification:** Confirmed
 
+**Status:** Completed — a remote success racing cancellation now closes the durable lifecycle as terminal `cancelled`, and the worker emits that terminal state; provider-core coverage passed (29 tests, 16 subtests).
+
 When a worker eventually succeeds after cancellation was requested, it calls reconciliation (`Auvra/desktop/provider_host.py:772`, `Auvra/desktop/provider_host.py:788`). Reconciliation intentionally retains `CANCEL_REQUESTED` on a success result (`Auvra/providers/jobs.py:289`). The worker then exits, leaving the terminal operation represented as in progress for the remainder of the current process. Restart reconciliation eventually fails non-durable jobs or moves durable jobs into recovery (`Auvra/providers/jobs.py:271`).
 
 ### F-020 — Retry spend is charged to the original job date
 
 **Severity:** High · **Classification:** Confirmed financial-control defect
+
+**Status:** Completed — durable cost reservations are timestamped as append-only events, legacy rows are backfilled, and retry charges are bucketed by their reservation time; provider-core coverage passed (30 tests, 16 subtests).
 
 Cost updates accumulate on a job, while totals bucket the entire cumulative amount by the job's original `created_at` (`Auvra/providers/jobs.py:229`). Budget enforcement uses those totals (`Auvra/desktop/provider_host.py:859`). Retrying an old job today can attribute today's spend to an older day or month and bypass the current period's cap.
 
@@ -180,11 +192,15 @@ Cost updates accumulate on a job, while totals bucket the entire cumulative amou
 
 **Severity:** High · **Classification:** Confirmed
 
+**Status:** Completed — structured command workers now pass the host-selected target binding into provider completion, making update/delete proposals reachable and safely constrained; provider-host coverage passed (5 tests).
+
 The provider host calls `adapter.complete()` without a target element ID (`Auvra/desktop/provider_host.py:731`). The adapter consequently permits only create operations (`Auvra/providers/adapters.py:123`), so update/delete proposals fail before the later host-side revalidation that has the saved target (`Auvra/providers/commands.py:44`). The advertised update/delete flow is unreachable through the normal job path.
 
 ### F-022 — Provider model discovery depends on prior call order
 
 **Severity:** High · **Classification:** Confirmed functional defect
+
+**Status:** Completed — `listModels` now instantiates and queries its adapter directly, independent of prior health calls or injected transports; fresh local-provider discovery regression and provider-host coverage passed (6 tests).
 
 Dynamic provider descriptors start with no models (`Auvra/providers/descriptors.py:95`). `listModels` invokes an adapter only if one already exists or an injected transport is present (`Auvra/desktop/provider_host.py:401`, `Auvra/desktop/provider_host.py:830`). Cloud health can instantiate an adapter incidentally, while Ollama and llama.cpp health return before doing so. Normal local-provider model discovery can therefore remain empty and prevent configuration.
 
@@ -192,11 +208,15 @@ Dynamic provider descriptors start with no models (`Auvra/providers/descriptors.
 
 **Severity:** High · **Classification:** Confirmed risk
 
+**Status:** Completed — Windows children launch suspended, are assigned to the private kill-on-close Job Object, and resume only after successful assignment; process lifecycle coverage passed (10 tests).
+
 Launcher processes are created before assignment to the Windows job object (`Auvra/launcher/process.py:53`, `Auvra/launcher/platform/windows_job.py:79`), and creation flags do not include `CREATE_SUSPENDED` (`Auvra/launcher/platform/windows_job.py:15`). A fast child can spawn descendants before containment. If assignment then fails, killing the root does not guarantee recovery of already escaped descendants.
 
 ### F-024 — The native engine is not owned as a process tree
 
 **Severity:** High · **Classification:** Confirmed risk
+
+**Status:** Completed — native children now launch inside a private POSIX process group or suspended Windows Job Object, shutdown and transport failure terminate the owned tree, and startup-exit cleanup plus native/launcher process-tree regressions passed.
 
 The native engine uses raw `subprocess.Popen` with `CREATE_NO_WINDOW` and no job object (`Auvra/desktop/native_engine.py:288`). Shutdown terminates or kills only the root PID (`Auvra/desktop/native_engine.py:622`). Any descendants can survive ordinary close, timeout recovery, or host failure.
 
@@ -204,17 +224,23 @@ The native engine uses raw `subprocess.Popen` with `CREATE_NO_WINDOW` and no job
 
 **Severity:** High · **Classification:** Confirmed
 
+**Status:** Completed — shutdown now uses a single bounded grace window, signals cooperative worker cancellation, avoids executor `wait=True`, and defers durable-store closure until any still-running worker exits; the blocked-future regression passed (7 provider-host tests).
+
 Shutdown waits briefly for futures and ignores incomplete work, then calls executor shutdown with `wait=True` (`Auvra/desktop/provider_host.py:251`). Workers have no cooperative cancellation token and may be blocked in network or polling code. The apparent bounded shutdown is therefore followed by an unbounded wait.
 
 ### F-026 — A hung WebView thread skips owned-browser cleanup
 
 **Severity:** High · **Classification:** Confirmed
 
+**Status:** Completed — close now treats join failures/timeouts as a cleanup path, terminates the owned browser tree before raising, and handles pre-thread startup cleanup; WebView and controller lifecycle regressions passed (27 tests, 1 skipped).
+
 When the UI thread remains alive after its join timeout, WebView close raises before `_terminate_owned_browser()` is reached (`Auvra/desktop/webview2.py:196`, `Auvra/desktop/webview2.py:215`). Controller cleanup cannot complete that skipped branch (`Auvra/desktop/controller.py:639`). Browser descendants and profile locks can survive shutdown.
 
 ### F-027 — The native viewport renders one frame and stops processing events
 
 **Severity:** High · **Classification:** Confirmed
+
+**Status:** Completed — the native runtime now keeps IPC responsive while repeatedly pumping the viewport event loop, handles close/resize/redraw events, and presents current world extraction on each tick; native cargo tests passed (34 tests) and the viewport source regression passed.
 
 The viewport event handler exits immediately after creating the window and again from `about_to_wait` (`native/src/main.rs:503`, `native/src/main.rs:532`). Open configures the surface and calls `present_surface` exactly once (`native/src/main.rs:545`, `native/src/main.rs:593`); recovery renders one additional frame (`native/src/main.rs:646`). There is no live redraw, resize, or close-event pump after open, so later world changes are not displayed.
 

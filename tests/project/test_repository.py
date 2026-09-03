@@ -79,6 +79,20 @@ class ProjectTests(unittest.TestCase):
         ref = store.put_stream(io.BytesIO(data), size=len(data), chunk_size=7, mime="model/gltf")
         self.assertEqual(ref.size, len(data)); self.assertTrue(store.verify(ref.asset_id))
         with store.open(ref.asset_id) as stream: self.assertEqual(stream.read(), data)
+
+    def test_reingest_repairs_corrupt_existing_hash_named_asset(self):
+        store = self.repo.assets
+        authentic = b"authentic-content"
+        reference = store.put_stream(io.BytesIO(authentic), name="asset.bin")
+        target = store.path_for(reference.asset_id)
+        target.write_bytes(b"corrupt-content")
+        self.assertFalse(store.verify(reference.asset_id, expected_size=len(authentic)))
+        repaired = store.put_stream(io.BytesIO(authentic), size=len(authentic), name="asset.bin")
+        self.assertEqual(repaired.asset_id, reference.asset_id)
+        self.assertTrue(store.verify(reference.asset_id, expected_size=len(authentic)))
+        with store.open(reference.asset_id) as stream:
+            self.assertEqual(stream.read(), authentic)
+
     def test_autosave_eligibility(self):
         self.repo.apply_changes({"metadata": [{"id":"m"}]}, expected_revision=0)
         now = 1000
@@ -123,6 +137,39 @@ class ProjectTests(unittest.TestCase):
         try:
             self.assertTrue((destination / f"{self.repo.name}.auvra").is_file())
         finally: copy.close()
+
+    def test_save_as_and_import_publish_authority_directories_with_rename(self):
+        original_replace = repository_module.os.replace
+        save_as_destination = Path(self.tmp.name) / "staged-save-as"
+        seen_save_as: list[bool] = []
+
+        def inspect_save_as(source, target):
+            if Path(target) == save_as_destination:
+                seen_save_as.append((Path(source) / ".auvra" / "transactions").is_dir())
+            return original_replace(source, target)
+
+        with mock.patch.object(repository_module.os, "replace", side_effect=inspect_save_as):
+            copied = self.repo.save_as(save_as_destination)
+        copied.close()
+        self.assertEqual(seen_save_as, [True])
+        self.assertTrue((save_as_destination / ".auvra" / "transactions").is_dir())
+
+        archive = Path(self.tmp.name) / "staged-import.auvrapack"
+        self.repo.export_pack(archive)
+        import_destination = Path(self.tmp.name) / "staged-import"
+        seen_import: list[bool] = []
+
+        def inspect_import(source, target):
+            if Path(target) == import_destination:
+                seen_import.append((Path(source) / ".auvra" / "transactions").is_dir())
+            return original_replace(source, target)
+
+        with mock.patch.object(repository_module.os, "replace", side_effect=inspect_import):
+            imported = ProjectRepository.import_pack(archive, import_destination)
+        imported.close()
+        self.assertEqual(seen_import, [True])
+        self.assertTrue((import_destination / ".auvra" / "transactions").is_dir())
+
     def test_recovery_count_and_byte_cap(self):
         self.repo.apply_changes({"metadata": [{"id":"m", "description":"0123456789"}]}, expected_revision=0)
         with mock.patch.object(repository_module, "PROJECT_CAP", 1):
@@ -156,6 +203,28 @@ class ProjectTests(unittest.TestCase):
         self.repo.apply_changes({"metadata": [{"id":"second", "name":"Second"}]}, expected_revision=1)
         self.repo.restore_recovery("manual", point)
         self.assertEqual(self.repo.get_domain("metadata")["documents"][0]["id"], "first")
+
+    def test_recovery_requires_complete_domains_and_restores_assets(self):
+        reference = self.repo.assets.put_stream(io.BytesIO(b"recovery-asset"), name="asset.bin")
+        self.repo.apply_changes({"metadata": [{"id": "snapshot", "name": "Snapshot"}]}, expected_revision=0)
+        self.repo.save()
+        point = self.repo.recovery_points("manual")[0]["name"]
+        reference_path = self.repo.assets.path_for(reference.asset_id)
+        reference_path.unlink()
+        self.assertFalse(self.repo.assets.verify(reference.asset_id))
+        self.repo.restore_recovery("manual", point)
+        self.assertTrue(self.repo.assets.verify(reference.asset_id))
+        self.assertEqual(self.repo.get_domain("metadata")["documents"][0]["id"], "snapshot")
+
+        incomplete = self.root / ".auvra" / "backups" / "incomplete"
+        incomplete.mkdir()
+        (incomplete / "metadata.json").write_text("{}", encoding="utf-8")
+        self.assertNotIn("incomplete", {item["name"] for item in self.repo.recovery_points("manual")})
+        with self.assertRaises(InvalidProjectError):
+            self.repo.restore_recovery("manual", "incomplete")
+        import shutil
+        shutil.rmtree(incomplete)
+
     def test_malicious_journal_path_fails_closed(self):
         journal = self.root / ".auvra" / "transactions" / "malicious.json"
         journal.write_text(json.dumps({"state":"prepared","newRevision":1,"files":[{"target":"../../escape.json","backup":"staging/x/old","staged":"staging/x/new"}]}), encoding="utf-8")

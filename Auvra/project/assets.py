@@ -70,11 +70,15 @@ class AssetStore:
             mime = mime or detected or "application/octet-stream"
             asset_id = digest.hexdigest(); target = self.path_for(asset_id)
             target.parent.mkdir(parents=True, exist_ok=True)
-            if target.exists():
-                tmp.unlink()
-            else:
-                os.replace(tmp, target)
-            self._record(asset_id, total, mime, name)
+            # Serialize same-digest ingestion with manifest publication.  An
+            # existing filename is not proof of valid content: repair a
+            # corrupt or truncated blob with the freshly verified stream.
+            with _MANIFEST_LOCK:
+                if target.exists() and self.verify(asset_id, expected_size=total):
+                    tmp.unlink()
+                else:
+                    os.replace(tmp, target)
+                self._record(asset_id, total, mime, name)
             return AssetReference(asset_id, total, mime, name)
         finally:
             try: tmp.unlink()

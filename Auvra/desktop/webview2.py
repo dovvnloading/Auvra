@@ -213,13 +213,30 @@ class WebView2Frame:
         else:
             self._closed.set()
         if thread is not None and not self._on_native_thread():
-            thread.Join(max(1, int(timeout * 1000)))
-            if bool(getattr(thread, "IsAlive", False)):
+            thread_alive = False
+            try:
+                thread.Join(max(1, int(timeout * 1000)))
+                thread_alive = bool(getattr(thread, "IsAlive", False))
+            except Exception:
+                # A managed-thread join can itself fail when the STA is
+                # tearing down. Treat that as hung so browser cleanup still
+                # runs on the caller's bounded shutdown path.
+                thread_alive = True
+            if thread_alive:
                 self._fail("shutdown_timeout", "Auvra desktop frame did not close in time")
+                # Do this before raising: a hung STA cannot execute the normal
+                # WebView2 disposal path, so its browser tree must be killed
+                # from the owning host thread.
+                self._terminate_owned_browser()
+                self._closed.set()
                 raise FrameStartupError("Auvra desktop frame shutdown timed out")
             self._browser_exited.wait(min(timeout, 2.0))
             if not self._browser_exited.is_set():
                 self._terminate_owned_browser()
+        elif thread is None and not self._browser_exited.is_set():
+            # Startup can fail before the STA thread is observable while a
+            # browser process has nevertheless been created.
+            self._terminate_owned_browser()
         with self._lock:
             self._state = FrameState.CLOSED
         self._closed.set()

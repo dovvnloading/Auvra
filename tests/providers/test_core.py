@@ -1,10 +1,13 @@
 from __future__ import annotations
 import hashlib, io, json, sqlite3, tempfile, unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 from Auvra.providers import *
 from Auvra.providers.adapters import MediaJob, TextResult, _fal_cdn_url
 from Auvra.providers.descriptors import ProviderFeature
+import Auvra.providers.jobs as jobs_module
 
 
 class FakeTransport:
@@ -212,6 +215,47 @@ class ProviderCoreTests(unittest.TestCase):
             self.assertEqual(loaded.state, JobState.CANCELLED); self.assertEqual(len(reopened.pending_reconciliation()), 0)
             self.assertNotIn("do not persist", Path(db).read_bytes().decode("latin1", "ignore"))
             reopened.close()
+
+    def test_cancel_requested_remote_success_becomes_terminal_cancelled(self):
+        store = SQLiteJobStore()
+        try:
+            job = store.create(
+                project_id="project-1", provider="fal", model="fal-ai/flux/dev",
+                capability="media.generate", prompt_hash="a" * 64,
+            )
+            store.transition(job.job_id, JobState.SUBMITTING, project_id="project-1")
+            store.transition(job.job_id, JobState.RUNNING, project_id="project-1")
+            store.request_cancel(job.job_id, project_id="project-1")
+            reconciled = store.reconcile(job.job_id, remote_state="succeeded", project_id="project-1")
+            self.assertEqual(reconciled.state, JobState.CANCELLED)
+            self.assertNotIn(job.job_id, {item.job_id for item in store.pending_reconciliation()})
+            self.assertEqual(store.events(job.job_id)[-1].state, JobState.CANCELLED)
+        finally:
+            store.close()
+
+    def test_retry_cost_is_bucketed_by_reservation_time(self):
+        old = datetime(2026, 1, 31, 23, 59, tzinfo=timezone.utc).timestamp()
+        current = datetime(2026, 2, 1, 0, 1, tzinfo=timezone.utc).timestamp()
+        store = SQLiteJobStore()
+        try:
+            with mock.patch.object(jobs_module.time, "time", return_value=old):
+                job = store.create(
+                    project_id="project-1", provider="fal", model="fal-ai/flux/dev",
+                    capability="media.generate", prompt_hash="a" * 64,
+                    cost_micro_usd=10,
+                )
+            with mock.patch.object(jobs_module.time, "time", return_value=current):
+                store.add_cost(job.job_id, 5, project_id="project-1")
+            self.assertEqual(
+                store.cost_totals("fal", at=datetime(2026, 1, 31, 23, 59, tzinfo=timezone.utc)),
+                {"aggregate": 15, "daily": 10, "monthly": 10},
+            )
+            self.assertEqual(
+                store.cost_totals("fal", at=datetime(2026, 2, 1, 0, 1, tzinfo=timezone.utc)),
+                {"aggregate": 15, "daily": 5, "monthly": 5},
+            )
+        finally:
+            store.close()
 
     def test_jobs_are_project_scoped_and_sensitive_events_never_persist(self):
         store = SQLiteJobStore()

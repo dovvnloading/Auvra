@@ -211,6 +211,26 @@ class NativeEngineTests(unittest.TestCase):
                             and item.get("attributes", {}).get("state") == "closed"
                             for item in records))
 
+    def test_native_child_is_attached_to_a_private_process_tree_owner(self) -> None:
+        engine = self.make_engine()
+        process = engine.process
+        owner = engine._process_owner
+        assert process is not None
+        self.assertIsNotNone(owner)
+        if os.name == "posix":
+            self.assertEqual(type(owner).__name__, "PosixProcessGroup")
+            self.assertEqual(os.getpgid(process.pid), process.pid)
+        else:
+            self.assertEqual(type(owner).__name__, "WindowsJob")
+
+    def test_native_viewport_has_a_live_event_and_redraw_pump(self) -> None:
+        source = (Path(__file__).parents[2] / "native" / "src" / "main.rs").read_text(encoding="utf-8")
+        self.assertIn("fn pump_events(", source)
+        self.assertIn("WindowEvent::Resized", source)
+        self.assertIn("WindowEvent::RedrawRequested", source)
+        self.assertIn("window.request_redraw()", source)
+        self.assertIn("receiver.recv_timeout(Duration::from_millis(16))", source)
+
     def test_child_exit_is_typed_and_cleanup_is_bounded(self) -> None:
         engine = self.make_engine()
         with self.assertRaises(NativeEngineChildExitedError) as raised:

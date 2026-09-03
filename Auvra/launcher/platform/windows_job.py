@@ -13,6 +13,10 @@ kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 JobObjectExtendedLimitInformation = 9
 CREATE_NEW_PROCESS_GROUP = 0x00000200
+CREATE_SUSPENDED = 0x00000004
+THREAD_SUSPEND_RESUME = 0x0002
+THREAD_QUERY_LIMITED_INFORMATION = 0x0800
+TH32CS_SNAPTHREAD = 0x00000004
 
 
 class IO_COUNTERS(ctypes.Structure):
@@ -48,6 +52,25 @@ kernel32.SetInformationJobObject.argtypes = [
 kernel32.SetInformationJobObject.restype = wintypes.BOOL
 kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
 kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+kernel32.ResumeThread.argtypes = [wintypes.HANDLE]
+kernel32.ResumeThread.restype = wintypes.DWORD
+kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+kernel32.Thread32First.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+kernel32.Thread32First.restype = wintypes.BOOL
+kernel32.Thread32Next.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+kernel32.Thread32Next.restype = wintypes.BOOL
+kernel32.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+kernel32.OpenThread.restype = wintypes.HANDLE
+
+
+class THREADENTRY32(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+        ("th32ThreadID", wintypes.DWORD), ("th32OwnerProcessID", wintypes.DWORD),
+        ("tpBasePri", ctypes.c_long), ("tpDeltaPri", ctypes.c_long),
+        ("dwFlags", wintypes.DWORD),
+    ]
 kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
 kernel32.TerminateJobObject.restype = wintypes.BOOL
 kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
@@ -57,7 +80,9 @@ kernel32.CloseHandle.restype = wintypes.BOOL
 class WindowsJob:
     """A private kill-on-close job; assignment failure is fatal to startup."""
 
-    creation_kwargs = {"creationflags": CREATE_NEW_PROCESS_GROUP}
+    # The child cannot execute (and therefore cannot spawn descendants) until
+    # ``assign`` has placed it in this private kill-on-close job.
+    creation_kwargs = {"creationflags": CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED}
 
     def __init__(self) -> None:
         self.handle = kernel32.CreateJobObjectW(None, None)
@@ -90,6 +115,42 @@ class WindowsJob:
                     pass
             self.close()
             raise OSError(error, "AssignProcessToJobObject failed; child was stopped")
+        if not self._resume_primary_thread(process):
+            error = ctypes.get_last_error()
+            try:
+                self.kill(process)
+            finally:
+                self.close()
+            raise OSError(error, "ResumeThread failed; child was stopped")
+
+    @staticmethod
+    def _resume_primary_thread(process: subprocess.Popen[bytes] | subprocess.Popen[str]) -> bool:
+        """Resume the suspended process without relying on Popen's closed thread handle."""
+
+        snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
+        snapshot_value = getattr(snapshot, "value", snapshot)
+        if not snapshot_value or snapshot_value == ctypes.c_void_p(-1).value:
+            return False
+        entry = THREADENTRY32()
+        entry.dwSize = ctypes.sizeof(THREADENTRY32)
+        try:
+            found = bool(kernel32.Thread32First(snapshot, ctypes.byref(entry)))
+            while found:
+                if entry.th32OwnerProcessID == int(process.pid):
+                    thread = kernel32.OpenThread(
+                        THREAD_SUSPEND_RESUME | THREAD_QUERY_LIMITED_INFORMATION,
+                        False,
+                        entry.th32ThreadID,
+                    )
+                    if thread:
+                        try:
+                            return kernel32.ResumeThread(thread) != 0xFFFFFFFF
+                        finally:
+                            kernel32.CloseHandle(thread)
+                found = bool(kernel32.Thread32Next(snapshot, ctypes.byref(entry)))
+            return False
+        finally:
+            kernel32.CloseHandle(snapshot)
 
     def close(self) -> None:
         if getattr(self, "handle", None):
