@@ -3,10 +3,32 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
 from .pipeline import ReleaseError, canonical_json
+
+
+_SIGNATURE = re.compile(r"^[0-9a-f]{16,64}$")
+
+
+def _normalize_signature(value: Any, label: str) -> str:
+    """Normalize and validate a backend's rendered-pixel digest.
+
+    Both producers have historically used hexadecimal digests, with the
+    native path sometimes including a ``0x`` prefix and differing case.  The
+    verifier compares the canonical value so formatting differences cannot
+    hide a real rendered-output mismatch.
+    """
+
+    if not isinstance(value, str) or not value:
+        raise ReleaseError(f"{label} pixel signature is missing")
+    normalized = value[2:] if value[:2].lower() == "0x" else value
+    normalized = normalized.lower()
+    if not _SIGNATURE.fullmatch(normalized):
+        raise ReleaseError(f"{label} pixel signature is invalid")
+    return normalized
 
 
 def _load(value: Mapping[str, Any] | Path) -> Mapping[str, Any]:
@@ -31,17 +53,19 @@ def _frontend_reference(value: Mapping[str, Any]) -> dict[str, Any]:
         selected = next((item for item in value["results"] if isinstance(item, Mapping) and item.get("backend") == "webgl2"), None)
         if not isinstance(selected, Mapping) or not selected.get("supported") or not selected.get("qualified"):
             raise ReleaseError("renderer webgl2 reference is unavailable or unqualified")
-        signature = selected.get("pixelSignature") or value.get("pixelSignature")
-        if not isinstance(signature, str) or not signature:
-            raise ReleaseError("renderer webgl2 pixel signature is missing")
+        signature = _normalize_signature(
+            selected.get("pixelSignature") or value.get("pixelSignature"),
+            "renderer webgl2",
+        )
         return {"scene": str(value["sceneId"]), "signature": signature,
                 "dimensions": _optional_dimensions(selected, value)}
     backend = value.get("backend")
     if backend != "webgl2":
         raise ReleaseError("cross-backend evidence is not the expected webgl2 result")
-    signature = value.get("signature") or value.get("pixelSignature")
-    if not isinstance(signature, str) or not signature:
-        raise ReleaseError("webgl2 reference signature is missing")
+    signature = _normalize_signature(
+        value.get("signature") or value.get("pixelSignature"),
+        "webgl2 reference",
+    )
     return {"scene": value.get("scene", "reference"), "signature": signature,
             "dimensions": _optional_dimensions(value, value)}
 
@@ -52,9 +76,10 @@ def _native_reference(value: Mapping[str, Any]) -> dict[str, Any]:
     candidate = value.get("reference") if value.get("probe") == "auvra-native-self-test" else value
     if not isinstance(candidate, Mapping):
         raise ReleaseError("native self-test reference is missing")
-    signature = candidate.get("pixel_hash_fnv1a64") or candidate.get("signature") or candidate.get("pixelSignature")
-    if not isinstance(signature, str) or not signature:
-        raise ReleaseError("native reference pixel signature is missing")
+    signature = _normalize_signature(
+        candidate.get("pixel_hash_fnv1a64") or candidate.get("signature") or candidate.get("pixelSignature"),
+        "native reference",
+    )
     return {"scene": value.get("scene", "basic"), "signature": signature,
             "dimensions": _optional_dimensions(candidate, value)}
 
@@ -78,12 +103,7 @@ def _dimensions(value: Mapping[str, Any]) -> tuple[int, int]:
 
 
 def verify_cross_backend(webgl: Mapping[str, Any] | Path, native: Mapping[str, Any] | Path) -> dict[str, Any]:
-    """Verify compatible reference dimensions and scene identity.
-
-    Pixel signatures are retained as evidence but are deliberately not required
-    to match: backend-specific rasterization can differ while the scene,
-    dimensions, and declared reference contract remain equivalent.
-    """
+    """Verify that both backends rendered the same versioned reference scene."""
 
     left, right = _frontend_reference(_load(webgl)), _native_reference(_load(native))
     left_dims, right_dims = left["dimensions"], right["dimensions"]
@@ -93,6 +113,8 @@ def verify_cross_backend(webgl: Mapping[str, Any] | Path, native: Mapping[str, A
     if not isinstance(left_scene, str) or not isinstance(right_scene, str) or left_scene not in {right_scene, "basic"}:
         raise ReleaseError("cross-backend scene identities differ")
     left_sig, right_sig = left["signature"], right["signature"]
+    if left_sig != right_sig:
+        raise ReleaseError("cross-backend rendered pixel signatures differ")
     return {
         "schema": 1,
         "scene": left_scene,
@@ -100,7 +122,7 @@ def verify_cross_backend(webgl: Mapping[str, Any] | Path, native: Mapping[str, A
         "height": left_dims[1] if left_dims else right_dims[1] if right_dims else None,
         "webgl": {"backend": "webgl2", "signature": left_sig},
         "native": {"backend": "native", "signature": right_sig},
-        "pixelSignaturesMatch": left_sig == right_sig,
+        "pixelSignaturesMatch": True,
     }
 
 

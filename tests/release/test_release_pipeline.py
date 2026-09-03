@@ -309,21 +309,29 @@ class ReleasePipelineTests(unittest.TestCase):
                             for path in cooked.rglob("*") if path.is_file()}
             self.assertEqual(first, second)
             self.assertEqual(first_bytes, second_bytes)
-            evidence = verify_cross_backend(
-                {"sceneId": "basic", "selected": "webgl2", "pixelSignature": "web",
+            with self.assertRaisesRegex(ReleaseError, "pixel signatures differ"):
+                verify_cross_backend(
+                {"sceneId": "basic", "selected": "webgl2", "pixelSignature": "a" * 32,
                  "results": [{"backend": "webgl2", "supported": True, "qualified": True,
-                              "pixelSignature": "web"}]},
+                              "pixelSignature": "a" * 32}]},
                 {"probe": "auvra-native-self-test", "reference": {"width": 96, "height": 80,
-                 "pixel_hash_fnv1a64": "0x1234"}},
+                 "pixel_hash_fnv1a64": "0x" + "b" * 16}},
+                )
+            evidence = verify_cross_backend(
+                {"sceneId": "basic", "selected": "webgl2", "pixelSignature": "0x" + "a" * 16,
+                 "results": [{"backend": "webgl2", "supported": True, "qualified": True,
+                              "pixelSignature": "A" * 16}]},
+                {"probe": "auvra-native-self-test", "reference": {"width": 96, "height": 80,
+                 "pixel_hash_fnv1a64": "0x" + "a" * 16}},
             )
-            self.assertFalse(evidence["pixelSignaturesMatch"])
+            self.assertTrue(evidence["pixelSignaturesMatch"])
             with self.assertRaises(ReleaseError):
                 verify_cross_backend(
-                    {"sceneId": "basic", "selected": "webgl2", "pixelSignature": "web",
+                    {"sceneId": "basic", "selected": "webgl2", "pixelSignature": "a" * 32,
                      "results": [{"backend": "webgl2", "supported": True, "qualified": True,
-                                  "pixelSignature": "web"}], "width": 32, "height": 32},
+                                  "pixelSignature": "a" * 32}], "width": 32, "height": 32},
                     {"probe": "auvra-native-self-test", "reference": {"width": 96, "height": 80,
-                     "pixel_hash_fnv1a64": "0x1234"}},
+                     "pixel_hash_fnv1a64": "0x" + "a" * 16}},
                 )
 
 

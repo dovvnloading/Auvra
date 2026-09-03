@@ -476,6 +476,8 @@ The SBOM lists Auvra, CPython, and two WebView components (`release/pipeline.py:
 
 Cross-backend verification deliberately permits different pixel signatures and merely reports whether they match (`release/cross_backend.py:80`). It checks scene label and dimensions, so radically different WebGL and native pixels can pass. The current test explicitly accepts fabricated mismatched signatures (`tests/release/test_release_pipeline.py:166`).
 
+**Status:** Completed — cross-backend evidence now validates canonical hexadecimal render digests and fails closed when the WebGL and native signatures differ; regression coverage proves both mismatch rejection and prefix/case-normalized matching.
+
 ## Frontend correctness and usability findings
 
 ### F-057 — Initial restore races itself under React StrictMode
