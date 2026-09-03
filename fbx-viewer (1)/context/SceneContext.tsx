@@ -44,8 +44,8 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
     const assets = useAssets();
     const level = useLevel();
 
-    const hydrationCommitRef = useRef({ assets, level, selection });
-    hydrationCommitRef.current = { assets, level, selection };
+    const hydrationCommitRef = useRef({ assets, level, selection, viewport });
+    hydrationCommitRef.current = { assets, level, selection, viewport };
     const publishedResourcesRef = useRef({
         models: assets.models,
         attachments: assets.attachments,
@@ -87,7 +87,15 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
             targets.assets.setAudioAssets(state.audioAssets);
             targets.level.hydrateProjectState(state.levels, state.levelObjects, state.currentLevelId);
             targets.assets.hydrateGraphs(state.graphs);
-            targets.selection.selectModel(state.selectedModelId);
+            targets.viewport.setCameraState(state.cameraState);
+            if (state.selectedModelId) {
+                targets.selection.selectModel(state.selectedModelId);
+            } else if (state.selectedBlueprintId) {
+                targets.selection.selectBlueprint(state.selectedBlueprintId);
+            } else {
+                targets.selection.selectModel(null);
+                targets.selection.selectBlueprint(null);
+            }
         });
     }, []);
 
@@ -138,7 +146,9 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
         setBlueprints: assets.setBlueprints,
         setTextures: assets.setTextures,
         setAudioAssets: assets.setAudioAssets,
+        setCameraState: viewport.setCameraState,
         setSelectedModelId: selection.selectModel,
+        setSelectedBlueprintId: selection.selectBlueprint,
         setIsLoading,
         defaultBlueprints: DEFAULT_BLUEPRINTS
         ,hydrateProjectState: level.hydrateProjectState

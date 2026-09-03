@@ -122,6 +122,7 @@ const FreeCameraControls: React.FC<{
       direction.normalize().multiplyScalar(speed);
       camera.position.add(direction);
       currentTarget.current.copy(camera.position).add(forward);
+      onUpdate(camera.position.clone(), currentTarget.current.clone());
     }
   });
 
@@ -170,7 +171,7 @@ export const SceneCamera: React.FC<SceneCameraProps> = ({ mode, resetTrigger }) 
   return (
     <>
       {mode === 'orbit' && (
-        <OrbitControls 
+      <OrbitControls 
           ref={controlsRef}
           makeDefault 
           target={cameraState.target}
@@ -179,7 +180,23 @@ export const SceneCamera: React.FC<SceneCameraProps> = ({ mode, resetTrigger }) 
           dampingFactor={0.05}
           enablePan={true}
           panSpeed={1.0}
-        />
+          onChange={() => {
+            const controls = controlsRef.current;
+            if (!controls) return;
+            const position = camera.position.toArray();
+            const target = controls.target.toArray();
+            setCameraState((previous) => (
+              previous.position[0] === position[0]
+                && previous.position[1] === position[1]
+                && previous.position[2] === position[2]
+                && previous.target[0] === target[0]
+                && previous.target[1] === target[1]
+                && previous.target[2] === target[2]
+                ? previous
+                : { position, target }
+            ));
+          }}
+      />
       )}
 
       {mode === 'orbit' && (

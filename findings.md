@@ -542,6 +542,8 @@ The history diff compares only a subset of position, rotation, scale, terrain, a
 
 The project manager receives camera and selected IDs but save/save-as ignore them (`fbx-viewer (1)/hooks/useProjectManager.ts:16`, `fbx-viewer (1)/hooks/useProjectManager.ts:97`). Normal open applies different metadata than recent-open, recovery, and import (`fbx-viewer (1)/hooks/useProjectManager.ts:109`), while hydration clears selected model state (`fbx-viewer (1)/hooks/useScenePersistence.ts:312`). The same project can restore differently depending on entry point.
 
+**Status:** Completed — camera and selection are stored in one native `metadata/editor-state` document before Save and Save As, restored by the shared hydration path for open/recent/recovery/import, and validated against the loaded domains while preserving the single-selection invariant. Orbit/free camera changes are captured while active. Project verification, TypeScript, and production frontend build pass.
+
 ### F-065 — Rapid blueprint creation can violate the single-player invariant
 
 **Severity:** Medium · **Classification:** Confirmed race

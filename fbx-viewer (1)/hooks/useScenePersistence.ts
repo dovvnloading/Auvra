@@ -1,7 +1,7 @@
 
 import { useEffect, useCallback } from 'react';
 import * as THREE from 'three';
-import { LoadedModelData, AttachmentData, Blueprint, SocketData, TextureData, LevelObject, LevelData, AudioData } from '../types';
+import { LoadedModelData, AttachmentData, Blueprint, SocketData, TextureData, LevelObject, LevelData, AudioData, CameraState } from '../types';
 import { dbOperations } from '../utils/db';
 import { importPhaseLabel, loadFBXFile } from '../utils/modelLoader';
 import { stripGeometry } from '../utils/processing/ModelTransforms';
@@ -18,6 +18,7 @@ import {
   type DiagnosticAttributes,
   type DiagnosticContext,
 } from '../diagnostics/runtime';
+import { createDefaultCameraState, readEditorState } from '../utils/editorState';
 
 export interface ScenePersistenceProps {
   setModels: (models: LoadedModelData[]) => void;
@@ -27,7 +28,9 @@ export interface ScenePersistenceProps {
   setTextures?: (textures: TextureData[]) => void;
   setAudioAssets?: (audios: AudioData[]) => void; // Added
   setLevelObjects?: (objects: LevelObject[]) => void;
+  setCameraState: (state: CameraState) => void;
   setSelectedModelId: (id: string | null) => void;
+  setSelectedBlueprintId: (id: string | null) => void;
   setIsLoading: (loading: boolean) => void;
   defaultBlueprints?: Blueprint[];
   hydrateProjectState?: (levels: LevelData[], objects: LevelObject[], currentLevelId?: string | null) => void;
@@ -44,7 +47,9 @@ interface SnapshotHydrationTargets {
   setTextures?: (value: TextureData[]) => void;
   setAudioAssets?: (value: AudioData[]) => void;
   setLevelObjects?: (value: LevelObject[]) => void;
+  setCameraState: (value: CameraState) => void;
   setSelectedModelId: (value: string | null) => void;
+  setSelectedBlueprintId: (value: string | null) => void;
   hydrateProjectState?: (levels: LevelData[], objects: LevelObject[], currentLevelId?: string | null) => void;
   hydrateGraphs?: (graphs: Record<string, import('../types').AnimationGraphData>) => void;
   trackTexture?: (texture: THREE.Texture) => void;
@@ -66,7 +71,9 @@ export interface DetachedHydration {
   levels: LevelData[];
   currentLevelId: string | null;
   graphs: Record<string, import('../types').AnimationGraphData>;
+  cameraState: CameraState;
   selectedModelId: string | null;
+  selectedBlueprintId: string | null;
   standaloneTextures: Set<THREE.Texture>;
   ownedUrls: Set<string>;
 }
@@ -75,7 +82,7 @@ const createDetachedHydration = (defaultBlueprints?: Blueprint[]): DetachedHydra
   models: [], attachments: [], sockets: [],
   blueprints: defaultBlueprints ? [...defaultBlueprints] : [],
   textures: [], audioAssets: [], levelObjects: [], levels: [],
-  currentLevelId: null, graphs: {}, selectedModelId: null,
+  currentLevelId: null, graphs: {}, cameraState: createDefaultCameraState(), selectedModelId: null, selectedBlueprintId: null,
   standaloneTextures: new Set(),
   ownedUrls: new Set(),
 });
@@ -89,12 +96,14 @@ const detachedTargets = (state: DetachedHydration): SnapshotHydrationTargets => 
   setAudioAssets: (value) => { state.audioAssets = value; },
   setLevelObjects: (value) => { state.levelObjects = value; },
   setSelectedModelId: (value) => { state.selectedModelId = value; },
+  setSelectedBlueprintId: (value) => { state.selectedBlueprintId = value; },
   hydrateProjectState: (levels, objects, currentLevelId) => {
     state.levels = levels;
     state.levelObjects = objects;
     state.currentLevelId = currentLevelId || levels[0]?.id || null;
   },
   hydrateGraphs: (value) => { state.graphs = value; },
+  setCameraState: (value) => { state.cameraState = value; },
   trackTexture: (value) => { state.standaloneTextures.add(value); },
   releaseTexture: (value) => { state.standaloneTextures.delete(value); },
   trackUrl: (value) => { state.ownedUrls.add(value); },
@@ -195,7 +204,9 @@ async function hydrateSnapshot(
     targets.setLevelObjects?.([]);
     targets.hydrateProjectState?.([], [], null);
     targets.hydrateGraphs?.({});
+    targets.setCameraState(createDefaultCameraState());
     targets.setSelectedModelId(null);
+    targets.setSelectedBlueprintId(null);
     return true;
   }
   const records = Array.isArray((snapshot as Record<string, unknown>).documents)
@@ -208,6 +219,10 @@ async function hydrateSnapshot(
     if (domain) (docsByDomain[domain] ||= []).push(document);
   }
   const documents = (key: string): unknown[] => domainDocuments(key).length ? domainDocuments(key) : docsByDomain[key] || [];
+  const editorState = readEditorState(snapshot);
+  let hydratedModelIds = new Set<string>();
+  let hydratedBlueprintIds = new Set<string>();
+  targets.setCameraState(editorState.cameraState);
   const assetWork = Math.max(1,
     documents('textures').length + documents('audio').length + documents('models').length
     + documents('animations').length + documents('attachments').length,
@@ -240,7 +255,11 @@ async function hydrateSnapshot(
     }, diagnostics, true);
   };
   const textureAssetUrls = new Map<string, string>();
-  if (targets.setBlueprints) targets.setBlueprints(documents('blueprints') as Blueprint[]);
+  if (targets.setBlueprints) {
+    const blueprints = documents('blueprints') as Blueprint[];
+    hydratedBlueprintIds = new Set(blueprints.map((blueprint) => blueprint.id));
+    targets.setBlueprints(blueprints);
+  }
   if (targets.setTextures) {
     const textures: TextureData[] = [];
     for (const value of documents('textures')) {
@@ -388,6 +407,7 @@ async function hydrateSnapshot(
         complete(`Skipped model — ${item.name}`, diagnostic);
       }
     }
+    hydratedModelIds = new Set(models.map((model) => model.id));
     targets.setModels(models);
   }
   if (targets.setAttachments) {
@@ -445,7 +465,14 @@ async function hydrateSnapshot(
   if (assetFailureCount > 0) {
     throw new Error(`Project hydration failed for ${assetFailureCount} asset${assetFailureCount === 1 ? '' : 's'}`);
   }
-  targets.setSelectedModelId(null);
+  const selectedModelId = editorState.selectedModelId && hydratedModelIds.has(editorState.selectedModelId)
+    ? editorState.selectedModelId : null;
+  const selectedBlueprintId = selectedModelId
+    ? null
+    : editorState.selectedBlueprintId && hydratedBlueprintIds.has(editorState.selectedBlueprintId)
+      ? editorState.selectedBlueprintId : null;
+  targets.setSelectedModelId(selectedModelId);
+  targets.setSelectedBlueprintId(selectedBlueprintId);
   onProgress(1, 'Project assets ready');
   return true;
 }
@@ -492,7 +519,9 @@ export const useScenePersistence = ({
   setTextures,
   setAudioAssets,
   setLevelObjects,
+  setCameraState,
   setSelectedModelId,
+  setSelectedBlueprintId,
   setIsLoading,
   defaultBlueprints,
   hydrateProjectState,
@@ -585,7 +614,8 @@ export const useScenePersistence = ({
             if (!hydrated) throw new Error('Native project snapshot did not contain a valid domain payload');
             publishDetachedHydration(detached, {
               setModels, setAttachments, setSockets, setBlueprints, setTextures,
-              setAudioAssets, setLevelObjects, setSelectedModelId, setIsLoading,
+              setAudioAssets, setLevelObjects, setCameraState, setSelectedModelId,
+              setSelectedBlueprintId, setIsLoading,
               defaultBlueprints, hydrateProjectState, hydrateGraphs, commitHydration,
             });
             published = true;
@@ -884,7 +914,8 @@ export const useScenePersistence = ({
         }
         publishDetachedHydration(detached, {
           setModels, setAttachments, setSockets, setBlueprints, setTextures,
-          setAudioAssets, setLevelObjects, setSelectedModelId, setIsLoading,
+          setAudioAssets, setLevelObjects, setCameraState, setSelectedModelId,
+          setSelectedBlueprintId, setIsLoading,
           defaultBlueprints, hydrateProjectState, hydrateGraphs, commitHydration,
         });
         published = true;

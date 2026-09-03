@@ -6,6 +6,7 @@ import { dbOperations } from '../utils/db';
 import { OperationHandle, useOperationActions } from '../context/OperationContext';
 import { frontendDiagnostics, type DiagnosticAttributes, type DiagnosticContext } from '../diagnostics/runtime';
 import { editorSession, type EditorSessionTransition } from '../utils/editorSession';
+import { createEditorStateDocument, EDITOR_STATE_DOCUMENT_ID } from '../utils/editorState';
 
 type HydrationProgress = (
   progress: number,
@@ -123,19 +124,32 @@ export const useProjectManager = ({
     }), handle.signal, contextFor(handle), transition || undefined);
   }, [contextFor, restoreSession]);
 
+  const persistEditorState = useCallback(async (handle: OperationHandle) => {
+    await projectService.applyChanges([{
+      domain: 'metadata',
+      operation: 'upsert',
+      id: EDITOR_STATE_DOCUMENT_ID,
+      value: createEditorStateDocument(cameraState, selectedModelId, selectedBlueprintId),
+    }], contextFor(handle));
+  }, [cameraState, contextFor, selectedBlueprintId, selectedModelId]);
+
   const saveProject = useCallback(async () => {
-    await run('project.save', 'Saving project', (handle) => projectService.save(contextFor(handle)), 'Project saved.');
-  }, [contextFor, run]);
+    await run('project.save', 'Saving project', async (handle) => {
+      await persistEditorState(handle);
+      await projectService.save(contextFor(handle));
+    }, 'Project saved.');
+  }, [contextFor, persistEditorState, run]);
 
   const saveProjectAs = useCallback(async () => {
     await run('project.save_as', 'Saving project as', async (handle, transition) => {
+      await persistEditorState(handle);
       await projectService.saveAs(undefined, contextFor(handle));
       if (transition && !editorSession.isTransitionCurrent(transition)) {
         throw new DOMException('Project save as was superseded.', 'AbortError');
       }
       await hydrate(handle, 0.4, 0.58, transition);
     }, 'Project saved as a new project.', 'replace');
-  }, [contextFor, hydrate, run]);
+  }, [contextFor, hydrate, persistEditorState, run]);
 
   const exportProject = useCallback(async () => {
     await run('project.export', 'Exporting project package', (handle) => projectService.exportPack(contextFor(handle)), 'Project package exported.');
@@ -169,15 +183,11 @@ export const useProjectManager = ({
 
   const loadProject = useCallback(async () => {
     await run('project.open', 'Opening project', async (handle, transition) => {
-      const snapshot = await projectService.open(undefined, contextFor(handle));
+      await projectService.open(undefined, contextFor(handle));
       if (transition && !editorSession.isTransitionCurrent(transition)) throw new DOMException('Project open was superseded.', 'AbortError');
       await hydrate(handle, 0.4, 0.58, transition);
-      const state = snapshot as Record<string, unknown> | null;
-      if (state?.cameraState) setCameraState(state.cameraState as CameraState);
-      selectModel(typeof state?.selectedModelId === 'string' ? state.selectedModelId : null);
-      selectBlueprint(typeof state?.selectedBlueprintId === 'string' ? state.selectedBlueprintId : null);
     }, 'Project opened.', 'replace');
-  }, [contextFor, hydrate, run, selectBlueprint, selectModel, setCameraState]);
+  }, [contextFor, hydrate, run]);
 
   const openRecentProject = useCallback(async (projectId: string) => {
     await run('project.open_recent', 'Opening recent project', async (handle, transition) => {

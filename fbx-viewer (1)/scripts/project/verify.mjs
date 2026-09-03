@@ -40,6 +40,8 @@ const audioSystem = await readFile(resolve(root, 'components/Environment/AudioSy
 const blueprintRuntime = await readFile(resolve(root, 'hooks/useLevelBlueprintRuntime.ts'), 'utf8');
 const graphPreview = await readFile(resolve(root, 'components/AnimationGraph/GraphPreview.tsx'), 'utf8');
 const domainCascade = await readFile(resolve(root, 'utils/domainCascade.ts'), 'utf8');
+const editorState = await readFile(resolve(root, 'utils/editorState.ts'), 'utf8');
+const sceneCamera = await readFile(resolve(root, 'components/Scene/SceneCamera.tsx'), 'utf8');
 
 const failures = [];
 const mustNotContain = (text, pattern, label) => { if (pattern.test(text)) failures.push(`${label}: forbidden ${pattern}`); };
@@ -144,6 +146,17 @@ if (!/JSON\.stringify\(oldItem\) !== JSON\.stringify\(item\)/.test(levels)
   || !/syncStateToDB\(nextState, currentState, rollbackLease, false\)/.test(levels)
   || !/level_history_rollback_failed/.test(levels)) {
   failures.push('level undo/redo still omits authored fields or consumes history before persistence');
+}
+if (!/createEditorStateDocument/.test(projectManager)
+  || !/persistEditorState/.test(projectManager)
+  || !/projectService\.applyChanges/.test(projectManager)
+  || !/readEditorState/.test(persistence)
+  || !/setSelectedBlueprintId/.test(persistence)
+  || !/state\.cameraState/.test(sceneContext)
+  || !/onChange=\{\(\) =>/.test(sceneCamera)
+  || !/onUpdate\(camera\.position\.clone\(\)/.test(sceneCamera)
+  || !/EDITOR_STATE_DOCUMENT_ID/.test(editorState)) {
+  failures.push('camera and selection metadata are not persisted and restored through one canonical path');
 }
 if (!/transition \|\| undefined/.test(projectManager) || !/isTransitionCurrent\(transition\)/.test(projectManager)) failures.push('project-manager hydration does not carry exact transition identity through awaits');
 if (!/expectedProjectId/.test(persistence) || !/expectedRevision/.test(persistence) || !/status\.projectId !== expectedProjectId/.test(persistence) || !/status\.revision !== expectedRevision/.test(persistence)) failures.push('hydration does not fence the exact project identity after awaits');
