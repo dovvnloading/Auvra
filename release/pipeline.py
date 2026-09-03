@@ -20,6 +20,7 @@ import subprocess
 import struct
 import sys
 import tempfile
+import tomllib
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlsplit
 import xml.etree.ElementTree as ET
@@ -351,7 +352,100 @@ def _write_png(path: Path, width: int, height: int) -> None:
     path.write_bytes(png)
 
 
-def _write_sbom(output_root: Path, inventory: Mapping[str, Any], policy: Mapping[str, Any]) -> None:
+def _sbom_component(
+    ecosystem: str,
+    name: str,
+    version: str,
+    *,
+    digest: str | None = None,
+    license_name: str | None = None,
+) -> dict[str, Any]:
+    component: dict[str, Any] = {
+        "type": "library",
+        "name": name,
+        "version": version,
+        "purl": f"pkg:{ecosystem}/{name}@{version}",
+    }
+    if digest is not None and re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+        component["hashes"] = [{"alg": "SHA-256", "content": digest.lower()}]
+    if license_name:
+        component["licenses"] = [{"license": {"name": license_name}}]
+    return component
+
+
+def _locked_dependency_components(input_root: Path) -> list[dict[str, Any]]:
+    """Collect identities for dependencies that can be shipped in a release."""
+
+    components: list[dict[str, Any]] = []
+    package_lock = ROOT.parent / "fbx-viewer (1)" / "package-lock.json"
+    try:
+        lock = json.loads(package_lock.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        lock = {}
+    for relative, metadata in sorted(lock.get("packages", {}).items() if isinstance(lock, dict) else []):
+        if not relative or not isinstance(metadata, Mapping) or metadata.get("dev") is True:
+            continue
+        name = metadata.get("name")
+        if not isinstance(name, str) or not name:
+            name = relative.removeprefix("node_modules/")
+        version = metadata.get("version")
+        if not isinstance(version, str) or not version:
+            continue
+        components.append(_sbom_component("npm", name, version))
+
+    cargo_lock = ROOT.parent / "native" / "Cargo.lock"
+    try:
+        lock = tomllib.loads(cargo_lock.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        lock = {}
+    for package in lock.get("package", []) if isinstance(lock, dict) else []:
+        if not isinstance(package, Mapping):
+            continue
+        name, version = package.get("name"), package.get("version")
+        if not isinstance(name, str) or not isinstance(version, str):
+            continue
+        components.append(_sbom_component("cargo", name, version, digest=package.get("checksum")))
+
+    uv_lock = ROOT.parent / "uv.lock"
+    try:
+        lock = tomllib.loads(uv_lock.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        lock = {}
+    for package in lock.get("package", []) if isinstance(lock, dict) else []:
+        if not isinstance(package, Mapping):
+            continue
+        name, version = package.get("name"), package.get("version")
+        if not isinstance(name, str) or not isinstance(version, str):
+            continue
+        digest = None
+        wheels = package.get("wheels")
+        if isinstance(wheels, list) and wheels and isinstance(wheels[0], Mapping):
+            candidate = wheels[0].get("hash")
+            if isinstance(candidate, str) and candidate.startswith("sha256:"):
+                digest = candidate.removeprefix("sha256:")
+        components.append(_sbom_component("pypi", name, version, digest=digest))
+
+    site_packages = input_root / "python-site-packages"
+    if site_packages.is_dir():
+        for metadata_path in sorted(site_packages.glob("*.dist-info/METADATA"), key=lambda item: item.as_posix().lower()):
+            try:
+                fields = metadata_path.read_text(encoding="utf-8", errors="strict").splitlines()
+            except (OSError, UnicodeDecodeError):
+                continue
+            values: dict[str, str] = {}
+            for line in fields:
+                key, separator, value = line.partition(":")
+                if separator and key in {"Name", "Version", "License"}:
+                    values[key] = value.strip()
+            if values.get("Name") and values.get("Version"):
+                components.append(_sbom_component("pypi", values["Name"], values["Version"], license_name=values.get("License")))
+    deduplicated: dict[str, dict[str, Any]] = {}
+    for component in components:
+        deduplicated[component["purl"]] = component
+    return sorted(deduplicated.values(), key=lambda item: (item["type"], item["name"].casefold(), item["version"], item["purl"]))
+
+
+def _write_sbom(output_root: Path, inventory: Mapping[str, Any], policy: Mapping[str, Any], *, input_root: Path) -> None:
     pins = policy["runtimePins"]
     components = [
         {"type": "application", "name": "Auvra", "version": "release"},
@@ -359,6 +453,7 @@ def _write_sbom(output_root: Path, inventory: Mapping[str, Any], policy: Mapping
         {"type": "library", "name": "Microsoft.Web.WebView2 SDK", "version": pins["webview2Sdk"]["version"], "licenses": ["Microsoft-WebView2-SDK"]},
         {"type": "framework", "name": "Microsoft WebView2 Fixed Runtime", "version": pins["webview2Fixed"]["version"], "licenses": ["Microsoft-WebView2-Runtime"]},
     ]
+    components.extend(_locked_dependency_components(input_root))
     artifacts = []
     for entry in inventory["inputs"].get("python-site-packages", []):
         artifacts.append({"path": "runtime/python/Lib/site-packages/" + entry["path"], "sha256": entry["sha256"]})
@@ -507,7 +602,7 @@ def _assemble_into(input_root: Path, output_root: Path, *, channel: str, version
     _write_png(assets / "logo_44.png", 44, 44)
     _write_png(assets / "logo_150.png", 150, 150)
     _write_png(assets / "logo.png", 256, 256)
-    _write_sbom(output_root, inventory, policy)
+    _write_sbom(output_root, inventory, policy, input_root=input_root)
     manifest = _manifest_xml(channel_policy["identity"], channel_policy["publisher"], version_parts)
     (output_root / "AppxManifest.xml").write_bytes(manifest)
     companion: dict[str, Any] | None = None

@@ -460,6 +460,8 @@ The release scanner treats any file whose first 4096 bytes contain NUL as binary
 
 The SBOM lists Auvra, CPython, and two WebView components (`release/pipeline.py:308`). Python site-packages are recorded only as anonymous file artifacts; Rust crates and frontend packages are not components at all. The output is not a useful complete dependency/license inventory for incident response or redistribution review.
 
+**Status:** Completed — SBOM assembly now includes stable npm, Cargo, and uv-lock dependency components (with purls and available hashes), discovers shipped Python distribution metadata, and preserves per-file artifacts and license files. Release tests assert identities across all three ecosystems.
+
 ### F-055 — Hosted update metadata accepts non-HTTPS locations
 
 **Severity:** Medium · **Classification:** Security configuration concern

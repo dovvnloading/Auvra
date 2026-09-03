@@ -167,6 +167,11 @@ class ReleasePipelineTests(unittest.TestCase):
             first_times = {path.relative_to(output).as_posix(): path.stat().st_mtime_ns
                            for path in output.rglob("*") if path.is_file()}
             verify_package(output, expected_channel="beta")
+            sbom = json.loads((output / "sbom.json").read_text(encoding="utf-8"))
+            names = {(item.get("purl"), item.get("name")) for item in sbom["components"]}
+            self.assertIn(("pkg:npm/react@18.2.0", "react"), names)
+            self.assertTrue(any(item.get("purl", "").startswith("pkg:cargo/wgpu@") for item in sbom["components"]))
+            self.assertTrue(any(item.get("purl", "").startswith("pkg:pypi/jsonschema@") for item in sbom["components"]))
             # MakeAppx adds container metadata when an MSIX is unpacked. It is
             # validated by MakeAppx itself and is not part of Auvra's payload.
             (output / "AppxBlockMap.xml").write_bytes(b"<BlockMap />")
