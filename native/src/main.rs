@@ -1161,21 +1161,22 @@ impl App {
     }
 
     fn world_snapshot(&self, params: &Value) -> Result<Value, String> {
-        let snapshot = self.world.snapshot();
         let object = params.as_object();
         let offset = object
             .and_then(|v| v.get("offset"))
             .and_then(Value::as_u64)
             .unwrap_or(0)
-            .min(snapshot.entities.len() as u64) as usize;
+            .min(self.world.len() as u64) as usize;
         let limit = object
             .and_then(|v| v.get("limit"))
             .and_then(Value::as_u64)
             .unwrap_or(128)
             .clamp(1, 256) as usize;
-        let end = offset.saturating_add(limit).min(snapshot.entities.len());
+        let total = self.world.len();
+        let snapshot = self.world.snapshot_page(offset, limit);
+        let end = offset.saturating_add(snapshot.entities.len()).min(total);
         Ok(
-            json!({"revision": snapshot.revision, "tick": snapshot.tick, "worldHash": snapshot.world_hash, "worldRevision": snapshot.revision, "projectId": self.project_id, "projectRevision": self.project_revision, "replayHash": self.world.replay_hash(), "entities": &snapshot.entities[offset..end], "page": {"offset": offset, "limit": limit, "total": snapshot.entities.len(), "hasMore": end < snapshot.entities.len()}}),
+            json!({"revision": snapshot.revision, "tick": snapshot.tick, "worldHash": snapshot.world_hash, "worldRevision": snapshot.revision, "projectId": self.project_id, "projectRevision": self.project_revision, "replayHash": self.world.replay_hash(), "entities": &snapshot.entities, "page": {"offset": offset, "limit": limit, "total": total, "hasMore": end < total}}),
         )
     }
 

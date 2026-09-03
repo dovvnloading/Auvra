@@ -3,7 +3,7 @@
 use auvra_native::render_world::{
     ExtractedEntity, PostEffect, RenderCapabilities, RenderExtraction, RenderFeatureBits,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 
 pub struct ProductionFrame {
@@ -114,6 +114,127 @@ pub struct ProductionSubmission {
     pub memory_bytes: u64,
     pub pipeline_cache_hit: bool,
 }
+
+struct ReusableBuffer {
+    buffer: Option<wgpu::Buffer>,
+    capacity: u64,
+}
+
+impl ReusableBuffer {
+    fn new() -> Self {
+        Self {
+            buffer: None,
+            capacity: 0,
+        }
+    }
+
+    fn write(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        label: &'static str,
+        usage: wgpu::BufferUsages,
+        bytes: &[u8],
+    ) {
+        let required = u64::try_from(bytes.len().max(4)).unwrap_or(u64::MAX);
+        if self.capacity < required {
+            let capacity = required.next_power_of_two();
+            self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: capacity,
+                usage,
+                mapped_at_creation: false,
+            }));
+            self.capacity = capacity;
+        }
+        if let Some(buffer) = self.buffer.as_ref() {
+            queue.write_buffer(buffer, 0, bytes);
+        }
+    }
+
+    fn buffer(&self) -> &wgpu::Buffer {
+        self.buffer
+            .as_ref()
+            .expect("reusable GPU buffer was not prepared")
+    }
+}
+
+struct GeometryBuffers {
+    scene: ReusableBuffer,
+    gizmo: ReusableBuffer,
+    pick: ReusableBuffer,
+    uniforms: ReusableBuffer,
+    post_uniforms: ReusableBuffer,
+}
+
+impl GeometryBuffers {
+    fn new() -> Self {
+        Self {
+            scene: ReusableBuffer::new(),
+            gizmo: ReusableBuffer::new(),
+            pick: ReusableBuffer::new(),
+            uniforms: ReusableBuffer::new(),
+            post_uniforms: ReusableBuffer::new(),
+        }
+    }
+
+    fn prepare(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        scene: &[u8],
+        gizmo: &[u8],
+        pick: &[u8],
+        uniforms: &[u8],
+        post_uniforms: &[u8],
+    ) {
+        self.scene.write(
+            device,
+            queue,
+            "auvra-production-geometry",
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            scene,
+        );
+        self.gizmo.write(
+            device,
+            queue,
+            "auvra-production-gizmo-geometry",
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            gizmo,
+        );
+        self.pick.write(
+            device,
+            queue,
+            "auvra-production-pick-geometry",
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            pick,
+        );
+        self.uniforms.write(
+            device,
+            queue,
+            "auvra-production-light-uniforms",
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            uniforms,
+        );
+        self.post_uniforms.write(
+            device,
+            queue,
+            "auvra-production-post-uniforms",
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            post_uniforms,
+        );
+    }
+
+    fn allocated_bytes(&self) -> u64 {
+        self.scene
+            .capacity
+            .saturating_add(self.gizmo.capacity)
+            .saturating_add(self.pick.capacity)
+            .saturating_add(self.uniforms.capacity)
+            .saturating_add(self.post_uniforms.capacity)
+    }
+}
+
 pub fn capabilities() -> RenderCapabilities {
     RenderCapabilities::from_bits(RenderFeatureBits::all())
 }
@@ -164,6 +285,7 @@ pub struct ProductionPipelines {
     post: wgpu::RenderPipeline,
     post_layout: wgpu::BindGroupLayout,
     surface_format: wgpu::TextureFormat,
+    geometry: GeometryBuffers,
 }
 
 #[derive(Clone)]
@@ -206,6 +328,7 @@ impl ProductionPipelines {
             post,
             post_layout,
             surface_format: output_format,
+            geometry: GeometryBuffers::new(),
         }
     }
 
@@ -387,48 +510,29 @@ fn render_production_to_view(
 ) -> Result<ProductionSubmission, String> {
     let sample_count = u32::from(extraction.snapshot.msaa_samples).max(1);
     let (sample_pipelines, pipeline_cache_hit) = pipelines.sample_pipelines(device, sample_count);
-    let vertices = scene_vertices(extraction);
+    let entity_indices = entity_indices(extraction);
+    let vertices = scene_vertices(extraction, &entity_indices);
     let bytes = f32_bytes(&vertices);
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("auvra-production-geometry"),
-        size: bytes.len() as u64,
-        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    queue.write_buffer(&buffer, 0, &bytes);
-    let gizmo = gizmo_vertices(extraction);
+    let gizmo = gizmo_vertices(extraction, &entity_indices);
     let gizmo_bytes = f32_bytes(&gizmo);
-    let gizmo_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("auvra-production-gizmo-geometry"),
-        size: gizmo_bytes.len() as u64,
-        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    queue.write_buffer(&gizmo_buffer, 0, &gizmo_bytes);
     let pick_bytes = pick_vertices(extraction);
-    let pick_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("auvra-production-pick-geometry"),
-        size: pick_bytes.len() as u64,
-        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    queue.write_buffer(&pick_buffer, 0, &pick_bytes);
     let uniforms_bytes = uniform_bytes(extraction);
-    let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("auvra-production-light-uniforms"),
-        size: uniforms_bytes.len() as u64,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    queue.write_buffer(&uniforms, 0, &uniforms_bytes);
-    let mut memory_bytes = u64::try_from(
-        bytes
-            .len()
-            .saturating_add(gizmo_bytes.len())
-            .saturating_add(pick_bytes.len())
-            .saturating_add(uniforms_bytes.len()),
-    )
-    .unwrap_or(u64::MAX);
+    let post_uniform_bytes = post_uniform_bytes(extraction);
+    pipelines.geometry.prepare(
+        device,
+        queue,
+        &bytes,
+        &gizmo_bytes,
+        &pick_bytes,
+        &uniforms_bytes,
+        &post_uniform_bytes,
+    );
+    let buffer = pipelines.geometry.scene.buffer();
+    let gizmo_buffer = pipelines.geometry.gizmo.buffer();
+    let pick_buffer = pipelines.geometry.pick.buffer();
+    let uniforms = pipelines.geometry.uniforms.buffer();
+    let post_uniforms = pipelines.geometry.post_uniforms.buffer();
+    let mut memory_bytes = pipelines.geometry.allocated_bytes();
     let hdr_usage = wgpu::TextureUsages::RENDER_ATTACHMENT
         | if sample_count == 1 {
             wgpu::TextureUsages::TEXTURE_BINDING
@@ -538,15 +642,6 @@ fn render_production_to_view(
         ],
     });
     let sampler = device.create_sampler(&Default::default());
-    let post_uniform_bytes = post_uniform_bytes(extraction);
-    let post_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("auvra-production-post-uniforms"),
-        size: post_uniform_bytes.len() as u64,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    queue.write_buffer(&post_uniforms, 0, &post_uniform_bytes);
-    memory_bytes = memory_bytes.saturating_add(u64::try_from(post_uniform_bytes.len()).unwrap_or(u64::MAX));
     let post_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("auvra-production-post"),
         layout: &pipelines.post_layout,
@@ -802,17 +897,25 @@ fn texture_with_samples(
         view_formats: &[],
     })
 }
-fn scene_vertices(extraction: &RenderExtraction) -> Vec<f32> {
+fn entity_indices(extraction: &RenderExtraction) -> HashMap<u64, usize> {
+    extraction
+        .snapshot
+        .entities
+        .iter()
+        .enumerate()
+        .map(|(index, entity)| (entity.id, index))
+        .collect()
+}
+
+fn scene_vertices(extraction: &RenderExtraction, indices: &HashMap<u64, usize>) -> Vec<f32> {
     let mut out = Vec::with_capacity(extraction.snapshot.entities.len() * 27);
     // Batch order is part of immutable extraction. Material/mesh/LOD peers are
     // submitted contiguously in one bounded GPU buffer publication.
     for batch in extraction.snapshot.batches.iter() {
         for entity_id in batch.entity_ids.iter() {
-            let Some(entity) = extraction
-                .snapshot
-                .entities
-                .iter()
-                .find(|candidate| candidate.id == *entity_id)
+            let Some(entity) = indices
+                .get(entity_id)
+                .and_then(|index| extraction.snapshot.entities.get(*index))
             else {
                 continue;
             };
@@ -838,14 +941,12 @@ fn scene_vertices(extraction: &RenderExtraction) -> Vec<f32> {
     }
     out
 }
-fn gizmo_vertices(extraction: &RenderExtraction) -> Vec<f32> {
+fn gizmo_vertices(extraction: &RenderExtraction, indices: &HashMap<u64, usize>) -> Vec<f32> {
     let mut out = Vec::with_capacity(extraction.snapshot.gizmos.len() * 27);
     for gizmo in extraction.snapshot.gizmos.iter() {
-        if let Some(entity) = extraction
-            .snapshot
-            .entities
-            .iter()
-            .find(|entity| entity.id == gizmo.entity_id)
+        if let Some(entity) = indices
+            .get(&gizmo.entity_id)
+            .and_then(|index| extraction.snapshot.entities.get(*index))
         {
             for (px, py, pz) in projected_triangle(entity) {
                 out.extend_from_slice(&[

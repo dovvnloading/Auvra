@@ -420,6 +420,8 @@ Startup checks only that `AUVRA_NATIVE_SESSION_TOKEN` exists and has a valid sha
 
 World advance clones the complete world and replay state and clones all entities per step (`native/src/world.rs:448`, `native/src/world.rs:477`, `native/src/world.rs:523`). When more than one worker is requested, every step also spawns a fresh set of scoped OS threads (`native/src/world.rs:528`). Paged snapshots still create and hash a full snapshot first (`native/src/main.rs:827`). Rendering finds every batch entity with a linear scan and rebuilds/uploads a GPU vertex buffer (`native/src/gpu.rs:536`, `native/src/gpu.rs:471`), producing quadratic lookup behavior and allocation churn.
 
+**Status:** Completed — bounded advances now compute position updates from borrowed entities in one worker scope without cloning the full world/replay state, cached world hashes make paged snapshots clone only the requested page, indexed extraction removes quadratic batch/gizmo lookups, and reusable GPU buffers avoid per-frame geometry/uniform allocation churn. Native unit and live headless/render validation passed.
+
 ### F-050 — Release PowerShell wrappers return success after Python failures
 
 **Severity:** High · **Classification:** Confirmed and locally reproduced
