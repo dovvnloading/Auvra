@@ -428,6 +428,8 @@ World advance clones the complete world and replay state and clones all entities
 
 `release/build.ps1`, `release/verify.ps1`, and `release/stage_inputs.ps1` invoke Python without checking `$LASTEXITCODE` or exiting with it (`release/build.ps1:13`, `release/verify.ps1:10`, `release/stage_inputs.ps1:40`). Both build and verify wrappers printed underlying failures for missing inputs but returned process exit code 0. Any caller relying on the wrapper status can publish or accept a failed release step.
 
+**Status:** Completed — each release wrapper now propagates every Python subprocess exit code, and the Windows regression tests reproduce missing-input failures with the expected non-zero status.
+
 ### F-051 — Runtime pin markers do not attest the extracted runtime contents
 
 **Severity:** High · **Classification:** Supply-chain risk
