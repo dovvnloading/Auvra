@@ -6,6 +6,7 @@ import { projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { editorSession, selectObjectsForLevel, type EditorSessionLease } from '../utils/editorSession';
+import { subscribeDomainCascade, type DomainCascadeEvent } from '../utils/domainCascade';
 
 const DEFAULT_LEVEL_ID = 'default_level';
 const EMPTY_BLUEPRINT: LevelBlueprintData = { nodes: [], connections: [], variables: [] };
@@ -23,6 +24,23 @@ const EMPTY_WORKING_STATE: LevelWorkingState = {
     currentLevelId: null,
     levelObjects: [],
     activeLevelBlueprint: EMPTY_BLUEPRINT,
+};
+
+const applyDomainCascade = (objects: LevelObject[], event: DomainCascadeEvent): LevelObject[] => {
+    if (event.kind === 'model') {
+        return objects.filter((object) => object.modelId !== event.id);
+    }
+    return objects.map((object) => {
+        if (event.kind === 'texture' && object.terrainData?.textureId === event.id) {
+            const { textureId: _removed, ...terrainData } = object.terrainData;
+            return { ...object, terrainData };
+        }
+        if (event.kind === 'audio' && object.audioConfig?.audioId === event.id) {
+            const { audioConfig: _removed, ...withoutAudioReference } = object;
+            return withoutAudioReference;
+        }
+        return object;
+    });
 };
 
 const syncStateToDB = async (currentState: LevelObject[], nextState: LevelObject[], lease?: EditorSessionLease) => {
@@ -149,13 +167,47 @@ export const useLevelManager = (models: LoadedModelData[]) => {
   }, [currentLevelId]);
 
   const pendingUpdatesRef = useRef<Map<string, { updates: Partial<LevelObject>; lease: EditorSessionLease; previous: LevelObject }>>(new Map());
+  const invalidatedIdsRef = useRef<Set<string>>(new Set());
   const saveTimeoutRef = useRef<any>(null);
+
+  useEffect(() => subscribeDomainCascade((event) => {
+      const status = projectService.getStatus();
+      if (session.getSnapshot().phase !== 'ready' || status.projectId !== event.projectId) return;
+      const currentObjects = workingState.levelObjects;
+      const affectedIds = new Set(currentObjects
+          .filter((object) => event.kind === 'model'
+              ? object.modelId === event.id
+              : event.kind === 'texture'
+                  ? object.terrainData?.textureId === event.id
+                  : object.audioConfig?.audioId === event.id)
+          .map((object) => object.id));
+      if (affectedIds.size === 0) return;
+      for (const id of affectedIds) {
+          invalidatedIdsRef.current.add(id);
+          pendingUpdatesRef.current.delete(id);
+      }
+      if (pendingUpdatesRef.current.size === 0 && saveTimeoutRef.current) {
+          clearTimeout(saveTimeoutRef.current);
+          saveTimeoutRef.current = null;
+      }
+      setWorkingState((current) => {
+          const nextObjects = applyDomainCascade(current.levelObjects, event);
+          return nextObjects.length === current.levelObjects.length
+              && nextObjects.every((object, index) => object === current.levelObjects[index])
+              ? current
+              : { ...current, levelObjects: nextObjects };
+      });
+  }), [session, workingState.levelObjects]);
 
   const commitUpdates = useCallback(async () => {
       if (pendingUpdatesRef.current.size === 0) return;
       const batch = new Map<string, { updates: Partial<LevelObject>; lease: EditorSessionLease; previous: LevelObject }>(pendingUpdatesRef.current);
       pendingUpdatesRef.current.clear();
       for (const [id, pending] of batch.entries()) {
+          if (invalidatedIdsRef.current.has(id)) {
+              invalidatedIdsRef.current.delete(id);
+              continue;
+          }
           if (!session.isCurrent(pending.lease)) continue;
           try {
               await dbOperations.updateLevelObject(id, pending.updates, pending.lease);

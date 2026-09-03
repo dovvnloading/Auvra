@@ -526,6 +526,8 @@ Graph, blueprint, socket, level, and model-placement managers update local state
 
 Host-side model deletion cascades through level references (`fbx-viewer (1)/utils/db.ts:286`), but live AssetContext cleanup omits the level manager (`fbx-viewer (1)/context/AssetContext.tsx:105`). Texture and audio host cascades update dependent domains (`fbx-viewer (1)/utils/db.ts:455`, `fbx-viewer (1)/utils/db.ts:502`), while their React managers remove only the primary array (`fbx-viewer (1)/hooks/useTextureManager.ts:119`, `fbx-viewer (1)/hooks/useAudioManager.ts:108`). Persisted and live state disagree until reload.
 
+**Status:** Completed — successful native model, texture, and audio deletes now publish project-scoped cascade events; live model overrides, blueprint links/sounds, socket flash references, and level objects are reconciled, with pending level writes invalidated so deleted records cannot be resurrected. Project verification, TypeScript, and production frontend build pass.
+
 ### F-063 — Level undo/redo omits fields and consumes history before persistence succeeds
 
 **Severity:** Medium · **Classification:** Confirmed

@@ -152,6 +152,19 @@ export const useModelManager = (
     }
   }, [clearSelectedModel, models, onModelRemoved]);
 
+  const removeTextureReference = useCallback((textureId: string) => {
+    setModels((previous) => previous.map((model) => {
+      const overrides = model.textureOverrides;
+      if (!overrides) return model;
+      const nextOverrides = Object.fromEntries(
+        Object.entries(overrides).filter(([, referencedTextureId]) => referencedTextureId !== textureId),
+      );
+      return Object.keys(nextOverrides).length === Object.keys(overrides).length
+        ? model
+        : { ...model, textureOverrides: nextOverrides };
+    }));
+  }, []);
+
   const addAnimations = useCallback(async (files: File[], modelId: string) => {
     projectService.assertWritable();
     const aliases = files.map(() => frontendDiagnostics.nextAssetAlias());
@@ -389,6 +402,7 @@ export const useModelManager = (
     selectModel,
     addModel,
     removeModel,
+    removeTextureReference,
     placeInScene,
     removeFromScene,
     addAnimations,

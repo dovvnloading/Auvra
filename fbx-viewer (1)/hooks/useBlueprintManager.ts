@@ -88,6 +88,20 @@ export const useBlueprintManager = (
     });
   }, []);
 
+  const removeTextureReference = useCallback((textureId: string) => {
+    setBlueprints(prev => prev.map(blueprint => blueprint.textureId === textureId
+      ? { ...blueprint, textureId: null }
+      : blueprint));
+  }, []);
+
+  const removeAudioReference = useCallback((audioId: string) => {
+    setBlueprints(prev => prev.map(blueprint => {
+      const weaponSounds = blueprint.weaponSounds;
+      if (!weaponSounds?.includes(audioId)) return blueprint;
+      return { ...blueprint, weaponSounds: weaponSounds.filter(id => id !== audioId) };
+    }));
+  }, []);
+
   return frontendDiagnostics.traceActions('blueprint_manager', {
     blueprints,
     setBlueprints, // Exposed for persistence layer
@@ -96,6 +110,8 @@ export const useBlueprintManager = (
     addBlueprint,
     updateBlueprint,
     removeBlueprint,
-    unlinkModelFromBlueprints
+    unlinkModelFromBlueprints,
+    removeTextureReference,
+    removeAudioReference,
   });
 };

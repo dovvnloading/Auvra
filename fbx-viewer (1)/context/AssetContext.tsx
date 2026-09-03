@@ -14,6 +14,8 @@ import { useGraphManager } from '../hooks/useGraphManager';
 import { useDebugTools } from '../hooks/useDebugTools';
 import { useSelection } from './SelectionContext';
 import { frontendDiagnostics } from '../diagnostics/runtime';
+import { projectService } from '../utils/projectService';
+import { emitDomainCascade, type DomainCascadeKind } from '../utils/domainCascade';
 
 interface AssetContextType {
   // Models
@@ -96,6 +98,11 @@ interface AssetProviderProps {
 export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoading }) => {
   const { selectModel, selectedModelId, selectBlueprint, selectedBlueprintId, clearModel, clearBlueprint } = useSelection();
 
+  const emitCascade = useCallback((kind: DomainCascadeKind, id: string) => {
+    const projectId = projectService.getStatus().projectId;
+    if (projectId) emitDomainCascade({ kind, id, projectId });
+  }, []);
+
   // --- Domain Managers ---
   const textureManager = useTextureManager(setIsLoading);
   const audioManager = useAudioManager(setIsLoading);
@@ -108,11 +115,26 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     socketManager.removeSocketsByParentId(id, false);
     graphManager.removeGraphData(id, false);
     blueprintManager.unlinkModelFromBlueprints(id);
+    emitCascade('model', id);
   }, selectedModelId, selectModel, clearModel);
 
   const attachmentManager = useAttachmentManager(modelManager.models, setIsLoading);
   const socketManager = useSocketManager();
   const debugTools = useDebugTools();
+
+  const removeTexture = useCallback(async (id: string) => {
+    if (!await textureManager.removeTexture(id)) return;
+    modelManager.removeTextureReference(id);
+    blueprintManager.removeTextureReference(id);
+    socketManager.removeTextureReference(id);
+    emitCascade('texture', id);
+  }, [blueprintManager, emitCascade, modelManager, socketManager, textureManager]);
+
+  const removeAudio = useCallback(async (id: string) => {
+    if (!await audioManager.removeAudio(id)) return;
+    blueprintManager.removeAudioReference(id);
+    emitCascade('audio', id);
+  }, [audioManager, blueprintManager, emitCascade]);
 
   // --- Flash & Animation Triggers ---
   const [flashTriggers, setFlashTriggers] = useState<Record<string, number>>({});
@@ -159,13 +181,13 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     textures: textureManager.textures,
     addTexture: textureManager.addTexture,
     saveTextureToLibrary: textureManager.saveTextureToLibrary,
-    removeTexture: textureManager.removeTexture,
+    removeTexture,
     setTextures: textureManager.setTextures,
 
     // Audio
     audioAssets: audioManager.audioAssets,
     addAudio: audioManager.addAudio,
-    removeAudio: audioManager.removeAudio,
+    removeAudio,
     setAudioAssets: audioManager.setAudioAssets,
 
     // Blueprints

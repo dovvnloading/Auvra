@@ -124,9 +124,27 @@ export const useSocketManager = () => {
           if (!editorSession.isSameSession(lease)) return;
           setSockets(prev => prev.filter(s => s.parentModelId !== parentId));
       } catch (error) {
-          frontendDiagnostics.failure('socket_cleanup_failed', error);
+      frontendDiagnostics.failure('socket_cleanup_failed', error);
       }
   }, [sockets]);
+
+  const removeTextureReference = useCallback((textureId: string) => {
+      for (const [id, pending] of pendingUpdatesRef.current.entries()) {
+          if (pending.updates.flashConfig?.textureId !== textureId) continue;
+          const { flashConfig: _removed, ...updates } = pending.updates;
+          const { flashConfig: _previous, ...previous } = pending.previous;
+          if (Object.keys(updates).length === 0) {
+              pendingUpdatesRef.current.delete(id);
+          } else {
+              pendingUpdatesRef.current.set(id, { ...pending, updates, previous });
+          }
+      }
+      setSockets(previous => previous.map(socket => {
+          if (socket.flashConfig?.textureId !== textureId) return socket;
+          const { flashConfig: _removed, ...withoutTextureReference } = socket;
+          return withoutTextureReference;
+      }));
+  }, []);
 
   return frontendDiagnostics.traceActions('socket_manager', {
       sockets,
@@ -134,6 +152,7 @@ export const useSocketManager = () => {
       addSocket,
       updateSocket,
       removeSocket,
-      removeSocketsByParentId
+      removeSocketsByParentId,
+      removeTextureReference,
   });
 };

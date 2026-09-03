@@ -116,7 +116,7 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
       }
   }, [addTexture, setIsLoading, addNotification]);
 
-  const removeTexture = useCallback(async (id: string) => {
+  const removeTexture = useCallback(async (id: string): Promise<boolean> => {
     projectService.assertWritable();
       try {
           await dbOperations.deleteTexture(id);
@@ -126,9 +126,11 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
               return prev.filter(t => t.id !== id);
           });
           addNotification({ message: "Texture deleted.", type: 'info' });
+          return true;
       } catch (e) {
           frontendDiagnostics.failure('texture_remove_failed', e);
           addNotification({ message: "Failed to delete texture.", type: 'error' });
+          return false;
       }
   }, [addNotification]);
 

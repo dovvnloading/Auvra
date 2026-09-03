@@ -39,6 +39,7 @@ const environmentViewport = await readFile(resolve(root, 'components/Environment
 const audioSystem = await readFile(resolve(root, 'components/Environment/AudioSystem.tsx'), 'utf8');
 const blueprintRuntime = await readFile(resolve(root, 'hooks/useLevelBlueprintRuntime.ts'), 'utf8');
 const graphPreview = await readFile(resolve(root, 'components/AnimationGraph/GraphPreview.tsx'), 'utf8');
+const domainCascade = await readFile(resolve(root, 'utils/domainCascade.ts'), 'utf8');
 
 const failures = [];
 const mustNotContain = (text, pattern, label) => { if (pattern.test(text)) failures.push(`${label}: forbidden ${pattern}`); };
@@ -121,6 +122,19 @@ if (/const displayObject = targetModel\?\.object/.test(graphPreview)
   || !/texture\.dispose\(\)/.test(graphPreview)
   || !/baseMaps/.test(graphPreview)) {
   failures.push('graph preview still shares canonical model materials or leaks override textures');
+}
+if (!/emitDomainCascade/.test(assetContext)
+  || !/await textureManager\.removeTexture\(id\)/.test(assetContext)
+  || !/await audioManager\.removeAudio\(id\)/.test(assetContext)
+  || !/removeTextureReference/.test(modelManager)
+  || !/removeTextureReference/.test(blueprintManager)
+  || !/removeAudioReference/.test(blueprintManager)
+  || !/removeTextureReference/.test(socketManager)
+  || !/subscribeDomainCascade/.test(levels)
+  || !/applyDomainCascade/.test(levels)
+  || !/invalidatedIdsRef/.test(levels)
+  || !/projectId: string/.test(domainCascade)) {
+  failures.push('host asset-delete cascades are not reconciled across live editor domains');
 }
 if (!/transition \|\| undefined/.test(projectManager) || !/isTransitionCurrent\(transition\)/.test(projectManager)) failures.push('project-manager hydration does not carry exact transition identity through awaits');
 if (!/expectedProjectId/.test(persistence) || !/expectedRevision/.test(persistence) || !/status\.projectId !== expectedProjectId/.test(persistence) || !/status\.revision !== expectedRevision/.test(persistence)) failures.push('hydration does not fence the exact project identity after awaits');
