@@ -12,7 +12,7 @@ import re
 import secrets
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 from Auvra.diagnostics import trace_public_class
 from Auvra.diagnostics.core import active_diagnostics
 
@@ -141,6 +141,10 @@ class NativeProjectHost:
             events, self._events = self._events, []
             return events
 
+    def restore_events(self, events: Sequence[tuple[str, dict[str, Any]]]) -> None:
+        with self._event_lock:
+            self._events[0:0] = list(events)
+
     def tick(self) -> None:
         if not self._operation_lock.acquire(blocking=False):
             return
@@ -174,7 +178,7 @@ class NativeProjectHost:
                         )
                     return
                 self._autosave_retry_at = 0.0
-                self._queue("project.recovery", self._status_value(available=recoveries))
+                self._queue("project.recovery", self._recovery_event_value("autosave", available=recoveries))
                 # One recovery point per dirty period. A later mutation starts a
                 # new 60-second window instead of duplicating an unchanged state.
                 self._dirty_since = None
@@ -357,7 +361,7 @@ class NativeProjectHost:
     def _queue(self, name: str, payload: dict[str, Any]) -> None:
         event_fields = {
             "projectId", "revision", "name", "dirty", "readOnly", "busy",
-            "progress", "recoveryAvailable", "recoveryId", "recoveryKind",
+            "progress", "recoveryAvailable", "recoveryId", "recoveryKind", "recoveryPoints",
             "recentProjects", "status", "domains", "dirtySince", "operation",
             "available",
         }
@@ -392,6 +396,21 @@ class NativeProjectHost:
                 self._recovery_by_id[recovery_id] = key
             values.append({"recoveryId": recovery_id, "kind": point["kind"], "size": point["size"]})
         return values
+
+    def _recovery_event_value(self, kind: str, **extra: Any) -> dict[str, Any]:
+        """Publish the full recovery list and identify the newly-created point."""
+        payload = self._status_value(**extra)
+        active = self.service.active
+        if active is None:
+            return payload
+        points = active.recovery_points(kind)
+        if not points:
+            return payload
+        key = (active.project_id, kind, points[0]["name"])
+        recovery_id = self._recovery_id_by_key.get(key)
+        if recovery_id is not None:
+            payload.update({"recoveryId": recovery_id, "recoveryKind": kind})
+        return payload
 
     def _restore_requested(self, payload: dict[str, Any], status: Any) -> Any:
         recovery_id = payload.get("recoveryId")
@@ -617,7 +636,7 @@ class NativeProjectHost:
         self._dirty_since = self._last_mutation = None
         result = self._status_value(status)
         self._queue("project.dirty", result)
-        self._queue("project.recovery", self._status_value(available=len(active.recovery_points())))
+        self._queue("project.recovery", self._recovery_event_value("manual", available=len(active.recovery_points())))
         return result
 
     def _save_as(self, payload: dict[str, Any]) -> dict[str, Any]:

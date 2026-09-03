@@ -248,6 +248,31 @@ class NativeProjectHostTests(unittest.TestCase):
         })
         self.assertEqual(snapshot["domains"]["metadata"]["documents"][0]["name"], "First")
 
+    def test_recovery_event_contains_full_choices_and_new_point(self) -> None:
+        created = self.host.handle("project.create", {"name": "Recovery event"})
+        project_id = created["projectId"]
+        changed = self.host.handle("project.applyChanges", {
+            "projectId": project_id,
+            "expectedRevision": created["revision"],
+            "changes": [{
+                "domain": "metadata", "documentId": "project", "operation": "upsert",
+                "document": {"id": "project", "name": "Recovery event"},
+            }],
+        })
+        self.host.drain_events()
+        saved = self.host.handle("project.save", {
+            "projectId": project_id, "expectedRevision": changed["revision"],
+        })
+        recovery_event = next(
+            payload for name, payload in self.host.drain_events()
+            if name == "project.recovery"
+        )
+        expected = saved["recoveryPoints"]
+        self.assertEqual(recovery_event["recoveryPoints"], expected)
+        self.assertEqual(recovery_event["recoveryId"], expected[0]["recoveryId"])
+        self.assertEqual(recovery_event["recoveryKind"], expected[0]["kind"])
+        self.assertTrue(recovery_event["recoveryAvailable"])
+
     def test_autosave_runs_once_until_another_mutation(self) -> None:
         clock = [100.0]
         self.host.shutdown()

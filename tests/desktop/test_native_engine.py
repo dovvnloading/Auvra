@@ -10,6 +10,7 @@ import textwrap
 import unittest
 import hashlib
 import io
+from unittest import mock
 
 from Auvra.diagnostics.core import DiagnosticsSession, bind_diagnostic_context
 from Auvra.desktop.native_engine import (
@@ -151,6 +152,43 @@ class NativeEngineTests(unittest.TestCase):
                 return super().read(min(size, 1))
 
         self.assertEqual(_read_frame(FragmentedReader(encoded)), value)
+
+    def test_snapshot_world_collects_all_native_pages(self) -> None:
+        engine = NativeEngine(["fake-native"])
+        engine._state = NativeEngineState.READY
+        common = {"revision": 4, "worldRevision": 4, "tick": 2,
+                  "worldHash": "a" * 16, "replayHash": "b" * 16,
+                  "projectId": None, "projectRevision": None}
+        pages = [
+            {**common, "entities": [{"id": "one"}],
+             "page": {"offset": 0, "limit": 256, "total": 3, "hasMore": True}},
+            {**common, "entities": [{"id": "two"}, {"id": "three"}],
+             "page": {"offset": 1, "limit": 256, "total": 3, "hasMore": False}},
+        ]
+        with mock.patch.object(engine, "call", side_effect=pages) as call:
+            snapshot = engine.snapshot_world()
+        self.assertEqual([item["id"] for item in snapshot["entities"]], ["one", "two", "three"])
+        self.assertEqual(call.call_args_list, [
+            mock.call("world.getSnapshot", {"offset": 0, "limit": 256}),
+            mock.call("world.getSnapshot", {"offset": 1, "limit": 256}),
+        ])
+
+    def test_engine_snapshot_publishes_the_aggregated_world(self) -> None:
+        class Engine:
+            state = NativeEngineState.READY
+
+            def snapshot_world(self):
+                return {
+                    "worldRevision": 3,
+                    "entities": [
+                        {"id": str(index), "position": [0, 0, 0], "color": [1, 1, 1, 1]}
+                        for index in range(300)
+                    ],
+                }
+
+        result = NativeEngineHost(Engine()).handle("engine.getSnapshot", {})
+        self.assertEqual(len(result["entities"]), 300)
+        self.assertEqual(result["entities"][-1]["id"], "299")
 
     def test_framing_authentication_revision_and_reload_continuity(self) -> None:
         engine = self.make_engine()

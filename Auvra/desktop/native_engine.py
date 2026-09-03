@@ -683,7 +683,54 @@ class NativeEngine:
         return self.call("session.hello", {"editorSession": editor_session})
 
     def snapshot_world(self) -> dict[str, Any]:
-        return self.call("world.getSnapshot")
+        first = self.call("world.getSnapshot", {"offset": 0, "limit": 256})
+        page = first.get("page")
+        # Older development binaries do not return paging metadata. Preserve
+        # their one-page response for compatibility while current binaries
+        # are required to prove that every bounded page was collected.
+        if not isinstance(page, Mapping):
+            return first
+        offset = page.get("offset")
+        limit = page.get("limit")
+        total = page.get("total")
+        has_more = page.get("hasMore")
+        entities = first.get("entities")
+        if (not isinstance(offset, int) or isinstance(offset, bool) or offset != 0
+                or not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 256
+                or not isinstance(total, int) or isinstance(total, bool) or not 0 <= total <= 1024
+                or not isinstance(has_more, bool) or not isinstance(entities, list)
+                or len(entities) > limit or len(entities) > total):
+            raise NativeEngineProtocolError("native snapshot paging metadata is invalid")
+        collected = list(entities)
+        next_offset = len(collected)
+        while has_more:
+            if next_offset >= total:
+                raise NativeEngineProtocolError("native snapshot paging did not advance")
+            current = self.call("world.getSnapshot", {"offset": next_offset, "limit": limit})
+            current_page = current.get("page")
+            current_entities = current.get("entities")
+            if not isinstance(current_page, Mapping) or not isinstance(current_entities, list):
+                raise NativeEngineProtocolError("native snapshot paging metadata is invalid")
+            if (current_page.get("offset") != next_offset
+                    or current_page.get("limit") != limit
+                    or current_page.get("total") != total
+                    or not isinstance(current_page.get("hasMore"), bool)
+                    or len(current_entities) == 0
+                    or len(current_entities) > limit
+                    or len(collected) + len(current_entities) > total):
+                raise NativeEngineProtocolError("native snapshot paging metadata is inconsistent")
+            for key in ("revision", "worldRevision", "tick", "worldHash", "projectId", "projectRevision", "replayHash"):
+                if key in first and current.get(key) != first.get(key):
+                    raise NativeEngineProtocolError("native snapshot changed while paging")
+            collected.extend(current_entities)
+            next_offset = len(collected)
+            has_more = current_page["hasMore"]
+        if next_offset != total:
+            raise NativeEngineProtocolError("native snapshot paging was incomplete")
+        result = dict(first)
+        result["entities"] = collected
+        result["page"] = {"offset": 0, "limit": limit, "total": total, "hasMore": False}
+        return result
 
     def apply_world(self, expected_revision: int, entities: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         if expected_revision < 0 or isinstance(expected_revision, bool):
@@ -1153,6 +1200,9 @@ class NativeEngineHost:
         events, self._events = self._events, []
         return events
 
+    def restore_events(self, events: Sequence[tuple[str, dict[str, Any]]]) -> None:
+        self._events[0:0] = list(events)
+
     @staticmethod
     def _translate_error(error: NativeEngineError) -> HostOperationError:
         if isinstance(error, NativeEngineRevisionConflictError):
@@ -1208,7 +1258,8 @@ class NativeEngineHost:
                 self._capabilities()
                 result = self._canonical("engine.status")
             elif method == "engine.getSnapshot":
-                snapshot = self.engine.call("world.getSnapshot")
+                snapshot_reader = getattr(self.engine, "snapshot_world", None)
+                snapshot = snapshot_reader() if callable(snapshot_reader) else self.engine.call("world.getSnapshot")
                 self._ingest_native_result(snapshot)
                 result = self._canonical("engine.snapshot", values={"entities": self._host_entities(snapshot.get("entities", []))})
             elif method == "engine.applyChanges":

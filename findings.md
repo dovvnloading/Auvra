@@ -250,11 +250,15 @@ The viewport event handler exits immediately after creating the window and again
 
 **Severity:** High · **Classification:** Confirmed
 
+**Status:** Completed — the host now requests and validates every bounded native snapshot page, aggregates all entities up to the protocol limit, and preserves compatibility with legacy one-page engines; 24 native-engine tests passed, including a 300-entity regression.
+
 Native snapshot methods default to 128 entities and cap a page at 256 (`native/src/main.rs:827`, `native/src/main.rs:905`). The host calls `world.getSnapshot` without paging and projects only the returned entities, discarding page metadata (`Auvra/desktop/native_engine.py:1114`). The public result schema has no paging fields (`protocol/v1/auvra-host.schema.json:124`). Worlds larger than 128 entities are silently truncated at the browser boundary.
 
 ### F-029 — Several state-changing methods do not advance the host revision
 
 **Severity:** Medium · **Classification:** Confirmed
+
+**Status:** Completed — credential configure/delete, provider settings, and media discard are now explicit mutating boundaries; successful built-in mutations and sequenced dispatcher requests advance the authoritative session revision; 15 dispatcher tests passed.
 
 The mutating-method set omits credential configuration/deletion, provider configuration, and media discard (`Auvra/host/dispatcher.py:27`). Those methods change durable or session state (`Auvra/desktop/provider_host.py:301`, `Auvra/desktop/provider_host.py:549`) while retaining the same protocol revision, weakening ordering and concurrency guarantees.
 
@@ -262,11 +266,15 @@ The mutating-method set omits credential configuration/deletion, provider config
 
 **Severity:** Medium · **Classification:** Confirmed
 
+**Status:** Completed — events are built and validated against the prospective revision before session advancement, and bound-event batches are restored if conversion fails; invalid-event regressions passed (17 dispatcher tests).
+
 `make_event` advances session state before constructing and validating the event (`Auvra/host/dispatcher.py:280`). Bound service queues are drained before all conversions complete (`Auvra/host/dispatcher.py:315`). One invalid generated event can therefore consume the batch and advance revisions without delivering it. The transport accepts nonconsecutive revisions, so the observable result is a lost event batch and an unexplained revision skip rather than a permanent protocol deadlock (`fbx-viewer (1)/host/nativeTransport.ts:200`).
 
 ### F-031 — Recovery events omit details and force a status refresh
 
 **Severity:** Low to Medium · **Classification:** Confirmed
+
+**Status:** Completed — recovery events now include the bounded recovery-point list and the newly created point's opaque ID/kind; the canonical event schema and generated validator accept the payload, and focused project/dispatcher plus protocol verification passed.
 
 Project status includes recovery points, but the project-event filter forwards only a small field subset and omits both `recoveryPoints` and a specific recovery ID (`Auvra/desktop/project_host.py:241`, `Auvra/desktop/project_host.py:307`). The generated protocol shape itself does permit `recoveryPoints` (`Auvra/host/generated/protocol_v1.py:39`). The frontend detects the missing ID and performs a separate status refresh (`fbx-viewer (1)/utils/projectService.ts:349`), so choices are delayed by an avoidable extra request rather than unavailable.
 

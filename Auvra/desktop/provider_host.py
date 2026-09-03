@@ -199,6 +199,10 @@ class NativeProviderHost:
             events, self._events = self._events, []
         return events
 
+    def restore_events(self, events: list[tuple[str, dict[str, Any]]]) -> None:
+        with self._lock:
+            self._events[0:0] = list(events)
+
     def tick(self) -> None:
         """Advance adapter polling hooks without blocking the UI thread."""
         with self._lock:

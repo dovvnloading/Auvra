@@ -192,6 +192,46 @@ class DispatcherTests(unittest.TestCase):
         self.assertEqual(event["payload"]["status"], "open")
         self.assertEqual(dispatcher.drain_bound_events(), [])
 
+    def test_invalid_event_does_not_consume_revision_or_event_batch(self):
+        class Service:
+            def __init__(self):
+                self.events = [("host.revision", {}), ("invalid.event", {})]
+
+            def drain_events(self):
+                events, self.events = self.events, []
+                return events
+
+        service = Service()
+        dispatcher = HostDispatcher(SessionManager("s1"))
+        dispatcher.bind_services(engine_service=service)
+        with self.assertRaises(ValueError):
+            dispatcher.drain_bound_events()
+        self.assertEqual(dispatcher.session.revision, 0)
+        self.assertEqual(service.events, [("host.revision", {}), ("invalid.event", {})])
+
+        service.events[1] = ("host.revision", {})
+        events = dispatcher.drain_bound_events()
+        self.assertEqual([event["revision"] for event in events], [1, 2])
+        self.assertEqual(dispatcher.session.revision, 2)
+
+    def test_invalid_direct_event_does_not_advance_session_revision(self):
+        with self.assertRaises(Exception):
+            self.dispatcher.make_event("engine.status", {"unexpected": True})
+        self.assertEqual(self.dispatcher.session.revision, 0)
+
+    def test_project_recovery_event_accepts_points_and_selected_id(self):
+        event = self.dispatcher.make_event("project.recovery", {
+            "projectId": "project-recovery",
+            "recoveryAvailable": True,
+            "recoveryId": "recovery-selected",
+            "recoveryKind": "manual",
+            "recoveryPoints": [{
+                "recoveryId": "recovery-selected", "kind": "manual", "size": 12,
+            }],
+        })
+        self.assertEqual(event["payload"]["recoveryPoints"][0]["recoveryId"], "recovery-selected")
+        self.assertEqual(event["payload"]["recoveryId"], "recovery-selected")
+
     def test_fake_asset_ticket_is_bounded_single_use_and_addressed(self):
         host = FakeHost()
         request = {"protocol":"auvra.host/1","type":"request","id":"r1","session":host.session.session_id,"revision":0,"method":"project.create","payload":{"name":"Demo"}}
@@ -218,12 +258,31 @@ class DispatcherTests(unittest.TestCase):
         configured = self.dispatcher.dispatch(self.request(revision=host_revision, method="provider.configureCredential",
             payload={"providerId": "ollama", "storageMode": "memoryOnly"}))
         self.assertEqual(configured["result"]["configured"], True)
+        self.assertEqual(configured["revision"], host_revision + 1)
+        host_revision = configured["revision"]
         submitted = self.dispatcher.dispatch(self.request(revision=host_revision, method="inference.submit",
             payload={"projectId": project_id, "expectedRevision": 0, "providerId": "ollama",
                      "modelId": "llama3.1:8b", "capability": "text", "route": "local"}))
         self.assertEqual(submitted["result"]["job"]["outputText"], "deterministic fake response")
         self.assertEqual(submitted["result"]["job"]["status"], "succeeded")
         self.assertEqual(submitted["revision"], host_revision)
+        deleted = self.dispatcher.dispatch(self.request(revision=host_revision,
+            method="provider.deleteCredential", payload={"providerId": "ollama"}))
+        self.assertEqual(deleted["revision"], host_revision + 1)
+
+    def test_media_discard_advances_session_revision(self):
+        create = self.dispatcher.dispatch(self.request(method="project.create", payload={"name": "Demo"}))
+        project_id = create["result"]["projectId"]
+        configured = self.dispatcher.dispatch(self.request(revision=create["revision"],
+            method="provider.configureCredential", payload={"providerId": "fal", "storageMode": "memoryOnly"}))
+        submitted = self.dispatcher.dispatch(self.request(revision=configured["revision"],
+            method="inference.submit", payload={"projectId": project_id, "expectedRevision": 0,
+                "providerId": "fal", "modelId": "fal.default", "capability": "media.generate", "route": "cloud"}))
+        job = submitted["result"]["job"]
+        discarded = self.dispatcher.dispatch(self.request(revision=configured["revision"],
+            method="media.discard", payload={"projectId": project_id, "jobId": job["jobId"],
+                "previewAssetId": job["preview"]["previewAssetId"]}))
+        self.assertEqual(discarded["revision"], configured["revision"] + 1)
 
     def test_provider_settings_status_and_ownership_are_strict(self):
         create = self.dispatcher.dispatch(self.request(method="project.create", payload={"name": "Demo"}))
@@ -240,6 +299,7 @@ class DispatcherTests(unittest.TestCase):
             method="provider.configure", payload={"providerId": "ollama",
                 "expectedSettingsRevision": 0, "settings": settings}))
         self.assertEqual(configured["result"]["settingsRevision"], 1)
+        host_revision = configured["revision"]
         old_shape = self.dispatcher.dispatch(self.request(revision=host_revision,
             method="provider.configure", payload={"providerId": "ollama", "route": "local",
                 "selectedModels": {"text": "llama3.1:8b"}, "budgets": {"perJob": 1, "daily": 1, "monthly": 1}}))
@@ -255,6 +315,7 @@ class DispatcherTests(unittest.TestCase):
         host_revision = create["revision"]
         configured = self.dispatcher.dispatch(self.request(revision=host_revision, method="provider.configureCredential",
             payload={"providerId": "openai", "storageMode": "memoryOnly"}))
+        host_revision = configured["revision"]
         submitted = self.dispatcher.dispatch(self.request(revision=host_revision, method="inference.submit",
             payload={"projectId": project_id, "expectedRevision": 0, "providerId": "openai",
                      "modelId": "openai/gpt-test", "capability": "commands", "route": "cloud"}))
