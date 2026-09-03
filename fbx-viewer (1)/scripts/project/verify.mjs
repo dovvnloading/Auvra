@@ -36,6 +36,7 @@ const environmentEditor = await readFile(resolve(root, 'components/Environment/E
 const environmentViewport = await readFile(resolve(root, 'components/Environment/EnvironmentViewport.tsx'), 'utf8');
 const audioSystem = await readFile(resolve(root, 'components/Environment/AudioSystem.tsx'), 'utf8');
 const blueprintRuntime = await readFile(resolve(root, 'hooks/useLevelBlueprintRuntime.ts'), 'utf8');
+const graphPreview = await readFile(resolve(root, 'components/AnimationGraph/GraphPreview.tsx'), 'utf8');
 
 const failures = [];
 const mustNotContain = (text, pattern, label) => { if (pattern.test(text)) failures.push(`${label}: forbidden ${pattern}`); };
@@ -97,6 +98,15 @@ if (/const \[selectedModelId,\s*setSelectedModelId\]\s*=\s*useState/.test(modelM
   || !/useBlueprintManager\(selectedBlueprintId,[\s\S]*clearBlueprint/.test(assetContext)
   || !/clearModel/.test(assetContext) || !/clearBlueprint/.test(assetContext)) {
   failures.push('model and blueprint managers retain a duplicate selection authority');
+}
+if (/const displayObject = targetModel\?\.object/.test(graphPreview)
+  || !/clonePreviewResources/.test(graphPreview)
+  || !/cloneSkeleton/.test(graphPreview)
+  || !/disposePreviewResources/.test(graphPreview)
+  || !/loadAsync\(textureUrl\)/.test(graphPreview)
+  || !/texture\.dispose\(\)/.test(graphPreview)
+  || !/baseMaps/.test(graphPreview)) {
+  failures.push('graph preview still shares canonical model materials or leaks override textures');
 }
 if (!/transition \|\| undefined/.test(projectManager) || !/isTransitionCurrent\(transition\)/.test(projectManager)) failures.push('project-manager hydration does not carry exact transition identity through awaits');
 if (!/expectedProjectId/.test(persistence) || !/expectedRevision/.test(persistence) || !/status\.projectId !== expectedProjectId/.test(persistence) || !/status\.revision !== expectedRevision/.test(persistence)) failures.push('hydration does not fence the exact project identity after awaits');

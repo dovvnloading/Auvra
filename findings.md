@@ -510,6 +510,8 @@ The abort listener covers only the worker phase and is removed before `GLTFLoade
 
 `GraphPreview` receives the shared model object and writes newly loaded textures directly into its materials (`fbx-viewer (1)/components/AnimationGraph/GraphPreview.tsx:58`, `fbx-viewer (1)/components/AnimationGraph/GraphPreview.tsx:84`). It neither restores old maps nor disposes replacement textures. Merely changing or closing a preview can permanently change the model used elsewhere and leak texture resources.
 
+**Status:** Completed — graph previews now render a skeleton-aware, material/texture-owned clone (including attachments), load overrides with cancellation, restore the cloned base maps, and dispose only preview-owned resources. Project verification, TypeScript, and production frontend build pass.
+
 ### F-061 — Failed optimistic mutations leave UI and host state divergent
 
 **Severity:** Medium · **Classification:** Confirmed pattern
