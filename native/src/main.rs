@@ -821,6 +821,7 @@ struct App {
     asset_jobs: HashMap<u64, CancellationToken>,
     pending_asset_ids: BTreeSet<String>,
     hydration: Option<HydrationDraft>,
+    render_state: ProjectRenderState,
 }
 
 #[derive(Clone)]
@@ -831,6 +832,45 @@ struct HydrationDraft {
     domains: BTreeMap<String, Vec<Value>>,
     asset_ids: BTreeSet<String>,
     document_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ProjectRenderState {
+    materials: BTreeMap<u64, MaterialReference>,
+    model_base_color_textures: BTreeMap<String, u64>,
+    object_materials: BTreeMap<String, u64>,
+    object_lods: BTreeMap<String, Vec<LodLevel>>,
+    object_animations: BTreeMap<String, AnimationInput>,
+    object_visibility: BTreeMap<String, bool>,
+    object_selected: BTreeSet<String>,
+    object_radii: BTreeMap<String, f32>,
+    lights: Vec<WorldRenderLight>,
+    camera_position: [f32; 3],
+    ibl: Option<IblInput>,
+    post_effects: Vec<PostEffect>,
+    msaa_samples: u8,
+    fxaa: bool,
+}
+
+impl Default for ProjectRenderState {
+    fn default() -> Self {
+        Self {
+            materials: BTreeMap::new(),
+            model_base_color_textures: BTreeMap::new(),
+            object_materials: BTreeMap::new(),
+            object_lods: BTreeMap::new(),
+            object_animations: BTreeMap::new(),
+            object_visibility: BTreeMap::new(),
+            object_selected: BTreeSet::new(),
+            object_radii: BTreeMap::new(),
+            lights: Vec::new(),
+            camera_position: [0.0; 3],
+            ibl: None,
+            post_effects: Vec::new(),
+            msaa_samples: 0,
+            fxaa: false,
+        }
+    }
 }
 
 impl App {
@@ -856,6 +896,7 @@ impl App {
             asset_jobs: HashMap::new(),
             pending_asset_ids: BTreeSet::new(),
             hydration: None,
+            render_state: ProjectRenderState::default(),
         })
     }
 
@@ -1090,7 +1131,7 @@ impl App {
     }
 
     fn validate_hydration(&self, params: &Value) -> Result<Value, String> {
-        let (_, revision, entities, _) = project_candidate(params)?;
+        let (_, revision, entities, _, _) = project_candidate(params)?;
         let mut candidate = NativeWorld::new();
         candidate
             .hydrate(revision, entities)
@@ -1273,7 +1314,8 @@ impl App {
             })
             .collect::<serde_json::Map<_, _>>();
         let params = json!({"projectId": draft.project_id, "projectRevision": draft.project_revision, "domains": domains, "assetIds": draft.asset_ids});
-        let (project_id, project_revision, entities, asset_ids) = project_candidate(&params)?;
+        let (project_id, project_revision, entities, asset_ids, render_state) =
+            project_candidate(&params)?;
         let mut candidate = NativeWorld::new();
         let snapshot = candidate
             .hydrate(project_revision, entities)
@@ -1287,6 +1329,7 @@ impl App {
         self.world = candidate;
         self.project_id = Some(project_id.clone());
         self.project_revision = Some(project_revision);
+        self.render_state = render_state;
         let (queued_assets, deferred_assets) = self.submit_asset_ids(&asset_ids);
         let mut result = self.snapshot_value(snapshot, &Value::Null)?;
         if let Some(object) = result.as_object_mut() {
@@ -1305,7 +1348,8 @@ impl App {
     }
 
     fn hydrate_world(&mut self, params: &Value) -> Result<Value, String> {
-        let (project_id, project_revision, entities, asset_ids) = project_candidate(params)?;
+        let (project_id, project_revision, entities, asset_ids, render_state) =
+            project_candidate(params)?;
         let mut candidate = NativeWorld::new();
         let snapshot = candidate
             .hydrate(project_revision, entities)
@@ -1313,6 +1357,7 @@ impl App {
         self.world = candidate;
         self.project_id = Some(project_id.clone());
         self.project_revision = Some(project_revision);
+        self.render_state = render_state;
         let (queued_assets, deferred_assets) = self.submit_asset_ids(&asset_ids);
         let mut result = self.snapshot_value(snapshot, params)?;
         if let Some(object) = result.as_object_mut() {
@@ -1329,6 +1374,7 @@ impl App {
         self.world = NativeWorld::new();
         self.project_id = None;
         self.project_revision = None;
+        self.render_state = ProjectRenderState::default();
         for cancellation in self.asset_jobs.values() {
             cancellation.cancel();
         }
@@ -1482,53 +1528,108 @@ impl App {
         let render_entities = snapshot
             .entities
             .iter()
-            .map(|entity| WorldRenderEntity {
-                id: stable_id(&entity.id),
-                mesh_id: entity
+            .filter_map(|entity| {
+                if entity
                     .render
                     .as_ref()
-                    .and_then(|render| render.asset_hash.as_deref())
-                    .map(stable_id)
-                    .unwrap_or(1),
-                position: entity.position.map(|value| value as f32),
-                radius: 1.0,
-                material: MaterialReference {
-                    material_id: 1,
-                    base_color_factor: entity.color.map(|value| value.clamp(0.0, 1.0) as f32),
-                    metallic: 0.0,
-                    roughness: 1.0,
-                    base_color_texture: None,
-                    normal_texture: None,
-                    metallic_roughness_texture: None,
-                },
-                lods: vec![LodLevel {
-                    level: 0,
-                    max_distance: f32::MAX,
-                }],
-                animation: None,
-                selected: false,
+                    .is_some_and(|render| !render.visible)
+                    || self
+                        .render_state
+                        .object_visibility
+                        .get(&entity.id)
+                        .is_some_and(|visible| !visible)
+                {
+                    return None;
+                }
+                let asset_hash = entity
+                    .render
+                    .as_ref()
+                    .and_then(|render| render.asset_hash.as_deref());
+                let material_id = self
+                    .render_state
+                    .object_materials
+                    .get(&entity.id)
+                    .copied()
+                    .unwrap_or(1);
+                let material = self
+                    .render_state
+                    .materials
+                    .get(&material_id)
+                    .copied()
+                    .unwrap_or(MaterialReference {
+                        material_id,
+                        base_color_factor: entity
+                            .color
+                            .map(|value| value.clamp(0.0, 1.0) as f32),
+                        metallic: 0.0,
+                        roughness: 1.0,
+                        base_color_texture: asset_hash
+                            .and_then(|asset| self.render_state.model_base_color_textures.get(asset))
+                            .copied(),
+                        normal_texture: None,
+                        metallic_roughness_texture: None,
+                    });
+                Some(WorldRenderEntity {
+                    id: stable_id(&entity.id),
+                    mesh_id: asset_hash.map(stable_id).unwrap_or(1),
+                    position: entity.position.map(|value| value as f32),
+                    rotation: entity.rotation.map(|value| value as f32),
+                    scale: entity.scale.map(|value| value as f32),
+                    radius: self
+                        .render_state
+                        .object_radii
+                        .get(&entity.id)
+                        .copied()
+                        .unwrap_or(1.0),
+                    material,
+                    lods: self
+                        .render_state
+                        .object_lods
+                        .get(&entity.id)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            vec![LodLevel {
+                                level: 0,
+                                max_distance: f32::MAX,
+                            }]
+                        }),
+                    animation: self
+                        .render_state
+                        .object_animations
+                        .get(&entity.id)
+                        .copied()
+                        .or_else(|| entity.animation.as_ref().map(world_animation_input)),
+                    selected: self.render_state.object_selected.contains(&entity.id),
+                })
             })
             .collect();
+        let mut lights = self.render_state.lights.clone();
+        lights.extend(snapshot.entities.iter().filter_map(|entity| {
+            entity
+                .light
+                .as_ref()
+                .and_then(|light| world_light_input(&entity.id, entity.position, light))
+        }));
         let mut input = WorldRenderInput {
             world_revision: snapshot.revision,
             fixed_tick: snapshot.tick,
-            camera_position: [0.0; 3],
+            camera_position: self.render_state.camera_position,
             frustum: wide_frustum(),
             entities: render_entities,
-            lights: Vec::new(),
-            ibl: None,
-            post_effects: Vec::<PostEffect>::new(),
+            lights,
+            ibl: self.render_state.ibl,
+            post_effects: self.render_state.post_effects.clone(),
             msaa_samples: params
                 .as_object()
                 .and_then(|v| v.get("msaaSamples"))
                 .and_then(Value::as_u64)
-                .unwrap_or(0)
+                .unwrap_or(u64::from(self.render_state.msaa_samples))
                 .min(16) as u8,
             fxaa: params
                 .as_object()
                 .and_then(|v| v.get("fxaa"))
                 .and_then(Value::as_bool)
-                .unwrap_or(false),
+                .unwrap_or(self.render_state.fxaa),
         };
         if params
             .as_object()
@@ -1597,7 +1698,9 @@ fn world_error_message(error: auvra_native::world::WorldError) -> String {
     }
 }
 
-fn project_candidate(params: &Value) -> Result<(String, u64, Vec<Entity>, Vec<String>), String> {
+fn project_candidate(
+    params: &Value,
+) -> Result<(String, u64, Vec<Entity>, Vec<String>, ProjectRenderState), String> {
     let object = params
         .as_object()
         .ok_or("invalid_project|project hydration must be an object")?;
@@ -1742,6 +1845,7 @@ fn project_candidate(params: &Value) -> Result<(String, u64, Vec<Entity>, Vec<St
             animation: None,
         });
     }
+    let render_state = project_render_state(&documents, &model_assets)?;
     let mut asset_ids = std::collections::BTreeSet::new();
     if let Some(values) = object.get("assetIds").and_then(Value::as_array) {
         for value in values {
@@ -1764,7 +1868,620 @@ fn project_candidate(params: &Value) -> Result<(String, u64, Vec<Entity>, Vec<St
         project_revision,
         entities,
         asset_ids.into_iter().collect(),
+        render_state,
     ))
+}
+
+fn project_render_state(
+    documents: &serde_json::Map<String, Value>,
+    _model_assets: &BTreeMap<String, String>,
+) -> Result<ProjectRenderState, String> {
+    let mut state = ProjectRenderState::default();
+    let mut animations = BTreeMap::<String, AnimationInput>::new();
+
+    for document in domain_values(documents, "animations") {
+        let object = document
+            .as_object()
+            .ok_or("invalid_project|animation document is invalid")?;
+        let id = required_string(object, "id", "animation id")?;
+        let duration_ticks = optional_u64(object, "durationTicks")
+            .or_else(|| optional_u64(object, "duration"))
+            .unwrap_or(1)
+            .max(1);
+        let speed_numerator = optional_u64(object, "speedNumerator")
+            .unwrap_or(1)
+            .min(u64::from(u32::MAX)) as u32;
+        let speed_denominator = optional_u64(object, "speedDenominator")
+            .unwrap_or(1)
+            .min(u64::from(u32::MAX)) as u32;
+        if speed_numerator == 0 || speed_denominator == 0 {
+            return Err("invalid_project|animation speed must be positive".into());
+        }
+        let looped = object
+            .get("looped")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        animations.insert(
+            id.to_owned(),
+            AnimationInput {
+                clip_id: stable_id(id),
+                duration_ticks,
+                speed_numerator,
+                speed_denominator,
+                looped,
+            },
+        );
+    }
+
+    for document in domain_values(documents, "materials") {
+        let object = document
+            .as_object()
+            .ok_or("invalid_project|material document is invalid")?;
+        let id = required_string(object, "id", "material id")?;
+        let base_color_factor = fixed_vec4(
+            object
+                .get("baseColorFactor")
+                .or_else(|| object.get("baseColor")),
+            [0.7, 0.7, 0.7, 1.0],
+            "material baseColorFactor",
+        )?;
+        let metallic = optional_f32(object, "metallic")?.unwrap_or(0.0);
+        let roughness = optional_f32(object, "roughness")?.unwrap_or(1.0);
+        if !(0.0..=1.0).contains(&metallic) || !(0.0..=1.0).contains(&roughness) {
+            return Err("invalid_project|material metallic/roughness is out of range".into());
+        }
+        let texture_ids = object
+            .get("textureIds")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(stable_id)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let base_color_texture = string_handle(
+            object
+                .get("baseColorTexture")
+                .or_else(|| object.get("baseColorTextureId")),
+        )?
+        .or_else(|| texture_ids.first().copied());
+        let normal_texture = string_handle(
+            object
+                .get("normalTexture")
+                .or_else(|| object.get("normalTextureId")),
+        )?;
+        let metallic_roughness_texture = string_handle(
+            object
+                .get("metallicRoughnessTexture")
+                .or_else(|| object.get("metallicRoughnessTextureId")),
+        )?;
+        state.materials.insert(
+            stable_id(id),
+            MaterialReference {
+                material_id: stable_id(id),
+                base_color_factor,
+                metallic,
+                roughness,
+                base_color_texture,
+                normal_texture,
+                metallic_roughness_texture,
+            },
+        );
+    }
+
+    for document in domain_values(documents, "models") {
+        let object = document
+            .as_object()
+            .ok_or("invalid_project|model document is invalid")?;
+        let _model_id = required_string(object, "id", "model id")?;
+        let asset_id = required_string(object, "assetId", "model assetId")?;
+        if let Some(texture_id) = object
+            .get("textureOverrides")
+            .and_then(Value::as_object)
+            .and_then(|overrides| overrides.values().find_map(Value::as_str))
+        {
+            state
+                .model_base_color_textures
+                .insert(asset_id.to_owned(), stable_id(texture_id));
+        }
+    }
+
+    for document in domain_values(documents, "objects") {
+        let object = document
+            .as_object()
+            .ok_or("invalid_project|object document is invalid")?;
+        let id = required_string(object, "id", "object id")?;
+        if let Some(material_id) = object
+            .get("materialId")
+            .or_else(|| object.get("material"))
+            .and_then(Value::as_str)
+        {
+            state
+                .object_materials
+                .insert(id.to_owned(), stable_id(material_id));
+        } else if let Some(material) = object.get("material").and_then(Value::as_object) {
+            let material_id = material
+                .get("id")
+                .and_then(Value::as_str)
+                .map(stable_id)
+                .unwrap_or_else(|| stable_id(&format!("object-material:{id}")));
+            state.materials.insert(
+                material_id,
+                material_reference(material, material_id)?,
+            );
+            state.object_materials.insert(id.to_owned(), material_id);
+        }
+        if let Some(render) = object.get("render").and_then(Value::as_object) {
+            if let Some(visible) = render.get("visible").and_then(Value::as_bool) {
+                state.object_visibility.insert(id.to_owned(), visible);
+            }
+            if let Some(radius) = render.get("radius") {
+                state.object_radii.insert(id.to_owned(), bounded_radius(radius)?);
+            }
+            if render
+                .get("selected")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                state.object_selected.insert(id.to_owned());
+            }
+            if let Some(lods) = render.get("lods") {
+                state.object_lods.insert(id.to_owned(), parse_lods(lods)?);
+            }
+        }
+        if let Some(radius) = object.get("radius") {
+            state.object_radii.insert(id.to_owned(), bounded_radius(radius)?);
+        }
+        if object
+            .get("selected")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            state.object_selected.insert(id.to_owned());
+        }
+        if let Some(lods) = object.get("lods") {
+            state.object_lods.insert(id.to_owned(), parse_lods(lods)?);
+        }
+        if let Some(animation_id) = object.get("animationId").and_then(Value::as_str) {
+            if let Some(animation) = animations.get(animation_id) {
+                state.object_animations.insert(id.to_owned(), *animation);
+            }
+        } else if let Some(animation) = object.get("animation").and_then(Value::as_object) {
+            state
+                .object_animations
+                .insert(id.to_owned(), animation_input(animation, &format!("object {id} animation"))?);
+        }
+    }
+
+    let mut lights = BTreeMap::new();
+    for domain in ["worlds", "scenes", "levels", "environment", "lights"] {
+        for (index, document) in domain_values(documents, domain).into_iter().enumerate() {
+            if domain == "lights"
+                && document
+                    .get("kind")
+                    .or_else(|| document.get("type"))
+                    .and_then(Value::as_str)
+                    .is_some()
+            {
+                let light = parse_render_light(document, index)?;
+                lights.insert(light.id, light);
+            } else {
+                collect_render_settings(document, &mut state, &mut lights)?;
+            }
+        }
+    }
+    state.lights = lights.into_values().collect();
+    Ok(state)
+}
+
+fn domain_values<'a>(documents: &'a serde_json::Map<String, Value>, domain: &str) -> Vec<&'a Value> {
+    documents
+        .get(domain)
+        .and_then(Value::as_array)
+        .map(|values| values.iter().collect())
+        .unwrap_or_default()
+}
+
+fn required_string<'a>(object: &'a serde_json::Map<String, Value>, key: &str, label: &str) -> Result<&'a str, String> {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("invalid_project|{label} is required"))
+}
+
+fn optional_u64(object: &serde_json::Map<String, Value>, key: &str) -> Option<u64> {
+    object.get(key).and_then(Value::as_u64)
+}
+
+fn optional_f32(object: &serde_json::Map<String, Value>, key: &str) -> Result<Option<f32>, String> {
+    object
+        .get(key)
+        .map(|value| finite_f32(value, key).map(Some))
+        .unwrap_or(Ok(None))
+}
+
+fn finite_f32(value: &Value, label: &str) -> Result<f32, String> {
+    let number = value
+        .as_f64()
+        .ok_or_else(|| format!("invalid_project|{label} must be numeric"))?;
+    if !number.is_finite() || number.abs() > f64::from(f32::MAX) {
+        return Err(format!("invalid_project|{label} is not finite"));
+    }
+    Ok(number as f32)
+}
+
+fn fixed_vec3(value: Option<&Value>, default: [f32; 3], label: &str) -> Result<[f32; 3], String> {
+    let Some(value) = value else {
+        return Ok(default);
+    };
+    if let Some(values) = value.as_array() {
+        if values.len() != 3 {
+            return Err(format!("invalid_project|{label} must contain three values"));
+        }
+        return Ok([
+            finite_f32(&values[0], label)?,
+            finite_f32(&values[1], label)?,
+            finite_f32(&values[2], label)?,
+        ]);
+    }
+    let object = value
+        .as_object()
+        .ok_or_else(|| format!("invalid_project|{label} is invalid"))?;
+    Ok([
+        finite_f32(object.get("x").ok_or_else(|| format!("invalid_project|{label}.x is required"))?, label)?,
+        finite_f32(object.get("y").ok_or_else(|| format!("invalid_project|{label}.y is required"))?, label)?,
+        finite_f32(object.get("z").ok_or_else(|| format!("invalid_project|{label}.z is required"))?, label)?,
+    ])
+}
+
+fn fixed_vec4(value: Option<&Value>, default: [f32; 4], label: &str) -> Result<[f32; 4], String> {
+    let Some(value) = value else {
+        return Ok(default);
+    };
+    let values = value
+        .as_array()
+        .ok_or_else(|| format!("invalid_project|{label} is invalid"))?;
+    if values.len() != 4 {
+        return Err(format!("invalid_project|{label} must contain four values"));
+    }
+    Ok([
+        finite_f32(&values[0], label)?,
+        finite_f32(&values[1], label)?,
+        finite_f32(&values[2], label)?,
+        finite_f32(&values[3], label)?,
+    ])
+}
+
+fn string_handle(value: Option<&Value>) -> Result<Option<u64>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    if let Some(id) = value.as_str() {
+        return Ok(Some(stable_id(id)));
+    }
+    value
+        .as_u64()
+        .filter(|id| *id > 0)
+        .map(Some)
+        .ok_or("invalid_project|renderer asset handle is invalid".into())
+}
+
+fn material_reference(
+    object: &serde_json::Map<String, Value>,
+    material_id: u64,
+) -> Result<MaterialReference, String> {
+    let base_color_factor = fixed_vec4(
+        object
+            .get("baseColorFactor")
+            .or_else(|| object.get("baseColor")),
+        [0.7, 0.7, 0.7, 1.0],
+        "material baseColorFactor",
+    )?;
+    let metallic = object
+        .get("metallic")
+        .map(|value| finite_f32(value, "material metallic"))
+        .transpose()?
+        .unwrap_or(0.0);
+    let roughness = object
+        .get("roughness")
+        .map(|value| finite_f32(value, "material roughness"))
+        .transpose()?
+        .unwrap_or(1.0);
+    if !(0.0..=1.0).contains(&metallic) || !(0.0..=1.0).contains(&roughness) {
+        return Err("invalid_project|material metallic/roughness is out of range".into());
+    }
+    Ok(MaterialReference {
+        material_id,
+        base_color_factor,
+        metallic,
+        roughness,
+        base_color_texture: string_handle(
+            object
+                .get("baseColorTexture")
+                .or_else(|| object.get("baseColorTextureId")),
+        )?,
+        normal_texture: string_handle(
+            object
+                .get("normalTexture")
+                .or_else(|| object.get("normalTextureId")),
+        )?,
+        metallic_roughness_texture: string_handle(
+            object
+                .get("metallicRoughnessTexture")
+                .or_else(|| object.get("metallicRoughnessTextureId")),
+        )?,
+    })
+}
+
+fn bounded_radius(value: &Value) -> Result<f32, String> {
+    let radius = finite_f32(value, "object radius")?;
+    if !(0.0..=1_000_000.0).contains(&radius) {
+        return Err("invalid_project|object radius is out of range".into());
+    }
+    Ok(radius)
+}
+
+fn parse_lods(value: &Value) -> Result<Vec<LodLevel>, String> {
+    let values = value
+        .as_array()
+        .ok_or("invalid_project|object LODs must be an array")?;
+    if values.is_empty() || values.len() > 8 {
+        return Err("invalid_project|object LOD count is out of range".into());
+    }
+    let mut result = Vec::with_capacity(values.len());
+    for value in values {
+        let object = value
+            .as_object()
+            .ok_or("invalid_project|object LOD is invalid")?;
+        let level = object
+            .get("level")
+            .and_then(Value::as_u64)
+            .filter(|level| *level <= u64::from(u8::MAX))
+            .ok_or("invalid_project|object LOD level is invalid")?;
+        let max_distance = object
+            .get("maxDistance")
+            .map(|value| finite_f32(value, "object LOD maxDistance"))
+            .transpose()?
+            .unwrap_or(f32::MAX);
+        if max_distance < 0.0 {
+            return Err("invalid_project|object LOD maxDistance is invalid".into());
+        }
+        result.push(LodLevel {
+            level: level as u8,
+            max_distance,
+        });
+    }
+    Ok(result)
+}
+
+fn animation_input(
+    object: &serde_json::Map<String, Value>,
+    label: &str,
+) -> Result<AnimationInput, String> {
+    let clip_id = object
+        .get("clipId")
+        .or_else(|| object.get("id"))
+        .and_then(Value::as_str)
+        .map(stable_id)
+        .unwrap_or_else(|| stable_id(label));
+    let duration_ticks = object
+        .get("durationTicks")
+        .and_then(Value::as_u64)
+        .or_else(|| object.get("duration").and_then(Value::as_u64))
+        .unwrap_or(1)
+        .max(1);
+    let speed_numerator = object
+        .get("speedNumerator")
+        .and_then(Value::as_u64)
+        .unwrap_or(1)
+        .min(u64::from(u32::MAX)) as u32;
+    let speed_denominator = object
+        .get("speedDenominator")
+        .and_then(Value::as_u64)
+        .unwrap_or(1)
+        .min(u64::from(u32::MAX)) as u32;
+    if speed_numerator == 0 || speed_denominator == 0 {
+        return Err(format!("invalid_project|{label} speed must be positive"));
+    }
+    Ok(AnimationInput {
+        clip_id,
+        duration_ticks,
+        speed_numerator,
+        speed_denominator,
+        looped: object
+            .get("looped")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+    })
+}
+
+fn collect_render_settings(
+    value: &Value,
+    state: &mut ProjectRenderState,
+    lights: &mut BTreeMap<u64, WorldRenderLight>,
+) -> Result<(), String> {
+    let Some(object) = value.as_object() else {
+        return Ok(());
+    };
+    apply_render_settings(object, state, lights)?;
+    for key in ["settings", "lighting", "render", "camera"] {
+        if let Some(nested) = object.get(key).and_then(Value::as_object) {
+            apply_render_settings(nested, state, lights)?;
+        }
+    }
+    Ok(())
+}
+
+fn apply_render_settings(
+    object: &serde_json::Map<String, Value>,
+    state: &mut ProjectRenderState,
+    lights: &mut BTreeMap<u64, WorldRenderLight>,
+) -> Result<(), String> {
+    if let Some(camera) = object.get("camera").and_then(Value::as_object) {
+        if let Some(position) = camera.get("position") {
+            state.camera_position = fixed_vec3(Some(position), state.camera_position, "camera position")?;
+        }
+    }
+    if let Some(position) = object.get("cameraPosition") {
+        state.camera_position = fixed_vec3(Some(position), state.camera_position, "camera position")?;
+    }
+    if let Some(ibl) = object.get("ibl").and_then(Value::as_object) {
+        let environment_id = string_handle(ibl.get("environmentId"))?;
+        let irradiance_id = string_handle(ibl.get("irradianceId"))?;
+        let prefiltered_id = string_handle(ibl.get("prefilteredId"))?;
+        let brdf_lut_id = string_handle(ibl.get("brdfLutId").or_else(|| ibl.get("brdfLUTId")))?;
+        if let (Some(environment_id), Some(irradiance_id), Some(prefiltered_id), Some(brdf_lut_id)) =
+            (environment_id, irradiance_id, prefiltered_id, brdf_lut_id)
+        {
+            state.ibl = Some(IblInput {
+                environment_id,
+                irradiance_id,
+                prefiltered_id,
+                brdf_lut_id,
+            });
+        }
+    }
+    if let Some(effects) = object.get("postEffects").and_then(Value::as_array) {
+        for effect in effects {
+            let name = effect
+                .as_str()
+                .or_else(|| effect.get("type").and_then(Value::as_str))
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let parsed = match name.as_str() {
+                "bloom" => Some(PostEffect::Bloom),
+                "colorgrading" | "color_grading" | "color-grading" => {
+                    Some(PostEffect::ColorGrading)
+                }
+                "vignette" => Some(PostEffect::Vignette),
+                "sharpen" => Some(PostEffect::Sharpen),
+                "fxaa" => Some(PostEffect::Fxaa),
+                _ => None,
+            };
+            if let Some(effect) = parsed {
+                if !state.post_effects.contains(&effect) {
+                    state.post_effects.push(effect);
+                }
+            }
+        }
+    }
+    if let Some(samples) = object.get("msaaSamples").and_then(Value::as_u64) {
+        if samples > 16 || samples != 0 && !samples.is_power_of_two() {
+            return Err("invalid_project|MSAA sample count is invalid".into());
+        }
+        state.msaa_samples = samples as u8;
+    }
+    if let Some(fxaa) = object.get("fxaa").and_then(Value::as_bool) {
+        state.fxaa = fxaa;
+    }
+    if let Some(values) = object.get("lights").and_then(Value::as_array) {
+        for (index, value) in values.iter().enumerate() {
+            let light = parse_render_light(value, index)?;
+            lights.insert(light.id, light);
+        }
+    }
+    Ok(())
+}
+
+fn parse_render_light(value: &Value, index: usize) -> Result<WorldRenderLight, String> {
+    let object = value
+        .as_object()
+        .ok_or("invalid_project|render light is invalid")?;
+    let fallback = format!("project-light-{index}");
+    let id = object
+        .get("id")
+        .and_then(Value::as_str)
+        .map(stable_id)
+        .unwrap_or_else(|| stable_id(&fallback));
+    let kind_name = object
+        .get("kind")
+        .or_else(|| object.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or("directional")
+        .to_ascii_lowercase();
+    let kind = match kind_name.as_str() {
+        "directional" | "directional_light" | "directionallight" => LightKind::Directional,
+        "point" | "point_light" | "pointlight" => LightKind::Point,
+        "spot" | "spot_light" | "spotlight" => LightKind::Spot,
+        _ => return Err("invalid_project|render light kind is unsupported".into()),
+    };
+    let position = fixed_vec3(object.get("position"), [0.0, 0.0, 0.0], "render light position")?;
+    let direction = fixed_vec3(object.get("direction"), [0.0, -1.0, 0.0], "render light direction")?;
+    let range = object
+        .get("range")
+        .map(|value| finite_f32(value, "render light range"))
+        .transpose()?
+        .unwrap_or(if matches!(kind, LightKind::Directional) { 0.0 } else { 10.0 });
+    let inner_angle = object
+        .get("spotInnerAngle")
+        .or_else(|| object.get("spot_inner_angle"))
+        .map(|value| finite_f32(value, "render light inner angle"))
+        .transpose()?
+        .unwrap_or(0.0);
+    let outer_angle = object
+        .get("spotOuterAngle")
+        .or_else(|| object.get("spot_outer_angle"))
+        .map(|value| finite_f32(value, "render light outer angle"))
+        .transpose()?
+        .unwrap_or(std::f32::consts::FRAC_PI_4);
+    if range < 0.0 || inner_angle < 0.0 || outer_angle < inner_angle || outer_angle > std::f32::consts::PI {
+        return Err("invalid_project|render light values are out of range".into());
+    }
+    Ok(WorldRenderLight {
+        id,
+        kind,
+        position,
+        direction,
+        range,
+        spot_inner_cos: inner_angle.cos(),
+        spot_outer_cos: outer_angle.cos(),
+        casts_shadow: object
+            .get("castsShadow")
+            .or_else(|| object.get("castShadow"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+fn world_light_input(
+    entity_id: &str,
+    position: [f64; 3],
+    light: &auvra_native::world::LightData,
+) -> Option<WorldRenderLight> {
+    let kind = match light.kind.as_str() {
+        "directional" => LightKind::Directional,
+        "point" => LightKind::Point,
+        "spot" => LightKind::Spot,
+        _ => return None,
+    };
+    Some(WorldRenderLight {
+        id: stable_id(&format!("entity-light:{entity_id}")),
+        kind,
+        position: position.map(|value| value as f32),
+        direction: [0.0, -1.0, 0.0],
+        range: light.range as f32,
+        spot_inner_cos: light.spot_inner_angle.cos() as f32,
+        spot_outer_cos: light.spot_outer_angle.cos() as f32,
+        casts_shadow: true,
+    })
+}
+
+fn world_animation_input(animation: &auvra_native::world::AnimationData) -> AnimationInput {
+    AnimationInput {
+        clip_id: stable_id(&animation.clip),
+        duration_ticks: 1,
+        speed_numerator: (animation.speed.abs().round() as u64)
+            .max(1)
+            .min(u64::from(u32::MAX)) as u32,
+        speed_denominator: 1,
+        looped: animation.looping,
+    }
 }
 
 fn vector3(value: Option<&Value>, default: [f64; 3]) -> Result<[f64; 3], String> {
@@ -1858,6 +2575,8 @@ fn reference_input(revision: u64, tick: u64) -> WorldRenderInput {
         id,
         mesh_id: 7,
         position,
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        scale: [1.0, 1.0, 1.0],
         radius: 0.35,
         material: material(3),
         lods: vec![
@@ -2431,6 +3150,50 @@ mod tests {
                 .and_then(|render| render.asset_hash.as_deref()),
             Some("0000000000000000000000000000000000000000000000000000000000000000")
         );
+    }
+
+    #[test]
+    fn project_render_domains_survive_native_extraction() {
+        let asset = "0000000000000000000000000000000000000000000000000000000000000000";
+        let payload = json!({
+            "projectId": "render-project",
+            "projectRevision": 9,
+            "domains": {
+                "worlds": {"schemaVersion": 1, "documents": []},
+                "levels": {"schemaVersion": 1, "documents": [{
+                    "id": "level",
+                    "cameraPosition": [1.0, 2.0, 3.0],
+                    "lights": [{"id": "key", "kind": "directional", "direction": [0.0, -1.0, 0.0], "castsShadow": true}],
+                    "postEffects": ["bloom", "vignette"],
+                    "msaaSamples": 4,
+                    "fxaa": true,
+                    "ibl": {"environmentId": "environment", "irradianceId": "irradiance", "prefilteredId": "prefiltered", "brdfLutId": "brdf"}
+                }]},
+                "models": {"schemaVersion": 1, "documents": [{"id": "model", "name": "Model", "assetId": asset, "textureOverrides": {"Body": "albedo"}}]},
+                "animations": {"schemaVersion": 1, "documents": [{"id": "run", "name": "Run", "assetId": asset, "modelId": "model", "durationTicks": 120, "speedNumerator": 2, "speedDenominator": 1, "looped": true}]},
+                "materials": {"schemaVersion": 1, "documents": [{"id": "red", "name": "Red", "baseColorFactor": [1.0, 0.1, 0.1, 1.0], "metallic": 0.8, "roughness": 0.25}]},
+                "objects": {"schemaVersion": 1, "documents": [{"id": "object", "levelId": "level", "modelId": "model", "name": "Object", "type": "mesh", "position": [0.0, 0.0, 0.5], "materialId": "red", "radius": 2.0, "lods": [{"level": 0, "maxDistance": 4.0}, {"level": 1, "maxDistance": 40.0}], "animationId": "run", "selected": true}]}
+            }
+        });
+        let mut app = App::new().unwrap();
+        app.authenticated = true;
+        let response = app
+            .dispatch(Request { id: 1, protocol: PROTOCOL.into(), method: "world.hydrate".into(), params: payload })
+            .unwrap();
+        assert!(response.ok);
+        let extraction = app.build_extraction(&Value::Null).unwrap();
+        let entity = &extraction.snapshot.entities[0];
+        assert_eq!(entity.material.material_id, stable_id("red"));
+        assert_eq!(entity.material.base_color_factor, [1.0, 0.1, 0.1, 1.0]);
+        assert_eq!(entity.material.base_color_texture, None);
+        assert_eq!(entity.lod, 0);
+        assert_eq!(entity.animation.unwrap().clip_id, stable_id("run"));
+        assert_eq!(extraction.snapshot.lights.len(), 1);
+        assert_eq!(extraction.snapshot.post_effects.as_ref(), &[PostEffect::Bloom, PostEffect::Vignette]);
+        assert_eq!(extraction.snapshot.msaa_samples, 4);
+        assert!(extraction.snapshot.fxaa);
+        assert_eq!(extraction.snapshot.ibl.unwrap().environment_id, stable_id("environment"));
+        assert_eq!(extraction.snapshot.gizmos.len(), 1);
     }
 
     #[test]

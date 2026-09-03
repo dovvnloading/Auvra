@@ -242,20 +242,28 @@ class NativeProjectHost:
             self._discard_pending_assets(active.project_id, active)
 
     def _native_domains(self, active: Any) -> dict[str, Any]:
-        # Only world-authority fields cross the private native boundary. Large
-        # HUD/graph/terrain/provider documents remain solely in the project
-        # repository and cannot inflate a native protocol frame.
-        fields = {
-            "levels": ("id",),
-            "models": ("id", "assetId"),
-            "animations": ("id", "assetId", "modelId"),
-            "objects": ("id", "levelId", "modelId", "position", "rotation", "scale"),
-        }
+        # Only renderer-authority fields cross the private native boundary.
+        # Large HUD/graph/terrain/provider documents remain solely in the
+        # project repository and cannot inflate a native protocol frame.
+        fields = self._native_fields()
         authored = {
             domain: active.get_domain(domain)
             for domain in fields
         }
         return self._native_domains_from_documents(authored, fields)
+
+    @staticmethod
+    def _native_fields() -> dict[str, tuple[str, ...]]:
+        return {
+            "worlds": ("id", "name", "camera", "cameraPosition", "lights", "lighting", "postEffects", "msaaSamples", "fxaa"),
+            "scenes": ("id", "name", "camera", "cameraPosition", "lights", "lighting", "postEffects", "msaaSamples", "fxaa"),
+            "levels": ("id", "name", "camera", "cameraPosition", "lights", "lighting", "postEffects", "msaaSamples", "fxaa"),
+            "environment": ("id", "name", "settings", "skyConfig", "fog", "camera", "cameraPosition", "lights", "lighting", "ibl", "postEffects", "msaaSamples", "fxaa"),
+            "models": ("id", "assetId", "category", "textureOverrides"),
+            "animations": ("id", "assetId", "modelId", "durationTicks", "duration", "speedNumerator", "speedDenominator", "looped"),
+            "materials": ("id", "name", "textureIds", "overrides", "baseColorFactor", "baseColor", "metallic", "roughness", "baseColorTexture", "baseColorTextureId", "normalTexture", "normalTextureId", "metallicRoughnessTexture", "metallicRoughnessTextureId"),
+            "objects": ("id", "levelId", "modelId", "position", "rotation", "scale", "color", "materialId", "material", "radius", "lods", "animationId", "animation", "render", "selected"),
+        }
 
     @staticmethod
     def _euler_to_native_quaternion(rotation: Any) -> list[float]:
@@ -291,12 +299,7 @@ class NativeProjectHost:
         domains: dict[str, Any],
         fields: dict[str, tuple[str, ...]] | None = None,
     ) -> dict[str, Any]:
-        fields = fields or {
-            "levels": ("id",),
-            "models": ("id", "assetId"),
-            "animations": ("id", "assetId", "modelId"),
-            "objects": ("id", "levelId", "modelId", "position", "rotation", "scale"),
-        }
+        fields = fields or cls._native_fields()
         result: dict[str, dict[str, Any]] = {}
         for domain, allowed in fields.items():
             value = domains.get(domain, {})

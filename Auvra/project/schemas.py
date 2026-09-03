@@ -47,6 +47,8 @@ _NESTED_KEYS = {
     "commands": {"id", "jobId", "providerId", "modelId", "promptSha256", "operationsSha256", "appliedAt"},
     "animationGraph": {"variables", "inputs", "states", "transitions", "activeStateId", "customData"},
     "layout": {"x", "y", "width", "height", "customData"},
+    "lods": {"level", "maxDistance"},
+    "render": {"visible", "radius", "selected", "lods"},
 }
 _FREEFORM_KEYS = {"settings", "overrides", "style", "payload", "data", "customData", "props"}
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")

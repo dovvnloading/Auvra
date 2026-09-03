@@ -378,6 +378,8 @@ The visible surface calls `present_extraction`, which allocates a simple vertex 
 
 **Severity:** High · **Classification:** Confirmed implementation mismatch
 
+**Status:** Completed — renderer-authority domains now cross the native boundary; extraction preserves authored materials, texture overrides, LODs, animations, visibility, selection, radii, lights, camera, IBL, post/AA settings, and entity transforms, while GPU submission consumes rotation, scale, and depth instead of discarding those fields. Native and full Python regression suites passed.
+
 Real project entities receive hard-coded material, LOD, animation, camera, lighting, IBL, and post-effect values (`native/src/main.rs:1276`). Project hydration maps only models, objects, and levels, sets lights and animation to none, and ignores the remaining project domains (`native/src/main.rs:1396`, `native/src/main.rs:1514`). GPU geometry is a projected triangle per entity and ignores actual mesh contents, rotation, scale, and depth (`native/src/gpu.rs:536`, `native/src/gpu.rs:619`). The hard-coded `basic` reference scene does not establish rendering of authored project content.
 
 ### F-045 — MSAA is not implemented and the FXAA label is misleading

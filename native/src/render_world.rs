@@ -267,6 +267,8 @@ pub struct WorldRenderEntity {
     pub id: u64,
     pub mesh_id: u64,
     pub position: [f32; 3],
+    pub rotation: [f32; 4],
+    pub scale: [f32; 3],
     pub radius: f32,
     pub material: MaterialReference,
     pub lods: Vec<LodLevel>,
@@ -354,6 +356,8 @@ pub struct ExtractedEntity {
     pub id: u64,
     pub mesh_id: u64,
     pub position: [f32; 3],
+    pub rotation: [f32; 4],
+    pub scale: [f32; 3],
     pub radius: f32,
     pub material: MaterialReference,
     pub animation: Option<AnimationSample>,
@@ -519,6 +523,8 @@ pub fn extract_render_world(
             id: entity.id,
             mesh_id: entity.mesh_id,
             position: entity.position,
+            rotation: entity.rotation,
+            scale: entity.scale,
             radius: entity.radius,
             material: entity.material,
             animation,
@@ -827,6 +833,9 @@ fn validate_input(input: &WorldRenderInput) -> Result<(), RenderExtractionError>
         if entity.id == 0
             || entity.mesh_id == 0
             || !finite3(entity.position)
+            || !finite4(entity.rotation)
+            || entity.rotation.iter().map(|value| value * value).sum::<f32>() <= f32::EPSILON
+            || entity.scale.iter().any(|value| !value.is_finite() || *value <= 0.0)
             || !entity.radius.is_finite()
             || entity.radius < 0.0
         {
@@ -912,6 +921,9 @@ fn validate_material(material: MaterialReference) -> Result<(), RenderExtraction
 fn finite3(value: [f32; 3]) -> bool {
     value.iter().all(|component| component.is_finite())
 }
+fn finite4(value: [f32; 4]) -> bool {
+    value.iter().all(|component| component.is_finite())
+}
 fn direction_length_sq(value: [f32; 3]) -> f32 {
     value[0].mul_add(value[0], value[1].mul_add(value[1], value[2] * value[2]))
 }
@@ -995,6 +1007,8 @@ mod tests {
             id,
             mesh_id: 2,
             position: [x, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0, 1.0, 1.0],
             radius: 0.5,
             material: material(3),
             lods: vec![

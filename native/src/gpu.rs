@@ -449,7 +449,7 @@ fn render_production_to_view(
         });
         pass.set_pipeline(&pipelines.pick);
         pass.set_vertex_buffer(0, pick_buffer.slice(..));
-        pass.draw(0..(pick_bytes.len() as u32 / 12), 0..1);
+        pass.draw(0..(pick_bytes.len() as u32 / 16), 0..1);
     }
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -544,10 +544,11 @@ fn scene_vertices(extraction: &RenderExtraction) -> Vec<f32> {
                 continue;
             };
             let color = entity.material.base_color_factor;
-            for (px, py) in projected_triangle(entity) {
+            for (px, py, pz) in projected_triangle(entity) {
                 out.extend_from_slice(&[
                     px,
                     py,
+                    pz,
                     color[0],
                     color[1],
                     color[2],
@@ -573,10 +574,11 @@ fn gizmo_vertices(extraction: &RenderExtraction) -> Vec<f32> {
             .iter()
             .find(|entity| entity.id == gizmo.entity_id)
         {
-            for (px, py) in projected_triangle(entity) {
+            for (px, py, pz) in projected_triangle(entity) {
                 out.extend_from_slice(&[
                     px,
                     py,
+                    pz,
                     1.0,
                     0.72,
                     0.1,
@@ -594,16 +596,18 @@ fn gizmo_vertices(extraction: &RenderExtraction) -> Vec<f32> {
     out
 }
 fn pick_vertices(extraction: &RenderExtraction) -> Vec<u8> {
-    let mut out = Vec::with_capacity(extraction.snapshot.entities.len() * 36);
+    let mut out = Vec::with_capacity(extraction.snapshot.entities.len() * 48);
     for entity in extraction.snapshot.entities.iter() {
-        for (px, py) in projected_triangle(entity) {
+        for (px, py, pz) in projected_triangle(entity) {
             out.extend_from_slice(&px.to_ne_bytes());
             out.extend_from_slice(&py.to_ne_bytes());
+            out.extend_from_slice(&pz.to_ne_bytes());
             out.extend_from_slice(&entity.pick_id.to_ne_bytes());
         }
     }
     if out.is_empty() {
         for _ in 0..3 {
+            out.extend_from_slice(&0.0_f32.to_ne_bytes());
             out.extend_from_slice(&0.0_f32.to_ne_bytes());
             out.extend_from_slice(&0.0_f32.to_ne_bytes());
             out.extend_from_slice(&0_u32.to_ne_bytes());
@@ -612,19 +616,35 @@ fn pick_vertices(extraction: &RenderExtraction) -> Vec<u8> {
     out
 }
 
-fn projected_triangle(entity: &ExtractedEntity) -> [(f32, f32); 3] {
+fn projected_triangle(entity: &ExtractedEntity) -> [(f32, f32, f32); 3] {
     let animation_offset = entity
         .animation
         .map(|sample| sample.normalized_time_micros as f32 / 100_000_000.0)
         .unwrap_or(0.0);
-    let x = (entity.position[0] + animation_offset).clamp(-1.0, 1.0);
-    let y = entity.position[1].clamp(-1.0, 1.0);
+    let x = entity.position[0] + animation_offset;
+    let y = entity.position[1];
+    let z = entity.position[2].clamp(-1.0, 1.0);
     let lod_scale = 1.0 / (1.0 + entity.lod as f32 * 0.25);
     let radius = (entity.radius * 0.02 * lod_scale).clamp(0.004, 0.2);
+    let scale_x = entity.scale[0].clamp(0.0001, 1_000_000.0);
+    let scale_y = entity.scale[1].clamp(0.0001, 1_000_000.0);
+    let qx = entity.rotation[0];
+    let qy = entity.rotation[1];
+    let qz = entity.rotation[2];
+    let qw = entity.rotation[3];
+    let sin_z = 2.0 * (qw * qz + qx * qy);
+    let cos_z = 1.0 - 2.0 * (qy * qy + qz * qz);
+    let transform = |local_x: f32, local_y: f32| {
+        (
+            (x + cos_z * local_x * scale_x - sin_z * local_y * scale_y).clamp(-1.0, 1.0),
+            (y + sin_z * local_x * scale_x + cos_z * local_y * scale_y).clamp(-1.0, 1.0),
+            z,
+        )
+    };
     [
-        (x - radius, y - radius),
-        (x, y + radius),
-        (x + radius, y - radius),
+        transform(-radius, -radius),
+        transform(0.0, radius),
+        transform(radius, -radius),
     ]
 }
 fn uniform_bytes(extraction: &RenderExtraction) -> Vec<u8> {
@@ -689,7 +709,7 @@ struct Parameters {
 @group(0) @binding(2) var shadow_sampler: sampler_comparison;
 
 struct VertexInput {
-    @location(0) position: vec2<f32>,
+    @location(0) position: vec3<f32>,
     @location(1) color: vec4<f32>,
     @location(2) material: vec2<f32>,
 }
@@ -701,10 +721,10 @@ struct VertexOutput {
 }
 @vertex fn vs(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
-    output.position = vec4(input.position, 0.0, 1.0);
+    output.position = vec4(input.position, 1.0);
     output.color = input.color;
     output.material = input.material;
-    output.shadow_uv = input.position * vec2(0.5, -0.5) + vec2(0.5);
+    output.shadow_uv = input.position.xy * vec2(0.5, -0.5) + vec2(0.5);
     return output;
 }
 @fragment fn fs(input: VertexOutput) -> @location(0) vec4<f32> {
@@ -799,18 +819,18 @@ fn vertex_state<'a>(shader: &'a wgpu::ShaderModule, entry: &'a str) -> wgpu::Ver
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
                 wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x2,
+                    format: wgpu::VertexFormat::Float32x3,
                     offset: 0,
                     shader_location: 0,
                 },
                 wgpu::VertexAttribute {
                     format: wgpu::VertexFormat::Float32x4,
-                    offset: 8,
+                    offset: 12,
                     shader_location: 1,
                 },
                 wgpu::VertexAttribute {
                     format: wgpu::VertexFormat::Float32x2,
-                    offset: 24,
+                    offset: 28,
                     shader_location: 2,
                 },
             ],
@@ -819,7 +839,7 @@ fn vertex_state<'a>(shader: &'a wgpu::ShaderModule, entry: &'a str) -> wgpu::Ver
     }
 }
 fn depth_pipeline(device: &wgpu::Device) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("auvra-depth"), source: wgpu::ShaderSource::Wgsl(r#"@vertex fn vs(@location(0)p:vec2<f32>)->@builtin(position)vec4<f32>{return vec4(p,0.,1.);}"#.into()) });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("auvra-depth"), source: wgpu::ShaderSource::Wgsl(r#"@vertex fn vs(@location(0)p:vec3<f32>)->@builtin(position)vec4<f32>{return vec4(p,1.);}"#.into()) });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("auvra-depth-pipeline"),
         layout: None,
@@ -830,7 +850,7 @@ fn depth_pipeline(device: &wgpu::Device) -> wgpu::RenderPipeline {
                 array_stride: 36,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &[wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x2,
+                    format: wgpu::VertexFormat::Float32x3,
                     offset: 0,
                     shader_location: 0,
                 }],
@@ -852,7 +872,7 @@ fn depth_pipeline(device: &wgpu::Device) -> wgpu::RenderPipeline {
     })
 }
 fn pick_pipeline(device: &wgpu::Device) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("auvra-pick"), source: wgpu::ShaderSource::Wgsl(r#"struct O{@builtin(position)p:vec4<f32>,@interpolate(flat)@location(0)id:u32};@vertex fn vs(@location(0)p:vec2<f32>,@location(3)id:u32)->O{var o:O;o.p=vec4(p,0.,1.);o.id=id;return o;}@fragment fn fs(o:O)->@location(0)u32{return o.id;}"#.into()) });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("auvra-pick"), source: wgpu::ShaderSource::Wgsl(r#"struct O{@builtin(position)p:vec4<f32>,@interpolate(flat)@location(0)id:u32};@vertex fn vs(@location(0)p:vec3<f32>,@location(3)id:u32)->O{var o:O;o.p=vec4(p,1.);o.id=id;return o;}@fragment fn fs(o:O)->@location(0)u32{return o.id;}"#.into()) });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("auvra-pick-pipeline"),
         layout: None,
@@ -860,17 +880,17 @@ fn pick_pipeline(device: &wgpu::Device) -> wgpu::RenderPipeline {
             module: &shader,
             entry_point: Some("vs"),
             buffers: &[Some(wgpu::VertexBufferLayout {
-                array_stride: 12,
+                array_stride: 16,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &[
-                    wgpu::VertexAttribute {
-                        format: wgpu::VertexFormat::Float32x2,
-                        offset: 0,
-                        shader_location: 0,
-                    },
-                    wgpu::VertexAttribute {
-                        format: wgpu::VertexFormat::Uint32,
-                        offset: 8,
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x3,
+                    offset: 0,
+                    shader_location: 0,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Uint32,
+                    offset: 12,
                         shader_location: 3,
                     },
                 ],
