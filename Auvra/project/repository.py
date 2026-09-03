@@ -139,11 +139,26 @@ class ProjectRepository:
         for journal in txdir.glob("*.json"):
             try: tx = load_json(journal)
             except Exception: raise RecoveryRequiredError("corrupt transaction journal requires recovery")
-            if tx.get("state") == "committed": journal.unlink(missing_ok=True); continue
+            staging_roots: set[Path] = set()
+            entries = tx.get("files", [])
+            if not isinstance(entries, list):
+                raise RecoveryRequiredError("transaction journal files are invalid")
+            for entry in [*entries, tx.get("descriptor", {})]:
+                if isinstance(entry, dict) and entry.get("staged"):
+                    staging_roots.add(_journal_path(self.path, entry.get("staged"), "staging").parent)
+            if tx.get("state") == "committed":
+                journal.unlink(missing_ok=True)
+                # A committed journal intentionally contains only the final
+                # state, so recover any orphaned staging trees left by a crash
+                # between the commit marker and journal cleanup.
+                staging_roots.update(path for path in txdir.parent.glob("tx-*") if path.is_dir())
+                for staging_root in staging_roots:
+                    shutil.rmtree(staging_root, ignore_errors=True)
+                continue
             # Descriptor is the commit point. Restore the old generation when it
             # was not advanced; finish staged documents when it was advanced.
             if self._descriptor.get("revision") == tx.get("newRevision"):
-                for entry in tx.get("files", []):
+                for entry in entries:
                     staged = _journal_path(self.path, entry.get("staged"), "staging")
                     target = _journal_path(self.path, entry.get("target"), "project")
                     if staged.exists(): os.replace(staged, target)
@@ -168,6 +183,8 @@ class ProjectRepository:
             _fsync_directory(self.path / ".auvra")
             journal.unlink(missing_ok=True)
             _fsync_directory(txdir)
+            for staging_root in staging_roots:
+                shutil.rmtree(staging_root, ignore_errors=True)
 
     @property
     def status(self) -> ProjectStatus:

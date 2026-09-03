@@ -624,6 +624,8 @@ Credential tests use only `MemoryCredentialStore`, not Windows Credential Manage
 
 The repository's “nested content” test uses an invalid descriptor and fails before reaching the nested-content guard (`tests/project/test_repository.py:232`; guard at `Auvra/project/repository.py:446`). The desktop SDK “symlink” test adds a traversal filename but no symlink member (`tests/desktop/test_sdk.py:48`; guard at `Auvra/desktop/sdk.py:139`). Transaction fault injection catches and ignores `OSError`, accepts either old or new data, and does not assert no hybrid state or journal cleanup (`tests/project/test_repository.py:99`). These tests can remain green while the intended boundary regresses.
 
+**Status:** Completed — the nested archive fixture is now a valid exported project with an actual nested `Content/sha256` directory and asserts the nested-content guard; the SDK fixture now contains a real ZIP symlink member; and transaction faults are injected at all five real replace boundaries with exact generation, revision, no-hybrid, journal, and staging assertions. Recovery now removes orphaned transaction staging after successful journal recovery. Project coverage passes (51 tests, 1 platform skip) and SDK coverage passes (3 tests).
+
 ### F-075 — Diagnostics follow state grows without a bound and trace gates rely on source tokens
 
 **Severity:** Medium · **Classification:** Confirmed concern and gap

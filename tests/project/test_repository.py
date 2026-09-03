@@ -122,22 +122,41 @@ class ProjectTests(unittest.TestCase):
             with self.assertRaises(OSError): self.repo.apply_changes({"metadata": [{"id":"new"}], "levels": [{"id":"l", "name":"L"}]}, expected_revision=1)
         self.repo.close(); self.repo = ProjectRepository(self.root)
         self.assertEqual(self.repo.revision, 1); self.assertEqual(self.repo.get_domain("metadata")["documents"][0]["id"], "old")
-    def test_fault_at_every_replace_boundary_recovers_old_or_new(self):
-        # Cover journal publication, each document replacement, descriptor
-        # commit, committed-journal replacement, and post-commit cleanup.
-        for failure_at in range(1, 7):
+    def test_fault_at_every_replace_boundary_recovers_one_complete_generation(self):
+        # The transaction performs five real replaces: prepared journal,
+        # metadata, levels, descriptor commit, and committed journal.  Every
+        # injected fault must be observed, and recovery must leave either the
+        # complete old generation or the complete new generation—never a mix.
+        for failure_at in range(1, 6):
             root = Path(self.tmp.name) / f"fault-{failure_at}"; repo = ProjectRepository.create(root, "fault")
             repo.apply_changes({"metadata": [{"id":"old"}]}, expected_revision=0)
             original = repository_module.os.replace; calls = {"n": 0}
+
             def fail(source, target):
                 calls["n"] += 1
-                if calls["n"] == failure_at: raise OSError("injected failure")
+                if calls["n"] == failure_at:
+                    raise OSError("injected failure")
                 return original(source, target)
+
             with mock.patch.object(repository_module.os, "replace", side_effect=fail):
-                try: repo.apply_changes({"metadata": [{"id":"new"}], "levels": [{"id":"l","name":"L"}]}, expected_revision=1)
-                except OSError: pass
+                with self.assertRaises(OSError):
+                    repo.apply_changes(
+                        {"metadata": [{"id":"new"}], "levels": [{"id":"l","name":"L"}]},
+                        expected_revision=1,
+                    )
+            self.assertEqual(calls["n"], failure_at)
             repo.close(); repo = ProjectRepository(root)
-            self.assertIn(repo.get_domain("metadata")["documents"][0]["id"], ("old", "new")); repo.close()
+            try:
+                expected_id = "new" if failure_at == 5 else "old"
+                expected_revision = 2 if failure_at == 5 else 1
+                self.assertEqual(repo.revision, expected_revision, f"failure_at={failure_at}, calls={calls}")
+                self.assertEqual(repo.get_domain("metadata")["documents"][0]["id"], expected_id, f"failure_at={failure_at}")
+                levels = repo.get_domain("levels")["documents"]
+                self.assertEqual(levels, [{"id":"l","name":"L"}] if expected_id == "new" else [])
+                self.assertEqual(list((root / ".auvra" / "transactions").glob("*.json")), [])
+                self.assertEqual(list((root / ".auvra").glob("tx-*")), [])
+            finally:
+                repo.close()
     def test_save_as_failure_leaves_no_partial_destination(self):
         destination = Path(self.tmp.name) / "save-as-target"
         with mock.patch.object(repository_module.shutil, "copytree", side_effect=OSError("disk full")):
@@ -367,9 +386,15 @@ class ProjectTests(unittest.TestCase):
         case = Path(self.tmp.name) / "case.zip"
         with zipfile.ZipFile(case, "w") as z: z.writestr("Foo", "1"); z.writestr("foo", "2")
         with self.assertRaises(ArchiveValidationError): ProjectRepository.import_pack(case, Path(self.tmp.name) / "case-import")
+        source = Path(self.tmp.name) / "source.auvrapack"
+        self.repo.export_pack(source)
         nested = Path(self.tmp.name) / "nested.zip"
-        with zipfile.ZipFile(nested, "w") as z: z.writestr("Project/", b""); z.writestr("Content/", b""); z.writestr("Content/sha256/", b""); z.writestr("bad.auvra", "{}")
-        with self.assertRaises(InvalidProjectError): ProjectRepository.import_pack(nested, Path(self.tmp.name) / "nested-import")
+        with zipfile.ZipFile(source) as original, zipfile.ZipFile(nested, "w") as target:
+            for info in original.infolist():
+                target.writestr(info, original.read(info) if not info.is_dir() else b"")
+            target.writestr("Content/sha256/nested/", b"")
+        with self.assertRaisesRegex(InvalidProjectError, "nested content paths"):
+            ProjectRepository.import_pack(nested, Path(self.tmp.name) / "nested-import")
 
     def test_archive_rejects_portable_name_collisions_and_windows_devices(self):
         candidates = {
