@@ -218,6 +218,7 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
         removeAudio: assets.removeAudio,
 
         blueprints: assets.blueprints,
+        isCreatingPlayerBlueprint: assets.isCreatingPlayerBlueprint,
         addBlueprint: assets.addBlueprint,
         updateBlueprint: assets.updateBlueprint,
         removeBlueprint: assets.removeBlueprint,

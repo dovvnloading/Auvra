@@ -550,6 +550,8 @@ The project manager receives camera and selected IDs but save/save-as ignore the
 
 `addBlueprint` checks a closed-over array before awaiting persistence (`fbx-viewer (1)/hooks/useBlueprintManager.ts:13`), and the Add control is not disabled while the call is in flight (`fbx-viewer (1)/components/Blueprint/BlueprintListPanel.tsx:20`). Two rapid activations can both observe no player blueprint and each persist one.
 
+**Status:** Completed — player creation now reserves the singleton synchronously with a ref-backed in-flight guard and current blueprint ref, while both Blueprint Editor and Browser toolbar Add controls disable during the request. Project verification, TypeScript, and production frontend build pass.
+
 ### F-066 — Project-operation errors become unhandled promise rejections
 
 **Severity:** Medium · **Classification:** Confirmed

@@ -42,6 +42,8 @@ const graphPreview = await readFile(resolve(root, 'components/AnimationGraph/Gra
 const domainCascade = await readFile(resolve(root, 'utils/domainCascade.ts'), 'utf8');
 const editorState = await readFile(resolve(root, 'utils/editorState.ts'), 'utf8');
 const sceneCamera = await readFile(resolve(root, 'components/Scene/SceneCamera.tsx'), 'utf8');
+const blueprintListPanel = await readFile(resolve(root, 'components/Blueprint/BlueprintListPanel.tsx'), 'utf8');
+const browserToolbar = await readFile(resolve(root, 'components/UI/Browser/BrowserToolbar.tsx'), 'utf8');
 
 const failures = [];
 const mustNotContain = (text, pattern, label) => { if (pattern.test(text)) failures.push(`${label}: forbidden ${pattern}`); };
@@ -157,6 +159,14 @@ if (!/createEditorStateDocument/.test(projectManager)
   || !/onUpdate\(camera\.position\.clone\(\)/.test(sceneCamera)
   || !/EDITOR_STATE_DOCUMENT_ID/.test(editorState)) {
   failures.push('camera and selection metadata are not persisted and restored through one canonical path');
+}
+if (!/playerCreationInFlightRef/.test(blueprintManager)
+  || !/blueprintsRef\.current\.some\(bp => bp\.type === 'Player Character'\)/.test(blueprintManager)
+  || !/setIsCreatingPlayer\(true\)/.test(blueprintManager)
+  || !/setIsCreatingPlayer\(false\)/.test(blueprintManager)
+  || !/disabled=\{isCreatingPlayer\}/.test(blueprintListPanel)
+  || !/disabled=\{isCreatingPlayerBlueprint\}/.test(browserToolbar)) {
+  failures.push('player blueprint creation is still vulnerable to rapid duplicate activation');
 }
 if (!/transition \|\| undefined/.test(projectManager) || !/isTransitionCurrent\(transition\)/.test(projectManager)) failures.push('project-manager hydration does not carry exact transition identity through awaits');
 if (!/expectedProjectId/.test(persistence) || !/expectedRevision/.test(persistence) || !/status\.projectId !== expectedProjectId/.test(persistence) || !/status\.revision !== expectedRevision/.test(persistence)) failures.push('hydration does not fence the exact project identity after awaits');

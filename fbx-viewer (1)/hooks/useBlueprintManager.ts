@@ -13,6 +13,8 @@ export const useBlueprintManager = (
 ) => {
   const [blueprints, setBlueprints] = useState<Blueprint[]>(DEFAULT_BLUEPRINTS);
   const blueprintsRef = useRef(blueprints);
+  const playerCreationInFlightRef = useRef(false);
+  const [isCreatingPlayer, setIsCreatingPlayer] = useState(false);
   useEffect(() => { blueprintsRef.current = blueprints; }, [blueprints]);
 
   const addBlueprint = useCallback(async (type: BlueprintType) => {
@@ -20,9 +22,14 @@ export const useBlueprintManager = (
     const isPlayer = type === 'Player Character';
     
     // ENFORCE SINGLETON PLAYER CONSTRAINT
-    if (isPlayer && blueprints.some(bp => bp.type === 'Player Character')) {
+    if (isPlayer && (playerCreationInFlightRef.current || blueprintsRef.current.some(bp => bp.type === 'Player Character'))) {
         frontendDiagnostics.warning('duplicate_player_blueprint_blocked');
         return; 
+    }
+
+    if (isPlayer) {
+        playerCreationInFlightRef.current = true;
+        setIsCreatingPlayer(true);
     }
 
     const graphTemplate = isPlayer ? PLAYER_GRAPH : ENEMY_GRAPH;
@@ -45,12 +52,21 @@ export const useBlueprintManager = (
     
     try {
         await dbOperations.saveBlueprint(newBP);
-        setBlueprints(prev => [...prev, newBP]);
+        setBlueprints(prev => {
+          const next = [...prev, newBP];
+          blueprintsRef.current = next;
+          return next;
+        });
         selectBlueprint(newBP.id);
     } catch (err) {
         frontendDiagnostics.failure('blueprint_add_failed', err);
+    } finally {
+        if (isPlayer) {
+            playerCreationInFlightRef.current = false;
+            setIsCreatingPlayer(false);
+        }
     }
-  }, [blueprints, selectBlueprint]);
+  }, [selectBlueprint]);
 
   const updateBlueprint = useCallback(async (id: string, updates: Partial<Blueprint>) => {
     projectService.assertWritable();
@@ -74,7 +90,11 @@ export const useBlueprintManager = (
     projectService.assertWritable();
     try {
       await dbOperations.deleteBlueprint(id);
-      setBlueprints(prev => prev.filter(bp => bp.id !== id));
+      setBlueprints(prev => {
+        const next = prev.filter(bp => bp.id !== id);
+        blueprintsRef.current = next;
+        return next;
+      });
       clearSelectedBlueprint(id);
     } catch (err) {
         frontendDiagnostics.failure('blueprint_delete_failed', err);
@@ -84,6 +104,7 @@ export const useBlueprintManager = (
   const unlinkModelFromBlueprints = useCallback((modelId: string) => {
     setBlueprints(prev => {
         const next = prev.map(bp => bp.linkedModelId === modelId ? { ...bp, linkedModelId: null } : bp);
+        blueprintsRef.current = next;
         return next;
     });
   }, []);
@@ -106,6 +127,7 @@ export const useBlueprintManager = (
     blueprints,
     setBlueprints, // Exposed for persistence layer
     selectedBlueprintId,
+    isCreatingPlayer,
     setSelectedBlueprintId: selectBlueprint,
     addBlueprint,
     updateBlueprint,

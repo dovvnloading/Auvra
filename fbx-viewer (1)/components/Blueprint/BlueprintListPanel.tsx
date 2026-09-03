@@ -7,6 +7,7 @@ interface BlueprintListPanelProps {
     selectedId: string | null;
     onSelect: (id: string) => void;
     onAdd: (type: BlueprintType) => void;
+    isCreatingPlayer: boolean;
     onRemove: (id: string) => void;
 }
 
@@ -15,6 +16,7 @@ export const BlueprintListPanel: React.FC<BlueprintListPanelProps> = ({
     selectedId,
     onSelect,
     onAdd,
+    isCreatingPlayer,
     onRemove
 }) => {
     const hasPlayerCharacter = blueprints.some(bp => bp.type === 'Player Character');
@@ -29,6 +31,7 @@ export const BlueprintListPanel: React.FC<BlueprintListPanelProps> = ({
                     {!hasPlayerCharacter && (
                         <button 
                             onClick={() => onAdd('Player Character')} 
+                            disabled={isCreatingPlayer}
                             className="p-1 hover:bg-gray-800 rounded text-blue-400 hover:text-white transition-colors" 
                             title="New Player"
                         >

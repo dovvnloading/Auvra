@@ -16,6 +16,7 @@ interface BrowserToolbarProps {
     onAddBlueprint: (type: 'Player Character' | 'Enemy Controller') => void;
     isLoading: boolean;
     hasPlayerCharacter: boolean;
+    isCreatingPlayerBlueprint: boolean;
     animationTargetName?: string;
 }
 
@@ -32,6 +33,7 @@ export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
     onAddBlueprint,
     isLoading,
     hasPlayerCharacter,
+    isCreatingPlayerBlueprint,
     animationTargetName
 }) => {
     const [isImportOpen, setIsImportOpen] = useState(false);
@@ -149,6 +151,7 @@ export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
                         {!hasPlayerCharacter && (
                             <button
                                 onClick={() => onAddBlueprint('Player Character')}
+                                disabled={isCreatingPlayerBlueprint}
                                 className="flex items-center gap-2 px-3 py-1.5 rounded text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white shadow transition-all"
                             >
                                 <Shield size={14} /> New Character

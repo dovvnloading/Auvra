@@ -62,6 +62,7 @@ interface AssetContextType {
 
   // Blueprints
   blueprints: Blueprint[];
+  isCreatingPlayerBlueprint: boolean;
   addBlueprint: (type: any) => Promise<void>;
   updateBlueprint: (id: string, updates: Partial<Blueprint>) => void;
   removeBlueprint: (id: string) => void;
@@ -192,6 +193,7 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
 
     // Blueprints
     blueprints: blueprintManager.blueprints,
+    isCreatingPlayerBlueprint: blueprintManager.isCreatingPlayer,
     addBlueprint: blueprintManager.addBlueprint,
     updateBlueprint: blueprintManager.updateBlueprint,
     removeBlueprint: blueprintManager.removeBlueprint,
