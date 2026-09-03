@@ -502,6 +502,8 @@ The root enables `StrictMode` (`fbx-viewer (1)/index.tsx:20`), while the mount e
 
 The abort listener covers only the worker phase and is removed before `GLTFLoader.parseAsync` runs on the main thread (`fbx-viewer (1)/utils/modelLoader.ts:70`, `fbx-viewer (1)/utils/modelLoader.ts:111`). Abort is checked only after parsing, and the error path does not dispose a scene produced before cancellation or a later normalization failure (`fbx-viewer (1)/utils/modelLoader.ts:139`). Cancel can therefore leave expensive CPU work running and leak the discarded scene.
 
+**Status:** Completed — the main-thread GLTF handoff now races cancellation, observes late parser failures, disposes a scene produced after cancellation, and the outer loader disposes any partially normalized scene before revoking its URL. Project verification, TypeScript, and production frontend build pass.
+
 ### F-060 — Graph preview mutates canonical model materials
 
 **Severity:** High · **Classification:** Confirmed

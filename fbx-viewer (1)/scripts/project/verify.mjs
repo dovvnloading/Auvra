@@ -77,7 +77,11 @@ if (/clip\.duration > 0\.1/.test(modelLoader) || !/clip\.duration > 0/.test(mode
 if (!/new Worker\(new URL\(['"]\.\.\/workers\/fbxImport\.worker\.ts['"]/.test(modelLoader)) failures.push('FBX import is not isolated in a module worker');
 if (/import\s*\{\s*FBXLoader\s*\}/.test(modelLoader)) failures.push('renderer model loader still imports FBXLoader directly');
 if (!/new FBXLoader\(\)\.parse/.test(importWorker) || !/new GLTFExporter\(\)\.parseAsync/.test(importWorker)) failures.push('FBX worker does not own parse and transient runtime conversion');
-if (!/signal\?\.addEventListener\(['"]abort/.test(modelLoader) || !/worker\.terminate\(\)/.test(modelLoader)) failures.push('FBX worker cancellation or teardown is missing');
+if (!/signal\?\.addEventListener\(['"]abort/.test(modelLoader) || !/worker\.terminate\(\)/.test(modelLoader)
+  || !/Promise\.race\(\[parsedPromise, cancelled\]\)/.test(modelLoader)
+  || !/disposeObject\(loaded\.scene\)/.test(modelLoader)
+  || !/let object: THREE\.Group \| null = null/.test(modelLoader)
+  || !/disposeObject\(object\)/.test(modelLoader)) failures.push('FBX worker/main-thread cancellation or late-output teardown is missing');
 if (/img\.onerror\s*=\s*\(\)\s*=>\s*\{[^}]*resolve\(\)/.test(textureManager)) failures.push('texture metadata decode failures are treated as successful imports');
 if (!/request\.upload\.onprogress/.test(service) || !/XMLHttpRequest/.test(service)) failures.push('asset upload has no byte progress surface');
 if (!/OperationProvider/.test(app) || !/OperationCenter/.test(app) || !/AbortController/.test(operationContext)) failures.push('global operation lifecycle is not mounted');
