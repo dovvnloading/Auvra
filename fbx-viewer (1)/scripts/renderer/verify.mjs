@@ -113,6 +113,18 @@ async function behaviorTests() {
     check(before.lifecycle === "ready", "renderer registry surface did not become ready");
     registry.rendererCoordinator.markContextLost(surfaceId);
     check(registry.rendererCoordinator.getSnapshot(surfaceId).lifecycle === "lost", "renderer registry did not report context loss");
+    check(registry.rendererCoordinator.beginRecovery(surfaceId, 1), "first renderer recovery attempt was rejected");
+    registry.rendererCoordinator.markContextRestoring(surfaceId);
+    check(registry.rendererCoordinator.getSnapshot(surfaceId).recoveryCount === 1, "renderer recovery streak was not recorded");
+    registry.rendererCoordinator.markContextRestored(surfaceId);
+    check(registry.rendererCoordinator.getSnapshot(surfaceId).recoveryCount === 0, "successful renderer recovery did not reset the streak");
+    check(registry.rendererCoordinator.beginRecovery(surfaceId, 1), "successful renderer recovery did not restore the attempt budget");
+    check(!registry.rendererCoordinator.beginRecovery(surfaceId, 1), "renderer recovery exceeded its consecutive-attempt budget");
+    registry.rendererCoordinator.unregisterSurface(surfaceId);
+    registry.rendererCoordinator.registerSurface({ id: surfaceId, role: "reference", canvas, selectedBackend: "webgl2", tier: "compatibility" });
+    registry.rendererCoordinator.markReady(surfaceId);
+    check(registry.rendererCoordinator.getSnapshot(surfaceId).recoveryCount === 0, "remounted renderer retained stale recovery count");
+    check(registry.rendererCoordinator.beginRecovery(surfaceId, 1), "remounted renderer retained stale recovery attempts");
     const previousConsoleError = console.error;
     console.error = () => {};
     try {

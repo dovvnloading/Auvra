@@ -566,6 +566,8 @@ The project operation wrapper catches, notifies, and then rethrows (`fbx-viewer 
 
 The registry increments recovery counts but does not reset them after successful restoration or unregister (`fbx-viewer (1)/renderer/registry.ts:156`, `fbx-viewer (1)/renderer/registry.ts:180`). `AuvraCanvas` allows only two attempts (`fbx-viewer (1)/renderer/AuvraCanvas.tsx:51`). After two unrelated successful recoveries, a later context loss no longer receives the normal timeout-driven recovery path.
 
+**Status:** Completed — renderer recovery streaks and attempt budgets now reset after successful restoration and unregister/remount; renderer behavior verification, TypeScript, and production frontend build pass.
+
 ### F-068 — HUD coordinates are not scaled to the editing surface
 
 **Severity:** Medium · **Classification:** Confirmed

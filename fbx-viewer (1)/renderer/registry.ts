@@ -160,6 +160,7 @@ class RendererCoordinator {
     this.emit(current);
     this.surfaces.delete(id);
     this.canvases.delete(id);
+    this.resetRecoveryState(id);
   }
 
   setLifecycle(id: string, lifecycle: RendererLifecycle): void {
@@ -186,6 +187,10 @@ class RendererCoordinator {
     const surface = this.requireSurface(id);
     surface.lifecycle = "ready";
     surface.capabilities = { ...surface.capabilities, ...capabilities };
+    // Recovery limits apply to one consecutive failure streak.  A successful
+    // restore gives the surface a fresh budget for a later, unrelated loss.
+    this.resetRecoveryState(id);
+    surface.recoveryCount = 0;
     this.emit(surface);
   }
 
@@ -253,6 +258,11 @@ class RendererCoordinator {
     const surface = this.surfaces.get(id);
     if (!surface) throw new RendererRegistryError(`Unknown renderer surface: ${id}`);
     return surface;
+  }
+
+  private resetRecoveryState(id: string): void {
+    this.recoveryCounts.delete(id);
+    this.recoveryAttempts.delete(id);
   }
 
   private emit(snapshot: RendererSurfaceSnapshot): void {
