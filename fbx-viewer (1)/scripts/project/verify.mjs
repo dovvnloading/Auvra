@@ -44,6 +44,8 @@ const editorState = await readFile(resolve(root, 'utils/editorState.ts'), 'utf8'
 const sceneCamera = await readFile(resolve(root, 'components/Scene/SceneCamera.tsx'), 'utf8');
 const blueprintListPanel = await readFile(resolve(root, 'components/Blueprint/BlueprintListPanel.tsx'), 'utf8');
 const browserToolbar = await readFile(resolve(root, 'components/UI/Browser/BrowserToolbar.tsx'), 'utf8');
+const hudEditor = await readFile(resolve(root, 'components/HUDEditor/HUDEditor.tsx'), 'utf8');
+const hudCanvas = await readFile(resolve(root, 'components/HUDEditor/HUDCanvas.tsx'), 'utf8');
 
 const failures = [];
 const mustNotContain = (text, pattern, label) => { if (pattern.test(text)) failures.push(`${label}: forbidden ${pattern}`); };
@@ -173,6 +175,16 @@ if (!/playerCreationInFlightRef/.test(blueprintManager)
   || !/disabled=\{isCreatingPlayer\}/.test(blueprintListPanel)
   || !/disabled=\{isCreatingPlayerBlueprint\}/.test(browserToolbar)) {
   failures.push('player blueprint creation is still vulnerable to rapid duplicate activation');
+}
+if (!/HUD_REFERENCE_SIZE/.test(hudEditor)
+  || !/normalizeHUDLayout/.test(hudEditor)
+  || !/clampHUDPosition/.test(hudEditor)
+  || !/ResizeObserver/.test(hudCanvas)
+  || !/Math\.min\(viewport\.width \/ normalizedLayout\.width, viewport\.height \/ normalizedLayout\.height\)/.test(hudCanvas)
+  || !/transform: `scale\(\$\{scale\}\)`/.test(hudCanvas)
+  || !/clientX - rect\.left/.test(hudCanvas)
+  || !/clampHUDPosition/.test(hudCanvas)) {
+  failures.push('HUD editing does not scale logical coordinates to the pane and clamp element bounds');
 }
 if (!/transition \|\| undefined/.test(projectManager) || !/isTransitionCurrent\(transition\)/.test(projectManager)) failures.push('project-manager hydration does not carry exact transition identity through awaits');
 if (!/expectedProjectId/.test(persistence) || !/expectedRevision/.test(persistence) || !/status\.projectId !== expectedProjectId/.test(persistence) || !/status\.revision !== expectedRevision/.test(persistence)) failures.push('hydration does not fence the exact project identity after awaits');

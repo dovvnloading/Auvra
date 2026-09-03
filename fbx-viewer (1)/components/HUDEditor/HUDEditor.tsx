@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { HUDCanvas } from './HUDCanvas';
 import { HUDLibrary } from './HUDLibrary';
 import { AIChatPanel } from './AIChatPanel';
-import { HUDElement } from './types';
+import { clampHUDPosition, HUD_REFERENCE_SIZE, HUDElement, normalizeHUDLayout } from './types';
 import { AVAILABLE_COMPONENTS } from './componentRegistry';
 import { Code, Settings2, Sliders, Palette, Type, Move, Scaling } from 'lucide-react';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
@@ -23,7 +23,7 @@ const createDefaultHUDDocument = (): HUDDocument => ({
     id: HUD_DOCUMENT_ID,
     name: 'Main HUD',
     elements: [],
-    layout: { width: 1920, height: 1080 },
+    layout: { ...HUD_REFERENCE_SIZE },
     commands: [],
 });
 
@@ -121,8 +121,10 @@ export const HUDEditor: React.FC = () => {
         'hud', HUD_DOCUMENT_ID, createDefaultHUDDocument,
     );
     const elements = document.elements;
+    const layout = normalizeHUDLayout(document.layout);
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [rightPanelTab, setRightPanelTab] = useState<'ai' | 'props'>('props');
+    const [canvasScale, setCanvasScale] = useState(1);
 
     const commitElements = useCallback((nextElements: HUDElement[]) => {
         return replace({ ...document, elements: nextElements });
@@ -145,7 +147,11 @@ export const HUDEditor: React.FC = () => {
             name: `${def.label} ${elements.length + 1}`,
             type: def.type,
             props: { ...def.defaultProps, ...(overrides.props || {}) },
-            position: overrides.position || { x: 960 - (def.defaultSize.width / 2), y: 540 - (def.defaultSize.height / 2) }, // Center spawn
+            position: clampHUDPosition(
+                overrides.position || { x: (layout.width - def.defaultSize.width) / 2, y: (layout.height - def.defaultSize.height) / 2 },
+                overrides.size || def.defaultSize,
+                layout,
+            ),
             size: overrides.size || { ...def.defaultSize },
             zIndex: elements.length + 1,
             isVisible: true,
@@ -168,7 +174,11 @@ export const HUDEditor: React.FC = () => {
     };
 
     const handleUpdateElement = (id: string, updates: Partial<HUDElement>) => {
-        void commitElements(elements.map(el => el.id === id ? { ...el, ...updates } : el))
+        void commitElements(elements.map(el => {
+            if (el.id !== id) return el;
+            const next = { ...el, ...updates };
+            return { ...next, position: clampHUDPosition(next.position, next.size, layout) };
+        }))
             .catch((cause) => frontendDiagnostics.failure('hud_element_update_failed', cause));
     };
 
@@ -221,14 +231,16 @@ export const HUDEditor: React.FC = () => {
             {/* Center: Canvas */}
             <div className="flex-1 flex flex-col min-w-0 bg-[#111111]">
                 <div className="h-8 bg-[#1a1a1a] border-b border-gray-800 flex items-center px-4 justify-between shrink-0">
-                    <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Canvas: 1920 x 1080</span>
-                    <div className="text-[10px] text-gray-600">Zoom: 100%</div>
+                    <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Canvas: {Math.round(layout.width)} x {Math.round(layout.height)}</span>
+                    <div className="text-[10px] text-gray-600">Zoom: {Math.round(canvasScale * 100)}%</div>
                 </div>
                 <HUDCanvas 
                     elements={elements}
                     selectedId={selectedId}
                     onSelect={setSelectedId}
                     onUpdate={handleUpdateElement}
+                    layout={layout}
+                    onScaleChange={setCanvasScale}
                 />
             </div>
 

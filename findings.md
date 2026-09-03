@@ -574,6 +574,8 @@ The registry increments recovery counts but does not reset them after successful
 
 HUD documents and new widgets use a fixed 1920×1080 coordinate system (`fbx-viewer (1)/components/HUDEditor/HUDEditor.tsx:21`, `fbx-viewer (1)/components/HUDEditor/HUDEditor.tsx:139`). `HUDCanvas` applies those coordinates as raw CSS pixels inside the available pane (`fbx-viewer (1)/components/HUDEditor/HUDCanvas.tsx:76`) while the UI labels the view as 1920×1080 at 100%. Items can spawn outside a smaller pane, and dragging has no bounds clamp, making elements unreachable.
 
+**Status:** Completed — HUD editing now fits a logical document stage to the available pane, converts pointer coordinates through the active scale, clamps element positions to the layout, and reports the actual zoom; project verification, TypeScript, and production frontend build pass.
+
 ### F-069 — Keyboard, pointer, and accessibility behavior is incomplete
 
 **Severity:** Medium · **Classification:** Confirmed usability concern
