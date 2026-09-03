@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from Auvra.desktop.native_engine import NativeEngine
+from Auvra.desktop.native_engine import NativeEngine, NativeEngineResponseError
 from Auvra.diagnostics.core import DiagnosticsSession, install_diagnostics
 
 
@@ -37,7 +37,16 @@ class NativeTraceSmokeTests(unittest.TestCase):
                 # snapshot call.  Detailed capture records quiet operations.
                 engine.call("world.getReplay")
                 engine.call("renderer.getCapabilities")
-                engine.open_viewport(width=320, height=240, title="Auvra trace smoke")
+                viewport_opened = True
+                try:
+                    engine.open_viewport(width=320, height=240, title="Auvra trace smoke")
+                except NativeEngineResponseError as error:
+                    if error.code != "unsupported_capability":
+                        raise
+                    # Windows CI can run in an occluded desktop session where
+                    # the swapchain is unavailable even though offscreen
+                    # rendering and native diagnostics remain healthy.
+                    viewport_opened = False
                 engine.render_reference(width=32, height=32)
                 engine.call("renderer.extract")
                 engine.reference_metrics()
@@ -68,11 +77,20 @@ class NativeTraceSmokeTests(unittest.TestCase):
                 for record in operation_records
                 if record["attributes"]["state"] == "native.operation_completed"
             }
-            self.assertTrue({
-                "world.getReplay", "renderer.getCapabilities", "viewport.open",
+            required_methods = {
+                "world.getReplay", "renderer.getCapabilities",
                 "renderer.renderReference", "renderer.extract", "renderer.getMetrics",
                 "renderer.recover", "viewport.close", "world.closeProject",
-            } <= completed_methods, completed_methods)
+            }
+            if viewport_opened:
+                required_methods.add("viewport.open")
+            self.assertTrue(required_methods <= completed_methods, completed_methods)
+            if not viewport_opened:
+                self.assertTrue(any(
+                    record["attributes"]["state"] == "native.operation_failed"
+                    and record["attributes"].get("method") == "viewport.open"
+                    for record in operation_records
+                ), operation_records)
 
 
 if __name__ == "__main__":

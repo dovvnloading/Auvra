@@ -358,6 +358,11 @@ pub fn render_offscreen(
     width: u32,
     height: u32,
 ) -> Result<ProductionFrame, String> {
+    // The post-processing pipeline is shared with the visible viewport, whose
+    // swapchain may use a different color format.  Rebind it to the target
+    // before encoding this offscreen frame so a prior viewport presentation
+    // cannot leave a format-incompatible pipeline cached.
+    pipelines.ensure_surface_format(device, format);
     let target = texture(
         device,
         "auvra-production-srgb",
@@ -475,12 +480,17 @@ pub fn present_production(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     view: &wgpu::TextureView,
+    format: wgpu::TextureFormat,
     pipelines: &mut ProductionPipelines,
     timing: Option<&GpuTiming>,
     extraction: &RenderExtraction,
     width: u32,
     height: u32,
 ) -> Result<ProductionSubmission, String> {
+    // Keep the shared post-processing pipeline aligned with the actual
+    // swapchain view.  Offscreen reference renders may have switched the
+    // cached output format since the viewport was last pumped.
+    pipelines.ensure_surface_format(device, format);
     let mut submission = render_production_to_view(
         device, queue, pipelines, timing, extraction, width, height, view,
     )?;

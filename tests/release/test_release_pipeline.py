@@ -259,6 +259,12 @@ class ReleasePipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             inputs = self.staged_inputs(root)
+            (inputs / "native" / "auvra-native.exe").write_bytes(
+                rb"native build path: C:\Users\runneradmin\source\Auvra\native\src\main.rs"
+            )
+            binary_package = root / "binary-package"
+            assemble(inputs, binary_package, channel="stable", version="1.0.0")
+            self.assertTrue((binary_package / "native" / "auvra-native.exe").is_file())
             (inputs / "host" / "secret.txt").write_text("api_key='0123456789abcdef0123456789'", encoding="utf-8")
             with self.assertRaises(ReleaseError):
                 assemble(inputs, root / "bad-package", channel="stable", version="1.0.0")

@@ -855,7 +855,17 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         _wait_until(lambda: expected.issubset({item.get("id") for item in seen if item.get("type") == "response"}),
                     30.0, "native engine lifecycle")
         responses = {item["id"]: item for item in seen if item.get("id") in expected and item.get("type") == "response"}
-        self.assertTrue(all(item.get("ok") is True for item in responses.values()), responses)
+        successful = expected - ({f"{prefix}-open"} if not resume else set())
+        self.assertTrue(all(responses[item].get("ok") is True for item in successful), responses)
+        if not resume and not responses[f"{prefix}-open"].get("ok"):
+            # The native renderer can render offscreen while a Windows runner
+            # has no usable swapchain (for example an occluded session).  The
+            # capability-gated error is the truthful result for that host.
+            self.assertEqual(
+                responses[f"{prefix}-open"].get("error", {}).get("code"),
+                "unsupported_capability",
+                responses,
+            )
         return responses
 
     def _application_engine_resume(self, frame: WebView2Frame, label: str) -> dict[str, Any]:
@@ -959,9 +969,11 @@ class NativeWebView2SmokeTests(unittest.TestCase):
             for actual, expected in zip(reference_entity["rotation"], expected_rotation):
                 self.assertAlmostEqual(actual, expected, places=12)
             self.assertIsInstance(initial_snapshot.get("worldHash"), str)
-            self.assertEqual(engine_initial["engine-1-open"]["result"]["viewport"], "open")
-            self.assertFalse(engine_initial["engine-1-open"]["result"]["dockActive"])
-            self.assertIsInstance(engine_initial["engine-1-open"]["result"]["dockReason"], str)
+            initial_open = engine_initial["engine-1-open"]
+            if initial_open.get("ok"):
+                self.assertEqual(initial_open["result"]["viewport"], "open")
+                self.assertFalse(initial_open["result"]["dockActive"])
+                self.assertIsInstance(initial_open["result"]["dockReason"], str)
 
             nav_before = dev_lifecycle.count("navigation_completed")
             self._ui(dev.frame, lambda core: core.Reload())

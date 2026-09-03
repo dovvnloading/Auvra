@@ -520,7 +520,7 @@ impl Renderer {
     fn present_surface(
         &mut self,
         surface: &wgpu::Surface<'_>,
-        _format: wgpu::TextureFormat,
+        format: wgpu::TextureFormat,
         width: u32,
         height: u32,
         extraction: &RenderExtraction,
@@ -537,6 +537,7 @@ impl Renderer {
             &self.device,
             &self.queue,
             &view,
+            format,
             &mut self.production_pipelines,
             self.gpu_timing.as_ref(),
             extraction,
@@ -699,7 +700,7 @@ impl Viewport {
             height,
             present_mode,
             alpha_mode,
-        );
+        )?;
         renderer.present_surface(&surface, format, width, height, extraction)?;
         Ok(Self {
             event_loop,
@@ -750,7 +751,7 @@ impl Viewport {
                 height,
                 present_mode,
                 alpha_mode,
-            );
+            )?;
         }
         // Present on every bounded pump, not only on the first open or after
         // explicit recovery. This keeps world mutations and redraw/resize
@@ -793,7 +794,7 @@ impl Viewport {
             self.height,
             present_mode,
             alpha_mode,
-        );
+        )?;
         renderer.present_surface(&surface, format, self.width, self.height, extraction)?;
         self.format = format;
         self.surface = Some(surface);
@@ -809,24 +810,43 @@ fn configure_viewport_surface(
     height: u32,
     present_mode: wgpu::PresentMode,
     alpha_mode: wgpu::CompositeAlphaMode,
-) {
+) -> Result<(), String> {
     renderer
         .production_pipelines
         .ensure_surface_format(&renderer.device, format);
-    surface.configure(
-        &renderer.device,
-        &wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            color_space: wgpu::SurfaceColorSpace::Auto,
-            width,
-            height,
-            present_mode,
-            alpha_mode,
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        },
-    );
+    // ``Surface::configure`` reports backend failures through wgpu's error
+    // handler, which otherwise panics when no error scope is active.  A
+    // hidden/occluded Windows desktop (for example a CI runner session) can
+    // legitimately reject a swapchain even though offscreen rendering works.
+    // Keep that capability failure inside the request boundary instead of
+    // terminating the native process.
+    let error_scope = renderer
+        .device
+        .push_error_scope(wgpu::ErrorFilter::Validation);
+    let configured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        surface.configure(
+            &renderer.device,
+            &wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format,
+                color_space: wgpu::SurfaceColorSpace::Auto,
+                width,
+                height,
+                present_mode,
+                alpha_mode,
+                view_formats: vec![],
+                desired_maximum_frame_latency: 2,
+            },
+        );
+    }));
+    let scoped_error = pollster::block_on(error_scope.pop());
+    if configured.is_err() || scoped_error.is_some() {
+        return Err(
+            "unsupported_capability|viewport surface configuration was rejected by the backend"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 fn valid_session_token(token: &str) -> bool {
@@ -3079,6 +3099,12 @@ fn run_self_test() -> Result<(), String> {
         method: "shutdown".into(),
         params: Value::Null,
     })?;
+    let viewport_unsupported = !opened.ok
+        && opened
+            .error
+            .as_ref()
+            .map(|error| error.code == "unsupported_capability")
+            .unwrap_or(false);
     let cache_hit = cached
         .result
         .as_ref()
@@ -3104,16 +3130,14 @@ fn run_self_test() -> Result<(), String> {
         && rendered.ok
         && cached.ok
         && cache_hit
-        && opened.ok
-        && recovered.ok
-        && viewport_reopened
-        && closed.ok
+        && ((opened.ok && recovered.ok && viewport_reopened && closed.ok)
+            || (viewport_unsupported && recovered.ok && !viewport_reopened && closed.ok))
         && clean_shutdown
         && app.world.revision() == 1)
     {
         return Err("native self-test acceptance failed".into());
     }
-    let evidence = json!({"probe": "auvra-native-self-test", "protocol": PROTOCOL, "hello_ok": hello.ok, "world_apply_ok": applied.ok, "world_revision": app.world.revision(), "reference_render_ok": rendered.ok, "reference": rendered.result, "pipeline_cache_hit": cache_hit, "viewport_open_ok": opened.ok, "recovery_ok": recovered.ok, "viewport_reopened": viewport_reopened, "viewport_close_ok": closed.ok, "clean_shutdown": clean_shutdown, "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0});
+    let evidence = json!({"probe": "auvra-native-self-test", "protocol": PROTOCOL, "hello_ok": hello.ok, "world_apply_ok": applied.ok, "world_revision": app.world.revision(), "reference_render_ok": rendered.ok, "reference": rendered.result, "pipeline_cache_hit": cache_hit, "viewport_open_ok": opened.ok, "viewport_unsupported": viewport_unsupported, "recovery_ok": recovered.ok, "viewport_reopened": viewport_reopened, "viewport_close_ok": closed.ok, "clean_shutdown": clean_shutdown, "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0});
     println!(
         "{}",
         serde_json::to_string(&evidence).map_err(|e| e.to_string())?

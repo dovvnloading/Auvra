@@ -33,6 +33,13 @@ POLICY_PATH = ROOT / "policy.json"
 FORBIDDEN_SUFFIXES = {".pfx", ".p12", ".pem", ".key", ".env"}
 FORBIDDEN_CONTENT_SUFFIXES = {".map", ".log", ".dmp", ".dump", ".pdb", ".ilk", ".obj", ".lib", ".exp", ".pyc", ".pyproj", ".sln"}
 FORBIDDEN_CONTENT_NAMES = {"vite.config.ts", "vite.config.js", "tsconfig.json", "cargo.toml", "cargo.lock", "pyproject.toml", "uv.lock", "package.json", "package-lock.json", "auvra.py", "auvra.pyproj", "bootstrap.py"}
+# Compiled/runtime payloads can legitimately contain toolchain source paths
+# and URLs in debug/resource strings.  Keep secret/private-content checks for
+# those files, but apply text-only path/CDN checks to actual text payloads.
+BINARY_CONTENT_SUFFIXES = {
+    ".bin", ".cab", ".dat", ".dll", ".dylib", ".exe", ".msix", ".msixbundle",
+    ".nupkg", ".pak", ".pyd", ".so", ".ttf", ".woff", ".woff2", ".zip",
+}
 SECRET_PATTERN = re.compile(
     rb"-----BEGIN [^-]*PRIVATE KEY-----"
     rb"|(?:password|passwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*[\"'][A-Za-z0-9_./+=:-]{12,}[\"']"
@@ -132,12 +139,12 @@ def _assert_no_forbidden(path: str, policy: Mapping[str, Any]) -> None:
 def _scan_release_content(root: Path, policy: Mapping[str, Any], *, include_manifest: bool = False) -> None:
     """Reject accidental developer artifacts and secret-like text."""
 
-    def violation(data: bytes) -> bool:
+    def violation(data: bytes, *, text_content: bool) -> bool:
         return bool(
             SECRET_PATTERN.search(data)
-            or ABSOLUTE_PATH_PATTERN.search(data)
             or PRIVATE_CONTENT_PATTERN.search(data)
-            or RUNTIME_CDN_PATTERN.search(data)
+            or (text_content and ABSOLUTE_PATH_PATTERN.search(data))
+            or (text_content and RUNTIME_CDN_PATTERN.search(data))
         )
 
     for path in sorted(root.rglob("*"), key=lambda item: item.as_posix().lower()):
@@ -152,19 +159,20 @@ def _scan_release_content(root: Path, policy: Mapping[str, Any], *, include_mani
         lower_name = path.name.lower()
         if path.suffix.lower() in FORBIDDEN_CONTENT_SUFFIXES or lower_name in FORBIDDEN_CONTENT_NAMES:
             raise ReleaseError(f"development or diagnostic file is not releasable: {relative}")
+        text_content = path.suffix.lower() not in BINARY_CONTENT_SUFFIXES
         try:
             with path.open("rb") as stream:
                 sample = stream.read(4096)
                 rolling = sample
                 normalized = sample.replace(b"\x00", b"")
-                if violation(rolling) or violation(normalized):
+                if violation(rolling, text_content=text_content) or violation(normalized, text_content=text_content):
                     raise ReleaseError(f"secret-like or private content in release: {relative}")
                 for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                     rolling = (rolling + chunk)[-1024 * 1024:]
                     normalized = (normalized + chunk.replace(b"\x00", b""))[-1024 * 1024:]
-                    if violation(rolling) or violation(normalized):
+                    if violation(rolling, text_content=text_content) or violation(normalized, text_content=text_content):
                         raise ReleaseError(f"secret-like or private content in release: {relative}")
-                if violation(rolling) or violation(normalized):
+                if violation(rolling, text_content=text_content) or violation(normalized, text_content=text_content):
                     raise ReleaseError(f"secret-like or private content in release: {relative}")
         except OSError as exc:
             raise ReleaseError(f"release content could not be scanned: {relative}") from exc
