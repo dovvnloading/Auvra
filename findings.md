@@ -608,6 +608,8 @@ Release unit tests accept dummy runtime, SDK, Python, and native bytes (`tests/r
 
 `release/lifecycle.py` explicitly implements a side-effect-free dictionary model (`release/lifecycle.py:1`, `release/lifecycle.py:12`). The CI release job does invoke MakeAppx, unpack and verify the unsigned package, launch its packaged Python entrypoint, and run the packaged startup smoke (`.github/workflows/verify.yml:268`). It intentionally does not sign or install the package and explicitly disclaims installation, upgrade, rollback, and uninstall success (`.github/workflows/verify.yml:298`). The in-memory lifecycle test (`tests/release/test_release_pipeline.py:132`) is therefore useful logic coverage but not evidence for those signed Windows lifecycle operations.
 
+**Status:** Completed — `release/windows_lifecycle.py` now provides a strict opt-in PowerShell smoke that installs, upgrades, rolls back with `ForceUpdateFromAnyVersion`, uninstalls with `PreserveApplicationData`, and verifies package identity, versions, registration removal, and preserved app data. It refuses pre-existing identities and missing/non-MSIX inputs; runner and PowerShell syntax tests pass, while the machine-changing smoke remains explicitly gated by `AUVRA_WINDOWS_LIFECYCLE_SMOKE=1` and three signed package paths.
+
 ### F-073 — Important Windows security boundaries lack production-path tests
 
 **Severity:** Medium · **Classification:** Gap

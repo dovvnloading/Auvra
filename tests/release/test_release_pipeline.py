@@ -16,6 +16,7 @@ from release.cross_backend import verify_cross_backend
 from release.lifecycle import LifecycleState
 from release.pipeline import ReleaseError, assemble, sign_msix, verify_package, write_input_inventory
 from release.runtime_verify import verify_installed_package
+from release.windows_lifecycle import WINDOWS_LIFECYCLE_SCRIPT, run_windows_lifecycle_smoke
 
 
 class ReleasePipelineTests(unittest.TestCase):
@@ -313,6 +314,79 @@ class ReleasePipelineTests(unittest.TestCase):
             self.assertEqual(state.install(one, channel="stable", force_any_version=True)["action"], "rollback")
             state.uninstall(channel="stable")
             self.assertEqual(state.user_data, {"project.auvra": b"keep"})
+
+    def test_windows_lifecycle_runner_requires_three_msix_files_and_proves_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            packages = [root / name for name in ("initial.msix", "upgrade.msix", "rollback.msix")]
+            for package in packages:
+                package.write_bytes(b"signed package placeholder")
+            response = {
+                "schema": 1,
+                "identity": "Auvra",
+                "initialVersion": "1.0.0.0",
+                "upgradeVersion": "2.0.0.0",
+                "rollbackVersion": "1.0.0.0",
+                "installed": True,
+                "upgraded": True,
+                "rolledBack": True,
+                "uninstalled": True,
+                "userDataPreserved": True,
+            }
+            with mock.patch("release.windows_lifecycle.os.name", "nt"), \
+                 mock.patch("release.windows_lifecycle.subprocess.run",
+                            return_value=subprocess.CompletedProcess([], 0, json.dumps(response), "")) as run:
+                result = run_windows_lifecycle_smoke(
+                    packages[0], packages[1], packages[2], identity="Auvra", powershell="powershell.exe",
+                )
+            self.assertEqual(result, response)
+            command = run.call_args.args[0]
+            self.assertEqual(command[:5], ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"])
+            self.assertIn("-ForceUpdateFromAnyVersion", WINDOWS_LIFECYCLE_SCRIPT)
+            self.assertIn("-PreserveApplicationData", WINDOWS_LIFECYCLE_SCRIPT)
+
+    def test_windows_lifecycle_runner_rejects_missing_package_before_starting_shell(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            packages = [root / name for name in ("initial.msix", "upgrade.msix")]
+            for package in packages:
+                package.write_bytes(b"placeholder")
+            with mock.patch("release.windows_lifecycle.os.name", "nt"), \
+                 mock.patch("release.windows_lifecycle.subprocess.run") as run:
+                with self.assertRaisesRegex(ReleaseError, "rollback package is missing"):
+                    run_windows_lifecycle_smoke(
+                        packages[0], packages[1], root / "rollback.msix", identity="Auvra", powershell="powershell.exe",
+                    )
+            run.assert_not_called()
+
+    @unittest.skipUnless(os.name == "nt", "PowerShell lifecycle scripts require Windows")
+    def test_windows_lifecycle_powershell_body_parses(self) -> None:
+        powershell = self._powershell()
+        if powershell is None:
+            self.skipTest("PowerShell is required for lifecycle script syntax validation")
+        with tempfile.TemporaryDirectory() as temporary:
+            script = Path(temporary) / "lifecycle.ps1"
+            script.write_text(WINDOWS_LIFECYCLE_SCRIPT, encoding="utf-8")
+            environment = os.environ.copy()
+            environment["AUVRA_LIFECYCLE_PARSE_TARGET"] = str(script)
+            parse = subprocess.run(
+                [
+                    powershell,
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "$tokens=$null; $errors=$null; "
+                    "[System.Management.Automation.Language.Parser]::ParseFile($env:AUVRA_LIFECYCLE_PARSE_TARGET,[ref]$tokens,[ref]$errors) | Out-Null; "
+                    "if($errors.Count){$errors | ForEach-Object Message; exit 1}; exit 0",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                env=environment,
+            )
+        self.assertEqual(parse.returncode, 0, parse.stdout + parse.stderr)
 
     def test_asset_cooking_and_cross_backend_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
