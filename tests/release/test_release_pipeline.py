@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -99,7 +100,27 @@ class ReleasePipelineTests(unittest.TestCase):
             path = staged / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
+        for directory, kind, version, digest in (
+            ("python-embed", "pythonEmbed", "3.14.7", "d297e5ff019966817ad8502465176139f2d3d840fa4ed84b13bed399a6ab1f15"),
+            ("webview2-fixed", "webview2Fixed", "151.0.4129.107", "f1e1c2c9b34c79ba4d88df77fb79a05441e1bd7481d6a985d76dd377cda45f33"),
+        ):
+            root = staged / directory
+            entries = []
+            for path in sorted(
+                    (item for item in root.rglob("*") if item.is_file() and item.name != "Auvra.runtime-pin.json"),
+                    key=lambda item: item.as_posix().lower()):
+                entries.append({"path": path.relative_to(root).as_posix(), "size": path.stat().st_size,
+                                "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+            marker = {"schema": 1, "kind": kind, "version": version, "sha256": digest, "files": entries}
+            (root / "Auvra.runtime-pin.json").write_text(json.dumps(marker, separators=(",", ":")), encoding="ascii")
         return staged
+
+    def test_runtime_pin_attestation_rejects_modified_extracted_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            inputs = self.staged_inputs(Path(temporary))
+            (inputs / "python-embed" / "pythonw.exe").write_bytes(b"tampered")
+            with self.assertRaisesRegex(ReleaseError, "contents do not match"):
+                write_input_inventory(inputs, inputs / "inventory.json")
 
     def test_assemble_verify_and_appinstaller_are_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

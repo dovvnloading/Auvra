@@ -436,6 +436,8 @@ World advance clones the complete world and replay state and clones all entities
 
 Release assembly hashes whatever staged files it receives (`release/pipeline.py:162`), while runtime-pin validation compares only marker strings to policy (`release/pipeline.py:179`). It does not reconstruct or verify the extracted tree against the pinned archive. A modified cached tree accompanied by a copied valid marker passes this boundary and becomes self-consistent in the newly generated manifest.
 
+**Status:** Completed — runtime acquisition now records a per-file size and SHA-256 attestation for each extracted pinned tree, and assembly recomputes that attestation before accepting the marker; tampering an extracted file with a copied marker is rejected by regression coverage.
+
 ### F-052 — Signing exposes the certificate password and does not verify the result
 
 **Severity:** High · **Classification:** Confirmed security/release concern

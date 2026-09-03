@@ -195,6 +195,43 @@ def _validate_runtime_pin_markers(input_root: Path, policy: Mapping[str, Any]) -
         if (value.get("version") != expected.get("version") or not isinstance(marker_hash, str)
                 or marker_hash.lower() != str(expected.get("sha256", "")).lower()):
             raise ReleaseError(f"{directory} runtime pin does not match release policy")
+        attested = value.get("files")
+        if not isinstance(attested, list):
+            raise ReleaseError(f"{directory} runtime pin is missing its extracted-file attestation")
+        expected_files: list[dict[str, Any]] = []
+        runtime_root = input_root / directory
+        marker_relative = "Auvra.runtime-pin.json"
+        for path in sorted(runtime_root.rglob("*"), key=lambda item: item.as_posix().lower()):
+            if path.is_symlink() or _is_reparse(path):
+                raise ReleaseError(f"{directory} runtime contains a link or reparse point")
+            if not path.is_file():
+                continue
+            relative = _relative(path, runtime_root)
+            if relative == marker_relative:
+                continue
+            expected_files.append({
+                "path": relative,
+                "size": path.stat().st_size,
+                "sha256": sha256(path),
+            })
+        normalized_attestation: list[dict[str, Any]] = []
+        for entry in attested:
+            if not isinstance(entry, Mapping) or not isinstance(entry.get("path"), str):
+                raise ReleaseError(f"{directory} runtime pin file attestation is invalid")
+            relative = _safe_manifest_path(entry["path"])
+            if relative == marker_relative or not isinstance(entry.get("size"), int) or entry["size"] < 0:
+                raise ReleaseError(f"{directory} runtime pin file attestation is invalid")
+            digest = entry.get("sha256")
+            if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+                raise ReleaseError(f"{directory} runtime pin file attestation is invalid")
+            normalized_attestation.append({
+                "path": relative,
+                "size": entry["size"],
+                "sha256": digest.lower(),
+            })
+        normalized_attestation.sort(key=lambda entry: entry["path"].lower())
+        if normalized_attestation != expected_files:
+            raise ReleaseError(f"{directory} extracted runtime contents do not match its attestation")
     sdk_marker = input_root / "webview2-sdk" / ".auvra-sdk.sha256"
     expected_sdk = pins.get("webview2Sdk")
     try:
