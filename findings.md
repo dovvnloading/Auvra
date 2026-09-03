@@ -354,6 +354,8 @@ The cooker queue capacity defaults to eight (`native/src/assets.rs:36`, `native/
 
 **Severity:** Medium · **Classification:** Confirmed
 
+**Status:** Completed — project close cancels owned asset tokens and pending IDs, terminal app tokens are reaped, and early-cancel worker paths trim terminal records; native lifecycle regressions passed.
+
 Project close clears the app's token map without cancelling tokens (`native/src/main.rs:1163`). Worker records retain cloned tokens, so old cooking continues and can occupy the queue after another project opens. Completed app tokens are never removed (`native/src/main.rs:1240`, `native/src/main.rs:1260`), and the early-cancel worker path skips terminal-record trimming (`native/src/assets.rs:292`, `native/src/assets.rs:299`).
 
 ### F-042 — Project schemas accept transforms that native hydration rejects

@@ -868,6 +868,7 @@ impl App {
         if !self.authenticated {
             return Err("session.hello required".into());
         }
+        self.reap_asset_jobs();
         self.retry_pending_asset_jobs();
         let result = match req.method.as_str() {
             "world.getSnapshot" => {
@@ -1323,6 +1324,9 @@ impl App {
         self.world = NativeWorld::new();
         self.project_id = None;
         self.project_revision = None;
+        for cancellation in self.asset_jobs.values() {
+            cancellation.cancel();
+        }
         self.asset_jobs.clear();
         self.pending_asset_ids.clear();
         self.world_snapshot(&Value::Null)
@@ -1355,6 +1359,31 @@ impl App {
             }
         }
         (queued, self.pending_asset_ids.len() + failed)
+    }
+
+    fn reap_asset_jobs(&mut self) {
+        let Some(cooker) = self.cooker.as_ref() else {
+            self.asset_jobs.clear();
+            return;
+        };
+        let finished = self
+            .asset_jobs
+            .keys()
+            .copied()
+            .filter(|job_id| {
+                cooker.status(*job_id).is_some_and(|status| {
+                    matches!(
+                        status.state,
+                        auvra_native::assets::JobState::Completed
+                            | auvra_native::assets::JobState::Failed
+                            | auvra_native::assets::JobState::Cancelled
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        for job_id in finished {
+            self.asset_jobs.remove(&job_id);
+        }
     }
 
     fn advance_world(&mut self, params: &Value) -> Result<Value, String> {
@@ -2537,6 +2566,54 @@ mod tests {
         assert_eq!(queued, ids.len());
         assert_eq!(deferred, 0);
         assert!(app.pending_asset_ids.is_empty());
+        drop(app);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn closing_project_cancels_and_releases_asset_tokens() {
+        let root = std::env::temp_dir().join(format!("auvra-main-close-assets-{}", std::process::id()));
+        let derived = root.join("derived");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut app = App::new().unwrap();
+        app.cooker = Some(
+            CookWorker::new(CookConfig::new(&root, &derived).with_queue_capacity(1)).unwrap(),
+        );
+        let submission = app.cooker.as_ref().unwrap().submit_deferred(&format!("{:064x}", 1)).unwrap();
+        let cancellation = submission.cancellation.clone();
+        app.asset_jobs.insert(submission.job_id, submission.cancellation);
+        app.close_project().unwrap();
+        assert!(cancellation.is_cancelled());
+        assert!(app.asset_jobs.is_empty());
+        assert!(app.pending_asset_ids.is_empty());
+        drop(app);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn terminal_asset_tokens_are_reaped_from_app_bookkeeping() {
+        let root = std::env::temp_dir().join(format!("auvra-main-reap-assets-{}", std::process::id()));
+        let derived = root.join("derived");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut app = App::new().unwrap();
+        app.cooker = Some(CookWorker::new(CookConfig::new(&root, &derived)).unwrap());
+        let submission = app.cooker.as_ref().unwrap().submit(&format!("{:064x}", 2)).unwrap();
+        app.asset_jobs.insert(submission.job_id, submission.cancellation);
+        for _ in 0..100 {
+            if app.cooker.as_ref().unwrap().status(submission.job_id).is_some_and(|status| {
+                matches!(
+                    status.state,
+                    auvra_native::assets::JobState::Completed
+                        | auvra_native::assets::JobState::Failed
+                        | auvra_native::assets::JobState::Cancelled
+                )
+            }) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        app.reap_asset_jobs();
+        assert!(!app.asset_jobs.contains_key(&submission.job_id));
         drop(app);
         let _ = std::fs::remove_dir_all(root);
     }

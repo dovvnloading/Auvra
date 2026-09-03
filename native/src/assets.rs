@@ -298,6 +298,9 @@ impl CookWorker {
                         }
                     }
                     if job.cancellation.is_cancelled() {
+                        let (lock, _) = &*worker_state;
+                        let mut guard = lock.lock().expect("asset queue mutex poisoned");
+                        trim_completed_jobs(&mut guard);
                         continue;
                     }
                     let result = cook_source(&worker_config, &job.source_id, &job.cancellation);
