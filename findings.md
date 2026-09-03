@@ -386,6 +386,8 @@ Real project entities receive hard-coded material, LOD, animation, camera, light
 
 **Severity:** Medium · **Classification:** Confirmed
 
+**Status:** Completed — requested MSAA sample counts now select cached multisample scene color/depth pipelines and resolve into a single-sample HDR target before post-processing; FXAA is enabled only by its explicit flag/effect, and native unit plus headless GPU validation passed.
+
 All render textures use `sample_count: 1` (`native/src/gpu.rs:513`). Requesting MSAA merely enables the post-process `use_fxaa` flag (`native/src/gpu.rs:658`); the shader never uses `requested_msaa` and applies a simple five-neighbor blur (`native/src/gpu.rs:915`, `native/src/gpu.rs:934`). Capabilities nevertheless advertise every render feature (`native/src/gpu.rs:17`).
 
 ### F-046 — Renderer metrics report placeholders as operational measurements

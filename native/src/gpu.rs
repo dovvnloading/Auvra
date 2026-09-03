@@ -3,6 +3,7 @@
 use auvra_native::render_world::{
     ExtractedEntity, PostEffect, RenderCapabilities, RenderExtraction, RenderFeatureBits,
 };
+use std::collections::BTreeMap;
 use std::time::Instant;
 
 pub struct ProductionFrame {
@@ -55,33 +56,64 @@ pub fn validate_adapter(adapter: &wgpu::Adapter) -> Result<(), String> {
     Ok(())
 }
 
-/// Pipelines are immutable after device initialization.  Keeping them here prevents
-/// shader compilation from occurring on the simulation or viewport interaction path.
+/// Production pipelines are cached by scene sample count.  The single-sample
+/// variant is created during device initialization; additional variants are
+/// created once on first use and then reused for later frames.
 pub struct ProductionPipelines {
-    pbr: wgpu::RenderPipeline,
+    samples: BTreeMap<u32, SamplePipelines>,
     pbr_layout: wgpu::BindGroupLayout,
-    depth: wgpu::RenderPipeline,
-    pick: wgpu::RenderPipeline,
     post: wgpu::RenderPipeline,
     post_layout: wgpu::BindGroupLayout,
     surface_format: wgpu::TextureFormat,
 }
 
+#[derive(Clone)]
+struct SamplePipelines {
+    pbr: wgpu::RenderPipeline,
+    depth: wgpu::RenderPipeline,
+    shadow_depth: wgpu::RenderPipeline,
+    pick: wgpu::RenderPipeline,
+}
+
+impl SamplePipelines {
+    fn new(device: &wgpu::Device, sample_count: u32) -> Self {
+        Self {
+            pbr: pbr_pipeline(device, wgpu::TextureFormat::Rgba16Float, sample_count).0,
+            depth: depth_pipeline(device, sample_count),
+            shadow_depth: depth_pipeline(device, 1),
+            pick: pick_pipeline(device, 1),
+        }
+    }
+}
+
 impl ProductionPipelines {
     pub fn new(device: &wgpu::Device, output_format: wgpu::TextureFormat) -> Self {
-        let (pbr, pbr_layout) = pbr_pipeline(device, wgpu::TextureFormat::Rgba16Float);
-        let depth = depth_pipeline(device);
-        let pick = pick_pipeline(device);
+        let (pbr, pbr_layout) =
+            pbr_pipeline(device, wgpu::TextureFormat::Rgba16Float, 1);
         let (post, post_layout) = post_pipeline(device, output_format);
+        let mut samples = BTreeMap::new();
+        samples.insert(
+            1,
+            SamplePipelines {
+                pbr,
+                depth: depth_pipeline(device, 1),
+                shadow_depth: depth_pipeline(device, 1),
+                pick: pick_pipeline(device, 1),
+            },
+        );
         Self {
-            pbr,
+            samples,
             pbr_layout,
-            depth,
-            pick,
             post,
             post_layout,
             surface_format: output_format,
         }
+    }
+
+    fn sample_pipelines(&mut self, device: &wgpu::Device, sample_count: u32) -> &SamplePipelines {
+        self.samples
+            .entry(sample_count)
+            .or_insert_with(|| SamplePipelines::new(device, sample_count))
     }
 
     pub fn ensure_surface_format(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
@@ -98,7 +130,7 @@ pub fn render_offscreen(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     format: wgpu::TextureFormat,
-    pipelines: &ProductionPipelines,
+    pipelines: &mut ProductionPipelines,
     extraction: &RenderExtraction,
     width: u32,
     height: u32,
@@ -208,7 +240,7 @@ pub fn present_production(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     view: &wgpu::TextureView,
-    pipelines: &ProductionPipelines,
+    pipelines: &mut ProductionPipelines,
     extraction: &RenderExtraction,
     width: u32,
     height: u32,
@@ -221,12 +253,14 @@ pub fn present_production(
 fn render_production_to_view(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    pipelines: &ProductionPipelines,
+    pipelines: &mut ProductionPipelines,
     extraction: &RenderExtraction,
     width: u32,
     height: u32,
     target_view: &wgpu::TextureView,
 ) -> Result<f64, String> {
+    let sample_count = u32::from(extraction.snapshot.msaa_samples).max(1);
+    let sample_pipelines = pipelines.sample_pipelines(device, sample_count).clone();
     let vertices = scene_vertices(extraction);
     let bytes = f32_bytes(&vertices);
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -261,22 +295,44 @@ fn render_production_to_view(
         mapped_at_creation: false,
     });
     queue.write_buffer(&uniforms, 0, &uniforms_bytes);
-    let hdr = texture(
+    let hdr_usage = wgpu::TextureUsages::RENDER_ATTACHMENT
+        | if sample_count == 1 {
+            wgpu::TextureUsages::TEXTURE_BINDING
+        } else {
+            wgpu::TextureUsages::empty()
+        };
+    let hdr = texture_with_samples(
         device,
         "auvra-production-hdr",
         width,
         height,
         wgpu::TextureFormat::Rgba16Float,
-        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        hdr_usage,
+        sample_count,
     );
     let hdr_view = hdr.create_view(&Default::default());
-    let depth_texture = texture(
+    let hdr_resolve = (sample_count > 1).then(|| {
+        texture(
+            device,
+            "auvra-production-hdr-resolve",
+            width,
+            height,
+            wgpu::TextureFormat::Rgba16Float,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        )
+    });
+    let hdr_resolve_view = hdr_resolve
+        .as_ref()
+        .map(|texture| texture.create_view(&Default::default()));
+    let hdr_output_view = hdr_resolve_view.as_ref().unwrap_or(&hdr_view);
+    let depth_texture = texture_with_samples(
         device,
         "auvra-production-depth",
         width,
         height,
         wgpu::TextureFormat::Depth32Float,
         wgpu::TextureUsages::RENDER_ATTACHMENT,
+        sample_count,
     );
     let depth_view = depth_texture.create_view(&Default::default());
     let shadow = texture(
@@ -297,6 +353,15 @@ fn render_production_to_view(
         wgpu::TextureUsages::RENDER_ATTACHMENT,
     );
     let pick_view = pick_texture.create_view(&Default::default());
+    let pick_depth_texture = texture(
+        device,
+        "auvra-production-pick-depth",
+        width,
+        height,
+        wgpu::TextureFormat::Depth32Float,
+        wgpu::TextureUsages::RENDER_ATTACHMENT,
+    );
+    let pick_depth_view = pick_depth_texture.create_view(&Default::default());
     let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("auvra-production-shadow-sampler"),
         address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -338,7 +403,7 @@ fn render_production_to_view(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::TextureView(&hdr_view),
+                resource: wgpu::BindingResource::TextureView(hdr_output_view),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
@@ -370,7 +435,7 @@ fn render_production_to_view(
             timestamp_writes: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&pipelines.depth);
+        pass.set_pipeline(&sample_pipelines.shadow_depth);
         pass.set_vertex_buffer(0, buffer.slice(..));
         pass.draw(0..(vertices.len() as u32 / 9), 0..1);
     }
@@ -390,7 +455,7 @@ fn render_production_to_view(
             timestamp_writes: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&pipelines.depth);
+        pass.set_pipeline(&sample_pipelines.depth);
         pass.set_vertex_buffer(0, buffer.slice(..));
         pass.draw(0..(vertices.len() as u32 / 9), 0..1);
     }
@@ -418,7 +483,7 @@ fn render_production_to_view(
             timestamp_writes: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&pipelines.pbr);
+        pass.set_pipeline(&sample_pipelines.pbr);
         pass.set_bind_group(0, &bind, &[]);
         pass.set_vertex_buffer(0, buffer.slice(..));
         pass.draw(0..(vertices.len() as u32 / 9), 0..1);
@@ -436,7 +501,7 @@ fn render_production_to_view(
                 },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &depth_view,
+                view: &pick_depth_view,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
@@ -447,7 +512,7 @@ fn render_production_to_view(
             timestamp_writes: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&pipelines.pick);
+        pass.set_pipeline(&sample_pipelines.pick);
         pass.set_vertex_buffer(0, pick_buffer.slice(..));
         pass.draw(0..(pick_bytes.len() as u32 / 16), 0..1);
     }
@@ -475,14 +540,32 @@ fn render_production_to_view(
             timestamp_writes: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&pipelines.pbr);
+        pass.set_pipeline(&sample_pipelines.pbr);
         pass.set_bind_group(0, &bind, &[]);
         pass.set_vertex_buffer(0, gizmo_buffer.slice(..));
         pass.draw(0..(gizmo.len() as u32 / 9), 0..1);
     }
+    if let Some(resolve_view) = hdr_resolve_view.as_ref() {
+        let _resolve_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("msaa-resolve"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &hdr_view,
+                depth_slice: None,
+                resolve_target: Some(resolve_view),
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            occlusion_query_set: None,
+            timestamp_writes: None,
+            multiview_mask: None,
+        });
+    }
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("aces-fxaa-post-chain"),
+            label: Some("aces-post-chain"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target_view,
                 depth_slice: None,
@@ -514,6 +597,18 @@ fn texture(
     format: wgpu::TextureFormat,
     usage: wgpu::TextureUsages,
 ) -> wgpu::Texture {
+    texture_with_samples(device, label, width, height, format, usage, 1)
+}
+
+fn texture_with_samples(
+    device: &wgpu::Device,
+    label: &str,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+    usage: wgpu::TextureUsages,
+    sample_count: u32,
+) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d {
@@ -522,7 +617,7 @@ fn texture(
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
-        sample_count: 1,
+        sample_count,
         dimension: wgpu::TextureDimension::D2,
         format,
         usage,
@@ -672,29 +767,36 @@ fn uniform_bytes(extraction: &RenderExtraction) -> Vec<u8> {
 }
 
 fn post_uniform_bytes(extraction: &RenderExtraction) -> Vec<u8> {
-    let mut mask = 0_u32;
-    for effect in extraction.snapshot.post_effects.iter() {
-        mask |= match effect {
-            PostEffect::Bloom => 1 << 0,
-            PostEffect::ColorGrading => 1 << 1,
-            PostEffect::Vignette => 1 << 2,
-            PostEffect::Sharpen => 1 << 3,
-            PostEffect::Fxaa => 1 << 4,
-        };
-    }
-    let use_fxaa =
-        extraction.snapshot.fxaa || extraction.snapshot.msaa_samples > 1 || mask & (1 << 4) != 0;
+    let mask = post_effect_mask(&extraction.snapshot.post_effects);
+    let use_fxaa = post_chain_uses_fxaa(extraction.snapshot.fxaa, &extraction.snapshot.post_effects);
     [
         mask.to_ne_bytes(),
         u32::from(use_fxaa).to_ne_bytes(),
-        u32::from(extraction.snapshot.msaa_samples).to_ne_bytes(),
         (extraction.snapshot.post_effects.len() as u32).to_ne_bytes(),
     ]
     .concat()
 }
+
+fn post_effect_mask(effects: &[PostEffect]) -> u32 {
+    effects.iter().fold(0_u32, |mask, effect| {
+        mask
+            | match effect {
+                PostEffect::Bloom => 1 << 0,
+                PostEffect::ColorGrading => 1 << 1,
+                PostEffect::Vignette => 1 << 2,
+                PostEffect::Sharpen => 1 << 3,
+                PostEffect::Fxaa => 1 << 4,
+            }
+    })
+}
+
+fn post_chain_uses_fxaa(fxaa: bool, effects: &[PostEffect]) -> bool {
+    fxaa || post_effect_mask(effects) & (1 << 4) != 0
+}
 fn pbr_pipeline(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
+    sample_count: u32,
 ) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("auvra-pbr"),
@@ -804,7 +906,11 @@ struct VertexOutput {
             stencil: Default::default(),
             bias: Default::default(),
         }),
-        multisample: Default::default(),
+        multisample: wgpu::MultisampleState {
+            count: sample_count,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        },
         multiview_mask: None,
         cache: None,
     });
@@ -838,7 +944,7 @@ fn vertex_state<'a>(shader: &'a wgpu::ShaderModule, entry: &'a str) -> wgpu::Ver
         compilation_options: Default::default(),
     }
 }
-fn depth_pipeline(device: &wgpu::Device) -> wgpu::RenderPipeline {
+fn depth_pipeline(device: &wgpu::Device, sample_count: u32) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("auvra-depth"), source: wgpu::ShaderSource::Wgsl(r#"@vertex fn vs(@location(0)p:vec3<f32>)->@builtin(position)vec4<f32>{return vec4(p,1.);}"#.into()) });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("auvra-depth-pipeline"),
@@ -866,12 +972,16 @@ fn depth_pipeline(device: &wgpu::Device) -> wgpu::RenderPipeline {
             stencil: Default::default(),
             bias: Default::default(),
         }),
-        multisample: Default::default(),
+        multisample: wgpu::MultisampleState {
+            count: sample_count,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        },
         multiview_mask: None,
         cache: None,
     })
 }
-fn pick_pipeline(device: &wgpu::Device) -> wgpu::RenderPipeline {
+fn pick_pipeline(device: &wgpu::Device, sample_count: u32) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("auvra-pick"), source: wgpu::ShaderSource::Wgsl(r#"struct O{@builtin(position)p:vec4<f32>,@interpolate(flat)@location(0)id:u32};@vertex fn vs(@location(0)p:vec3<f32>,@location(3)id:u32)->O{var o:O;o.p=vec4(p,1.);o.id=id;return o;}@fragment fn fs(o:O)->@location(0)u32{return o.id;}"#.into()) });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("auvra-pick-pipeline"),
@@ -915,7 +1025,11 @@ fn pick_pipeline(device: &wgpu::Device) -> wgpu::RenderPipeline {
             stencil: Default::default(),
             bias: Default::default(),
         }),
-        multisample: Default::default(),
+        multisample: wgpu::MultisampleState {
+            count: sample_count,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        },
         multiview_mask: None,
         cache: None,
     })
@@ -931,7 +1045,6 @@ fn post_pipeline(
 struct PostParameters {
     effect_mask: u32,
     use_fxaa: u32,
-    requested_msaa: u32,
     effect_count: u32,
 }
 @group(0) @binding(0) var hdr: texture_2d<f32>;
@@ -1075,5 +1188,12 @@ mod tests {
         assert_eq!(caps.features.len(), 16);
         assert_eq!(caps.bits.0, RenderFeatureBits::ALL);
         assert!(caps.features.iter().all(|feature| feature.supported));
+    }
+
+    #[test]
+    fn msaa_does_not_implicitly_enable_fxaa() {
+        assert!(!post_chain_uses_fxaa(false, &[PostEffect::Bloom]));
+        assert!(post_chain_uses_fxaa(true, &[]));
+        assert!(post_chain_uses_fxaa(false, &[PostEffect::Fxaa]));
     }
 }
