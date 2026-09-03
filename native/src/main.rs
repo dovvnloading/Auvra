@@ -1,6 +1,4 @@
-use auvra_native::assets::{
-    CancellationToken, CookConfig, CookWorker, cook_source, sha256_digest,
-};
+use auvra_native::assets::{CancellationToken, CookConfig, CookWorker, cook_source, sha256_digest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 mod gpu;
@@ -14,7 +12,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::io::{self, Read, Write};
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use winit::{
     event_loop::EventLoop, platform::run_on_demand::EventLoopExtRunOnDemand, window::Window,
@@ -626,9 +624,7 @@ impl winit::application::ApplicationHandler for ViewportApp {
                 self.close_requested = true;
                 event_loop.exit();
             }
-            winit::event::WindowEvent::Resized(size)
-                if size.width > 0 && size.height > 0 =>
-            {
+            winit::event::WindowEvent::Resized(size) if size.width > 0 && size.height > 0 => {
                 self.width = size.width;
                 self.height = size.height;
                 self.resized = Some((size.width, size.height));
@@ -870,7 +866,9 @@ fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
     }
     left.iter()
         .zip(right)
-        .fold(0_u8, |difference, (left, right)| difference | (left ^ right))
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
         == 0
 }
 
@@ -1595,8 +1593,9 @@ impl App {
     }
 
     fn recover_renderer(&mut self) -> Result<Value, String> {
-        let mut renderer = Renderer::new()
-            .map_err(|error| format!("unsupported_capability|native renderer unavailable: {error}"))?;
+        let mut renderer = Renderer::new().map_err(|error| {
+            format!("unsupported_capability|native renderer unavailable: {error}")
+        })?;
         let extraction = self.build_extraction(&Value::Null)?;
         let viewport_reopened = if let Some(viewport) = self.viewport.as_mut() {
             viewport.recover(&mut renderer, &extraction)?;
@@ -1712,10 +1711,7 @@ impl App {
             .entities
             .iter()
             .filter_map(|entity| {
-                if entity
-                    .render
-                    .as_ref()
-                    .is_some_and(|render| !render.visible)
+                if entity.render.as_ref().is_some_and(|render| !render.visible)
                     || self
                         .render_state
                         .object_visibility
@@ -1741,13 +1737,13 @@ impl App {
                     .copied()
                     .unwrap_or(MaterialReference {
                         material_id,
-                        base_color_factor: entity
-                            .color
-                            .map(|value| value.clamp(0.0, 1.0) as f32),
+                        base_color_factor: entity.color.map(|value| value.clamp(0.0, 1.0) as f32),
                         metallic: 0.0,
                         roughness: 1.0,
                         base_color_texture: asset_hash
-                            .and_then(|asset| self.render_state.model_base_color_textures.get(asset))
+                            .and_then(|asset| {
+                                self.render_state.model_base_color_textures.get(asset)
+                            })
                             .copied(),
                         normal_texture: None,
                         metallic_roughness_texture: None,
@@ -1860,10 +1856,7 @@ impl App {
         }
         let extraction = self.build_extraction(&Value::Null)?;
         let renderer_error = self.renderer_unavailable_error();
-        let renderer = self
-            .renderer
-            .as_mut()
-            .ok_or(renderer_error)?;
+        let renderer = self.renderer.as_mut().ok_or(renderer_error)?;
         self.viewport = Some(Viewport::open(
             renderer,
             width as u32,
@@ -2195,10 +2188,9 @@ fn project_render_state(
                 .and_then(Value::as_str)
                 .map(stable_id)
                 .unwrap_or_else(|| stable_id(&format!("object-material:{id}")));
-            state.materials.insert(
-                material_id,
-                material_reference(material, material_id)?,
-            );
+            state
+                .materials
+                .insert(material_id, material_reference(material, material_id)?);
             state.object_materials.insert(id.to_owned(), material_id);
         }
         if let Some(render) = object.get("render").and_then(Value::as_object) {
@@ -2206,7 +2198,9 @@ fn project_render_state(
                 state.object_visibility.insert(id.to_owned(), visible);
             }
             if let Some(radius) = render.get("radius") {
-                state.object_radii.insert(id.to_owned(), bounded_radius(radius)?);
+                state
+                    .object_radii
+                    .insert(id.to_owned(), bounded_radius(radius)?);
             }
             if render
                 .get("selected")
@@ -2220,7 +2214,9 @@ fn project_render_state(
             }
         }
         if let Some(radius) = object.get("radius") {
-            state.object_radii.insert(id.to_owned(), bounded_radius(radius)?);
+            state
+                .object_radii
+                .insert(id.to_owned(), bounded_radius(radius)?);
         }
         if object
             .get("selected")
@@ -2237,9 +2233,10 @@ fn project_render_state(
                 state.object_animations.insert(id.to_owned(), *animation);
             }
         } else if let Some(animation) = object.get("animation").and_then(Value::as_object) {
-            state
-                .object_animations
-                .insert(id.to_owned(), animation_input(animation, &format!("object {id} animation"))?);
+            state.object_animations.insert(
+                id.to_owned(),
+                animation_input(animation, &format!("object {id} animation"))?,
+            );
         }
     }
 
@@ -2264,7 +2261,10 @@ fn project_render_state(
     Ok(state)
 }
 
-fn domain_values<'a>(documents: &'a serde_json::Map<String, Value>, domain: &str) -> Vec<&'a Value> {
+fn domain_values<'a>(
+    documents: &'a serde_json::Map<String, Value>,
+    domain: &str,
+) -> Vec<&'a Value> {
     documents
         .get(domain)
         .and_then(Value::as_array)
@@ -2272,7 +2272,11 @@ fn domain_values<'a>(documents: &'a serde_json::Map<String, Value>, domain: &str
         .unwrap_or_default()
 }
 
-fn required_string<'a>(object: &'a serde_json::Map<String, Value>, key: &str, label: &str) -> Result<&'a str, String> {
+fn required_string<'a>(
+    object: &'a serde_json::Map<String, Value>,
+    key: &str,
+    label: &str,
+) -> Result<&'a str, String> {
     object
         .get(key)
         .and_then(Value::as_str)
@@ -2319,9 +2323,24 @@ fn fixed_vec3(value: Option<&Value>, default: [f32; 3], label: &str) -> Result<[
         .as_object()
         .ok_or_else(|| format!("invalid_project|{label} is invalid"))?;
     Ok([
-        finite_f32(object.get("x").ok_or_else(|| format!("invalid_project|{label}.x is required"))?, label)?,
-        finite_f32(object.get("y").ok_or_else(|| format!("invalid_project|{label}.y is required"))?, label)?,
-        finite_f32(object.get("z").ok_or_else(|| format!("invalid_project|{label}.z is required"))?, label)?,
+        finite_f32(
+            object
+                .get("x")
+                .ok_or_else(|| format!("invalid_project|{label}.x is required"))?,
+            label,
+        )?,
+        finite_f32(
+            object
+                .get("y")
+                .ok_or_else(|| format!("invalid_project|{label}.y is required"))?,
+            label,
+        )?,
+        finite_f32(
+            object
+                .get("z")
+                .ok_or_else(|| format!("invalid_project|{label}.z is required"))?,
+            label,
+        )?,
     ])
 }
 
@@ -2513,19 +2532,25 @@ fn apply_render_settings(
 ) -> Result<(), String> {
     if let Some(camera) = object.get("camera").and_then(Value::as_object) {
         if let Some(position) = camera.get("position") {
-            state.camera_position = fixed_vec3(Some(position), state.camera_position, "camera position")?;
+            state.camera_position =
+                fixed_vec3(Some(position), state.camera_position, "camera position")?;
         }
     }
     if let Some(position) = object.get("cameraPosition") {
-        state.camera_position = fixed_vec3(Some(position), state.camera_position, "camera position")?;
+        state.camera_position =
+            fixed_vec3(Some(position), state.camera_position, "camera position")?;
     }
     if let Some(ibl) = object.get("ibl").and_then(Value::as_object) {
         let environment_id = string_handle(ibl.get("environmentId"))?;
         let irradiance_id = string_handle(ibl.get("irradianceId"))?;
         let prefiltered_id = string_handle(ibl.get("prefilteredId"))?;
         let brdf_lut_id = string_handle(ibl.get("brdfLutId").or_else(|| ibl.get("brdfLUTId")))?;
-        if let (Some(environment_id), Some(irradiance_id), Some(prefiltered_id), Some(brdf_lut_id)) =
-            (environment_id, irradiance_id, prefiltered_id, brdf_lut_id)
+        if let (
+            Some(environment_id),
+            Some(irradiance_id),
+            Some(prefiltered_id),
+            Some(brdf_lut_id),
+        ) = (environment_id, irradiance_id, prefiltered_id, brdf_lut_id)
         {
             state.ibl = Some(IblInput {
                 environment_id,
@@ -2599,13 +2624,25 @@ fn parse_render_light(value: &Value, index: usize) -> Result<WorldRenderLight, S
         "spot" | "spot_light" | "spotlight" => LightKind::Spot,
         _ => return Err("invalid_project|render light kind is unsupported".into()),
     };
-    let position = fixed_vec3(object.get("position"), [0.0, 0.0, 0.0], "render light position")?;
-    let direction = fixed_vec3(object.get("direction"), [0.0, -1.0, 0.0], "render light direction")?;
+    let position = fixed_vec3(
+        object.get("position"),
+        [0.0, 0.0, 0.0],
+        "render light position",
+    )?;
+    let direction = fixed_vec3(
+        object.get("direction"),
+        [0.0, -1.0, 0.0],
+        "render light direction",
+    )?;
     let range = object
         .get("range")
         .map(|value| finite_f32(value, "render light range"))
         .transpose()?
-        .unwrap_or(if matches!(kind, LightKind::Directional) { 0.0 } else { 10.0 });
+        .unwrap_or(if matches!(kind, LightKind::Directional) {
+            0.0
+        } else {
+            10.0
+        });
     let inner_angle = object
         .get("spotInnerAngle")
         .or_else(|| object.get("spot_inner_angle"))
@@ -2618,7 +2655,11 @@ fn parse_render_light(value: &Value, index: usize) -> Result<WorldRenderLight, S
         .map(|value| finite_f32(value, "render light outer angle"))
         .transpose()?
         .unwrap_or(std::f32::consts::FRAC_PI_4);
-    if range < 0.0 || inner_angle < 0.0 || outer_angle < inner_angle || outer_angle > std::f32::consts::PI {
+    if range < 0.0
+        || inner_angle < 0.0
+        || outer_angle < inner_angle
+        || outer_angle > std::f32::consts::PI
+    {
         return Err("invalid_project|render light values are out of range".into());
     }
     Ok(WorldRenderLight {
@@ -3461,7 +3502,12 @@ mod tests {
         let mut app = App::new().unwrap();
         app.authenticated = true;
         let response = app
-            .dispatch(Request { id: 1, protocol: PROTOCOL.into(), method: "world.hydrate".into(), params: payload })
+            .dispatch(Request {
+                id: 1,
+                protocol: PROTOCOL.into(),
+                method: "world.hydrate".into(),
+                params: payload,
+            })
             .unwrap();
         assert!(response.ok);
         let extraction = app.build_extraction(&Value::Null).unwrap();
@@ -3472,10 +3518,16 @@ mod tests {
         assert_eq!(entity.lod, 0);
         assert_eq!(entity.animation.unwrap().clip_id, stable_id("run"));
         assert_eq!(extraction.snapshot.lights.len(), 1);
-        assert_eq!(extraction.snapshot.post_effects.as_ref(), &[PostEffect::Bloom, PostEffect::Vignette]);
+        assert_eq!(
+            extraction.snapshot.post_effects.as_ref(),
+            &[PostEffect::Bloom, PostEffect::Vignette]
+        );
         assert_eq!(extraction.snapshot.msaa_samples, 4);
         assert!(extraction.snapshot.fxaa);
-        assert_eq!(extraction.snapshot.ibl.unwrap().environment_id, stable_id("environment"));
+        assert_eq!(
+            extraction.snapshot.ibl.unwrap().environment_id,
+            stable_id("environment")
+        );
         assert_eq!(extraction.snapshot.gizmos.len(), 1);
     }
 
@@ -3607,9 +3659,8 @@ mod tests {
         let derived = root.join("derived");
         std::fs::create_dir_all(&root).unwrap();
         let mut app = App::new().unwrap();
-        app.cooker = Some(
-            CookWorker::new(CookConfig::new(&root, &derived).with_queue_capacity(1)).unwrap(),
-        );
+        app.cooker =
+            Some(CookWorker::new(CookConfig::new(&root, &derived).with_queue_capacity(1)).unwrap());
         let ids = (0..32)
             .map(|index| format!("{index:064x}"))
             .collect::<Vec<_>>();
@@ -3623,16 +3674,22 @@ mod tests {
 
     #[test]
     fn closing_project_cancels_and_releases_asset_tokens() {
-        let root = std::env::temp_dir().join(format!("auvra-main-close-assets-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("auvra-main-close-assets-{}", std::process::id()));
         let derived = root.join("derived");
         std::fs::create_dir_all(&root).unwrap();
         let mut app = App::new().unwrap();
-        app.cooker = Some(
-            CookWorker::new(CookConfig::new(&root, &derived).with_queue_capacity(1)).unwrap(),
-        );
-        let submission = app.cooker.as_ref().unwrap().submit_deferred(&format!("{:064x}", 1)).unwrap();
+        app.cooker =
+            Some(CookWorker::new(CookConfig::new(&root, &derived).with_queue_capacity(1)).unwrap());
+        let submission = app
+            .cooker
+            .as_ref()
+            .unwrap()
+            .submit_deferred(&format!("{:064x}", 1))
+            .unwrap();
         let cancellation = submission.cancellation.clone();
-        app.asset_jobs.insert(submission.job_id, submission.cancellation);
+        app.asset_jobs
+            .insert(submission.job_id, submission.cancellation);
         app.close_project().unwrap();
         assert!(cancellation.is_cancelled());
         assert!(app.asset_jobs.is_empty());
@@ -3643,22 +3700,35 @@ mod tests {
 
     #[test]
     fn terminal_asset_tokens_are_reaped_from_app_bookkeeping() {
-        let root = std::env::temp_dir().join(format!("auvra-main-reap-assets-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("auvra-main-reap-assets-{}", std::process::id()));
         let derived = root.join("derived");
         std::fs::create_dir_all(&root).unwrap();
         let mut app = App::new().unwrap();
         app.cooker = Some(CookWorker::new(CookConfig::new(&root, &derived)).unwrap());
-        let submission = app.cooker.as_ref().unwrap().submit(&format!("{:064x}", 2)).unwrap();
-        app.asset_jobs.insert(submission.job_id, submission.cancellation);
+        let submission = app
+            .cooker
+            .as_ref()
+            .unwrap()
+            .submit(&format!("{:064x}", 2))
+            .unwrap();
+        app.asset_jobs
+            .insert(submission.job_id, submission.cancellation);
         for _ in 0..100 {
-            if app.cooker.as_ref().unwrap().status(submission.job_id).is_some_and(|status| {
-                matches!(
-                    status.state,
-                    auvra_native::assets::JobState::Completed
-                        | auvra_native::assets::JobState::Failed
-                        | auvra_native::assets::JobState::Cancelled
-                )
-            }) {
+            if app
+                .cooker
+                .as_ref()
+                .unwrap()
+                .status(submission.job_id)
+                .is_some_and(|status| {
+                    matches!(
+                        status.state,
+                        auvra_native::assets::JobState::Completed
+                            | auvra_native::assets::JobState::Failed
+                            | auvra_native::assets::JobState::Cancelled
+                    )
+                })
+            {
                 break;
             }
             std::thread::sleep(Duration::from_millis(2));

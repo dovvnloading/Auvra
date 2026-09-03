@@ -334,6 +334,7 @@ class ReleasePipelineTests(unittest.TestCase):
                 "userDataPreserved": True,
             }
             with mock.patch("release.windows_lifecycle.os.name", "nt"), \
+                 mock.patch("release.windows_lifecycle.Path", type(root)), \
                  mock.patch("release.windows_lifecycle.subprocess.run",
                             return_value=subprocess.CompletedProcess([], 0, json.dumps(response), "")) as run:
                 result = run_windows_lifecycle_smoke(
@@ -352,6 +353,7 @@ class ReleasePipelineTests(unittest.TestCase):
             for package in packages:
                 package.write_bytes(b"placeholder")
             with mock.patch("release.windows_lifecycle.os.name", "nt"), \
+                 mock.patch("release.windows_lifecycle.Path", type(root)), \
                  mock.patch("release.windows_lifecycle.subprocess.run") as run:
                 with self.assertRaisesRegex(ReleaseError, "rollback package is missing"):
                     run_windows_lifecycle_smoke(

@@ -581,7 +581,7 @@ impl World {
                     .collect::<Vec<_>>();
                 handles
                     .into_iter()
-                    .map(|handle| handle.join().map_err(|_| WorldError::WorkerPanic)? )
+                    .map(|handle| handle.join().map_err(|_| WorldError::WorkerPanic)?)
                     .collect::<Result<Vec<_>, WorldError>>()
             })
             .map(|partitions| partitions.into_iter().flatten().collect())

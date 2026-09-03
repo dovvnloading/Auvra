@@ -63,13 +63,7 @@ impl GpuTiming {
 
     fn encode_resolve(&self, encoder: &mut wgpu::CommandEncoder) {
         encoder.resolve_query_set(&self.query_set, 0..2, &self.resolve_buffer, 0);
-        encoder.copy_buffer_to_buffer(
-            &self.resolve_buffer,
-            0,
-            &self.readback_buffer,
-            0,
-            16,
-        );
+        encoder.copy_buffer_to_buffer(&self.resolve_buffer, 0, &self.readback_buffer, 0, 16);
     }
 
     pub fn read_ms(&self, device: &wgpu::Device) -> Result<Option<f64>, String> {
@@ -309,8 +303,7 @@ impl SamplePipelines {
 
 impl ProductionPipelines {
     pub fn new(device: &wgpu::Device, output_format: wgpu::TextureFormat) -> Self {
-        let (pbr, pbr_layout) =
-            pbr_pipeline(device, wgpu::TextureFormat::Rgba16Float, 1);
+        let (pbr, pbr_layout) = pbr_pipeline(device, wgpu::TextureFormat::Rgba16Float, 1);
         let (post, post_layout) = post_pipeline(device, output_format);
         let mut samples = BTreeMap::new();
         samples.insert(
@@ -564,17 +557,42 @@ fn render_production_to_view(
         .map(|texture| texture.create_view(&Default::default()));
     let hdr_output_view = hdr_resolve_view.as_ref().unwrap_or(&hdr_view);
     memory_bytes = memory_bytes
-        .saturating_add(texture_memory_bytes(width, height, wgpu::TextureFormat::Rgba16Float, sample_count))
+        .saturating_add(texture_memory_bytes(
+            width,
+            height,
+            wgpu::TextureFormat::Rgba16Float,
+            sample_count,
+        ))
         .saturating_add(
             hdr_resolve_view
                 .as_ref()
                 .map(|_| texture_memory_bytes(width, height, wgpu::TextureFormat::Rgba16Float, 1))
                 .unwrap_or(0),
         )
-        .saturating_add(texture_memory_bytes(width, height, wgpu::TextureFormat::Depth32Float, sample_count))
-        .saturating_add(texture_memory_bytes(1024, 1024, wgpu::TextureFormat::Depth32Float, 1))
-        .saturating_add(texture_memory_bytes(width, height, wgpu::TextureFormat::R32Uint, 1))
-        .saturating_add(texture_memory_bytes(width, height, wgpu::TextureFormat::Depth32Float, 1));
+        .saturating_add(texture_memory_bytes(
+            width,
+            height,
+            wgpu::TextureFormat::Depth32Float,
+            sample_count,
+        ))
+        .saturating_add(texture_memory_bytes(
+            1024,
+            1024,
+            wgpu::TextureFormat::Depth32Float,
+            1,
+        ))
+        .saturating_add(texture_memory_bytes(
+            width,
+            height,
+            wgpu::TextureFormat::R32Uint,
+            1,
+        ))
+        .saturating_add(texture_memory_bytes(
+            width,
+            height,
+            wgpu::TextureFormat::Depth32Float,
+            1,
+        ));
     if let Some(timer) = timing {
         memory_bytes = memory_bytes.saturating_add(timer.memory_bytes());
     }
@@ -1047,7 +1065,8 @@ fn uniform_bytes(extraction: &RenderExtraction) -> Vec<u8> {
 
 fn post_uniform_bytes(extraction: &RenderExtraction) -> Vec<u8> {
     let mask = post_effect_mask(&extraction.snapshot.post_effects);
-    let use_fxaa = post_chain_uses_fxaa(extraction.snapshot.fxaa, &extraction.snapshot.post_effects);
+    let use_fxaa =
+        post_chain_uses_fxaa(extraction.snapshot.fxaa, &extraction.snapshot.post_effects);
     [
         mask.to_ne_bytes(),
         u32::from(use_fxaa).to_ne_bytes(),
@@ -1058,14 +1077,13 @@ fn post_uniform_bytes(extraction: &RenderExtraction) -> Vec<u8> {
 
 fn post_effect_mask(effects: &[PostEffect]) -> u32 {
     effects.iter().fold(0_u32, |mask, effect| {
-        mask
-            | match effect {
-                PostEffect::Bloom => 1 << 0,
-                PostEffect::ColorGrading => 1 << 1,
-                PostEffect::Vignette => 1 << 2,
-                PostEffect::Sharpen => 1 << 3,
-                PostEffect::Fxaa => 1 << 4,
-            }
+        mask | match effect {
+            PostEffect::Bloom => 1 << 0,
+            PostEffect::ColorGrading => 1 << 1,
+            PostEffect::Vignette => 1 << 2,
+            PostEffect::Sharpen => 1 << 3,
+            PostEffect::Fxaa => 1 << 4,
+        }
     })
 }
 
@@ -1272,14 +1290,14 @@ fn pick_pipeline(device: &wgpu::Device, sample_count: u32) -> wgpu::RenderPipeli
                 array_stride: 16,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &[
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x3,
-                    offset: 0,
-                    shader_location: 0,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Uint32,
-                    offset: 12,
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x3,
+                        offset: 0,
+                        shader_location: 0,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Uint32,
+                        offset: 12,
                         shader_location: 3,
                     },
                 ],

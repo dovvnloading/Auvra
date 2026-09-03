@@ -834,8 +834,16 @@ fn validate_input(input: &WorldRenderInput) -> Result<(), RenderExtractionError>
             || entity.mesh_id == 0
             || !finite3(entity.position)
             || !finite4(entity.rotation)
-            || entity.rotation.iter().map(|value| value * value).sum::<f32>() <= f32::EPSILON
-            || entity.scale.iter().any(|value| !value.is_finite() || *value <= 0.0)
+            || entity
+                .rotation
+                .iter()
+                .map(|value| value * value)
+                .sum::<f32>()
+                <= f32::EPSILON
+            || entity
+                .scale
+                .iter()
+                .any(|value| !value.is_finite() || *value <= 0.0)
             || !entity.radius.is_finite()
             || entity.radius < 0.0
         {
