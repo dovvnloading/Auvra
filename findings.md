@@ -394,6 +394,8 @@ All render textures use `sample_count: 1` (`native/src/gpu.rs:513`). Requesting 
 
 **Severity:** Medium · **Classification:** Confirmed
 
+**Status:** Completed — GPU timestamp queries now populate `gpu_frame_ms` when supported, unsupported adapters retain an explicit fallback, sample-variant cache hits/misses reflect real lookups, and memory reports tracked renderer buffers/textures/readbacks instead of a width×height placeholder; native, live GPU, and full Python suites passed.
+
 `last_gpu_ms` is initialized but never assigned, so GPU time remains unavailable despite timestamp feature detection (`native/src/main.rs:346`, `native/src/main.rs:468`). Reference renders increment cache hits without an actual lookup, misses remain zero, and reported memory is essentially width × height × 4 rather than total renderer allocation (`native/src/main.rs:415`). These values can mislead diagnostics and performance decisions.
 
 ### F-047 — The native session token is not authenticated

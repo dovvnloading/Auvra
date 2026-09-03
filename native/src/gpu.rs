@@ -9,11 +9,110 @@ use std::time::Instant;
 pub struct ProductionFrame {
     pub pixel_hash: u64,
     pub cpu_submit_ms: f64,
+    pub gpu_ms: Option<f64>,
+    pub memory_bytes: u64,
+    pub pipeline_cache_hit: bool,
     pub geometry_count: usize,
     pub batch_count: usize,
     pub pass_count: usize,
     pub fallback_count: usize,
     pub executed_passes: Vec<String>,
+}
+
+/// A two-point GPU timestamp query used to measure the complete production
+/// render submission.  Query results are copied to a mappable staging buffer
+/// only when a caller asks for the measurement, so unsupported adapters retain
+/// the explicit `None` metric rather than a fabricated value.
+pub struct GpuTiming {
+    query_set: wgpu::QuerySet,
+    resolve_buffer: wgpu::Buffer,
+    readback_buffer: wgpu::Buffer,
+    timestamp_period_ns: f32,
+}
+
+impl GpuTiming {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
+        let timestamp_period_ns = queue.get_timestamp_period();
+        if !timestamp_period_ns.is_finite() || timestamp_period_ns <= 0.0 {
+            return None;
+        }
+        let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("auvra-production-gpu-timestamps"),
+            ty: wgpu::QueryType::Timestamp,
+            count: 2,
+        });
+        let resolve_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("auvra-production-gpu-timestamp-resolve"),
+            size: 256,
+            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("auvra-production-gpu-timestamp-readback"),
+            size: 256,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        Some(Self {
+            query_set,
+            resolve_buffer,
+            readback_buffer,
+            timestamp_period_ns,
+        })
+    }
+
+    fn encode_resolve(&self, encoder: &mut wgpu::CommandEncoder) {
+        encoder.resolve_query_set(&self.query_set, 0..2, &self.resolve_buffer, 0);
+        encoder.copy_buffer_to_buffer(
+            &self.resolve_buffer,
+            0,
+            &self.readback_buffer,
+            0,
+            16,
+        );
+    }
+
+    pub fn read_ms(&self, device: &wgpu::Device) -> Result<Option<f64>, String> {
+        let slice = self.readback_buffer.slice(0..16);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|error| format!("GPU timestamp poll failed: {error:?}"))?;
+        receiver
+            .recv()
+            .map_err(|error| error.to_string())?
+            .map_err(|error| error.to_string())?;
+        let mapped = slice
+            .get_mapped_range()
+            .map_err(|error| error.to_string())?;
+        let mut start_bytes = [0_u8; 8];
+        let mut end_bytes = [0_u8; 8];
+        start_bytes.copy_from_slice(&mapped[..8]);
+        end_bytes.copy_from_slice(&mapped[8..16]);
+        let start = u64::from_le_bytes(start_bytes);
+        let end = u64::from_le_bytes(end_bytes);
+        drop(mapped);
+        self.readback_buffer.unmap();
+        if end < start {
+            return Ok(None);
+        }
+        let elapsed_ms = (end - start) as f64 * f64::from(self.timestamp_period_ns) / 1_000_000.0;
+        Ok(elapsed_ms.is_finite().then_some(elapsed_ms.max(0.0)))
+    }
+
+    fn memory_bytes(&self) -> u64 {
+        512
+    }
+}
+
+pub struct ProductionSubmission {
+    pub cpu_submit_ms: f64,
+    pub gpu_ms: Option<f64>,
+    pub memory_bytes: u64,
+    pub pipeline_cache_hit: bool,
 }
 pub fn capabilities() -> RenderCapabilities {
     RenderCapabilities::from_bits(RenderFeatureBits::all())
@@ -110,10 +209,17 @@ impl ProductionPipelines {
         }
     }
 
-    fn sample_pipelines(&mut self, device: &wgpu::Device, sample_count: u32) -> &SamplePipelines {
-        self.samples
-            .entry(sample_count)
-            .or_insert_with(|| SamplePipelines::new(device, sample_count))
+    fn sample_pipelines(
+        &mut self,
+        device: &wgpu::Device,
+        sample_count: u32,
+    ) -> (SamplePipelines, bool) {
+        if let Some(pipelines) = self.samples.get(&sample_count) {
+            return (pipelines.clone(), true);
+        }
+        let pipelines = SamplePipelines::new(device, sample_count);
+        self.samples.insert(sample_count, pipelines.clone());
+        (pipelines, false)
     }
 
     pub fn ensure_surface_format(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
@@ -131,6 +237,7 @@ pub fn render_offscreen(
     queue: &wgpu::Queue,
     format: wgpu::TextureFormat,
     pipelines: &mut ProductionPipelines,
+    timing: Option<&GpuTiming>,
     extraction: &RenderExtraction,
     width: u32,
     height: u32,
@@ -144,10 +251,11 @@ pub fn render_offscreen(
         wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
     );
     let target_view = target.create_view(&Default::default());
-    let cpu_submit_ms = render_production_to_view(
+    let mut submission = render_production_to_view(
         device,
         queue,
         pipelines,
+        timing,
         extraction,
         width,
         height,
@@ -208,6 +316,14 @@ pub fn render_offscreen(
     let hash = fnv1a(&pixels);
     drop(mapped);
     readback.unmap();
+    submission.memory_bytes = submission
+        .memory_bytes
+        .saturating_add(texture_memory_bytes(width, height, format, 1))
+        .saturating_add(u64::from(bytes_per_row) * u64::from(height));
+    submission.gpu_ms = timing
+        .map(|timer| timer.read_ms(device))
+        .transpose()?
+        .flatten();
     let executed = extraction
         .plan
         .passes
@@ -223,7 +339,10 @@ pub fn render_offscreen(
         .count();
     Ok(ProductionFrame {
         pixel_hash: hash,
-        cpu_submit_ms,
+        cpu_submit_ms: submission.cpu_submit_ms,
+        gpu_ms: submission.gpu_ms,
+        memory_bytes: submission.memory_bytes,
+        pipeline_cache_hit: submission.pipeline_cache_hit,
         geometry_count: extraction.snapshot.entities.len(),
         batch_count: extraction.snapshot.batches.len(),
         pass_count: executed.len(),
@@ -241,26 +360,33 @@ pub fn present_production(
     queue: &wgpu::Queue,
     view: &wgpu::TextureView,
     pipelines: &mut ProductionPipelines,
+    timing: Option<&GpuTiming>,
     extraction: &RenderExtraction,
     width: u32,
     height: u32,
-) -> Result<f64, String> {
-    render_production_to_view(
-        device, queue, pipelines, extraction, width, height, view,
-    )
+) -> Result<ProductionSubmission, String> {
+    let mut submission = render_production_to_view(
+        device, queue, pipelines, timing, extraction, width, height, view,
+    )?;
+    submission.gpu_ms = timing
+        .map(|timer| timer.read_ms(device))
+        .transpose()?
+        .flatten();
+    Ok(submission)
 }
 
 fn render_production_to_view(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     pipelines: &mut ProductionPipelines,
+    timing: Option<&GpuTiming>,
     extraction: &RenderExtraction,
     width: u32,
     height: u32,
     target_view: &wgpu::TextureView,
-) -> Result<f64, String> {
+) -> Result<ProductionSubmission, String> {
     let sample_count = u32::from(extraction.snapshot.msaa_samples).max(1);
-    let sample_pipelines = pipelines.sample_pipelines(device, sample_count).clone();
+    let (sample_pipelines, pipeline_cache_hit) = pipelines.sample_pipelines(device, sample_count);
     let vertices = scene_vertices(extraction);
     let bytes = f32_bytes(&vertices);
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -295,6 +421,14 @@ fn render_production_to_view(
         mapped_at_creation: false,
     });
     queue.write_buffer(&uniforms, 0, &uniforms_bytes);
+    let mut memory_bytes = u64::try_from(
+        bytes
+            .len()
+            .saturating_add(gizmo_bytes.len())
+            .saturating_add(pick_bytes.len())
+            .saturating_add(uniforms_bytes.len()),
+    )
+    .unwrap_or(u64::MAX);
     let hdr_usage = wgpu::TextureUsages::RENDER_ATTACHMENT
         | if sample_count == 1 {
             wgpu::TextureUsages::TEXTURE_BINDING
@@ -325,6 +459,21 @@ fn render_production_to_view(
         .as_ref()
         .map(|texture| texture.create_view(&Default::default()));
     let hdr_output_view = hdr_resolve_view.as_ref().unwrap_or(&hdr_view);
+    memory_bytes = memory_bytes
+        .saturating_add(texture_memory_bytes(width, height, wgpu::TextureFormat::Rgba16Float, sample_count))
+        .saturating_add(
+            hdr_resolve_view
+                .as_ref()
+                .map(|_| texture_memory_bytes(width, height, wgpu::TextureFormat::Rgba16Float, 1))
+                .unwrap_or(0),
+        )
+        .saturating_add(texture_memory_bytes(width, height, wgpu::TextureFormat::Depth32Float, sample_count))
+        .saturating_add(texture_memory_bytes(1024, 1024, wgpu::TextureFormat::Depth32Float, 1))
+        .saturating_add(texture_memory_bytes(width, height, wgpu::TextureFormat::R32Uint, 1))
+        .saturating_add(texture_memory_bytes(width, height, wgpu::TextureFormat::Depth32Float, 1));
+    if let Some(timer) = timing {
+        memory_bytes = memory_bytes.saturating_add(timer.memory_bytes());
+    }
     let depth_texture = texture_with_samples(
         device,
         "auvra-production-depth",
@@ -397,6 +546,7 @@ fn render_production_to_view(
         mapped_at_creation: false,
     });
     queue.write_buffer(&post_uniforms, 0, &post_uniform_bytes);
+    memory_bytes = memory_bytes.saturating_add(u64::try_from(post_uniform_bytes.len()).unwrap_or(u64::MAX));
     let post_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("auvra-production-post"),
         layout: &pipelines.post_layout,
@@ -432,7 +582,11 @@ fn render_production_to_view(
                 stencil_ops: None,
             }),
             occlusion_query_set: None,
-            timestamp_writes: None,
+            timestamp_writes: timing.map(|timer| wgpu::RenderPassTimestampWrites {
+                query_set: &timer.query_set,
+                beginning_of_pass_write_index: Some(0),
+                end_of_pass_write_index: None,
+            }),
             multiview_mask: None,
         });
         pass.set_pipeline(&sample_pipelines.shadow_depth);
@@ -577,16 +731,40 @@ fn render_production_to_view(
             })],
             depth_stencil_attachment: None,
             occlusion_query_set: None,
-            timestamp_writes: None,
+            timestamp_writes: timing.map(|timer| wgpu::RenderPassTimestampWrites {
+                query_set: &timer.query_set,
+                beginning_of_pass_write_index: None,
+                end_of_pass_write_index: Some(1),
+            }),
             multiview_mask: None,
         });
         pass.set_pipeline(&pipelines.post);
         pass.set_bind_group(0, &post_bind, &[]);
         pass.draw(0..3, 0..1);
     }
+    if let Some(timer) = timing {
+        timer.encode_resolve(&mut encoder);
+    }
     queue.submit(Some(encoder.finish()));
     let cpu_submit_ms = submit_started.elapsed().as_secs_f64() * 1000.0;
-    Ok(cpu_submit_ms)
+    Ok(ProductionSubmission {
+        cpu_submit_ms,
+        gpu_ms: None,
+        memory_bytes,
+        pipeline_cache_hit,
+    })
+}
+
+fn texture_memory_bytes(
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+    sample_count: u32,
+) -> u64 {
+    u64::from(width)
+        .saturating_mul(u64::from(height))
+        .saturating_mul(u64::from(format.block_copy_size(None).unwrap_or(4)))
+        .saturating_mul(u64::from(sample_count))
 }
 
 fn texture(

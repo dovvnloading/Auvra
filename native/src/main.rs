@@ -412,6 +412,7 @@ struct Renderer {
     last_memory_bytes: u64,
     last_hash: Option<String>,
     production_pipelines: gpu::ProductionPipelines,
+    gpu_timing: Option<gpu::GpuTiming>,
     gpu_timing_supported: bool,
     gpu_timing_fallback: Option<String>,
     pipeline_cache_hits: u64,
@@ -433,9 +434,9 @@ impl Renderer {
         let info = adapter.get_info();
         gpu::validate_adapter(&adapter)?;
         let available = adapter.features();
-        let gpu_timing_supported = available.contains(wgpu::Features::TIMESTAMP_QUERY)
+        let timestamp_features_available = available.contains(wgpu::Features::TIMESTAMP_QUERY)
             && available.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES);
-        let required_features = if gpu_timing_supported {
+        let required_features = if timestamp_features_available {
             wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES
         } else {
             wgpu::Features::empty()
@@ -451,6 +452,10 @@ impl Renderer {
         .map_err(|e| format!("device request failed: {e:?}"))?;
         let production_pipelines =
             gpu::ProductionPipelines::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let gpu_timing = timestamp_features_available
+            .then(|| gpu::GpuTiming::new(&device, &queue))
+            .flatten();
+        let gpu_timing_supported = gpu_timing.is_some();
         Ok(Self {
             instance,
             adapter,
@@ -464,6 +469,7 @@ impl Renderer {
             last_memory_bytes: 0,
             last_hash: None,
             production_pipelines,
+            gpu_timing,
             gpu_timing_supported,
             gpu_timing_fallback: (!gpu_timing_supported)
                 .then(|| "timestamp_query_unavailable_cpu_submit".into()),
@@ -488,6 +494,7 @@ impl Renderer {
             &self.queue,
             self.format,
             &mut self.production_pipelines,
+            self.gpu_timing.as_ref(),
             extraction,
             width,
             height,
@@ -496,9 +503,14 @@ impl Renderer {
         // GPU completion, readback mapping, and signature hashing are separate
         // acceptance work and must not be compared with the CPU frame budget.
         self.last_frame_ms = Some(frame.cpu_submit_ms);
+        self.last_gpu_ms = frame.gpu_ms;
         self.last_hash = Some(format!("0x{:016x}", frame.pixel_hash));
-        self.last_memory_bytes = u64::from(width) * u64::from(height) * 4;
-        self.pipeline_cache_hits = self.pipeline_cache_hits.saturating_add(1);
+        self.last_memory_bytes = frame.memory_bytes;
+        if frame.pipeline_cache_hit {
+            self.pipeline_cache_hits = self.pipeline_cache_hits.saturating_add(1);
+        } else {
+            self.pipeline_cache_misses = self.pipeline_cache_misses.saturating_add(1);
+        }
         Ok(
             json!({"referenceScene":"basic", "referenceVersion":1, "width":width, "height":height, "signature":format!("{:016x}", frame.pixel_hash), "pixel_hash_fnv1a64":format!("0x{:016x}", frame.pixel_hash), "geometryCount":frame.geometry_count, "batchCount":frame.batch_count, "passCount":frame.pass_count, "fallbackCount":frame.fallback_count, "executedPasses":frame.executed_passes, "extractionHash":extraction.snapshot.extraction_hash, "capabilities":gpu::capabilities().features, "pipeline_cache_hits":self.pipeline_cache_hits, "pipeline_cache_misses":self.pipeline_cache_misses, "frame_submit_ms":self.last_frame_ms}),
         )
@@ -520,16 +532,24 @@ impl Renderer {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let cpu_submit_ms = gpu::present_production(
+        let submission = gpu::present_production(
             &self.device,
             &self.queue,
             &view,
             &mut self.production_pipelines,
+            self.gpu_timing.as_ref(),
             extraction,
             width,
             height,
         )?;
-        self.last_frame_ms = Some(cpu_submit_ms);
+        self.last_frame_ms = Some(submission.cpu_submit_ms);
+        self.last_gpu_ms = submission.gpu_ms;
+        self.last_memory_bytes = submission.memory_bytes;
+        if submission.pipeline_cache_hit {
+            self.pipeline_cache_hits = self.pipeline_cache_hits.saturating_add(1);
+        } else {
+            self.pipeline_cache_misses = self.pipeline_cache_misses.saturating_add(1);
+        }
         self.queue.present(frame);
         Ok(())
     }
