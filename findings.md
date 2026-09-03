@@ -518,6 +518,8 @@ The abort listener covers only the worker phase and is removed before `GLTFLoade
 
 Graph, blueprint, socket, level, and model-placement managers update local state but generally only log persistence failures (`fbx-viewer (1)/hooks/useGraphManager.ts:12`, `fbx-viewer (1)/hooks/useBlueprintManager.ts:50`, `fbx-viewer (1)/hooks/useSocketManager.ts:35`, `fbx-viewer (1)/hooks/useLevelManager.ts:223`, `fbx-viewer (1)/hooks/useModelManager.ts:118`). Revision conflict, read-only, or host failure can leave ghost edits until reload. Several host side effects also run inside React state updaters, risking duplicate work under replay.
 
+**Status:** Completed — simple mutations now publish only after host persistence succeeds; debounced socket and level-object edits retain an identity-checked pre-edit snapshot and roll back on failed writes; graph/blueprint persistence no longer runs inside React state updaters; model deletion disposal and parent cleanup are outside setters. Project-boundary verification, TypeScript, production build, and release tests pass.
+
 ### F-062 — Host delete cascades are not reflected in live editor domains
 
 **Severity:** Medium · **Classification:** Confirmed

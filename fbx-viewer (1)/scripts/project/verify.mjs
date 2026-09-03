@@ -11,6 +11,8 @@ const service = await readFile(resolve(root, 'utils/projectService.ts'), 'utf8')
 const header = await readFile(resolve(root, 'components/UI/Header.tsx'), 'utf8');
 const modelManager = await readFile(resolve(root, 'hooks/useModelManager.ts'), 'utf8');
 const blueprintManager = await readFile(resolve(root, 'hooks/useBlueprintManager.ts'), 'utf8');
+const graphManager = await readFile(resolve(root, 'hooks/useGraphManager.ts'), 'utf8');
+const socketManager = await readFile(resolve(root, 'hooks/useSocketManager.ts'), 'utf8');
 const assetContext = await readFile(resolve(root, 'context/AssetContext.tsx'), 'utf8');
 const persistence = await readFile(resolve(root, 'hooks/useScenePersistence.ts'), 'utf8');
 const levels = await readFile(resolve(root, 'hooks/useLevelManager.ts'), 'utf8');
@@ -98,6 +100,18 @@ if (/const \[selectedModelId,\s*setSelectedModelId\]\s*=\s*useState/.test(modelM
   || !/useBlueprintManager\(selectedBlueprintId,[\s\S]*clearBlueprint/.test(assetContext)
   || !/clearModel/.test(assetContext) || !/clearBlueprint/.test(assetContext)) {
   failures.push('model and blueprint managers retain a duplicate selection authority');
+}
+if (/setGraphData\(prev => \{[\s\S]*?applyChanges/.test(graphManager)
+  || !/animation_graph_persist_failed/.test(graphManager)
+  || !/blueprintsRef\.current/.test(blueprintManager)
+  || !/blueprint_save_failed/.test(blueprintManager)
+  || !/previous: SocketData/.test(socketManager)
+  || !/pending\.previous/.test(socketManager)
+  || !/previous: LevelObject/.test(levels)
+  || !/levelObjects: current\.levelObjects\.map/.test(levels)
+  || !/await dbOperations\.updateModelPlacement\(id, true\)[\s\S]*?setModels/.test(modelManager)
+  || !/await dbOperations\.updateModelPlacement\(id, false\)[\s\S]*?setModels/.test(modelManager)) {
+  failures.push('optimistic domain mutations lack failure rollback or persist-before-publish ordering');
 }
 if (/const displayObject = targetModel\?\.object/.test(graphPreview)
   || !/clonePreviewResources/.test(graphPreview)

@@ -1,5 +1,5 @@
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Blueprint, BlueprintType } from '../types';
 import { dbOperations } from '../utils/db';
 import { projectService } from '../utils/projectService';
@@ -12,6 +12,8 @@ export const useBlueprintManager = (
   clearSelectedBlueprint: (id: string) => void,
 ) => {
   const [blueprints, setBlueprints] = useState<Blueprint[]>(DEFAULT_BLUEPRINTS);
+  const blueprintsRef = useRef(blueprints);
+  useEffect(() => { blueprintsRef.current = blueprints; }, [blueprints]);
 
   const addBlueprint = useCallback(async (type: BlueprintType) => {
     projectService.assertWritable();
@@ -50,31 +52,33 @@ export const useBlueprintManager = (
     }
   }, [blueprints, selectBlueprint]);
 
-  const updateBlueprint = useCallback((id: string, updates: Partial<Blueprint>) => {
+  const updateBlueprint = useCallback(async (id: string, updates: Partial<Blueprint>) => {
     projectService.assertWritable();
-    setBlueprints(prev => prev.map(bp => {
-        if (bp.id === id) {
-            const updated = { ...bp, ...updates };
-            // Save to DB asynchronously
-            dbOperations.saveBlueprint(updated).catch((err) => frontendDiagnostics.failure('blueprint_save_failed', err));
-            return updated;
-        }
-        return bp;
-    }));
-  }, []);
+    const previous = blueprintsRef.current.find((blueprint) => blueprint.id === id);
+    if (!previous) return;
+    const updated = { ...previous, ...updates };
+    blueprintsRef.current = blueprintsRef.current.map(blueprint => blueprint.id === id ? updated : blueprint);
+    setBlueprints(current => current.map(blueprint => blueprint.id === id ? updated : blueprint));
+    try {
+      await dbOperations.saveBlueprint(updated);
+    } catch (error) {
+      if (blueprintsRef.current.find((blueprint) => blueprint.id === id) === updated) {
+        blueprintsRef.current = blueprintsRef.current.map(blueprint => blueprint.id === id ? previous : blueprint);
+        setBlueprints(blueprintsRef.current);
+      }
+      frontendDiagnostics.failure('blueprint_save_failed', error);
+    }
+  }, [blueprints]);
 
-  const removeBlueprint = useCallback((id: string) => {
+  const removeBlueprint = useCallback(async (id: string) => {
     projectService.assertWritable();
-    // 1. Optimistic Update
-    setBlueprints(prev => prev.filter(bp => bp.id !== id));
-    
-    // 2. Handle Selection
-    clearSelectedBlueprint(id);
-
-    // 3. Persist
-    dbOperations.deleteBlueprint(id).catch(err => {
+    try {
+      await dbOperations.deleteBlueprint(id);
+      setBlueprints(prev => prev.filter(bp => bp.id !== id));
+      clearSelectedBlueprint(id);
+    } catch (err) {
         frontendDiagnostics.failure('blueprint_delete_failed', err);
-    });
+    }
   }, [clearSelectedBlueprint]);
 
   const unlinkModelFromBlueprints = useCallback((modelId: string) => {

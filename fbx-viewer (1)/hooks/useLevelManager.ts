@@ -148,21 +148,26 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       updateHistoryState();
   }, [currentLevelId]);
 
-  const pendingUpdatesRef = useRef<Map<string, { updates: Partial<LevelObject>; lease: EditorSessionLease }>>(new Map());
+  const pendingUpdatesRef = useRef<Map<string, { updates: Partial<LevelObject>; lease: EditorSessionLease; previous: LevelObject }>>(new Map());
   const saveTimeoutRef = useRef<any>(null);
 
   const commitUpdates = useCallback(async () => {
       if (pendingUpdatesRef.current.size === 0) return;
-      const batch = new Map<string, any>(pendingUpdatesRef.current);
+      const batch = new Map<string, { updates: Partial<LevelObject>; lease: EditorSessionLease; previous: LevelObject }>(pendingUpdatesRef.current);
       pendingUpdatesRef.current.clear();
-      try {
-          for (const [id, pending] of batch.entries()) {
-              if (!session.isCurrent(pending.lease)) continue;
+      for (const [id, pending] of batch.entries()) {
+          if (!session.isCurrent(pending.lease)) continue;
+          try {
               await dbOperations.updateLevelObject(id, pending.updates, pending.lease);
               if (!session.isSameSession(pending.lease)) continue;
+          } catch (error) {
+              if (!pendingUpdatesRef.current.has(id)) {
+                  setWorkingState(current => current.levelObjects.some((object) => object.id === id && object === pending.previous)
+                      ? current
+                      : { ...current, levelObjects: current.levelObjects.map((object) => object.id === id ? pending.previous : object) });
+              }
+              frontendDiagnostics.failure('level_batch_persist_failed', error);
           }
-      } catch (e) {
-          frontendDiagnostics.failure('level_batch_persist_failed', e);
       }
   }, [session]);
 
@@ -427,21 +432,28 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       const lease = session.captureReady();
       session.requireCurrent(lease);
       projectService.assertWritable();
+      const previous = levelObjects.find((object) => object.id === id);
+      if (!previous) return;
       setWorkingState(prev => ({
           ...prev,
           levelObjects: prev.levelObjects.map(o => o.id === id ? { ...o, ...updates } : o),
       }));
       const existing = pendingUpdatesRef.current.get(id);
-      pendingUpdatesRef.current.set(id, { updates: { ...(existing?.updates || {}), ...updates }, lease });
+      pendingUpdatesRef.current.set(id, {
+          updates: { ...(existing?.updates || {}), ...updates },
+          lease,
+          previous: existing?.previous || previous,
+      });
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = setTimeout(commitUpdates, 1500);
-  }, [commitUpdates, session]);
+  }, [commitUpdates, levelObjects, session]);
 
   const updateLevelBlueprint = useCallback((data: Partial<LevelBlueprintData>) => {
       const lease = session.captureReady();
       session.requireCurrent(lease);
       projectService.assertWritable();
       const next = { ...activeLevelBlueprint, ...data };
+      const previous = activeLevelBlueprint;
       setWorkingState(prev => ({
           ...prev,
           activeLevelBlueprint: next,
@@ -452,7 +464,18 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       if (currentLevelId) {
           const lvl = levels.find(l => l.id === currentLevelId);
           if (lvl) {
-              dbOperations.addLevel({ ...lvl, blueprint: next }, lease).catch((error) => frontendDiagnostics.failure('level_blueprint_persist_failed', error));
+              dbOperations.addLevel({ ...lvl, blueprint: next }, lease).catch((error) => {
+                  setWorkingState(current => current.activeLevelBlueprint === next
+                      ? {
+                          ...current,
+                          activeLevelBlueprint: previous,
+                          levels: current.levels.map(level => level.id === currentLevelId
+                              ? { ...level, blueprint: previous }
+                              : level),
+                      }
+                      : current);
+                  frontendDiagnostics.failure('level_blueprint_persist_failed', error);
+              });
           }
       }
   }, [activeLevelBlueprint, currentLevelId, levels, session]);

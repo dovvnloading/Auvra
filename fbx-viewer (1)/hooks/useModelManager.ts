@@ -119,19 +119,19 @@ export const useModelManager = (
 
   const placeInScene = useCallback(async (id: string) => {
       projectService.assertWritable();
-      setModels(prev => prev.map(m => m.id === id ? { ...m, isPlacedInScene: true } : m));
-      selectModel(id);
       try {
           await dbOperations.updateModelPlacement(id, true);
+          setModels(prev => prev.map(m => m.id === id ? { ...m, isPlacedInScene: true } : m));
+          selectModel(id);
       } catch(e) { frontendDiagnostics.failure('model_placement_update_failed', e); }
   }, [selectModel]);
 
   const removeFromScene = useCallback(async (id: string) => {
       projectService.assertWritable();
-      setModels(prev => prev.map(m => m.id === id ? { ...m, isPlacedInScene: false } : m));
-      clearSelectedModel(id);
       try {
           await dbOperations.updateModelPlacement(id, false);
+          setModels(prev => prev.map(m => m.id === id ? { ...m, isPlacedInScene: false } : m));
+          clearSelectedModel(id);
       } catch(e) { frontendDiagnostics.failure('model_placement_remove_failed', e); }
   }, [clearSelectedModel]);
 
@@ -139,14 +139,9 @@ export const useModelManager = (
     projectService.assertWritable();
     try {
         await dbOperations.deleteModel(id);
-        
-        setModels(prev => {
-          const modelToRemove = prev.find(m => m.id === id);
-          if (modelToRemove) {
-              disposeModel(modelToRemove);
-          }
-          return prev.filter(m => m.id !== id);
-        });
+        const modelToRemove = models.find((model) => model.id === id);
+        if (modelToRemove) disposeModel(modelToRemove);
+        setModels(prev => prev.filter(m => m.id !== id));
         
         // Callback to cleanup attachments in the other hook
         onModelRemoved(id);
@@ -155,7 +150,7 @@ export const useModelManager = (
     } catch (e) {
         frontendDiagnostics.failure('model_delete_failed', e);
     }
-  }, [clearSelectedModel, onModelRemoved]);
+  }, [clearSelectedModel, models, onModelRemoved]);
 
   const addAnimations = useCallback(async (files: File[], modelId: string) => {
     projectService.assertWritable();

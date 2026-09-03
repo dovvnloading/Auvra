@@ -9,14 +9,14 @@ export const useSocketManager = () => {
   const [sockets, setSockets] = useState<SocketData[]>([]);
   
   // Refs for debouncing DB updates
-  const pendingUpdatesRef = useRef<Map<string, { updates: Partial<SocketData>; lease: EditorSessionLease }>>(new Map());
+  const pendingUpdatesRef = useRef<Map<string, { updates: Partial<SocketData>; lease: EditorSessionLease; previous: SocketData }>>(new Map());
   const saveTimeoutRef = useRef<any>(null);
   const commitInFlightRef = useRef<Promise<void> | null>(null);
 
   const commitUpdates = useCallback((): Promise<void> => {
       if (commitInFlightRef.current) return commitInFlightRef.current;
       const run = async () => {
-          const batch = new Map<string, { updates: Partial<SocketData>; lease: EditorSessionLease }>(pendingUpdatesRef.current);
+          const batch = new Map<string, { updates: Partial<SocketData>; lease: EditorSessionLease; previous: SocketData }>(pendingUpdatesRef.current);
           for (const [id, pending] of batch.entries()) {
               if (!editorSession.isSameSession(pending.lease)) {
                   if (pendingUpdatesRef.current.get(id) === pending) pendingUpdatesRef.current.delete(id);
@@ -26,8 +26,10 @@ export const useSocketManager = () => {
                   await dbOperations.updateSocket(id, pending.updates, pending.lease);
                   if (pendingUpdatesRef.current.get(id) === pending) pendingUpdatesRef.current.delete(id);
               } catch (error) {
-                  // Preserve the failed entry for a later retry while its
-                  // exact project session is still valid.
+                  if (pendingUpdatesRef.current.get(id) === pending) {
+                      pendingUpdatesRef.current.delete(id);
+                      setSockets(current => current.map((socket) => socket.id === id ? pending.previous : socket));
+                  }
                   frontendDiagnostics.failure('socket_batch_persist_failed', error);
               }
           }
@@ -69,11 +71,10 @@ export const useSocketManager = () => {
         scale: [1, 1, 1]
     };
 
-    setSockets(prev => [...prev, newSocket]);
-    
     try {
         await dbOperations.addSocket(newSocket, lease);
         if (!editorSession.isSameSession(lease)) return;
+        setSockets(prev => [...prev, newSocket]);
     } catch(e) {
         frontendDiagnostics.failure('socket_add_failed', e);
     }
@@ -82,6 +83,8 @@ export const useSocketManager = () => {
   const updateSocket = useCallback((id: string, updates: Partial<SocketData>) => {
       projectService.assertWritable();
       const lease = editorSession.requireWritable(editorSession.captureReady(), projectService.getStatus());
+      const previous = sockets.find((socket) => socket.id === id);
+      if (!previous) return;
       setSockets(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
 
       // Queue DB update
@@ -89,11 +92,12 @@ export const useSocketManager = () => {
       pendingUpdatesRef.current.set(id, {
         updates: { ...(existing?.updates || {}), ...updates },
         lease,
+        previous: existing?.previous || previous,
       });
 
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = setTimeout(commitUpdates, 1500);
-  }, [commitUpdates]);
+  }, [commitUpdates, sockets]);
 
   const removeSocket = useCallback(async (id: string) => {
       projectService.assertWritable();
@@ -101,24 +105,28 @@ export const useSocketManager = () => {
       if (pendingUpdatesRef.current.has(id)) {
           pendingUpdatesRef.current.delete(id);
       }
-      setSockets(prev => prev.filter(s => s.id !== id));
-      
       try {
           await dbOperations.deleteSocket(id, lease);
           if (!editorSession.isSameSession(lease)) return;
+          setSockets(prev => prev.filter(s => s.id !== id));
       } catch(e) { frontendDiagnostics.failure('socket_delete_failed', e); }
   }, []);
 
-  const removeSocketsByParentId = useCallback((parentId: string, persist = true) => {
-      const lease = persist
-          ? editorSession.requireWritable(editorSession.captureReady(), projectService.getStatus())
-          : undefined;
-      setSockets(prev => {
-          const toRemove = prev.filter(s => s.parentModelId === parentId);
-          if (persist) toRemove.forEach(s => dbOperations.deleteSocket(s.id, lease).catch((error) => frontendDiagnostics.failure('socket_cleanup_failed', error)));
-          return prev.filter(s => s.parentModelId !== parentId);
-      });
-  }, []);
+  const removeSocketsByParentId = useCallback(async (parentId: string, persist = true) => {
+      const toRemove = sockets.filter(s => s.parentModelId === parentId);
+      if (!persist) {
+          setSockets(prev => prev.filter(s => s.parentModelId !== parentId));
+          return;
+      }
+      const lease = editorSession.requireWritable(editorSession.captureReady(), projectService.getStatus());
+      try {
+          await Promise.all(toRemove.map((socket) => dbOperations.deleteSocket(socket.id, lease)));
+          if (!editorSession.isSameSession(lease)) return;
+          setSockets(prev => prev.filter(s => s.parentModelId !== parentId));
+      } catch (error) {
+          frontendDiagnostics.failure('socket_cleanup_failed', error);
+      }
+  }, [sockets]);
 
   return frontendDiagnostics.traceActions('socket_manager', {
       sockets,
