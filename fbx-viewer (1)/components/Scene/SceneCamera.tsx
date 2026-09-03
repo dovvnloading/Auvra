@@ -171,7 +171,7 @@ export const SceneCamera: React.FC<SceneCameraProps> = ({ mode, resetTrigger }) 
   return (
     <>
       {mode === 'orbit' && (
-      <OrbitControls 
+      <OrbitControls
           ref={controlsRef}
           makeDefault 
           target={cameraState.target}
