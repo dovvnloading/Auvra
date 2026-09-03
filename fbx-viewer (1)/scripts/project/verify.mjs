@@ -46,6 +46,10 @@ const blueprintListPanel = await readFile(resolve(root, 'components/Blueprint/Bl
 const browserToolbar = await readFile(resolve(root, 'components/UI/Browser/BrowserToolbar.tsx'), 'utf8');
 const hudEditor = await readFile(resolve(root, 'components/HUDEditor/HUDEditor.tsx'), 'utf8');
 const hudCanvas = await readFile(resolve(root, 'components/HUDEditor/HUDCanvas.tsx'), 'utf8');
+const hudLibrary = await readFile(resolve(root, 'components/HUDEditor/HUDLibrary.tsx'), 'utf8');
+const selectControl = await readFile(resolve(root, 'components/UI/Select.tsx'), 'utf8');
+const scrubbableInput = await readFile(resolve(root, 'components/UI/Properties/ScrubbableInput.tsx'), 'utf8');
+const playerControls = await readFile(resolve(root, 'components/Sandbox/hooks/usePlayerControls.ts'), 'utf8');
 
 const failures = [];
 const mustNotContain = (text, pattern, label) => { if (pattern.test(text)) failures.push(`${label}: forbidden ${pattern}`); };
@@ -185,6 +189,26 @@ if (!/HUD_REFERENCE_SIZE/.test(hudEditor)
   || !/clientX - rect\.left/.test(hudCanvas)
   || !/clampHUDPosition/.test(hudCanvas)) {
   failures.push('HUD editing does not scale logical coordinates to the pane and clamp element bounds');
+}
+if (!/role="combobox"/.test(selectControl)
+  || !/aria-haspopup="listbox"/.test(selectControl)
+  || !/role="listbox"/.test(selectControl)
+  || !/aria-selected/.test(selectControl)
+  || !/ArrowDown/.test(selectControl)
+  || !/ArrowUp/.test(selectControl)
+  || !/Escape/.test(selectControl)
+  || !/onPointerCancel=\{handlePointerCancel\}/.test(scrubbableInput)
+  || !/handleScrubKeyDown/.test(scrubbableInput)
+  || !/role="button"/.test(hudLibrary)
+  || !/tabIndex=\{0\}/.test(hudLibrary)
+  || !/role="button"/.test(blueprintListPanel)
+  || !/tabIndex=\{0\}/.test(blueprintListPanel)
+  || !/isEditableTarget/.test(sceneCamera)
+  || !/window\.addEventListener\('blur'/.test(sceneCamera)
+  || !/isEditableTarget/.test(playerControls)
+  || !/window\.addEventListener\('blur'/.test(playerControls)
+  || !/keys\.current\.clear\(\)/.test(playerControls)) {
+  failures.push('keyboard, pointer, and accessibility interaction safeguards are incomplete');
 }
 if (!/transition \|\| undefined/.test(projectManager) || !/isTransitionCurrent\(transition\)/.test(projectManager)) failures.push('project-manager hydration does not carry exact transition identity through awaits');
 if (!/expectedProjectId/.test(persistence) || !/expectedRevision/.test(persistence) || !/status\.projectId !== expectedProjectId/.test(persistence) || !/status\.revision !== expectedRevision/.test(persistence)) failures.push('hydration does not fence the exact project identity after awaits');

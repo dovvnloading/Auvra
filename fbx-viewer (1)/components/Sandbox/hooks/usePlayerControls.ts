@@ -10,6 +10,11 @@ export interface PlayerInputState {
     isAiming: boolean;
 }
 
+const isEditableTarget = (target: EventTarget | null): boolean => {
+    if (!(target instanceof HTMLElement)) return false;
+    return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
+};
+
 export const usePlayerControls = (enabled: boolean) => {
     const keys = useRef(new Set<string>());
     const mouseButtons = useRef(new Set<number>());
@@ -17,7 +22,10 @@ export const usePlayerControls = (enabled: boolean) => {
     useEffect(() => {
         if (!enabled) return;
 
-        const onKeyDown = (e: KeyboardEvent) => keys.current.add(e.code);
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.defaultPrevented || isEditableTarget(e.target)) return;
+            keys.current.add(e.code);
+        };
         const onKeyUp = (e: KeyboardEvent) => keys.current.delete(e.code);
         
         const onMouseDown = (e: MouseEvent) => {
@@ -26,17 +34,29 @@ export const usePlayerControls = (enabled: boolean) => {
             }
         };
         const onMouseUp = (e: MouseEvent) => mouseButtons.current.delete(e.button);
+        const clearInput = () => {
+            keys.current.clear();
+            mouseButtons.current.clear();
+        };
+        const onVisibilityChange = () => {
+            if (document.visibilityState !== 'visible') clearInput();
+        };
 
         window.addEventListener('keydown', onKeyDown);
         window.addEventListener('keyup', onKeyUp);
         window.addEventListener('mousedown', onMouseDown);
         window.addEventListener('mouseup', onMouseUp);
+        window.addEventListener('blur', clearInput);
+        document.addEventListener('visibilitychange', onVisibilityChange);
         
         return () => {
             window.removeEventListener('keydown', onKeyDown);
             window.removeEventListener('keyup', onKeyUp);
             window.removeEventListener('mousedown', onMouseDown);
             window.removeEventListener('mouseup', onMouseUp);
+            window.removeEventListener('blur', clearInput);
+            document.removeEventListener('visibilitychange', onVisibilityChange);
+            clearInput();
         };
     }, [enabled]);
 

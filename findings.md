@@ -582,6 +582,8 @@ HUD documents and new widgets use a fixed 1920×1080 coordinate system (`fbx-vie
 
 The custom Select lacks combobox/listbox semantics and keyboard navigation (`fbx-viewer (1)/components/UI/Select.tsx:80`). The scrubbable input's primary surface is a non-focusable `div`, has no keyboard adjustment, and lacks pointer-cancel cleanup (`fbx-viewer (1)/components/UI/Properties/ScrubbableInput.tsx:50`). HUD and blueprint rows use clickable non-focusable containers (`fbx-viewer (1)/components/HUDEditor/HUDLibrary.tsx:93`, `fbx-viewer (1)/components/Blueprint/BlueprintListPanel.tsx:47`). Global movement listeners neither exclude editable targets nor clear stuck keys on blur (`fbx-viewer (1)/components/Scene/SceneCamera.tsx:72`, `fbx-viewer (1)/components/Sandbox/hooks/usePlayerControls.ts:13`).
 
+**Status:** Completed — Select now exposes combobox/listbox semantics with keyboard navigation; scrubbing supports keyboard adjustment and pointer-cancel/unmount cleanup; HUD/blueprint rows are keyboard focusable; and global movement ignores editable targets and clears on blur/hidden visibility. Project verification, TypeScript, and production frontend build pass.
+
 ## Verification, testing, and documentation concerns
 
 ### F-070 — The frontend lacks conventional unit/component coverage and uses relaxed compiler checks

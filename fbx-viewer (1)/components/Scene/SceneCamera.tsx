@@ -5,6 +5,11 @@ import * as THREE from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { useScene } from '../../context/SceneContext';
 
+const isEditableTarget = (target: EventTarget | null): boolean => {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
+};
+
 const FreeCameraControls: React.FC<{ 
     initialPosition: [number, number, number], 
     initialTarget: [number, number, number],
@@ -69,11 +74,18 @@ const FreeCameraControls: React.FC<{
       currentTarget.current.copy(camera.position).add(forward);
     };
 
-    const onKeyDown = (e: KeyboardEvent) => keys.current.add(e.code);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || isEditableTarget(e.target)) return;
+      keys.current.add(e.code);
+    };
     const onKeyUp = (e: KeyboardEvent) => keys.current.delete(e.code);
     const onContextMenu = (e: Event) => e.preventDefault();
 
     const domEl = gl.domElement;
+    const clearKeys = () => keys.current.clear();
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') clearKeys();
+    };
     
     // Listeners
     domEl.addEventListener('mousedown', onMouseDown);
@@ -81,6 +93,8 @@ const FreeCameraControls: React.FC<{
     document.addEventListener('mousemove', onMouseMove);
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', clearKeys);
+    document.addEventListener('visibilitychange', onVisibilityChange);
     domEl.addEventListener('contextmenu', onContextMenu);
 
     return () => {
@@ -89,8 +103,11 @@ const FreeCameraControls: React.FC<{
       document.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', clearKeys);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       domEl.removeEventListener('contextmenu', onContextMenu);
       if (document.pointerLockElement === domEl) document.exitPointerLock();
+      clearKeys();
       
       // Sync back to context on unmount
       onUpdate(camera.position.clone(), currentTarget.current.clone());

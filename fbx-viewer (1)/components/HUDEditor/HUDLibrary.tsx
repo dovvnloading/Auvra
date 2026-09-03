@@ -30,6 +30,13 @@ export const HUDLibrary: React.FC<HUDLibraryProps> = ({
         c.label.toLowerCase().includes(search.toLowerCase())
     );
 
+    const handleLayerKeyDown = (event: React.KeyboardEvent<HTMLDivElement>, id: string) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        onSelect(id);
+    };
+
     return (
         <div className="w-64 bg-gray-900 border-r border-gray-800 flex flex-col shrink-0 z-20">
             {/* Tab Header */}
@@ -94,6 +101,10 @@ export const HUDLibrary: React.FC<HUDLibraryProps> = ({
                         <div 
                             key={el.id}
                             onClick={() => onSelect(el.id)}
+                            onKeyDown={(event) => handleLayerKeyDown(event, el.id)}
+                            role="button"
+                            tabIndex={0}
+                            aria-pressed={selectedId === el.id}
                             className={`
                                 flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer group border border-transparent
                                 ${selectedId === el.id ? 'bg-blue-900/30 border-blue-500/30' : 'hover:bg-gray-800'}
@@ -101,7 +112,8 @@ export const HUDLibrary: React.FC<HUDLibraryProps> = ({
                         >
                             <button 
                                 onClick={(e) => { e.stopPropagation(); onToggleVisibility(el.id); }}
-                                className="text-gray-500 hover:text-white"
+                                aria-label={`${el.isVisible ? 'Hide' : 'Show'} ${el.name}`}
+                                className="text-gray-500 hover:text-white focus-visible:text-white"
                             >
                                 {el.isVisible ? <Eye size={12} /> : <EyeOff size={12} />}
                             </button>
@@ -112,14 +124,16 @@ export const HUDLibrary: React.FC<HUDLibraryProps> = ({
 
                             <button 
                                 onClick={(e) => { e.stopPropagation(); onToggleLock(el.id); }}
-                                className={`text-gray-500 hover:text-white ${el.isLocked ? 'text-amber-500' : 'opacity-0 group-hover:opacity-100'}`}
+                                aria-label={`${el.isLocked ? 'Unlock' : 'Lock'} ${el.name}`}
+                                className={`text-gray-500 hover:text-white focus-visible:opacity-100 ${el.isLocked ? 'text-amber-500' : 'opacity-0 group-hover:opacity-100'}`}
                             >
                                 {el.isLocked ? <Lock size={12} /> : <Unlock size={12} />}
                             </button>
 
                             <button 
                                 onClick={(e) => { e.stopPropagation(); onDelete(el.id); }}
-                                className="text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100"
+                                aria-label={`Delete ${el.name}`}
+                                className="text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
                             >
                                 <Trash2 size={12} />
                             </button>
