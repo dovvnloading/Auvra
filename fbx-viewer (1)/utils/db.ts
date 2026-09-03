@@ -2,6 +2,7 @@
 import { AssetCategory, AttachmentData, Blueprint, SocketData, TextureData, LevelObject, LevelData, AudioData } from '../types';
 import { AssetTransferOptions, projectService } from './projectService';
 import { frontendDiagnostics } from '../diagnostics/runtime';
+import { editorSession, type EditorSessionLease } from './editorSession';
 
 const DB_NAME = 'OmniRenderDB';
 
@@ -128,17 +129,23 @@ class DBOperations {
     }
   }
 
+  private requireEditorLease(lease?: EditorSessionLease): void {
+    if (!lease) return;
+    editorSession.requireWritable(lease, projectService.getStatus());
+  }
+
   /** Route authored JSON mutations to the native repository once a project is
    * open. IndexedDB remains a read-only migration source; binary uploads are
    * handled by the host asset transport and are therefore not sent here. */
-  private async canonicalChange(domain: string, operation: 'upsert' | 'remove', value: unknown, id?: string): Promise<boolean> {
-    const run = () => this.performCanonicalChange(domain, operation, value, id);
+  private async canonicalChange(domain: string, operation: 'upsert' | 'remove', value: unknown, id?: string, lease?: EditorSessionLease): Promise<boolean> {
+    const run = () => this.performCanonicalChange(domain, operation, value, id, lease);
     const result = this.mutationQueue.then(run, run);
     this.mutationQueue = result.catch(() => undefined);
     return result;
   }
 
-  private async performCanonicalChange(domain: string, operation: 'upsert' | 'remove', value: unknown, id?: string): Promise<boolean> {
+  private async performCanonicalChange(domain: string, operation: 'upsert' | 'remove', value: unknown, id?: string, lease?: EditorSessionLease): Promise<boolean> {
+    this.requireEditorLease(lease);
     if (!projectService.getStatus().projectId) throw new Error('Open a native project before editing');
     if (projectService.getStatus().readOnly) throw new Error('Project is read-only');
     let completeValue = value;
@@ -151,7 +158,9 @@ class DBOperations {
           ? (rawDomain as { documents: unknown[] }).documents : snapshot?.documents || [];
       const current = records.find((record) => record && typeof record === 'object' && (record as { id?: unknown }).id === id);
       if (current && typeof current === 'object') completeValue = { ...(current as Record<string, unknown>), ...(value as Record<string, unknown>) };
+      this.requireEditorLease(lease);
     }
+    this.requireEditorLease(lease);
     await projectService.applyChanges([{ domain, operation, id, value: completeValue }]);
     return true;
   }
@@ -163,17 +172,19 @@ class DBOperations {
 
   // --- LEVELS ---
 
-  async addLevel(level: LevelData): Promise<void> {
-      await this.canonicalChange('levels', 'upsert', level, level.id);
+  async addLevel(level: LevelData, lease?: EditorSessionLease): Promise<void> {
+      await this.canonicalChange('levels', 'upsert', level, level.id, lease);
   }
 
   async getAllLevels(): Promise<LevelData[]> {
       return this.readOnlyStoreAll<LevelData>('levels');
   }
 
-  async deleteLevel(id: string): Promise<void> {
+  async deleteLevel(id: string, lease?: EditorSessionLease): Promise<void> {
+      this.requireEditorLease(lease);
       this.requireNativeProject();
       const snapshot = await projectService.getSnapshotAll();
+      this.requireEditorLease(lease);
       const changes: Array<{ domain: string; operation: 'remove' | 'upsert'; id: string; value?: unknown }> = [
         { domain: 'levels', operation: 'remove', id },
       ];
@@ -189,6 +200,7 @@ class DBOperations {
           changes.push({ domain: 'worlds', operation: 'upsert', id: record.id, value: { ...record, levels } });
         }
       }
+      this.requireEditorLease(lease);
       await projectService.applyChanges(changes);
   }
 
@@ -320,10 +332,16 @@ class DBOperations {
 
   // --- ATTACHMENTS ---
 
-  async addAttachment(attachment: DBAttachment, transfer: AssetTransferOptions = {}): Promise<void> {
+  async addAttachment(
+    attachment: DBAttachment,
+    transfer: AssetTransferOptions = {},
+    lease?: EditorSessionLease,
+  ): Promise<void> {
+    this.requireEditorLease(lease);
     this.requireNativeProject();
     const assetId = await projectService.uploadAsset(new File([attachment.file], attachment.name), transfer);
     assertTransferActive(transfer);
+    this.requireEditorLease(lease);
     transfer.onPhase?.('project_record_commit');
     await projectService.applyChanges([{ domain: 'attachments', operation: 'upsert', id: attachment.id, value: {
       id: attachment.id, name: attachment.name, assetId,
@@ -374,36 +392,36 @@ class DBOperations {
   }
 
 
-  async updateAttachment(id: string, updates: Partial<DBAttachment>): Promise<void> {
-      await this.canonicalChange('attachments', 'upsert', { id, ...updates }, id);
+  async updateAttachment(id: string, updates: Partial<DBAttachment>, lease?: EditorSessionLease): Promise<void> {
+      await this.canonicalChange('attachments', 'upsert', { id, ...updates }, id, lease);
   }
 
-  async deleteAttachment(id: string): Promise<void> {
-      await this.canonicalChange('attachments', 'remove', undefined, id);
+  async deleteAttachment(id: string, lease?: EditorSessionLease): Promise<void> {
+      await this.canonicalChange('attachments', 'remove', undefined, id, lease);
   }
 
   // --- SOCKETS (MUZZLES) ---
 
-  async addSocket(socket: DBSocket): Promise<void> {
-    await this.canonicalChange('sockets', 'upsert', socket, socket.id);
+  async addSocket(socket: DBSocket, lease?: EditorSessionLease): Promise<void> {
+    await this.canonicalChange('sockets', 'upsert', socket, socket.id, lease);
   }
 
   async getAllSockets(): Promise<DBSocket[]> {
       return this.readOnlyStoreAll<DBSocket>('sockets');
   }
 
-  async updateSocket(id: string, updates: Partial<DBSocket>): Promise<void> {
-      await this.canonicalChange('sockets', 'upsert', { id, ...updates }, id);
+  async updateSocket(id: string, updates: Partial<DBSocket>, lease?: EditorSessionLease): Promise<void> {
+      await this.canonicalChange('sockets', 'upsert', { id, ...updates }, id, lease);
   }
 
-  async deleteSocket(id: string): Promise<void> {
-      await this.canonicalChange('sockets', 'remove', undefined, id);
+  async deleteSocket(id: string, lease?: EditorSessionLease): Promise<void> {
+      await this.canonicalChange('sockets', 'remove', undefined, id, lease);
   }
 
   // --- LEVEL OBJECTS ---
 
-  async addLevelObject(obj: DBLevelObject): Promise<void> {
-    await this.canonicalChange('objects', 'upsert', obj, obj.id);
+  async addLevelObject(obj: DBLevelObject, lease?: EditorSessionLease): Promise<void> {
+    await this.canonicalChange('objects', 'upsert', obj, obj.id, lease);
   }
 
   /**
@@ -428,12 +446,24 @@ class DBOperations {
       });
   }
 
-  async updateLevelObject(id: string, updates: Partial<DBLevelObject>): Promise<void> {
-    await this.canonicalChange('objects', 'upsert', { id, ...updates }, id);
+  /**
+   * Read the complete authoritative level-object domain for the open native
+   * project. The legacy IndexedDB store is deliberately not consulted here:
+   * it may describe an unrelated browser project and is only a migration
+   * source.
+   */
+  async getAllNativeLevelObjects(): Promise<DBLevelObject[]> {
+    this.requireNativeProject();
+    const snapshot = await projectService.getSnapshotAll('objects');
+    return nativeDomainRecords(snapshot, 'objects') as DBLevelObject[];
   }
 
-  async deleteLevelObject(id: string): Promise<void> {
-    await this.canonicalChange('objects', 'remove', undefined, id);
+  async updateLevelObject(id: string, updates: Partial<DBLevelObject>, lease?: EditorSessionLease): Promise<void> {
+    await this.canonicalChange('objects', 'upsert', { id, ...updates }, id, lease);
+  }
+
+  async deleteLevelObject(id: string, lease?: EditorSessionLease): Promise<void> {
+    await this.canonicalChange('objects', 'remove', undefined, id, lease);
   }
 
   // --- TEXTURES ---
@@ -643,7 +673,7 @@ frontendDiagnostics.instrumentClass(DBOperations, 'project_documents', [
   'updateModelTextureOverrides', 'addModelTextureOverride', 'deleteModel',
   'addAnimations', 'addAttachment', 'updateAttachment', 'deleteAttachment',
   'addSocket', 'updateSocket', 'deleteSocket', 'addLevelObject',
-  'updateLevelObject', 'deleteLevelObject', 'addTexture', 'deleteTexture',
+  'updateLevelObject', 'deleteLevelObject', 'getAllNativeLevelObjects', 'addTexture', 'deleteTexture',
   'addAudio', 'deleteAudio', 'saveBlueprint', 'deleteBlueprint',
   'migrateLegacyDatabase', 'clearDatabase', 'deleteEntireDatabase',
 ]);

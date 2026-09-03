@@ -10,6 +10,8 @@ from Auvra.desktop.assets import AssetTransferRegistry
 from Auvra.desktop.dialogs import DialogSelection
 from Auvra.desktop.project_host import NativeProjectHost
 from Auvra.desktop.previews import PreviewStore
+from Auvra.host.dispatcher import HostOperationError
+from Auvra.project.repository import ProjectRepository
 
 
 class _Dialogs:
@@ -38,8 +40,9 @@ class _Dialogs:
 
 
 class _NativeRecorder:
-    def __init__(self, *, fail_hydrate: bool = False) -> None:
+    def __init__(self, *, fail_hydrate: bool = False, fail_stage: bool = False) -> None:
         self.fail_hydrate = fail_hydrate
+        self.fail_stage = fail_stage
         self.hydrations = []
         self.validations = []
         self.closed = []
@@ -56,6 +59,8 @@ class _NativeRecorder:
         self.closed.append(project_id)
 
     def stage_asset(self, asset_id, stream):
+        if self.fail_stage:
+            raise RuntimeError("native asset staging failed")
         stream.read()
 
 
@@ -325,22 +330,156 @@ class NativeProjectHostTests(unittest.TestCase):
         self.assertEqual(native.validations[-1][1], 1)
 
     def test_durable_project_wins_when_native_rehydration_fails(self) -> None:
-        native = _NativeRecorder(fail_hydrate=True)
-        self.host.set_native_engine_host(native)
         created = self.host.handle("project.create", {"name": "RecoveryWorld"})
-        changed = self.host.handle("project.applyChanges", {
+        project_path = self.host.service.active.path
+        native = _NativeRecorder(fail_hydrate=True)
+        self.host._native_engine = native
+        self.host.drain_events()
+        with self.assertRaises(HostOperationError) as raised:
+            self.host.handle("project.applyChanges", {
+                "projectId": created["projectId"], "expectedRevision": created["revision"],
+                "changes": [{
+                    "domain": "metadata", "documentId": "project", "operation": "upsert",
+                    "document": {"id": "project", "name": "Persisted"},
+                }],
+            })
+        self.assertEqual(raised.exception.code, "recovery_required")
+        self.assertIsNone(self.host.service.active)
+        events = self.host.drain_events()
+        self.assertFalse(any(name in {"project.opened", "project.revision", "project.dirty"} for name, _ in events))
+        self.assertEqual([name for name, _ in events[-2:]], ["project.closed", "project.status"])
+        self.assertTrue(all(payload["projectId"] is None for _, payload in events[-2:]))
+        self.assertTrue(project_path.exists())
+        self.host.set_native_engine_host(None)
+        self.host.service.open(project_path)
+        snapshot = self.host.service.get_snapshot(["metadata"], page_size=10)
+        self.assertEqual(snapshot.domains["metadata"]["documents"][0]["name"], "Persisted")
+
+    def _assert_native_failure(self, method: str, payload: dict, project_path: Path | None = None) -> None:
+        self.host.drain_events()
+        with self.assertRaises(HostOperationError) as raised:
+            self.host.handle(method, payload)
+        self.assertEqual(raised.exception.code, "recovery_required")
+        self.assertIsNone(self.host.service.active)
+        events = self.host.drain_events()
+        self.assertFalse(any(name in {"project.opened", "project.revision", "project.dirty"} for name, _ in events))
+        self.assertEqual([name for name, _ in events[-2:]], ["project.closed", "project.status"])
+        self.assertTrue(all(payload["projectId"] is None for _, payload in events[-2:]))
+        self.assertTrue(all(payload["status"] == "closed" for _, payload in events[-2:]))
+        if project_path is not None:
+            self.assertTrue(project_path.exists())
+
+    def test_native_hydration_failure_fail_closes_create_open_and_open_recent(self) -> None:
+        native = _NativeRecorder(fail_hydrate=True)
+        self.host._native_engine = native
+        create_path = self.root / "projects" / "CreateFailure"
+        self._assert_native_failure("project.create", {"name": "CreateFailure"}, create_path)
+        self.assertEqual(native.closed, [mock.ANY])
+
+        self.host._native_engine = None
+        created = self.host.handle("project.create", {"name": "OpenFailure"})
+        open_path = self.host.service.active.path
+        self.host.handle("project.close", {
+            "projectId": created["projectId"], "expectedRevision": created["revision"],
+        })
+        self.host._native_engine = native
+        with mock.patch.object(self.host.dialogs, "choose_open_project", return_value=DialogSelection(open_path / "OpenFailure.auvra")):
+            self._assert_native_failure("project.open", {"projectHandle": "dialog"}, open_path)
+
+        self.host._native_engine = None
+        recent = self.host.service.open(open_path)
+        recent_id = recent.project_id
+        self.host.service.close()
+        self.host._native_engine = native
+        self._assert_native_failure("project.openRecent", {"recentId": recent_id}, open_path)
+
+    def test_native_hydration_failure_fail_closes_save_as_and_apply_changes(self) -> None:
+        created = self.host.handle("project.create", {"name": "MutationFailure"})
+        project_path = self.host.service.active.path
+        native = _NativeRecorder(fail_hydrate=True)
+        self.host._native_engine = native
+        self._assert_native_failure("project.applyChanges", {
             "projectId": created["projectId"], "expectedRevision": created["revision"],
             "changes": [{
                 "domain": "metadata", "documentId": "project", "operation": "upsert",
                 "document": {"id": "project", "name": "Persisted"},
             }],
+        }, project_path)
+
+        self.host._native_engine = None
+        restored = self.host.service.open(project_path)
+        self.host._native_engine = native
+        destination = self.root / "projects" / "MutationFailure-copy"
+        with mock.patch.object(self.host.dialogs, "choose_save_as_location", return_value=DialogSelection(destination)):
+            self._assert_native_failure("project.saveAs", {
+                "projectId": restored.project_id, "expectedRevision": restored.revision, "name": "MutationFailure-copy",
+            }, destination)
+
+    def test_native_stage_failure_fail_closes_import_pack_and_legacy(self) -> None:
+        source_dir = self.root / "source-project"
+        source = ProjectRepository.create(source_dir, "Source")
+        try:
+            asset = source.assets.put_stream(io.BytesIO(b"asset-bytes"), name="asset.glb")
+            source.apply_changes({"models": [{"id": "model", "name": "Model", "assetId": asset.asset_id}]}, expected_revision=0)
+            source.save()
+            pack = self.root / "source.auvrapack"
+            source.export_pack(pack)
+        finally:
+            source.close()
+        destination = self.root / "projects" / "ImportedPackFailure"
+        native = _NativeRecorder(fail_stage=True)
+        self.host._native_engine = native
+        with mock.patch.object(self.host.dialogs, "choose_import_pack", return_value=DialogSelection(pack)), \
+                mock.patch.object(self.host.dialogs, "choose_create_location", return_value=DialogSelection(destination)):
+            self._assert_native_failure("project.importPack", {"sourceHandle": "pack"}, destination)
+
+        self.host._native_engine = None
+        created = self.host.handle("project.create", {"name": "LegacyFailure"})
+        legacy_path = self.host.service.active.path
+        native.fail_hydrate = True
+        self.host._native_engine = native
+        report = type("Report", (), {})()
+        with mock.patch.object(self.host.dialogs, "choose_import_legacy", return_value=DialogSelection(self.root / "legacy.forge")), \
+                mock.patch.object(self.host.dialogs, "choose_create_location", return_value=DialogSelection(self.root / "projects" / "LegacyFailure-copy")), \
+                mock.patch.object(self.host.service, "migrate_legacy", return_value=(self.host.service.active.status, report)):
+            self._assert_native_failure("project.importLegacy", {"sourceHandle": "legacy"}, legacy_path)
+
+    def test_native_hydration_uses_normalized_quaternion_without_mutating_authored_euler(self) -> None:
+        import math
+
+        native = _NativeRecorder()
+        self.host.set_native_engine_host(native)
+        created = self.host.handle("project.create", {"name": "RotationBoundary"})
+        authored_rotation = [0.2, -0.4, math.pi / 2]
+        self.host.handle("project.applyChanges", {
+            "projectId": created["projectId"], "expectedRevision": created["revision"],
+            "changes": [{
+                "domain": "levels", "documentId": "level", "operation": "upsert",
+                "document": {"id": "level", "name": "Level"},
+            }, {
+                "domain": "objects", "documentId": "object", "operation": "upsert",
+                "document": {
+                    "id": "object", "levelId": "level", "name": "Object", "type": "prop",
+                    "position": [0, 0, 0], "rotation": authored_rotation, "scale": [1, 1, 1],
+                },
+            }],
         })
-        self.assertEqual(changed["revision"], 1)
+        native_object = native.hydrations[-1][2]["objects"]["documents"][0]
+        self.assertEqual(len(native_object["rotation"]), 4)
+        self.assertAlmostEqual(sum(value * value for value in native_object["rotation"]), 1.0, places=12)
+        expected_quaternion = [
+            -0.07059288589999412,
+            -0.20896434210788314,
+            0.6755249097756644,
+            0.7035741925769524,
+        ]
+        for actual, expected in zip(native_object["rotation"], expected_quaternion):
+            self.assertAlmostEqual(actual, expected, places=12)
+        self.assertNotEqual(native_object["rotation"], authored_rotation)
         snapshot = self.host.handle("project.getSnapshot", {
-            "projectId": created["projectId"], "domain": "metadata", "pageSize": 10,
+            "projectId": created["projectId"], "domain": "objects", "pageSize": 10,
         })
-        self.assertEqual(snapshot["domains"]["metadata"]["documents"][0]["name"], "Persisted")
-        self.assertTrue(any(name == "project.recovery" for name, _ in self.host.drain_events()))
+        self.assertEqual(snapshot["domains"]["objects"]["documents"][0]["rotation"], authored_rotation)
 
     def test_import_pack_and_legacy_each_hydrate_once(self) -> None:
         native = _NativeRecorder()

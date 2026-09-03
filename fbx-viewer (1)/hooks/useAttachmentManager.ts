@@ -9,6 +9,7 @@ import { projectService } from '../utils/projectService';
 import { isAbortError, useOperationActions } from '../context/OperationContext';
 import { useNotification } from '../context/NotificationContext';
 import { assetDiagnosticAttributes, frontendDiagnostics } from '../diagnostics/runtime';
+import { editorSession, type EditorSessionLease } from '../utils/editorSession';
 
 export const useAttachmentManager = (
   models: LoadedModelData[],
@@ -19,20 +20,36 @@ export const useAttachmentManager = (
   const { addNotification } = useNotification();
   
   // Refs for debouncing DB updates
-  const pendingUpdatesRef = useRef<Map<string, any>>(new Map());
+  const pendingUpdatesRef = useRef<Map<string, { updates: Partial<AttachmentData>; lease: EditorSessionLease }>>(new Map());
   const saveTimeoutRef = useRef<any>(null);
+  const commitInFlightRef = useRef<Promise<void> | null>(null);
 
   // Helper to commit updates to DB
-  const commitUpdates = useCallback(async () => {
-      if (pendingUpdatesRef.current.size === 0) return;
-      const batch = new Map<string, any>(pendingUpdatesRef.current);
-      pendingUpdatesRef.current.clear();
-      
-      try {
-          for (const [id, updates] of batch.entries()) await dbOperations.updateAttachment(id, updates);
-      } catch (e) {
-          frontendDiagnostics.failure('attachment_batch_save_failed', e);
-      }
+  const commitUpdates = useCallback((): Promise<void> => {
+      if (commitInFlightRef.current) return commitInFlightRef.current;
+      const run = async () => {
+          const batch = new Map<string, { updates: Partial<AttachmentData>; lease: EditorSessionLease }>(pendingUpdatesRef.current);
+          for (const [id, pending] of batch.entries()) {
+              // A transition invalidates the lease. Discarding stale work is
+              // safer than allowing a timer from project A to write project B.
+              if (!editorSession.isSameSession(pending.lease)) {
+                  if (pendingUpdatesRef.current.get(id) === pending) pendingUpdatesRef.current.delete(id);
+                  continue;
+              }
+              try {
+                  await dbOperations.updateAttachment(id, pending.updates, pending.lease);
+                  if (pendingUpdatesRef.current.get(id) === pending) pendingUpdatesRef.current.delete(id);
+              } catch (error) {
+                  // Keep the exact failed entry for a later retry while its
+                  // project session remains valid; never lose a user edit
+                  // merely because a sequential flush failed.
+                  frontendDiagnostics.failure('attachment_batch_save_failed', error);
+              }
+          }
+      };
+      const promise = run().finally(() => { commitInFlightRef.current = null; });
+      commitInFlightRef.current = promise;
+      return promise;
   }, []);
 
   // Flush updates on unmount
@@ -40,13 +57,26 @@ export const useAttachmentManager = (
     return () => {
         if (saveTimeoutRef.current) {
             clearTimeout(saveTimeoutRef.current);
-            commitUpdates();
+            saveTimeoutRef.current = null;
+            void commitUpdates();
         }
+        pendingUpdatesRef.current.clear();
     };
   }, [commitUpdates]);
 
+  // Project transitions invalidate every delayed attachment write before the
+  // replacement project can become ready.
+  useEffect(() => editorSession.subscribe(() => {
+      if (editorSession.getSnapshot().phase !== 'ready') {
+          if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+          saveTimeoutRef.current = null;
+          pendingUpdatesRef.current.clear();
+      }
+  }), []);
+
   const addAttachment = useCallback(async (file: File, parentModelId: string) => {
     projectService.assertWritable();
+    const lease = editorSession.requireWritable(editorSession.captureReady(), projectService.getStatus());
     const assetAlias = frontendDiagnostics.nextAssetAlias();
     const diagnostic = assetDiagnosticAttributes(file, 'attachment', assetAlias);
     const operation = startOperation({
@@ -102,8 +132,9 @@ export const useAttachmentManager = (
               if (progress >= 1) operation.lockCancellation();
               operation.update({ progress: 0.72 + progress * 0.25, detail: progress >= 1 ? 'Finalizing project record' : 'Saving attachment source' });
             },
-        });
+        }, lease);
         if (operation.signal.aborted) throw new DOMException('Attachment import was cancelled.', 'AbortError');
+        if (!editorSession.isSameSession(lease)) throw new DOMException('Attachment import was superseded.', 'AbortError');
         operation.update({ phase: 'library_publication', progress: 0.98, detail: 'Publishing attachment', diagnostic });
         setAttachments(prev => [...prev, newAttachment]);
         loaded = null;
@@ -148,6 +179,7 @@ export const useAttachmentManager = (
 
   const updateAttachment = useCallback((id: string, updates: Partial<AttachmentData>) => {
       projectService.assertWritable();
+      const lease = editorSession.requireWritable(editorSession.captureReady(), projectService.getStatus());
       // 1. Update React State Immediately
       setAttachments(prev => prev.map(att => 
         att.id === id ? { ...att, ...updates } : att
@@ -161,8 +193,11 @@ export const useAttachmentManager = (
       if (updates.scale !== undefined) dbFields.scale = updates.scale;
       
       if (Object.keys(dbFields).length > 0) {
-          const existing = pendingUpdatesRef.current.get(id) || {};
-          pendingUpdatesRef.current.set(id, { ...existing, ...dbFields });
+          const existing = pendingUpdatesRef.current.get(id);
+          pendingUpdatesRef.current.set(id, {
+            updates: { ...(existing?.updates || {}), ...dbFields },
+            lease,
+          });
 
           if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
           saveTimeoutRef.current = setTimeout(commitUpdates, 1500);
@@ -171,12 +206,14 @@ export const useAttachmentManager = (
 
   const removeAttachment = useCallback(async (id: string) => {
       projectService.assertWritable();
+      const lease = editorSession.requireWritable(editorSession.captureReady(), projectService.getStatus());
       if (pendingUpdatesRef.current.has(id)) {
           pendingUpdatesRef.current.delete(id);
       }
       
       try {
-          await dbOperations.deleteAttachment(id);
+          await dbOperations.deleteAttachment(id, lease);
+          if (!editorSession.isSameSession(lease)) return;
           setAttachments(prev => {
               const toRemove = prev.find(a => a.id === id);
               if (toRemove) {

@@ -1,14 +1,33 @@
 
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useSyncExternalStore } from 'react';
 import { LevelObject, LoadedModelData, LevelObjectType, LevelData, LevelBlueprintData, TerrainData } from '../types';
 import { dbOperations } from '../utils/db';
 import { projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
 import { frontendDiagnostics } from '../diagnostics/runtime';
+import { editorSession, selectObjectsForLevel, type EditorSessionLease } from '../utils/editorSession';
 
 const DEFAULT_LEVEL_ID = 'default_level';
+const EMPTY_BLUEPRINT: LevelBlueprintData = { nodes: [], connections: [], variables: [] };
 
-const syncStateToDB = async (currentState: LevelObject[], nextState: LevelObject[]) => {
+/** The World Editor's visible level data is one transaction-shaped value. */
+interface LevelWorkingState {
+    levels: LevelData[];
+    currentLevelId: string | null;
+    levelObjects: LevelObject[];
+    activeLevelBlueprint: LevelBlueprintData;
+}
+
+const EMPTY_WORKING_STATE: LevelWorkingState = {
+    levels: [],
+    currentLevelId: null,
+    levelObjects: [],
+    activeLevelBlueprint: EMPTY_BLUEPRINT,
+};
+
+const syncStateToDB = async (currentState: LevelObject[], nextState: LevelObject[], lease?: EditorSessionLease) => {
+    if (lease && !editorSession.isCurrent(lease)) return false;
+    let activeLease = lease;
     const currentMap = new Map(currentState.map(o => [o.id, o]));
     const nextMap = new Map(nextState.map(o => [o.id, o]));
 
@@ -39,21 +58,39 @@ const syncStateToDB = async (currentState: LevelObject[], nextState: LevelObject
         }
     }
 
-    for (const id of toDelete) await dbOperations.deleteLevelObject(id);
-    for (const object of toAdd) await dbOperations.addLevelObject(object);
-    for (const object of toUpdate) await dbOperations.updateLevelObject(object.id, object);
+    for (const id of toDelete) {
+        if (activeLease && !editorSession.isCurrent(activeLease)) return false;
+        await dbOperations.deleteLevelObject(id, activeLease);
+        if (lease && !editorSession.isSameSession(lease)) return false;
+        activeLease = editorSession.captureReady() || undefined;
+    }
+    for (const object of toAdd) {
+        if (activeLease && !editorSession.isCurrent(activeLease)) return false;
+        await dbOperations.addLevelObject(object, activeLease);
+        if (lease && !editorSession.isSameSession(lease)) return false;
+        activeLease = editorSession.captureReady() || undefined;
+    }
+    for (const object of toUpdate) {
+        if (activeLease && !editorSession.isCurrent(activeLease)) return false;
+        await dbOperations.updateLevelObject(object.id, object, activeLease);
+        if (lease && !editorSession.isSameSession(lease)) return false;
+        activeLease = editorSession.captureReady() || undefined;
+    }
+    return true;
 };
 
 export const useLevelManager = (models: LoadedModelData[]) => {
-  const [levelObjects, setLevelObjects] = useState<LevelObject[]>([]);
-  const [levels, setLevels] = useState<LevelData[]>([]);
-  const [currentLevelId, setCurrentLevelId] = useState<string | null>(null);
-  
-  const [activeLevelBlueprint, setActiveLevelBlueprint] = useState<LevelBlueprintData>({
-      nodes: [],
-      connections: [],
-      variables: []
-  });
+  const session = editorSession;
+  const sessionSnapshot = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
+  const [workingState, setWorkingState] = useState<LevelWorkingState>(EMPTY_WORKING_STATE);
+  const { levels, currentLevelId, levelObjects, activeLevelBlueprint } = workingState;
+  const currentLevelIdRef = useRef<string | null>(null);
+  const getCurrentLevelId = useCallback(() => currentLevelIdRef.current, []);
+
+  const replaceWorkingState = useCallback((next: LevelWorkingState) => {
+      currentLevelIdRef.current = next.currentLevelId;
+      setWorkingState(next);
+  }, []);
 
   const { addNotification } = useNotification();
 
@@ -68,45 +105,50 @@ export const useLevelManager = (models: LoadedModelData[]) => {
   };
 
   const snapshotHistory = useCallback(() => {
+      session.requireCurrent(session.captureReady());
       const snapshot = JSON.parse(JSON.stringify(levelObjects));
       history.current.past.push(snapshot);
       if (history.current.past.length > 50) history.current.past.shift();
       history.current.future = []; 
       updateHistoryState();
-  }, [levelObjects]);
+  }, [levelObjects, session]);
 
   const undo = useCallback(async () => {
+      const lease = session.captureReady();
+      session.requireCurrent(lease);
       if (history.current.past.length === 0) return;
       const currentSnapshot = JSON.parse(JSON.stringify(levelObjects));
       history.current.future.push(currentSnapshot);
       const previousState = history.current.past.pop();
       if (previousState) {
-          await syncStateToDB(levelObjects, previousState);
-          setLevelObjects(previousState);
+          if (!await syncStateToDB(levelObjects, previousState, lease) || !session.isSameSession(lease)) return;
+          setWorkingState(prev => ({ ...prev, levelObjects: previousState }));
           addNotification({ message: "Undo", type: 'info', duration: 800 });
       }
       updateHistoryState();
-  }, [levelObjects, addNotification]);
+  }, [levelObjects, addNotification, session]);
 
   const redo = useCallback(async () => {
+      const lease = session.captureReady();
+      session.requireCurrent(lease);
       if (history.current.future.length === 0) return;
       const currentSnapshot = JSON.parse(JSON.stringify(levelObjects));
       history.current.past.push(currentSnapshot);
       const nextState = history.current.future.pop();
       if (nextState) {
-          await syncStateToDB(levelObjects, nextState);
-          setLevelObjects(nextState);
+          if (!await syncStateToDB(levelObjects, nextState, lease) || !session.isSameSession(lease)) return;
+          setWorkingState(prev => ({ ...prev, levelObjects: nextState }));
           addNotification({ message: "Redo", type: 'info', duration: 800 });
       }
       updateHistoryState();
-  }, [levelObjects, addNotification]);
+  }, [levelObjects, addNotification, session]);
 
   useEffect(() => {
       history.current = { past: [], future: [] };
       updateHistoryState();
   }, [currentLevelId]);
 
-  const pendingUpdatesRef = useRef<Map<string, any>>(new Map());
+  const pendingUpdatesRef = useRef<Map<string, { updates: Partial<LevelObject>; lease: EditorSessionLease }>>(new Map());
   const saveTimeoutRef = useRef<any>(null);
 
   const commitUpdates = useCallback(async () => {
@@ -114,25 +156,44 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       const batch = new Map<string, any>(pendingUpdatesRef.current);
       pendingUpdatesRef.current.clear();
       try {
-          for (const [id, updates] of batch.entries()) await dbOperations.updateLevelObject(id, updates);
+          for (const [id, pending] of batch.entries()) {
+              if (!session.isCurrent(pending.lease)) continue;
+              await dbOperations.updateLevelObject(id, pending.updates, pending.lease);
+              if (!session.isSameSession(pending.lease)) continue;
+          }
       } catch (e) {
           frontendDiagnostics.failure('level_batch_persist_failed', e);
       }
-  }, []);
+  }, [session]);
+
+  useEffect(() => session.subscribe(() => {
+      if (session.getSnapshot().phase === 'transitioning') {
+          if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+          saveTimeoutRef.current = null;
+          pendingUpdatesRef.current.clear();
+      }
+  }), [session]);
 
   useEffect(() => {
     return () => {
         if (saveTimeoutRef.current) {
             clearTimeout(saveTimeoutRef.current);
-            commitUpdates();
+            saveTimeoutRef.current = null;
         }
+        pendingUpdatesRef.current.clear();
     };
-  }, [commitUpdates]);
+  }, []);
 
-  const initLevels = useCallback(async () => {
-      if (projectService.getStatus().projectId) return;
+  const initLevels = useCallback(async (signal?: AbortSignal) => {
+      const initialSession = session.getSnapshot();
+      if (projectService.getStatus().projectId || initialSession.phase !== 'closed') return;
+      const isCurrentLegacySession = () => !signal?.aborted
+          && !projectService.getStatus().projectId
+          && session.getSnapshot().phase === 'closed'
+          && session.getSnapshot().generation === initialSession.generation;
       try {
           const storedLevels = await dbOperations.getAllLevels();
+          if (!isCurrentLegacySession()) return;
           if (storedLevels.length === 0) {
               const defaultLevel: LevelData = {
                   id: DEFAULT_LEVEL_ID,
@@ -141,37 +202,54 @@ export const useLevelManager = (models: LoadedModelData[]) => {
                   blueprint: { nodes: [], connections: [], variables: [] }
               };
               await dbOperations.addLevel(defaultLevel);
-              setLevels([defaultLevel]);
-              setCurrentLevelId(defaultLevel.id);
-              setActiveLevelBlueprint(defaultLevel.blueprint!);
+              if (!isCurrentLegacySession()) return;
+              replaceWorkingState({
+                  levels: [defaultLevel],
+                  currentLevelId: defaultLevel.id,
+                  levelObjects: [],
+                  activeLevelBlueprint: defaultLevel.blueprint || EMPTY_BLUEPRINT,
+              });
           } else {
-              setLevels(storedLevels);
               if (!currentLevelId) {
-                  setCurrentLevelId(storedLevels[0].id);
-                  setActiveLevelBlueprint(storedLevels[0].blueprint || { nodes: [], connections: [], variables: [] });
+                  const firstLevel = storedLevels[0];
+                  replaceWorkingState({
+                      levels: storedLevels,
+                      currentLevelId: firstLevel.id,
+                      levelObjects: [],
+                      activeLevelBlueprint: firstLevel.blueprint || EMPTY_BLUEPRINT,
+                  });
               }
           }
       } catch (e) {
-          frontendDiagnostics.failure('level_initialize_failed', e);
+          if (isCurrentLegacySession()) frontendDiagnostics.failure('level_initialize_failed', e);
       }
-  }, [currentLevelId]);
+  }, [currentLevelId, replaceWorkingState, session]);
 
   useEffect(() => {
-      if (currentLevelId) {
-          if (!projectService.getStatus().projectId) {
-              dbOperations.getLevelObjects(currentLevelId).then(objects => {
-                  setLevelObjects(objects);
-              }).catch((error) => frontendDiagnostics.failure('level_initialize_persist_failed', error));
-          }
-          
-          const lvl = levels.find(l => l.id === currentLevelId);
-          if (lvl) {
-              setActiveLevelBlueprint(lvl.blueprint || { nodes: [], connections: [], variables: [] });
-          }
+      if (!currentLevelId || sessionSnapshot.phase !== 'closed') return;
+      if (!projectService.getStatus().projectId) {
+      const controller = new AbortController();
+      const generation = sessionSnapshot.generation;
+      void dbOperations.getLevelObjects(currentLevelId).then(objects => {
+          const currentSession = session.getSnapshot();
+          if (controller.signal.aborted
+              || projectService.getStatus().projectId
+              || currentSession.phase !== 'closed'
+              || currentSession.generation !== generation
+              || currentLevelIdRef.current !== currentLevelId) return;
+          setWorkingState(prev => prev.currentLevelId === currentLevelId
+              ? { ...prev, levelObjects: selectObjectsForLevel(objects, currentLevelId) }
+              : prev);
+      }).catch((error) => {
+          if (!controller.signal.aborted) frontendDiagnostics.failure('level_initialize_persist_failed', error);
+      });
+      return () => controller.abort();
       }
-  }, [currentLevelId, levels]);
+  }, [currentLevelId, session, sessionSnapshot.generation, sessionSnapshot.phase]);
 
   const createLevel = useCallback(async (name: string) => {
+      const lease = session.captureReady();
+      session.requireCurrent(lease);
       projectService.assertWritable();
       const newLevel: LevelData = {
           id: crypto.randomUUID(),
@@ -181,34 +259,76 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       };
       
       try {
-          await dbOperations.addLevel(newLevel);
-          setLevels(prev => [...prev, newLevel]);
+          await dbOperations.addLevel(newLevel, lease);
+          session.requireSameSession(lease);
+          setWorkingState(prev => ({ ...prev, levels: [...prev.levels, newLevel] }));
           addNotification({ message: `Level "${name}" created.`, type: 'success' });
       } catch (e) {
           frontendDiagnostics.failure('level_create_failed', e);
           addNotification({ message: "Failed to create level.", type: 'error' });
       }
-  }, [addNotification]);
+  }, [addNotification, session]);
 
   const loadLevel = useCallback(async (id: string) => {
-      if (id === currentLevelId) return;
+      const lease = session.captureReady();
+      session.requireCurrent(lease);
+      if (id === currentLevelIdRef.current) return;
+      if (!levels.some((level) => level.id === id)) throw new Error('Cannot load an unknown level.');
+      const authoritative = projectService.getStatus();
+      if (!authoritative.projectId) throw new Error('Cannot load a level without an open native project.');
+      session.requireWritable(lease, authoritative);
+      const transition = session.beginTransition();
       if (saveTimeoutRef.current) {
           clearTimeout(saveTimeoutRef.current);
-          await commitUpdates();
+          saveTimeoutRef.current = null;
+          pendingUpdatesRef.current.clear();
       }
-      setCurrentLevelId(id);
-      addNotification({ message: "Level loaded.", type: 'info' });
-  }, [currentLevelId, commitUpdates, addNotification]);
+      try {
+          // Native project data is authoritative for an open project. Capture
+          // its identity before the asynchronous read and prove it again
+          // before publishing anything from the replacement level.
+          const allObjects = await dbOperations.getAllNativeLevelObjects();
+          if (!session.isTransitionCurrent(transition)) return;
+          const afterRead = projectService.getStatus();
+          if (afterRead.projectId !== authoritative.projectId
+              || afterRead.revision !== authoritative.revision) {
+              throw new Error('Level transition was superseded by a project revision change.');
+          }
+          if (!session.isTransitionCurrent(transition)) return;
+          const targetLevel = levels.find((level) => level.id === id);
+          if (!targetLevel) throw new Error('Cannot load an unknown level.');
+          const targetObjects = selectObjectsForLevel(allObjects, id);
+          const nextState: LevelWorkingState = {
+              levels,
+              currentLevelId: id,
+              levelObjects: targetObjects,
+              activeLevelBlueprint: targetLevel.blueprint || EMPTY_BLUEPRINT,
+          };
+          // One React update publishes the ID, complete object set, and
+          // blueprint together. The session is only made ready afterwards.
+          replaceWorkingState(nextState);
+          if (!session.complete(transition, authoritative.projectId, id, authoritative.revision)) {
+              throw new Error('Level transition was superseded.');
+          }
+          addNotification({ message: "Level loaded.", type: 'info' });
+      } catch (error) {
+          session.fail(transition);
+          throw error;
+      }
+  }, [levels, addNotification, replaceWorkingState, session]);
 
   const deleteLevel = useCallback(async (id: string) => {
+      const lease = session.captureReady();
+      session.requireCurrent(lease);
       projectService.assertWritable();
       try {
-          await dbOperations.deleteLevel(id);
-          setLevels(prev => prev.filter(l => l.id !== id));
+          await dbOperations.deleteLevel(id, lease);
+          session.requireSameSession(lease);
+          setWorkingState(prev => ({ ...prev, levels: prev.levels.filter(l => l.id !== id) }));
           if (id === currentLevelId) {
               const remaining = levels.filter(l => l.id !== id);
               if (remaining.length > 0) {
-                  loadLevel(remaining[0].id);
+                  void loadLevel(remaining[0].id);
               } else {
                   initLevels(); 
               }
@@ -218,7 +338,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
           frontendDiagnostics.failure('level_delete_failed', e);
           addNotification({ message: "Failed to delete level.", type: 'error' });
       }
-  }, [currentLevelId, levels, loadLevel, initLevels, addNotification]);
+  }, [currentLevelId, levels, loadLevel, initLevels, addNotification, session]);
 
   const addLevelObject = useCallback(async (
       modelId: string, 
@@ -228,7 +348,10 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       type: LevelObjectType = 'prop',
       extraData?: any
   ): Promise<string | undefined> => {
-    if (!currentLevelId) return undefined;
+    const lease = session.captureReady();
+    session.requireCurrent(lease);
+    const activeLevelId = currentLevelIdRef.current;
+    if (!activeLevelId || lease.levelId !== activeLevelId) return undefined;
     snapshotHistory();
     
     // Validate model if type is prop/foliage
@@ -240,7 +363,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
 
     const newObj: LevelObject = {
         id: crypto.randomUUID(),
-        levelId: currentLevelId,
+        levelId: activeLevelId,
         modelId,
         name: type === 'spawn_point' ? 'Enemy Spawner' : 
               type === 'audio_emitter' ? 'Audio Emitter' :
@@ -258,69 +381,100 @@ export const useLevelManager = (models: LoadedModelData[]) => {
     };
 
     projectService.assertWritable();
-    setLevelObjects(prev => [...prev, newObj]);
-    
-    try { 
-        await dbOperations.addLevelObject(newObj); 
+    try {
+        await dbOperations.addLevelObject(newObj, lease);
+        if (!session.isSameSession(lease)) return undefined;
+          setWorkingState(prev => ({ ...prev, levelObjects: [...prev.levelObjects, newObj] }));
         return newObj.id;
     } catch(e) { 
         frontendDiagnostics.failure('level_object_add_failed', e);
         return undefined;
     }
-  }, [models, currentLevelId, snapshotHistory]);
+  }, [models, currentLevelId, snapshotHistory, session]);
 
   const removeLevelObject = useCallback(async (id: string) => {
+      const lease = session.captureReady();
+      session.requireCurrent(lease);
       projectService.assertWritable();
       snapshotHistory();
-      setLevelObjects(prev => prev.filter(o => o.id !== id));
-      try { await dbOperations.deleteLevelObject(id); } catch(e) { frontendDiagnostics.failure('level_object_delete_failed', e); }
-  }, [snapshotHistory]);
+      try {
+          await dbOperations.deleteLevelObject(id, lease);
+          if (!session.isSameSession(lease)) return;
+          setWorkingState(prev => ({ ...prev, levelObjects: prev.levelObjects.filter(o => o.id !== id) }));
+      } catch(e) { frontendDiagnostics.failure('level_object_delete_failed', e); }
+  }, [snapshotHistory, session]);
 
   const removeLevelObjects = useCallback(async (ids: string[]) => {
+      const lease = session.captureReady();
+      session.requireCurrent(lease);
       projectService.assertWritable();
       if (ids.length === 0) return;
       snapshotHistory();
-      setLevelObjects(prev => prev.filter(o => !ids.includes(o.id)));
-      try { for (const id of ids) await dbOperations.deleteLevelObject(id); } catch(e) { frontendDiagnostics.failure('level_object_batch_delete_failed', e); }
-  }, [snapshotHistory]);
+      try {
+          let activeLease: EditorSessionLease = lease;
+          for (const id of ids) {
+              session.requireCurrent(activeLease);
+              await dbOperations.deleteLevelObject(id, activeLease);
+              if (!session.isSameSession(lease)) return;
+              activeLease = session.captureReady()!;
+          }
+          if (!session.isSameSession(lease)) return;
+          setWorkingState(prev => ({ ...prev, levelObjects: prev.levelObjects.filter(o => !ids.includes(o.id)) }));
+      } catch(e) { frontendDiagnostics.failure('level_object_batch_delete_failed', e); }
+  }, [snapshotHistory, session]);
 
   const updateLevelObject = useCallback((id: string, updates: Partial<LevelObject>) => {
+      const lease = session.captureReady();
+      session.requireCurrent(lease);
       projectService.assertWritable();
-      setLevelObjects(prev => prev.map(o => o.id === id ? { ...o, ...updates } : o));
-      const existing = pendingUpdatesRef.current.get(id) || {};
-      pendingUpdatesRef.current.set(id, { ...existing, ...updates });
+      setWorkingState(prev => ({
+          ...prev,
+          levelObjects: prev.levelObjects.map(o => o.id === id ? { ...o, ...updates } : o),
+      }));
+      const existing = pendingUpdatesRef.current.get(id);
+      pendingUpdatesRef.current.set(id, { updates: { ...(existing?.updates || {}), ...updates }, lease });
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = setTimeout(commitUpdates, 1500);
-  }, [commitUpdates]);
+  }, [commitUpdates, session]);
 
   const updateLevelBlueprint = useCallback((data: Partial<LevelBlueprintData>) => {
+      const lease = session.captureReady();
+      session.requireCurrent(lease);
       projectService.assertWritable();
-      setActiveLevelBlueprint(prev => {
-          const next = { ...prev, ...data };
-          if (currentLevelId) {
-              const lvl = levels.find(l => l.id === currentLevelId);
-              if (lvl) {
-                  dbOperations.addLevel({ ...lvl, blueprint: next }).catch((error) => frontendDiagnostics.failure('level_blueprint_persist_failed', error));
-              }
+      const next = { ...activeLevelBlueprint, ...data };
+      setWorkingState(prev => ({
+          ...prev,
+          activeLevelBlueprint: next,
+          levels: prev.levels.map(level => level.id === currentLevelId
+              ? { ...level, blueprint: next }
+              : level),
+      }));
+      if (currentLevelId) {
+          const lvl = levels.find(l => l.id === currentLevelId);
+          if (lvl) {
+              dbOperations.addLevel({ ...lvl, blueprint: next }, lease).catch((error) => frontendDiagnostics.failure('level_blueprint_persist_failed', error));
           }
-          return next;
-      });
-  }, [currentLevelId, levels]);
+      }
+  }, [activeLevelBlueprint, currentLevelId, levels, session]);
 
   const hydrateProjectState = useCallback((nextLevels: LevelData[], nextObjects: LevelObject[], nextCurrentLevelId?: string | null) => {
       const selected = nextCurrentLevelId || nextLevels[0]?.id || null;
-      setLevels(nextLevels);
-      setCurrentLevelId(selected);
-      setLevelObjects(nextObjects.filter((object) => !selected || object.levelId === selected));
       const level = nextLevels.find((item) => item.id === selected);
-      setActiveLevelBlueprint(level?.blueprint || { nodes: [], connections: [], variables: [] });
+      replaceWorkingState({
+          levels: nextLevels,
+          currentLevelId: selected,
+          levelObjects: selected ? selectObjectsForLevel(nextObjects, selected) : [],
+          activeLevelBlueprint: level?.blueprint || EMPTY_BLUEPRINT,
+      });
       history.current = { past: [], future: [] };
       updateHistoryState();
-  }, []);
+  }, [replaceWorkingState]);
 
   useEffect(() => {
-      initLevels();
-  }, []);
+      const controller = new AbortController();
+      void initLevels(controller.signal);
+      return () => controller.abort();
+  }, [initLevels]);
 
   return frontendDiagnostics.traceActions('level_manager', {
       levels,
@@ -329,7 +483,6 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       loadLevel,
       deleteLevel,
       levelObjects,
-      setLevelObjects,
       addLevelObject,
       removeLevelObject,
       removeLevelObjects,
@@ -341,6 +494,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       redo,
       canUndo,
       canRedo,
-      snapshotHistory
+      snapshotHistory,
+      getCurrentLevelId,
   });
 };

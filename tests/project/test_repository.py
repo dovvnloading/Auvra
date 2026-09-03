@@ -383,7 +383,7 @@ class SchemaTests(unittest.TestCase):
         fixtures = {
             "metadata":{"id":"m","name":"Project","description":"D","settings":{"grid":True}},
             "worlds":{"id":"w","name":"World","levels":["l"]}, "scenes":{"id":"s","name":"Scene","levelId":"l","objects":[]},
-            "levels":{"id":"l","name":"Level","createdAt":1}, "objects":{"id":"o","levelId":"l","modelId":"m","name":"Object","type":"prop","position":[0,0,0]},
+            "levels":{"id":"l","name":"Level","createdAt":1}, "objects":{"id":"o","levelId":"l","modelId":"m","name":"Object","type":"prop","position":[0,0,0],"rotation":[0,0,0],"scale":[1,1,1]},
             "environment":{"id":"e","name":"Environment","settings":{"exposure":1}}, "models":{"id":"m","name":"Model","assetId":asset},
             "animations":{"id":"an","name":"Anim","assetId":asset,"modelId":"m"}, "attachments":{"id":"at","name":"Attachment","assetId":asset,"parentModelId":"m","position":[0,0,0]},
             "sockets":{"id":"so","name":"Socket","parentModelId":"m","position":[0,0,0]}, "textures":{"id":"t","name":"Texture","assetId":asset,"dimensions":{"width":1,"height":1}},
@@ -393,6 +393,57 @@ class SchemaTests(unittest.TestCase):
         }
         for domain, value in fixtures.items():
             document = {"schemaVersion":1,"documents":[value]}; validate_domain(domain, document); self.assertEqual(validate_domain(domain, json.loads(canonical_json(document))), document)
+
+    def test_object_transform_defaults_and_legacy_quaternion_are_canonicalized(self):
+        legacy = {"schemaVersion": 1, "documents": [{
+            "id": "legacy", "levelId": "level", "name": "Legacy", "type": "prop",
+            "position": [1, 2, 3], "rotation": [0, 0, 0, 2], "scale": [2, 3, 4],
+        }, {
+            "id": "defaults", "levelId": "level", "name": "Defaults", "type": "prop",
+        }]}
+        normalized = validate_domain("objects", legacy)
+        self.assertEqual(legacy["documents"][0]["rotation"], [0, 0, 0, 2])
+        self.assertEqual(normalized["documents"][0]["rotation"], [0.0, 0.0, 0.0])
+        self.assertEqual(normalized["documents"][1]["position"], [0.0, 0.0, 0.0])
+        self.assertEqual(normalized["documents"][1]["rotation"], [0.0, 0.0, 0.0])
+        self.assertEqual(normalized["documents"][1]["scale"], [1.0, 1.0, 1.0])
+
+    def test_object_transform_contract_rejects_invalid_shapes_values_and_bounds(self):
+        base = {"id": "object", "levelId": "level", "name": "Object", "type": "prop",
+                "position": [0, 0, 0], "rotation": [0, 0, 0], "scale": [1, 1, 1]}
+        cases = (
+            ("position", [0, 0]), ("position", [0, 0, 0, 0]),
+            ("position", [1_000_001, 0, 0]), ("position", [float("inf"), 0, 0]),
+            ("rotation", [0, 0]), ("rotation", [0, 0, 0, 0]),
+            ("rotation", [float("nan"), 0, 0]), ("rotation", [0, 0, 0, 0, 1]),
+            ("scale", [0, 1, 1]), ("scale", [0.00009, 1, 1]),
+            ("scale", [1_000_001, 1, 1]), ("scale", [1, True, 1]),
+        )
+        for field, replacement in cases:
+            candidate = {"schemaVersion": 1, "documents": [{**base, field: replacement}]}
+            with self.assertRaises(ValueError, msg=f"{field}={replacement!r}"):
+                validate_domain("objects", candidate)
+
+    def test_object_quaternion_conversion_matches_three_xyz_radians(self):
+        # A 90-degree Z rotation has the same canonical Euler result in
+        # Three.js XYZ order, independent of the quaternion's magnitude.
+        candidate = {"schemaVersion": 1, "documents": [{
+            "id": "object", "levelId": "level", "name": "Object", "type": "prop",
+            "rotation": [0, 0, 2 ** -0.5, 2 ** -0.5],
+        }]}
+        result = validate_domain("objects", candidate)["documents"][0]
+        self.assertAlmostEqual(result["rotation"][0], 0.0, places=7)
+        self.assertAlmostEqual(result["rotation"][1], 0.0, places=7)
+        self.assertAlmostEqual(result["rotation"][2], 1.5707963267948966, places=7)
+
+    def test_three_value_rotation_is_never_guessed_to_be_degrees(self):
+        authored = [90, -180, 360]
+        candidate = {"schemaVersion": 1, "documents": [{
+            "id": "object", "levelId": "level", "name": "Object", "type": "prop",
+            "rotation": authored,
+        }]}
+        result = validate_domain("objects", candidate)["documents"][0]
+        self.assertEqual(result["rotation"], authored)
 
 class LegacyTests(unittest.TestCase):
     def test_legacy_source_is_not_modified(self):

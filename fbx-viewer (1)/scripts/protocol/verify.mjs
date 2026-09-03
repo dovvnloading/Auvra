@@ -142,10 +142,15 @@ const engineReloadSnapshot = await engineCall("engine-reload", "engine.getSnapsh
 if (!engineReloadSnapshot.ok || engineReloadSnapshot.result.entities.length !== 1 || engineReloadSnapshot.result.worldRevision !== 1) throw new Error("engine world did not survive editor reload");
 const interleavedBackend = new FakeHost("interleaved-session");
 const sentRevisions = [];
+const sentProjectMutationRevisions = [];
 const sharedHost = {
   get session() { return interleavedBackend.session; },
   get currentRevision() { return interleavedBackend.currentRevision; },
-  request(request) { sentRevisions.push({ id: request.id, revision: request.revision, method: request.method }); return interleavedBackend.request(request); },
+  request(request) {
+    sentRevisions.push({ id: request.id, revision: request.revision, method: request.method });
+    if (request.method === "project.applyChanges") sentProjectMutationRevisions.push(request.payload.expectedRevision);
+    return interleavedBackend.request(request);
+  },
   subscribe(listener) { return interleavedBackend.subscribe(listener); },
 };
 const interleavedProject = new ProjectService(sharedHost);
@@ -156,6 +161,15 @@ await interleavedProject.create("Interleaved");
 await interleavedEngine.closeViewport();
 await interleavedProject.applyChanges([{ domain: "objects", operation: "upsert", id: "object-1", value: { id: "object-1" } }]);
 if (sentRevisions.map(({ revision }) => revision).join(",") !== "0,1,2,3") throw new Error("interleaved services sent a stale host revision");
+const firstQueuedMutation = interleavedProject.applyChanges([{ domain: "objects", operation: "upsert", id: "object-2", value: { id: "object-2" } }]);
+const staleQueuedMutation = interleavedProject.applyChanges([{ domain: "objects", operation: "upsert", id: "object-3", value: { id: "object-3" } }]);
+const queuedMutationResults = await Promise.allSettled([firstQueuedMutation, staleQueuedMutation]);
+if (queuedMutationResults[0].status !== "fulfilled" || queuedMutationResults[1].status !== "rejected") throw new Error("queued stale project mutation did not fail closed");
+if (sentProjectMutationRevisions.join(",") !== "0,1,1") throw new Error("project service rebased a caller's expected revision");
+if (!String(queuedMutationResults[1].reason?.message || queuedMutationResults[1].reason).includes("Project revision does not match")) throw new Error("queued stale mutation did not report revision conflict");
+const queuedFinalSnapshot = await interleavedProject.getSnapshot("objects");
+const queuedObjectIds = (queuedFinalSnapshot?.documents || []).map((document) => document.id).sort().join(",");
+if (queuedObjectIds !== "object-1,object-2") throw new Error("queued revision conflict allowed the stale mutation to overwrite the project");
 console.log("fake host behavior passed");
 ` , "utf8");
   let buildError;

@@ -6,6 +6,7 @@ from collections import defaultdict
 from dataclasses import asdict
 import errno
 import json
+import math
 from pathlib import Path
 import re
 import secrets
@@ -190,15 +191,73 @@ class NativeProjectHost:
             "animations": ("id", "assetId", "modelId"),
             "objects": ("id", "levelId", "modelId", "position", "rotation", "scale"),
         }
+        authored = {
+            domain: active.get_domain(domain)
+            for domain in fields
+        }
+        return self._native_domains_from_documents(authored, fields)
+
+    @staticmethod
+    def _euler_to_native_quaternion(rotation: Any) -> list[float]:
+        """Convert authored Three.js XYZ-radian Euler angles for native only.
+
+        Project files intentionally keep the editor-facing Euler representation.
+        The native world consumes normalized quaternions, so this conversion is
+        kept at the private host boundary and never written back to a project.
+        """
+        if (not isinstance(rotation, (list, tuple)) or len(rotation) != 3 or
+                any(isinstance(value, bool) or not isinstance(value, (int, float)) or
+                    not math.isfinite(value) for value in rotation)):
+            raise ValueError("object rotation must be three finite Euler radians")
+        x, y, z = (float(value) for value in rotation)
+        half_x, half_y, half_z = x / 2.0, y / 2.0, z / 2.0
+        sx, cx = math.sin(half_x), math.cos(half_x)
+        sy, cy = math.sin(half_y), math.cos(half_y)
+        sz, cz = math.sin(half_z), math.cos(half_z)
+        quaternion = [
+            sx * cy * cz + cx * sy * sz,
+            cx * sy * cz - sx * cy * sz,
+            cx * cy * sz + sx * sy * cz,
+            cx * cy * cz - sx * sy * sz,
+        ]
+        length = math.sqrt(sum(value * value for value in quaternion))
+        if not math.isfinite(length) or length <= 1e-12:
+            raise ValueError("object rotation quaternion is not normalizable")
+        return [value / length for value in quaternion]
+
+    @classmethod
+    def _native_domains_from_documents(
+        cls,
+        domains: dict[str, Any],
+        fields: dict[str, tuple[str, ...]] | None = None,
+    ) -> dict[str, Any]:
+        fields = fields or {
+            "levels": ("id",),
+            "models": ("id", "assetId"),
+            "animations": ("id", "assetId", "modelId"),
+            "objects": ("id", "levelId", "modelId", "position", "rotation", "scale"),
+        }
         result: dict[str, dict[str, Any]] = {}
         for domain, allowed in fields.items():
-            documents = active.get_domain(domain).get("documents", [])
+            value = domains.get(domain, {})
+            documents = value.get("documents", []) if isinstance(value, dict) else []
+            if not isinstance(documents, list):
+                raise ValueError(f"{domain} documents are invalid")
+            native_documents = []
+            for document in documents:
+                if not isinstance(document, dict):
+                    raise ValueError(f"{domain} document is invalid")
+                native_document = {
+                    key: document[key] for key in allowed if key in document
+                }
+                if domain == "objects" and "rotation" in native_document:
+                    native_document["rotation"] = cls._euler_to_native_quaternion(
+                        native_document["rotation"]
+                    )
+                native_documents.append(native_document)
             result[domain] = {
                 "schemaVersion": 1,
-                "documents": [
-                    {key: document[key] for key in allowed if key in document}
-                    for document in documents
-                ],
+                "documents": native_documents,
             }
         return result
 
@@ -222,19 +281,54 @@ class NativeProjectHost:
             native.hydrate_project(active.project_id, active.revision, domains, asset_ids=sorted(asset_ids))
             if progress is not None:
                 progress(1.0)
-        except Exception:
-            # Durable project state wins. A native child can be restarted and
-            # rehydrated from the repository on the next lifecycle boundary.
-            # Use the existing project recovery event shape; no new protocol
-            # event is invented for a transient native-runtime failure.
-            self._queue("project.recovery", self._status_value(available=len(self._recovery_values())))
+        except Exception as exc:
+            # A durable repository commit is still authoritative, but the
+            # native world is no longer a trustworthy view of it.  Invalidate
+            # the whole in-memory session before surfacing the existing,
+            # fail-closed recovery error.  In particular, do not let callers
+            # observe an opened/revision/dirty success for a world that did
+            # not hydrate.
+            self._invalidate_native_session(active)
+            raise HostOperationError(
+                "recovery_required",
+                "Native project hydration failed; recovery is required",
+                {"projectId": active.project_id, "revision": active.revision},
+            ) from exc
+
+    def _invalidate_native_session(self, active: Any) -> None:
+        """Close native and repository state after a failed native boundary."""
+        native = self._native_engine
+        if native is not None:
+            try:
+                native.close_project(active.project_id)
+            except Exception:
+                # The native child is already considered unusable.  The
+                # repository must still be closed and the protocol must still
+                # expose the canonical closed state.
+                pass
+        self._native_staged_assets.clear()
+        if self.service.active is active:
+            self.service.close()
+        else:
+            try:
+                active.close()
+            except Exception:
+                pass
+        self._dirty_since = self._last_mutation = None
+        self._queue("project.closed", self._status_value())
 
     def _validate_native_candidate(self, active: Any, revision: int, domains: dict[str, Any]) -> None:
         native = self._native_engine
         if native is None or not callable(getattr(native, "validate_project", None)):
             return
         try:
-            native.validate_project(active.project_id, revision, domains)
+            native.validate_project(
+                active.project_id,
+                revision,
+                self._native_domains_from_documents(domains),
+            )
+        except HostOperationError:
+            raise
         except Exception as exc:
             raise HostOperationError("invalid_project", "Native world rejected the project candidate") from exc
 

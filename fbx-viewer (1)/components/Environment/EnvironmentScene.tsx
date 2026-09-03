@@ -329,11 +329,9 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
             const o = transformTarget;
             updateLevelObject(selectedId, {
                 position: o.position.toArray(),
-                rotation: [
-                    THREE.MathUtils.radToDeg(o.rotation.x),
-                    THREE.MathUtils.radToDeg(o.rotation.y),
-                    THREE.MathUtils.radToDeg(o.rotation.z)
-                ],
+                // LevelObject.rotation is authored as a Three.js XYZ Euler in radians.
+                // Keep the degree conversion at presentation boundaries only.
+                rotation: [o.rotation.x, o.rotation.y, o.rotation.z],
                 scale: o.scale.toArray()
             });
         }

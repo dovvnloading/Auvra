@@ -276,14 +276,6 @@ export class ProjectService {
     await this.ensureSession();
     const host = this.getHost();
     if (!this.session) throw new Error('The native project host is not ready');
-    const effectivePayload = { ...payload };
-    if (
-      typeof effectivePayload.expectedRevision === 'number' &&
-      typeof effectivePayload.projectId === 'string' &&
-      effectivePayload.projectId === this.status.projectId
-    ) {
-      effectivePayload.expectedRevision = this.status.revision;
-    }
     const requestNumber = ++this.requestCounter;
     const traceId = diagnostics?.traceId && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,100}$/.test(diagnostics.traceId)
       ? diagnostics.traceId : null;
@@ -293,7 +285,10 @@ export class ProjectService {
       session: this.session,
       revision: host.currentRevision,
       method,
-      payload: effectivePayload,
+      // Preserve the revision captured by the caller. The host, not this
+      // queue, owns conflict detection; rebasing here can turn a stale
+      // queued mutation into an overwrite of a newer project revision.
+      payload,
     };
     const response = await frontendDiagnostics.withContext(
       diagnostics ?? {},

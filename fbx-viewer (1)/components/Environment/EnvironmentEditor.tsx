@@ -1,5 +1,5 @@
 
-import React from 'react';
+import React, { useEffect, useSyncExternalStore } from 'react';
 import { useScene } from '../../context/SceneContext';
 import { EnvironmentSidebar } from './EnvironmentSidebar';
 import { EnvironmentViewport } from './EnvironmentViewport';
@@ -9,8 +9,12 @@ import { EnvironmentInspector } from './layout/EnvironmentInspector';
 import { useEnvironmentState } from './hooks/useEnvironmentState';
 import { useEnvironmentHotkeys } from './hooks/useEnvironmentHotkeys';
 import { LevelBlueprintEditor } from '../LevelBlueprint/LevelBlueprintEditor';
+import { editorSession } from '../../utils/editorSession';
 
 export const EnvironmentEditor: React.FC = () => {
+    const session = useSyncExternalStore(editorSession.subscribe, editorSession.getSnapshot, editorSession.getSnapshot);
+    const sessionReady = session.phase === 'ready';
+    const isReadyNow = () => editorSession.captureReady() !== null;
     const { 
         levelObjects, models, removeLevelObject, updateLevelObject, 
         undo, redo, canUndo, canRedo, snapshotHistory 
@@ -25,24 +29,43 @@ export const EnvironmentEditor: React.FC = () => {
         actions: {
             ...actions,
             deleteSelected: () => {
+                if (!isReadyNow()) return;
                 if(state.selectedObjectId) removeLevelObject(state.selectedObjectId);
                 actions.setSelectedObjectId(null);
             },
             clearSelection: () => {
+                if (!isReadyNow()) return;
                 actions.setSelectedBrushId(null);
                 actions.setSelectedObjectId(null);
                 actions.setInteractionMode('select');
             },
-            undo, redo
+            undo: () => { if (isReadyNow()) void undo(); },
+            redo: () => { if (isReadyNow()) void redo(); },
+            setInteractionMode: (mode) => { if (isReadyNow()) actions.setInteractionMode(mode); },
+            updateTransformSettings: (updates) => { if (isReadyNow()) actions.updateTransformSettings(updates); },
         },
-        history: { undo, redo }
+        history: {
+            undo: () => { if (isReadyNow()) void undo(); },
+            redo: () => { if (isReadyNow()) void redo(); },
+        }
     });
+
+    useEffect(() => {
+        if (!sessionReady && state.isPlaying) actions.handlePlayStop();
+    }, [actions, sessionReady, state.isPlaying]);
+
+    const guardedUpdateLevelObject = (id: string, updates: Parameters<typeof updateLevelObject>[1]) => {
+        if (isReadyNow()) updateLevelObject(id, updates);
+    };
+    const guardedRemoveLevelObject = (id: string) => {
+        if (isReadyNow()) void removeLevelObject(id);
+    };
 
     const activeBrush = models.find(m => m.id === state.selectedBrushId);
     const selectedObject = levelObjects.find(o => o.id === state.selectedObjectId);
 
     // --- Render Game Mode ---
-    if (state.isPlaying) {
+    if (state.isPlaying && sessionReady) {
         return (
             <LevelGameLoop 
                 onExit={actions.handlePlayStop} 
@@ -53,7 +76,7 @@ export const EnvironmentEditor: React.FC = () => {
 
     // --- Render Editor Mode ---
     return (
-        <div className="flex h-full w-full bg-gray-950 text-white font-sans overflow-hidden relative">
+        <div className="flex h-full w-full bg-gray-950 text-white font-sans overflow-hidden relative" aria-busy={!sessionReady}>
             <EnvironmentSidebar 
                 selectedModelId={state.selectedBrushId} 
                 onSelectModel={(id) => {
@@ -99,8 +122,8 @@ export const EnvironmentEditor: React.FC = () => {
                     setPaintMode: actions.setPaintMode,
                     setPaintSettings: actions.setPaintSettings,
                     setSelectedObjectId: actions.setSelectedObjectId,
-                    updateLevelObject,
-                    removeLevelObject,
+                    updateLevelObject: guardedUpdateLevelObject,
+                    removeLevelObject: guardedRemoveLevelObject,
                     setSculptSettings: actions.setSculptSettings
                 }}
             />
@@ -111,6 +134,17 @@ export const EnvironmentEditor: React.FC = () => {
                     onClose={() => actions.setInteractionMode('select')} 
                     selectedObjectId={state.selectedObjectId}
                 />
+            )}
+            {!sessionReady && (
+                <div
+                    className="absolute inset-0 z-[100] flex cursor-wait items-center justify-center bg-gray-950/60 text-sm text-gray-200"
+                    role="status"
+                    onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
+                    onPointerUp={(event) => { event.preventDefault(); event.stopPropagation(); }}
+                    onClick={(event) => { event.preventDefault(); event.stopPropagation(); }}
+                >
+                    {session.phase === 'transitioning' ? 'Switching World Editor session…' : 'Open a project to edit the world.'}
+                </div>
             )}
         </div>
     );

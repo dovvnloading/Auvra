@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { Search, Trees, Box, Image, MousePointer2, Layers, Trash2, Eye, Plus, ChevronDown, Skull, Music, Sun } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
 import { LoadedModelData } from '../../types';
+import { editorSession } from '../../utils/editorSession';
 
 interface EnvironmentSidebarProps {
     selectedModelId: string | null;
@@ -35,8 +36,10 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
     );
 
     const currentLevel = levels.find(l => l.id === currentLevelId);
+    const canEdit = () => editorSession.captureReady() !== null;
 
     const handleCreateLevel = async () => {
+        if (!canEdit()) return;
         const name = prompt("Enter new level name:");
         if (name) {
             await createLevel(name);
@@ -44,6 +47,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
     };
 
     const handleAddSpawner = async () => {
+        if (!canEdit()) return;
         // Add a spawn point at origin
         const newId = await addLevelObject(
             '', // No model ID
@@ -59,6 +63,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
     };
 
     const handleAddAudioEmitter = async () => {
+        if (!canEdit()) return;
         const newId = await addLevelObject(
             '',
             [0, 1, 0],
@@ -70,6 +75,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
     };
 
     const handleAddSkySphere = async () => {
+        if (!canEdit()) return;
         // Check if one already exists
         const existing = levelObjects.find(o => o.type === 'sky_sphere');
         if (existing) {
@@ -131,14 +137,14 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                     {levels.map(lvl => (
                                         <div 
                                             key={lvl.id}
-                                            onClick={() => { loadLevel(lvl.id); setShowLevelMenu(false); }}
+                                            onClick={() => { if (!canEdit()) return; void loadLevel(lvl.id); setShowLevelMenu(false); }}
                                             className={`flex items-center justify-between px-2 py-1.5 rounded cursor-pointer group ${currentLevelId === lvl.id ? 'bg-blue-900/30 text-blue-400' : 'hover:bg-gray-700 text-gray-300'}`}
                                             title={`Load level: ${lvl.name}`}
                                         >
                                             <span className="text-xs truncate">{lvl.name}</span>
                                             {levels.length > 1 && (
                                                 <button 
-                                                    onClick={(e) => { e.stopPropagation(); if(confirm('Delete level?')) deleteLevel(lvl.id); }}
+                                                    onClick={(e) => { e.stopPropagation(); if(canEdit() && confirm('Delete level?')) void deleteLevel(lvl.id); }}
                                                     className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400"
                                                     title="Delete Level"
                                                 >

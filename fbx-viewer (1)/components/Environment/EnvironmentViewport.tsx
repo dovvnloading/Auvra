@@ -7,6 +7,7 @@ import { useAssets, useLevel } from '../../context/SceneContext';
 import { LoadedModelData } from '../../types';
 import { InteractionMode, PaintMode, PaintSettings, TransformSettings, ViewportLayout, SculptSettings } from './types';
 import { EnvironmentScene } from './EnvironmentScene';
+import { editorSession } from '../../utils/editorSession';
 
 interface EnvironmentViewportProps {
     activeModelId: string | null;
@@ -71,6 +72,8 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
         activeModelId ? models.find(m => m.id === activeModelId) || null : null, 
     [models, activeModelId]);
 
+    const canEdit = () => editorSession.captureReady() !== null;
+
     useEffect(() => {
         if (interactionMode !== 'select' && interactionMode !== 'sculpt') {
             setSelectedId(null);
@@ -78,22 +81,26 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
     }, [interactionMode]);
 
     const handleViewSelect = (id: string | null, viewId: string) => {
+        if (!canEdit()) return;
         setActiveView(viewId);
         setSelectedId(id);
         onSelectObject(id);
     };
 
     const handlePlace = (pos: THREE.Vector3, rotY: number) => {
+        if (!canEdit()) return;
         if (!activeModelId) return;
         addLevelObject(activeModelId, pos.toArray(), [0, rotY, 0], [1, 1, 1], 'prop');
     };
 
     const handlePaint = (pos: THREE.Vector3, rot: THREE.Euler, scale: THREE.Vector3) => {
+        if (!canEdit()) return;
         if (!activeModelId) return;
         addLevelObject(activeModelId, pos.toArray(), [rot.x, rot.y, rot.z], scale.toArray(), 'foliage');
     };
 
     const handleErase = (ids: string[]) => {
+        if (!canEdit()) return;
         removeLevelObjects(ids);
     };
 
@@ -107,11 +114,13 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
         onErase: handleErase,
         models,
         levelObjects,
-        updateLevelObject,
+        updateLevelObject: (id: string, updates: Parameters<typeof updateLevelObject>[1]) => {
+            if (canEdit()) updateLevelObject(id, updates);
+        },
         transformSettings,
         paintSettings,
         sculptSettings,
-        onSnapshot: snapshotHistory,
+        onSnapshot: () => { if (canEdit()) snapshotHistory(); },
         selectedId,
         isMuted
     };
