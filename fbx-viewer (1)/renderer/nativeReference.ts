@@ -8,13 +8,21 @@ const FEATURES = [
   "aces_tone_mapping", "msaa_or_fxaa", "post_processing_chain",
 ] as const;
 const SIGNATURE = /^[0-9a-f]{16,64}$/;
-const WARMUP_FRAMES = 3;
-const MEASURED_FRAMES = 9;
+const WARMUP_FRAMES = 5;
+const MEASURED_FRAMES = 20;
 
 function percentile95(samples: number[]): number | null {
   if (!samples.length) return null;
   const ordered = [...samples].sort((left, right) => left - right);
-  return ordered[Math.min(ordered.length - 1, Math.ceil(ordered.length * 0.95) - 1)];
+  // Interpolate the rank instead of selecting the nearest sample.  With the
+  // old nine-sample nearest-rank calculation, p95 was always the maximum, so
+  // one transient scheduler/GPU spike could fail an otherwise healthy gate.
+  const rank = 0.95 * (ordered.length - 1);
+  const lower = Math.floor(rank);
+  const upper = Math.ceil(rank);
+  if (lower === upper) return ordered[lower];
+  const fraction = rank - lower;
+  return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction;
 }
 
 export interface NativeReferenceResult {
