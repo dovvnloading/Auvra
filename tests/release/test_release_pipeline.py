@@ -8,12 +8,13 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 import xml.etree.ElementTree as ET
 
 from release.asset_cooking import cook_assets
 from release.cross_backend import verify_cross_backend
 from release.lifecycle import LifecycleState
-from release.pipeline import ReleaseError, assemble, verify_package, write_input_inventory
+from release.pipeline import ReleaseError, assemble, sign_msix, verify_package, write_input_inventory
 from release.runtime_verify import verify_installed_package
 
 
@@ -121,6 +122,38 @@ class ReleasePipelineTests(unittest.TestCase):
             (inputs / "python-embed" / "pythonw.exe").write_bytes(b"tampered")
             with self.assertRaisesRegex(ReleaseError, "contents do not match"):
                 write_input_inventory(inputs, inputs / "inventory.json")
+
+    def test_signing_uses_timestamp_and_post_verifies_without_password_argument(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "Auvra.msix"
+            certificate = root / "release.pfx"
+            package.write_bytes(b"unsigned package")
+            certificate.write_bytes(b"certificate")
+            responses = [
+                subprocess.CompletedProcess([], 0, stdout="signed", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="verified", stderr=""),
+            ]
+            with mock.patch("release.pipeline.subprocess.run", side_effect=responses) as run:
+                sign_msix(package, signtool="signtool.exe", certificate=certificate)
+            self.assertEqual(run.call_count, 2)
+            sign_command = run.call_args_list[0].args[0]
+            self.assertNotIn("/p", sign_command)
+            self.assertEqual(sign_command[sign_command.index("/tr") + 1], "https://timestamp.digicert.com")
+            self.assertEqual(sign_command[sign_command.index("/td") + 1], "SHA256")
+            verify_command = run.call_args_list[1].args[0]
+            self.assertEqual(verify_command[1:5], ["verify", "/pa", "/all", "/q"])
+
+    def test_signing_accepts_certificate_store_thumbprint_and_rejects_bad_timestamp(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            package = Path(temporary) / "Auvra.msix"
+            package.write_bytes(b"unsigned package")
+            with mock.patch("release.pipeline.subprocess.run", return_value=subprocess.CompletedProcess([], 0, stderr="")) as run:
+                sign_msix(package, signtool="signtool.exe", thumbprint="a" * 40)
+            self.assertIn("/sha1", run.call_args_list[0].args[0])
+            with self.assertRaisesRegex(ReleaseError, "HTTPS"):
+                sign_msix(package, signtool="signtool.exe", thumbprint="a" * 40,
+                          timestamp_url="http://timestamp.example")
 
     def test_assemble_verify_and_appinstaller_are_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

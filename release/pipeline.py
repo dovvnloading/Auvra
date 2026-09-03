@@ -21,6 +21,7 @@ import struct
 import sys
 import tempfile
 from typing import Any, Iterable, Mapping
+from urllib.parse import urlsplit
 import xml.etree.ElementTree as ET
 import zlib
 
@@ -624,21 +625,57 @@ def make_msix(package_root: Path, output: Path, *, makeappx: str | None = None) 
     return output
 
 
-def sign_msix(package: Path, *, signtool: str | None, certificate: Path | None, password: str | None = None) -> None:
-    if certificate is None:
-        raise ReleaseError("certificate must be supplied out-of-band for signing")
-    if not certificate.is_file() or certificate.suffix.lower() not in {".pfx", ".p12"}:
+DEFAULT_TIMESTAMP_URL = "https://timestamp.digicert.com"
+
+
+def _validate_timestamp_url(value: str) -> str:
+    parsed = urlsplit(value)
+    if parsed.scheme.lower() != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise ReleaseError("timestamp URL must be an HTTPS origin without credentials")
+    return value
+
+
+def sign_msix(
+    package: Path,
+    *,
+    signtool: str | None,
+    certificate: Path | None = None,
+    thumbprint: str | None = None,
+    timestamp_url: str = DEFAULT_TIMESTAMP_URL,
+) -> None:
+    if certificate is None and thumbprint is None:
+        raise ReleaseError("a certificate file or certificate-store thumbprint is required")
+    if certificate is not None and thumbprint is not None:
+        raise ReleaseError("certificate file and certificate-store thumbprint are mutually exclusive")
+    if certificate is not None and (not certificate.is_file() or certificate.suffix.lower() not in {".pfx", ".p12"}):
         raise ReleaseError("signing certificate must be an existing PFX/P12 file")
+    if thumbprint is not None and not re.fullmatch(r"[0-9a-fA-F]{40}", thumbprint):
+        raise ReleaseError("certificate-store thumbprint must be 40 hexadecimal characters")
+    if not package.is_file() or package.suffix.lower() != ".msix":
+        raise ReleaseError("package to sign must be an existing MSIX file")
+    timestamp_url = _validate_timestamp_url(timestamp_url)
     tool = signtool or os.environ.get("AUVRA_SIGNTOOL") or shutil.which("SignTool.exe")
     if not tool:
         raise ReleaseError("SignTool.exe is required; set AUVRA_SIGNTOOL or install the Windows SDK")
-    command = [tool, "sign", "/fd", "SHA256", "/f", str(certificate)]
-    if password:
-        command.extend(["/p", password])
+    command = [tool, "sign", "/fd", "SHA256", "/tr", timestamp_url, "/td", "SHA256"]
+    if certificate is not None:
+        command.extend(["/f", str(certificate)])
+    else:
+        command.extend(["/sha1", thumbprint])
     command.append(str(package))
     result = subprocess.run(command, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if result.returncode:
         raise ReleaseError(f"SignTool failed with status {result.returncode}: {result.stderr[-1000:]}")
+    verify = subprocess.run(
+        [tool, "verify", "/pa", "/all", "/q", str(package)],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if verify.returncode:
+        raise ReleaseError(f"SignTool verification failed with status {verify.returncode}: {verify.stderr[-1000:]}")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -662,9 +699,11 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--channel")
     sign = sub.add_parser("sign")
     sign.add_argument("--package", type=Path, required=True)
-    sign.add_argument("--certificate", type=Path, required=True)
+    certificate = sign.add_mutually_exclusive_group(required=True)
+    certificate.add_argument("--certificate", type=Path)
+    certificate.add_argument("--thumbprint")
     sign.add_argument("--signtool")
-    sign.add_argument("--password")
+    sign.add_argument("--timestamp-url", default=DEFAULT_TIMESTAMP_URL)
     return parser
 
 
@@ -681,7 +720,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "verify":
             verify_package(args.package_root, expected_channel=args.channel)
         else:
-            sign_msix(args.package, signtool=args.signtool, certificate=args.certificate, password=args.password)
+            sign_msix(args.package, signtool=args.signtool, certificate=args.certificate,
+                      thumbprint=args.thumbprint, timestamp_url=args.timestamp_url)
     except (OSError, ValueError, ReleaseError, json.JSONDecodeError) as exc:
         print(f"release pipeline failed: {exc}", file=sys.stderr)
         return 2

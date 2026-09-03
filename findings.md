@@ -444,6 +444,8 @@ Release assembly hashes whatever staged files it receives (`release/pipeline.py:
 
 The CLI accepts a plaintext `--password` (`release/pipeline.py:626`) and places it in the SignTool command line with `/p` (`release/pipeline.py:590`). It can be exposed through process inspection or shell history. The signing function also supplies no timestamp service and performs no post-sign `signtool verify`, so success means only that the sign command returned zero.
 
+**Status:** Completed — signing now uses a certificate-store thumbprint or passwordless PFX without a password CLI option, requires an HTTPS timestamp service, and verifies the signed MSIX with SignTool before returning success. Command-level regression tests passed.
+
 ### F-053 — NUL bytes bypass release content scanning
 
 **Severity:** Medium · **Classification:** Confirmed verification weakness
