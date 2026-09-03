@@ -558,6 +558,8 @@ The project manager receives camera and selected IDs but save/save-as ignore the
 
 The project operation wrapper catches, notifies, and then rethrows (`fbx-viewer (1)/hooks/useProjectManager.ts:69`). Header handlers pass these async functions directly or discard their promises without a catch (`fbx-viewer (1)/components/UI/Header.tsx:17`, `fbx-viewer (1)/components/UI/Header.tsx:82`). A cancelled or failed dialog can produce both the expected notification and an unhandled rejection.
 
+**Status:** Completed — Header project actions now run through a single UI boundary that consumes rejected promises after the manager records the user-facing error notification; project verification, TypeScript, and production frontend build pass.
+
 ### F-067 — Renderer recovery limits lifetime losses rather than consecutive failures
 
 **Severity:** Medium · **Classification:** Confirmed concern

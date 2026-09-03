@@ -50,6 +50,12 @@ const mustNotContain = (text, pattern, label) => { if (pattern.test(text)) failu
 mustNotContain(db, /readwrite|createObjectStore|deleteObjectStore|deleteDatabase|\.put\(|\.clear\(/, 'legacy IndexedDB adapter');
 mustNotContain(serializer, /jszip|file-saver|saveAs|new Blob|<input/i, 'project serializer');
 mustNotContain(header, /accept=["']\.forge|type=["']file|FileSaver|saveAs/i, 'project controls');
+if (!/const runProjectAction = \(action: \(\) => Promise<unknown>\) => \{[\s\S]*?action\(\)\.catch\(\(\) => undefined\)/.test(header)
+  || /onClick=\{(?:saveProject|saveProjectAs|loadProject|importProject|importLegacyProject|migrateLegacyBrowserProject|exportProject|closeProject)\}/.test(header)
+  || /void (?:openRecentProject|recoverProject)\(/.test(header)
+  || !/runProjectAction\(createNewProject\)/.test(header)) {
+  failures.push('Header project actions must consume rejected promises at the UI boundary');
+}
 mustNotContain(service, /beginAssetUpload\(assetId|sha256\s*[,}]/, 'asset upload precomputed identity');
 mustNotContain(service, /fetch\([^)]*assets\.auvra\.local[^)]*\{[^}]*method:\s*['"](?!GET|PUT)/i, 'asset transport method');
 for (const method of ['project.create', 'project.open', 'project.openRecent', 'project.close', 'project.getSnapshot', 'project.applyChanges', 'project.save', 'project.saveAs', 'project.exportPack', 'project.importPack', 'project.importLegacy', 'asset.beginUpload', 'asset.resolve']) {
