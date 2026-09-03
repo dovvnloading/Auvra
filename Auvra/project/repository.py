@@ -258,11 +258,14 @@ class ProjectRepository:
     def save(self, *, expected_revision: int | None = None) -> int:
         if expected_revision is not None and expected_revision != self.revision: raise RevisionConflictError("project revision changed")
         if self.read_only: raise ReadOnlyError("project is read-only")
-        self._dirty = False; self._retain_recovery("manual")
+        self._retain_recovery("manual")
+        self._dirty = False
         return self.revision
     def save_as(self, destination: str | os.PathLike[str], *, name: str | None = None) -> "ProjectRepository":
         if self.read_only: raise ReadOnlyError("project is read-only")
         destination = Path(destination)
+        if _destination_is_inside(self.path, destination):
+            raise InvalidProjectError("Save As destination must be outside the source project")
         if destination.exists(): raise InvalidProjectError("Save As destination already exists")
         new_name = name or destination.name
         if not new_name or any(c in new_name for c in "/\\"):
@@ -499,6 +502,8 @@ class ProjectRepository:
         finally:
             shutil.rmtree(asset_staging, ignore_errors=True)
     def export_pack(self, destination: str | os.PathLike[str]) -> None:
+        if _destination_is_inside(self.path, Path(destination)):
+            raise InvalidProjectError("export destination must be outside the source project")
         _validate_project_tree(self.path, allow_internal=True)
         export_folder(self.path, destination)
     @classmethod
@@ -663,6 +668,15 @@ def _is_reparse(path: Path) -> bool:
         return bool(getattr(path.stat(), "st_file_attributes", 0) & 0x400)
     except OSError:
         return True
+
+
+def _destination_is_inside(source: Path, destination: Path) -> bool:
+    """Reject output paths that resolve into the live project tree."""
+    try:
+        Path(destination).resolve(strict=False).relative_to(Path(source).resolve(strict=True))
+        return True
+    except (OSError, ValueError):
+        return False
 
 def _validate_open_boundaries(root: Path) -> None:
     """Reject linked project authority before opening the lock itself."""

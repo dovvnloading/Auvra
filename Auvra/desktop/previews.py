@@ -22,6 +22,7 @@ from Auvra.diagnostics import trace_public_class
 _CHUNK = 1024 * 1024
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _JOB_ID = re.compile(r"^job-[A-Za-z0-9_-]{16,128}$")
+_PROJECT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _PROVIDER_ID = re.compile(r"^[a-z][a-z0-9._-]{0,63}$")
 _SUPPORTED_IMAGES = frozenset({"image/png", "image/jpeg", "image/webp"})
 _PROVENANCE_FIELDS = frozenset({
@@ -44,6 +45,7 @@ class PreviewRecord:
     width: int
     height: int
     provenance: Mapping[str, Any]
+    project_id: str | None = None
 
 
 @trace_public_class("preview_store", concise=("ingest", "discard", "close"))
@@ -60,7 +62,7 @@ class PreviewStore:
         self._root.mkdir(mode=0o700)
         self._max_size = max_size
         self._lock = threading.RLock()
-        self._records: dict[tuple[str, str], PreviewRecord] = {}
+        self._records: dict[tuple[str | None, str, str], PreviewRecord] = {}
         self._closed = False
 
     def ingest(
@@ -68,11 +70,13 @@ class PreviewStore:
         job_id: str,
         stream: BinaryIO,
         *,
+        project_id: str | None = None,
         declared_mime: str | None = None,
         expected_hash: str | None = None,
         provenance: Mapping[str, Any] | None = None,
     ) -> PreviewRecord:
         self._validate_job(job_id)
+        self._validate_project(project_id)
         if expected_hash is not None and not _SHA256.fullmatch(expected_hash):
             raise PreviewError("generated media hash is invalid")
         normalized_mime = str(declared_mime or "").split(";", 1)[0].strip().lower()
@@ -125,37 +129,40 @@ class PreviewStore:
                 else:
                     os.replace(temporary, destination)
                 record = PreviewRecord(
-                    job_id, actual_hash, size, actual_mime, width, height, metadata
+                    job_id, actual_hash, size, actual_mime, width, height, metadata, project_id
                 )
-                self._records[(job_id, actual_hash)] = record
+                self._records[(project_id, job_id, actual_hash)] = record
                 return record
         except Exception:
             temporary.unlink(missing_ok=True)
             raise
 
-    def get(self, job_id: str, asset_id: str) -> PreviewRecord:
+    def get(self, job_id: str, asset_id: str, *, project_id: str | None = None) -> PreviewRecord:
         self._validate_job(job_id)
         self._validate_asset(asset_id)
+        self._validate_project(project_id)
         with self._lock:
             self._require_open()
             try:
-                return self._records[(job_id, asset_id)]
+                return self._records[(project_id, job_id, asset_id)]
             except KeyError as exc:
                 raise PreviewError("generated preview is unavailable") from exc
 
-    def find(self, asset_id: str) -> PreviewRecord:
+    def find(self, asset_id: str, *, project_id: str | None = None) -> PreviewRecord:
         """Resolve a session preview by content identity for local asset tickets."""
 
         self._validate_asset(asset_id)
+        self._validate_project(project_id)
         with self._lock:
             self._require_open()
-            matches = [record for (_, identity), record in self._records.items() if identity == asset_id]
+            matches = [record for (_, _, identity), record in self._records.items()
+                       if identity == asset_id and (project_id is None or record.project_id == project_id)]
             if not matches:
                 raise PreviewError("generated preview is unavailable")
             return matches[0]
 
-    def open(self, asset_id: str) -> BinaryIO:
-        record = self.find(asset_id)
+    def open(self, asset_id: str, *, project_id: str | None = None) -> BinaryIO:
+        record = self.find(asset_id, project_id=project_id)
         path = self._path(record.asset_id)
         with self._lock:
             self._require_open()
@@ -178,11 +185,11 @@ class PreviewStore:
             stream.close()
             raise
 
-    def discard(self, job_id: str, asset_id: str) -> None:
-        self.get(job_id, asset_id)
+    def discard(self, job_id: str, asset_id: str, *, project_id: str | None = None) -> None:
+        self.get(job_id, asset_id, project_id=project_id)
         with self._lock:
-            self._records.pop((job_id, asset_id), None)
-            if not any(identity == asset_id for _, identity in self._records):
+            self._records.pop((project_id, job_id, asset_id), None)
+            if not any(identity == asset_id for _, _, identity in self._records):
                 self._path(asset_id).unlink(missing_ok=True)
 
     def close(self) -> None:
@@ -209,6 +216,11 @@ class PreviewStore:
     def _validate_job(job_id: str) -> None:
         if not isinstance(job_id, str) or not _JOB_ID.fullmatch(job_id):
             raise PreviewError("provider job identity is invalid")
+
+    @staticmethod
+    def _validate_project(project_id: str | None) -> None:
+        if project_id is not None and (not isinstance(project_id, str) or not _PROJECT_ID.fullmatch(project_id)):
+            raise PreviewError("project identity is invalid")
 
     @staticmethod
     def _validate_asset(asset_id: str) -> None:

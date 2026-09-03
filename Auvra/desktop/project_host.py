@@ -747,8 +747,8 @@ class NativeProjectHost:
             if self.preview_store is None:
                 raise
             try:
-                preview = self.preview_store.find(asset_id)
-                stream = self.preview_store.open(asset_id)
+                preview = self.preview_store.find(asset_id, project_id=active.project_id)
+                stream = self.preview_store.open(asset_id, project_id=active.project_id)
                 mime, size = preview.mime, preview.size
             except Exception:
                 raise HostOperationError("invalid_job", "Generated preview is unavailable") from None

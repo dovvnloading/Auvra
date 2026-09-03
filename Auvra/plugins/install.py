@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import hashlib
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import shutil
 import sys
 import tempfile
@@ -84,6 +85,17 @@ def _remove_staging(path: Path) -> None:
         raise InstallError("failed plugin installation left staging data")
 
 
+def _entrypoint_path(package: PluginPackage) -> PurePosixPath:
+    return PurePosixPath(package.manifest["entrypoint"]["path"])
+
+
+def _entrypoint_tree(entrypoint: PurePosixPath) -> set[str]:
+    return {
+        PurePosixPath(*entrypoint.parts[:index]).as_posix()
+        for index in range(1, len(entrypoint.parts) + 1)
+    }
+
+
 @trace_public_class("plugin_install", concise=("install",))
 class PluginInstaller:
     """Install only a fully validated package into a digest-addressed directory."""
@@ -111,10 +123,11 @@ class PluginInstaller:
         _check_tree(self.root, final)
         if final.is_symlink() or (final.exists() and _linked(final)):
             raise InstallError("existing digest-addressed plugin install is a link or reparse point")
-        executable = final / package.manifest["entrypoint"]["path"]
+        entrypoint = _entrypoint_path(package)
+        executable = final.joinpath(*entrypoint.parts)
         if final.exists():
             payload_dir = final / "payload"
-            expected = {"payload", "payload/" + executable.name}
+            expected = _entrypoint_tree(entrypoint)
             actual = {item.relative_to(final).as_posix() for item in final.rglob("*")}
             if (_linked(final) or not payload_dir.is_dir() or _linked(payload_dir)
                     or actual != expected or not executable.is_file() or _linked(executable)
@@ -123,9 +136,9 @@ class PluginInstaller:
             return InstalledPlugin(package, final, executable)
         staging = Path(tempfile.mkdtemp(prefix=f".{package.package_digest}.", dir=self.root))
         try:
-            payload = staging / "payload"
-            payload.mkdir()
-            target = payload / Path(package.manifest["entrypoint"]["path"]).name
+            target = staging.joinpath(*entrypoint.parts)
+            _check_tree(staging, target)
+            target.parent.mkdir(parents=True, exist_ok=True)
             _check_tree(staging, target)
             with zipfile.ZipFile(package.path, "r") as archive:
                 info = archive.getinfo(package.manifest["entrypoint"]["path"])
@@ -135,14 +148,15 @@ class PluginInstaller:
             if _sha256(target) != package.manifest["entrypoint"]["sha256"]:
                 raise InstallError("extracted plugin digest does not match package")
             target.chmod(0o555)
-            payload.chmod(0o555)
+            for index in range(1, len(entrypoint.parts)):
+                staging.joinpath(*entrypoint.parts[:index]).chmod(0o555)
             # The callback is injectable for deterministic tests but production
             # always uses the native AppContainer SID ACL implementation.
             self.acl_grant(staging, package)
             os.rename(staging, final)  # atomic and refuses an existing final dir
             staging = None  # type: ignore[assignment]
             final.chmod(0o555)
-            return InstalledPlugin(package, final, final / "payload" / target.name)
+            return InstalledPlugin(package, final, final.joinpath(*entrypoint.parts))
         except (OSError, zipfile.BadZipFile) as exc:
             raise InstallError("plugin installation failed closed") from exc
         finally:
@@ -192,8 +206,11 @@ def _grant_appcontainer_read_execute(directory: Path, package: PluginPackage) ->
     try:
         trustee = TRUSTEE(None, 0, 0, 0, sid)
         entry = EXPLICIT_ACCESS(0x1200A9, 1, 3, trustee)  # read/execute + child inheritance
-        for item in (directory, directory / "payload",
-                     directory / "payload" / Path(package.manifest["entrypoint"]["path"]).name):
+        entrypoint = _entrypoint_path(package)
+        items = [directory]
+        items.extend(directory.joinpath(*entrypoint.parts[:index])
+                     for index in range(1, len(entrypoint.parts) + 1))
+        for item in items:
             if _linked(item):
                 raise InstallError("plugin install path became a link or reparse point")
             old_dacl = LPVOID(); security_descriptor = LPVOID(); new_dacl = LPVOID()

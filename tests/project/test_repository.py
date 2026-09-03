@@ -131,6 +131,19 @@ class ProjectTests(unittest.TestCase):
         with mock.patch.object(repository_module.shutil, "copytree", side_effect=OSError("disk full")):
             with self.assertRaises(OSError): self.repo.save_as(destination)
         self.assertFalse(destination.exists())
+
+    def test_save_as_and_export_reject_destinations_inside_source_tree(self):
+        nested_copy = self.root / "nested-copy"
+        with self.assertRaises(InvalidProjectError):
+            self.repo.save_as(nested_copy)
+        self.assertFalse(nested_copy.exists())
+
+        nested_archive = self.root / "nested.auvrapack"
+        with self.assertRaises(InvalidProjectError):
+            self.repo.export_pack(nested_archive)
+        self.assertFalse(nested_archive.exists())
+        self.assertFalse(any(self.root.glob("nested.auvrapack.tmp-*")))
+
     def test_save_as_same_name_keeps_descriptor(self):
         destination = Path(self.tmp.name) / "same-name"
         copy = self.repo.save_as(destination, name=self.repo.name)
@@ -177,6 +190,25 @@ class ProjectTests(unittest.TestCase):
         self.assertLessEqual(len(self.repo.recovery_points("manual")), 5)
         root = self.root / ".auvra" / "backups"
         self.assertLessEqual(sum(f.stat().st_size for f in root.rglob("*") if f.is_file()), 1)
+
+    def test_save_failure_retains_dirty_state_until_recovery_is_retained(self):
+        self.repo.apply_changes({"metadata": [{"id": "m"}]}, expected_revision=0)
+        with mock.patch.object(self.repo, "_retain_recovery", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.repo.save(expected_revision=1)
+        self.assertTrue(self.repo.status.dirty)
+
+        observed: list[bool] = []
+        original = self.repo._retain_recovery
+
+        def retain(kind: str) -> None:
+            observed.append(self.repo.status.dirty)
+            original(kind)
+
+        with mock.patch.object(self.repo, "_retain_recovery", side_effect=retain):
+            self.repo.save(expected_revision=1)
+        self.assertEqual(observed, [True])
+        self.assertFalse(self.repo.status.dirty)
 
     def test_recovery_points_older_than_thirty_days_are_pruned(self):
         self.repo.apply_changes({"metadata": [{"id": "m"}]}, expected_revision=0)

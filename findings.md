@@ -282,11 +282,15 @@ Project status includes recovery points, but the project-event filter forwards o
 
 **Severity:** Medium · **Classification:** Confirmed
 
+**Status:** Completed — upload responses are consumed to EOF in bounded chunks, oversize bodies are rejected, and declared lengths are checked; focused provider transport regressions passed.
+
 The production provider upload transport performs one bounded response read (`Auvra/providers/transport.py:141`, `Auvra/providers/transport.py:163`). It neither continues to EOF nor validates declared length, unlike normal request handling. A valid response larger than 64 KiB but below the configured maximum is returned incomplete.
 
 ### F-033 — Stream and upload forward caller-controlled connection headers
 
 **Severity:** Medium · **Classification:** Latent network-policy risk
+
+**Status:** Completed — stream/upload now strip hop-by-hop connection headers consistently with normal requests, and upload owns its framing headers; focused transport regressions passed.
 
 Normal requests strip `Host` and `Connection` headers (`Auvra/providers/transport.py:74`), while stream and upload copy them (`Auvra/providers/transport.py:118`, `Auvra/providers/transport.py:153`). A future adapter that accepts arbitrary headers could send a misleading virtual-host value to an otherwise allowlisted resolved endpoint. No current end-to-end exploit path was established.
 
@@ -294,11 +298,15 @@ Normal requests strip `Host` and `Connection` headers (`Auvra/providers/transpor
 
 **Severity:** Medium · **Classification:** Confirmed
 
+**Status:** Completed — nested entrypoint paths are preserved during install, validated beneath the digest root, included in ACL coverage, and accepted by the worker launcher; the full plugin suite passed.
+
 Package validation accepts a nested entrypoint such as `payload/subdir/plugin.exe` (`Auvra/plugins/package.py:145`). Installation flattens it to its basename (`Auvra/plugins/install.py:101`), while reopen checks the original nested path and worker isolation requires `payload\\<basename>` (`Auvra/plugins/worker.py:164`). A package accepted by the manifest validator can therefore become unusable after installation.
 
 ### F-035 — `save()` marks a project clean before recovery retention succeeds
 
 **Severity:** Medium · **Classification:** Confirmed
+
+**Status:** Completed — recovery retention now succeeds before the repository clears its dirty flag; injected retention failures preserve dirty state, and the repository suite passed.
 
 `save()` clears `_dirty` and only then retains a recovery point (`Auvra/project/repository.py:256`). If backup creation fails, save raises while the repository remains marked clean, misreporting state and potentially suppressing later autosave behavior.
 
@@ -306,17 +314,23 @@ Package validation accepts a nested entrypoint such as `payload/subdir/plugin.ex
 
 **Severity:** High · **Classification:** Confirmed risk
 
+**Status:** Completed — Save As and pack export now reject paths resolving inside the live project tree before creating staging or temporary output; repository regressions passed.
+
 `save_as()` and `export_pack()` do not reject destinations within the active project (`Auvra/project/repository.py:261`, `Auvra/project/repository.py:348`). Save-as can recursively encounter its own staging/destination subtree; export can introduce an unknown top-level archive that makes strict project validation fail.
 
 ### F-037 — Preview lookup crosses project boundaries
 
 **Severity:** High · **Classification:** Confirmed isolation risk
 
+**Status:** Completed — preview records are internally project-bound and all project/provider lookup, commit, discard, and ingest paths pass the active project identity; cross-project resolution regressions passed.
+
 The session preview store resolves solely by content hash and has no project binding (`Auvra/desktop/previews.py:146`). When an active project lacks an asset, resolution falls back to that global store (`Auvra/desktop/project_host.py:598`). Project B can resolve project A's uncommitted preview if its hash is known.
 
 ### F-038 — Download staging copies persist for the entire desktop session
 
 **Severity:** High · **Classification:** Confirmed storage concern
+
+**Status:** Completed — staged download files are owned by their response streams, removed on close or EOF, and purged when tickets expire or the asset session closes; asset and WebView2 lifecycle tests passed.
 
 Every download stream creates a verified private staging copy (`Auvra/desktop/assets.py:284`, `Auvra/desktop/assets.py:466`). Consuming or expiring the ticket removes registry state but not the staged file; files are deleted only when the whole registry closes (`Auvra/desktop/assets.py:510`). Repeated large downloads can consume unbounded disk during a long session.
 

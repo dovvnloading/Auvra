@@ -168,7 +168,9 @@ class NativeProjectHostTests(unittest.TestCase):
                 b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
                 b"\x00\x00\x00\x02\x00\x00\x00\x03\x08\x06\x00\x00\x00"
             )
-            record = previews.ingest("job-0123456789abcdef", io.BytesIO(payload))
+            record = previews.ingest(
+                "job-0123456789abcdef", io.BytesIO(payload), project_id=created["projectId"],
+            )
             self.host.set_preview_store(previews)
             canonical = self.host.service.active.path / "Content" / "sha256" / record.asset_id
             self.assertFalse(canonical.exists())
@@ -184,6 +186,27 @@ class NativeProjectHostTests(unittest.TestCase):
             self.assertEqual(served.body.read(), payload)
             served.body.close()
             self.assertFalse(canonical.exists())
+        finally:
+            previews.close()
+
+    def test_generated_preview_cannot_cross_project_boundaries(self) -> None:
+        first = self.host.handle("project.create", {"name": "Preview A"})
+        previews = PreviewStore(self.root / "cross-project-previews")
+        try:
+            payload = (
+                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+                b"\x00\x00\x00\x02\x00\x00\x00\x03\x08\x06\x00\x00\x00"
+            )
+            record = previews.ingest(
+                "job-0123456789abcdef", io.BytesIO(payload), project_id=first["projectId"],
+            )
+            self.host.set_preview_store(previews)
+            second = self.host.handle("project.create", {"name": "Preview B"})
+            with self.assertRaises(HostOperationError) as raised:
+                self.host.handle("asset.resolve", {
+                    "projectId": second["projectId"], "assetId": record.asset_id,
+                })
+            self.assertEqual(raised.exception.code, "invalid_job")
         finally:
             previews.close()
 

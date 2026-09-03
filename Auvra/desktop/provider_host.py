@@ -606,10 +606,11 @@ class NativeProviderHost:
 
     def _discard(self, payload: dict[str, Any]) -> dict[str, Any]:
         job = self._require_job_project(payload)
-        preview = self.preview_store.get(job.job_id, payload["previewAssetId"]) if self.preview_store is not None else None
+        preview = (self.preview_store.get(job.job_id, payload["previewAssetId"], project_id=payload["projectId"])
+                   if self.preview_store is not None else None)
         if preview is None:
             raise HostOperationError("invalid_job", "Generated preview is unavailable")
-        self.preview_store.discard(job.job_id, preview.asset_id)
+        self.preview_store.discard(job.job_id, preview.asset_id, project_id=payload["projectId"])
         return {"kind": "media.discard", "projectId": payload["projectId"], "jobId": job.job_id,
                 "previewAssetId": payload["previewAssetId"], "projectRevision": self._project_revision(payload["projectId"])}
 
@@ -619,10 +620,11 @@ class NativeProviderHost:
         if job.state.value != "succeeded" or job.capability not in {Capability.MEDIA_GENERATE.value, Capability.MEDIA_EDIT.value}:
             raise HostOperationError("invalid_job", "Media job is not complete")
         meta = self._meta.get(job.job_id, {})
-        preview = self.preview_store.get(job.job_id, payload["previewAssetId"]) if self.preview_store is not None else None
+        preview = (self.preview_store.get(job.job_id, payload["previewAssetId"], project_id=active.project_id)
+                   if self.preview_store is not None else None)
         if preview is None:
             raise HostOperationError("invalid_job", "Generated preview is unavailable")
-        with self.preview_store.open(preview.asset_id) as stream:
+        with self.preview_store.open(preview.asset_id, project_id=active.project_id) as stream:
             reference = self.project_host.service.begin_upload(stream, project_id=active.project_id, size=preview.size, mime=preview.mime, name=payload["name"])
         generation = {
             "providerId": job.provider, "modelId": job.model, "jobId": job.job_id,
@@ -667,7 +669,7 @@ class NativeProviderHost:
             # Keep every model record and only update the selected model.
             changes["models"] = model_documents
         status = self.project_host.service.apply_changes(changes, project_id=active.project_id, expected_revision=payload["expectedRevision"])
-        self.preview_store.discard(job.job_id, preview.asset_id)
+        self.preview_store.discard(job.job_id, preview.asset_id, project_id=active.project_id)
         return {"kind": "media.commit", "projectId": active.project_id, "jobId": job.job_id, "previewAssetId": preview.asset_id, "projectRevision": status.revision, "assetId": reference.asset_id, "provenance": generation}
 
     def _preview_command(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -908,7 +910,11 @@ class NativeProviderHost:
         with tempfile.NamedTemporaryFile() as temp:
             artifact = adapter.download_output(url, sink=temp)
             temp.flush(); temp.seek(0)
-            record = self.preview_store.ingest(job_id, temp, declared_mime=artifact.content_type, provenance=self._preview_provenance(job_id, meta))
+            record = self.preview_store.ingest(
+                job_id, temp, project_id=meta.get("projectId"),
+                declared_mime=artifact.content_type,
+                provenance=self._preview_provenance(job_id, meta),
+            )
         meta["artifactHash"] = record.asset_id
         meta["preview"] = record
 

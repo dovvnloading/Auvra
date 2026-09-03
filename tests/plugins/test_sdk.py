@@ -178,6 +178,33 @@ class PluginSdkTests(unittest.TestCase):
         self.assertEqual(installed.executable.read_bytes(), self.entry.read_bytes())
         self.assertEqual(installed.directory.name, installed.package.package_digest)
 
+    def test_nested_entrypoint_remains_bound_through_install_and_worker(self) -> None:
+        nested = self.root / "payload" / "subdir" / "provider.exe"
+        nested.parent.mkdir()
+        nested.write_bytes(self.entry.read_bytes())
+        self.manifest["entrypoint"] = {
+            "path": "payload/subdir/provider.exe",
+            "sha256": hashlib.sha256(nested.read_bytes()).hexdigest(),
+        }
+        package = PluginPackage.open(self.build(), allow_unsigned=True)
+        installer = PluginInstaller(self.root / "nested-install", acl_grant=lambda *_: None)
+        installed = installer.install(package.path, allow_unsigned=True)
+        self.assertEqual(installed.executable, installed.directory / "payload" / "subdir" / "provider.exe")
+        self.assertEqual(installed.executable.read_bytes(), nested.read_bytes())
+        reopened = installer.install(package.path, allow_unsigned=True)
+        self.assertEqual(reopened.executable, installed.executable)
+
+        class Policy:
+            def __init__(self): self.launched = None
+            def launch(self, executable: Path, *, package: PluginPackage):
+                self.launched = (executable, package)
+                return object()
+
+        policy = Policy()
+        worker = PluginWorker(package, project_id="project-a", grants=PermissionGrantStore(), policy=policy)
+        worker.start(installed.executable)
+        self.assertEqual(policy.launched[0], installed.executable)
+
     def test_persistent_security_state_is_atomic_and_fails_closed_on_corruption(self) -> None:
         state_path = self.root / "security.json"
         state = PersistentSecurityState(state_path)

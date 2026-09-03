@@ -96,6 +96,89 @@ class ProviderCoreTests(unittest.TestCase):
         with self.assertRaises(ProviderError):
             bounded.upload(HttpRequest("PUT", "https://api.openai.com/file"), io.BytesIO(b"x"), size=1)
 
+    def test_stdlib_upload_reads_large_response_to_eof_and_checks_length(self):
+        class UploadResponse:
+            status = 200
+
+            def __init__(self, body, declared):
+                self.body = body
+                self.declared = declared
+
+            def getheaders(self):
+                return [("Content-Length", str(self.declared))]
+
+            def read(self, limit):
+                chunk, self.body = self.body[:limit], self.body[limit:]
+                return chunk
+
+        class UploadConnection:
+            def __init__(self, response):
+                self.response = response
+                self.sent = bytearray()
+
+            def putrequest(self, *_args): pass
+            def putheader(self, *_args): pass
+            def endheaders(self): pass
+            def send(self, chunk): self.sent.extend(chunk)
+            def getresponse(self): return self.response
+            def close(self): pass
+
+        body = b"x" * (64 * 1024 + 17)
+        connection = UploadConnection(UploadResponse(body, len(body)))
+        with mock.patch("Auvra.providers.transport.http.client.HTTPSConnection", return_value=connection):
+            response = StdlibTransport(max_response_bytes=len(body) + 1).upload(
+                HttpRequest("PUT", "https://uploads.example.test/result"), io.BytesIO(b"a"), size=1,
+            )
+        self.assertEqual(response.body, body)
+        self.assertEqual(connection.sent, b"a")
+
+        connection = UploadConnection(UploadResponse(body, len(body) + 1))
+        with mock.patch("Auvra.providers.transport.http.client.HTTPSConnection", return_value=connection):
+            with self.assertRaises(ProviderError):
+                StdlibTransport(max_response_bytes=len(body) + 1).upload(
+                    HttpRequest("PUT", "https://uploads.example.test/result"), io.BytesIO(b"a"), size=1,
+                )
+
+    def test_stdlib_stream_and_upload_strip_connection_headers(self):
+        class Response:
+            status = 200
+
+            def getheaders(self): return []
+            def read(self, _limit): return b""
+
+        class Connection:
+            def __init__(self): self.request_headers = {}; self.put_headers = []
+            def request(self, _method, _path, *, body, headers): self.request_headers = dict(headers)
+            def putrequest(self, *_args): pass
+            def putheader(self, key, value): self.put_headers.append((key, value))
+            def endheaders(self): pass
+            def send(self, _chunk): pass
+            def getresponse(self): return Response()
+            def close(self): pass
+
+        stream_connection = Connection()
+        with mock.patch("Auvra.providers.transport.http.client.HTTPConnection", return_value=stream_connection):
+            StdlibTransport().stream(
+                HttpRequest("GET", "http://127.0.0.1:8080/result", {
+                    "Host": "attacker.example", "Connection": "close", "X-Test": "ok",
+                }), io.BytesIO(), max_bytes=10,
+            )
+        self.assertNotIn("host", {key.lower() for key in stream_connection.request_headers})
+        self.assertNotIn("connection", {key.lower() for key in stream_connection.request_headers})
+        self.assertEqual(stream_connection.request_headers["X-Test"], "ok")
+
+        upload_connection = Connection()
+        with mock.patch("Auvra.providers.transport.http.client.HTTPSConnection", return_value=upload_connection):
+            StdlibTransport().upload(
+                HttpRequest("PUT", "https://uploads.example.test/result", {
+                    "Host": "attacker.example", "Connection": "close", "Content-Length": "999",
+                }), io.BytesIO(), size=0,
+            )
+        headers = {key.lower(): value for key, value in upload_connection.put_headers}
+        self.assertNotIn("host", headers)
+        self.assertNotIn("connection", headers)
+        self.assertEqual(headers["content-length"], "0")
+
     def test_openai_responses_and_no_raw_payload_exposed(self):
         response = HttpResponse(200, {}, json.dumps({"output": [{"content": [{"type": "output_text", "text": "hello"}]}]}).encode())
         fake = FakeTransport([response]); adapter = OpenAIAdapter(fake, credential_store=FakeCredentials()); adapter.registry.discover_models("openai", ["gpt-4o-mini"]); result = adapter.complete(model="gpt-4o-mini", prompt="hi")

@@ -94,6 +94,14 @@ class PreviewStoreTests(unittest.TestCase):
         with self.assertRaises(PreviewError):
             self.store.open(second.asset_id)
 
+    def test_project_scope_is_required_for_cross_project_lookup(self) -> None:
+        record = self.store.ingest(
+            "job-0123456789abcdef", io.BytesIO(_png()), project_id="project-a",
+        )
+        with self.assertRaises(PreviewError):
+            self.store.find(record.asset_id, project_id="project-b")
+        self.assertEqual(self.store.find(record.asset_id, project_id="project-a"), record)
+
     def test_jpeg_and_webp_dimensions_are_parsed_without_image_dependency(self) -> None:
         jpeg = b"\xff\xd8\xff\xc0\x00\x07\x08\x00\x02\x00\x03"
         record = self.store.ingest("job-0123456789abcdef", io.BytesIO(jpeg), declared_mime="image/jpeg")

@@ -13,6 +13,9 @@ from .errors import ErrorCode, ProviderError, from_http_status
 from Auvra.diagnostics import trace_public_class
 
 
+_HOP_BY_HOP_HEADERS = frozenset({"host", "connection"})
+
+
 @dataclass(frozen=True, slots=True)
 class HttpRequest:
     method: str
@@ -71,7 +74,7 @@ class StdlibTransport:
         if request.method.upper() == "GET" and request.body:
             raise ProviderError(ErrorCode.INVALID_REQUEST, "GET requests cannot contain a body")
         if request.timeout <= 0 or request.timeout > 120: raise ProviderError(ErrorCode.TIMEOUT, "provider timeout is outside the allowed bound")
-        headers = {str(k): str(v) for k, v in request.headers.items() if str(k).lower() not in {"host", "connection"}}
+        headers = _forward_headers(request.headers)
         headers["User-Agent"] = self.user_agent
         try:
             connection: http.client.HTTPConnection | http.client.HTTPSConnection
@@ -116,7 +119,7 @@ class StdlibTransport:
             conn = (http.client.HTTPSConnection(parsed.hostname, parsed.port or 443, timeout=request.timeout, context=ssl.create_default_context()) if parsed.scheme == "https" else http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=request.timeout))
             try:
                 path = parsed.path or "/"; path += ("?" + parsed.query) if parsed.query else ""
-                headers = {str(k): str(v) for k, v in request.headers.items()}; headers["User-Agent"] = self.user_agent
+                headers = _forward_headers(request.headers); headers["User-Agent"] = self.user_agent
                 conn.request(request.method.upper(), path, body=request.body, headers=headers); response = conn.getresponse()
                 captured = {k.lower(): v[:512] for k, v in response.getheaders() if k.lower() in {"content-type", "content-length", "location", "retry-after", "x-request-id"}}
                 declared = _content_length(captured)
@@ -151,7 +154,8 @@ class StdlibTransport:
         conn = http.client.HTTPSConnection(parsed.hostname, parsed.port or 443, timeout=request.timeout, context=ssl.create_default_context())
         try:
             path = parsed.path or "/"; path += ("?" + parsed.query) if parsed.query else ""
-            headers = {str(k): str(v) for k, v in request.headers.items()}; headers["User-Agent"] = self.user_agent; headers["Content-Length"] = str(size)
+            headers = _forward_headers(request.headers, excluded={"content-length", "transfer-encoding"})
+            headers["User-Agent"] = self.user_agent; headers["Content-Length"] = str(size)
             conn.putrequest(request.method.upper(), path)
             for key, value in headers.items(): conn.putheader(key, value)
             conn.endheaders(); sent = 0
@@ -161,8 +165,20 @@ class StdlibTransport:
                 sent += len(chunk); conn.send(chunk)
             if sent != size: raise ProviderError(ErrorCode.INVALID_REQUEST, "upload size did not match source")
             response = conn.getresponse(); captured = {k.lower(): v[:512] for k, v in response.getheaders() if k.lower() in {"content-type", "content-length", "location", "retry-after", "x-request-id"}}
-            body = response.read(min(64 * 1024, self.max_response_bytes + 1))
-            return HttpResponse(response.status, captured, body)
+            declared = _content_length(captured)
+            if declared is not None and declared > self.max_response_bytes:
+                raise ProviderError(ErrorCode.REMOTE, "provider response exceeded size limit")
+            data = bytearray()
+            while len(data) <= self.max_response_bytes:
+                chunk = response.read(min(64 * 1024, self.max_response_bytes + 1 - len(data)))
+                if not chunk:
+                    break
+                data.extend(chunk)
+            if len(data) > self.max_response_bytes:
+                raise ProviderError(ErrorCode.REMOTE, "provider response exceeded size limit")
+            if declared is not None and len(data) != declared:
+                raise ProviderError(ErrorCode.REMOTE, "provider response size did not match declared length")
+            return HttpResponse(response.status, captured, bytes(data))
         except ProviderError: raise
         except (TimeoutError, OSError) as exc: raise ProviderError(ErrorCode.NETWORK, "provider upload failed", retryable=True) from exc
         finally: conn.close()
@@ -183,6 +199,15 @@ def _content_length(headers: Mapping[str, str]) -> int | None:
     if result < 0:
         raise ProviderError(ErrorCode.REMOTE, "provider response had an invalid size")
     return result
+
+
+def _forward_headers(headers: Mapping[str, str], *, excluded: Iterable[str] = ()) -> dict[str, str]:
+    blocked = _HOP_BY_HOP_HEADERS | {str(name).lower() for name in excluded}
+    return {
+        str(key): str(value)
+        for key, value in headers.items()
+        if str(key).lower() not in blocked
+    }
 
 
 @trace_public_class("provider_transport", concise=("request", "stream", "upload"))

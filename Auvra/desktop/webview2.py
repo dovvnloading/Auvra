@@ -763,10 +763,15 @@ class WebView2Frame:
                 name = getattr(response.body, "name", None)
                 if not isinstance(name, (str, os.PathLike)):
                     raise TypeError("asset response stream is not file-backed")
-                response.body.close()
                 from System.IO import FileAccess, FileMode, FileShare, FileStream  # type: ignore[import-not-found]
 
-                native_stream = FileStream(str(name), FileMode.Open, FileAccess.Read, FileShare.Read)
+                native_stream = FileStream(
+                    str(name),
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.Read | FileShare.Delete,
+                )
+                response.body.close()
             headers = "".join(f"{name}: {value}\r\n" for name, value in response.headers.items())
             args.Response = environment.CreateWebResourceResponse(
                 native_stream,

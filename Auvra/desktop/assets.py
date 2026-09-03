@@ -92,9 +92,78 @@ class _TicketState:
     expected_hash: str | None
     expires_at: float
     source_path: Path | None = None
+    cleanup_path: Path | None = None
     consumed: bool = False
     upload: AssetUpload | None = None
     on_upload: Callable[[AssetUpload], None] | None = None
+
+
+class _EphemeralDownloadStream:
+    """Close a staged download and remove its private copy together."""
+
+    def __init__(self, stream: BinaryIO, cleanup: Callable[[], None]) -> None:
+        self._stream = stream
+        self._cleanup = cleanup
+        self._closed = False
+
+    @property
+    def name(self) -> object:
+        return getattr(self._stream, "name", None)
+
+    @property
+    def closed(self) -> bool:
+        return self._closed or bool(getattr(self._stream, "closed", False))
+
+    def read(self, size: int = -1) -> bytes:
+        data = self._stream.read(size)
+        if size < 0 or not data:
+            self.close()
+        return data
+
+    def readinto(self, buffer: Any) -> int:
+        size = self._stream.readinto(buffer)
+        if not size:
+            self.close()
+        return size
+
+    def readline(self, size: int = -1) -> bytes:
+        data = self._stream.readline(size)
+        if not data:
+            self.close()
+        return data
+
+    def __iter__(self) -> _EphemeralDownloadStream:
+        return self
+
+    def __next__(self) -> bytes:
+        line = self._stream.readline()
+        if not line:
+            self.close()
+            raise StopIteration
+        return line
+
+    def __enter__(self) -> _EphemeralDownloadStream:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        error: Exception | None = None
+        try:
+            self._stream.close()
+        except Exception as exc:
+            error = exc
+        finally:
+            self._cleanup()
+        if error is not None:
+            raise error
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
 
 
 def is_asset_resource_url(url: str) -> bool:
@@ -190,6 +259,7 @@ class AssetTransferRegistry:
         self._now = now
         self._lock = threading.RLock()
         self._tickets: dict[str, _TicketState] = {}
+        self._active_downloads: set[_EphemeralDownloadStream] = set()
         parent = Path(parent).expanduser().absolute()
         parent.mkdir(parents=True, exist_ok=True)
         self._parent = parent.resolve(strict=True)
@@ -217,6 +287,7 @@ class AssetTransferRegistry:
         expected_hash: str | None,
         ttl: float,
         source_path: Path | None = None,
+        cleanup_path: Path | None = None,
         on_upload: Callable[[AssetUpload], None] | None = None,
     ) -> AssetTicket:
         if method not in {"GET", "PUT"}:
@@ -231,17 +302,16 @@ class AssetTransferRegistry:
         token = secrets.token_urlsafe(32)
         expires = self._now() + ttl
         state = _TicketState(
-            token,
-            self.session_id,
-            method,
-            mime,
-            max_size,
-            expected_hash,
-            expires,
-            source_path,
-            False,
-            None,
-            on_upload,
+            token=token,
+            session_id=self.session_id,
+            method=method,
+            mime_type=mime,
+            max_size=max_size,
+            expected_hash=expected_hash,
+            expires_at=expires,
+            source_path=source_path,
+            cleanup_path=cleanup_path,
+            on_upload=on_upload,
         )
         with self._lock:
             self._tickets[token] = state
@@ -273,13 +343,39 @@ class AssetTransferRegistry:
         max_size: int,
         ttl: float = 60.0,
     ) -> AssetTicket:
+        return self._issue_download_path(
+            source,
+            mime_type=mime_type,
+            expected_hash=expected_hash,
+            max_size=max_size,
+            ttl=ttl,
+        )
+
+    def _issue_download_path(
+        self,
+        source: Path,
+        *,
+        mime_type: str,
+        expected_hash: str,
+        max_size: int,
+        ttl: float,
+        cleanup_path: Path | None = None,
+    ) -> AssetTicket:
         path = Path(source).absolute().resolve(strict=True)
         if not path.is_file() or path.is_symlink():
             raise AssetTransportError("asset_unavailable", 404)
         size, actual = _hash_file(path, max_size=max_size)
         if not secrets.compare_digest(actual, expected_hash):
             raise AssetTransportError("asset_hash_mismatch", 409)
-        return self._new_ticket("GET", mime_type, size, expected_hash, ttl, path)
+        return self._new_ticket(
+            "GET",
+            mime_type,
+            size,
+            expected_hash,
+            ttl,
+            path,
+            cleanup_path=cleanup_path,
+        )
 
     def issue_download_stream(
         self,
@@ -314,12 +410,13 @@ class AssetTransferRegistry:
                 os.fsync(output.fileno())
             if not secrets.compare_digest(digest.hexdigest(), expected_hash):
                 raise AssetTransportError("asset_hash_mismatch", 409)
-            return self.issue_download(
+            return self._issue_download_path(
                 target,
                 mime_type=mime_type,
                 expected_hash=expected_hash,
                 max_size=max_size,
                 ttl=ttl,
+                cleanup_path=target,
             )
         except Exception:
             target.unlink(missing_ok=True)
@@ -349,6 +446,7 @@ class AssetTransferRegistry:
                 raise AssetTransportError("asset_ticket_unknown", 404)
             if self._now() >= state.expires_at:
                 self._tickets.pop(token, None)
+                self._cleanup_staged_path(state.cleanup_path)
                 raise AssetTransportError("asset_ticket_expired", 410)
             if state.consumed:
                 raise AssetTransportError("asset_ticket_consumed", 410)
@@ -471,10 +569,25 @@ class AssetTransferRegistry:
         path = state.source_path
         if path is None:
             raise AssetTransportError("asset_unavailable", 404)
-        size, actual = _hash_file(path, max_size=state.max_size)
-        if state.expected_hash is None or not secrets.compare_digest(actual, state.expected_hash):
-            raise AssetTransportError("asset_hash_mismatch", 409)
-        stream = path.open("rb")
+        try:
+            size, actual = _hash_file(path, max_size=state.max_size)
+            if state.expected_hash is None or not secrets.compare_digest(actual, state.expected_hash):
+                raise AssetTransportError("asset_hash_mismatch", 409)
+            stream = path.open("rb")
+        except AssetTransportError:
+            self._cleanup_staged_path(state.cleanup_path)
+            raise
+        except OSError as exc:
+            self._cleanup_staged_path(state.cleanup_path)
+            raise AssetTransportError("asset_unavailable", 404) from exc
+        if state.cleanup_path is not None:
+            owned = _EphemeralDownloadStream(
+                stream,
+                lambda: self._release_download(state.cleanup_path, owned),
+            )
+            with self._lock:
+                self._active_downloads.add(owned)
+            stream = owned
         response_headers = self._cors_headers()
         response_headers.update(
             {
@@ -484,6 +597,19 @@ class AssetTransferRegistry:
             }
         )
         return AssetResourceResponse(200, "OK", response_headers, stream)
+
+    def _cleanup_staged_path(self, path: Path | None) -> None:
+        if path is None or path.parent != self._root:
+            return
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def _release_download(self, path: Path, stream: _EphemeralDownloadStream) -> None:
+        self._cleanup_staged_path(path)
+        with self._lock:
+            self._active_downloads.discard(stream)
 
     def claim_upload(self, url: str) -> AssetUpload:
         """Claim a completed upload for repository ingestion exactly once."""
@@ -509,7 +635,14 @@ class AssetTransferRegistry:
 
     def close(self) -> None:
         with self._lock:
+            active = list(self._active_downloads)
+            self._active_downloads.clear()
             self._tickets.clear()
+        for stream in active:
+            try:
+                stream.close()
+            except OSError:
+                pass
         root = self._root
         marker = root / ".auvra-asset-transfer"
         try:

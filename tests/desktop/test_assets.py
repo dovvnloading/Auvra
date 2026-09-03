@@ -131,6 +131,61 @@ class AssetTransferRegistryTests(unittest.TestCase):
             )
         self.assertEqual(raised.exception.code, "asset_stream_invalid")
 
+    def test_staged_download_is_removed_on_body_close_and_expiry(self) -> None:
+        payload = b"staged-download"
+        digest = hashlib.sha256(payload).hexdigest()
+        ticket = self.registry.issue_download_stream(
+            io.BytesIO(payload),
+            mime_type="application/octet-stream",
+            expected_hash=digest,
+            max_size=64,
+        )
+        staged = list(self.registry.root.glob("download-*"))
+        self.assertEqual(len(staged), 1)
+        served = self.registry.handle(
+            method="GET",
+            url=ticket.url,
+            headers={"Origin": "http://127.0.0.1:3000"},
+        )
+        self.assertEqual(served.body.read(), payload)
+        self.assertFalse(staged[0].exists())
+        served.body.close()
+
+        manual = self.registry.issue_download_stream(
+            io.BytesIO(payload),
+            mime_type="application/octet-stream",
+            expected_hash=digest,
+            max_size=64,
+        )
+        manual_path = list(self.registry.root.glob("download-*"))[0]
+        manual_response = self.registry.handle(
+            method="GET",
+            url=manual.url,
+            headers={"Origin": "http://127.0.0.1:3000"},
+        )
+        self.assertEqual(manual_response.body.read(1), payload[:1])
+        self.assertTrue(manual_path.exists())
+        manual_response.body.close()
+        self.assertFalse(manual_path.exists())
+
+        expiring = self.registry.issue_download_stream(
+            io.BytesIO(payload),
+            mime_type="application/octet-stream",
+            expected_hash=digest,
+            max_size=64,
+            ttl=1,
+        )
+        expiring_path = list(self.registry.root.glob("download-*"))[0]
+        self.clock[0] += 2
+        with self.assertRaises(AssetTransportError) as raised:
+            self.registry.handle(
+                method="GET",
+                url=expiring.url,
+                headers={"Origin": "http://127.0.0.1:3000"},
+            )
+        self.assertEqual(raised.exception.code, "asset_ticket_expired")
+        self.assertFalse(expiring_path.exists())
+
     def test_wrong_origin_mime_size_hash_and_expiry_fail_closed(self) -> None:
         cases = []
         ticket = self.registry.issue_upload(mime_type="image/png", max_size=3)
