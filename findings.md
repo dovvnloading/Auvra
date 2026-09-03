@@ -486,6 +486,8 @@ Cross-backend verification deliberately permits different pixel signatures and m
 
 The root enables `StrictMode` (`fbx-viewer (1)/index.tsx:20`), while the mount effect starts asynchronous restore without cleanup or a generation guard (`fbx-viewer (1)/hooks/useScenePersistence.ts:666`). React development replay launches two restores; whichever completes last wins, without disposal of the other result. The stale-completion race also exists on unmount or project change in production.
 
+**Status:** Completed — initial restore is transition-scoped and abortable before its first await; cleanup aborts the controller and invalidates the transition, while hydration checks project identity/generation before publication and disposes detached results. Project-boundary verification covers StrictMode setup/cleanup/setup and stale completion rejection; TypeScript typecheck passes.
+
 ### F-058 — Duplicate selection authorities leave stale model and blueprint state
 
 **Severity:** High · **Classification:** Confirmed
