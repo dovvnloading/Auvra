@@ -15,10 +15,12 @@ import { assetDiagnosticAttributes, frontendDiagnostics } from '../diagnostics/r
 
 export const useModelManager = (
   setIsLoading: (loading: boolean) => void,
-  onModelRemoved: (id: string) => void
+  onModelRemoved: (id: string) => void,
+  selectedModelId: string | null,
+  selectModel: (id: string | null) => void,
+  clearSelectedModel: (id: string) => void,
 ) => {
   const [models, setModels] = useState<LoadedModelData[]>([]);
-  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const { startOperation } = useOperationActions();
   const { addNotification } = useNotification();
 
@@ -118,20 +120,20 @@ export const useModelManager = (
   const placeInScene = useCallback(async (id: string) => {
       projectService.assertWritable();
       setModels(prev => prev.map(m => m.id === id ? { ...m, isPlacedInScene: true } : m));
-      setSelectedModelId(id);
+      selectModel(id);
       try {
           await dbOperations.updateModelPlacement(id, true);
       } catch(e) { frontendDiagnostics.failure('model_placement_update_failed', e); }
-  }, []);
+  }, [selectModel]);
 
   const removeFromScene = useCallback(async (id: string) => {
       projectService.assertWritable();
       setModels(prev => prev.map(m => m.id === id ? { ...m, isPlacedInScene: false } : m));
-      if (selectedModelId === id) setSelectedModelId(null);
+      clearSelectedModel(id);
       try {
           await dbOperations.updateModelPlacement(id, false);
       } catch(e) { frontendDiagnostics.failure('model_placement_remove_failed', e); }
-  }, [selectedModelId]);
+  }, [clearSelectedModel]);
 
   const removeModel = useCallback(async (id: string) => {
     projectService.assertWritable();
@@ -149,13 +151,11 @@ export const useModelManager = (
         // Callback to cleanup attachments in the other hook
         onModelRemoved(id);
 
-        if (selectedModelId === id) {
-          setSelectedModelId(null);
-        }
+        clearSelectedModel(id);
     } catch (e) {
         frontendDiagnostics.failure('model_delete_failed', e);
     }
-  }, [selectedModelId, onModelRemoved]);
+  }, [clearSelectedModel, onModelRemoved]);
 
   const addAnimations = useCallback(async (files: File[], modelId: string) => {
     projectService.assertWritable();
@@ -390,8 +390,8 @@ export const useModelManager = (
     models,
     setModels,
     selectedModelId,
-    setSelectedModelId, // Exposed for useScenePersistence
-    selectModel: setSelectedModelId, // Alias
+    setSelectedModelId: selectModel, // Exposed for useScenePersistence
+    selectModel,
     addModel,
     removeModel,
     placeInScene,

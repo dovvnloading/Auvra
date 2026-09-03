@@ -6,9 +6,12 @@ import { projectService } from '../utils/projectService';
 import { DEFAULT_BLUEPRINTS, PLAYER_GRAPH, ENEMY_GRAPH } from '../data/blueprints';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 
-export const useBlueprintManager = () => {
+export const useBlueprintManager = (
+  selectedBlueprintId: string | null,
+  selectBlueprint: (id: string | null) => void,
+  clearSelectedBlueprint: (id: string) => void,
+) => {
   const [blueprints, setBlueprints] = useState<Blueprint[]>(DEFAULT_BLUEPRINTS);
-  const [selectedBlueprintId, setSelectedBlueprintId] = useState<string | null>(null);
 
   const addBlueprint = useCallback(async (type: BlueprintType) => {
     projectService.assertWritable();
@@ -41,11 +44,11 @@ export const useBlueprintManager = () => {
     try {
         await dbOperations.saveBlueprint(newBP);
         setBlueprints(prev => [...prev, newBP]);
-        setSelectedBlueprintId(newBP.id);
+        selectBlueprint(newBP.id);
     } catch (err) {
         frontendDiagnostics.failure('blueprint_add_failed', err);
     }
-  }, [blueprints]);
+  }, [blueprints, selectBlueprint]);
 
   const updateBlueprint = useCallback((id: string, updates: Partial<Blueprint>) => {
     projectService.assertWritable();
@@ -66,15 +69,13 @@ export const useBlueprintManager = () => {
     setBlueprints(prev => prev.filter(bp => bp.id !== id));
     
     // 2. Handle Selection
-    if (selectedBlueprintId === id) {
-        setSelectedBlueprintId(null);
-    }
+    clearSelectedBlueprint(id);
 
     // 3. Persist
     dbOperations.deleteBlueprint(id).catch(err => {
         frontendDiagnostics.failure('blueprint_delete_failed', err);
     });
-  }, [selectedBlueprintId]);
+  }, [clearSelectedBlueprint]);
 
   const unlinkModelFromBlueprints = useCallback((modelId: string) => {
     setBlueprints(prev => {
@@ -87,7 +88,7 @@ export const useBlueprintManager = () => {
     blueprints,
     setBlueprints, // Exposed for persistence layer
     selectedBlueprintId,
-    setSelectedBlueprintId,
+    setSelectedBlueprintId: selectBlueprint,
     addBlueprint,
     updateBlueprint,
     removeBlueprint,

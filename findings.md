@@ -494,6 +494,8 @@ The root enables `StrictMode` (`fbx-viewer (1)/index.tsx:20`), while the mount e
 
 `useModelManager` owns a private selected ID while the UI uses `SelectionContext` (`fbx-viewer (1)/hooks/useModelManager.ts:20`, `fbx-viewer (1)/context/AssetContext.tsx:96`). Removal does not clear the UI authority, and the viewer filters using that stale ID (`fbx-viewer (1)/components/Scene/ViewerScene.tsx:94`). Blueprint manager/editor repeat the same split (`fbx-viewer (1)/hooks/useBlueprintManager.ts:9`, `fbx-viewer (1)/components/Blueprint/BlueprintEditor.tsx:13`). Deleting a selected item can hide remaining models or leave an unusable selection.
 
+**Status:** Completed — model and blueprint managers now consume the shared `SelectionContext` instead of keeping private selected IDs. Conditional clear actions prevent stale asynchronous deletes from clearing a newer selection, and placement/removal no longer performs a second competing synchronization. Project-boundary verification and TypeScript typecheck pass.
+
 ### F-059 — FBX cancellation neither stops parsing nor disposes late output
 
 **Severity:** High · **Classification:** Confirmed

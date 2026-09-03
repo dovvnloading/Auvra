@@ -10,6 +10,8 @@ const serializer = await readFile(resolve(root, 'utils/projectSerializer.ts'), '
 const service = await readFile(resolve(root, 'utils/projectService.ts'), 'utf8');
 const header = await readFile(resolve(root, 'components/UI/Header.tsx'), 'utf8');
 const modelManager = await readFile(resolve(root, 'hooks/useModelManager.ts'), 'utf8');
+const blueprintManager = await readFile(resolve(root, 'hooks/useBlueprintManager.ts'), 'utf8');
+const assetContext = await readFile(resolve(root, 'context/AssetContext.tsx'), 'utf8');
 const persistence = await readFile(resolve(root, 'hooks/useScenePersistence.ts'), 'utf8');
 const levels = await readFile(resolve(root, 'hooks/useLevelManager.ts'), 'utf8');
 const attachments = await readFile(resolve(root, 'hooks/useAttachmentManager.ts'), 'utf8');
@@ -85,6 +87,13 @@ if (!/LONG_RUNNING_METHODS/.test(nativeTransport) || !/LONG_REQUEST_TIMEOUT_MS/.
 if (!/hydrateSnapshot\(\s*snapshot,[\s\S]*?hydrationSignal,\s*activeDiagnostics/.test(persistence)) failures.push('project hydration does not propagate progress, cancellation, and trace context');
 if (!/interface DetachedHydration/.test(persistence) || !/publishDetachedHydration/.test(persistence) || !/disposeDetachedHydration/.test(persistence)) failures.push('project hydration is not detached, atomically published, and stale-resource safe');
 if (!/new AbortController\(\)/.test(persistence) || !/controller\.abort\(\)/.test(persistence) || !/editorSession\.beginTransition\(\)/.test(persistence)) failures.push('initial project hydration is not cancellable and transition-scoped');
+if (/const \[selectedModelId,\s*setSelectedModelId\]\s*=\s*useState/.test(modelManager)
+  || /const \[selectedBlueprintId,\s*setSelectedBlueprintId\]\s*=\s*useState/.test(blueprintManager)
+  || !/useModelManager\([\s\S]*selectedModelId,[\s\S]*clearModel/.test(assetContext)
+  || !/useBlueprintManager\(selectedBlueprintId,[\s\S]*clearBlueprint/.test(assetContext)
+  || !/clearModel/.test(assetContext) || !/clearBlueprint/.test(assetContext)) {
+  failures.push('model and blueprint managers retain a duplicate selection authority');
+}
 if (!/transition \|\| undefined/.test(projectManager) || !/isTransitionCurrent\(transition\)/.test(projectManager)) failures.push('project-manager hydration does not carry exact transition identity through awaits');
 if (!/expectedProjectId/.test(persistence) || !/expectedRevision/.test(persistence) || !/status\.projectId !== expectedProjectId/.test(persistence) || !/status\.revision !== expectedRevision/.test(persistence)) failures.push('hydration does not fence the exact project identity after awaits');
 if (!/flushSync/.test(sceneContext) || !/commitHydration/.test(sceneContext)) failures.push('hydration replacement lacks an explicit atomic React commit');

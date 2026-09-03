@@ -94,13 +94,13 @@ interface AssetProviderProps {
 }
 
 export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoading }) => {
-  const { selectModel, selectedModelId } = useSelection();
+  const { selectModel, selectedModelId, selectBlueprint, selectedBlueprintId, clearModel, clearBlueprint } = useSelection();
 
   // --- Domain Managers ---
   const textureManager = useTextureManager(setIsLoading);
   const audioManager = useAudioManager(setIsLoading);
   const graphManager = useGraphManager();
-  const blueprintManager = useBlueprintManager();
+  const blueprintManager = useBlueprintManager(selectedBlueprintId, selectBlueprint, clearBlueprint);
   
   // Model Manager (Handles cleanup of other domains on deletion)
   const modelManager = useModelManager(setIsLoading, (id) => {
@@ -108,7 +108,7 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     socketManager.removeSocketsByParentId(id, false);
     graphManager.removeGraphData(id, false);
     blueprintManager.unlinkModelFromBlueprints(id);
-  });
+  }, selectedModelId, selectModel, clearModel);
 
   const attachmentManager = useAttachmentManager(modelManager.models, setIsLoading);
   const socketManager = useSocketManager();
@@ -130,14 +130,8 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     models: modelManager.models,
     addModel: modelManager.addModel,
     removeModel: modelManager.removeModel,
-    placeInScene: async (id) => {
-        await modelManager.placeInScene(id);
-        selectModel(id); // Sync selection
-    },
-    removeFromScene: async (id) => {
-        await modelManager.removeFromScene(id);
-        if (selectedModelId === id) selectModel(null); // Deselect
-    },
+    placeInScene: modelManager.placeInScene,
+    removeFromScene: modelManager.removeFromScene,
     addAnimations: modelManager.addAnimations,
     retextureModel: modelManager.retextureModel,
     previewTexture: modelManager.previewTexture,
@@ -178,9 +172,7 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     blueprints: blueprintManager.blueprints,
     addBlueprint: blueprintManager.addBlueprint,
     updateBlueprint: blueprintManager.updateBlueprint,
-    removeBlueprint: (id) => {
-        blueprintManager.removeBlueprint(id);
-    },
+    removeBlueprint: blueprintManager.removeBlueprint,
     setBlueprints: blueprintManager.setBlueprints,
 
     // Graphs
