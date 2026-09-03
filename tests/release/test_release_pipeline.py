@@ -155,6 +155,21 @@ class ReleasePipelineTests(unittest.TestCase):
                 sign_msix(package, signtool="signtool.exe", thumbprint="a" * 40,
                           timestamp_url="http://timestamp.example")
 
+    def test_hosted_appinstaller_requires_secure_public_origin(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs = self.staged_inputs(root)
+            for uri in (
+                "http://updates.example/Auvra.appinstaller",
+                "file:///tmp/Auvra.appinstaller",
+                "https://localhost/Auvra.appinstaller",
+                "https://127.0.0.1/Auvra.appinstaller",
+                "https://user:password@updates.example/Auvra.appinstaller",
+            ):
+                with self.assertRaises(ReleaseError):
+                    assemble(inputs, root / "bad", channel="stable", version="1.0.0",
+                             appinstaller_uri=uri)
+
     def test_assemble_verify_and_appinstaller_are_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

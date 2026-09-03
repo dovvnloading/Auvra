@@ -468,6 +468,8 @@ The SBOM lists Auvra, CPython, and two WebView components (`release/pipeline.py:
 
 `--appinstaller-uri` is a free string (`release/pipeline.py:618`), and generation/validation checks XML structure but not scheme or origin (`release/pipeline.py:326`, `release/pipeline.py:344`). Stable or beta update metadata can therefore be generated with `http:`, `file:`, or another unsuitable location.
 
+**Status:** Completed — hosted App Installer metadata now requires a credential-free HTTPS `.appinstaller` URL on a public origin, with loopback/private/local targets rejected at generation and companion publication. Secure/insecure URI regression coverage passed.
+
 ### F-056 — Cross-backend verification does not compare rendered output
 
 **Severity:** Medium · **Classification:** Confirmed verification gap

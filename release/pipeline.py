@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -465,6 +466,8 @@ def _write_sbom(output_root: Path, inventory: Mapping[str, Any], policy: Mapping
 
 
 def _appinstaller(identity: str, publisher: str, version: tuple[int, int, int, int], uri: str, updates: bool) -> bytes:
+    if updates:
+        _validate_appinstaller_uri(uri)
     ns = "http://schemas.microsoft.com/appx/appinstaller/2021"
     ET.register_namespace("", ns)
     root = ET.Element(f"{{{ns}}}AppInstaller", Version=".".join(str(item) for item in version), Uri=uri)
@@ -480,6 +483,24 @@ def _appinstaller(identity: str, publisher: str, version: tuple[int, int, int, i
     if not updates:
         settings.remove(on_launch)
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _validate_appinstaller_uri(uri: str) -> str:
+    parsed = urlsplit(uri)
+    if (parsed.scheme.lower() != "https" or not parsed.hostname or parsed.username or parsed.password
+            or parsed.fragment or not parsed.path.lower().endswith(".appinstaller")):
+        raise ReleaseError("hosted App Installer URI must be an HTTPS .appinstaller URL without credentials or fragments")
+    hostname = parsed.hostname.rstrip(".").lower()
+    if hostname == "localhost":
+        raise ReleaseError("hosted App Installer URI cannot target localhost")
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        address = None
+    if address is not None and (address.is_private or address.is_loopback or address.is_link_local
+                                or address.is_reserved or address.is_multicast):
+        raise ReleaseError("hosted App Installer URI cannot target a private or local address")
+    return uri
 
 
 def _validate_appinstaller(data: bytes, *, hosted: bool) -> None:
@@ -608,6 +629,8 @@ def _assemble_into(input_root: Path, output_root: Path, *, channel: str, version
     companion: dict[str, Any] | None = None
     if appinstaller_uri:
         uri = appinstaller_uri.replace("{channel}", channel).replace("{version}", ".".join(str(item) for item in version_parts))
+        if channel_policy["updates"]:
+            _validate_appinstaller_uri(uri)
         companion_path = output_root.parent / f"{channel_policy['identity']}.appinstaller"
         companion_bytes = _appinstaller(channel_policy["identity"], channel_policy["publisher"], version_parts, uri, bool(channel_policy["updates"]))
         _validate_appinstaller(companion_bytes, hosted=bool(channel_policy["updates"]))
@@ -653,6 +676,8 @@ def assemble(input_root: Path, output_root: Path, *, channel: str, version: str,
             policy = _read_policy()
             channel_policy = policy["channels"][channel]
             uri = appinstaller_uri.replace("{channel}", channel).replace("{version}", manifest["version"])
+            if channel_policy["updates"]:
+                _validate_appinstaller_uri(uri)
             companion_bytes = _appinstaller(channel_policy["identity"], channel_policy["publisher"], _version_parts(manifest["version"]), uri, bool(channel_policy["updates"]))
             _validate_appinstaller(companion_bytes, hosted=bool(channel_policy["updates"]))
             (destination.parent / f"{channel_policy['identity']}.appinstaller").write_bytes(companion_bytes)
