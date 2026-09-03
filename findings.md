@@ -616,6 +616,8 @@ Release unit tests accept dummy runtime, SDK, Python, and native bytes (`tests/r
 
 Credential tests use only `MemoryCredentialStore`, not Windows Credential Manager (`tests/providers/test_core.py:41`; production at `Auvra/providers/credentials.py:44`). Plugin signature tests inject a fake verifier rather than the CNG path (`tests/plugins/test_sdk.py:141`; production at `Auvra/plugins/security.py:46`). Plugin resource-ceiling tests cover one happy request but not CPU/wall overage, malformed output, stuck readers, or kill escalation (`tests/plugins/test_sdk.py:217`; production at `Auvra/plugins/worker.py:510`).
 
+**Status:** Completed — provider tests now exercise the native Credential Manager wrapper (including not-found, write, and delete handling), plugin tests drive the production CNG verifier boundary, and worker tests cover CPU overage, wall-time/stuck-reader cleanup, malformed responses, and kill escalation. Provider coverage passes (33 tests) and plugin coverage passes (18 tests, including the guarded Windows isolation smoke).
+
 ### F-074 — Several tests do not exercise the boundary their names imply
 
 **Severity:** Medium · **Classification:** Gap

@@ -1,5 +1,5 @@
 from __future__ import annotations
-import hashlib, io, json, sqlite3, tempfile, unittest
+import hashlib, io, json, sqlite3, sys, tempfile, unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -7,6 +7,7 @@ from unittest import mock
 from Auvra.providers import *
 from Auvra.providers.adapters import MediaJob, TextResult, _fal_cdn_url
 from Auvra.providers.descriptors import ProviderFeature
+from Auvra.providers.credentials import _WinCredNative
 import Auvra.providers.jobs as jobs_module
 
 
@@ -46,6 +47,38 @@ class ProviderCoreTests(unittest.TestCase):
         self.assertEqual(store.read("openai_api_key"), "secret-value")
         self.assertNotIn("secret-value", repr(store))
         with self.assertRaises(CredentialError): store.write("x", "a" * 1300)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows Credential Manager is Windows-only")
+    def test_windows_credential_manager_native_boundary_handles_not_found_and_write(self):
+        class NativeFunction:
+            def __init__(self, result):
+                self.result = result
+                self.calls = []
+
+            def __call__(self, *args):
+                self.calls.append(args)
+                return self.result
+
+        class Advapi:
+            def __init__(self):
+                self.CredReadW = NativeFunction(False)
+                self.CredWriteW = NativeFunction(True)
+                self.CredDeleteW = NativeFunction(False)
+                self.CredFree = NativeFunction(None)
+
+        advapi = Advapi()
+        with mock.patch("Auvra.providers.credentials.ctypes.WinDLL", return_value=advapi), \
+             mock.patch("Auvra.providers.credentials.ctypes.get_last_error", return_value=1168):
+            native = _WinCredNative()
+            self.assertIsNone(native.read("Auvra/provider/native-test"))
+            native.write("Auvra/provider/native-test", "secret-value")
+            native.delete("Auvra/provider/native-test")
+        self.assertEqual(len(advapi.CredReadW.calls), 1)
+        self.assertEqual(len(advapi.CredWriteW.calls), 1)
+        credential = advapi.CredWriteW.calls[0][0]._obj
+        self.assertEqual(credential.TargetName, "Auvra/provider/native-test")
+        self.assertEqual(credential.CredentialBlobSize, len("secret-value".encode("utf-16-le")))
+        self.assertEqual(len(advapi.CredDeleteW.calls), 1)
 
     def test_provider_errors_redact_sensitive_text_in_all_public_forms(self):
         error = ProviderError(ErrorCode.REMOTE, "request failed: api_key=super-secret")

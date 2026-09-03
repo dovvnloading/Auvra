@@ -7,13 +7,15 @@ from pathlib import Path
 import struct
 import sys
 import tempfile
+import threading
 import unittest
+from unittest import mock
 import zipfile
 
 from Auvra.plugins.install import InstallError, PluginInstaller
 from Auvra.plugins.package import PackageError, PluginPackage, attach_signature, build_unsigned_package, signature_body
 from Auvra.plugins.protocol import ProviderProtocolError, encode, read_frame
-from Auvra.plugins.security import PersistentSecurityState, PermissionGrantStore, RevocationStore, SecurityError, TrustStore
+from Auvra.plugins.security import CngSignatureVerifier, PersistentSecurityState, PermissionGrantStore, RevocationStore, SecurityError, TrustStore
 from Auvra.plugins.worker import IsolationUnavailable, PluginLoader, PluginWorker, ProviderBroker, WindowsAppContainerPolicy
 
 
@@ -166,6 +168,45 @@ class PluginSdkTests(unittest.TestCase):
                 target.writestr(info, b"tampered" if info.filename == "payload/provider.exe" else source.read(info))
         with self.assertRaises(PackageError): PluginPackage.open(tampered, verifier=verifier)
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows CNG is Windows-only")
+    def test_cng_signature_verifier_uses_production_bcrypt_boundary(self) -> None:
+        class NativeFunction:
+            def __init__(self, result, *, assign=None):
+                self.result = result
+                self.assign = assign
+                self.calls = []
+
+            def __call__(self, *args):
+                self.calls.append(args)
+                if self.assign is not None:
+                    self.assign(args)
+                return self.result
+
+        def assign_algorithm(args):
+            args[0]._obj.value = 101
+
+        def assign_key(args):
+            args[3]._obj.value = 202
+
+        class BCrypt:
+            def __init__(self):
+                self.BCryptOpenAlgorithmProvider = NativeFunction(0, assign=assign_algorithm)
+                self.BCryptImportKeyPair = NativeFunction(0, assign=assign_key)
+                self.BCryptVerifySignature = NativeFunction(0)
+                self.BCryptDestroyKey = NativeFunction(0)
+                self.BCryptCloseAlgorithmProvider = NativeFunction(0)
+
+        bcrypt = BCrypt()
+        public_key = b"k" * 64
+        key_id = hashlib.sha256(public_key).hexdigest()
+        verifier = CngSignatureVerifier({key_id: public_key})
+        with mock.patch("ctypes.WinDLL", return_value=bcrypt):
+            self.assertTrue(verifier.verify(key_id=key_id, signed=b"signed payload", signature=b"s" * 64))
+        self.assertEqual(len(bcrypt.BCryptOpenAlgorithmProvider.calls), 1)
+        self.assertEqual(len(bcrypt.BCryptImportKeyPair.calls), 1)
+        self.assertEqual(len(bcrypt.BCryptVerifySignature.calls), 1)
+        self.assertFalse(verifier.verify(key_id=key_id, signed=b"signed payload", signature=b"short"))
+
     def test_install_is_digest_addressed_and_rolls_back_failed_acl(self) -> None:
         package = self.build()
         install_root = self.root / "installed"
@@ -278,6 +319,146 @@ class PluginSdkTests(unittest.TestCase):
         worker.stop()
         self.assertTrue(process.terminated)
         self.assertTrue(process.closed)
+
+    def test_worker_cpu_ceiling_stops_a_valid_but_over_budget_response(self) -> None:
+        package = PluginPackage.open(self.build(), allow_unsigned=True)
+        installed = PluginInstaller(self.root / "cpu-limit-install", acl_grant=lambda *_: None).install(
+            package.path, allow_unsigned=True)
+
+        class ReplyStream:
+            def __init__(self, request_stream: io.BytesIO) -> None:
+                self.request_stream = request_stream
+                self.reply: io.BytesIO | None = None
+
+            def read(self, size: int = -1) -> bytes:
+                if self.reply is None:
+                    request = read_frame(io.BytesIO(self.request_stream.getvalue()))
+                    self.reply = io.BytesIO(encode({
+                        "protocol": "auvra.provider/1", "id": request["id"], "ok": True, "result": {},
+                    }))
+                return self.reply.read(size)
+
+        class Process:
+            def __init__(self) -> None:
+                self.stdin = io.BytesIO()
+                self.stdout = ReplyStream(self.stdin)
+                self.terminated = False
+                self.closed = False
+                self._cpu = iter((0.0, 1001.0))
+
+            def cpu_time_ms(self) -> float: return next(self._cpu)
+            def terminate(self) -> None: self.terminated = True
+            def wait(self, timeout=None) -> int: return 0
+            def close(self) -> None: self.closed = True
+
+        process = Process()
+        class Policy:
+            def launch(self, executable: Path, *, package: PluginPackage): return process
+
+        worker = PluginWorker(package, project_id="project-a", grants=PermissionGrantStore(), policy=Policy())
+        worker.start(installed.executable)
+        with self.assertRaisesRegex(IsolationUnavailable, "CPU-time limit"):
+            worker.request("provider.complete", {"prompt": "over-budget"})
+        self.assertTrue(process.terminated)
+        self.assertTrue(process.closed)
+        self.assertTrue(worker.disabled)
+
+    def test_worker_wall_ceiling_stops_a_stuck_response_reader(self) -> None:
+        self.manifest["resources"]["wallMsPerRequest"] = 20
+        package = PluginPackage.open(self.build(), allow_unsigned=True)
+        installed = PluginInstaller(self.root / "wall-limit-install", acl_grant=lambda *_: None).install(
+            package.path, allow_unsigned=True)
+
+        class BlockingStream:
+            def __init__(self) -> None:
+                self.released = threading.Event()
+
+            def read(self, size: int = -1) -> bytes:
+                self.released.wait(2.0)
+                raise OSError("reader released by process termination")
+
+        class Process:
+            def __init__(self) -> None:
+                self.stdin = io.BytesIO()
+                self.stdout = BlockingStream()
+                self.terminated = False
+                self.closed = False
+
+            def terminate(self) -> None:
+                self.terminated = True
+                self.stdout.released.set()
+
+            def wait(self, timeout=None) -> int: return 0
+            def close(self) -> None: self.closed = True
+
+        process = Process()
+        class Policy:
+            def launch(self, executable: Path, *, package: PluginPackage): return process
+
+        worker = PluginWorker(package, project_id="project-a", grants=PermissionGrantStore(), policy=Policy())
+        worker.start(installed.executable)
+        with self.assertRaisesRegex(IsolationUnavailable, "wall-time limit"):
+            worker.request("provider.complete", {"prompt": "stuck"})
+        self.assertTrue(process.terminated)
+        self.assertTrue(process.closed)
+        self.assertTrue(worker.disabled)
+
+    def test_worker_malformed_response_stops_the_process(self) -> None:
+        package = PluginPackage.open(self.build(), allow_unsigned=True)
+        installed = PluginInstaller(self.root / "malformed-response-install", acl_grant=lambda *_: None).install(
+            package.path, allow_unsigned=True)
+
+        class Process:
+            def __init__(self) -> None:
+                self.stdin = io.BytesIO()
+                self.stdout = io.BytesIO(b"\x00\x00\x00\x01x")
+                self.terminated = False
+                self.closed = False
+
+            def terminate(self) -> None: self.terminated = True
+            def wait(self, timeout=None) -> int: return 0
+            def close(self) -> None: self.closed = True
+
+        process = Process()
+        class Policy:
+            def launch(self, executable: Path, *, package: PluginPackage): return process
+
+        worker = PluginWorker(package, project_id="project-a", grants=PermissionGrantStore(), policy=Policy())
+        worker.start(installed.executable)
+        with self.assertRaisesRegex(IsolationUnavailable, "invalid response"):
+            worker.request("provider.complete", {"prompt": "malformed"})
+        self.assertTrue(process.terminated)
+        self.assertTrue(process.closed)
+
+    def test_worker_stop_escalates_to_kill_when_graceful_wait_times_out(self) -> None:
+        package = PluginPackage.open(self.build(), allow_unsigned=True)
+        installed = PluginInstaller(self.root / "kill-escalation-install", acl_grant=lambda *_: None).install(
+            package.path, allow_unsigned=True)
+
+        class Process:
+            def __init__(self) -> None:
+                self.stdin = io.BytesIO()
+                self.stdout = io.BytesIO()
+                self.terminated = False
+                self.killed = False
+                self.closed = False
+
+            def terminate(self) -> None: self.terminated = True
+            def wait(self, timeout=None) -> int: raise TimeoutError("still running")
+            def kill(self) -> None: self.killed = True
+            def close(self) -> None: self.closed = True
+
+        process = Process()
+        class Policy:
+            def launch(self, executable: Path, *, package: PluginPackage): return process
+
+        worker = PluginWorker(package, project_id="project-a", grants=PermissionGrantStore(), policy=Policy())
+        worker.start(installed.executable)
+        worker.stop()
+        self.assertTrue(process.terminated)
+        self.assertTrue(process.killed)
+        self.assertTrue(process.closed)
+        self.assertIsNone(worker.process)
 
     def test_windows_isolation_gate_fails_closed_without_injected_backend(self) -> None:
         policy = WindowsAppContainerPolicy()
