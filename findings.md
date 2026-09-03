@@ -82,17 +82,23 @@ Transform controls emit Euler radians and convert them to degrees before persist
 
 **Severity:** High · **Classification:** Confirmed
 
+**Status:** Completed — quad mode now mounts one audio system, and stale asset callbacks are identity-fenced; project-boundary verification and TypeScript typecheck passed.
+
 Quad mode mounts four `EnvironmentScene` instances (`fbx-viewer (1)/components/Environment/EnvironmentViewport.tsx:201`), and every scene unconditionally mounts an `AudioSystem` (`fbx-viewer (1)/components/Environment/EnvironmentScene.tsx:404`). Each audio system creates and autoplays its own sources (`fbx-viewer (1)/components/Environment/AudioSystem.tsx:55`). An autoplay emitter can play four times and consume four sets of audio resources; stale asynchronous loads can also attach after an asset change.
 
 ### F-008 — Cyclic blueprint graphs can recurse until the editor crashes or freezes
 
 **Severity:** High · **Classification:** Confirmed
 
+**Status:** Completed — blueprint evaluation/execution now use bounded path-aware recursion, and zero divisors remain zero; project-boundary verification and TypeScript typecheck passed.
+
 Data evaluation and execution flow recurse without a visited set, cycle check, or depth budget (`fbx-viewer (1)/hooks/useLevelBlueprintRuntime.ts:66`, `fbx-viewer (1)/hooks/useLevelBlueprintRuntime.ts:202`). A persisted data or execution cycle can overflow the stack or loop synchronously. The same implementation also coerces a zero divisor to one before checking for zero (`fbx-viewer (1)/hooks/useLevelBlueprintRuntime.ts:143`), making its intended divide-by-zero path unreachable for literal zero.
 
 ### F-009 — Custom HUD code can synchronously freeze the editor
 
 **Severity:** High · **Classification:** Confirmed risk
+
+**Status:** Completed — compiled HUD loops/functions now receive a step/deadline guard inside the sandbox; frame invariants and production build passed.
 
 Custom code is compiled in the parent and executed synchronously with `new Function` in the iframe (`fbx-viewer (1)/components/HUDEditor/DynamicHUDComponent.tsx:38`, `fbx-viewer (1)/hud-frame.tsx:48`). The sandbox and CSP restrict origin and network behavior but provide no CPU or memory isolation. Code such as an infinite loop blocks the renderer process. This is a denial-of-service boundary, not a claim of iframe escape.
 
@@ -106,11 +112,15 @@ Both request and response frames are capped at 64 KiB (`native/src/main.rs:298`,
 
 **Severity:** High · **Classification:** Confirmed
 
+**Status:** Completed — response timeouts now invalidate and tear down the transport before any late frame can be consumed; the native-engine timeout/late-call regression passed (20 tests).
+
 The host times out while leaving the child and response queue intact (`Auvra/desktop/native_engine.py:479`, `Auvra/desktop/native_engine.py:510`). A late response for request N remains queued; request N+1 consumes it and fails the ID check (`Auvra/desktop/native_engine.py:519`). Later responses remain shifted, so one slow call can poison every subsequent native call until restart.
 
 ### F-012 — Host queue saturation silently drops requests
 
 **Severity:** High · **Classification:** Confirmed
+
+**Status:** Completed — saturated browser requests now receive an immediate validated, retryable `locking` response; the controller regression suite passed (16 tests).
 
 The desktop controller has a 64-slot request semaphore (`Auvra/desktop/controller.py:133`). When acquisition fails, it logs and returns without posting a protocol error (`Auvra/desktop/controller.py:426`). The browser receives no immediate bounded busy response and instead waits for the transport's 15-second or 120-second request timeout (`fbx-viewer (1)/host/nativeTransport.ts:9`, `fbx-viewer (1)/host/nativeTransport.ts:132`).
 
@@ -118,11 +128,15 @@ The desktop controller has a 64-slot request semaphore (`Auvra/desktop/controlle
 
 **Severity:** High · **Classification:** Confirmed risk
 
+**Status:** Completed — autosave failures are isolated from the controller tick, retained as a dirty period, diagnosed, and retried on a bounded cadence; project-host regression tests passed (15 tests).
+
 The project host calls `active.autosave()` without isolating I/O exceptions (`Auvra/desktop/project_host.py:140`). The controller's main loop does not catch failures from `project_host.tick()` locally (`Auvra/desktop/controller.py:374`). Disk-full, permissions, removed-volume, or similar autosave failures can therefore escape the loop and initiate application shutdown.
 
 ### F-014 — Archive validation and extraction have a pathname TOCTOU
 
 **Severity:** Critical · **Classification:** Demonstrated security risk
+
+**Status:** Completed — archive validation and extraction now share one open `ZipFile` handle, eliminating the validation/reopen pathname race; repository archive tests passed (42 passed, 1 skipped), including a same-handle regression.
 
 Import validates an archive, closes it, and later reopens the same path for extraction (`Auvra/project/repository.py:352`). The validated member and size rules live in `Auvra/project/archive.py:25`, but the second archive is not revalidated before paths are joined under staging. An actor able to replace the file between opens can substitute traversal members or exceed the validated limits.
 

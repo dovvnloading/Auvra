@@ -476,6 +476,37 @@ class NativeEngine:
         except subprocess.TimeoutExpired:
             return process.poll()
 
+    def _invalidate_transport(self, *, code: str) -> None:
+        """Fail closed after a response-channel timeout or protocol fault.
+
+        A timed-out request may still produce a late frame.  Retaining the
+        reader and response queue would let that frame be consumed as the
+        response to a later request, permanently shifting correlation.  The
+        queue is therefore replaced and the child is terminated before any
+        subsequent call can be accepted; callers can use the explicit
+        restart path to create a fresh channel.
+        """
+        self._state = NativeEngineState.FAILED
+        self._response_queue = queue.Queue()
+        process = self._process
+        if process is not None and process.poll() is None:
+            try:
+                process.terminate()
+                process.wait(timeout=min(self.shutdown_timeout, 1.0))
+            except subprocess.TimeoutExpired:
+                try:
+                    process.kill()
+                    process.wait(timeout=min(self.shutdown_timeout, 1.0))
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+            except OSError:
+                pass
+        if self._runtime_diagnostics is not None:
+            self._runtime_diagnostics.emit(
+                "native", "native.lifecycle",
+                attributes={"state": "failed", "code": code},
+            )
+
     def _call_transport(self, method: str, params: Mapping[str, Any] | None = None,
                         *, timeout: float | None = None) -> dict[str, Any]:
         if not method or not isinstance(method, str):
@@ -511,6 +542,7 @@ class NativeEngine:
             try:
                 response = self._response_queue.get(timeout=wait_for)
             except queue.Empty as exc:
+                self._invalidate_transport(code="response_timeout")
                 raise NativeEngineTimeoutError(f"native method '{method}' timed out") from exc
         if response is None:
             raise NativeEngineChildExitedError(self._returncode(process))

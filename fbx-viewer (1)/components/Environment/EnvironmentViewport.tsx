@@ -28,8 +28,9 @@ const ViewportSceneContent: React.FC<{
     activeViewId: string;
     gridRotation?: [number, number, number];
     isOrthographic?: boolean;
+    enableAudio?: boolean;
     sceneProps: any;
-}> = ({ viewId, activeViewId, gridRotation, isOrthographic, sceneProps }) => {
+}> = ({ viewId, activeViewId, gridRotation, isOrthographic, enableAudio = true, sceneProps }) => {
     return (
         <EnvironmentScene 
             {...sceneProps}
@@ -37,6 +38,7 @@ const ViewportSceneContent: React.FC<{
             activeViewId={activeViewId}
             gridRotation={gridRotation}
             isOrthographic={isOrthographic}
+            enableAudio={enableAudio}
         />
     );
 };
@@ -218,6 +220,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                                 activeViewId={activeView}
                                 gridRotation={[0, 0, -Math.PI / 2]} 
                                 isOrthographic 
+                                enableAudio
                                 sceneProps={{...baseSceneProps, onSelectObject: (id: string | null) => handleViewSelect(id, 'left')}}
                             />
                         </View>
@@ -231,6 +234,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                                 activeViewId={activeView}
                                 gridRotation={[0, 0, Math.PI / 2]} 
                                 isOrthographic 
+                                enableAudio={false}
                                 sceneProps={{...baseSceneProps, onSelectObject: (id: string | null) => handleViewSelect(id, 'right')}}
                             />
                         </View>
@@ -243,6 +247,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                                 viewId="top" 
                                 activeViewId={activeView}
                                 isOrthographic 
+                                enableAudio={false}
                                 sceneProps={{...baseSceneProps, onSelectObject: (id: string | null) => handleViewSelect(id, 'top')}}
                             />
                         </View>
@@ -256,6 +261,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                                 activeViewId={activeView}
                                 gridRotation={[Math.PI, 0, 0]} 
                                 isOrthographic 
+                                enableAudio={false}
                                 sceneProps={{...baseSceneProps, onSelectObject: (id: string | null) => handleViewSelect(id, 'bottom')}}
                             />
                         </View>

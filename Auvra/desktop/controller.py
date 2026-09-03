@@ -423,7 +423,24 @@ class FrameController:
         if self._diagnostic_lane.recognizes(request):
             self._diagnostic_lane.handle(request, encoded_size=diagnostic_message_size(request))
             return
-        self._submit_host(self._dispatch_message, request)
+        if self._submit_host(self._dispatch_message, request) is None:
+            # A full host queue must not leave the browser waiting for its
+            # transport timeout.  Return a bounded, retryable protocol error
+            # immediately while preserving the normal response validation
+            # boundary.  ``_response`` also sanitizes malformed request IDs.
+            self._post_queue_busy_response(request)
+
+    def _post_queue_busy_response(self, request: Any) -> None:
+        """Tell a parsed browser request that bounded host capacity is full."""
+
+        candidate = request if isinstance(request, dict) else {"id": "invalid"}
+        response = self.dispatcher._response(  # type: ignore[attr-defined]
+            candidate,
+            code="locking",
+            message="Host is busy; retry the request",
+            details={"retryable": True},
+        )
+        self._post(response)
 
     def _submit_host(self, callback: Callable[..., Any], *args: Any) -> Future[Any] | None:
         if not self._host_slots.acquire(blocking=False):

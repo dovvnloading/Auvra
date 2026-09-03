@@ -285,6 +285,40 @@ class NativeProjectHostTests(unittest.TestCase):
         self.host.tick()
         self.assertEqual(len(self.host.service.active.recovery_points()), 2)
 
+    def test_autosave_failure_isolated_from_controller_tick_and_retried(self) -> None:
+        clock = [100.0]
+        self.host.shutdown()
+        self.host = NativeProjectHost(
+            self.root / "state-autosave-failure",
+            asset_registry=self.registry,
+            dialogs=_Dialogs(self.root / "autosave-failure-projects"),
+            now=lambda: clock[0],
+        )
+        created = self.host.handle("project.create", {"name": "Autosave failure"})
+        self.host.handle("project.applyChanges", {
+            "projectId": created["projectId"],
+            "expectedRevision": created["revision"],
+            "changes": [{
+                "domain": "metadata", "documentId": "project", "operation": "upsert",
+                "document": {"id": "project", "name": "Autosave failure"},
+            }],
+        })
+        active = self.host.service.active
+        self.assertIsNotNone(active)
+        with mock.patch.object(active, "autosave", side_effect=OSError("disk full")) as autosave:
+            clock[0] = 165.0
+            self.host.tick()
+            self.assertEqual(autosave.call_count, 1)
+            # A repeated controller tick during the retry window is harmless.
+            self.host.tick()
+            self.assertEqual(autosave.call_count, 1)
+            self.assertIs(self.host.service.active, active)
+            # Once the bounded retry delay elapses, the operation is attempted
+            # again instead of silently abandoning the dirty period.
+            clock[0] = 170.0
+            self.host.tick()
+            self.assertEqual(autosave.call_count, 2)
+
     def test_snapshot_cursor_is_absolute_when_transport_page_shrinks(self) -> None:
         created = self.host.handle("project.create", {"name": "Paging"})
         documents = [

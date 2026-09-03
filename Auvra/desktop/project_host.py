@@ -14,6 +14,7 @@ import threading
 import time
 from typing import Any, Callable
 from Auvra.diagnostics import trace_public_class
+from Auvra.diagnostics.core import active_diagnostics
 
 from Auvra.host.dispatcher import HostOperationError
 from Auvra.project import (
@@ -35,6 +36,7 @@ from .dialogs import DialogSelection, WinFormsProjectDialogs
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SNAPSHOT_SOFT_LIMIT = 192 * 1024
+_AUTOSAVE_RETRY_DELAY = 5.0
 
 
 @trace_public_class("project_host", concise=("handle", "asset_resource", "shutdown"))
@@ -60,6 +62,7 @@ class NativeProjectHost:
         self._now = now
         self._dirty_since: float | None = None
         self._last_mutation: float | None = None
+        self._autosave_retry_at = 0.0
         self._events: list[tuple[str, dict[str, Any]]] = []
         self._recovery_by_id: dict[str, tuple[str, str, str]] = {}
         self._recovery_id_by_key: dict[tuple[str, str, str], str] = {}
@@ -145,13 +148,32 @@ class NativeProjectHost:
             active = self.service.active
             if active is None:
                 return
+            now = self._now()
+            if now < self._autosave_retry_at:
+                return
             if active.autosave_due(
                 dirty_since=self._dirty_since,
                 last_mutation=self._last_mutation,
-                now=self._now(),
+                now=now,
             ):
-                active.autosave()
-                recoveries = len(active.recovery_points())
+                try:
+                    active.autosave()
+                    recoveries = len(active.recovery_points())
+                except Exception as exc:
+                    # Autosave is a background convenience operation.  A disk
+                    # or permissions failure must leave the live project and
+                    # controller usable; retain the dirty period and retry at
+                    # a bounded cadence instead of escaping the desktop loop.
+                    self._autosave_retry_at = now + _AUTOSAVE_RETRY_DELAY
+                    diagnostics = active_diagnostics()
+                    if diagnostics is not None:
+                        diagnostics.emit(
+                            "operation", "operation.failed",
+                            attributes={"code": "autosave_failed",
+                                        "errorType": type(exc).__name__},
+                        )
+                    return
+                self._autosave_retry_at = 0.0
                 self._queue("project.recovery", self._status_value(available=recoveries))
                 # One recovery point per dirty period. A later mutation starts a
                 # new 60-second window instead of duplicating an unchanged state.

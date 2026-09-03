@@ -238,6 +238,7 @@ interface EnvironmentSceneProps {
     activeViewId: string;
     isOrthographic?: boolean;
     isMuted: boolean;
+    enableAudio?: boolean;
 }
 
 export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({ 
@@ -260,7 +261,8 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
     viewId,
     activeViewId,
     isOrthographic = false,
-    isMuted
+    isMuted,
+    enableAudio = true,
 }) => {
     const { camera, controls } = useThree(); 
     const { audioAssets } = useAssets();
@@ -400,11 +402,11 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
             />
 
             {/* Audio System */}
-            <AudioSystem 
-                levelObjects={levelObjects} 
-                audioAssets={audioAssets} 
-                isMuted={isMuted} 
-            />
+            {enableAudio && <AudioSystem
+                levelObjects={levelObjects}
+                audioAssets={audioAssets}
+                isMuted={isMuted}
+            />}
 
             {/* Render Terrain */}
             {terrainObjects.map(terrain => (

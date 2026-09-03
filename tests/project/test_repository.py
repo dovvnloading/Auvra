@@ -178,6 +178,27 @@ class ProjectTests(unittest.TestCase):
         with zipfile.ZipFile(bad, "w") as z: z.writestr("../escape", "bad")
         with self.assertRaises(ArchiveValidationError): ProjectRepository.import_pack(bad, Path(self.tmp.name) / "bad-import")
         self.assertFalse((Path(self.tmp.name) / "bad-import").exists())
+
+    def test_pack_validation_and_extraction_share_one_open_archive(self):
+        self.repo.apply_changes({"metadata": [{"id": "same-handle", "name": "x"}]}, expected_revision=0)
+        archive = Path(self.tmp.name) / "same-handle.auvrapack"
+        self.repo.export_pack(archive)
+        original_validator = repository_module.validate_archive
+        observed: list[zipfile.ZipFile] = []
+
+        def observe(source, **kwargs):
+            self.assertIsInstance(source, zipfile.ZipFile)
+            observed.append(source)
+            return original_validator(source, **kwargs)
+
+        with mock.patch.object(repository_module, "validate_archive", side_effect=observe):
+            imported = ProjectRepository.import_pack(archive, Path(self.tmp.name) / "same-handle-import")
+        try:
+            self.assertEqual(len(observed), 1)
+            self.assertEqual(imported.get_domain("metadata")["documents"][0]["id"], "same-handle")
+        finally:
+            imported.close()
+
     def test_failed_service_import_keeps_active_project(self):
         service = ProjectService(index=ProjectIndex(Path(self.tmp.name) / "index.sqlite"))
         try:

@@ -31,6 +31,9 @@ const nativeTransport = await readFile(resolve(root, 'host/nativeTransport.ts'),
 const diagnosticsRuntime = await readFile(resolve(root, 'diagnostics/runtime.ts'), 'utf8');
 const environmentScene = await readFile(resolve(root, 'components/Environment/EnvironmentScene.tsx'), 'utf8');
 const environmentEditor = await readFile(resolve(root, 'components/Environment/EnvironmentEditor.tsx'), 'utf8');
+const environmentViewport = await readFile(resolve(root, 'components/Environment/EnvironmentViewport.tsx'), 'utf8');
+const audioSystem = await readFile(resolve(root, 'components/Environment/AudioSystem.tsx'), 'utf8');
+const blueprintRuntime = await readFile(resolve(root, 'hooks/useLevelBlueprintRuntime.ts'), 'utf8');
 
 const failures = [];
 const mustNotContain = (text, pattern, label) => { if (pattern.test(text)) failures.push(`${label}: forbidden ${pattern}`); };
@@ -126,6 +129,21 @@ for (const [source, label] of [[attachments, 'attachment'], [sockets, 'socket']]
     || !/pendingUpdatesRef\.current\.clear\(\)/.test(source)) {
     failures.push(`${label} debounced writes are not project-session fenced`);
   }
+}
+if (!/enableAudio\?: boolean/.test(environmentScene) || !/enableAudio && <AudioSystem/.test(environmentScene)
+  || (environmentViewport.match(/enableAudio=\{false\}/g) || []).length !== 3
+  || !/viewId="left"[\s\S]*?enableAudio/.test(environmentViewport)
+  || !/sourcesRef\.current\.get\(obj\.id\) !== createdSound/.test(audioSystem)
+  || !/sourceAssetIdMap\.current\.get\(obj\.id\) !== createdAssetId/.test(audioSystem)) {
+  failures.push('quad environment view does not own exactly one identity-safe audio system');
+}
+if (!/MAX_BLUEPRINT_EVALUATION_DEPTH/.test(blueprintRuntime)
+  || !/MAX_BLUEPRINT_EXECUTION_DEPTH/.test(blueprintRuntime)
+  || !/path\.has\(pathKey\)/.test(blueprintRuntime)
+  || !/path\.has\(nodeId\)/.test(blueprintRuntime)
+  || !/const b = Number\(evaluate\([\s\S]*?\?\? 0\)/.test(blueprintRuntime)
+  || !/b !== 0 \? a \/ b : 0/.test(blueprintRuntime)) {
+  failures.push('blueprint runtime lacks bounded cycle-safe evaluation and execution');
 }
 
 const bundledBinding = await build({

@@ -1,7 +1,7 @@
 """Transactional native project repository."""
 from __future__ import annotations
 
-import copy, hashlib, json, os, re, shutil, tempfile, time, uuid
+import copy, hashlib, json, os, re, shutil, tempfile, time, uuid, zipfile
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,8 +9,9 @@ from typing import Any, Iterable
 from Auvra.diagnostics import trace_public_class
 from .archive import export_folder, validate_archive
 from .assets import AssetStore, sniff_mime
-from .errors import (InvalidProjectError, ReadOnlyError, RevisionConflictError,
-                     RecoveryRequiredError, UnsupportedVersionError)
+from .errors import (ArchiveValidationError, InvalidProjectError, ReadOnlyError,
+                     RevisionConflictError, RecoveryRequiredError,
+                     UnsupportedVersionError)
 from .legacy import LegacyArchive
 from .locking import ProjectLock
 from .schemas import (DOMAIN_NAMES, domain_document, validate_domain,
@@ -350,13 +351,21 @@ class ProjectRepository:
         export_folder(self.path, destination)
     @classmethod
     def import_pack(cls, archive: str | os.PathLike[str], destination: str | os.PathLike[str]) -> "ProjectRepository":
-        validate_archive(archive); destination = Path(destination)
+        destination = Path(destination)
         if destination.exists(): raise InvalidProjectError("import destination already exists")
         destination.parent.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}.import-", dir=destination.parent))
         try:
-            with __import__("zipfile").ZipFile(archive) as z:
-                for info in z.infolist():
+            # Keep validation and extraction on the same open archive handle.
+            # Reopening by pathname after validation permits a replacement
+            # archive to swap in traversal members or oversized content.
+            try:
+                z = zipfile.ZipFile(archive)
+            except (OSError, zipfile.BadZipFile) as exc:
+                raise ArchiveValidationError("invalid ZIP archive") from exc
+            with z:
+                infos = validate_archive(z)
+                for info in infos:
                     if info.is_dir():
                         (staging / Path(info.filename)).mkdir(parents=True, exist_ok=True)
                         continue

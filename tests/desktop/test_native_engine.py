@@ -20,6 +20,8 @@ from Auvra.desktop.native_engine import (
     NativeEngineFrameTooLargeError,
     NativeEngineHost,
     NativeEngineRevisionConflictError,
+    NativeEngineTimeoutError,
+    NativeEngineClosedError,
     NativeEngineState,
     PROTOCOL_VERSION,
     _encode_frame,
@@ -29,7 +31,7 @@ from Auvra.desktop.native_engine import (
 
 FAKE_CHILD = textwrap.dedent(
     r'''
-    import json, os, struct, sys
+    import json, os, struct, sys, time
 
     PROTOCOL = "auvra.native/1"
     MAX_FRAME = 64 * 1024
@@ -75,6 +77,9 @@ FAKE_CHILD = textwrap.dedent(
                 result = {"revision": revision, "entities": entities}
             elif method == "world.getSnapshot":
                 result = {"revision": revision, "entities": entities}
+            elif method == "sleep":
+                time.sleep(float(params.get("seconds", 0)))
+                result = {"slept": True}
             elif method == "shutdown":
                 write_frame({"protocol":PROTOCOL,"id":request_id,"ok":True,"result":{"stopped":True}})
                 print(json.dumps({"schema":"auvra.native-diagnostic/1","level":"info","event":"native.stopped","method":"shutdown"}), file=sys.stderr, flush=True)
@@ -180,6 +185,16 @@ class NativeEngineTests(unittest.TestCase):
         engine = self.make_engine()
         with self.assertRaises(NativeEngineFrameTooLargeError):
             engine.call("world.apply", {"payload": "x" * MAX_FRAME_BYTES})
+
+    def test_timeout_invalidates_response_channel_before_late_frame_arrives(self) -> None:
+        engine = self.make_engine()
+        engine.request_timeout = 0.1
+        with self.assertRaises(NativeEngineTimeoutError):
+            engine.call("sleep", {"seconds": 0.4})
+        self.assertEqual(engine.state, NativeEngineState.FAILED)
+        with self.assertRaises(NativeEngineClosedError):
+            engine.call("world.getSnapshot")
+        self.assertEqual(engine._response_queue.qsize(), 0)
 
     def test_clean_shutdown_reports_lifecycle_and_does_not_kill(self) -> None:
         engine = self.make_engine()
