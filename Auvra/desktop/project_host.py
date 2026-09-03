@@ -68,6 +68,7 @@ class NativeProjectHost:
         self._recovery_id_by_key: dict[tuple[str, str, str], str] = {}
         self._native_engine: Any = None
         self._native_staged_assets: set[str] = set()
+        self._pending_assets: dict[str, set[str]] = defaultdict(set)
         self._operation_lock = threading.RLock()
         self._event_lock = threading.Lock()
         self._event_sink: Callable[[str, dict[str, Any]], None] | None = None
@@ -191,6 +192,9 @@ class NativeProjectHost:
                 self._native_engine.close_project()
             except Exception:
                 pass
+        active = self.service.active
+        if active is not None:
+            self._discard_pending_assets(active.project_id, active)
         self.service.shutdown()
 
     @staticmethod
@@ -206,6 +210,36 @@ class NativeProjectHost:
                 if isinstance(asset_id, str) and _SHA256.fullmatch(asset_id):
                     found.add(asset_id)
         return found
+
+    def _record_pending_asset(self, project_id: str, asset_id: str) -> None:
+        self._pending_assets[project_id].add(asset_id)
+
+    def _discard_pending_assets(self, project_id: str, active: Any | None = None) -> None:
+        pending = self._pending_assets.get(project_id)
+        if not pending:
+            return
+        active = active or self.service.active
+        if active is None or getattr(active, "project_id", None) != project_id:
+            return
+        live = getattr(active, "referenced_asset_ids", lambda: set())()
+        for asset_id in list(pending):
+            if asset_id in live:
+                pending.discard(asset_id)
+                continue
+            try:
+                discard = getattr(active, "discard_asset_if_unreferenced", None)
+                if callable(discard):
+                    discard(asset_id)
+            except (OSError, ValueError):
+                continue
+            pending.discard(asset_id)
+        if not pending:
+            self._pending_assets.pop(project_id, None)
+
+    def _retire_active_pending_assets(self) -> None:
+        active = self.service.active
+        if active is not None:
+            self._discard_pending_assets(active.project_id, active)
 
     def _native_domains(self, active: Any) -> dict[str, Any]:
         # Only world-authority fields cross the private native boundary. Large
@@ -333,6 +367,7 @@ class NativeProjectHost:
                 # expose the canonical closed state.
                 pass
         self._native_staged_assets.clear()
+        self._discard_pending_assets(active.project_id, active)
         if self.service.active is active:
             self.service.close()
         else:
@@ -501,6 +536,7 @@ class NativeProjectHost:
         name = payload["name"]
         destination = self._choose(lambda: self.dialogs.choose_create_location(name))
         self._queue("project.opening", self._status_value(busy=True, progress=0.0, operation="create"))
+        self._retire_active_pending_assets()
         status = self.service.create(destination, name)
         self._progress("create", 0.6)
         self._native_staged_assets.clear()
@@ -515,6 +551,7 @@ class NativeProjectHost:
             raise HostOperationError("invalid_project", "Project handle is not available")
         descriptor = self._choose(self.dialogs.choose_open_project)
         self._queue("project.opening", self._status_value(busy=True, progress=0.0, operation="open"))
+        self._retire_active_pending_assets()
         status = self.service.open(descriptor.parent)
         self._progress("open", 0.5)
         status = self._restore_requested(payload, status)
@@ -529,6 +566,7 @@ class NativeProjectHost:
 
     def _open_recent(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._queue("project.opening", self._status_value(busy=True, progress=0.0, operation="openRecent"))
+        self._retire_active_pending_assets()
         status = self.service.open_recent(payload["recentId"])
         self._progress("openRecent", 0.5)
         status = self._restore_requested(payload, status)
@@ -548,6 +586,7 @@ class NativeProjectHost:
                 self._native_engine.close_project(project_id)
             except Exception:
                 pass
+        self._discard_pending_assets(project_id, active)
         self.service.close()
         self._native_staged_assets.clear()
         self._dirty_since = self._last_mutation = None
@@ -587,37 +626,44 @@ class NativeProjectHost:
             page_size = max(1, page_size // 2)
 
     def _apply(self, payload: dict[str, Any]) -> dict[str, Any]:
-        active = self._require(payload, expected=True)
-        changed: dict[str, list[dict[str, Any]]] = {}
-        grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for change in payload["changes"]:
-            grouped[change["domain"]].append(change)
-        for domain, operations in grouped.items():
-            documents = {
-                document["id"]: document
-                for document in active.get_domain(domain)["documents"]
+        active = self.service.active
+        try:
+            active = self._require(payload, expected=True)
+            changed: dict[str, list[dict[str, Any]]] = {}
+            grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for change in payload["changes"]:
+                grouped[change["domain"]].append(change)
+            for domain, operations in grouped.items():
+                documents = {
+                    document["id"]: document
+                    for document in active.get_domain(domain)["documents"]
+                }
+                for change in operations:
+                    document_id = change["documentId"]
+                    if change["operation"] == "remove":
+                        documents.pop(document_id, None)
+                    else:
+                        document = change.get("document")
+                        if not isinstance(document, dict) or document.get("id") != document_id:
+                            raise HostOperationError("invalid_request", "Project document identity does not match")
+                        documents[document_id] = document
+                changed[domain] = [documents[key] for key in sorted(documents)]
+            candidate = {
+                domain: {"schemaVersion": 1, "documents":
+                         (changed[domain] if domain in changed else active.get_domain(domain)["documents"])}
+                for domain in DOMAIN_NAMES
             }
-            for change in operations:
-                document_id = change["documentId"]
-                if change["operation"] == "remove":
-                    documents.pop(document_id, None)
-                else:
-                    document = change.get("document")
-                    if not isinstance(document, dict) or document.get("id") != document_id:
-                        raise HostOperationError("invalid_request", "Project document identity does not match")
-                    documents[document_id] = document
-            changed[domain] = [documents[key] for key in sorted(documents)]
-        candidate = {
-            domain: {"schemaVersion": 1, "documents":
-                     (changed[domain] if domain in changed else active.get_domain(domain)["documents"])}
-            for domain in DOMAIN_NAMES
-        }
-        self._validate_native_candidate(active, active.revision + 1, candidate)
-        status = self.service.apply_changes(
-            changed,
-            project_id=active.project_id,
-            expected_revision=payload["expectedRevision"],
-        )
+            self._validate_native_candidate(active, active.revision + 1, candidate)
+            status = self.service.apply_changes(
+                changed,
+                project_id=active.project_id,
+                expected_revision=payload["expectedRevision"],
+            )
+        except Exception:
+            if active is not None and payload.get("projectId") == getattr(active, "project_id", None):
+                self._discard_pending_assets(active.project_id, active)
+            raise
+        self._discard_pending_assets(active.project_id, self.service.active)
         now = self._now()
         self._dirty_since = self._dirty_since or now
         self._last_mutation = now
@@ -643,6 +689,7 @@ class NativeProjectHost:
         active = self._require(payload, expected=True)
         name = payload["name"]
         destination = self._choose(lambda: self.dialogs.choose_save_as_location(name))
+        self._retire_active_pending_assets()
         status = self.service.save_as(destination, project_id=active.project_id, name=name)
         self._native_staged_assets.clear()
         self._hydrate_native(self.service.active)
@@ -662,6 +709,7 @@ class NativeProjectHost:
         name = payload.get("name") or source.stem
         destination = self._choose(lambda: self.dialogs.choose_create_location(name))
         self._queue("project.opening", self._status_value(busy=True, progress=0.0, operation="importPack"))
+        self._retire_active_pending_assets()
         status = self.service.import_pack(source, destination)
         self._progress("importPack", 0.65)
         self._native_staged_assets.clear()
@@ -676,6 +724,7 @@ class NativeProjectHost:
         name = payload.get("name") or source.stem
         destination = self._choose(lambda: self.dialogs.choose_create_location(name))
         self._queue("project.opening", self._status_value(busy=True, progress=0.0, operation="importLegacy"))
+        self._retire_active_pending_assets()
         migrate = getattr(self.service, "migrate_legacy", None)
         if not callable(migrate):
             raise HostOperationError("migration_failed", "Legacy migration is unavailable")
@@ -706,16 +755,27 @@ class NativeProjectHost:
             current = self.service.active
             if current is None or current.project_id != project_id or current.read_only:
                 raise ReadOnlyError("project upload is no longer writable")
-            with upload.path.open("rb") as stream:
-                reference = self.service.begin_upload(
-                    stream,
-                    project_id=project_id,
-                    size=upload.size,
-                    mime=upload.mime_type,
-                    name=name,
-                )
+            already_present = current.assets.verify(upload.sha256, expected_size=upload.size)
+            try:
+                with upload.path.open("rb") as stream:
+                    reference = self.service.begin_upload(
+                        stream,
+                        project_id=project_id,
+                        size=upload.size,
+                        mime=upload.mime_type,
+                        name=name,
+                    )
+            except Exception:
+                if not already_present:
+                    try:
+                        current.discard_asset_if_unreferenced(upload.sha256)
+                    except (OSError, ValueError):
+                        pass
+                raise
             if reference.asset_id != upload.sha256:
                 raise InvalidProjectError("uploaded asset hash changed during ingestion")
+            if not already_present:
+                self._record_pending_asset(project_id, upload.sha256)
 
         ticket = self.assets.issue_upload(
             mime_type=mime,

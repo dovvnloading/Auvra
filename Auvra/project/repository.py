@@ -188,6 +188,40 @@ class ProjectRepository:
         path = self._domain_path(domain)
         if not path.exists(): return domain_document(domain, [])
         return validate_domain(domain, load_json(path))
+
+    def referenced_asset_ids(self, domains: dict[str, Any] | None = None) -> set[str]:
+        """Return the content hashes reachable from the live project documents."""
+
+        references: set[str] = set()
+
+        def collect(value: Any) -> None:
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    if key == "assetId" and isinstance(child, str):
+                        references.add(child)
+                    elif key == "assetIds" and isinstance(child, list):
+                        references.update(item for item in child if isinstance(item, str))
+                    collect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect(child)
+
+        selected = domains or {domain: self.get_domain(domain) for domain in DOMAIN_NAMES}
+        for document in selected.values():
+            collect(document)
+        return references
+
+    def prune_unreferenced_assets(self, candidates: Iterable[str] | None = None) -> set[str]:
+        """Delete blobs no longer reachable from the live project."""
+
+        return self.assets.remove_unreferenced(self.referenced_asset_ids(), candidates)
+
+    def discard_asset_if_unreferenced(self, asset_id: str) -> bool:
+        """Remove one blob only when no live document points to it."""
+
+        if asset_id in self.referenced_asset_ids():
+            return False
+        return self.assets.remove(asset_id)
     def snapshot(self, domains: Iterable[str] | None = None, *, page: int = 0, page_size: int | None = None,
                  offset: int | None = None) -> ProjectSnapshot:
         if not isinstance(page, int) or page < 0: raise ValueError("page must be a non-negative integer")
@@ -206,11 +240,17 @@ class ProjectRepository:
         if expected_revision != self.revision: raise RevisionConflictError("project revision changed")
         validated = {domain: domain_document(domain, copy.deepcopy(docs)) for domain, docs in changes.items()}
         candidate = {domain: (validated[domain] if domain in validated else self.get_domain(domain)) for domain in DOMAIN_NAMES}
+        candidate_refs = self.referenced_asset_ids(candidate)
         try:
             validate_project_references(candidate, asset_exists=self.assets.verify)
         except ValueError as exc:
+            self.prune_unreferenced_assets(candidate_refs - self.referenced_asset_ids())
             raise InvalidProjectError(str(exc)) from exc
-        self._transaction(validated, expected_revision + 1)
+        try:
+            self._transaction(validated, expected_revision + 1)
+        except Exception:
+            self.prune_unreferenced_assets(candidate_refs - self.referenced_asset_ids())
+            raise
         self._dirty = True
         return self.revision
 
@@ -544,6 +584,11 @@ class ProjectRepository:
     @staticmethod
     def import_legacy(source: str | os.PathLike[str]) -> tuple[dict[str, Any], Any]: return LegacyArchive(source).migrate()
     def close(self) -> None:
+        if not self.read_only and self._descriptor:
+            try:
+                self.prune_unreferenced_assets()
+            except (OSError, ValueError):
+                pass
         self._lock.release()
     def __enter__(self): return self
     def __exit__(self, *_): self.close()

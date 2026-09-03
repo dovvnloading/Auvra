@@ -34,6 +34,18 @@ class ProjectTests(unittest.TestCase):
         reference = self.repo.assets.put_stream(io.BytesIO(b"model"), mime="application/octet-stream")
         self.repo.apply_changes({"models": [{"id": "model", "name": "Model", "assetId": reference.asset_id}]}, expected_revision=1)
         self.repo.apply_changes({"objects": [{"id": "object", "levelId": "level", "modelId": "model", "name": "Object", "type": "prop"}]}, expected_revision=2)
+
+    def test_failed_candidate_removes_newly_ingested_unreferenced_asset(self):
+        reference = self.repo.assets.put_stream(io.BytesIO(b"pending"), mime="application/octet-stream")
+        target = self.repo.assets.path_for(reference.asset_id)
+        with self.assertRaises(InvalidProjectError):
+            self.repo.apply_changes({
+                "models": [{"id": "model", "name": "Model", "assetId": reference.asset_id}],
+                "objects": [{"id": "object", "name": "Object", "type": "prop", "levelId": "missing"}],
+            }, expected_revision=0)
+        self.assertFalse(target.exists())
+        manifest = json.loads((self.root / "Content" / "manifest.json").read_text(encoding="utf-8"))
+        self.assertNotIn(reference.asset_id, manifest)
     def test_revision_and_readonly_lock(self):
         second = ProjectRepository(self.root)
         try:

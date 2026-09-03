@@ -160,6 +160,45 @@ class NativeProjectHostTests(unittest.TestCase):
         self.assertEqual(served.headers["Content-Type"], "application/octet-stream")
         served.body.close()
 
+    def test_failed_project_mutation_discards_pending_upload(self) -> None:
+        created = self.host.handle("project.create", {"name": "Pending"})
+        ticket = self.host.handle(
+            "asset.beginUpload",
+            {
+                "projectId": created["projectId"],
+                "expectedRevision": created["revision"],
+                "size": 7,
+                "mime": "application/octet-stream",
+                "name": "pending.bin",
+            },
+        )
+        response = self.registry.handle(
+            method="PUT",
+            url=ticket["url"],
+            headers={
+                "Origin": "http://127.0.0.1:3000",
+                "Content-Type": "application/octet-stream",
+                "Content-Length": "7",
+            },
+            body=io.BytesIO(b"pending"),
+        )
+        asset_id = response.headers["X-Auvra-Asset-Sha256"]
+        target = self.host.service.active.assets.path_for(asset_id)
+        self.assertTrue(target.exists())
+        with self.assertRaises(HostOperationError) as raised:
+            self.host.handle("project.applyChanges", {
+                "projectId": created["projectId"],
+                "expectedRevision": created["revision"],
+                "changes": [{
+                    "domain": "objects",
+                    "documentId": "object",
+                    "operation": "upsert",
+                    "document": {"id": "object", "name": "Object", "type": "prop", "levelId": "missing"},
+                }],
+            })
+        self.assertEqual(raised.exception.code, "invalid_project")
+        self.assertFalse(target.exists())
+
     def test_generated_preview_resolves_without_becoming_project_content(self) -> None:
         created = self.host.handle("project.create", {"name": "Preview"})
         previews = PreviewStore(self.root / "previews")

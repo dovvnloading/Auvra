@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import io
 from dataclasses import dataclass
 from pathlib import Path
 import tempfile
 import time
 import unittest
 from unittest import mock
+from types import SimpleNamespace
 
+from Auvra.desktop.previews import PreviewStore
 from Auvra.desktop.provider_host import NativeProviderHost
 from Auvra.host.dispatcher import HostOperationError
+from Auvra.project import ProjectIndex, ProjectService
 from Auvra.providers import Capability
 from Auvra.providers.adapters import TextResult
+from Auvra.providers.jobs import JobState
 
 
 @dataclass
@@ -187,3 +192,69 @@ class ProviderHostTests(unittest.TestCase):
             while not host._stores_closed and time.monotonic() < deadline:
                 time.sleep(0.01)
             self.assertTrue(host._stores_closed)
+
+    def test_media_commit_validates_before_ingest_rolls_back_and_tolerates_discard_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            service = ProjectService(index=ProjectIndex(root / "projects.sqlite3"))
+            service.create(root / "project", "Media")
+            project_host = SimpleNamespace(service=service)
+            previews = PreviewStore(root / "previews")
+            host = NativeProviderHost(root / "provider", project_host=project_host, preview_store=previews)
+            try:
+                project_id = service.active.project_id
+                job_id = "job-media-f039-00001"
+                payload = (
+                    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+                    b"\x00\x00\x00\x02\x00\x00\x00\x03\x08\x06\x00\x00\x00"
+                )
+                preview = previews.ingest(job_id, io.BytesIO(payload), project_id=project_id)
+                host.jobs.create(
+                    project_id=project_id,
+                    provider="fal",
+                    model="gpt-test",
+                    capability=Capability.MEDIA_GENERATE.value,
+                    prompt_hash="a" * 64,
+                    job_id=job_id,
+                )
+                for state in (JobState.SUBMITTING, JobState.RUNNING, JobState.SUCCEEDED):
+                    host.jobs.transition(job_id, state, project_id=project_id)
+                host._meta[job_id] = {"route": "cloud", "createdAt": 0, "assetIds": []}
+                base = {
+                    "projectId": project_id,
+                    "expectedRevision": 0,
+                    "jobId": job_id,
+                    "previewAssetId": preview.asset_id,
+                    "textureId": "texture-one",
+                    "name": "Generated",
+                }
+
+                with mock.patch.object(service, "begin_upload", wraps=service.begin_upload) as ingest:
+                    with self.assertRaises(HostOperationError) as raised:
+                        host._commit_media({
+                            **base,
+                            "materialName": "Albedo",
+                            "targetModelId": "missing-model",
+                        })
+                self.assertEqual(raised.exception.code, "invalid_project")
+                ingest.assert_not_called()
+                self.assertFalse(service.active.assets.path_for(preview.asset_id).exists())
+
+                with mock.patch.object(service, "apply_changes", side_effect=RuntimeError("apply failed")):
+                    with self.assertRaises(RuntimeError):
+                        host._commit_media(base)
+                self.assertFalse(service.active.assets.path_for(preview.asset_id).exists())
+
+                with mock.patch.object(previews, "discard", side_effect=RuntimeError("cleanup failed")):
+                    result = host._commit_media(base)
+                self.assertEqual(result["assetId"], preview.asset_id)
+                self.assertEqual(service.active.revision, 1)
+                self.assertEqual(
+                    service.active.get_domain("textures")["documents"][0]["assetId"],
+                    preview.asset_id,
+                )
+                self.assertEqual(previews.get(job_id, preview.asset_id, project_id=project_id), preview)
+            finally:
+                host.shutdown()
+                previews.close()
+                service.shutdown()

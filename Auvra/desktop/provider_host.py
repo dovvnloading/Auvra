@@ -20,6 +20,7 @@ from Auvra.diagnostics import trace_public_class
 from typing import Any, Callable, Mapping
 
 from Auvra.host.dispatcher import HostOperationError
+from Auvra.project import InvalidProjectError
 from Auvra.providers import (
     AnthropicAdapter, Capability, CommandProposal, FalAdapter,
     LlamaCppAdapter, OllamaAdapter, OpenAIAdapter, OpenRouterAdapter,
@@ -624,14 +625,13 @@ class NativeProviderHost:
                    if self.preview_store is not None else None)
         if preview is None:
             raise HostOperationError("invalid_job", "Generated preview is unavailable")
-        with self.preview_store.open(preview.asset_id, project_id=active.project_id) as stream:
-            reference = self.project_host.service.begin_upload(stream, project_id=active.project_id, size=preview.size, mime=preview.mime, name=payload["name"])
+        artifact_id = preview.asset_id
         generation = {
             "providerId": job.provider, "modelId": job.model, "jobId": job.job_id,
             "createdAt": meta.get("createdAt", self._now()),
             "routeOrigin": meta.get("route", "cloud"), "routeConsent": "explicit",
             "promptSha256": job.prompt_hash, "settingsSha256": meta.get("settingsHash", self._settings_hash(self.settings.get(job.provider))),
-            "artifactSha256": reference.asset_id, "inputAssetIds": meta.get("assetIds", []),
+            "artifactSha256": artifact_id, "inputAssetIds": meta.get("assetIds", []),
         }
         if isinstance(meta.get("modelVersion"), str):
             generation["modelVersion"] = meta["modelVersion"]
@@ -639,7 +639,7 @@ class NativeProviderHost:
             generation["seed"] = meta["seed"]
         if isinstance(meta.get("costMicroUsd"), int) and not isinstance(meta.get("costMicroUsd"), bool):
             generation["costMicroUsd"] = meta["costMicroUsd"]
-        texture = {"id": payload["textureId"], "name": payload["name"], "assetId": reference.asset_id, "dimensions": {"width": preview.width, "height": preview.height}, "generation": generation}
+        texture = {"id": payload["textureId"], "name": payload["name"], "assetId": artifact_id, "dimensions": {"width": preview.width, "height": preview.height}, "generation": generation}
         # apply_changes expects document records, not a replacement domain
         # singleton.  Merge the generated record into the complete canonical
         # textures document, replacing only a matching texture identity.
@@ -668,8 +668,44 @@ class NativeProviderHost:
             model_documents[model_index] = model
             # Keep every model record and only update the selected model.
             changes["models"] = model_documents
-        status = self.project_host.service.apply_changes(changes, project_id=active.project_id, expected_revision=payload["expectedRevision"])
-        self.preview_store.discard(job.job_id, preview.asset_id, project_id=active.project_id)
+        existing = active.assets.verify(artifact_id, expected_size=preview.size)
+        try:
+            with self.preview_store.open(preview.asset_id, project_id=active.project_id) as stream:
+                reference = self.project_host.service.begin_upload(
+                    stream,
+                    project_id=active.project_id,
+                    size=preview.size,
+                    mime=preview.mime,
+                    name=payload["name"],
+                )
+            if reference.asset_id != artifact_id:
+                raise InvalidProjectError("generated asset hash changed during ingestion")
+        except Exception:
+            if not existing:
+                try:
+                    active.discard_asset_if_unreferenced(artifact_id)
+                except (OSError, ValueError):
+                    pass
+            raise
+        try:
+            status = self.project_host.service.apply_changes(
+                changes,
+                project_id=active.project_id,
+                expected_revision=payload["expectedRevision"],
+            )
+        except Exception:
+            if not existing:
+                try:
+                    active.discard_asset_if_unreferenced(artifact_id)
+                except (OSError, ValueError):
+                    pass
+            raise
+        try:
+            self.preview_store.discard(job.job_id, preview.asset_id, project_id=active.project_id)
+        except Exception:
+            # The project mutation is already durable.  A cleanup failure must
+            # not report a false commit failure; session shutdown will retry it.
+            pass
         return {"kind": "media.commit", "projectId": active.project_id, "jobId": job.job_id, "previewAssetId": preview.asset_id, "projectRevision": status.revision, "assetId": reference.asset_id, "provenance": generation}
 
     def _preview_command(self, payload: dict[str, Any]) -> dict[str, Any]:

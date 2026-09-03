@@ -338,6 +338,8 @@ Every download stream creates a verified private staging copy (`Auvra/desktop/as
 
 **Severity:** High · **Classification:** Confirmed
 
+**Status:** Completed — pending uploads are tracked and discarded when project mutations fail or sessions close; media commit validates targets before ingestion, rolls back newly ingested blobs on failure, and treats post-commit preview cleanup as best effort; focused repository, project-host, and provider-host tests passed.
+
 Upload completion and media commit ingest permanent project blobs before the project mutation and all validation complete (`Auvra/desktop/project_host.py:570`, `Auvra/desktop/provider_host.py:567`). Revision or target validation failure leaves orphan content, and there is no asset garbage collector. A preview-discard failure after a successful apply can also report overall failure even though the project already changed.
 
 ### F-040 — Hydration defers most asset cooking with no retry path
