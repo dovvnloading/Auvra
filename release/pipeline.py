@@ -130,6 +130,14 @@ def _assert_no_forbidden(path: str, policy: Mapping[str, Any]) -> None:
 def _scan_release_content(root: Path, policy: Mapping[str, Any], *, include_manifest: bool = False) -> None:
     """Reject accidental developer artifacts and secret-like text."""
 
+    def violation(data: bytes) -> bool:
+        return bool(
+            SECRET_PATTERN.search(data)
+            or ABSOLUTE_PATH_PATTERN.search(data)
+            or PRIVATE_CONTENT_PATTERN.search(data)
+            or RUNTIME_CDN_PATTERN.search(data)
+        )
+
     for path in sorted(root.rglob("*"), key=lambda item: item.as_posix().lower()):
         if path.is_symlink() or _is_reparse(path):
             raise ReleaseError(f"release contains a link or reparse point: {_relative(path, root)}")
@@ -145,16 +153,16 @@ def _scan_release_content(root: Path, policy: Mapping[str, Any], *, include_mani
         try:
             with path.open("rb") as stream:
                 sample = stream.read(4096)
-                if b"\x00" in sample:
-                    continue
                 rolling = sample
+                normalized = sample.replace(b"\x00", b"")
+                if violation(rolling) or violation(normalized):
+                    raise ReleaseError(f"secret-like or private content in release: {relative}")
                 for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                     rolling = (rolling + chunk)[-1024 * 1024:]
-                    if (SECRET_PATTERN.search(rolling) or ABSOLUTE_PATH_PATTERN.search(rolling)
-                            or PRIVATE_CONTENT_PATTERN.search(rolling) or RUNTIME_CDN_PATTERN.search(rolling)):
+                    normalized = (normalized + chunk.replace(b"\x00", b""))[-1024 * 1024:]
+                    if violation(rolling) or violation(normalized):
                         raise ReleaseError(f"secret-like or private content in release: {relative}")
-                if (SECRET_PATTERN.search(rolling) or ABSOLUTE_PATH_PATTERN.search(rolling)
-                        or PRIVATE_CONTENT_PATTERN.search(rolling) or RUNTIME_CDN_PATTERN.search(rolling)):
+                if violation(rolling) or violation(normalized):
                     raise ReleaseError(f"secret-like or private content in release: {relative}")
         except OSError as exc:
             raise ReleaseError(f"release content could not be scanned: {relative}") from exc

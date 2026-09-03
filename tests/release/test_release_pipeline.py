@@ -245,6 +245,16 @@ class ReleasePipelineTests(unittest.TestCase):
                 assemble(inputs, root / "dev-package", channel="dev", version="1.0.0",
                          appinstaller_uri="https://updates.example/dev.appinstaller")
 
+    def test_content_scan_rejects_nul_encoded_secret(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs = self.staged_inputs(root)
+            (inputs / "host" / "utf16.txt").write_bytes(
+                "api_key='0123456789abcdef0123456789'".encode("utf-16-le")
+            )
+            with self.assertRaisesRegex(ReleaseError, "secret-like"):
+                assemble(inputs, root / "nul-package", channel="stable", version="1.0.0")
+
     def test_lifecycle_upgrade_rollback_and_uninstall_preserve_data(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

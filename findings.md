@@ -452,6 +452,8 @@ The CLI accepts a plaintext `--password` (`release/pipeline.py:626`) and places 
 
 The release scanner treats any file whose first 4096 bytes contain NUL as binary and skips all content scans (`release/pipeline.py:129`, `release/pipeline.py:145`). UTF-16 text and crafted files can therefore bypass secret-like, absolute-path, private-content, and runtime-CDN detection. Filename and suffix checks still apply.
 
+**Status:** Completed — content scanning now checks rolling raw and NUL-normalized windows, preserving bounded streaming behavior while detecting UTF-16 and crafted interleaved-NUL secret-like content. The new UTF-16 regression and release suite passed.
+
 ### F-054 — The generated SBOM omits most dependency identities
 
 **Severity:** Medium · **Classification:** Confirmed completeness concern
