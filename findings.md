@@ -664,6 +664,8 @@ Diagnostics close waits only one second for the writer, records `drainIncomplete
 
 Launcher output-reader threads invoke callbacks without catching callback exceptions (`Auvra/launcher/process.py:71`, `Auvra/launcher/process.py:192`). If a callback raises, that reader stops draining the pipe. A verbose child can then block on a full stdout/stderr pipe while the parent waits for process completion.
 
+**Status:** Completed — the owned-process output reader now catches callback exceptions and continues draining bounded chunks, so diagnostics/logging failures cannot block a verbose child. A regression emits 1 MB while the first callback raises and verifies normal process completion and continued callbacks. The full launcher suite passes (70 tests).
+
 ### F-080 — Frontend port selection has a bind race and weak readiness identity
 
 **Severity:** Medium · **Classification:** Local-origin risk

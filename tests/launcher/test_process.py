@@ -94,6 +94,31 @@ class OwnedProcessTests(unittest.TestCase):
             self.assertGreater(len(chunks), 1)
             self.assertLessEqual(max(map(len, chunks)), 8192)
 
+    def test_output_reader_continues_after_callback_exception(self) -> None:
+        chunks: list[str] = []
+        calls = 0
+
+        def on_output(chunk: str) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("callback failure")
+            chunks.append(chunk)
+
+        with tempfile.TemporaryDirectory(prefix="auvra output callback ") as raw:
+            owned = OwnedProcess.launch(
+                [sys.executable, "-c", "import sys;sys.stdout.write('z' * 1000000)"],
+                Path(raw), on_output=on_output,
+            )
+            try:
+                self.assertEqual(owned.wait(timeout=10), 0)
+                if owned.output_thread is not None:
+                    owned.output_thread.join(timeout=2)
+                self.assertGreater(calls, 1)
+                self.assertTrue(chunks)
+            finally:
+                owned.terminate(grace=1)
+
     def test_cleanup_uses_hard_owner_stop_when_graceful_signal_fails(self) -> None:
         process = mock.Mock(pid=1234, stdout=None)
         process.poll.return_value = 0

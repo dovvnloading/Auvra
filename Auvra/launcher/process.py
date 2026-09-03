@@ -77,7 +77,13 @@ class OwnedProcess:
                     chunk = child.stdout.readline(OUTPUT_READ_CHARS)
                     if not chunk:
                         break
-                    on_output(chunk.rstrip("\r\n"))
+                    try:
+                        on_output(chunk.rstrip("\r\n"))
+                    except Exception:
+                        # A logging/diagnostic callback must never stop the
+                        # reader: continuing to drain the pipe prevents a
+                        # verbose child from blocking on a full buffer.
+                        continue
             owned.output_thread = threading.Thread(target=stream, name="auvra-vite-output", daemon=True)
             owned.output_thread.start()
         return owned
