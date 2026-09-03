@@ -64,7 +64,6 @@ pub struct ProductionPipelines {
     pick: wgpu::RenderPipeline,
     post: wgpu::RenderPipeline,
     post_layout: wgpu::BindGroupLayout,
-    surface: wgpu::RenderPipeline,
     surface_format: wgpu::TextureFormat,
 }
 
@@ -74,7 +73,6 @@ impl ProductionPipelines {
         let depth = depth_pipeline(device);
         let pick = pick_pipeline(device);
         let (post, post_layout) = post_pipeline(device, output_format);
-        let surface = surface_pipeline(device, output_format);
         Self {
             pbr,
             pbr_layout,
@@ -82,14 +80,15 @@ impl ProductionPipelines {
             pick,
             post,
             post_layout,
-            surface,
             surface_format: output_format,
         }
     }
 
     pub fn ensure_surface_format(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
         if self.surface_format != format {
-            self.surface = surface_pipeline(device, format);
+            let (post, post_layout) = post_pipeline(device, format);
+            self.post = post;
+            self.post_layout = post_layout;
             self.surface_format = format;
         }
     }
@@ -104,6 +103,130 @@ pub fn render_offscreen(
     width: u32,
     height: u32,
 ) -> Result<ProductionFrame, String> {
+    let target = texture(
+        device,
+        "auvra-production-srgb",
+        width,
+        height,
+        format,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    let target_view = target.create_view(&Default::default());
+    let cpu_submit_ms = render_production_to_view(
+        device,
+        queue,
+        pipelines,
+        extraction,
+        width,
+        height,
+        &target_view,
+    )?;
+    let bytes_per_row = wgpu::util::align_to(width * 4, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("auvra-production-readback"),
+        size: u64::from(bytes_per_row) * u64::from(height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut copy = device.create_command_encoder(&Default::default());
+    copy.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &target,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(bytes_per_row),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    queue.submit(Some(copy.finish()));
+    let slice = readback.slice(..);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        let _ = sender.send(result);
+    });
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .map_err(|error| format!("readback poll failed: {error:?}"))?;
+    receiver
+        .recv()
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+    let mapped = slice
+        .get_mapped_range()
+        .map_err(|error| error.to_string())?;
+    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+    for row in mapped
+        .chunks_exact(bytes_per_row as usize)
+        .take(height as usize)
+    {
+        pixels.extend_from_slice(&row[..(width * 4) as usize]);
+    }
+    let hash = fnv1a(&pixels);
+    drop(mapped);
+    readback.unmap();
+    let executed = extraction
+        .plan
+        .passes
+        .iter()
+        .filter(|pass| pass.enabled)
+        .map(|pass| pass_name(pass.kind))
+        .collect::<Vec<_>>();
+    let fallbacks = extraction
+        .plan
+        .passes
+        .iter()
+        .filter(|pass| pass.fallback.is_some())
+        .count();
+    Ok(ProductionFrame {
+        pixel_hash: hash,
+        cpu_submit_ms,
+        geometry_count: extraction.snapshot.entities.len(),
+        batch_count: extraction.snapshot.batches.len(),
+        pass_count: executed.len(),
+        fallback_count: fallbacks,
+        executed_passes: executed,
+    })
+}
+
+/// Render the same production passes used by reference frames directly into
+/// the configured viewport surface.  The surface is only the final color
+/// target; depth, shadows, picking, gizmos, HDR lighting, and post-processing
+/// remain part of this frame just as they are for offscreen renders.
+pub fn present_production(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    view: &wgpu::TextureView,
+    pipelines: &ProductionPipelines,
+    extraction: &RenderExtraction,
+    width: u32,
+    height: u32,
+) -> Result<f64, String> {
+    render_production_to_view(
+        device, queue, pipelines, extraction, width, height, view,
+    )
+}
+
+fn render_production_to_view(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    pipelines: &ProductionPipelines,
+    extraction: &RenderExtraction,
+    width: u32,
+    height: u32,
+    target_view: &wgpu::TextureView,
+) -> Result<f64, String> {
     let vertices = scene_vertices(extraction);
     let bytes = f32_bytes(&vertices);
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -147,15 +270,6 @@ pub fn render_offscreen(
         wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
     );
     let hdr_view = hdr.create_view(&Default::default());
-    let target = texture(
-        device,
-        "auvra-production-srgb",
-        width,
-        height,
-        format,
-        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-    );
-    let target_view = target.create_view(&Default::default());
     let depth_texture = texture(
         device,
         "auvra-production-depth",
@@ -370,7 +484,7 @@ pub fn render_offscreen(
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("aces-fxaa-post-chain"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &target_view,
+                view: target_view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
@@ -389,125 +503,7 @@ pub fn render_offscreen(
     }
     queue.submit(Some(encoder.finish()));
     let cpu_submit_ms = submit_started.elapsed().as_secs_f64() * 1000.0;
-    let bytes_per_row = wgpu::util::align_to(width * 4, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-    let readback = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("auvra-production-readback"),
-        size: u64::from(bytes_per_row) * u64::from(height),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let mut copy = device.create_command_encoder(&Default::default());
-    copy.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: &target,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &readback,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(bytes_per_row),
-                rows_per_image: Some(height),
-            },
-        },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
-    queue.submit(Some(copy.finish()));
-    let slice = readback.slice(..);
-    let (sender, receiver) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |result| {
-        let _ = sender.send(result);
-    });
-    device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .map_err(|error| format!("readback poll failed: {error:?}"))?;
-    receiver
-        .recv()
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())?;
-    let mapped = slice
-        .get_mapped_range()
-        .map_err(|error| error.to_string())?;
-    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
-    for row in mapped
-        .chunks_exact(bytes_per_row as usize)
-        .take(height as usize)
-    {
-        pixels.extend_from_slice(&row[..(width * 4) as usize]);
-    }
-    let hash = fnv1a(&pixels);
-    drop(mapped);
-    readback.unmap();
-    let executed = extraction
-        .plan
-        .passes
-        .iter()
-        .filter(|pass| pass.enabled)
-        .map(|pass| pass_name(pass.kind))
-        .collect::<Vec<_>>();
-    let fallbacks = extraction
-        .plan
-        .passes
-        .iter()
-        .filter(|pass| pass.fallback.is_some())
-        .count();
-    Ok(ProductionFrame {
-        pixel_hash: hash,
-        cpu_submit_ms,
-        geometry_count: extraction.snapshot.entities.len(),
-        batch_count: extraction.snapshot.batches.len(),
-        pass_count: executed.len(),
-        fallback_count: fallbacks,
-        executed_passes: executed,
-    })
-}
-
-pub fn present_extraction(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    view: &wgpu::TextureView,
-    pipelines: &ProductionPipelines,
-    extraction: &RenderExtraction,
-) -> Result<(), String> {
-    let vertices = scene_vertices(extraction);
-    let bytes = f32_bytes(&vertices);
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("auvra-surface-geometry"),
-        size: bytes.len() as u64,
-        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    queue.write_buffer(&buffer, 0, &bytes);
-    let mut encoder = device.create_command_encoder(&Default::default());
-    {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("auvra-surface-pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            occlusion_query_set: None,
-            timestamp_writes: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(&pipelines.surface);
-        pass.set_vertex_buffer(0, buffer.slice(..));
-        pass.draw(0..(vertices.len() as u32 / 9), 0..1);
-    }
-    queue.submit(Some(encoder.finish()));
-    Ok(())
+    Ok(cpu_submit_ms)
 }
 
 fn texture(
@@ -1028,49 +1024,6 @@ fn sample_hdr(uv: vec2<f32>) -> vec3<f32> {
         cache: None,
     });
     (pipeline, layout)
-}
-fn surface_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("auvra-surface-shader"), source: wgpu::ShaderSource::Wgsl(r#"struct V{@location(0)p:vec2<f32>,@location(1)c:vec4<f32>};struct O{@builtin(position)p:vec4<f32>,@location(0)c:vec4<f32>};@vertex fn vs(v:V)->O{var o:O;o.p=vec4(v.p,0.,1.);o.c=v.c;return o;}@fragment fn fs(o:O)->@location(0)vec4<f32>{return o.c;}"#.into()) });
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("auvra-surface-pipeline"),
-        layout: None,
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs"),
-            buffers: &[Some(wgpu::VertexBufferLayout {
-                array_stride: 36,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &[
-                    wgpu::VertexAttribute {
-                        format: wgpu::VertexFormat::Float32x2,
-                        offset: 0,
-                        shader_location: 0,
-                    },
-                    wgpu::VertexAttribute {
-                        format: wgpu::VertexFormat::Float32x4,
-                        offset: 8,
-                        shader_location: 1,
-                    },
-                ],
-            })],
-            compilation_options: Default::default(),
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend: Some(wgpu::BlendState::REPLACE),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: Default::default(),
-        }),
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    })
 }
 fn pass_name(kind: auvra_native::render_world::RenderPassKind) -> String {
     serde_json::to_string(&kind)

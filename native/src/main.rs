@@ -508,6 +508,8 @@ impl Renderer {
         &mut self,
         surface: &wgpu::Surface<'_>,
         _format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
         extraction: &RenderExtraction,
     ) -> Result<(), String> {
         let frame = match surface.get_current_texture() {
@@ -518,13 +520,16 @@ impl Renderer {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        gpu::present_extraction(
+        let cpu_submit_ms = gpu::present_production(
             &self.device,
             &self.queue,
             &view,
             &self.production_pipelines,
             extraction,
+            width,
+            height,
         )?;
+        self.last_frame_ms = Some(cpu_submit_ms);
         self.queue.present(frame);
         Ok(())
     }
@@ -676,7 +681,7 @@ impl Viewport {
             present_mode,
             alpha_mode,
         );
-        renderer.present_surface(&surface, format, extraction)?;
+        renderer.present_surface(&surface, format, width, height, extraction)?;
         Ok(Self {
             event_loop,
             app,
@@ -731,7 +736,7 @@ impl Viewport {
         // Present on every bounded pump, not only on the first open or after
         // explicit recovery. This keeps world mutations and redraw/resize
         // events visible while the IPC loop remains responsive.
-        renderer.present_surface(surface, self.format, extraction)?;
+        renderer.present_surface(surface, self.format, self.width, self.height, extraction)?;
         Ok(true)
     }
 
@@ -770,7 +775,7 @@ impl Viewport {
             present_mode,
             alpha_mode,
         );
-        renderer.present_surface(&surface, format, extraction)?;
+        renderer.present_surface(&surface, format, self.width, self.height, extraction)?;
         self.format = format;
         self.surface = Some(surface);
         Ok(())

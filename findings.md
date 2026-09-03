@@ -370,6 +370,8 @@ The object schema constrains `position` but leaves `rotation` and `scale` as arb
 
 **Severity:** High · **Classification:** Confirmed implementation mismatch
 
+**Status:** Completed — the viewport now renders through the shared production pass encoder directly into the swapchain, including shadow/depth passes, HDR PBR lighting, picking, gizmos, and post-processing; the obsolete flat surface pipeline was removed and native tests passed.
+
 The visible surface calls `present_extraction`, which allocates a simple vertex buffer and uses the flat surface pipeline (`native/src/gpu.rs:471`, `native/src/gpu.rs:1032`). That shader only passes through 2D positions and colors; it has no depth, PBR, lights, shadows, post-processing, or antialiasing. The more elaborate offscreen pipeline is used by `renderer.renderReference`, not the interactive viewport (`native/src/main.rs:743`).
 
 ### F-044 — Native project extraction discards most authored renderer data
