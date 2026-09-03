@@ -656,6 +656,8 @@ The README describes a production native baseline including PBR, animation, ligh
 
 Diagnostics close waits only one second for the writer, records `drainIncomplete` when it remains alive, but still removes the current-run marker and proceeds to close storage (`Auvra/diagnostics/core.py:1030`). The next launch can therefore miss an unclean run, while the old writer may still race the stream and storage teardown.
 
+**Status:** Completed — close now retains the current-run marker and writer-owned stream while the writer is still alive, suppresses active-summary overwrites during shutdown, and defers final summary, marker removal, stream closure, and pruning until the writer and monitor have exited. If queues remain after a writer failure, the marker is retained. A stalled-writer regression test cross-validates the retained-marker and eventual-cleanup paths; the diagnostics core and whole-program trace suites pass (18 tests).
+
 ### F-079 — An output callback exception can stop pipe draining and deadlock a child
 
 **Severity:** Medium · **Classification:** Confirmed risk
