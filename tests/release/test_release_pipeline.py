@@ -218,6 +218,28 @@ class ReleasePipelineTests(unittest.TestCase):
             self.assertIn("except SystemExit as exc:", sitecustomize)
             self.assertIn("os._exit(code)", sitecustomize)
 
+    def test_default_local_release_contract_smoke_verifies_staged_package(self) -> None:
+        """Run a real package assembly/verification smoke in ordinary discovery.
+
+        The WebView2/native process smoke is intentionally Windows-only, but
+        local discovery must still exercise the release boundary instead of
+        relying solely on mocked launcher calls or skipped hardware tests.
+        """
+        with tempfile.TemporaryDirectory(prefix="auvra local release contract ") as temporary:
+            root = Path(temporary)
+            inputs = self.staged_inputs(root)
+            output = root / "package"
+            assemble(inputs, output, channel="stable", version="9.9.9",
+                     appinstaller_uri="https://updates.example/stable/9.9.9/Auvra.appinstaller")
+            verify_package(output, expected_channel="stable")
+            manifest = verify_installed_package(output)
+
+            self.assertEqual(manifest.get("channel"), "stable")
+            self.assertTrue((output / "runtime" / "python").is_dir())
+            self.assertTrue((output / "runtime" / "webview2").is_dir())
+            self.assertTrue((output / "native" / "auvra-native.exe").is_file())
+            self.assertTrue((output / "release-manifest.json").is_file())
+
     def test_integrity_and_forbidden_inputs_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

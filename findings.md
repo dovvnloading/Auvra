@@ -600,6 +600,8 @@ The frontend has custom protocol, project, provider, renderer, diagnostics, and 
 
 Release unit tests accept dummy runtime, SDK, Python, and native bytes (`tests/release/test_release_pipeline.py:18`), and packaged-launcher tests mock verification, SDK loading, and frame creation (`tests/launcher/test_packaged_release.py:12`, `tests/launcher/test_packaged_release.py:41`). Real packaged, native/WebView, and trace smokes skip during ordinary local discovery unless environment variables and external artifacts are supplied (`tests/desktop/test_release_smoke.py:69`, `tests/desktop/test_native_smoke.py:379`, `tests/desktop/test_native_trace_smoke.py:12`). CI does explicitly enable the native trace and WebView smokes and assembles, unpacks, verifies, and starts an unsigned dev package (`.github/workflows/verify.yml:180`, `.github/workflows/verify.yml:234`, `.github/workflows/verify.yml:268`). The gap is default local coverage and reproducibility, not absence of those CI paths.
 
+**Status:** Completed — ordinary release discovery now includes a cross-platform local contract smoke that assembles, verifies, and inspects a staged package; the strict Windows/WebView2/native smoke remains opt-in and fails closed when enabled without required artifacts. Release discovery coverage passes (15 tests).
+
 ### F-072 — Release lifecycle verification is an in-memory model, not Windows lifecycle testing
 
 **Severity:** Medium · **Classification:** Gap
