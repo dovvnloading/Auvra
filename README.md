@@ -127,13 +127,15 @@ survives editor reloads and native-process recovery, and is extracted into
 immutable render snapshots. Source assets are cooked into a rebuildable local
 cache without becoming a second project authority.
 
-The `wgpu` renderer provides the current native production baseline: metallic-
-roughness PBR, animation, culling and deterministic LOD, batching, directional,
-point and spot lights, shadows, image-based lighting, integer picking, editor
-gizmos, HDR/ACES output, anti-aliasing, and a bounded post-processing chain.
-It presents in a separate native viewport; WebGL2 remains the compatibility
-path in the editor frame. Build the pinned release binary before launching
-Auvra from source:
+The native runtime exposes a capability-gated `wgpu` baseline for its separate
+viewport and reference-render paths: metallic-roughness PBR, animation,
+culling and deterministic LOD, batching, directional/point/spot lights,
+shadows, image-based lighting, integer picking, editor gizmos, HDR/ACES output,
+anti-aliasing, and a bounded post-processing chain. The runtime reports each
+feature and its fallback reason per adapter. This is a native baseline, not a
+claim that the WebGL2 compatibility editor or every authored project asset
+exercises every feature; WebGL2 remains the default editor path. Build the
+pinned release binary before launching Auvra from source:
 
 ```powershell
 cd native
@@ -188,6 +190,10 @@ npm run protocol:verify
 npm run renderer:verify
 npm run project:verify
 npm run provider:verify
+npm run diagnostics:verify
+npm run typecheck
+npm run typecheck:strict
+npm test
 npm run build
 cd ..
 cargo +1.98.0 build --release --locked --manifest-path native/Cargo.toml

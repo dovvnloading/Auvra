@@ -22,7 +22,7 @@ internal architecture or working notes.
 | 5 | Stabilize the current renderer and establish backend-independent rendering contracts | Complete |
 | 6 | Prove the native engine and multi-backend rendering path with a vertical slice | Complete |
 | 7 | Complete packaging, recovery, performance, compatibility, and release hardening | Complete |
-| 8 | Establish the deterministic native world, asset cooker, and production renderer baseline | In review |
+| 8 | Establish the deterministic native world, asset cooker, and capability-gated production renderer baseline | Complete |
 
 ## What this means for the current repository
 
@@ -41,9 +41,9 @@ internal architecture or working notes.
 - Saving, recovery, provider access, and rendering now run behind explicit
   engine services. The Rust runtime hydrates a deterministic fixed-step world
   from the Python project repository, cooks source assets into a rebuildable
-  local cache, and extracts immutable render snapshots. Its `wgpu` renderer
-  covers the native production feature baseline in a separate viewport while
-  preserving WebGL2 as the compatibility path.
+  local cache, and extracts immutable render snapshots. Its capability-gated
+  `wgpu` renderer covers the native production baseline in a separate viewport
+  while preserving WebGL2 as the compatibility path.
 - Project saving and recovery now run through the native host; legacy browser
   storage remains available only as a read-only migration source.
 - Experimental work must preserve a tested fallback and may not silently become

@@ -648,6 +648,8 @@ The project subprocess-lock test performs a blocking `readline()` with no timeou
 
 The README describes a production native baseline including PBR, animation, lights, shadows, IBL, picking, HDR, ACES, antialiasing, and post-processing (`README.md:124`), while the visible viewport and project extraction paths described in F-043 through F-045 do not implement that behavior. The local verification command list also omits several checks now present in CI (`README.md:182`). `REFACTOR.md` still labels the native renderer stage “In review” (`REFACTOR.md:25`), creating additional status drift.
 
+**Status:** Completed — README now scopes native renderer features to the capability-gated separate viewport/reference paths and explicitly disclaims universal WebGL2 or authored-asset parity; local verification commands include diagnostics coverage, full and strict typechecking, and frontend tests; REFACTOR Stage 8 now matches the completed capability-gated baseline. The diagnostics verifier scope was corrected to exclude test fixtures and classify its intentional pure/data/event utility boundaries, and the documented diagnostics, strict typecheck, and test commands all pass.
+
 ### F-078 — Diagnostics can mark a run clean while its writer is still active
 
 **Severity:** Medium · **Classification:** Confirmed
