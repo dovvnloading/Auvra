@@ -487,7 +487,7 @@ class PluginSdkTests(unittest.TestCase):
             process = policy.launch(installed.executable, package=package)
         except IsolationUnavailable as exc:
             if "(50)" in str(exc):
-                self.skipTest("host Windows reports AppContainer APIs unsupported")
+                self.fail(f"host Windows reports AppContainer APIs unsupported: {exc}")
             self.fail(f"supported Windows reported unavailable isolation: {exc}")
         self.assertGreater(process.pid, 0)
         process.terminate()

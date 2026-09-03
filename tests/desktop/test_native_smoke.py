@@ -212,6 +212,7 @@ def _script_for_project_lifecycle(prefix: str) -> str:
       const state = {{ session: null, revision: 0, projectId: null, projectRevision: 0,
         assetId: null, jobId: null, poll: 0, sent: new Set() }};
       window.__auvraNativeProjectSmoke = state;
+      document.title = "AUVRA_LISTENER_READY:{prefix}";
       const request = (id, method, payload) => {{
         if (state.sent.has(id)) return;
         state.sent.add(id);
@@ -352,6 +353,7 @@ def _script_for_engine_lifecycle(prefix: str, *, resume: bool) -> str:
     return f"""
     (() => {{
       const state = {{ session: null, revision: 0, sent: new Set() }};
+      document.title = "AUVRA_LISTENER_READY:{prefix}";
       const request = (id, method, payload) => {{
         if (state.sent.has(id)) return;
         state.sent.add(id);
@@ -673,12 +675,12 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         # ExecuteScriptAsync queues work on the document thread; wait until
         # the listener is installed before sending the synthetic navigation
         # boundary below.
-        time.sleep(0.25)
-        # The native script API is asynchronous; a short repeated boundary
-        # keeps this opt-in smoke deterministic across runner load variance.
-        for _ in range(4):
-            controller.on_lifecycle("navigation_completed", {"success": True})
-            time.sleep(0.2)
+        _wait_until(
+            lambda: self._document_title(controller.frame) == f"AUVRA_LISTENER_READY:{prefix}",
+            5.0,
+            f"{prefix} WebView listener",
+        )
+        controller.on_lifecycle("navigation_completed", {"success": True})
         expected = {
             f"{prefix}-create", f"{prefix}-begin-upload", f"{prefix}-apply",
             f"{prefix}-resolve", f"{prefix}-snapshot",
@@ -841,7 +843,11 @@ class NativeWebView2SmokeTests(unittest.TestCase):
     def _engine_lifecycle(self, controller: FrameController, prefix: str,
                           seen: list[dict[str, Any]], *, resume: bool) -> dict[str, Any]:
         self._execute_script(controller.frame, _script_for_engine_lifecycle(prefix, resume=resume))
-        time.sleep(0.25)
+        _wait_until(
+            lambda: self._document_title(controller.frame) == f"AUVRA_LISTENER_READY:{prefix}",
+            5.0,
+            f"{prefix} WebView listener",
+        )
         controller.on_lifecycle("navigation_completed", {"success": True})
         expected = ({f"{prefix}-first", f"{prefix}-metrics", f"{prefix}-recover", f"{prefix}-close"}
                     if resume else
@@ -988,13 +994,11 @@ class NativeWebView2SmokeTests(unittest.TestCase):
 
             trusted = f"http://127.0.0.1:{port}/"
             self._ui(dev.frame, lambda core: core.Navigate("https://example.com/"))
-            time.sleep(0.7)
-            self.assertTrue(self._source(dev.frame).startswith(trusted))
+            _wait_until(lambda: self._source(dev.frame).startswith(trusted), 5.0, "external navigation rejection")
             probe = dev_profile_parent / "blocked-file.txt"
             probe.write_text("must not navigate", encoding="utf-8")
             self._ui(dev.frame, lambda core: core.Navigate(probe.as_uri()))
-            time.sleep(0.7)
-            self.assertTrue(self._source(dev.frame).startswith(trusted))
+            _wait_until(lambda: self._source(dev.frame).startswith(trusted), 5.0, "file navigation rejection")
             self.assertEqual(self.trap.hits, [], "external image/popup reached the trap server")
         finally:
             if dev is not None:

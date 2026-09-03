@@ -97,12 +97,24 @@ class WebView2HandlerTests(unittest.TestCase):
         args = resource(f"{ASSET_ORIGIN}/v1/get/" + "a" * 43, deferred=True)
         fake_system = types.ModuleType("System")
         fake_system.Action = lambda callback: callback
+        completed = threading.Event()
+        errors: list[BaseException] = []
+
+        def dispatch() -> None:
+            try:
+                frame._on_resource(None, args)
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                completed.set()
+
+        thread = threading.Thread(target=dispatch, name="webview-resource-nonblocking-test")
         try:
             with mock.patch.dict(sys.modules, {"System": fake_system}):
-                before = time.monotonic()
-                frame._on_resource(None, args)
-                elapsed = time.monotonic() - before
-                self.assertLess(elapsed, 0.2)
+                thread.start()
+                self.assertTrue(completed.wait(2), "resource callback blocked behind the asset handler")
+                thread.join(timeout=2)
+                self.assertEqual(errors, [])
                 self.assertTrue(started.wait(1))
                 self.assertIsNone(args.Response)
                 self.assertFalse(args.deferral.completed.is_set())
@@ -112,6 +124,7 @@ class WebView2HandlerTests(unittest.TestCase):
             self.assertEqual(args.Response.status, 204)
         finally:
             release.set()
+            thread.join(timeout=2)
             frame.close()
 
     def test_popup_download_permission_are_denied(self):

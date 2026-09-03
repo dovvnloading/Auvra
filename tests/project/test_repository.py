@@ -435,8 +435,11 @@ class ProjectTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "nt", "Windows long-path acceptance only")
     def test_supported_windows_long_path(self):
         path = Path(self.tmp.name) / ("x" * 220)
-        try: repo = ProjectRepository.create(path, "long"); repo.close()
-        except OSError as exc: self.skipTest(f"long paths unavailable: {exc}")
+        try:
+            repo = ProjectRepository.create(path, "long")
+            repo.close()
+        except OSError as exc:
+            self.fail(f"supported Windows long-path operation failed: {exc}")
 
     @unittest.skipUnless(os.name != "nt", "POSIX permission semantics only")
     def test_permission_failure_is_actionable(self):

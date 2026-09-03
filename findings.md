@@ -640,6 +640,8 @@ Diagnostics follow mode retains every `(runId, sequence)` in `seen` for the proc
 
 The project subprocess-lock test performs a blocking `readline()` with no timeout (`tests/project/test_repository.py:164`). Multiple controller/WebView tests use strict sub-second wall-clock thresholds, and native navigation checks rely on a fixed sleep (`tests/desktop/test_controller.py:258`, `tests/desktop/test_webview2.py:102`, `tests/desktop/test_native_smoke.py:836`). AppContainer and long-path failures can turn supported-platform regressions into skips (`tests/plugins/test_sdk.py:260`, `tests/project/test_repository.py:276`).
 
+**Status:** Completed — subprocess-lock and nonblocking controller/WebView tests now use bounded thread completion and guaranteed cleanup instead of unbounded reads or sub-second elapsed assertions; native WebView smokes wait on explicit readiness/title and navigation predicates instead of fixed sleeps. Windows long-path and supported-build AppContainer failures now fail closed rather than becoming green skips. The affected project/controller/WebView/plugin suites pass (97 tests, 2 intentional platform skips).
+
 ### F-077 — Public renderer and verification documentation is ahead of the implementation
 
 **Severity:** Medium · **Classification:** Documentation concern
