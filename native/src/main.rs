@@ -435,6 +435,12 @@ impl Renderer {
         let info = adapter.get_info();
         gpu::validate_adapter(&adapter)?;
         let available = adapter.features();
+        // A CPU software adapter may expose timestamp-query features, but its
+        // elapsed values measure software rasterization rather than a
+        // production GPU frame.  Keep the renderer usable while publishing an
+        // explicit timing fallback instead of qualifying it against the GPU
+        // budget.
+        let software_adapter = matches!(info.device_type, wgpu::DeviceType::Cpu);
         let timestamp_features_available = available.contains(wgpu::Features::TIMESTAMP_QUERY)
             && available.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES);
         let required_features = if timestamp_features_available {
@@ -453,7 +459,7 @@ impl Renderer {
         .map_err(|e| format!("device request failed: {e:?}"))?;
         let production_pipelines =
             gpu::ProductionPipelines::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb);
-        let gpu_timing = timestamp_features_available
+        let gpu_timing = (timestamp_features_available && !software_adapter)
             .then(|| gpu::GpuTiming::new(&device, &queue))
             .flatten();
         let gpu_timing_supported = gpu_timing.is_some();
@@ -472,8 +478,13 @@ impl Renderer {
             production_pipelines,
             gpu_timing,
             gpu_timing_supported,
-            gpu_timing_fallback: (!gpu_timing_supported)
-                .then(|| "timestamp_query_unavailable_cpu_submit".into()),
+            gpu_timing_fallback: (!gpu_timing_supported).then(|| {
+                if software_adapter {
+                    "software_adapter_gpu_timing_unavailable".into()
+                } else {
+                    "timestamp_query_unavailable_cpu_submit".into()
+                }
+            }),
             pipeline_cache_hits: 0,
             pipeline_cache_misses: 0,
         })
