@@ -136,6 +136,15 @@ if (!/emitDomainCascade/.test(assetContext)
   || !/projectId: string/.test(domainCascade)) {
   failures.push('host asset-delete cascades are not reconciled across live editor domains');
 }
+if (!/JSON\.stringify\(oldItem\) !== JSON\.stringify\(item\)/.test(levels)
+  || !/const previousState = history\.current\.past\[history\.current\.past\.length - 1\]/.test(levels)
+  || !/const nextState = history\.current\.future\[history\.current\.future\.length - 1\]/.test(levels)
+  || !/historyMutationRef/.test(levels)
+  || !/Keep both stacks untouched until every host change succeeds/.test(levels)
+  || !/syncStateToDB\(nextState, currentState, rollbackLease, false\)/.test(levels)
+  || !/level_history_rollback_failed/.test(levels)) {
+  failures.push('level undo/redo still omits authored fields or consumes history before persistence');
+}
 if (!/transition \|\| undefined/.test(projectManager) || !/isTransitionCurrent\(transition\)/.test(projectManager)) failures.push('project-manager hydration does not carry exact transition identity through awaits');
 if (!/expectedProjectId/.test(persistence) || !/expectedRevision/.test(persistence) || !/status\.projectId !== expectedProjectId/.test(persistence) || !/status\.revision !== expectedRevision/.test(persistence)) failures.push('hydration does not fence the exact project identity after awaits');
 if (!/flushSync/.test(sceneContext) || !/commitHydration/.test(sceneContext)) failures.push('hydration replacement lacks an explicit atomic React commit');

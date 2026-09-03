@@ -534,6 +534,8 @@ Host-side model deletion cascades through level references (`fbx-viewer (1)/util
 
 The history diff compares only a subset of position, rotation, scale, terrain, and sky fields (`fbx-viewer (1)/hooks/useLevelManager.ts:11`). It omits position Y, rotation X/Z, scale Y/Z, name, type, audio, spawn, and other editable data. Undo/redo mutate stacks before awaiting host synchronization and have no rollback (`fbx-viewer (1)/hooks/useLevelManager.ts:78`), so failures permanently consume history and omitted changes can reappear after reload.
 
+**Status:** Completed — level persistence now compares complete authored objects, undo/redo keep history untouched until synchronization succeeds, guard concurrent history commands, and perform a bounded inverse sync when a multi-object write partially fails. Project verification, TypeScript, and production frontend build pass.
+
 ### F-064 — Camera and selection state are saved and restored inconsistently
 
 **Severity:** Medium · **Classification:** Confirmed

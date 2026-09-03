@@ -43,7 +43,12 @@ const applyDomainCascade = (objects: LevelObject[], event: DomainCascadeEvent): 
     });
 };
 
-const syncStateToDB = async (currentState: LevelObject[], nextState: LevelObject[], lease?: EditorSessionLease) => {
+const syncStateToDB = async (
+    currentState: LevelObject[],
+    nextState: LevelObject[],
+    lease?: EditorSessionLease,
+    allowRollback = true,
+) => {
     if (lease && !editorSession.isCurrent(lease)) return false;
     let activeLease = lease;
     const currentMap = new Map(currentState.map(o => [o.id, o]));
@@ -62,39 +67,49 @@ const syncStateToDB = async (currentState: LevelObject[], nextState: LevelObject
             toAdd.push(item);
         } else {
             const oldItem = currentMap.get(item.id)!;
-            // Enhanced diff check to include terrain and sky data
-            if (
-                oldItem.position[0] !== item.position[0] || 
-                oldItem.position[2] !== item.position[2] ||
-                oldItem.rotation[1] !== item.rotation[1] ||
-                oldItem.scale[0] !== item.scale[0] ||
-                (item.type === 'terrain' && JSON.stringify(oldItem.terrainData) !== JSON.stringify(item.terrainData)) ||
-                (item.type === 'sky_sphere' && JSON.stringify(oldItem.skyConfig) !== JSON.stringify(item.skyConfig))
-            ) {
+            // A level object is an authored document. Compare the complete
+            // document so name/type/audio/spawn/terrain/sky and every
+            // transform component survive undo/redo round trips.
+            if (JSON.stringify(oldItem) !== JSON.stringify(item)) {
                 toUpdate.push(item);
             }
         }
     }
 
-    for (const id of toDelete) {
-        if (activeLease && !editorSession.isCurrent(activeLease)) return false;
-        await dbOperations.deleteLevelObject(id, activeLease);
-        if (lease && !editorSession.isSameSession(lease)) return false;
-        activeLease = editorSession.captureReady() || undefined;
+    try {
+        for (const id of toDelete) {
+            if (activeLease && !editorSession.isCurrent(activeLease)) return false;
+            await dbOperations.deleteLevelObject(id, activeLease);
+            if (lease && !editorSession.isSameSession(lease)) return false;
+            activeLease = editorSession.captureReady() || undefined;
+        }
+        for (const object of toAdd) {
+            if (activeLease && !editorSession.isCurrent(activeLease)) return false;
+            await dbOperations.addLevelObject(object, activeLease);
+            if (lease && !editorSession.isSameSession(lease)) return false;
+            activeLease = editorSession.captureReady() || undefined;
+        }
+        for (const object of toUpdate) {
+            if (activeLease && !editorSession.isCurrent(activeLease)) return false;
+            await dbOperations.updateLevelObject(object.id, object, activeLease);
+            if (lease && !editorSession.isSameSession(lease)) return false;
+            activeLease = editorSession.captureReady() || undefined;
+        }
+        return true;
+    } catch (error) {
+        if (allowRollback) {
+            const rollbackLease = editorSession.captureReady();
+            if (rollbackLease && (!lease || editorSession.isSameSession(lease))) {
+                try {
+                    const restored = await syncStateToDB(nextState, currentState, rollbackLease, false);
+                    if (!restored) frontendDiagnostics.failure('level_history_rollback_rejected', error);
+                } catch (rollbackError) {
+                    frontendDiagnostics.failure('level_history_rollback_failed', rollbackError);
+                }
+            }
+        }
+        throw error;
     }
-    for (const object of toAdd) {
-        if (activeLease && !editorSession.isCurrent(activeLease)) return false;
-        await dbOperations.addLevelObject(object, activeLease);
-        if (lease && !editorSession.isSameSession(lease)) return false;
-        activeLease = editorSession.captureReady() || undefined;
-    }
-    for (const object of toUpdate) {
-        if (activeLease && !editorSession.isCurrent(activeLease)) return false;
-        await dbOperations.updateLevelObject(object.id, object, activeLease);
-        if (lease && !editorSession.isSameSession(lease)) return false;
-        activeLease = editorSession.captureReady() || undefined;
-    }
-    return true;
 };
 
 export const useLevelManager = (models: LoadedModelData[]) => {
@@ -114,6 +129,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
 
   // History State
   const history = useRef<{ past: LevelObject[][], future: LevelObject[][] }>({ past: [], future: [] });
+  const historyMutationRef = useRef(false);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
 
@@ -132,33 +148,53 @@ export const useLevelManager = (models: LoadedModelData[]) => {
   }, [levelObjects, session]);
 
   const undo = useCallback(async () => {
+      if (historyMutationRef.current) return;
       const lease = session.captureReady();
       session.requireCurrent(lease);
-      if (history.current.past.length === 0) return;
+      const previousState = history.current.past[history.current.past.length - 1];
+      if (!previousState) return;
       const currentSnapshot = JSON.parse(JSON.stringify(levelObjects));
-      history.current.future.push(currentSnapshot);
-      const previousState = history.current.past.pop();
-      if (previousState) {
+      historyMutationRef.current = true;
+      try {
+          // Keep both stacks untouched until every host change succeeds.
           if (!await syncStateToDB(levelObjects, previousState, lease) || !session.isSameSession(lease)) return;
+          if (history.current.past[history.current.past.length - 1] !== previousState) return;
+          history.current.past.pop();
+          history.current.future.push(currentSnapshot);
           setWorkingState(prev => ({ ...prev, levelObjects: previousState }));
           addNotification({ message: "Undo", type: 'info', duration: 800 });
+      } catch (error) {
+          frontendDiagnostics.failure('level_undo_failed', error);
+          addNotification({ message: "Undo failed; no history was consumed.", type: 'error' });
+      } finally {
+          historyMutationRef.current = false;
+          updateHistoryState();
       }
-      updateHistoryState();
   }, [levelObjects, addNotification, session]);
 
   const redo = useCallback(async () => {
+      if (historyMutationRef.current) return;
       const lease = session.captureReady();
       session.requireCurrent(lease);
-      if (history.current.future.length === 0) return;
+      const nextState = history.current.future[history.current.future.length - 1];
+      if (!nextState) return;
       const currentSnapshot = JSON.parse(JSON.stringify(levelObjects));
-      history.current.past.push(currentSnapshot);
-      const nextState = history.current.future.pop();
-      if (nextState) {
+      historyMutationRef.current = true;
+      try {
+          // Keep both stacks untouched until every host change succeeds.
           if (!await syncStateToDB(levelObjects, nextState, lease) || !session.isSameSession(lease)) return;
+          if (history.current.future[history.current.future.length - 1] !== nextState) return;
+          history.current.future.pop();
+          history.current.past.push(currentSnapshot);
           setWorkingState(prev => ({ ...prev, levelObjects: nextState }));
           addNotification({ message: "Redo", type: 'info', duration: 800 });
+      } catch (error) {
+          frontendDiagnostics.failure('level_redo_failed', error);
+          addNotification({ message: "Redo failed; no history was consumed.", type: 'error' });
+      } finally {
+          historyMutationRef.current = false;
+          updateHistoryState();
       }
-      updateHistoryState();
   }, [levelObjects, addNotification, session]);
 
   useEffect(() => {
