@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+from dataclasses import dataclass
 import json
 import os
+import secrets
 import shutil
 import signal
 import socket
@@ -138,6 +140,49 @@ def _node_npm() -> tuple[str, str]:
     node = shutil.which("node") or "node"
     npm = shutil.which("npm") or "npm"
     return node, npm
+
+
+@dataclass
+class PortReservation:
+    """An OS-bound loopback port held through the Vite spawn handoff."""
+
+    port: int
+    _socket: socket.socket
+    _released: bool = False
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        self._socket.close()
+
+
+def _reserve_port(port: int) -> PortReservation:
+    reserved = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if os.name == "nt":
+            exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+            if exclusive is not None:
+                reserved.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+        reserved.bind((HOST, port))
+    except OSError:
+        reserved.close()
+        raise
+    return PortReservation(port, reserved)
+
+
+def _reserve_start_port(explicit: int | None) -> tuple[int, PortReservation]:
+    attempts = 1 if explicit is not None else len(PORT_RANGE) + 1
+    last_error: OSError | None = None
+    for _ in range(attempts):
+        port = choose_port(explicit)
+        try:
+            return port, _reserve_port(port)
+        except OSError as exc:
+            last_error = exc
+            if explicit is not None:
+                raise
+    raise last_error or OSError("no free loopback port in 3000-3099")
 
 
 def _port_open(port: int) -> bool:
@@ -492,8 +537,16 @@ def _run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool, pack
         return ExitCode.RUNTIME
     _diagnostic_phase("runtime-checks", "completed", started=runtime_started)
     port_started = _diagnostic_phase("port-selection", "started")
+    port_reservation: PortReservation | None = None
+
+    def release_port_reservation() -> None:
+        nonlocal port_reservation
+        if port_reservation is not None:
+            port_reservation.release()
+            port_reservation = None
+
     try:
-        port = choose_port(explicit_port)
+        port, port_reservation = _reserve_start_port(explicit_port)
     except (OSError, ValueError) as exc:
         _diagnostic_phase("port-selection", "failed", started=port_started,
                           code="port_unavailable", errorType=type(exc).__name__)
@@ -513,12 +566,14 @@ def _run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool, pack
                           code="dependency_cleanup", errorType=type(exc).__name__)
         emit({"command": "start", "ok": False,
               "error": f"dependency cleanup failed: {exc}"}, json_mode=json_mode)
+        release_port_reservation()
         return ExitCode.CLEANUP
     except ProcessLaunchError as exc:
         _diagnostic_phase("dependency-checks", "failed", started=dependencies_started,
                           code="dependency_launch", errorType=type(exc).__name__)
         emit({"command": "start", "ok": False,
               "error": f"dependency child launch failed: {exc}"}, json_mode=json_mode)
+        release_port_reservation()
         return ExitCode.CHILD
     except (OSError, ValueError) as exc:
         ready, state, install_output = False, None, str(exc)
@@ -527,6 +582,7 @@ def _run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool, pack
                           code="dependencies_unavailable")
         emit({"command": "start", "ok": False, "error": "dependency preparation failed",
               "port": port, "dependencies": state.to_dict() if state else {}, "output": install_output[-4000:]}, json_mode=json_mode)
+        release_port_reservation()
         return ExitCode.DEPENDENCIES
     _diagnostic_phase("dependency-checks", "completed", started=dependencies_started)
     node, _ = _node_npm()
@@ -541,10 +597,17 @@ def _run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool, pack
     exit_code = ExitCode.OK
     active_phase = "vite-launch"
     active_phase_started: float | None = None
+    readiness_token = secrets.token_urlsafe(32)
+    child_environment = dict(os.environ)
+    child_environment["AUVRA_READY_TOKEN"] = readiness_token
     try:
         vite_started = _diagnostic_phase("vite-launch", "started")
         active_phase_started = vite_started
-        owned = OwnedProcess.launch(command, paths.frontend_root, on_output=log)
+        owned = OwnedProcess.launch(command, paths.frontend_root, on_output=log,
+                                    env=child_environment)
+        # The reservation protects selection through Popen; Vite now owns the
+        # port and readiness identity closes the unavoidable handoff window.
+        release_port_reservation()
         _diagnostic_phase("vite-launch", "completed", started=vite_started, port=port)
         if session is not None:
             session.emit("launcher", "child.started",
@@ -552,7 +615,8 @@ def _run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool, pack
         readiness_started = _diagnostic_phase("vite-readiness", "started")
         active_phase = "vite-readiness"
         active_phase_started = readiness_started
-        result = wait_for_readiness(HOST, port, owned.is_alive, timeout=READINESS_TIMEOUT)
+        result = wait_for_readiness(HOST, port, owned.is_alive, timeout=READINESS_TIMEOUT,
+                                    expected_token=readiness_token)
         if not result.ready:
             _diagnostic_phase("vite-readiness", "failed", started=readiness_started,
                               code=str(result.reason or "readiness_failed"))
@@ -655,6 +719,7 @@ def _run_start(paths: Paths, *, explicit_port: int | None, json_mode: bool, pack
                 _diagnostic_phase("cleanup", "completed", started=cleanup_started)
         else:
             _diagnostic_phase("cleanup", "completed", started=cleanup_started)
+        release_port_reservation()
     return exit_code
 
 

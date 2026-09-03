@@ -108,6 +108,8 @@ Custom code is compiled in the parent and executed synchronously with `new Funct
 
 Both request and response frames are capped at 64 KiB (`native/src/main.rs:298`, `native/src/main.rs:325`). `world.getReplay` and `renderer.extract` serialize complete, unpaged structures (`native/src/main.rs:741`, `native/src/main.rs:1212`, `native/src/main.rs:1271`), and a response write error escapes the IPC loop (`native/src/main.rs:1758`). A 400-entity world was sufficient for each call to terminate the child with exit code 1. The trace is marked successful before the failing write (`native/src/main.rs:1754`), so diagnostics can also record the failed operation as completed.
 
+**Status:** Completed — oversized or unrepresentable native responses now fall back to a bounded `operation_failed` frame, keep the IPC loop alive for subsequent requests, and finish the diagnostic span as failed when the response could not be written. The dedicated oversized replay regression and full native suite pass (43 tests).
+
 ### F-011 — A timed-out native call permanently desynchronizes later responses
 
 **Severity:** High · **Classification:** Confirmed
@@ -671,6 +673,8 @@ Launcher output-reader threads invoke callbacks without catching callback except
 **Severity:** Medium · **Classification:** Local-origin risk
 
 The launcher selects a loopback port and releases the socket before Vite binds it (`Auvra/launcher/cli.py:154`, `Auvra/launcher/cli.py:494`). Readiness accepts any complete HTTP response while only confirming that the Vite root process remains alive (`Auvra/launcher/readiness.py:20`, `Auvra/launcher/readiness.py:49`). Another loopback process that wins the bind can be mistaken for the editor frontend.
+
+**Status:** Completed — startup now holds an OS-bound loopback reservation through dependency preparation and the Vite spawn handoff, retries automatic selection when a competing bind wins, and releases only after launch. Each development launch passes a random token to Vite; its dedicated readiness endpoint returns that token, and readiness requires the exact 200 response/header identity instead of accepting any HTTP response. Regression coverage proves reservation exclusion, token mismatch rejection, token acceptance, launch ordering, and a real Vite smoke; the full launcher suite (73 tests), strict typecheck, diagnostics verification, and production build pass.
 
 ## Checks that did not produce a finding
 
