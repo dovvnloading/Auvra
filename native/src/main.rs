@@ -814,6 +814,7 @@ struct App {
     viewport: Option<Viewport>,
     cooker: Option<CookWorker>,
     asset_jobs: HashMap<u64, CancellationToken>,
+    pending_asset_ids: BTreeSet<String>,
     hydration: Option<HydrationDraft>,
 }
 
@@ -848,6 +849,7 @@ impl App {
             viewport: None,
             cooker,
             asset_jobs: HashMap::new(),
+            pending_asset_ids: BTreeSet::new(),
             hydration: None,
         })
     }
@@ -866,6 +868,7 @@ impl App {
         if !self.authenticated {
             return Err("session.hello required".into());
         }
+        self.retry_pending_asset_jobs();
         let result = match req.method.as_str() {
             "world.getSnapshot" => {
                 in_native_phase("world_validate", || self.world_snapshot(&req.params))
@@ -1321,26 +1324,37 @@ impl App {
         self.project_id = None;
         self.project_revision = None;
         self.asset_jobs.clear();
+        self.pending_asset_ids.clear();
         self.world_snapshot(&Value::Null)
     }
 
     fn submit_asset_ids(&mut self, asset_ids: &[String]) -> (usize, usize) {
+        self.pending_asset_ids.extend(asset_ids.iter().cloned());
+        self.retry_pending_asset_jobs()
+    }
+
+    fn retry_pending_asset_jobs(&mut self) -> (usize, usize) {
         let Some(cooker) = self.cooker.as_ref() else {
-            return (0, asset_ids.len().min(256));
+            return (0, self.pending_asset_ids.len());
         };
         let mut queued = 0;
-        let mut deferred = 0;
-        for source_id in asset_ids.iter().take(256) {
-            match cooker.submit(source_id) {
+        let mut failed = 0;
+        for source_id in self.pending_asset_ids.clone() {
+            match cooker.submit_deferred(&source_id) {
                 Ok(submission) => {
                     self.asset_jobs
                         .insert(submission.job_id, submission.cancellation);
+                    self.pending_asset_ids.remove(&source_id);
                     queued += 1;
                 }
-                Err(_) => deferred += 1,
+                Err(error) if error.code == "queue_full" => break,
+                Err(_) => {
+                    self.pending_asset_ids.remove(&source_id);
+                    failed += 1;
+                }
             }
         }
-        (queued, deferred + asset_ids.len().saturating_sub(256))
+        (queued, self.pending_asset_ids.len() + failed)
     }
 
     fn advance_world(&mut self, params: &Value) -> Result<Value, String> {
@@ -2505,5 +2519,25 @@ mod tests {
             .unwrap()
             .ok
         );
+    }
+
+    #[test]
+    fn hydration_asset_submission_does_not_drop_queue_tail() {
+        let root = std::env::temp_dir().join(format!("auvra-main-deferred-{}", std::process::id()));
+        let derived = root.join("derived");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut app = App::new().unwrap();
+        app.cooker = Some(
+            CookWorker::new(CookConfig::new(&root, &derived).with_queue_capacity(1)).unwrap(),
+        );
+        let ids = (0..32)
+            .map(|index| format!("{index:064x}"))
+            .collect::<Vec<_>>();
+        let (queued, deferred) = app.submit_asset_ids(&ids);
+        assert_eq!(queued, ids.len());
+        assert_eq!(deferred, 0);
+        assert!(app.pending_asset_ids.is_empty());
+        drop(app);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

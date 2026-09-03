@@ -346,6 +346,8 @@ Upload completion and media commit ingest permanent project blobs before the pro
 
 **Severity:** High · **Classification:** Confirmed
 
+**Status:** Completed — hydration uses the worker’s bounded deferred-ingestion path for the full asset set, retains only an explicit safety-cap backlog for retry, and no longer drops queue tails at 256; native queue and hydration regression tests passed.
+
 The cooker queue capacity defaults to eight (`native/src/assets.rs:36`, `native/src/assets.rs:73`). Hydration attempts up to 256 assets once; queue-full submissions and all later assets are merely counted as deferred (`native/src/main.rs:1171`). No host or frontend consumer was found for `assetJobsDeferred`, so a project can remain permanently only partly cooked.
 
 ### F-041 — Asset jobs outlive project close and retain stale bookkeeping
