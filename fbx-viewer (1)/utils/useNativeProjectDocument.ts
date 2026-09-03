@@ -86,7 +86,7 @@ export function useNativeProjectDocument<T extends { id: string }>(
 
     void projectService.getSnapshotAll(domain, span.context).then((snapshot) => {
       if (controller.signal.aborted || !isCurrent()) return;
-      if (snapshot.projectId !== lease.projectId || snapshot.revision !== lease.revision) {
+      if (!snapshot || snapshot.projectId !== lease.projectId || snapshot.revision !== lease.revision) {
         controller.abort();
         return;
       }

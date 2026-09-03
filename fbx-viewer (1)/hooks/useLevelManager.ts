@@ -149,8 +149,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
 
   const undo = useCallback(async () => {
       if (historyMutationRef.current) return;
-      const lease = session.captureReady();
-      session.requireCurrent(lease);
+      const lease = session.requireCurrent(session.captureReady());
       const previousState = history.current.past[history.current.past.length - 1];
       if (!previousState) return;
       const currentSnapshot = JSON.parse(JSON.stringify(levelObjects));
@@ -174,8 +173,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
 
   const redo = useCallback(async () => {
       if (historyMutationRef.current) return;
-      const lease = session.captureReady();
-      session.requireCurrent(lease);
+      const lease = session.requireCurrent(session.captureReady());
       const nextState = history.current.future[history.current.future.length - 1];
       if (!nextState) return;
       const currentSnapshot = JSON.parse(JSON.stringify(levelObjects));
@@ -341,8 +339,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
   }, [currentLevelId, session, sessionSnapshot.generation, sessionSnapshot.phase]);
 
   const createLevel = useCallback(async (name: string) => {
-      const lease = session.captureReady();
-      session.requireCurrent(lease);
+      const lease = session.requireCurrent(session.captureReady());
       projectService.assertWritable();
       const newLevel: LevelData = {
           id: crypto.randomUUID(),
@@ -363,8 +360,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
   }, [addNotification, session]);
 
   const loadLevel = useCallback(async (id: string) => {
-      const lease = session.captureReady();
-      session.requireCurrent(lease);
+      const lease = session.requireCurrent(session.captureReady());
       if (id === currentLevelIdRef.current) return;
       if (!levels.some((level) => level.id === id)) throw new Error('Cannot load an unknown level.');
       const authoritative = projectService.getStatus();
@@ -411,8 +407,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
   }, [levels, addNotification, replaceWorkingState, session]);
 
   const deleteLevel = useCallback(async (id: string) => {
-      const lease = session.captureReady();
-      session.requireCurrent(lease);
+      const lease = session.requireCurrent(session.captureReady());
       projectService.assertWritable();
       try {
           await dbOperations.deleteLevel(id, lease);
@@ -441,8 +436,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       type: LevelObjectType = 'prop',
       extraData?: any
   ): Promise<string | undefined> => {
-    const lease = session.captureReady();
-    session.requireCurrent(lease);
+    const lease = session.requireCurrent(session.captureReady());
     const activeLevelId = currentLevelIdRef.current;
     if (!activeLevelId || lease.levelId !== activeLevelId) return undefined;
     snapshotHistory();
@@ -486,8 +480,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
   }, [models, currentLevelId, snapshotHistory, session]);
 
   const removeLevelObject = useCallback(async (id: string) => {
-      const lease = session.captureReady();
-      session.requireCurrent(lease);
+      const lease = session.requireCurrent(session.captureReady());
       projectService.assertWritable();
       snapshotHistory();
       try {
@@ -498,8 +491,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
   }, [snapshotHistory, session]);
 
   const removeLevelObjects = useCallback(async (ids: string[]) => {
-      const lease = session.captureReady();
-      session.requireCurrent(lease);
+      const lease = session.requireCurrent(session.captureReady());
       projectService.assertWritable();
       if (ids.length === 0) return;
       snapshotHistory();
@@ -517,8 +509,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
   }, [snapshotHistory, session]);
 
   const updateLevelObject = useCallback((id: string, updates: Partial<LevelObject>) => {
-      const lease = session.captureReady();
-      session.requireCurrent(lease);
+      const lease = session.requireCurrent(session.captureReady());
       projectService.assertWritable();
       const previous = levelObjects.find((object) => object.id === id);
       if (!previous) return;
@@ -537,8 +528,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
   }, [commitUpdates, levelObjects, session]);
 
   const updateLevelBlueprint = useCallback((data: Partial<LevelBlueprintData>) => {
-      const lease = session.captureReady();
-      session.requireCurrent(lease);
+      const lease = session.requireCurrent(session.captureReady());
       projectService.assertWritable();
       const next = { ...activeLevelBlueprint, ...data };
       const previous = activeLevelBlueprint;

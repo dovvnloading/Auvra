@@ -168,7 +168,7 @@ const App: React.FC = () => {
     const span = frontendDiagnostics.startSpan('editor', 'mounted', { category: 'lifecycle' });
     const uninstallRendererDiagnostics = installRendererDiagnostics();
     return () => {
-      uninstallRendererDiagnostics();
+      uninstallRendererDiagnostics?.();
       span.finish('success');
     };
   }, []);

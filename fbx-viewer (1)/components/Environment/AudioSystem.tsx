@@ -59,7 +59,8 @@ export const AudioSystem: React.FC<AudioSystemProps> = ({ levelObjects, audioAss
 
     // 3. Sync Audio Objects
     useEffect(() => {
-        if (!listenerRef.current) return;
+        const listener = listenerRef.current;
+        if (!listener) return;
 
         const currentIds = new Set<string>();
 
@@ -94,9 +95,9 @@ export const AudioSystem: React.FC<AudioSystemProps> = ({ levelObjects, audioAss
 
                         // Setup new sound
                         if (config.isSpatial) {
-                            sound = new THREE.PositionalAudio(listenerRef.current);
+                            sound = new THREE.PositionalAudio(listener);
                         } else {
-                            sound = new THREE.Audio(listenerRef.current);
+                            sound = new THREE.Audio(listener);
                         }
 
                         // Create container

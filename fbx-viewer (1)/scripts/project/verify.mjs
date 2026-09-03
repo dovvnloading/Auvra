@@ -50,6 +50,8 @@ const hudLibrary = await readFile(resolve(root, 'components/HUDEditor/HUDLibrary
 const selectControl = await readFile(resolve(root, 'components/UI/Select.tsx'), 'utf8');
 const scrubbableInput = await readFile(resolve(root, 'components/UI/Properties/ScrubbableInput.tsx'), 'utf8');
 const playerControls = await readFile(resolve(root, 'components/Sandbox/hooks/usePlayerControls.ts'), 'utf8');
+const packageJson = await readFile(resolve(root, 'package.json'), 'utf8');
+const strictTsconfig = await readFile(resolve(root, 'tsconfig.strict.json'), 'utf8');
 
 const failures = [];
 const mustNotContain = (text, pattern, label) => { if (pattern.test(text)) failures.push(`${label}: forbidden ${pattern}`); };
@@ -209,6 +211,15 @@ if (!/role="combobox"/.test(selectControl)
   || !/window\.addEventListener\('blur'/.test(playerControls)
   || !/keys\.current\.clear\(\)/.test(playerControls)) {
   failures.push('keyboard, pointer, and accessibility interaction safeguards are incomplete');
+}
+if (!/"test":\s*"vitest run"/.test(packageJson)
+  || !/"typecheck:strict":\s*"tsc --noEmit -p tsconfig\.strict\.json"/.test(packageJson)
+  || !/"strict":\s*true/.test(strictTsconfig)
+  || !/"noImplicitAny":\s*true/.test(strictTsconfig)
+  || !/"noUnusedLocals":\s*true/.test(strictTsconfig)
+  || !/"noUnusedParameters":\s*true/.test(strictTsconfig)
+  || !/tests\/frontend/.test(strictTsconfig)) {
+  failures.push('frontend conventional tests or strict compiler gate are missing');
 }
 if (!/transition \|\| undefined/.test(projectManager) || !/isTransitionCurrent\(transition\)/.test(projectManager)) failures.push('project-manager hydration does not carry exact transition identity through awaits');
 if (!/expectedProjectId/.test(persistence) || !/expectedRevision/.test(persistence) || !/status\.projectId !== expectedProjectId/.test(persistence) || !/status\.revision !== expectedRevision/.test(persistence)) failures.push('hydration does not fence the exact project identity after awaits');

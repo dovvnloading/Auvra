@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noImplicitAny": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "allowJs": false,
+    "skipLibCheck": true,
+    "types": ["node", "vitest/globals"]
+  },
+  "include": [
+    "tests/frontend/**/*.ts",
+    "tests/frontend/**/*.tsx",
+    "components/HUDEditor/types.ts",
+    "components/UI/Select.tsx",
+    "components/UI/Properties/ScrubbableInput.tsx",
+    "renderer/registry.ts",
+    "utils/editorSession.ts"
+  ]
+}

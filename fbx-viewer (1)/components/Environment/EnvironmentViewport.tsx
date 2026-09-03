@@ -189,11 +189,11 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                 surfaceId="editor-environment-viewport"
                 role="editor"
                 className="absolute inset-0 pointer-events-none"
-                eventSource={containerRef}
+                eventSource={containerRef as React.MutableRefObject<HTMLElement>}
                 shadows
             >
                 {layout === 'single' && (
-                    <View track={viewMain}>
+                    <View track={viewMain as React.MutableRefObject<HTMLElement>}>
                         <PerspectiveCamera makeDefault position={[10, 10, 10]} fov={45} />
                         <OrbitControls 
                             makeDefault 
@@ -211,7 +211,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
 
                 {layout === 'quad' && (
                     <>
-                        <View track={viewLeft}>
+                        <View track={viewLeft as React.MutableRefObject<HTMLElement>}>
                             <ambientLight intensity={0.8} />
                             <OrthographicCamera makeDefault position={[50, 0, 0]} zoom={20} near={-100} far={100} />
                             <OrbitControls makeDefault enableRotate={false} panSpeed={cameraSpeed} zoomSpeed={cameraSpeed} mouseButtons={controlConfig.mouseButtons} />
@@ -225,7 +225,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                             />
                         </View>
 
-                        <View track={viewRight}>
+                        <View track={viewRight as React.MutableRefObject<HTMLElement>}>
                             <ambientLight intensity={0.8} />
                             <OrthographicCamera makeDefault position={[-50, 0, 0]} zoom={20} near={-100} far={100} />
                             <OrbitControls makeDefault enableRotate={false} panSpeed={cameraSpeed} zoomSpeed={cameraSpeed} mouseButtons={controlConfig.mouseButtons} />
@@ -239,7 +239,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                             />
                         </View>
 
-                        <View track={viewTop}>
+                        <View track={viewTop as React.MutableRefObject<HTMLElement>}>
                             <ambientLight intensity={0.8} />
                             <OrthographicCamera makeDefault position={[0, 50, 0]} zoom={20} near={-100} far={100} />
                             <OrbitControls makeDefault enableRotate={false} panSpeed={cameraSpeed} zoomSpeed={cameraSpeed} mouseButtons={controlConfig.mouseButtons} />
@@ -252,7 +252,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                             />
                         </View>
 
-                        <View track={viewBottom}>
+                        <View track={viewBottom as React.MutableRefObject<HTMLElement>}>
                             <ambientLight intensity={0.8} />
                             <OrthographicCamera makeDefault position={[0, -50, 0]} zoom={20} near={-100} far={100} />
                             <OrbitControls makeDefault enableRotate={false} panSpeed={cameraSpeed} zoomSpeed={cameraSpeed} mouseButtons={controlConfig.mouseButtons} />

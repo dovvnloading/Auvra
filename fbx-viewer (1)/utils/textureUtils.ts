@@ -35,10 +35,11 @@ export const extractTextureFromModel = (object: THREE.Object3D): string | null =
     }
   });
 
-  if (!foundTexture || !foundTexture.image) return null;
+  const texture = foundTexture as THREE.Texture | null;
+  if (!texture || !texture.image) return null;
 
   try {
-    const image = foundTexture.image as HTMLImageElement | HTMLCanvasElement | ImageBitmap;
+    const image = texture.image as HTMLImageElement | HTMLCanvasElement | ImageBitmap;
     const canvas = document.createElement('canvas');
     canvas.width = image.width;
     canvas.height = image.height;

@@ -54,6 +54,12 @@ jobs:
       - name: Typecheck the full editor program
         run: npm run typecheck
 
+      - name: Typecheck strict frontend boundaries
+        run: npm run typecheck:strict
+
+      - name: Run frontend unit and component tests
+        run: npm test
+
       - name: Build editor
         run: npm run build
 

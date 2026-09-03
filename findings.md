@@ -592,6 +592,8 @@ The custom Select lacks combobox/listbox semantics and keyboard navigation (`fbx
 
 The frontend has custom protocol, project, provider, renderer, diagnostics, and frame verifier scripts, several of which execute meaningful behavioral checks (`fbx-viewer (1)/package.json:15`, `fbx-viewer (1)/package.json:19`). It has no conventional unit/component test framework or tracked `*.test.*`/`*.spec.*` suite. `tsconfig.json` does not enable project-wide `strict`, `noImplicitAny`, or unused checks and uses `allowJs` and `skipLibCheck` (`fbx-viewer (1)/tsconfig.json:2`). Current typecheck and custom gates pass, but they do not cover the interleaving, lifecycle, disposal, and interaction failures identified above.
 
+**Status:** Completed — Vitest/jsdom unit and component coverage now exercises HUD bounds, Select keyboard semantics, scrubbing cancellation/keyboard input, renderer recovery reset, and stale editor leases; the main frontend typecheck enables strict/noImplicitAny and disallows JS, while a strict boundary config enforces unused checks for covered production/test modules. Both gates, tests, project verification, and production build pass, and CI runs the new checks.
+
 ### F-071 — Default local release discovery uses placeholders and skips opt-in smokes
 
 **Severity:** Medium · **Classification:** Gap

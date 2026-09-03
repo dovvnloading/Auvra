@@ -11,7 +11,7 @@ import { dbOperations } from '../utils/db';
 import { projectService } from '../utils/projectService';
 import { isAbortError, useOperationActions } from '../context/OperationContext';
 import { useNotification } from '../context/NotificationContext';
-import { assetDiagnosticAttributes, frontendDiagnostics } from '../diagnostics/runtime';
+import { assetDiagnosticAttributes, frontendDiagnostics, type DiagnosticAttributes } from '../diagnostics/runtime';
 
 export const useModelManager = (
   setIsLoading: (loading: boolean) => void,
@@ -168,7 +168,7 @@ export const useModelManager = (
   const addAnimations = useCallback(async (files: File[], modelId: string) => {
     projectService.assertWritable();
     const aliases = files.map(() => frontendDiagnostics.nextAssetAlias());
-    const initialDiagnostic = files[0]
+    const initialDiagnostic: DiagnosticAttributes = files[0]
       ? { ...assetDiagnosticAttributes(files[0], 'animation', aliases[0]), itemCount: files.length }
       : { assetAlias: frontendDiagnostics.nextAssetAlias(), assetKind: 'animation', itemCount: 0 };
     const operation = startOperation({
