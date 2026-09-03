@@ -13,6 +13,7 @@ import io
 from unittest import mock
 
 from Auvra.diagnostics.core import DiagnosticsSession, bind_diagnostic_context
+from Auvra.host.validation import validate_message
 from Auvra.desktop.native_engine import (
     MAX_FRAME_BYTES,
     NativeEngine,
@@ -450,6 +451,11 @@ class NativeEngineTests(unittest.TestCase):
         host.set_dock_target_provider(lambda: {"parentHandle": 99, "width": 640, "height": 480})
         host.handle("engine.getStatus", {})
         self.assertEqual(host._canonical("engine.status")["deviceType"], "Cpu")
+        validate_message({
+            "protocol": "auvra.host/1", "type": "response", "id": "engine-status",
+            "session": "session-1", "revision": 0, "ok": True,
+            "result": host._canonical("engine.status"),
+        })
         snapshot = host.handle("engine.getSnapshot", {})
         self.assertEqual(snapshot["tick"], 12)
         self.assertEqual(snapshot["projectRevision"], 9)
