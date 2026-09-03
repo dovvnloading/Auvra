@@ -6,7 +6,8 @@ use serde_json::{Value, json};
 mod gpu;
 use auvra_native::render_world::{
     AnimationInput, Frustum, IblInput, LightKind, LodLevel, MaterialReference, Plane, PostEffect,
-    RenderExtraction, WorldRenderEntity, WorldRenderInput, WorldRenderLight, extract_render_world,
+    RenderCapabilities, RenderExtraction, RenderFeatureBits, WorldRenderEntity, WorldRenderInput,
+    WorldRenderLight, extract_render_world,
 };
 use auvra_native::world::{Entity, World as NativeWorld, WorldCommand, WorldTransaction};
 use std::cell::RefCell;
@@ -879,7 +880,8 @@ struct App {
     world: NativeWorld,
     project_id: Option<String>,
     project_revision: Option<u64>,
-    renderer: Renderer,
+    renderer: Option<Renderer>,
+    renderer_error: Option<String>,
     viewport: Option<Viewport>,
     cooker: Option<CookWorker>,
     asset_jobs: HashMap<u64, CancellationToken>,
@@ -942,6 +944,18 @@ impl App {
         let session_token = std::env::var("AUVRA_NATIVE_SESSION_TOKEN")
             .ok()
             .filter(|token| valid_session_token(token));
+        let (renderer, renderer_error) = match Renderer::new() {
+            Ok(renderer) => (Some(renderer), None),
+            Err(error) => {
+                diagnostic(
+                    "warning",
+                    "native.renderer_unavailable",
+                    None,
+                    Some("renderer_initialization_failed"),
+                );
+                (None, Some(error))
+            }
+        };
         let world = NativeWorld::new();
         let cooker = match (
             std::env::var_os("AUVRA_NATIVE_SOURCE_ROOT"),
@@ -958,7 +972,8 @@ impl App {
             world,
             project_id: None,
             project_revision: None,
-            renderer: Renderer::new()?,
+            renderer,
+            renderer_error,
             viewport: None,
             cooker,
             asset_jobs: HashMap::new(),
@@ -1051,17 +1066,26 @@ impl App {
             "world.closeProject" => in_native_phase("world_commit", || self.close_project()),
             "world.advance" => in_native_phase("world_advance", || self.advance_world(&req.params)),
             "world.getReplay" => self.replay_snapshot(),
-            "renderer.getCapabilities" => Ok(self.renderer.capabilities()),
+            "renderer.getCapabilities" => Ok(self.renderer_capabilities()),
             "renderer.renderReference" => {
+                if self.renderer.is_none() {
+                    return Ok(Self::operation_error_response(
+                        req.id,
+                        &self.renderer_unavailable_error(),
+                    ));
+                }
                 native_phase("render_extract");
                 let extraction = self.build_extraction(&req.params)?;
                 native_phase("render_submit");
-                self.renderer.render_production(&req.params, &extraction)
+                self.renderer
+                    .as_mut()
+                    .expect("renderer presence was checked above")
+                    .render_production(&req.params, &extraction)
             }
             "renderer.extract" => {
                 in_native_phase("render_extract", || self.render_extract(&req.params))
             }
-            "renderer.getMetrics" => Ok(self.renderer.metrics()),
+            "renderer.getMetrics" => Ok(self.renderer_metrics()),
             "renderer.recover" => in_native_phase("renderer_recover", || self.recover_renderer()),
             "asset.submit" | "asset.beginCook" => {
                 in_native_phase("asset_submit", || self.submit_asset(&req.params))
@@ -1570,17 +1594,69 @@ impl App {
     }
 
     fn recover_renderer(&mut self) -> Result<Value, String> {
-        self.renderer = Renderer::new()?;
+        let mut renderer = Renderer::new()
+            .map_err(|error| format!("unsupported_capability|native renderer unavailable: {error}"))?;
         let extraction = self.build_extraction(&Value::Null)?;
         let viewport_reopened = if let Some(viewport) = self.viewport.as_mut() {
-            viewport.recover(&mut self.renderer, &extraction)?;
+            viewport.recover(&mut renderer, &extraction)?;
             true
         } else {
             false
         };
+        let capabilities = renderer.capabilities();
+        self.renderer = Some(renderer);
+        self.renderer_error = None;
         Ok(
-            json!({"recovered": true, "viewport_reopened": viewport_reopened, "capabilities": self.renderer.capabilities(), "world_revision": self.world.revision()}),
+            json!({"recovered": true, "viewport_reopened": viewport_reopened, "capabilities": capabilities, "world_revision": self.world.revision()}),
         )
+    }
+
+    fn renderer_unavailable_error(&self) -> String {
+        match self.renderer_error.as_deref() {
+            Some(error) if !error.is_empty() => {
+                format!("unsupported_capability|native renderer unavailable: {error}")
+            }
+            _ => "unsupported_capability|native renderer unavailable".into(),
+        }
+    }
+
+    fn renderer_capabilities(&self) -> Value {
+        if let Some(renderer) = self.renderer.as_ref() {
+            return renderer.capabilities();
+        }
+        let capabilities = RenderCapabilities::from_bits(RenderFeatureBits(0));
+        json!({
+            "available": false,
+            "backend": "unavailable",
+            "adapter": "unavailable",
+            "format": "unavailable",
+            "fallback": self.renderer_error.as_deref().unwrap_or("native renderer unavailable"),
+            "gpu_timing": {"supported": false, "fallback": "renderer_initialization_failed"},
+            "pipeline_cache_key": "production-v1|immutable-extraction",
+            "pipeline_cache_hits": 0,
+            "pipeline_cache_misses": 0,
+            "featureCapabilities": capabilities.features,
+            "dockSupport": "unsupported",
+            "dockActive": false,
+            "dockReason": "native renderer unavailable",
+        })
+    }
+
+    fn renderer_metrics(&self) -> Value {
+        if let Some(renderer) = self.renderer.as_ref() {
+            return renderer.metrics();
+        }
+        json!({
+            "startup_ms": null,
+            "last_frame_submit_ms": null,
+            "gpu_frame_ms": null,
+            "memory_bytes": 0,
+            "last_readback_hash": null,
+            "backend": "unavailable",
+            "adapter": "unavailable",
+            "fallback": self.renderer_error.as_deref().unwrap_or("native renderer unavailable"),
+            "gpu_timing": {"supported": false, "fallback": "renderer_initialization_failed"},
+        })
     }
 
     fn submit_asset(&mut self, params: &Value) -> Result<Value, String> {
@@ -1782,8 +1858,13 @@ impl App {
             return Err("invalid viewport dimensions or title".into());
         }
         let extraction = self.build_extraction(&Value::Null)?;
+        let renderer_error = self.renderer_unavailable_error();
+        let renderer = self
+            .renderer
+            .as_mut()
+            .ok_or(renderer_error)?;
         self.viewport = Some(Viewport::open(
-            &mut self.renderer,
+            renderer,
             width as u32,
             height as u32,
             title,
@@ -2789,11 +2870,15 @@ fn pump_viewport(app: &mut App) -> Result<(), String> {
         return Ok(());
     }
     let extraction = app.build_extraction(&Value::Null)?;
+    let Some(renderer) = app.renderer.as_mut() else {
+        app.viewport = None;
+        return Ok(());
+    };
     let mut viewport = app
         .viewport
         .take()
         .ok_or("viewport disappeared during event pump")?;
-    let still_open = viewport.pump_events(&mut app.renderer, &extraction)?;
+    let still_open = viewport.pump_events(renderer, &extraction)?;
     if still_open {
         app.viewport = Some(viewport);
     }
@@ -3119,7 +3204,11 @@ fn run_headless_self_test() -> Result<(), String> {
     {
         return Err("headless native self-test acceptance failed".into());
     }
-    let evidence = json!({"probe":"auvra-native-headless-self-test","protocol":PROTOCOL,"hello_ok":hello.ok,"hydration_ok":hydrated.ok,"advance_ok":advanced.ok,"extraction_ok":extracted.ok,"reference_render_ok":rendered.ok,"reference_render_repeat_ok":rendered_twice.ok,"reference_deterministic":render_matches,"replay_matches":replay_matches,"cook_ok":cook_matches,"cook_artifact_sha256":cook_artifact_id,"close_project_ok":closed_ok,"world_revision":app.world.revision(),"world_tick":app.world.tick(),"world_hash":app.world.snapshot().world_hash,"replay_hash":app.world.replay_hash(),"backend":format!("{:?}", app.renderer.info.backend),"adapter":app.renderer.info.name,"reference":rendered.result,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0});
+    let renderer = app
+        .renderer
+        .as_ref()
+        .ok_or("headless self-test renderer disappeared")?;
+    let evidence = json!({"probe":"auvra-native-headless-self-test","protocol":PROTOCOL,"hello_ok":hello.ok,"hydration_ok":hydrated.ok,"advance_ok":advanced.ok,"extraction_ok":extracted.ok,"reference_render_ok":rendered.ok,"reference_render_repeat_ok":rendered_twice.ok,"reference_deterministic":render_matches,"replay_matches":replay_matches,"cook_ok":cook_matches,"cook_artifact_sha256":cook_artifact_id,"close_project_ok":closed_ok,"world_revision":app.world.revision(),"world_tick":app.world.tick(),"world_hash":app.world.snapshot().world_hash,"replay_hash":app.world.replay_hash(),"backend":format!("{:?}", renderer.info.backend),"adapter":renderer.info.name,"reference":rendered.result,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0});
     println!(
         "{}",
         serde_json::to_string(&evidence).map_err(|e| e.to_string())?
@@ -3194,6 +3283,56 @@ mod tests {
             Some("authentication_failed")
         );
         assert!(!app.authenticated);
+    }
+
+    #[test]
+    fn world_services_survive_renderer_initialization_failure() {
+        let mut app = App::new().unwrap();
+        app.renderer = None;
+        app.renderer_error = Some("test renderer failure".into());
+        app.authenticated = true;
+
+        let snapshot = app
+            .dispatch(Request {
+                id: 1,
+                protocol: PROTOCOL.into(),
+                method: "world.getSnapshot".into(),
+                params: Value::Null,
+            })
+            .unwrap();
+        assert!(snapshot.ok);
+
+        let capabilities = app
+            .dispatch(Request {
+                id: 2,
+                protocol: PROTOCOL.into(),
+                method: "renderer.getCapabilities".into(),
+                params: Value::Null,
+            })
+            .unwrap();
+        assert!(capabilities.ok);
+        assert_eq!(
+            capabilities
+                .result
+                .as_ref()
+                .and_then(|value| value.get("available"))
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+
+        let rendered = app
+            .dispatch(Request {
+                id: 3,
+                protocol: PROTOCOL.into(),
+                method: "renderer.renderReference".into(),
+                params: Value::Null,
+            })
+            .unwrap();
+        assert!(!rendered.ok);
+        assert_eq!(
+            rendered.error.as_ref().map(|error| error.code),
+            Some("unsupported_capability")
+        );
     }
 
     #[test]

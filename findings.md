@@ -412,6 +412,8 @@ Startup checks only that `AUVRA_NATIVE_SESSION_TOKEN` exists and has a valid sha
 
 `App::new` constructs the renderer before serving any IPC (`native/src/main.rs:675`, `native/src/main.rs:691`). If adapter discovery or required GPU features fail, native world, replay, and asset-cooker services are also unavailable even though they do not inherently need a GPU. The WebGL fallback therefore cannot preserve those services.
 
+**Status:** Completed — renderer initialization is now optional; native session, world, replay, hydration, and asset services remain available when GPU setup fails, while capabilities and metrics expose the renderer fallback and render/viewport requests return an explicit unsupported-capability response. Native failure-path and full native tests passed.
+
 ### F-049 — Large native worlds have avoidable clone, thread, and lookup costs
 
 **Severity:** Medium · **Classification:** Performance concern
