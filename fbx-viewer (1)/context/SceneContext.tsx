@@ -168,6 +168,7 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
         restoreSession,
         resetScene,
         getCurrentLevelId: level.getCurrentLevelId,
+        flushPendingLevelEdits: level.flushPendingLevelEdits,
     });
 
     // --- Compose Unified Context ---

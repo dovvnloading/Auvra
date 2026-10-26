@@ -9,6 +9,7 @@ import { ScrubbableInput } from '../../UI/Properties/ScrubbableInput';
 import { useScene } from '../../../context/SceneContext';
 import { WaveformEditor } from '../assets/WaveformEditor';
 import { DEFAULT_SKY_CONFIG } from '../SkySystem';
+import { isTerrainHeightfieldPending } from '../../../utils/terrainHeightfieldCodec';
 
 interface EnvironmentInspectorProps {
     state: EditorState;
@@ -312,7 +313,11 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                             <div className="space-y-2 text-xs text-gray-400 bg-gray-800 p-2 rounded">
                                 <div>Resolution: {selectedObject.terrainData?.resolution}</div>
                                 <div>Size: {selectedObject.terrainData?.width}m x {selectedObject.terrainData?.depth}m</div>
-                                <div className="pt-2 text-[10px] italic">Switch to Terrain Mode to sculpt geometry.</div>
+                                {isTerrainHeightfieldPending(selectedObject.terrainData) ? (
+                                    <div className="pt-2 text-[10px] italic text-amber-400">Loading terrain heights; sculpting is unavailable until they load.</div>
+                                ) : (
+                                    <div className="pt-2 text-[10px] italic">Switch to Terrain Mode to sculpt geometry.</div>
+                                )}
                             </div>
                         )}
 

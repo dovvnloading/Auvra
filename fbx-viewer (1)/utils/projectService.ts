@@ -62,6 +62,17 @@ const EMPTY_STATUS: ProjectStatus = {
 };
 const QUIET_PROJECT_METHODS = new Set(['project.getStatus', 'project.getSnapshot', 'asset.resolve']);
 
+/** A host error response. `code` is the protocol error code, so callers can tell a rejected change from a retryable failure. */
+export class ProjectHostError extends Error {
+  readonly code: string;
+
+  constructor(message: string, code: string) {
+    super(message);
+    this.name = 'ProjectHostError';
+    this.code = code;
+  }
+}
+
 /**
  * The only browser-side entry point for project persistence. It speaks the
  * versioned host boundary and deliberately has no filesystem, archive, or
@@ -296,7 +307,8 @@ export class ProjectService {
     );
     if (!response || !(response as unknown as { ok?: boolean }).ok) {
       const error = (response as unknown as { error?: { message?: string; code?: string } })?.error;
-      throw new Error(error?.message || error?.code || `Project operation failed: ${method}`);
+      const message = error?.message || error?.code || `Project operation failed: ${method}`;
+      throw typeof error?.code === 'string' ? new ProjectHostError(message, error.code) : new Error(message);
     }
     const result = (response as unknown as { result?: T }).result ?? null;
     this.updateFromResult(result);

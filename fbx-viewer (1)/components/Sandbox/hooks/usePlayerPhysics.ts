@@ -28,10 +28,13 @@ const DEFAULT_CONFIG: PhysicsConfig = {
 
 // --- TERRAIN HEIGHT SAMPLER ---
 const getTerrainHeight = (worldX: number, worldZ: number, terrain: LevelObject): number => {
-    if (!terrain.terrainData || !terrain.terrainData.heights) return 0;
-    
+    // Heights are resolved from the terrain's heightfield asset when the level
+    // loads; until then (or for a never-sculpted terrain) the ground is flat.
+    const heights = terrain.terrainData?.heights;
+    if (!terrain.terrainData || !heights) return 0;
+
     const { position } = terrain;
-    const { width, depth, resolution, heights } = terrain.terrainData;
+    const { width, depth, resolution } = terrain.terrainData;
 
     // Convert World Position to Local Terrain UV Space
     // Terrain is rotated -90 deg on X axis.
