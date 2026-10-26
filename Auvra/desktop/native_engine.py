@@ -1015,14 +1015,25 @@ class NativeEngineHost:
             self._publish_status()
         return result
 
-    def mark_stale(self, reason: str) -> None:
+    def mark_stale(self, reason: str, *, project_id: str | None = None,
+                   project_revision: int | None = None) -> None:
         """Degrade the native view after the project could not be mirrored.
 
-        The durable project stays authoritative and open.  The retained
-        payload re-synchronizes on the next hydration or native restart.
+        The durable project stays authoritative and open.  A retained payload
+        for ``project_id``/``project_revision`` re-synchronizes on the next
+        hydration or native restart.  When hydration failed before that
+        payload was retained, the native world still holds another project or
+        an older revision; it is dropped so neither the view nor a restart
+        presents it as current.
         """
-        self._stale_reason = reason[:256]
-        self._publish_status()
+        try:
+            if project_id is not None and self._project_id is not None and (
+                    self._project_id != project_id or self._project_revision != project_revision):
+                self._stale_reason = None
+                self.close_project()
+        finally:
+            self._stale_reason = reason[:256]
+            self._publish_status()
 
     def _publish_status(self) -> None:
         self._event("engine.status", {key: value for key, value in self._canonical("engine.status").items()

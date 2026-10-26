@@ -8,6 +8,7 @@ from unittest import mock
 
 from Auvra.desktop.assets import AssetTransferRegistry
 from Auvra.desktop.dialogs import DialogSelection
+from Auvra.desktop.native_engine import NativeEngineHost, NativeEngineState
 from Auvra.desktop.project_host import DOCUMENT_LOAD_LIMIT, NativeProjectHost
 from Auvra.desktop.previews import PreviewStore
 from Auvra.diagnostics.core import DiagnosticsSession, install_diagnostics
@@ -50,7 +51,7 @@ class _NativeRecorder:
         self.closed = []
         self.stale = []
 
-    def mark_stale(self, reason):
+    def mark_stale(self, reason, *, project_id=None, project_revision=None):
         self.stale.append(reason)
 
     def validate_project(self, project_id, revision, domains):
@@ -68,6 +69,26 @@ class _NativeRecorder:
         if self.fail_stage:
             raise RuntimeError("native asset staging failed")
         stream.read()
+
+
+class _ReadyNativeChild:
+    """READY native child double that commits every hydration transaction."""
+
+    state = NativeEngineState.READY
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def call(self, method, params=None):
+        self.calls.append(method)
+        if method == "world.beginHydration":
+            return {"hydrationTransaction": True}
+        if method == "world.commitHydration":
+            return {"revision": 1}
+        return {}
+
+    def restart(self, *, editor_session="editor"):
+        return None
 
 
 class NativeProjectHostTests(unittest.TestCase):
@@ -658,6 +679,99 @@ class NativeProjectHostTests(unittest.TestCase):
         self.assertIsNotNone(self.host.service.active)
         self.assertEqual(len(native.stale), 3)
         self.assertEqual(native.closed, [])
+
+    def test_non_authoritative_hydration_failure_drops_the_previous_native_project(self) -> None:
+        child = _ReadyNativeChild()
+        native = NativeEngineHost(child)
+        self.host.set_native_engine_host(native)
+        previous = self.host.handle("project.create", {"name": "Previous"})
+        self.assertEqual(native._canonical("engine.status")["projectId"], previous["projectId"])
+
+        source = ProjectRepository.create(self.root / "switch-source", "Switch")
+        try:
+            asset = source.assets.put_stream(io.BytesIO(b"switch-asset"), name="asset.glb")
+            source.apply_changes({"models": [{"id": "model", "name": "Model", "assetId": asset.asset_id}]}, expected_revision=0)
+            source.save()
+            pack = self.root / "switch.auvrapack"
+            source.export_pack(pack)
+        finally:
+            source.close()
+        destination = self.root / "projects" / "Switched"
+        with mock.patch.object(native, "stage_asset", side_effect=OSError("native staging failed")), \
+                mock.patch.object(self.host.dialogs, "choose_import_pack", return_value=DialogSelection(pack)), \
+                mock.patch.object(self.host.dialogs, "choose_create_location", return_value=DialogSelection(destination)):
+            switched = self.host.handle("project.importPack", {"sourceHandle": "pack"})
+        self.assertEqual(switched["status"], "open")
+        self.assertNotEqual(switched["projectId"], previous["projectId"])
+        # Staging failed before the new payload was retained, so native must
+        # not keep presenting the previous project as the open one.
+        status = native._canonical("engine.status")
+        self.assertEqual(status["status"], "degraded")
+        self.assertNotIn("projectId", status)
+        self.assertIn("world.closeProject", child.calls)
+
+        # Recovery must not re-hydrate the previous project and report ready.
+        child.calls.clear()
+        native.restart()
+        self.assertNotIn("world.beginHydration", child.calls)
+        self.assertEqual(native._canonical("engine.status")["status"], "degraded")
+
+        self.host.handle("project.close", {
+            "projectId": switched["projectId"], "expectedRevision": switched["revision"],
+        })
+        self.assertIn("world.closeProject", child.calls)
+        self.assertEqual(native._canonical("engine.status")["status"], "ready")
+
+    def test_non_authoritative_native_rejection_does_not_block_project_writes(self) -> None:
+        child = _ReadyNativeChild()
+        native = NativeEngineHost(child)
+        self.host.set_native_engine_host(native)
+        created = self.host.handle("project.create", {"name": "NativeRejected"})
+
+        def rename(revision: int, name: str) -> dict:
+            return self.host.handle("project.applyChanges", {
+                "projectId": created["projectId"], "expectedRevision": revision,
+                "changes": [{"domain": "metadata", "documentId": "project", "operation": "upsert",
+                             "document": {"id": "project", "name": name}}],
+            })
+
+        with tempfile.TemporaryDirectory(prefix="auvra project host diagnostics ") as raw:
+            session = DiagnosticsSession(Path(raw) / "diagnostics", run_id="run-native-rejected", mode="test")
+            session.start()
+            install_diagnostics(session)
+            try:
+                # Native refuses data: URLs; the project and WebGL2 accept them.
+                rejected = self.host.handle("project.applyChanges", {
+                    "projectId": created["projectId"], "expectedRevision": created["revision"],
+                    "changes": [{"domain": "environment", "documentId": "environment", "operation": "upsert",
+                                 "document": {"id": "environment",
+                                              "settings": {"sky": "data:image/png;base64,AAAA"}}}],
+                })
+                self.assertEqual(rejected["revision"], created["revision"] + 1)
+                renamed = rename(rejected["revision"], "Renamed")
+                self.assertEqual(renamed["revision"], rejected["revision"] + 1)
+                self.assertEqual(renamed["status"], "open")
+                states = [(record.get("attributes", {}).get("state"), record.get("attributes", {}).get("code"))
+                          for record in session.snapshot() if record["event"] == "native.lifecycle"]
+                self.assertIn(("rejected", "validation_failed"), states)
+                self.assertIn(("stale", "hydration_failed"), states)
+            finally:
+                install_diagnostics(None)
+                session.close(outcome="success")
+
+        # The native view stays stale; recovery cannot resurrect the older
+        # revision that native retained before the rejected write.
+        child.calls.clear()
+        native.restart()
+        self.assertNotIn("world.beginHydration", child.calls)
+        self.assertEqual(native._canonical("engine.status")["status"], "degraded")
+
+        # Once native rendering is authoritative the same rejection fails closed.
+        self.host._native_authoritative = True
+        with self.assertRaises(HostOperationError) as raised:
+            rename(renamed["revision"], "Blocked")
+        self.assertEqual(raised.exception.code, "invalid_project")
+        self.assertEqual(self.host.service.active.revision, renamed["revision"])
 
     def test_native_hydration_failure_fail_closes_create_open_and_open_recent(self) -> None:
         native = _NativeRecorder(fail_hydrate=True)

@@ -358,7 +358,7 @@ class NativeProjectHost:
             if not self._native_authoritative:
                 # The durable commit and the WebGL2 view remain correct; only
                 # the native mirror is stale.  Keep the project open.
-                self._degrade_native_view(exc)
+                self._degrade_native_view(active, exc)
                 return
             # A durable repository commit is still authoritative, but the
             # native world is no longer a trustworthy view of it.  Invalidate
@@ -373,19 +373,29 @@ class NativeProjectHost:
                 {"projectId": active.project_id, "revision": active.revision},
             ) from exc
 
-    def _degrade_native_view(self, error: Exception) -> None:
+    def _degrade_native_view(self, active: Any, error: Exception) -> None:
         """Mark the non-authoritative native view stale and record why."""
         mark_stale = getattr(self._native_engine, "mark_stale", None)
         if callable(mark_stale):
             try:
-                mark_stale("Native project hydration failed; the native view is stale")
+                # The identity lets native drop a world that still holds the
+                # previous project or revision instead of re-hydrating it.
+                mark_stale(
+                    "Native project hydration failed; the native view is stale",
+                    project_id=active.project_id,
+                    project_revision=active.revision,
+                )
             except Exception:
                 pass
+        self._emit_native_lifecycle("stale", "hydration_failed", error)
+
+    @staticmethod
+    def _emit_native_lifecycle(state: str, code: str, error: Exception) -> None:
         diagnostics = active_diagnostics()
         if diagnostics is not None:
             diagnostics.emit(
                 "native", "native.lifecycle",
-                attributes={"state": "stale", "code": "hydration_failed",
+                attributes={"state": state, "code": code,
                             "errorType": type(error).__name__},
             )
 
@@ -422,9 +432,15 @@ class NativeProjectHost:
                 revision,
                 self._native_domains_from_documents(domains),
             )
-        except HostOperationError:
-            raise
         except Exception as exc:
+            if not self._native_authoritative:
+                # WebGL2 is authoritative, so native rules must not block a
+                # durable write.  If native rejects the committed content too,
+                # the post-commit hydration degrades only the native view.
+                self._emit_native_lifecycle("rejected", "validation_failed", exc)
+                return
+            if isinstance(exc, HostOperationError):
+                raise
             raise HostOperationError("invalid_project", "Native world rejected the project candidate") from exc
 
     def _queue(self, name: str, payload: dict[str, Any]) -> None:

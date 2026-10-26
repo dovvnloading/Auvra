@@ -571,6 +571,22 @@ class NativeEngineTests(unittest.TestCase):
         host.close_project("project-stale")
         self.assertEqual(host._canonical("engine.status")["status"], "ready")
 
+    def test_stale_mark_keeps_a_matching_payload_and_drops_a_mismatched_world(self) -> None:
+        engine = _HydrationRecorder(fail_append=True)
+        host = NativeEngineHost(engine)
+        with self.assertRaises(RuntimeError):
+            host.hydrate_project("project-a", 3, {"scenes": {"schemaVersion": 1, "documents": [{"id": "scene"}]}})
+        reason = "Native project hydration failed; the native view is stale"
+        host.mark_stale(reason, project_id="project-a", project_revision=3)
+        self.assertNotIn("world.closeProject", [method for method, _ in engine.calls])
+        self.assertEqual(host._canonical("engine.status")["projectId"], "project-a")
+
+        host.mark_stale(reason, project_id="project-b", project_revision=0)
+        self.assertIn("world.closeProject", [method for method, _ in engine.calls])
+        status = host._canonical("engine.status")
+        self.assertEqual((status["status"], status["fallbackReason"]), ("degraded", reason))
+        self.assertNotIn("projectId", status)
+
     def test_startup_failures_carry_stable_cause_codes(self) -> None:
         silent = Path(self.temp.name) / "silent_native.py"
         silent.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
