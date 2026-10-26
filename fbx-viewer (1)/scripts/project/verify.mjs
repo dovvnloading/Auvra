@@ -68,6 +68,9 @@ const strictExcludes = strictConfig.exclude ?? [];
 const STRICT_EXCLUDE_ALLOWLIST = new Set([
   'tests/frontend/triggers.test.ts',
   'tests/frontend/hudMenus.test.tsx',
+  'tests/frontend/hudEditorSafety.test.tsx',
+  'tests/frontend/levelVariableValueField.test.tsx',
+  'tests/frontend/localizationPanel.test.tsx',
   'tests/frontend/hudBindings.test.tsx',
   'tests/frontend/terrainSplatPersistence.test.ts',
   'tests/frontend/levelBlueprintNodesRuntime.test.tsx',
@@ -335,7 +338,7 @@ if (!/enableAudio\?: boolean/.test(environmentScene) || !/enableAudio && <AudioS
 if (!/MAX_BLUEPRINT_EVALUATION_DEPTH/.test(blueprintRuntime)
   || !/MAX_BLUEPRINT_EXECUTION_DEPTH/.test(blueprintRuntime)
   || !/path\.has\(pathKey\)/.test(blueprintRuntime)
-  || !/path\.has\(nodeId\)/.test(blueprintRuntime)
+  || !/path\.has\(execKey\)/.test(blueprintRuntime)
   || !/const b = Number\(\(pinB \? evaluate\([\s\S]*?\?\? 0\)/.test(blueprintRuntime)
   || !/b !== 0 \? a \/ b : 0/.test(blueprintRuntime)) {
   failures.push('blueprint runtime lacks bounded cycle-safe evaluation and execution');

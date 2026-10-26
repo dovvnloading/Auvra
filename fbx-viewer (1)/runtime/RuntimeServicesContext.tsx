@@ -20,7 +20,7 @@ export interface RuntimeServices {
     options: PlayerOptions;
     /** Places a copy of a prefab in the running session (never the project). Returns the new object ids, root first; [] when nothing was placed. */
     spawnPrefab(prefabId: string, position: SpawnPosition): string[];
-    /** Plays an audio asset once, non-positional, on a mixer bus (default 'sfx'). */
+    /** Plays an audio asset once, non-positional, on a mixer bus (default 'sfx'). In a play session it stops when the session ends. */
     playSound(audioId: string, bus?: AudioBus): void;
 }
 
@@ -53,6 +53,27 @@ const spawnOutsideSession = (): string[] => {
 };
 
 const subscribeNothing = () => () => undefined;
+
+/** The Play Sound voices one play session started. Once it ends they stop, and sounds it asked for never start. */
+interface VoiceScope {
+    ended: boolean;
+    voices: Set<AudioBufferSourceNode>;
+}
+
+const newVoiceScope = (): VoiceScope => ({ ended: false, voices: new Set() });
+
+const stopVoices = (voices: Set<AudioBufferSourceNode>) => {
+    voices.forEach(source => {
+        try { source.stop(); } catch { /* already ended */ }
+        source.disconnect();
+    });
+    voices.clear();
+};
+
+/** Plays a sound for a session scope (null: the runtime itself); supplied by RuntimeServicesProvider. */
+type ScopedPlaySound = (audioId: string, bus: AudioBus | undefined, scope: VoiceScope | null) => void;
+
+const ScopedPlaySoundContext = createContext<ScopedPlaySound | null>(null);
 
 interface AttachedMixer {
     mixer: AudioMixer;
@@ -150,11 +171,7 @@ export const RuntimeServicesProvider: React.FC<RuntimeServicesProviderProps> = (
         setMixer(attached.mixer);
         const playing = voices.current;
         return () => {
-            playing.forEach(source => {
-                try { source.stop(); } catch { /* already ended */ }
-                source.disconnect();
-            });
-            playing.clear();
+            stopVoices(playing);
             if (audioRef.current === attached) audioRef.current = null;
             attached.detach();
             setMixer(null);
@@ -165,7 +182,9 @@ export const RuntimeServicesProvider: React.FC<RuntimeServicesProviderProps> = (
         mixer?.setVolumes(options.volumes);
     }, [mixer, options.volumes]);
 
-    const playSound = useCallback((audioId: string, bus: AudioBus = 'sfx') => {
+    const playScopedSound = useCallback<ScopedPlaySound>((audioId, bus = 'sfx', scope) => {
+        // A late call from a session that already ended (a timer, a decode callback) plays nothing.
+        if (scope?.ended) return;
         const asset = audioAssetsRef.current.find(item => item.id === audioId);
         const audio = audioRef.current;
         if (!asset) {
@@ -183,22 +202,26 @@ export const RuntimeServicesProvider: React.FC<RuntimeServicesProviderProps> = (
             buffers.current.set(asset.url, buffer);
         }
         buffer.then(decoded => {
-            // The mixer went away (runtime ended) while the sound loaded.
-            if (audioRef.current !== audio) return;
+            // The mixer went away (runtime ended), or the session that asked ended (restart, retry), while the sound loaded.
+            if (audioRef.current !== audio || scope?.ended) return;
             const source = audio.context.createBufferSource();
             source.buffer = decoded;
             source.connect(audio.mixer.input(target));
             source.onended = () => {
                 source.disconnect();
                 voices.current.delete(source);
+                scope?.voices.delete(source);
             };
             source.start();
             voices.current.add(source);
+            scope?.voices.add(source);
         }).catch(error => {
             buffers.current.delete(asset.url);
             frontendDiagnostics.failure('runtime_sound_failed', error);
         });
     }, []);
+
+    const playSound = useCallback((audioId: string, bus?: AudioBus) => playScopedSound(audioId, bus, null), [playScopedSound]);
 
     const services = useMemo<RuntimeServices>(() => ({
         input,
@@ -208,12 +231,34 @@ export const RuntimeServicesProvider: React.FC<RuntimeServicesProviderProps> = (
         playSound,
     }), [input, mixer, options, playSound]);
 
-    return <RuntimeServicesContext.Provider value={services}>{children}</RuntimeServicesContext.Provider>;
+    return (
+        <RuntimeServicesContext.Provider value={services}>
+            <ScopedPlaySoundContext.Provider value={playScopedSound}>{children}</ScopedPlaySoundContext.Provider>
+        </RuntimeServicesContext.Provider>
+    );
 };
 
-/** Supplies spawnPrefab for one play session, which owns the runtime world spawned objects join. */
+/**
+ * Supplies spawnPrefab for one play session, which owns the runtime world spawned objects join. Play Sound
+ * voices belong to the session too: a restart or retry remounts it, which stops every sound the old session
+ * started and drops any it asked for that is still loading.
+ */
 export const RuntimeSpawnerProvider: React.FC<{ spawnPrefab: RuntimeServices['spawnPrefab']; children?: React.ReactNode }> = ({ spawnPrefab, children }) => {
     const services = useRuntimeServices();
-    const value = useMemo<RuntimeServices>(() => ({ ...services, spawnPrefab }), [services, spawnPrefab]);
+    const playScopedSound = useContext(ScopedPlaySoundContext);
+    const scope = useRef<VoiceScope>(newVoiceScope());
+    // Layout effect: the old session's voices stop in the same commit that mounts the new session.
+    useLayoutEffect(() => {
+        if (scope.current.ended) scope.current = newVoiceScope(); // StrictMode re-runs effects on the same instance.
+        const own = scope.current;
+        return () => {
+            own.ended = true;
+            stopVoices(own.voices);
+        };
+    }, []);
+    const playSound = useMemo<RuntimeServices['playSound']>(() => (
+        playScopedSound ? (audioId, bus) => playScopedSound(audioId, bus, scope.current) : services.playSound
+    ), [playScopedSound, services.playSound]);
+    const value = useMemo<RuntimeServices>(() => ({ ...services, spawnPrefab, playSound }), [services, spawnPrefab, playSound]);
     return <RuntimeServicesContext.Provider value={value}>{children}</RuntimeServicesContext.Provider>;
 };

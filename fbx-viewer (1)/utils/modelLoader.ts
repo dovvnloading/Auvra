@@ -4,6 +4,7 @@ import { LoadedModelData } from '../types';
 import { optimizeModelMaterials } from './processing/ModelMaterials';
 import { normalizeModel } from './processing/ModelTransforms';
 import { disposeObject } from './processing/ModelLifecycle';
+import { UV_ORIGIN_TOP_LEFT_KEY } from './materialOverrides';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 
 // Re-export specific utilities for consumers (hooks) to maintain API compatibility
@@ -358,6 +359,8 @@ const parseGltfNative = async (
  * shadows, as every other import does.
  */
 const prepareNativeGltfMaterials = (object: THREE.Object3D): void => {
+  // glTF UVs start top-left, so override textures for this model load with flipY off.
+  object.userData[UV_ORIGIN_TOP_LEFT_KEY] = true;
   object.traverse((child) => {
     if ((child as THREE.Mesh).isMesh) {
       child.castShadow = true;

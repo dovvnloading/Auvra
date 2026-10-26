@@ -107,6 +107,8 @@ export const capsuleHalfHeight = (settings: ColliderSettings): number => Math.ma
 export interface PhysicsBodyPlan {
     /** The component whose Render mounts the body: the first enabled rigidBody, else the first enabled collider. */
     ownerId: string;
+    /** True when an enabled Rigid Body component sets the body; colliders alone make fixed scenery. */
+    rigidBody: boolean;
     /** Colliders without a rigidBody make fixed scenery. */
     body: RigidBodySettings;
     colliders: { id: string; settings: ColliderSettings }[];
@@ -123,6 +125,7 @@ export const planPhysicsBody = (object: LevelObject): PhysicsBodyPlan | null => 
     if (!owner) return null;
     return {
         ownerId: owner.id,
+        rigidBody: Boolean(rigidBody),
         body: rigidBody ? resolveRigidBodySettings(rigidBody) : { ...RIGID_BODY_DEFAULTS, type: 'fixed' },
         colliders: colliders.map(component => ({ id: component.id, settings: resolveColliderSettings(component) })),
         autoHull: Boolean(rigidBody) && colliders.length === 0
@@ -130,14 +133,69 @@ export const planPhysicsBody = (object: LevelObject): PhysicsBodyPlan | null => 
 };
 
 /**
- * The mass one collider gives its body. A dynamic body's mass is shared by its solid colliders, so
- * triggers add none (unless every collider is a trigger); other body types take no mass.
+ * The mass one collider gives its body. A dynamic body's mass is shared by its solid shapes (its
+ * colliders, its automatic hull and the colliders `folded` in from descendant objects), so triggers
+ * add none (unless every shape is a trigger); other body types take no mass.
  */
-export const colliderMass = (plan: PhysicsBodyPlan, settings: ColliderSettings): number | undefined => {
+export const colliderMass = (plan: PhysicsBodyPlan, settings: ColliderSettings, folded: readonly ColliderSettings[] = []): number | undefined => {
     if (plan.body.type !== 'dynamic') return undefined;
-    const solid = plan.colliders.filter(entry => !entry.settings.isTrigger).length;
-    if (solid === 0) return plan.body.mass / Math.max(1, plan.colliders.length);
+    const shapes = [...plan.colliders.map(entry => entry.settings), ...folded];
+    const hull = plan.autoHull ? 1 : 0;
+    const solid = shapes.filter(shape => !shape.isTrigger).length + hull;
+    if (solid === 0) return plan.body.mass / Math.max(1, shapes.length);
     return settings.isTrigger ? 0 : plan.body.mass / solid;
+};
+
+// --- SHAPE SCALE ---
+
+/** Smallest scale factor a shape is divided by, so a zero scale axis never makes it infinite. */
+const MIN_SCALE = 1e-6;
+const UNIT_SCALE: Vec3 = [1, 1, 1];
+
+/** The per-axis size of a world scale, kept above zero. */
+const absoluteScale = (scale: THREE.Vector3): Vec3 => [
+    Math.max(MIN_SCALE, Math.abs(scale.x)),
+    Math.max(MIN_SCALE, Math.abs(scale.y)),
+    Math.max(MIN_SCALE, Math.abs(scale.z))
+];
+
+const sameScale = (a: Vec3, b: Vec3): boolean =>
+    a.every((value, axis) => Math.abs(value - b[axis]) <= 1e-6 * Math.max(1, Math.abs(value)));
+
+const multiplyScale = (a: Vec3, b: Vec3): Vec3 => [
+    Math.max(MIN_SCALE, Math.abs(a[0] * b[0])),
+    Math.max(MIN_SCALE, Math.abs(a[1] * b[1])),
+    Math.max(MIN_SCALE, Math.abs(a[2] * b[2]))
+];
+
+export interface RoundShapeSize {
+    radius: number;
+    /** Half length of a capsule's straight section; 0 for a sphere. */
+    halfHeight: number;
+}
+
+/**
+ * The world size of a sphere or capsule collider on an object with world scale `scale`: the round
+ * shape closest to the scaled preview. A sphere takes the largest axis. A capsule keeps its full
+ * height (rounded ends included) along the object's Y, scaled by Y, and scales its radius by the
+ * larger of X and Z.
+ */
+export const roundShapeSize = (settings: ColliderSettings, [sx, sy, sz]: Vec3): RoundShapeSize => {
+    if (settings.shape !== 'capsule') return { radius: settings.radius * Math.max(sx, sy, sz), halfHeight: 0 };
+    const radius = settings.radius * Math.max(sx, sz);
+    const fullHalfHeight = (capsuleHalfHeight(settings) + settings.radius) * sy;
+    return { radius, halfHeight: Math.max(0, fullHalfHeight - radius) };
+};
+
+/**
+ * Args for a sphere ([radius]) or capsule ([halfHeight, radius]) collider built at world scale
+ * `scale`. @react-three/rapier multiplies positional args by [scale.x, scale.y], which on its own
+ * would stretch a capsule's half height by X and its radius by Y, so the world size is divided by
+ * those factors here.
+ */
+export const roundColliderArgs = (settings: ColliderSettings, scale: Vec3): number[] => {
+    const { radius, halfHeight } = roundShapeSize(settings, scale);
+    return settings.shape === 'capsule' ? [halfHeight / scale[0], radius / scale[1]] : [radius / scale[0]];
 };
 
 // --- OBJECT GEOMETRY ---
@@ -148,10 +206,13 @@ const ANCHOR_USER_DATA = { [PHYSICS_ANCHOR_FLAG]: true };
 
 const isPhysicsAnchor = (node: THREE.Object3D): boolean => node.userData?.[PHYSICS_ANCHOR_FLAG] === true;
 
-/** A nested LevelObject with physics of its own is simulated separately, so it is not part of this object's shape. */
-const isSeparateBody = (node: THREE.Object3D, objectId: string): boolean => {
+/**
+ * A nested LevelObject is not part of this object's shape, which is built from the object's own
+ * model (as the editor previews it); a child collides through Colliders of its own.
+ */
+const isNestedObject = (node: THREE.Object3D, objectId: string): boolean => {
     const id = node.userData?.levelObjectId;
-    return typeof id === 'string' && id !== objectId && node.children.some(isPhysicsAnchor);
+    return typeof id === 'string' && id !== objectId;
 };
 
 const hasVisibleMaterial = (mesh: THREE.Mesh): boolean => {
@@ -160,14 +221,14 @@ const hasVisibleMaterial = (mesh: THREE.Mesh): boolean => {
 };
 
 /**
- * The visible meshes drawn under `host` (the object's transform group): its model and any child
- * objects without physics of their own. Hidden hit volumes, instanced layers and physics previews are skipped.
+ * The visible meshes of the object's own model under `host` (the object's transform group). Nested
+ * child objects, hidden hit volumes, instanced layers and physics previews are skipped.
  */
 export const collectHostMeshes = (host: THREE.Object3D, objectId: string): THREE.Mesh[] => {
     const meshes: THREE.Mesh[] = [];
     const visit = (node: THREE.Object3D) => {
         for (const child of node.children) {
-            if (!child.visible || isPhysicsAnchor(child) || isSeparateBody(child, objectId)) continue;
+            if (!child.visible || isPhysicsAnchor(child) || isNestedObject(child, objectId)) continue;
             const mesh = child as THREE.Mesh;
             if (mesh.isMesh && !(child as THREE.InstancedMesh).isInstancedMesh
                 && mesh.geometry?.getAttribute('position') && hasVisibleMaterial(mesh)) {
@@ -319,10 +380,14 @@ type RigidBodyState = Parameters<NonNullable<RigidBodyProps['transformState']>>[
  */
 export const followHostState = (state: RigidBodyState, host: THREE.Object3D, writeBack: boolean): RigidBodyState => {
     const inverseParent = new THREE.Matrix4();
+    const liveScale = new THREE.Vector3();
     const followed: RigidBodyState = {
         ...state,
         object: host,
-        scale: host.getWorldScale(new THREE.Vector3()),
+        // Read on every sync, so a scale set during play is kept.
+        get scale() {
+            return host.getWorldScale(liveScale);
+        },
         // Read on every sync, so a body under a moving parent object still lands where the simulation put it.
         get invertedWorldMatrix() {
             return host.parent ? inverseParent.copy(host.parent.matrixWorld).invert() : inverseParent.identity();
@@ -335,12 +400,142 @@ export const followHostState = (state: RigidBodyState, host: THREE.Object3D, wri
     return followed;
 };
 
+const _position = new THREE.Vector3();
+const _quaternion = new THREE.Quaternion();
+const _scale = new THREE.Vector3();
+const POSE_EPSILON = 1e-8;
+const STILL = { x: 0, y: 0, z: 0 };
+
+type TeleportableBody = Pick<RapierRigidBody, 'translation' | 'rotation' | 'setTranslation' | 'setRotation' | 'setLinvel' | 'setAngvel'>;
+
+/**
+ * Moves a dynamic body to its object's transform group (the host) after the object's transform was
+ * set (Set Actor Transform, a level reset), waking it and stopping it there. A write that only echoes
+ * the body's own pose leaves it moving. Returns whether the body was moved.
+ */
+export const teleportBodyToHost = (body: TeleportableBody, host: THREE.Object3D): boolean => {
+    host.updateWorldMatrix(true, false);
+    host.matrixWorld.decompose(_position, _quaternion, _scale);
+    const t = body.translation();
+    const r = body.rotation();
+    const distanceSquared = (t.x - _position.x) ** 2 + (t.y - _position.y) ** 2 + (t.z - _position.z) ** 2;
+    const alignment = Math.abs(r.x * _quaternion.x + r.y * _quaternion.y + r.z * _quaternion.z + r.w * _quaternion.w);
+    if (distanceSquared < POSE_EPSILON && alignment > 1 - POSE_EPSILON) return false;
+    body.setTranslation(_position, true);
+    body.setRotation(_quaternion, true);
+    body.setLinvel(STILL, true);
+    body.setAngvel(STILL, true);
+    return true;
+};
+
+// --- COMPOUND BODIES ---
+
+/** userData key on a body's anchor group: the registry descendants' colliders join that body through. */
+const COMPOUND_BODY_KEY = 'auvraCompoundBody';
+
+/** A collider of a descendant object, placed in the space of the body it joined. */
+export interface FoldedCollider {
+    /** Unique among the body's colliders: the folded object's id and its component's. */
+    key: string;
+    /** The object the collider belongs to; its trigger events report this id. */
+    objectId: string;
+    settings: ColliderSettings;
+    /** The folded object's model geometry, for a mesh collider. */
+    content: HostGeometry | null;
+    /** Collider centre (offset included) and rotation (Euler XYZ) in the owner host's local space. */
+    position: Vec3;
+    rotation: Vec3;
+    /** The folded object's scale relative to the owner host. */
+    scale: Vec3;
+}
+
+export interface CompoundBodyRegistry {
+    /** True when the body comes from a Rigid Body component. */
+    rigidBody: boolean;
+    type: PhysicsBodyType;
+    /** Adds, replaces or (with null) removes the colliders an object folded into this body. */
+    set(objectId: string, colliders: FoldedCollider[] | null): void;
+}
+
+export interface CompoundOwner {
+    /** The transform group of the object whose body the colliders join. */
+    host: THREE.Object3D;
+    registry: CompoundBodyRegistry;
+}
+
+const compoundRegistryOf = (node: THREE.Object3D): CompoundBodyRegistry | null => {
+    for (const child of node.children) {
+        const registry = child.userData?.[COMPOUND_BODY_KEY] as CompoundBodyRegistry | undefined;
+        if (registry && isPhysicsAnchor(child)) return registry;
+    }
+    return null;
+};
+
+/**
+ * The body a collider-only object joins, the way child colliders shape a parent's rigid body in
+ * Unity: that of the nearest ancestor object with a Rigid Body, when that body moves (dynamic or
+ * kinematic). Under a fixed one, or none, the object keeps a fixed body of its own; a fixed body on
+ * a moving parent would be teleported onto it every step and shove it.
+ */
+export const findCompoundOwner = (host: THREE.Object3D, objectId: string): CompoundOwner | null => {
+    for (let node = host.parent; node; node = node.parent) {
+        const id = node.userData?.levelObjectId;
+        if (typeof id !== 'string' || id === objectId) continue;
+        const registry = compoundRegistryOf(node);
+        if (!registry?.rigidBody) continue;
+        return registry.type === 'fixed' ? null : { host: node, registry };
+    }
+    return null;
+};
+
+/** The object's colliders placed in the owner host's space, as the owner's body builds them. */
+export const foldColliders = (
+    ownerHost: THREE.Object3D,
+    host: THREE.Object3D,
+    objectId: string,
+    colliders: PhysicsBodyPlan['colliders'],
+    content: HostGeometry | null
+): FoldedCollider[] => {
+    ownerHost.updateWorldMatrix(true, false);
+    host.updateWorldMatrix(true, false);
+    const relative = new THREE.Matrix4().copy(ownerHost.matrixWorld).invert().multiply(host.matrixWorld);
+    const translation = new THREE.Vector3();
+    const quaternion = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    relative.decompose(translation, quaternion, scale);
+    const rotation = new THREE.Euler().setFromQuaternion(quaternion);
+    return colliders.map(({ id, settings }) => {
+        const centre = new THREE.Vector3(...settings.offset).applyMatrix4(relative);
+        return {
+            key: `${objectId}/${id}`,
+            objectId,
+            settings,
+            content: settings.shape === 'mesh' ? content : null,
+            position: [centre.x, centre.y, centre.z],
+            rotation: [rotation.x, rotation.y, rotation.z],
+            scale: [scale.x, scale.y, scale.z]
+        };
+    });
+};
+
+// --- COLLIDERS ---
+
 type ColliderCommonProps = Pick<CuboidColliderProps,
-    'position' | 'mass' | 'sensor' | 'activeCollisionTypes' | 'onIntersectionEnter' | 'onIntersectionExit'>;
+    'position' | 'rotation' | 'scale' | 'mass' | 'sensor' | 'activeCollisionTypes' | 'onIntersectionEnter' | 'onIntersectionExit'>;
+
+interface ColliderPlacement {
+    position: Vec3;
+    rotation: Vec3;
+    scale: Vec3;
+}
 
 interface ObjectColliderProps {
     settings: ColliderSettings;
     content: HostGeometry | null;
+    /** The absolute world scale the collider is built at, which round shapes are fitted to. */
+    worldScale: Vec3;
+    /** Where a collider folded in from a descendant sits in the body; the body's own colliders sit at their offset. */
+    placement?: ColliderPlacement;
     mass?: number;
     /** Pairs a trigger reports: the defaults plus kinematic bodies (the player, movers) against fixed ones. */
     sensorCollisionTypes: number;
@@ -348,24 +543,29 @@ interface ObjectColliderProps {
     onTriggerExit: (payload: CollisionPayload) => void;
 }
 
-const ObjectCollider: React.FC<ObjectColliderProps> = ({ settings, content, mass, sensorCollisionTypes, onTriggerEnter, onTriggerExit }) => {
+const ObjectCollider: React.FC<ObjectColliderProps> = ({ settings, content, worldScale, placement, mass, sensorCollisionTypes, onTriggerEnter, onTriggerExit }) => {
+    const pose: Pick<ColliderCommonProps, 'position' | 'rotation' | 'scale'> = placement
+        ? { position: placement.position, rotation: placement.rotation, scale: placement.scale }
+        : { position: settings.offset };
     const common: ColliderCommonProps = settings.isTrigger
         ? {
-            position: settings.offset,
+            ...pose,
             mass,
             sensor: true,
             activeCollisionTypes: sensorCollisionTypes,
             onIntersectionEnter: onTriggerEnter,
             onIntersectionExit: onTriggerExit
         }
-        : { position: settings.offset, mass };
+        : { ...pose, mass };
     switch (settings.shape) {
         case 'box':
             return <CuboidCollider args={[settings.size[0] / 2, settings.size[1] / 2, settings.size[2] / 2]} {...common} />;
         case 'sphere':
-            return <BallCollider args={[settings.radius]} {...common} />;
-        case 'capsule':
-            return <CapsuleCollider args={[capsuleHalfHeight(settings), settings.radius]} {...common} />;
+            return <BallCollider args={[roundColliderArgs(settings, worldScale)[0]]} {...common} />;
+        case 'capsule': {
+            const [halfHeight, radius] = roundColliderArgs(settings, worldScale);
+            return <CapsuleCollider args={[halfHeight, radius]} {...common} />;
+        }
         case 'mesh':
             return content ? <TrimeshCollider args={[content.positions, content.indices]} {...common} /> : null;
     }
@@ -379,19 +579,21 @@ const HullCollider: React.FC<{ points: Float32Array | null; mass?: number }> = (
     return <ConvexHullCollider args={[hull.points]} mass={mass} />;
 };
 
-const _position = new THREE.Vector3();
-const _quaternion = new THREE.Quaternion();
-const _scale = new THREE.Vector3();
-const POSE_EPSILON = 1e-8;
+interface TriggerHandlers {
+    enter: (payload: CollisionPayload) => void;
+    exit: (payload: CollisionPayload) => void;
+}
 
 interface SimulatedBodyProps {
     object: LevelObject;
     plan: PhysicsBodyPlan;
     host: THREE.Object3D;
     content: HostGeometry | null;
+    /** Colliders of collider-only descendant objects that joined this body. */
+    folded: readonly FoldedCollider[];
 }
 
-const SimulatedBody: React.FC<SimulatedBodyProps> = ({ object, plan, host, content }) => {
+const SimulatedBody: React.FC<SimulatedBodyProps> = ({ object, plan, host, content, folded }) => {
     const { rapier } = useRapier();
     const triggers = useTriggerEvents();
     const bodyRef = useRef<RapierRigidBody>(null);
@@ -403,27 +605,63 @@ const SimulatedBody: React.FC<SimulatedBodyProps> = ({ object, plan, host, conte
         [host, type]
     );
 
-    const tracker = useMemo(
-        () => createTriggerOverlapTracker(object.id, event => triggers.emit(event)),
-        [object.id, triggers]
-    );
-    const onTriggerEnter = useCallback((payload: CollisionPayload) => {
-        const other = objectIdFromRigidBody(payload.other.rigidBody);
-        if (other) tracker.enter(other);
-    }, [tracker]);
-    const onTriggerExit = useCallback((payload: CollisionPayload) => {
-        const other = objectIdFromRigidBody(payload.other.rigidBody);
-        if (other) tracker.exit(other);
-    }, [tracker]);
+    // One overlap tracker per object with trigger colliders here: this one and any folded-in descendant.
+    const triggerHandlers = useMemo(() => {
+        const byObject = new Map<string, TriggerHandlers>();
+        return (objectId: string): TriggerHandlers => {
+            const known = byObject.get(objectId);
+            if (known) return known;
+            const tracker = createTriggerOverlapTracker(objectId, event => triggers.emit(event));
+            const handlers: TriggerHandlers = {
+                enter: payload => {
+                    const other = objectIdFromRigidBody(payload.other.rigidBody);
+                    if (other) tracker.enter(other);
+                },
+                exit: payload => {
+                    const other = objectIdFromRigidBody(payload.other.rigidBody);
+                    if (other) tracker.exit(other);
+                }
+            };
+            byObject.set(objectId, handlers);
+            return handlers;
+        };
+    }, [triggers]);
     const { ActiveCollisionTypes } = rapier;
     const sensorCollisionTypes = ActiveCollisionTypes.DEFAULT | ActiveCollisionTypes.KINEMATIC_FIXED | ActiveCollisionTypes.KINEMATIC_KINEMATIC;
+
+    // Colliders take the host's world scale when they are built, so they are rebuilt when it changes
+    // (Set Actor Transform's Scale, a scaled or animated parent); the body and its velocity stay.
+    const [shapeScale, setShapeScale] = useState<Vec3>(() => absoluteScale(host.getWorldScale(new THREE.Vector3())));
+    const builtScale = useRef(shapeScale);
+
+    // A transform write moves the host only; a dynamic body is moved to it, or the next sync would
+    // undo the move (and, while the body sleeps, its collider would stay behind).
+    const authored = useRef({ position: object.position, rotation: object.rotation });
+    useLayoutEffect(() => {
+        const previous = authored.current;
+        authored.current = { position: object.position, rotation: object.rotation };
+        const moved = previous.position !== object.position;
+        const turned = previous.rotation !== object.rotation;
+        if (type !== 'dynamic' || (!moved && !turned)) return;
+        // R3F skips a prop equal to the one it last applied, though the body has moved the host since.
+        if (moved) host.position.fromArray(object.position);
+        if (turned) host.rotation.fromArray(object.rotation);
+        const body = bodyRef.current;
+        if (body) teleportBodyToHost(body, host);
+    }, [object.position, object.rotation, type, host]);
 
     // Fixed and kinematic bodies go where their object is, which movers, rotators or an animated parent may change.
     useBeforePhysicsStep(() => {
         const body = bodyRef.current;
-        if (!body || type === 'dynamic') return;
+        if (!body) return;
         host.updateWorldMatrix(true, false);
         host.matrixWorld.decompose(_position, _quaternion, _scale);
+        const scale = absoluteScale(_scale);
+        if (!sameScale(scale, builtScale.current)) {
+            builtScale.current = scale;
+            setShapeScale(scale);
+        }
+        if (type === 'dynamic') return;
         if (type === 'kinematicPosition') {
             body.setNextKinematicTranslation(_position);
             body.setNextKinematicRotation(_quaternion);
@@ -436,6 +674,10 @@ const SimulatedBody: React.FC<SimulatedBodyProps> = ({ object, plan, host, conte
         body.setRotation(_quaternion, true);
         lastPose.current = { position: _position.clone(), quaternion: _quaternion.clone() };
     });
+
+    const foldedShapes = useMemo(() => folded.map(entry => entry.settings), [folded]);
+    const scaleKey = shapeScale.join(',');
+    const own = triggerHandlers(object.id);
 
     return (
         <RigidBody
@@ -450,42 +692,92 @@ const SimulatedBody: React.FC<SimulatedBodyProps> = ({ object, plan, host, conte
         >
             {plan.colliders.map(entry => (
                 <ObjectCollider
-                    key={entry.id}
+                    key={`${entry.id}@${scaleKey}`}
                     settings={entry.settings}
                     content={content}
-                    mass={colliderMass(plan, entry.settings)}
+                    worldScale={shapeScale}
+                    mass={colliderMass(plan, entry.settings, foldedShapes)}
                     sensorCollisionTypes={sensorCollisionTypes}
-                    onTriggerEnter={onTriggerEnter}
-                    onTriggerExit={onTriggerExit}
+                    onTriggerEnter={own.enter}
+                    onTriggerExit={own.exit}
                 />
             ))}
-            {plan.autoHull && <HullCollider points={content?.positions ?? null} mass={type === 'dynamic' ? plan.body.mass : undefined} />}
+            {plan.autoHull && (
+                <HullCollider key={scaleKey} points={content?.positions ?? null} mass={colliderMass(plan, COLLIDER_DEFAULTS, foldedShapes)} />
+            )}
+            {folded.map(entry => {
+                const handlers = triggerHandlers(entry.objectId);
+                const worldScale = multiplyScale(shapeScale, entry.scale);
+                return (
+                    <ObjectCollider
+                        key={`${entry.key}@${worldScale.join(',')}`}
+                        settings={entry.settings}
+                        content={entry.content}
+                        worldScale={worldScale}
+                        placement={entry}
+                        mass={colliderMass(plan, entry.settings, foldedShapes)}
+                        sensorCollisionTypes={sensorCollisionTypes}
+                        onTriggerEnter={handlers.enter}
+                        onTriggerExit={handlers.exit}
+                    />
+                );
+            })}
         </RigidBody>
     );
 };
 
+const NO_FOLDED: ReadonlyMap<string, readonly FoldedCollider[]> = new Map();
+
 /**
  * The object's body. It waits one layout pass for the object's transform group (the host) and, when a
- * shape is built from the model, for the model to be attached so its meshes can be measured.
+ * shape is built from the model, for the model to be attached so its meshes can be measured. A
+ * collider-only object under a moving rigid body adds its colliders to that body instead.
  */
 const ObjectBody: React.FC<{ object: LevelObject; plan: PhysicsBodyPlan }> = ({ object, plan }) => {
     const hostRef = useContext(ComponentHostContext);
     const anchorRef = useRef<THREE.Group>(null);
     const [host, setHost] = useState<THREE.Object3D | null>(null);
     const [content, setContent] = useState<HostGeometry | null>(null);
+    const [owner, setOwner] = useState<CompoundOwner | null>(null);
+    const [foldedByObject, setFoldedByObject] = useState(NO_FOLDED);
+    const [registry] = useState((): CompoundBodyRegistry => ({
+        rigidBody: false,
+        type: 'fixed',
+        set: (objectId, colliders) => setFoldedByObject(current => {
+            if (!colliders && !current.has(objectId)) return current;
+            const next = new Map(current);
+            if (colliders) next.set(objectId, colliders);
+            else next.delete(objectId);
+            return next;
+        })
+    }));
+    // Read by descendants deciding whether to join this body, in layout effects after this render.
+    registry.rigidBody = plan.rigidBody;
+    registry.type = plan.body.type;
+    const anchorUserData = useMemo(() => ({ ...ANCHOR_USER_DATA, [COMPOUND_BODY_KEY]: registry }), [registry]);
+    const folded = useMemo(() => Array.from(foldedByObject.values()).flat(), [foldedByObject]);
     const needsContent = plan.autoHull || plan.colliders.some(entry => entry.settings.shape === 'mesh');
 
     useLayoutEffect(() => {
         const resolved = hostRef?.current ?? anchorRef.current?.parent ?? null;
         setHost(resolved);
+        setOwner(resolved && !plan.rigidBody ? findCompoundOwner(resolved, object.id) : null);
         setContent(resolved && needsContent ? collectHostGeometry(resolved, object.id) : null);
-    }, [hostRef, needsContent, object.id]);
+    }, [hostRef, needsContent, object.id, plan.rigidBody]);
+
+    // Re-placed whenever the object's own transform is set, which moves it relative to the owner.
+    const { colliders } = plan;
+    useLayoutEffect(() => {
+        if (!owner || !host) return undefined;
+        owner.registry.set(object.id, foldColliders(owner.host, host, object.id, colliders, content));
+        return () => owner.registry.set(object.id, null);
+    }, [owner, host, object.id, colliders, content, object.position, object.rotation, object.scale]);
 
     return (
-        <group ref={anchorRef} userData={ANCHOR_USER_DATA}>
-            {host && (
+        <group ref={anchorRef} userData={anchorUserData}>
+            {host && !owner && (
                 <PhysicsFailureBoundary code="physics_body_failed">
-                    <SimulatedBody object={object} plan={plan} host={host} content={content} />
+                    <SimulatedBody object={object} plan={plan} host={host} content={content} folded={folded} />
                 </PhysicsFailureBoundary>
             )}
         </group>
@@ -579,16 +871,41 @@ const ContentPreview: React.FC<{ objectId: string; kind: 'mesh' | 'hull'; offset
     );
 };
 
+const _previewScale = new THREE.Vector3();
+
+/** The world scale of `ref`'s node, sampled every frame while `enabled` (gizmos rescale objects while editing). */
+const usePreviewWorldScale = (ref: React.RefObject<THREE.Object3D | null>, enabled: boolean): Vec3 => {
+    const [scale, setScale] = useState<Vec3>(UNIT_SCALE);
+    const current = useRef(scale);
+    const sample = useCallback(() => {
+        const node = ref.current;
+        if (!enabled || !node) return;
+        const next = absoluteScale(node.getWorldScale(_previewScale));
+        if (sameScale(next, current.current)) return;
+        current.current = next;
+        setScale(next);
+    }, [ref, enabled]);
+    useLayoutEffect(() => sample(), [sample]);
+    useFrame(sample);
+    return scale;
+};
+
 const ColliderPreview: React.FC<{ object: LevelObject; component: LevelComponent }> = ({ object, component }) => {
     const settings = resolveColliderSettings(component);
     const color = settings.isTrigger ? TRIGGER_PREVIEW_COLOR : SOLID_PREVIEW_COLOR;
+    const anchorRef = useRef<THREE.Group>(null);
+    const round = settings.shape === 'sphere' || settings.shape === 'capsule';
+    const worldScale = usePreviewWorldScale(anchorRef, round);
     if (settings.shape === 'mesh') return <ContentPreview objectId={object.id} kind="mesh" offset={settings.offset} color={color} />;
+    // Round shapes are drawn at the size play builds them (roundShapeSize), undoing the object's scale.
+    const size = roundShapeSize(settings, worldScale);
+    const meshScale: Vec3 = round ? [1 / worldScale[0], 1 / worldScale[1], 1 / worldScale[2]] : UNIT_SCALE;
     return (
-        <group userData={ANCHOR_USER_DATA}>
-            <mesh key={settings.shape} position={settings.offset} raycast={ignoreRaycast}>
+        <group ref={anchorRef} userData={ANCHOR_USER_DATA}>
+            <mesh key={settings.shape} position={settings.offset} scale={meshScale} raycast={ignoreRaycast}>
                 {settings.shape === 'box' && <boxGeometry args={settings.size} />}
-                {settings.shape === 'sphere' && <sphereGeometry args={[settings.radius, 16, 12]} />}
-                {settings.shape === 'capsule' && <capsuleGeometry args={[settings.radius, capsuleHalfHeight(settings) * 2, 4, 12]} />}
+                {settings.shape === 'sphere' && <sphereGeometry args={[size.radius, 16, 12]} />}
+                {settings.shape === 'capsule' && <capsuleGeometry args={[size.radius, size.halfHeight * 2, 4, 12]} />}
                 <PreviewMaterial color={color} />
             </mesh>
         </group>
@@ -642,7 +959,7 @@ export const PHYSICS_COMPONENTS: ComponentDefinition[] = [
     {
         type: 'rigidBody',
         label: 'Rigid Body',
-        description: 'Simulates the object during play: dynamic bodies fall and collide, kinematic ones follow the object\'s motion, fixed ones stay put. Uses the object\'s Colliders, or a convex hull of its model when it has none.',
+        description: 'Simulates the object during play: dynamic bodies fall and collide, kinematic ones follow the object\'s motion, fixed ones stay put. Uses the object\'s Colliders, or a convex hull of its own model when it has none; child objects with only Colliders add theirs to the body.',
         props: [
             {
                 key: 'type', label: 'Body Type', type: 'select', default: RIGID_BODY_DEFAULTS.type,

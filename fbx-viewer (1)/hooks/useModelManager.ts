@@ -1,5 +1,5 @@
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import * as THREE from 'three';
 import { LoadedModelData, AssetCategory, AssetInfoUpdate, ModelImportSettings } from '../types';
 import { importPhaseLabel, loadFBXFile } from '../utils/modelLoader';
@@ -109,6 +109,9 @@ export const useModelManager = (
   clearSelectedModel: (id: string) => void,
 ) => {
   const [models, setModels] = useState<LoadedModelData[]>([]);
+  // Long operations read state that may change while they await (e.g. a material override save) from here.
+  const modelsRef = useRef(models);
+  modelsRef.current = models;
   const { startOperation } = useOperationActions();
   const { addNotification } = useNotification();
 
@@ -278,7 +281,6 @@ export const useModelManager = (
       replacement.category = category;
       replacement.isPlacedInScene = existing.isPlacedInScene;
       replacement.textureOverrides = existing.textureOverrides;
-      replacement.materialOverrides = existing.materialOverrides;
       replacement.folder = existing.folder;
       const importSettings = category === 'Animation' ? undefined : applyModelImportSettings(replacement, existing.importSettings);
       if (category === 'Animation') {
@@ -334,11 +336,14 @@ export const useModelManager = (
       await projectService.applyChanges([{ domain: 'models', operation: 'upsert', id: modelId, value: document }], trace);
 
       operation.update({ phase: 'library_publication', progress: 0.98, detail: 'Publishing to library', diagnostic });
+      // Material overrides saved while the reimport ran are the ones to keep.
+      const { materialOverrides } = modelsRef.current.find((model) => model.id === modelId) ?? existing;
+      replacement.materialOverrides = materialOverrides;
       // Material overrides sit on top of the texture overrides, so they come off
       // the old object first and go onto the replacement last.
       const materialOverrideTextures = detachMaterialOverrides(existing.object);
       adoptOverrideTextures(existing.object, replacement.object, Object.keys(existing.textureOverrides || {}));
-      attachMaterialOverrides(replacement.object, normalizeMaterialOverrides(existing.materialOverrides), materialOverrideTextures);
+      attachMaterialOverrides(replacement.object, normalizeMaterialOverrides(materialOverrides), materialOverrideTextures);
       const published = replacement;
       replacement = null;
       setModels((previous) => previous.map((model) => (model.id === modelId ? published : model)));
@@ -662,11 +667,13 @@ export const useModelManager = (
         newModelData.animations = model.animations;
         newModelData.isPlacedInScene = model.isPlacedInScene;
         newModelData.textureOverrides = {}; // Clear overrides
-        newModelData.materialOverrides = model.materialOverrides; // Kept: edited in the Materials panel
 
         // Clear DB overrides
         await dbOperations.updateModelTextureOverrides(modelId, {});
-        attachMaterialOverrides(newModelData.object, normalizeMaterialOverrides(model.materialOverrides), detachMaterialOverrides(model.object));
+        // Kept: edited in the Materials panel, possibly saved while the reset ran.
+        const latest = modelsRef.current.find((candidate) => candidate.id === modelId) ?? model;
+        newModelData.materialOverrides = latest.materialOverrides;
+        attachMaterialOverrides(newModelData.object, normalizeMaterialOverrides(latest.materialOverrides), detachMaterialOverrides(latest.object));
 
         setModels(prev => prev.map(m => {
             if (m.id === modelId) {

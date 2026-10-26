@@ -124,7 +124,9 @@ export const useInputActions = (map: InputActionMap, enabled = true): InputState
         if (!enabled) { input.clear(); return; }
         const down = (event: KeyboardEvent) => { if (!isEditableTarget(event.target)) input.keyDown(event.code); };
         const up = (event: KeyboardEvent) => input.keyUp(event.code);
-        const mouseDown = (event: MouseEvent) => input.mouseDown(event.button);
+        // Only presses made while the pointer is locked are gameplay input: the click that captures the
+        // pointer, or one on editor/HUD UI, must not fire or aim. Releases stay ungated so a held button always clears.
+        const mouseDown = (event: MouseEvent) => { if (document.pointerLockElement) input.mouseDown(event.button); };
         const mouseUp = (event: MouseEvent) => input.mouseUp(event.button);
         const blur = () => input.clear();
         let frame = 0;

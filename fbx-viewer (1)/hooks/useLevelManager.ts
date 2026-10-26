@@ -540,9 +540,8 @@ export const useLevelManager = (models: LoadedModelData[]) => {
   }, [addNotification, levelObjects]);
 
   // Terrain paint weights live in splat map assets and are resolved the same
-  // way into terrainData.splat. History snapshots are not patched: the host
-  // keeps replaced splat maps until the project closes, so an undone object
-  // that still carries only the reference is simply resolved again.
+  // way into terrainData.splat, history snapshots included: like heightfields,
+  // the host discards a splat map once a commit replaces it.
   const failedSplatmapsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
       const references = new Map<string, TerrainSplatmapReference>();
@@ -564,6 +563,13 @@ export const useLevelManager = (models: LoadedModelData[]) => {
                       && terrain.splatmap.columns === reference.columns
                       && terrain.splatmap.rows === reference.rows);
               };
+              // Snapshots taken while the weights were loading get them too,
+              // so undo and redo can upload the weights again.
+              for (const snapshot of [...history.current.past, ...history.current.future]) {
+                  snapshot.forEach((object, index) => {
+                      if (resolves(object)) snapshot[index] = { ...object, terrainData: { ...object.terrainData!, splat: splat.slice() } };
+                  });
+              }
               setWorkingState((current) => {
                   let changed = false;
                   const nextObjects = current.levelObjects.map((object) => {

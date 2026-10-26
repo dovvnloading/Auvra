@@ -5,6 +5,7 @@ import { AI_CONFIG, AIState, AITuning, DEFAULT_AI_TUNING } from './AIConfig';
 import { GraphRuntimeAPI } from '../../AnimationGraph/GraphRuntime';
 import { checkVisibility } from './AISenses';
 import { evaluateNextState, calculateNavigation, DecisionContext } from './AIStateMachine';
+import { planPath, useNavGridContext } from '../../../runtime/navigation';
 
 interface BrainInput {
   enemyPosition: THREE.Vector3;
@@ -43,6 +44,8 @@ export const useAIBrain = (
     patrolWait: 0,
     strafe: 0
   });
+
+  const navGrid = useNavGridContext();
 
   const updateState = useCallback((input: BrainInput): BrainOutput => {
     const { delta, enemyPosition, enemyForward, targetPosition, distToTarget, distFromCenter, boundarySize } = input;
@@ -128,6 +131,14 @@ export const useAIBrain = (
             // Clamp patrol point to arena
             patrolDest.current.x = THREE.MathUtils.clamp(patrolDest.current.x, -boundarySize + 1, boundarySize - 1);
             patrolDest.current.z = THREE.MathUtils.clamp(patrolDest.current.z, -boundarySize + 1, boundarySize - 1);
+            // A point inside or behind an obstacle moves to the closest reachable spot, so the enemy keeps to its path.
+            if (navGrid) {
+                const plan = planPath(navGrid, enemyPosition, patrolDest.current, { partial: true });
+                if (plan) {
+                    const end = plan.points[plan.points.length - 1];
+                    patrolDest.current.set(end.x, 0, end.z);
+                }
+            }
         }
         else if (nextState === 'IDLE' && stateRef.current === 'RETURNING') {
              timers.current.patrolWait = 2.0; // Pause after returning bounds
@@ -175,7 +186,7 @@ export const useAIBrain = (
         destination,
         targetFocus
     };
-  }, [graphApi, onAttack, tuning]);
+  }, [graphApi, onAttack, tuning, navGrid]);
 
   return { updateState };
 };

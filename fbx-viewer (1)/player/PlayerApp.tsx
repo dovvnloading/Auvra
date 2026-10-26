@@ -11,6 +11,7 @@ import { OptionsMenu } from './OptionsMenu';
 import {
     AuthoredMenu,
     findMenuDocument,
+    menuActionRunnable,
     PAUSE_MENU_DOCUMENT_ID,
     PAUSE_MENU_REQUIRED_ACTIONS,
     TITLE_MENU_DOCUMENT_ID,
@@ -206,16 +207,6 @@ export const PlayerApp: React.FC = () => {
         beginSession(startupLevelId);
     }, [startupLevelId, settings, beginSession]);
 
-    // Authored 'menu-title' / 'menu-pause' HUD documents replace the built-in menus when present.
-    const titleMenu = useMemo(
-        () => findMenuDocument(pack?.domains.hud, TITLE_MENU_DOCUMENT_ID, TITLE_MENU_REQUIRED_ACTIONS),
-        [pack],
-    );
-    const pauseMenu = useMemo(
-        () => findMenuDocument(pack?.domains.hud, PAUSE_MENU_DOCUMENT_ID, PAUSE_MENU_REQUIRED_ACTIONS),
-        [pack],
-    );
-
     const hasSaves = saveList.length > 0;
     const latestSlot = hasSaves ? saveList[0].slot : null;
     const menuHandlers = useMemo<MenuActionHandlers>(() => ({
@@ -241,6 +232,17 @@ export const PlayerApp: React.FC = () => {
         save: () => saveGame(),
         quit: quitToTitle,
     }), [menuHandlers, saveGame, quitToTitle]);
+
+    // Authored 'menu-title' / 'menu-pause' HUD documents replace the built-in menus when present, and only
+    // when an entry the screen requires can run right now, so a menu whose buttons are all disabled never traps the player.
+    const titleMenu = useMemo(
+        () => findMenuDocument(pack?.domains.hud, TITLE_MENU_DOCUMENT_ID, TITLE_MENU_REQUIRED_ACTIONS, menuActionRunnable(titleHandlers, levels)),
+        [pack, titleHandlers, levels],
+    );
+    const pauseMenu = useMemo(
+        () => findMenuDocument(pack?.domains.hud, PAUSE_MENU_DOCUMENT_ID, PAUSE_MENU_REQUIRED_ACTIONS, menuActionRunnable(pauseHandlers, levels)),
+        [pack, pauseHandlers, levels],
+    );
 
     const hudOverlay = useMemo(() => {
         const hud = loaded?.hud;

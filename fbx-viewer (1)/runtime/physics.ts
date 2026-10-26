@@ -50,11 +50,20 @@ export interface PhysicsRaycastOptions {
     includeTriggers?: boolean;
 }
 
+/** A body's simulated pose in world space. */
+export interface PhysicsBodyPose {
+    position: [number, number, number];
+    /** Euler angles in radians, XYZ order (the order LevelObject rotations use). */
+    rotation: [number, number, number];
+}
+
 export interface PhysicsQueries {
     /** First collider along the ray within maxDistance, or null. `direction` need not be normalised. */
     raycast(origin: THREE.Vector3, direction: THREE.Vector3, maxDistance: number, options?: PhysicsRaycastOptions): PhysicsRaycastHit | null;
     /** Pushes the dynamic body of `objectId`; false when that object has no dynamic body. */
     applyImpulse(objectId: string, impulse: { x: number; y: number; z: number }): boolean;
+    /** The live world-space pose of the dynamic body of `objectId`; null when that object has no dynamic body. */
+    getBodyPose(objectId: string): PhysicsBodyPose | null;
 }
 
 /** Rays longer than this are clamped; Rapier works in 32-bit floats. */
@@ -102,11 +111,22 @@ export const createPhysicsQueries = (world: RapierWorld, rapier: RapierModule): 
             applied = true;
         });
         return applied;
+    },
+    getBodyPose(objectId) {
+        const found: { body?: RapierRigidBody } = {};
+        world.forEachRigidBody(body => {
+            if (!found.body && body.isDynamic() && objectIdFromRigidBody(body) === objectId) found.body = body;
+        });
+        if (!found.body) return null;
+        const t = found.body.translation();
+        const r = found.body.rotation();
+        const euler = new THREE.Euler().setFromQuaternion(new THREE.Quaternion(r.x, r.y, r.z, r.w), 'XYZ');
+        return { position: [t.x, t.y, t.z], rotation: [euler.x, euler.y, euler.z] };
     }
 });
 
-/** Queries for code outside a physics world: nothing is ever hit. */
-const INERT_PHYSICS_QUERIES: PhysicsQueries = { raycast: () => null, applyImpulse: () => false };
+/** Queries for code outside a physics world: nothing is ever hit and no body exists. */
+const INERT_PHYSICS_QUERIES: PhysicsQueries = { raycast: () => null, applyImpulse: () => false, getBodyPose: () => null };
 
 const PhysicsQueriesContext = createContext<PhysicsQueries | null>(null);
 

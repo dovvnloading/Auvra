@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import type { LevelComponent, LevelObject } from '../types';
 
@@ -10,8 +10,10 @@ import type { LevelComponent, LevelObject } from '../types';
  * back to), is rejected when the ground is steeper than the slope limit, and
  * is blocked where a static obstacle, inflated by the agent radius, covers it.
  * Obstacles are enabled non-trigger 'collider' components (box, sphere,
- * capsule) and, for props without colliders, the same circle footprint the
- * player's collision uses. Objects that move (mover/rotator components, or a
+ * capsule; mesh colliders and fixed auto-hull bodies use options.shapeBounds
+ * when given) and, for props with a model but no colliders, the same circle
+ * footprint the player's collision uses (props without a model, such as
+ * lights, are not solid). Objects that move (mover/rotator components, or a
  * non-fixed rigidBody on the object or an ancestor) are not baked.
  *
  * findPath runs A* over the grid (8-connected, no corner cutting) and smooths
@@ -54,6 +56,12 @@ export interface NavGridOptions {
     maxCells?: number;
     /** Footprint radius of a prop without a collider; null leaves it out. Defaults to the player's max(scale.x, scale.z) / 2. */
     propRadius?: (object: LevelObject, worldScale: THREE.Vector3) => number | null;
+    /**
+     * Object-local bounds of the geometry physics builds a 'mesh' collider or a fixed rigid body's
+     * automatic hull from (the loaded model, import normalisation included); null when unknown.
+     * Without it those objects fall back to the prop footprint circle.
+     */
+    shapeBounds?: (object: LevelObject) => THREE.Box3 | null;
 }
 
 export interface NavGrid {
@@ -70,6 +78,8 @@ export interface NavGrid {
     /** Connected walkable region of each cell (4-connected); -1 when blocked. */
     regions: Int32Array;
     agentRadius: number;
+    /** Obstacles at most this far above the ground were stepped over when baking. */
+    maxStepHeight: number;
 }
 
 export interface FindPathOptions {
@@ -104,6 +114,8 @@ const DEFAULTS = {
 // TerrainObject's defaults when a terrain object carries no terrainData.
 const DEFAULT_TERRAIN = { resolution: 64, width: 100, depth: 100 };
 const DYNAMIC_COMPONENT_TYPES: ReadonlySet<string> = new Set(['mover', 'rotator']);
+// Smallest collider dimension physics builds (physicsComponents MIN_EXTENT).
+const MIN_COLLIDER_EXTENT = 0.01;
 const SQRT2 = Math.SQRT2;
 
 // ---------------------------------------------------------------------------
@@ -268,6 +280,31 @@ const circleObstacle = (centerX: number, centerZ: number, radius: number, minY: 
     },
 });
 
+/** A capsule: every point within `radius` of the world segment a..b. Its footprint is that segment's XZ shadow, grown by radius. */
+const segmentObstacle = (a: THREE.Vector3, b: THREE.Vector3, radius: number): Obstacle => {
+    const segX = b.x - a.x;
+    const segZ = b.z - a.z;
+    const lengthSq = segX * segX + segZ * segZ;
+    return {
+        bounds: {
+            minX: Math.min(a.x, b.x) - radius,
+            maxX: Math.max(a.x, b.x) + radius,
+            minZ: Math.min(a.z, b.z) - radius,
+            maxZ: Math.max(a.z, b.z) + radius,
+        },
+        // Conservative: the whole capsule's vertical span, although it is thinner toward its ends.
+        minY: Math.min(a.y, b.y) - radius,
+        maxY: Math.max(a.y, b.y) + radius,
+        covers: (x, z, agentRadius) => {
+            const t = lengthSq > 1e-12 ? THREE.MathUtils.clamp(((x - a.x) * segX + (z - a.z) * segZ) / lengthSq, 0, 1) : 0;
+            const dx = x - (a.x + segX * t);
+            const dz = z - (a.z + segZ * t);
+            const reach = radius + agentRadius;
+            return dx * dx + dz * dz <= reach * reach;
+        },
+    };
+};
+
 const boxObstacle = (matrix: THREE.Matrix4, center: THREE.Vector3, half: THREE.Vector3): Obstacle | null => {
     if (Math.abs(matrix.determinant()) < 1e-12) return null;
     const corners: THREE.Vector3[] = [];
@@ -304,45 +341,94 @@ const colliderObstacle = (component: LevelComponent, matrix: THREE.Matrix4): Obs
         const size = vectorProp(props.size, [1, 1, 1]);
         return boxObstacle(matrix, offset, new THREE.Vector3(Math.abs(size.x) / 2, Math.abs(size.y) / 2, Math.abs(size.z) / 2));
     }
-    if (shape === 'sphere' || shape === 'capsule') {
+    if (shape === 'sphere') {
         const scale = new THREE.Vector3().setFromMatrixScale(matrix);
         const radius = Math.abs(finite(props.radius, 0.5));
-        const halfHeight = shape === 'capsule' ? Math.abs(finite(props.height, 1)) / 2 + radius : radius;
         const center = offset.clone().applyMatrix4(matrix);
         const worldRadius = radius * Math.max(scale.x, scale.z);
-        const worldHalfHeight = halfHeight * scale.y;
+        const worldHalfHeight = radius * scale.y;
         return circleObstacle(center.x, center.z, worldRadius, center.y - worldHalfHeight, center.y + worldHalfHeight);
     }
-    return null; // 'mesh' and unknown shapes use the prop footprint
+    if (shape === 'capsule') {
+        // Like physics (resolveColliderSettings / capsuleHalfHeight): height is the full length, caps
+        // included, along the object's local Y, so the capsule rotates with the object.
+        const radius = Math.max(MIN_COLLIDER_EXTENT, finite(props.radius, 0.5));
+        const height = Math.max(MIN_COLLIDER_EXTENT, finite(props.height, 2));
+        const halfSegment = Math.max(0, height / 2 - radius);
+        const scale = new THREE.Vector3().setFromMatrixScale(matrix);
+        const a = new THREE.Vector3(offset.x, offset.y + halfSegment, offset.z).applyMatrix4(matrix);
+        const b = new THREE.Vector3(offset.x, offset.y - halfSegment, offset.z).applyMatrix4(matrix);
+        return segmentObstacle(a, b, radius * Math.max(Math.abs(scale.x), Math.abs(scale.y), Math.abs(scale.z)));
+    }
+    return null; // 'mesh' and unknown shapes use shapeBounds or the prop footprint
 };
 
 const defaultPropRadius = (_object: LevelObject, worldScale: THREE.Vector3): number =>
     Math.max(Math.abs(worldScale.x), Math.abs(worldScale.z)) * 0.5;
+
+/** A box around the object's physics geometry (from shapeBounds), shifted by the collider offset. */
+const shapeObstacle = (
+    object: LevelObject,
+    matrix: THREE.Matrix4,
+    offset: THREE.Vector3,
+    shapeBounds: NavGridOptions['shapeBounds'],
+): Obstacle | null => {
+    const box = shapeBounds?.(object);
+    if (!box || box.isEmpty()) return null;
+    const center = box.getCenter(new THREE.Vector3()).add(offset);
+    const half = box.getSize(new THREE.Vector3()).multiplyScalar(0.5);
+    if (![center.x, center.y, center.z, half.x, half.y, half.z].every(Number.isFinite)) return null;
+    return boxObstacle(matrix, center, half);
+};
+
+/**
+ * True when collectObstacles can bake something for the object (ignoring whether it moves): a
+ * non-trigger collider, a rigid body with no colliders (physics gives it an automatic hull), or the
+ * player's legacy footprint, which only props with a model have (usePlayerPhysics isLegacySolidProp).
+ */
+const mayBlock = (object: LevelObject): boolean => {
+    if (object.type === 'terrain' || object.type === 'sky_sphere') return false;
+    const components = enabledComponents(object);
+    const colliders = components.filter(component => component.type === 'collider');
+    if (colliders.length > 0) return colliders.some(collider => collider.props?.isTrigger !== true);
+    return components.some(component => component.type === 'rigidBody') || (object.type === 'prop' && !!object.modelId);
+};
 
 const collectObstacles = (
     levelObjects: readonly LevelObject[],
     index: ReadonlyMap<string, LevelObject>,
     worldMatrix: WorldMatrixResolver,
     propRadius: (object: LevelObject, worldScale: THREE.Vector3) => number | null,
+    shapeBounds: NavGridOptions['shapeBounds'],
 ): Obstacle[] => {
     const obstacles: Obstacle[] = [];
     const position = new THREE.Vector3();
     const quaternion = new THREE.Quaternion();
     const scale = new THREE.Vector3();
+    const noOffset = new THREE.Vector3();
     for (const object of levelObjects) {
-        if (object.type === 'terrain' || object.type === 'sky_sphere') continue;
-        const colliders = enabledComponents(object).filter(component => component.type === 'collider');
-        if (colliders.length === 0 && object.type !== 'prop') continue;
-        if (isDynamicObject(object, index)) continue;
+        if (!mayBlock(object) || isDynamicObject(object, index)) continue;
+        const components = enabledComponents(object);
+        const colliders = components.filter(component => component.type === 'collider');
         const matrix = worldMatrix(object.id);
         let needsFootprint = colliders.length === 0;
+        if (needsFootprint && components.some(component => component.type === 'rigidBody')) {
+            // A fixed rigid body without colliders: physics wraps the object's meshes in a hull.
+            const hull = shapeObstacle(object, matrix, noOffset, shapeBounds);
+            if (hull) {
+                obstacles.push(hull);
+                continue;
+            }
+        }
         for (const collider of colliders) {
             if (collider.props?.isTrigger === true) continue;
-            const obstacle = colliderObstacle(collider, matrix);
+            const obstacle = colliderObstacle(collider, matrix)
+                ?? (collider.props?.shape === 'mesh' ? shapeObstacle(object, matrix, vectorProp(collider.props.offset, [0, 0, 0]), shapeBounds) : null);
             if (obstacle) obstacles.push(obstacle);
             else needsFootprint = true;
         }
-        if (!needsFootprint) continue;
+        // Without a model there is nothing solid to fall back on (lights and other empty props).
+        if (!needsFootprint || !object.modelId) continue;
         matrix.decompose(position, quaternion, scale);
         const radius = propRadius(object, scale);
         if (radius === null || !(radius > 0)) continue;
@@ -411,7 +497,7 @@ export function buildNavGrid(levelObjects: readonly LevelObject[], options: NavG
         const sampler = createTerrainSampler(object, worldMatrix(object.id));
         if (sampler) terrains.push(sampler);
     }
-    const obstacles = collectObstacles(levelObjects, index, worldMatrix, options.propRadius ?? defaultPropRadius);
+    const obstacles = collectObstacles(levelObjects, index, worldMatrix, options.propRadius ?? defaultPropRadius, options.shapeBounds);
 
     let bounds: NavBounds;
     if (options.bounds) {
@@ -421,7 +507,11 @@ export function buildNavGrid(levelObjects: readonly LevelObject[], options: NavG
         const padding = Math.max(0, finite(options.padding, DEFAULTS.padding));
         bounds = { minX: -half, minZ: -half, maxX: half, maxZ: half };
         terrains.forEach(terrain => unionBounds(bounds, terrain.bounds));
-        obstacles.forEach(obstacle => unionBounds(bounds, obstacle.bounds));
+        // Without terrain the ground is y = 0, so an obstacle that is always stepped over or walked
+        // under (a floor slab, say) blocks nothing and must not stretch the grid and coarsen its cells.
+        obstacles.forEach(obstacle => {
+            if (terrains.length > 0 || (obstacle.maxY > maxStepHeight && obstacle.minY < agentHeight)) unionBounds(bounds, obstacle.bounds);
+        });
         bounds.minX -= padding;
         bounds.minZ -= padding;
         bounds.maxX += padding;
@@ -473,19 +563,23 @@ export function buildNavGrid(levelObjects: readonly LevelObject[], options: NavG
         }
     }
 
+    // Obstacles are rasterized by testing cell centres. Inflating them by at least half a cell
+    // diagonal keeps a thin wall from falling between centres once large bounds coarsen the cells;
+    // at the default 0.5 m cell this is just the agent radius.
+    const rasterRadius = Math.max(agentRadius, cellSize * Math.SQRT1_2);
     for (const obstacle of obstacles) {
         const { minX, minZ, maxX, maxZ } = obstacle.bounds;
-        const c0 = Math.max(0, Math.floor((minX - agentRadius - originX) / cellSize));
-        const c1 = Math.min(columns - 1, Math.floor((maxX + agentRadius - originX) / cellSize));
-        const r0 = Math.max(0, Math.floor((minZ - agentRadius - originZ) / cellSize));
-        const r1 = Math.min(rows - 1, Math.floor((maxZ + agentRadius - originZ) / cellSize));
+        const c0 = Math.max(0, Math.floor((minX - rasterRadius - originX) / cellSize));
+        const c1 = Math.min(columns - 1, Math.floor((maxX + rasterRadius - originX) / cellSize));
+        const r0 = Math.max(0, Math.floor((minZ - rasterRadius - originZ) / cellSize));
+        const r1 = Math.min(rows - 1, Math.floor((maxZ + rasterRadius - originZ) / cellSize));
         for (let row = r0; row <= r1; row++) {
             for (let column = c0; column <= c1; column++) {
                 const cell = row * columns + column;
                 if (!walkable[cell]) continue;
                 const ground = heights[cell];
                 if (obstacle.maxY <= ground + maxStepHeight || obstacle.minY >= ground + agentHeight) continue;
-                if (obstacle.covers(originX + (column + 0.5) * cellSize, originZ + (row + 0.5) * cellSize, agentRadius)) {
+                if (obstacle.covers(originX + (column + 0.5) * cellSize, originZ + (row + 0.5) * cellSize, rasterRadius)) {
                     walkable[cell] = 0;
                 }
             }
@@ -502,6 +596,7 @@ export function buildNavGrid(levelObjects: readonly LevelObject[], options: NavG
         heights,
         regions: labelRegions(walkable, columns, rows),
         agentRadius,
+        maxStepHeight,
     };
 }
 
@@ -530,6 +625,18 @@ const cellCenter = (grid: NavGrid, cell: number): THREE.Vector3 => {
 export function isWalkable(grid: NavGrid, x: number, z: number): boolean {
     const cell = cellIndexAt(grid, x, z);
     return cell >= 0 && grid.walkable[cell] === 1;
+}
+
+/**
+ * Whether a point planPath cannot reach is really shut off at ground level (a closed pen), rather
+ * than unknown to the grid: off the grid is unbaked open ground, and a point raised more than a
+ * step above a blocked cell stands on a platform, ramp or stairs, which the single ground layer
+ * bakes as solid. A point without y is taken to be on the ground.
+ */
+export function isWalledOff(grid: NavGrid, point: NavPoint): boolean {
+    const cell = cellIndexAt(grid, point.x, point.z);
+    if (cell < 0) return false;
+    return grid.walkable[cell] === 1 || point.y === undefined || point.y - grid.heights[cell] <= grid.maxStepHeight;
 }
 
 /**
@@ -867,15 +974,32 @@ const heightsToken = (heights: readonly number[] | undefined): number => {
     return token;
 };
 
-/** A key that changes only when something the nav grid bakes changes. */
+/**
+ * A key that changes only when something the nav grid bakes changes: terrains, static objects that
+ * can block (see collectObstacles), and the ancestors their world transforms come from. Objects
+ * that are never baked (lights, spawn points, movers and other dynamic objects) do not affect it.
+ */
 export function navGridSignature(levelObjects: readonly LevelObject[]): string {
+    const index = new Map<string, LevelObject>();
+    for (const object of levelObjects) index.set(object.id, object);
+    const baked = new Set<string>();
+    for (const object of levelObjects) {
+        if (object.type !== 'terrain' && (!mayBlock(object) || isDynamicObject(object, index))) continue;
+        let current: LevelObject | undefined = object;
+        while (current && !baked.has(current.id)) {
+            baked.add(current.id);
+            const parentId: string | null | undefined = current.parentId;
+            current = parentId ? index.get(parentId) : undefined;
+        }
+    }
     const parts: string[] = [];
     for (const object of levelObjects) {
-        if (object.type === 'foliage' || object.type === 'sky_sphere' || object.type === 'audio_emitter') continue;
+        if (!baked.has(object.id)) continue;
         const terrain = object.terrainData;
         parts.push([
             object.id,
             object.type,
+            object.modelId,
             object.parentId ?? '',
             object.position.join(','),
             object.rotation.join(','),
@@ -887,11 +1011,53 @@ export function navGridSignature(levelObjects: readonly LevelObject[]): string {
     return parts.join(';');
 }
 
-/** Bake (and re-bake on relevant level edits) the nav grid for these level objects. */
+/** Shortest time between re-bakes while baked objects keep changing (a script moving a platform every frame, bursts of spawns). */
+export const NAV_REBAKE_INTERVAL_MS = 500;
+
+interface BakedNavGrid {
+    key: string | null;
+    propRadius: NavGridOptions['propRadius'];
+    shapeBounds: NavGridOptions['shapeBounds'];
+    grid: NavGrid | null;
+    bakedAt: number;
+}
+
+/**
+ * Bake the nav grid for these level objects, and re-bake it when something it bakes changes. The
+ * first grid is baked during render; later re-bakes run outside render, at most once every
+ * NAV_REBAKE_INTERVAL_MS, and until then agents keep the previous grid (and their paths).
+ */
 export function useNavGrid(levelObjects: readonly LevelObject[] | null | undefined, options?: NavGridOptions): NavGrid | null {
-    const signature = levelObjects ? navGridSignature(levelObjects) : null;
-    const optionsKey = options ? JSON.stringify(options) : '';
-    const propRadius = options?.propRadius;
     // levelObjects/options are keyed by signature and options key, so identity churn alone does not re-bake.
-    return useMemo(() => (levelObjects ? buildNavGrid(levelObjects, options) : null), [signature, optionsKey, propRadius]);
+    const key = levelObjects ? `${navGridSignature(levelObjects)}#${options ? JSON.stringify(options) : ''}` : null;
+    const propRadius = options?.propRadius;
+    const shapeBounds = options?.shapeBounds;
+    const latest = useRef({ levelObjects, options });
+    useEffect(() => {
+        latest.current = { levelObjects, options };
+    });
+    const [baked, setBaked] = useState<BakedNavGrid>(() => ({
+        key,
+        propRadius,
+        shapeBounds,
+        grid: levelObjects ? buildNavGrid(levelObjects, options) : null,
+        // The first change after mount (the level finishing loading, say) re-bakes right away.
+        bakedAt: -Infinity,
+    }));
+    const stale = baked.key !== key || baked.propRadius !== propRadius || baked.shapeBounds !== shapeBounds;
+    useEffect(() => {
+        if (!stale) return undefined;
+        const timer = setTimeout(() => {
+            const current = latest.current;
+            setBaked({
+                key,
+                propRadius,
+                shapeBounds,
+                grid: current.levelObjects ? buildNavGrid(current.levelObjects, current.options) : null,
+                bakedAt: Date.now(),
+            });
+        }, Math.max(0, baked.bakedAt + NAV_REBAKE_INTERVAL_MS - Date.now()));
+        return () => clearTimeout(timer);
+    }, [stale, key, propRadius, shapeBounds, baked.bakedAt]);
+    return key === null ? null : baked.grid;
 }

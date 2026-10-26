@@ -1,7 +1,7 @@
 
 import React, { useEffect, useRef, useMemo } from 'react';
 import * as THREE from 'three';
-import { useFrame, useThree } from '@react-three/fiber';
+import { useFrame } from '@react-three/fiber';
 import { SocketData, TextureData } from '../../types';
 
 interface SocketControllerProps {

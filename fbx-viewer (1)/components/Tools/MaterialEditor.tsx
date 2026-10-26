@@ -11,6 +11,7 @@ import {
   materialOverridesEqual,
   normalizeMaterialOverrides,
   overrideTextureCacheKey,
+  overrideTextureFlipY,
   setMaterialOverrideField,
   tagOverrideTexture,
   type MaterialOverride,
@@ -158,6 +159,9 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
   const pendingTextures = useRef(new Set<string>());
   const failedTextures = useRef(new Set<string>());
   const session = useRef(0);
+  /** True while a save awaits the host; closing then defers the session end until it settles. */
+  const savingRef = useRef(false);
+  const deferredEnd = useRef<(() => void) | null>(null);
 
   const materials = useMemo(() => listModelMaterials(model.object), [model.object]);
   const dirty = !materialOverridesEqual(draft, saved);
@@ -179,13 +183,19 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
     for (const [key, texture] of collectOverrideTextures(object)) cache.set(key, texture);
     return () => {
       session.current += 1;
-      const bound = applyMaterialOverrides(object, savedRef.current, (textureId, slot) => cache.get(overrideTextureCacheKey(textureId, slot))).boundTextureKeys;
-      for (const [key, texture] of cache) {
-        if (!bound.has(key)) texture.dispose();
-      }
-      cache.clear();
-      pendingTextures.current.clear();
-      failedTextures.current.clear();
+      const endSession = () => {
+        const bound = applyMaterialOverrides(object, savedRef.current, (textureId, slot) => cache.get(overrideTextureCacheKey(textureId, slot))).boundTextureKeys;
+        for (const [key, texture] of cache) {
+          if (!bound.has(key)) texture.dispose();
+        }
+        cache.clear();
+        pendingTextures.current.clear();
+        failedTextures.current.clear();
+      };
+      // An in-flight save still needs the previewed textures on the object;
+      // it ends the session with the value it settled on.
+      if (savingRef.current) deferredEnd.current = endSession;
+      else endSession();
     };
   }, [model.object]);
 
@@ -205,7 +215,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
         return;
       }
       pendingTextures.current.delete(key);
-      textureCache.current.set(key, tagOverrideTexture(texture, textureId, slot));
+      textureCache.current.set(key, tagOverrideTexture(texture, textureId, slot, overrideTextureFlipY(model.object)));
       setTextureVersion((version) => version + 1);
     }, () => {
       if (loadSession !== session.current) return;
@@ -214,7 +224,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
       setTextureVersion((version) => version + 1);
     });
     return null;
-  }, [textureUrls]);
+  }, [textureUrls, model.object]);
 
   // Live preview: every draft change is laid onto the model's materials.
   useEffect(() => {
@@ -240,6 +250,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
     const next = draftRef.current;
     setSaving(true);
     setError(null);
+    savingRef.current = true;
     try {
       await onSave(model.id, next);
       savedRef.current = next;
@@ -247,7 +258,11 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Material overrides could not be saved.');
     } finally {
+      savingRef.current = false;
       setSaving(false);
+      const endSession = deferredEnd.current;
+      deferredEnd.current = null;
+      endSession?.();
     }
   };
 

@@ -2,7 +2,7 @@ import { useRef, useMemo } from 'react';
 import * as THREE from 'three';
 import { AI_CONFIG, AIState, AITuning, DEFAULT_AI_TUNING } from './AIConfig';
 import { usesPathfinding } from './AIStateMachine';
-import { NavGrid, advanceWaypoint, planPath, useNavGridContext } from '../../../runtime/navigation';
+import { NavGrid, advanceWaypoint, isWalledOff, planPath, useNavGridContext } from '../../../runtime/navigation';
 
 interface LocomotionInput {
   enemyObject: THREE.Object3D;
@@ -97,9 +97,10 @@ export const useAILocomotion = () => {
     const last = path.length - 1;
     if (nav.waypoint < last) return { target: path[nav.waypoint], detour: true, holding: false };
 
-    // Chasing or searching an unreachable spot: stop at the closest reachable point.
+    // Chasing or searching a walled-off spot: stop at the closest reachable point. A target off the
+    // grid or up on a platform is not walled off, so the chase keeps closing in on it.
     // Patrol/return keep heading on so the state machine can still reach its goal.
-    if (!nav.reachable && (state === 'CHASE' || state === 'SEARCHING')) {
+    if (!nav.reachable && (state === 'CHASE' || state === 'SEARCHING') && isWalledOff(grid, destination)) {
         const end = path[last];
         const dx = end.x - position.x;
         const dz = end.z - position.z;

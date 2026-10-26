@@ -33,7 +33,7 @@ export interface DecisionResult {
  */
 export const evaluateNextState = (ctx: DecisionContext): DecisionResult => {
     const { currentState, distToTarget, distFromCenter, boundarySize, canSee, timers, patrolDest, enemyPosition } = ctx;
-    const { DISTANCES, SENSES, COMBAT } = AI_CONFIG;
+    const { DISTANCES } = AI_CONFIG;
 
     let nextState = currentState;
     let shouldAttack = false;

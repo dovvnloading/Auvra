@@ -459,6 +459,9 @@ class WorldSpacePoints extends THREE.Points<THREE.BufferGeometry, THREE.ShaderMa
         geometry.setAttribute('aLife', dynamicAttribute(pool.life, 1));
         geometry.setAttribute('aSeed', dynamicAttribute(pool.seeds, 1));
         geometry.setDrawRange(0, 0);
+        // three sorts transparent draws by this centre. Left null, it would be computed once, lazily, over the
+        // zero-filled pool and stay at the origin; ParticlesRender keeps it on the emitter instead.
+        geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), Infinity);
         super(geometry, material);
         this.matrixAutoUpdate = false;
         this.matrixWorldAutoUpdate = false;
@@ -501,6 +504,8 @@ const ParticlesRender: React.FC<ComponentRenderProps> = ({ component, mode }) =>
 
         material.uniforms.uViewportHeight.value = state.size.height * state.viewport.dpr;
         const geometry = points.geometry;
+        // Depth-sort point for transparent layering: the emitter (world space, as matrixWorld stays identity).
+        geometry.boundingSphere?.center.setFromMatrixPosition(owner.matrixWorld);
         geometry.setDrawRange(0, pool.count);
         if (pool.count === 0) return;
         for (const [name, itemSize] of UPLOADED_ATTRIBUTES) {

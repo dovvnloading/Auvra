@@ -38,7 +38,27 @@ const parseNumberField = (raw: string, integer: boolean): number | string => {
 };
 
 const fieldText = (value: unknown): string =>
-    typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+    typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : '';
+
+/**
+ * Set Level Variable value typed as text: an undeclared variable takes the type of its first value, so the
+ * literals true/false store a Boolean and a plain number a Float. Partial input ('1.', '-') stays text while typing.
+ */
+const parseVariableLiteral =(raw: string): boolean | number | string => {
+    const trimmed = raw.trim();
+    if (trimmed === 'true') return true;
+    if (trimmed === 'false') return false;
+    const number = Number(trimmed);
+    return trimmed !== '' && Number.isFinite(number) && String(number) === trimmed ? number : raw;
+};
+
+const declaredKind = (type: string | undefined): 'number' | 'boolean' | 'string' => {
+    switch ((type ?? '').toLowerCase()) {
+        case 'float': case 'integer': case 'int': case 'number': return 'number';
+        case 'boolean': case 'bool': return 'boolean';
+        default: return 'string';
+    }
+};
 
 type PinFieldGroup = { kind: 'single', pin: LogicPin } | { kind: 'vector', label: string, pins: LogicPin[] };
 
@@ -219,6 +239,50 @@ const RegistryNodeFields: React.FC<RegistryNodeFieldsProps> = ({
                     levelVariables={levelVariables}
                     onChange={(name) => setDefault(pin, name, titled(name.trim() || undefined))}
                 />
+            );
+        }
+
+        if (node.type === 'SetLevelVariable' && pin.name === 'Value') {
+            const variableName = fieldText(data.default_Name).trim();
+            const declared = levelVariables.find(v => v.name === variableName);
+            const kind = declared ? declaredKind(declared.type) : null;
+            if (kind === 'boolean') {
+                return (
+                    <select id={fieldId(pin)} value={value === true || value === 'true' ? 'true' : 'false'} onChange={(e) => setDefault(pin, e.target.value === 'true')} className={FIELD_CLASS}>
+                        <option value="true">True</option>
+                        <option value="false">False</option>
+                    </select>
+                );
+            }
+            if (kind === 'number') {
+                return (
+                    <input
+                        id={fieldId(pin)}
+                        type="number"
+                        step="0.1"
+                        value={text}
+                        onChange={(e) => setDefault(pin, parseNumberField(e.target.value, false))}
+                        placeholder="unset"
+                        className={FIELD_CLASS}
+                    />
+                );
+            }
+            // A declared String keeps the text as typed; an undeclared name is typed by the literal.
+            return (
+                <>
+                    <input
+                        id={fieldId(pin)}
+                        type="text"
+                        value={text}
+                        onChange={(e) => setDefault(pin, kind === 'string' ? e.target.value : parseVariableLiteral(e.target.value))}
+                        className={FIELD_CLASS}
+                    />
+                    {kind === null && (
+                        <div className="text-[10px] text-gray-500">
+                            {typeof value === 'boolean' ? 'Creates a Boolean variable.' : typeof value === 'number' ? 'Creates a Float variable.' : 'Creates a String variable: type true, false or a number for a Boolean or Float.'}
+                        </div>
+                    )}
+                </>
             );
         }
 

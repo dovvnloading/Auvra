@@ -51,17 +51,32 @@ export const ProfilerProbe: React.FC<{ enabled: boolean }> = ({ enabled }) => {
     const sampler = useRef(new FrameSampler());
     const elapsed = useRef(0);
 
+    // Post-processing renders the scene and then each effect pass with its own render call, and by default the
+    // renderer resets its counters on every call, leaving only the last full-screen pass. While profiling, the
+    // counters run for the whole frame instead; the frame callback below reads and resets them once per frame.
+    useEffect(() => {
+        if (!enabled) return undefined;
+        const info = gl.info;
+        info.autoReset = false;
+        info.reset();
+        return () => { info.autoReset = true; };
+    }, [gl, enabled]);
+
     useFrame((_, delta) => {
         if (!enabled) return;
+        const { render, memory } = gl.info;
+        // Priority 0 runs before this frame renders, so the counters hold every render call of the previous frame.
+        const drawCalls = render.calls;
+        const triangles = render.triangles;
+        gl.info.reset();
         sampler.current.add(delta);
         elapsed.current += delta;
         if (elapsed.current < 0.25) return;
         elapsed.current = 0;
-        const { render, memory } = gl.info;
         publishStats({
             ...sampler.current.summary(),
-            drawCalls: render.calls,
-            triangles: render.triangles,
+            drawCalls,
+            triangles,
             geometries: memory.geometries,
             textures: memory.textures,
             heapMb: heapMegabytes(),

@@ -1,6 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, renderHook } from '@testing-library/react';
 import * as THREE from 'three';
-import { advanceWaypoint, buildNavGrid, findPath, hasLineOfSight, isWalkable, planPath } from '../../runtime/navigation';
+import {
+  NAV_REBAKE_INTERVAL_MS,
+  advanceWaypoint,
+  buildNavGrid,
+  findPath,
+  hasLineOfSight,
+  isWalkable,
+  isWalledOff,
+  navGridSignature,
+  planPath,
+  useNavGrid,
+} from '../../runtime/navigation';
 import type { LevelComponent, LevelObject } from '../../types';
 
 type Vec3 = [number, number, number];
@@ -151,5 +163,171 @@ describe('navigation grid', () => {
     expect(advanceWaypoint(path, 1, { x: 0.9, z: 0.1 }, 0.45)).toBe(2);
     expect(advanceWaypoint(path, 2, { x: 4.9, z: 4 }, 0.45)).toBe(2);
     expect(advanceWaypoint(path, 3, { x: 4.9, z: 4 }, 0.45)).toBe(3);
+  });
+
+  it('does not bake props without a model, such as lights', () => {
+    // LightingPanel creates point/spot lights as model-less props carrying only a light component.
+    const light = levelObject('light', {
+      modelId: '',
+      position: [0, 2, 0],
+      components: [{ id: 'light-c', type: 'pointLight', enabled: true, props: { intensity: 1 } }],
+    });
+    const grid = buildNavGrid([light], OPTIONS);
+    expect(isWalkable(grid, 0, 0)).toBe(true);
+    // A model-less prop with a mesh collider has no geometry for physics either.
+    const meshOnly = levelObject('empty-mesh', { modelId: '', components: [boxCollider('empty-mesh', [1, 1, 1], { shape: 'mesh' })] });
+    expect(isWalkable(buildNavGrid([meshOnly], OPTIONS), 0, 0)).toBe(true);
+  });
+
+  it('keeps thin walls when large bounds coarsen the cells', () => {
+    const thinWall = wall('wall', [0, 0, 0], [0.3, 3, 12]);
+    // A walk-on floor slab whose top face is the y = 0 ground: it never blocks, so it must not stretch the grid.
+    const floor = levelObject('floor', { components: [boxCollider('floor', [1000, 1, 1000], { offset: [0, -0.5, 0] })] });
+    const grid = buildNavGrid([thinWall, floor]);
+    expect(grid.cellSize).toBeCloseTo(0.5);
+    expect(isWalkable(grid, 0, 0)).toBe(false);
+    expect(planPath(grid, { x: -5, z: 0 }, { x: 5, z: 0 })!.points.length).toBeGreaterThan(2);
+
+    // Cells wider than the inflated wall: the wall must still cover a cell centre in every row it crosses.
+    const coarse = buildNavGrid([thinWall], { ...OPTIONS, cellSize: 2 });
+    expect(coarse.cellSize).toBe(2);
+    expect(isWalkable(coarse, 0.9, 0)).toBe(false);
+    expect(isWalkable(coarse, -0.9, 0)).toBe(false);
+    expect(hasLineOfSight(coarse, { x: -5, z: 0 }, { x: 5, z: 0 })).toBe(false);
+  });
+
+  it('bakes capsules along their rotated axis with the physics height convention', () => {
+    const capsule = (id: string, position: Vec3, rotation: Vec3, radius: number, height: number): LevelObject => levelObject(id, {
+      position,
+      rotation,
+      components: [{ id: `${id}-c`, type: 'collider', enabled: true, props: { shape: 'capsule', radius, height, offset: [0, 0, 0], isTrigger: false } }],
+    });
+    // A 4 m log lying along world X.
+    const log = buildNavGrid([capsule('log', [0, 0.4, 0], [0, 0, Math.PI / 2], 0.3, 4)], OPTIONS);
+    for (const x of [0.75, 1.25, 1.75]) expect(isWalkable(log, x, 0)).toBe(false);
+    expect(isWalkable(log, 3, 0)).toBe(true);
+    expect(planPath(log, { x: 1.3, z: -3 }, { x: 1.3, z: 3 })!.points.length).toBeGreaterThan(2);
+
+    // Upright, hanging with its bottom at 2.9 - (2 / 2) = 1.9 m: above agentHeight, so agents walk under.
+    expect(isWalkable(buildNavGrid([capsule('lamp', [0, 2.9, 0], [0, 0, 0], 0.3, 2)], OPTIONS), 0, 0)).toBe(true);
+    // A horizontal pipe spanning y 2.2..2.8 is walked under too.
+    expect(isWalkable(buildNavGrid([capsule('pipe', [0, 2.5, 0], [0, 0, Math.PI / 2], 0.3, 6)], OPTIONS), 0, 0)).toBe(true);
+    // Upright on the ground it still blocks.
+    expect(isWalkable(buildNavGrid([capsule('post', [0, 1, 0], [0, 0, 0], 0.3, 2)], OPTIONS), 0, 0)).toBe(false);
+  });
+
+  it('bakes mesh colliders and fixed auto-hull bodies from their shape bounds', () => {
+    // An imported model is normalised to 5 m; at scale 1 its bounds are about 5 m across.
+    const rockBounds = new THREE.Box3(new THREE.Vector3(-2.5, 0, -2.5), new THREE.Vector3(2.5, 5, 2.5));
+    const shapeBounds = (object: LevelObject) => (object.modelId === 'rock' ? rockBounds : null);
+    const meshRock = levelObject('mesh-rock', { modelId: 'rock', components: [boxCollider('mesh-rock', [1, 1, 1], { shape: 'mesh', offset: [0, 0, 0] })] });
+    const hullRock = levelObject('hull-rock', { modelId: 'rock', components: [{ id: 'rb', type: 'rigidBody', enabled: true, props: { type: 'fixed' } }] });
+    for (const rock of [meshRock, hullRock]) {
+      expect(isWalkable(buildNavGrid([rock], { ...OPTIONS, shapeBounds }), 2, 0)).toBe(false);
+      expect(isWalkable(buildNavGrid([rock], { ...OPTIONS, shapeBounds }), 3.5, 0)).toBe(true);
+      // Without bounds they keep the scale footprint circle.
+      expect(isWalkable(buildNavGrid([rock], OPTIONS), 2, 0)).toBe(true);
+      expect(isWalkable(buildNavGrid([rock], OPTIONS), 0, 0)).toBe(false);
+    }
+  });
+
+  it('tells a walled-off target from one the grid just does not cover', () => {
+    // Off the grid: unbaked open ground, so a chase keeps going past the edge.
+    const open = buildNavGrid([], OPTIONS);
+    const offGrid = planPath(open, { x: 8, z: 0 }, { x: 20, y: 0, z: 0 }, { partial: true })!;
+    expect(offGrid.reachable).toBe(false);
+    expect(isWalledOff(open, { x: 20, y: 0, z: 0 })).toBe(false);
+
+    // On a 10 x 10 m platform spanning y 0..1, which the single ground layer bakes as blocked.
+    const platform = levelObject('platform', {
+      position: [0, 0.5, 0],
+      scale: [10, 1, 10],
+      components: [boxCollider('platform', [1, 1, 1], { offset: [0, 0, 0] })],
+    });
+    const raised = buildNavGrid([platform], OPTIONS);
+    expect(raised.maxStepHeight).toBeCloseTo(0.35);
+    expect(planPath(raised, { x: 8, z: 0 }, { x: 0, y: 1, z: 0 }, { partial: true })!.reachable).toBe(false);
+    expect(isWalledOff(raised, { x: 0, y: 1, z: 0 })).toBe(false);
+    // Standing on the ground right against it is still walled off.
+    expect(isWalledOff(raised, { x: 0, y: 0, z: 0 })).toBe(true);
+
+    // Inside a closed pen at ground level: walled off, so a chase holds outside.
+    const pen = buildNavGrid([
+      wall('north', [5, 0, 8], [7, 2, 1]),
+      wall('south', [5, 0, 2], [7, 2, 1]),
+      wall('east', [8, 0, 5], [1, 2, 7]),
+      wall('west', [2, 0, 5], [1, 2, 7]),
+    ], OPTIONS);
+    expect(isWalledOff(pen, { x: 5, y: 0, z: 5 })).toBe(true);
+    expect(isWalledOff(pen, { x: 5, z: 5 })).toBe(true);
+  });
+});
+
+describe('nav grid re-baking', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const moved = (object: LevelObject, position: Vec3): LevelObject => ({ ...object, position });
+
+  it('keys the signature only on what the grid bakes', () => {
+    const group = levelObject('group', { modelId: '', type: 'player_start' });
+    const crate = wall('crate', [3, 0, 0], [1, 1, 1]);
+    const child = { ...wall('child', [0, 0, 0], [1, 1, 1]), parentId: 'group' };
+    const light = levelObject('light', { modelId: '', components: [{ id: 'l', type: 'pointLight', enabled: true, props: {} }] });
+    const mover = levelObject('mover', { components: [{ id: 'm', type: 'mover', enabled: true, props: {} }, boxCollider('mover', [1, 1, 1])] });
+    const spawn = levelObject('spawn', { modelId: '', type: 'spawn_point' });
+    const base = [group, crate, child, light, mover, spawn];
+    const signature = navGridSignature(base);
+
+    expect(navGridSignature([group, crate, child, moved(light, [5, 2, 5]), moved(mover, [9, 0, 9]), moved(spawn, [1, 0, 1])])).toBe(signature);
+    expect(navGridSignature([group, moved(crate, [4, 0, 0]), child, light, mover, spawn])).not.toBe(signature);
+    // The child's world transform comes from its parent.
+    expect(navGridSignature([moved(group, [0, 0, 2]), crate, child, light, mover, spawn])).not.toBe(signature);
+    // Giving an empty prop a model makes it solid.
+    expect(navGridSignature([group, crate, child, { ...light, modelId: 'lamp' }, mover, spawn])).not.toBe(signature);
+  });
+
+  it('re-bakes outside render, at most once per interval', () => {
+    vi.useFakeTimers();
+    const crate = wall('crate', [0, 0, 0], [1, 1, 1]);
+    const { result, rerender } = renderHook(
+      ({ objects }: { objects: LevelObject[] | null }) => useNavGrid(objects, OPTIONS),
+      { initialProps: { objects: [crate] as LevelObject[] | null } },
+    );
+    const first = result.current!;
+    expect(isWalkable(first, 0, 0)).toBe(false);
+
+    // Identity churn alone keeps the grid.
+    rerender({ objects: [{ ...crate }] });
+    expect(result.current).toBe(first);
+
+    // A baked object moved: agents keep the old grid until the re-bake lands.
+    rerender({ objects: [moved(crate, [4, 0, 0])] });
+    expect(result.current).toBe(first);
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    const second = result.current!;
+    expect(second).not.toBe(first);
+    expect(isWalkable(second, 0, 0)).toBe(true);
+    expect(isWalkable(second, 4, 0)).toBe(false);
+
+    // Moving it every frame re-bakes at most once per interval, with the latest objects.
+    for (let frame = 1; frame <= 10; frame++) {
+      rerender({ objects: [moved(crate, [4, 0, frame * 0.5])] });
+      act(() => {
+        vi.advanceTimersByTime(16);
+      });
+    }
+    expect(result.current).toBe(second);
+    act(() => {
+      vi.advanceTimersByTime(NAV_REBAKE_INTERVAL_MS);
+    });
+    expect(result.current).not.toBe(second);
+    expect(isWalkable(result.current!, 4, 5)).toBe(false);
+
+    rerender({ objects: null });
+    expect(result.current).toBeNull();
   });
 });

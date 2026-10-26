@@ -63,6 +63,18 @@ _FREEFORM_KEYS = {"settings", "overrides", "style", "payload", "data", "customDa
 # checked against the override fields instead of by their (arbitrary) key.
 _MATERIAL_OVERRIDE_KEYS = {"color", "roughness", "metalness", "emissive", "emissiveIntensity", "opacity", "mapTextureId", "normalTextureId"}
 _MATERIAL_TEXTURE_KEYS = ("mapTextureId", "normalTextureId")
+# Material names are also the keys of ``materialOverrides`` and
+# ``textureOverrides``, but every document crosses two protocol key blocklists:
+# the host's ``_FORBIDDEN_JSON_KEY`` (Auvra/host/validation.py) and the
+# editor's ``sanitizeJson`` (fbx-viewer (1)/utils/projectService.ts). A name
+# either one rejects could never be saved or loaded, so it is refused here too
+# (and a pack carrying one fails to import instead of opening unloadable).
+_PROTOCOL_RESERVED_KEY = re.compile(
+    r"^(?:path|filepath|filesystempath|sourcepath|assetpath|directorypath|absolutepath|localpath|base64|binary|bytes|blob"
+    r"|credential|credentials|secret|token|api[_-]?key|password|authorization|auth[_-]?header"
+    r"|file|animationfiles|object|url)$",
+    re.I,
+)
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 _COMMON = {
@@ -424,6 +436,10 @@ def _canonical_rotation(value: Any, index: int, *, domain: str = "objects") -> l
 
 def _assert_known_nested(value: Any, parent_key: str | None = None) -> None:
     if isinstance(value, dict):
+        if parent_key in ("materialOverrides", "textureOverrides"):
+            for name in value:
+                if isinstance(name, str) and _PROTOCOL_RESERVED_KEY.search(name):
+                    raise ValueError(f"{parent_key} cannot use the material name {name!r}: the project protocol reserves it")
         if parent_key == "materialOverrides":
             for name, override in value.items():
                 if not isinstance(override, dict): continue

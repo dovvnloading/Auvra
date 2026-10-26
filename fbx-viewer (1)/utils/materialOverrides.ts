@@ -127,9 +127,22 @@ export const materialOverrideTextureIds = (overrides: MaterialOverrides): Array<
   return result;
 };
 
-/** Mark a texture as bound for `textureId` in `slot` and give it that slot's colour space. */
-export const tagOverrideTexture = (texture: THREE.Texture, textureId: string, slot: MaterialTextureSlot): THREE.Texture => {
+/** userData flag on a model root whose UVs use the glTF top-left origin (native .glb/.gltf imports). */
+export const UV_ORIGIN_TOP_LEFT_KEY = 'uvOriginTopLeft';
+
+/** `flipY` for an image texture bound to `root`'s materials: false for glTF-convention UVs, true otherwise. */
+export const overrideTextureFlipY = (root: THREE.Object3D): boolean => root.userData?.[UV_ORIGIN_TOP_LEFT_KEY] !== true;
+
+/**
+ * Mark a texture as bound for `textureId` in `slot` and give it that slot's
+ * colour space, the model's UV orientation and repeat wrapping (as imported
+ * maps have). Call it before the texture is first uploaded.
+ */
+export const tagOverrideTexture = (texture: THREE.Texture, textureId: string, slot: MaterialTextureSlot, flipY = true): THREE.Texture => {
   texture.colorSpace = slot === 'map' ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+  texture.flipY = flipY;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
   texture.userData[TEXTURE_ID_KEY] = textureId;
   texture.userData[TEXTURE_SLOT_KEY] = slot;
   return texture;
@@ -153,6 +166,10 @@ interface MaterialBaseline {
   map: THREE.Texture | null;
   hasNormalMap: boolean;
   normalMap: THREE.Texture | null;
+  /** What the last apply left bound; a different value means code outside the override layer rebound it. */
+  appliedMap: THREE.Texture | null;
+  appliedNormalMap: THREE.Texture | null;
+  appliedTransparent: boolean;
 }
 
 /** Imported values, kept off `userData` so clones and JSON export stay untouched. */
@@ -182,6 +199,9 @@ const captureBaseline = (material: OverridableMaterial): MaterialBaseline => ({
   map: material.map ?? null,
   hasNormalMap: 'normalMap' in material,
   normalMap: material.normalMap ?? null,
+  appliedMap: material.map ?? null,
+  appliedNormalMap: material.normalMap ?? null,
+  appliedTransparent: material.transparent,
 });
 
 const baselineOf = (material: THREE.Material): MaterialBaseline => {
@@ -262,6 +282,13 @@ export const applyMaterialOverrides = (
     if (!override && !baselines.has(material)) continue;
     const before = programKey(material);
     const baseline = baselineOf(material);
+    // A map or transparency rebound since the last apply (retexture, texture
+    // preview) becomes the imported value, so restoring never puts back a
+    // replaced, disposed map.
+    const mapRebound = baseline.hasMap && (material.map ?? null) !== baseline.appliedMap;
+    if (mapRebound) baseline.map = material.map ?? null;
+    if (baseline.hasNormalMap && (material.normalMap ?? null) !== baseline.appliedNormalMap) baseline.normalMap = material.normalMap ?? null;
+    if (mapRebound || material.transparent !== baseline.appliedTransparent) baseline.transparent = material.transparent;
     restoreBaseline(material, baseline);
     if (override) {
       result.appliedMaterialNames.add(material.name);
@@ -285,6 +312,9 @@ export const applyMaterialOverrides = (
         if (normalMap) material.normalMap = normalMap;
       }
     }
+    baseline.appliedMap = material.map ?? null;
+    baseline.appliedNormalMap = material.normalMap ?? null;
+    baseline.appliedTransparent = material.transparent;
     if (programKey(material) !== before) material.needsUpdate = true;
   }
   return result;
@@ -382,13 +412,14 @@ export const hydrateMaterialOverrides = async (
   if (Object.keys(overrides).length === 0) return overrides;
   const load = options.loadTexture ?? ((url: string) => new THREE.TextureLoader().loadAsync(url));
   const loaded = new Map<string, THREE.Texture>();
+  const flipY = overrideTextureFlipY(root);
   let bound = new Set<string>();
   try {
     for (const { textureId, slot } of materialOverrideTextureIds(overrides)) {
       const url = options.resolveTextureUrl(textureId);
       if (!url) continue;
       const texture = await load(url);
-      loaded.set(overrideTextureCacheKey(textureId, slot), tagOverrideTexture(texture, textureId, slot));
+      loaded.set(overrideTextureCacheKey(textureId, slot), tagOverrideTexture(texture, textureId, slot, flipY));
       options.assertCurrent?.();
     }
     bound = applyMaterialOverrides(root, overrides, (textureId, slot) => loaded.get(overrideTextureCacheKey(textureId, slot))).boundTextureKeys;
