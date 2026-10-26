@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { PerformanceMonitor } from '@react-three/drei';
-import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing';
+import { EffectComposer, Bloom, Vignette, ToneMapping } from '@react-three/postprocessing';
+import { ToneMappingMode } from 'postprocessing';
 import { SkeletonUtils } from 'three-stdlib';
 import { AuvraCanvas } from '../renderer/AuvraCanvas';
 import { InstancedLevelLayer } from '../components/Environment/InstancedLevelLayer';
@@ -513,6 +514,8 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                     <EffectComposer enableNormalPass={false}>
                         <Bloom luminanceThreshold={1.2} mipmapBlur intensity={0.6} />
                         <Vignette eskil={false} offset={0.1} darkness={1.1} />
+                        {/* The composer bypasses the renderer's ACES tone mapping, so apply it as the final effect. */}
+                        <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
                     </EffectComposer>
                 )}
 
