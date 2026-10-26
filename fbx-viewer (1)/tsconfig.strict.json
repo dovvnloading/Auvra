@@ -19,6 +19,7 @@
     "utils/editorSession.ts"
   ],
   "exclude": [
+    "tests/frontend/hudSandbox.test.tsx",
     "tests/frontend/levelBlueprintRuntime.test.tsx",
     "tests/frontend/playRuntimeWorld.test.ts"
   ]

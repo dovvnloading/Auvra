@@ -60,6 +60,7 @@ const strictExcludes = strictConfig.exclude ?? [];
 // Exact test files only (never globs). They import modules that are not yet noUnused-clean and
 // are still type-checked by the base strict tsconfig.
 const STRICT_EXCLUDE_ALLOWLIST = new Set([
+  'tests/frontend/hudSandbox.test.tsx',
   'tests/frontend/levelBlueprintRuntime.test.tsx',
   'tests/frontend/playRuntimeWorld.test.ts',
 ]);
