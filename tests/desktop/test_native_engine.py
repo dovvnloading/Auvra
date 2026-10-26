@@ -17,17 +17,21 @@ from Auvra.host.validation import validate_message
 from Auvra.desktop.native_engine import (
     MAX_FRAME_BYTES,
     NativeEngine,
+    NativeEngineAuthenticationError,
     NativeEngineChildExitedError,
     NativeEngineConfigurationError,
     NativeEngineFrameTooLargeError,
     NativeEngineHost,
+    NativeEngineResponseError,
     NativeEngineRevisionConflictError,
+    NativeEngineStartupError,
     NativeEngineTimeoutError,
     NativeEngineClosedError,
     NativeEngineState,
     PROTOCOL_VERSION,
     _encode_frame,
     _read_frame,
+    startup_failure_code,
 )
 
 
@@ -537,6 +541,30 @@ class NativeEngineTests(unittest.TestCase):
         methods = [method for method, _params in engine.calls]
         self.assertIn("world.abortHydration", methods)
         self.assertNotIn("world.commitHydration", methods)
+
+    def test_startup_failures_carry_stable_cause_codes(self) -> None:
+        silent = Path(self.temp.name) / "silent_native.py"
+        silent.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+        timed_out = NativeEngine([sys.executable, "-u", str(silent)], startup_timeout=0.3,
+                                 shutdown_timeout=1, diagnostics=self.diagnostic_session)
+        with self.assertRaises(NativeEngineStartupError) as raised:
+            timed_out.start(editor_session="never-ready")
+        self.assertEqual(startup_failure_code(raised.exception), "startup_timeout")
+        missing = NativeEngine([str(Path(self.temp.name) / "missing-native.exe")],
+                               diagnostics=self.diagnostic_session)
+        with self.assertRaises(NativeEngineStartupError) as raised:
+            missing.start(editor_session="missing")
+        self.assertEqual(startup_failure_code(raised.exception), "process_start_failed")
+        for error, code in (
+            (NativeEngineChildExitedError(101), "child_exited"),
+            (NativeEngineTimeoutError("hello timed out"), "handshake_timeout"),
+            (NativeEngineAuthenticationError("session proof is invalid"), "authentication_failed"),
+            (NativeEngineFrameTooLargeError("frame"), "protocol_failed"),
+            (NativeEngineResponseError("internal_error", "rejected"), "handshake_rejected"),
+            (NativeEngineConfigurationError("bad session"), "configuration_failed"),
+            (NativeEngineClosedError("closed"), "engine_closed"),
+        ):
+            self.assertEqual(startup_failure_code(error), code)
 
     def test_dangling_source_symlink_is_rejected(self) -> None:
         source = Path(self.temp.name) / "native-source"

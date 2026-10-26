@@ -96,6 +96,10 @@ class NativeEngineClosedError(NativeEngineError):
 class NativeEngineStartupError(NativeEngineError):
     """The child did not reach its ready lifecycle state."""
 
+    def __init__(self, message: str, *, code: str = "startup_failed") -> None:
+        self.code = code
+        super().__init__(message)
+
 
 class NativeEngineTimeoutError(NativeEngineError):
     """A bounded native operation exceeded its timeout."""
@@ -138,6 +142,27 @@ class NativeEngineResponseError(NativeEngineError):
         self.code = code
         self.details = details
         super().__init__(message)
+
+
+def startup_failure_code(error: NativeEngineError) -> str:
+    """Name why native startup failed with a stable, path-free code."""
+    if isinstance(error, NativeEngineStartupError):
+        return error.code
+    if isinstance(error, NativeEngineChildExitedError):
+        return "child_exited"
+    if isinstance(error, NativeEngineTimeoutError):
+        return "handshake_timeout"
+    if isinstance(error, NativeEngineAuthenticationError):
+        return "authentication_failed"
+    if isinstance(error, NativeEngineProtocolError):
+        return "protocol_failed"
+    if isinstance(error, NativeEngineResponseError):
+        return "handshake_rejected"
+    if isinstance(error, NativeEngineConfigurationError):
+        return "configuration_failed"
+    if isinstance(error, NativeEngineClosedError):
+        return "engine_closed"
+    return "startup_failed"
 
 
 class NativeEngineState(str, Enum):
@@ -353,7 +378,8 @@ class NativeEngine:
                 self._runtime_diagnostics.emit("native", "native.lifecycle",
                                                attributes={"state": "failed", "code": "process_start_failed",
                                                            "errorType": type(exc).__name__})
-            raise NativeEngineStartupError("native process could not be started") from exc
+            raise NativeEngineStartupError("native process could not be started",
+                                           code="process_start_failed") from exc
         assert self._process.stderr is not None
         assert self._process.stdout is not None
         threading.Thread(target=self._read_stderr,
@@ -368,7 +394,8 @@ class NativeEngine:
                                                attributes={"state": "failed", "code": "startup_timeout",
                                                            "timeoutMs": round(self.startup_timeout * 1000, 3)})
             self.close(timeout=min(self.shutdown_timeout, 1.0))
-            raise NativeEngineStartupError("native process did not report ready before timeout")
+            raise NativeEngineStartupError("native process did not report ready before timeout",
+                                           code="startup_timeout")
         if self._process.poll() is not None:
             self._state = NativeEngineState.FAILED
             if self._runtime_diagnostics is not None:
@@ -1424,8 +1451,11 @@ class NativeEngineHost:
 class NativeEngineUnavailableHost:
     """Declared web fallback when the development native binary is unavailable."""
 
-    def __init__(self, reason: str = "Native engine executable is unavailable") -> None:
+    def __init__(self, reason: str = "Native engine executable is unavailable", *,
+                 code: str | None = None) -> None:
         self.reason = reason[:256]
+        # Stable cause (``startup_failure_code``) when a launched child failed.
+        self.code = code
 
     def start(self, *, editor_session: str = "editor") -> None:
         return None
