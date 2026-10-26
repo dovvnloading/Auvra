@@ -127,15 +127,18 @@ survives editor reloads and native-process recovery, and is extracted into
 immutable render snapshots. Source assets are cooked into a rebuildable local
 cache without becoming a second project authority.
 
-The native runtime exposes a capability-gated `wgpu` baseline for its separate
-viewport and reference-render paths: metallic-roughness PBR, animation,
-culling and deterministic LOD, batching, directional/point/spot lights,
-shadows, image-based lighting, integer picking, editor gizmos, HDR/ACES output,
-anti-aliasing, and a bounded post-processing chain. The runtime reports each
-feature and its fallback reason per adapter. This is a native baseline, not a
-claim that the WebGL2 compatibility editor or every authored project asset
-exercises every feature; WebGL2 remains the default editor path. Build the
-pinned release binary before launching Auvra from source:
+The native runtime's `wgpu` renderer is currently a pass-structure scaffold
+for its separate viewport and reference-render paths, not a production
+renderer. Real today: render extraction (culling, deterministic LOD selection,
+batching, pick-id assignment), an HDR intermediate target, multisample
+anti-aliasing with resolve, tone mapping, and a bounded post-processing pass.
+Placeholder today: scene geometry is one projected triangle per entity with no
+camera, cooked meshes and textures are not loaded, shading approximates
+lighting from light counts rather than evaluating PBR, and shadows, image-based
+lighting, animation, picking readback, and gizmos are stand-ins. Adapter
+validation is all-or-nothing rather than per-feature. WebGL2 remains the
+default editor and play path. Build the pinned release binary before launching
+Auvra from source:
 
 ```powershell
 cd native
