@@ -885,6 +885,9 @@ class NativeEngineHost:
         self._adapter: str | None = None
         self._device_type: str | None = None
         self._fallback_reason: str | None = None
+        # Set when the native world stopped mirroring the durable project; it
+        # degrades only the native view and clears on the next hydration.
+        self._stale_reason: str | None = None
         self._metrics: dict[str, Any] | None = None
         self._native_fields: dict[str, Any] = {}
         self._recovery_count = 0
@@ -1007,7 +1010,23 @@ class NativeEngineHost:
                 return None
             raise
         self._ingest_native_result(result)
+        if self._stale_reason is not None:
+            self._stale_reason = None
+            self._publish_status()
         return result
+
+    def mark_stale(self, reason: str) -> None:
+        """Degrade the native view after the project could not be mirrored.
+
+        The durable project stays authoritative and open.  The retained
+        payload re-synchronizes on the next hydration or native restart.
+        """
+        self._stale_reason = reason[:256]
+        self._publish_status()
+
+    def _publish_status(self) -> None:
+        self._event("engine.status", {key: value for key, value in self._canonical("engine.status").items()
+                                       if key in {"status", "worldRevision", "viewport", "backend", "adapter", "deviceType", "fallbackReason"}})
 
     @staticmethod
     def _hydration_pages(documents: Sequence[Mapping[str, Any]], *, limit: int = 48 * 1024) -> list[list[Mapping[str, Any]]]:
@@ -1190,6 +1209,9 @@ class NativeEngineHost:
                         "replayHash", "extractionHash", "referenceScene",
                         "referenceVersion"):
                 self._native_fields.pop(key, None)
+            if self._stale_reason is not None:
+                self._stale_reason = None
+                self._publish_status()
 
     @staticmethod
     def _state_name(state: NativeEngineState) -> str:
@@ -1203,10 +1225,13 @@ class NativeEngineHost:
         }[state]
 
     def _canonical(self, kind: str, *, values: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        status = self._state_name(self.engine.state)
+        if self._stale_reason is not None and status == "ready":
+            status = "degraded"
         result: dict[str, Any] = {
             "kind": kind,
             "protocol": PROTOCOL_VERSION,
-            "status": self._state_name(self.engine.state),
+            "status": status,
             "worldRevision": self._world_revision,
             "viewport": self._viewport,
             "dockSupport": self._dock_support,
@@ -1226,7 +1251,9 @@ class NativeEngineHost:
             result["adapter"] = self._adapter
         if self._device_type is not None:
             result["deviceType"] = self._device_type
-        if self._fallback_reason is not None:
+        if self._stale_reason is not None:
+            result["fallbackReason"] = self._stale_reason
+        elif self._fallback_reason is not None:
             result["fallbackReason"] = self._fallback_reason
         if self._metrics is not None:
             result["metrics"] = dict(self._metrics)

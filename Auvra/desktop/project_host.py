@@ -36,6 +36,11 @@ from .dialogs import DialogSelection, WinFormsProjectDialogs
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SNAPSHOT_SOFT_LIMIT = 192 * 1024
+# A snapshot page also carries the project status envelope (recent projects,
+# recovery points).  Writes are capped below the page limit by this reserve so
+# every committed document fits a single-document page and can be reopened.
+_SNAPSHOT_ENVELOPE_RESERVE = 32 * 1024
+DOCUMENT_LOAD_LIMIT = _SNAPSHOT_SOFT_LIMIT - _SNAPSHOT_ENVELOPE_RESERVE
 _AUTOSAVE_RETRY_DELAY = 5.0
 
 
@@ -52,6 +57,7 @@ class NativeProjectHost:
         service: ProjectService | None = None,
         preview_store: Any = None,
         now: Callable[[], float] = time.time,
+        native_authoritative: bool = False,
     ) -> None:
         state_root = Path(state_root).expanduser().absolute()
         state_root.mkdir(parents=True, exist_ok=True)
@@ -67,6 +73,10 @@ class NativeProjectHost:
         self._recovery_by_id: dict[str, tuple[str, str, str]] = {}
         self._recovery_id_by_key: dict[tuple[str, str, str], str] = {}
         self._native_engine: Any = None
+        # WebGL2 is the authoritative renderer today, so a native hydration
+        # failure degrades only the native view.  Once native rendering is
+        # authoritative, the same failure must fail the project closed.
+        self._native_authoritative = native_authoritative
         self._native_staged_assets: set[str] = set()
         self._pending_assets: dict[str, set[str]] = defaultdict(set)
         self._operation_lock = threading.RLock()
@@ -345,6 +355,11 @@ class NativeProjectHost:
             if progress is not None:
                 progress(1.0)
         except Exception as exc:
+            if not self._native_authoritative:
+                # The durable commit and the WebGL2 view remain correct; only
+                # the native mirror is stale.  Keep the project open.
+                self._degrade_native_view(exc)
+                return
             # A durable repository commit is still authoritative, but the
             # native world is no longer a trustworthy view of it.  Invalidate
             # the whole in-memory session before surfacing the existing,
@@ -357,6 +372,22 @@ class NativeProjectHost:
                 "Native project hydration failed; recovery is required",
                 {"projectId": active.project_id, "revision": active.revision},
             ) from exc
+
+    def _degrade_native_view(self, error: Exception) -> None:
+        """Mark the non-authoritative native view stale and record why."""
+        mark_stale = getattr(self._native_engine, "mark_stale", None)
+        if callable(mark_stale):
+            try:
+                mark_stale("Native project hydration failed; the native view is stale")
+            except Exception:
+                pass
+        diagnostics = active_diagnostics()
+        if diagnostics is not None:
+            diagnostics.emit(
+                "native", "native.lifecycle",
+                attributes={"state": "stale", "code": "hydration_failed",
+                            "errorType": type(error).__name__},
+            )
 
     def _invalidate_native_session(self, active: Any) -> None:
         """Close native and repository state after a failed native boundary."""
@@ -601,37 +632,75 @@ class NativeProjectHost:
         self._queue("project.closed", result)
         return result
 
+    @staticmethod
+    def _snapshot_cursor(cursor: Any) -> tuple[int, int]:
+        """Parse ``offset`` or ``offset.domainIndex`` (a page split by domain)."""
+        if cursor in {None, ""}:
+            return 0, 0
+        if isinstance(cursor, str) and cursor.isascii():
+            offset, split, domain = cursor.partition(".")
+            if offset.isdigit() and (not split or domain.isdigit()):
+                return int(offset), int(domain) if split else 0
+        raise HostOperationError("invalid_request", "Snapshot cursor is invalid")
+
     def _snapshot(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._require(payload)
-        cursor = payload.get("cursor", "0")
-        if cursor in {None, ""}:
-            offset = 0
-        elif isinstance(cursor, str) and cursor.isascii() and cursor.isdigit():
-            offset = int(cursor)
-        else:
-            raise HostOperationError("invalid_request", "Snapshot cursor is invalid")
+        offset, first = self._snapshot_cursor(payload.get("cursor", "0"))
         page_size = min(int(payload.get("pageSize", 100)), 100)
         domains = [payload["domain"]] if payload.get("domain") else list(DOMAIN_NAMES)
+        if first >= len(domains):
+            raise HostOperationError("invalid_request", "Snapshot cursor is invalid")
+        if first:
+            # Continue a one-document page that was split across domains.
+            page_size = 1
+        envelope = self._status_value(self.service.active.status)
+
+        def page(names: Sequence[str], snapshot: Any, cursor: str, more: bool) -> dict[str, Any] | None:
+            result = {**envelope, "domains": {name: snapshot.domains[name] for name in names},
+                      "cursor": cursor, "hasMore": more}
+            size = len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            return result if size <= _SNAPSHOT_SOFT_LIMIT else None
+
         while True:
             snapshot = self.service.get_snapshot(domains, offset=offset, page_size=page_size)
             more = any(bool(value.get("hasMore")) for value in snapshot.domains.values())
-            result = self._status_value(
-                self.service.active.status,
-                domains=snapshot.domains,
-                cursor=str(offset + page_size) if more else "",
-                hasMore=more,
-            )
-            size = len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
-            if size <= _SNAPSHOT_SOFT_LIMIT:
+            result = page(domains[first:], snapshot, str(offset + page_size) if more else "", more)
+            if result is not None:
                 return result
-            if page_size == 1:
+            if page_size > 1:
+                page_size = max(1, page_size // 2)
+                continue
+            # One document per domain still exceeds the page: serve the longest
+            # fitting run of domains and resume the same offset after it.
+            fitting: dict[str, Any] | None = None
+            for end in range(first + 1, len(domains)):
+                candidate = page(domains[first:end], snapshot, f"{offset}.{end}", True)
+                if candidate is None:
+                    break
+                fitting = candidate
+            if fitting is None:
                 raise HostOperationError("invalid_project", "A project document exceeds the transport limit")
-            page_size = max(1, page_size // 2)
+            return fitting
+
+    @staticmethod
+    def _require_loadable_documents(changes: Sequence[dict[str, Any]]) -> None:
+        """Reject a document that could be committed but never paged back."""
+        for change in changes:
+            document = change.get("document")
+            if change.get("operation") == "remove" or document is None:
+                continue
+            size = len(json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            if size > DOCUMENT_LOAD_LIMIT:
+                raise HostOperationError(
+                    "invalid_request",
+                    f"Project document exceeds the {DOCUMENT_LOAD_LIMIT // 1024} KiB load limit",
+                )
 
     def _apply(self, payload: dict[str, Any]) -> dict[str, Any]:
         active = self.service.active
         try:
             active = self._require(payload, expected=True)
+            self._require_loadable_documents(payload["changes"])
             changed: dict[str, list[dict[str, Any]]] = {}
             grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
             for change in payload["changes"]:

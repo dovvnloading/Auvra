@@ -542,6 +542,35 @@ class NativeEngineTests(unittest.TestCase):
         self.assertIn("world.abortHydration", methods)
         self.assertNotIn("world.commitHydration", methods)
 
+    def test_stale_native_view_degrades_status_until_the_next_hydration(self) -> None:
+        engine = _HydrationRecorder()
+        host = NativeEngineHost(engine)
+        reason = "Native project hydration failed; the native view is stale"
+        host.mark_stale(reason)
+        stale = host._canonical("engine.status")
+        self.assertEqual(stale["status"], "degraded")
+        self.assertEqual(stale["fallbackReason"], reason)
+        validate_message({
+            "protocol": "auvra.host/1", "type": "response", "id": "engine-status",
+            "session": "session-1", "revision": 0, "ok": True, "result": stale,
+        })
+        name, payload = host.drain_events()[-1]
+        self.assertEqual((name, payload["status"], payload["fallbackReason"]), ("engine.status", "degraded", reason))
+        validate_message({
+            "protocol": "auvra.host/1", "type": "event", "event": name,
+            "session": "session-1", "revision": 1, "payload": payload,
+        })
+
+        host.hydrate_project("project-stale", 2, {"scenes": {"schemaVersion": 1, "documents": [{"id": "scene"}]}})
+        recovered = host._canonical("engine.status")
+        self.assertEqual(recovered["status"], "ready")
+        self.assertNotIn("fallbackReason", recovered)
+        self.assertEqual(host.drain_events()[-1][1]["status"], "ready")
+
+        host.mark_stale(reason)
+        host.close_project("project-stale")
+        self.assertEqual(host._canonical("engine.status")["status"], "ready")
+
     def test_startup_failures_carry_stable_cause_codes(self) -> None:
         silent = Path(self.temp.name) / "silent_native.py"
         silent.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
