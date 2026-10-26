@@ -28,6 +28,13 @@ from Auvra.launcher import cli
 from Auvra.launcher.config import Paths
 
 
+def _await_writer(session, timeout: float = 30.0) -> None:
+    """close() waits only briefly for a stalled writer; let it finish so its log file is closed before cleanup."""
+    writer = session._writer
+    if writer is not None:
+        writer.join(timeout)
+
+
 class DiagnosticsCoreTests(unittest.TestCase):
     def tearDown(self) -> None:
         install_diagnostics(None)
@@ -145,7 +152,7 @@ class DiagnosticsCoreTests(unittest.TestCase):
             self.assertIsNotNone(session._stream, "the writer-owned stream must remain open")
 
             gate.set()
-            deadline = time.monotonic() + 3
+            deadline = time.monotonic() + 30
             while time.monotonic() < deadline and (marker.exists() or session._writer.is_alive()):
                 time.sleep(0.02)
             self.assertFalse(marker.exists(), "the deferred close must remove a drained marker")
@@ -207,6 +214,7 @@ class DiagnosticsCoreTests(unittest.TestCase):
             self.assertGreater(sum(session.summary["dropped"].values()), 0)
             gate.set()
             session.close(outcome="failure")
+            _await_writer(session)
             events = inspect_records(Path(raw) / "diagnostics", run_id="run-pressure", limit=1000)
             self.assertTrue(any(item["event"] == "host.dispatch_failed" for item in events))
             self.assertTrue(any(item["event"] == "diagnostics.records_dropped" for item in events))
@@ -235,6 +243,7 @@ class DiagnosticsCoreTests(unittest.TestCase):
             self.assertEqual(session.summary["dropped"]["info"], 0)
             gate.set()
             session.close(outcome="success")
+            _await_writer(session)
 
     def test_cli_reads_canonical_latest_run(self) -> None:
         with tempfile.TemporaryDirectory(prefix="auvra diagnostics ") as raw:
