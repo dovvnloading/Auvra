@@ -1,33 +1,75 @@
 
-import { useEffect, useRef, useMemo } from 'react';
+import { useEffect, useRef } from 'react';
+import type { InputState } from '../../../runtime/input';
+import { useRuntimeServicesAvailable, useRuntimeServices } from '../../../runtime/RuntimeServicesContext';
 
 export interface PlayerInputState {
     moveY: number; // Forward/Back (-1 to 1)
     moveX: number; // Left/Right (-1 to 1)
     isSprinting: boolean;
     isJumping: boolean;
+    /** True only on the frame Jump goes down, so holding it does not jump again on landing. */
+    jumpPressed: boolean;
     isFiring: boolean;
     isAiming: boolean;
 }
+
+type HeldInput = Omit<PlayerInputState, 'jumpPressed'>;
 
 const isEditableTarget = (target: EventTarget | null): boolean => {
     if (!(target instanceof HTMLElement)) return false;
     return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
 };
 
+/** Reads the runtime's named actions, so rebinding and gamepads apply. Stick input stays analog. */
+export const readActionInput = (input: InputState): HeldInput => ({
+    moveY: input.axis('MoveBack', 'MoveForward'),
+    moveX: input.axis('MoveLeft', 'MoveRight'),
+    isSprinting: input.isDown('Sprint'),
+    isJumping: input.isDown('Jump'),
+    isFiring: input.isDown('Fire'),
+    isAiming: input.isDown('Aim'),
+});
+
+/** Fixed keyboard layout used where no game runtime supplies input actions (the Sandbox tab). */
+const readKeyboardInput = (keys: Set<string>, mouseButtons: Set<number>): HeldInput => {
+    const w = keys.has('KeyW') ? 1 : 0;
+    const s = keys.has('KeyS') ? 1 : 0;
+    const a = keys.has('KeyA') ? 1 : 0;
+    const d = keys.has('KeyD') ? 1 : 0;
+
+    return {
+        moveY: w - s,
+        moveX: d - a,
+        isSprinting: keys.has('ShiftLeft'),
+        isJumping: keys.has('Space'),
+        isAiming: keys.has('KeyF'),
+        isFiring: mouseButtons.has(0) // Left Mouse Button
+    };
+};
+
+/**
+ * Player input for one frame. Inside a game runtime it reads the runtime's input actions
+ * (MoveForward/Back/Left/Right, Sprint, Jump, Fire, Aim); elsewhere it listens to the keyboard itself.
+ */
 export const usePlayerControls = (enabled: boolean) => {
+    const services = useRuntimeServices();
+    const actions = useRuntimeServicesAvailable() ? services.input : null;
+    const listenToKeyboard = enabled && !actions;
+
     const keys = useRef(new Set<string>());
     const mouseButtons = useRef(new Set<number>());
+    const jumpHeld = useRef(false);
 
     useEffect(() => {
-        if (!enabled) return;
+        if (!listenToKeyboard) return;
 
         const onKeyDown = (e: KeyboardEvent) => {
             if (e.defaultPrevented || isEditableTarget(e.target)) return;
             keys.current.add(e.code);
         };
         const onKeyUp = (e: KeyboardEvent) => keys.current.delete(e.code);
-        
+
         const onMouseDown = (e: MouseEvent) => {
             if (document.pointerLockElement) {
                 mouseButtons.current.add(e.button);
@@ -48,7 +90,7 @@ export const usePlayerControls = (enabled: boolean) => {
         window.addEventListener('mouseup', onMouseUp);
         window.addEventListener('blur', clearInput);
         document.addEventListener('visibilitychange', onVisibilityChange);
-        
+
         return () => {
             window.removeEventListener('keydown', onKeyDown);
             window.removeEventListener('keyup', onKeyUp);
@@ -58,26 +100,14 @@ export const usePlayerControls = (enabled: boolean) => {
             document.removeEventListener('visibilitychange', onVisibilityChange);
             clearInput();
         };
-    }, [enabled]);
+    }, [listenToKeyboard]);
 
-    // Returns a function to get the current state frame-by-frame
+    // Call once per frame: the Jump edge is tracked here, independent of when the runtime advances its own edges.
     const getInputState = (): PlayerInputState => {
-        const k = keys.current;
-        const m = mouseButtons.current;
-
-        const w = k.has('KeyW') ? 1 : 0;
-        const s = k.has('KeyS') ? 1 : 0;
-        const a = k.has('KeyA') ? 1 : 0;
-        const d = k.has('KeyD') ? 1 : 0;
-
-        return {
-            moveY: w - s,
-            moveX: d - a,
-            isSprinting: k.has('ShiftLeft'),
-            isJumping: k.has('Space'),
-            isAiming: k.has('KeyF'), // New Aim Binding
-            isFiring: m.has(0)       // Left Mouse Button
-        };
+        const held = actions ? readActionInput(actions) : readKeyboardInput(keys.current, mouseButtons.current);
+        const jumpPressed = held.isJumping && !jumpHeld.current;
+        jumpHeld.current = held.isJumping;
+        return { ...held, jumpPressed };
     };
 
     return { getInputState };

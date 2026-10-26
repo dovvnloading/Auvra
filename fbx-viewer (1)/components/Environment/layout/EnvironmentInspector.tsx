@@ -1,11 +1,12 @@
 
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { Box, Move, RotateCw, Scaling, Trash2, X, RotateCcw, Skull, Timer, Users, UserPlus, Hash, Music, Volume2, Radio, Ear, Repeat, VolumeX, Mountain, Layers, Plus, CircleDashed, Hammer, ArrowUp, ArrowDown, Minus, Activity, Wind, AlertTriangle, Grid, Sun, CloudFog, PersonStanding, Puzzle, Package, GitBranch, Boxes } from 'lucide-react';
+import { Box, Move, RotateCw, Scaling, Trash2, X, RotateCcw, Skull, Timer, Users, UserPlus, Hash, Music, Volume2, Radio, Ear, Repeat, VolumeX, Mountain, Layers, Plus, CircleDashed, Hammer, ArrowUp, ArrowDown, Minus, Activity, Wind, AlertTriangle, Grid, Sun, CloudFog, PersonStanding, Puzzle, Package, GitBranch, Boxes, Brush } from 'lucide-react';
 import { EditorState } from '../types';
 import { LevelComponent, LevelObject } from '../../../types';
 import { EnvironmentBrushPanel } from '../EnvironmentBrushPanel';
 import { EnvironmentMaskTool } from '../EnvironmentMaskTool';
+import { TerrainLayerPanel } from '../Terrain/TerrainLayerPanel';
 import { ScrubbableInput } from '../../UI/Properties/ScrubbableInput';
 import { useScene } from '../../../context/SceneContext';
 import { WaveformEditor } from '../assets/WaveformEditor';
@@ -285,6 +286,12 @@ const TerrainInspector: React.FC<{
                                             >
                                                 <Wind size={16} /> <span className="text-[10px] font-bold uppercase">Smooth</span>
                                             </button>
+                                            <button
+                                                onClick={() => actions.setSculptSettings({ ...sculptSettings, tool: 'paint' })}
+                                                className={`col-span-2 p-2 rounded border flex flex-col items-center gap-1 transition-all ${sculptSettings.tool === 'paint' ? 'bg-purple-600/20 border-purple-500 text-purple-400' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}
+                                            >
+                                                <Brush size={16} /> <span className="text-[10px] font-bold uppercase">Paint</span>
+                                            </button>
                                         </div>
 
                                         {sculptSettings.tool === 'flatten' && (
@@ -296,6 +303,12 @@ const TerrainInspector: React.FC<{
                                             </div>
                                         )}
                                     </div>
+
+                                    <TerrainLayerPanel
+                                        terrain={existingTerrain}
+                                        sculptSettings={sculptSettings}
+                                        onSculptSettingsChange={actions.setSculptSettings}
+                                    />
                                 </>
                             ) : (
                                 <div className="text-center py-10 text-gray-500 text-xs">

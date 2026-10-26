@@ -38,8 +38,12 @@ class ProjectService:
         self._record()
         return candidate.status
 
-    def create(self, path: str | Path, name: str | None = None) -> ProjectStatus:
-        return self._activate(ProjectRepository.create(path, name))
+    def create(self, path: str | Path, name: str | None = None, template: str | None = None) -> ProjectStatus:
+        repository = ProjectRepository.create(path, name)
+        if template not in (None, "blank"):
+            from .templates import apply_template
+            apply_template(repository, template, project_name=repository.name)
+        return self._activate(repository)
     def open(self, path: str | Path) -> ProjectStatus:
         candidate_path = Path(path).absolute()
         if self.active is not None and self.active.path.absolute() == candidate_path:

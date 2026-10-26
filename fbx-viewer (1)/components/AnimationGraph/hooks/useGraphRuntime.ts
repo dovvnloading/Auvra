@@ -62,7 +62,13 @@ export const useGraphRuntime = (
     const { mixer, actionsMap } = useAnimationMixer(modelObject, allClips);
 
     // -- Logic: Handles State Machine Transitions
-    const { activeStateRef, previousStateRef } = useGraphStateMachine(graph, variablesRef, onActiveStateChange);
+    const getNormalizedTime = useCallback((stateId: string): number | null => {
+        const state = graph.states.find(item => item.id === stateId);
+        const action = state?.stateType === 'Single' && state.clipName ? actionsMap[state.clipName] : undefined;
+        const duration = action?.getClip().duration ?? 0;
+        return action && duration > 0 ? Math.min(1, action.time / duration) : null;
+    }, [graph.states, actionsMap]);
+    const { activeStateRef, previousStateRef, blendDurationRef } = useGraphStateMachine(graph, variablesRef, onActiveStateChange, getNormalizedTime);
 
     // -- Inputs: Handles Keyboard -> Variable Mapping
     useInputHandler(graph, enableInputs, setVariable);
@@ -71,7 +77,7 @@ export const useGraphRuntime = (
     useGraphLocomotion(modelObject, graph, variablesRef, driveLocomotion);
 
     // -- Animation: Handles Weight Blending & Playback
-    useGraphAnimator(mixer, actionsMap, graph, activeStateRef, previousStateRef, variablesRef);
+    useGraphAnimator(mixer, actionsMap, graph, activeStateRef, previousStateRef, variablesRef, blendDurationRef);
 
     return { setVariable, getVariable, getVariables };
 };

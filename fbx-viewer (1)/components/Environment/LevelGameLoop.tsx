@@ -4,7 +4,12 @@ import { useScene } from '../../context/SceneContext';
 import { useNotification } from '../../context/NotificationContext';
 import { useNativeProjectDocument } from '../../utils/useNativeProjectDocument';
 import { LevelRuntime } from '../../runtime/LevelRuntime';
+import { GameContentProvider, useGameContent } from '../../runtime/GameContentContext';
+import { projectService } from '../../utils/projectService';
+import { frontendDiagnostics } from '../../diagnostics/runtime';
+import type { PrefabData } from '../../types';
 import { gameState } from '../../runtime/gameState';
+import { createDefaultLocalizationDocument, localization, LOCALIZATION_DOCUMENT_ID, type LocalizationDocument } from '../../runtime/localization';
 import {
     DEFAULT_GAME_SETTINGS,
     GAME_SETTINGS_DOCUMENT_ID,
@@ -44,6 +49,36 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
         'metadata', GAME_SETTINGS_DOCUMENT_ID, createDefaultGameSettingsDocument,
     );
     const settings = useMemo(() => normalizeGameSettings(settingsDocument.settings), [settingsDocument]);
+    const { document: localizationDocument } = useNativeProjectDocument<LocalizationDocument>(
+        'metadata', LOCALIZATION_DOCUMENT_ID, createDefaultLocalizationDocument,
+    );
+    useEffect(() => {
+        localization.load(localizationDocument.settings);
+    }, [localizationDocument]);
+
+    // Spawn Prefab needs the project's prefabs; they cannot change while a session runs.
+    const content = useGameContent();
+    const [prefabs, setPrefabs] = useState<PrefabData[] | null>(null);
+    useEffect(() => {
+        let current = true;
+        // Read-only snapshot: play never writes to the project.
+        const read = projectService.getStatus().projectId
+            ? projectService.getSnapshotAll('prefabs').then(snapshot => {
+                const raw = snapshot?.domains?.prefabs as unknown;
+                const records = Array.isArray(raw) ? raw : (raw as { documents?: unknown[] } | undefined)?.documents ?? [];
+                return records.filter((doc): doc is PrefabData => typeof (doc as PrefabData | null)?.id === 'string');
+            })
+            : Promise.resolve<PrefabData[]>([]);
+        read.then(
+            list => { if (current) setPrefabs(list); },
+            error => {
+                frontendDiagnostics.failure('play_prefabs_load_failed', error);
+                if (current) setPrefabs([]);
+            },
+        );
+        return () => { current = false; };
+    }, []);
+    const playContent = useMemo(() => ({ ...content, prefabs: prefabs ?? [] }), [content, prefabs]);
     const [sessionKey, setSessionKey] = useState(0);
 
     const level = useMemo<RuntimeLevel>(() => ({
@@ -85,18 +120,20 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
     // Each play-in-editor run starts from a clean game state.
     useEffect(() => () => gameState.reset(), []);
 
-    if (!settingsHydrated) {
+    if (!settingsHydrated || prefabs === null) {
         return <div className="flex items-center justify-center h-full w-full bg-black text-xs text-gray-500">Starting play session...</div>;
     }
 
     return (
-        <LevelRuntime
-            level={level}
-            settings={settings}
-            playerStart={playerStart}
-            paused={false}
-            host={host}
-            sessionKey={sessionKey}
-        />
+        <GameContentProvider value={playContent}>
+            <LevelRuntime
+                level={level}
+                settings={settings}
+                playerStart={playerStart}
+                paused={false}
+                host={host}
+                sessionKey={sessionKey}
+            />
+        </GameContentProvider>
     );
 };

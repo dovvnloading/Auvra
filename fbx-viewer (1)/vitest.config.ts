@@ -9,5 +9,7 @@ export default defineConfig({
     include: ['tests/frontend/**/*.test.{ts,tsx}'],
     restoreMocks: true,
     clearMocks: true,
+    // @react-three/rapier has no exports map; inlining it keeps tests on the ESM build and a single copy of three.
+    server: { deps: { inline: ['@react-three/rapier'] } },
   },
 });

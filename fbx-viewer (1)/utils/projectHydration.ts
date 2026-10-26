@@ -1,10 +1,15 @@
 import * as THREE from 'three';
-import type { AttachmentData, AudioData, Blueprint, LevelData, LevelObject, LoadedModelData, SocketData, TextureData } from '../types';
+import type { AttachmentData, AudioData, Blueprint, LevelData, LevelObject, LoadedModelData, PrefabData, SocketData, TerrainData, TextureData } from '../types';
 import { importPhaseLabel, loadFBXFile } from './modelLoader';
+import { resolveTerrainHeightfield } from './terrainHeightfield';
+import { isTerrainHeightfieldPending } from './terrainHeightfieldCodec';
+import { resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplat';
+import { isTerrainSplatPending } from '../components/Environment/Terrain/terrainSplatCodec';
 import { applyModelImportSettings, stripGeometry } from './processing/ModelTransforms';
 import { generateThumbnail } from './thumbnailGenerator';
 import { disposeModel, disposeObject } from './processing/ModelLifecycle';
 import { prepareAnimationClips } from './animationBinding';
+import { hydrateMaterialOverrides } from './materialOverrides';
 import {
   assetDiagnosticAttributes,
   diagnosticErrorType,
@@ -40,7 +45,34 @@ export interface LoadGameContentOptions {
   diagnostics?: DiagnosticContext;
   /** Returns false once the caller no longer wants this result, e.g. the project was replaced. */
   isCurrent?: () => boolean;
+  /**
+   * Resolve terrain heightfield and splat map references of 'objects'
+   * documents into terrainData.heights / terrainData.splat. The standalone
+   * player needs this; the editor resolves them after a level opens
+   * (useLevelManager) and leaves it off.
+   */
+  resolveTerrains?: boolean;
 }
+
+interface TerrainAssetReference {
+  assetId: string;
+  columns: number;
+  rows: number;
+}
+
+/** One read per asset and grid in a load; every later terrain gets its own copy. */
+const resolveSharedTerrainAsset = async (
+  cache: Map<string, Promise<number[]>>,
+  reference: TerrainAssetReference,
+  resolve: () => Promise<number[]>,
+): Promise<number[]> => {
+  const key = `${reference.assetId}:${reference.columns}x${reference.rows}`;
+  const existing = cache.get(key);
+  if (existing) return (await existing).slice();
+  const pending = resolve();
+  cache.set(key, pending);
+  return pending;
+};
 
 const throwIfAborted = (signal?: AbortSignal): void => {
   if (signal?.aborted) throw new DOMException('Project loading was cancelled.', 'AbortError');
@@ -56,7 +88,7 @@ export async function loadGameContent(
   domains: Record<string, any[]>,
   options: LoadGameContentOptions,
 ): Promise<LoadedGameContent> {
-  const { resolveAssetUrl, generateThumbnails, onProgress, signal, diagnostics, isCurrent } = options;
+  const { resolveAssetUrl, generateThumbnails, onProgress, signal, diagnostics, isCurrent, resolveTerrains = false } = options;
   const assertCurrent = () => {
     throwIfAborted(signal);
     if (isCurrent && !isCurrent()) throw new DOMException('Project loading was superseded.', 'AbortError');
@@ -86,10 +118,28 @@ export async function loadGameContent(
     ownedUrls.push(url);
     return url;
   };
+  const loadProjectAssetBytes = async (assetId: string, trace?: DiagnosticContext): Promise<ArrayBuffer> => {
+    throwIfAborted(signal);
+    const url = await resolveAssetUrl(assetId, trace);
+    assertCurrent();
+    const response = await fetch(url, { method: 'GET', signal });
+    if (!response.ok) throw new Error(`Asset download failed (${response.status})`);
+    const bytes = await response.arrayBuffer();
+    assertCurrent();
+    return bytes;
+  };
 
+  const objectDocuments = documents('objects') as LevelObject[];
+  let terrainWork = 0;
+  if (resolveTerrains) {
+    for (const object of objectDocuments) {
+      if (isTerrainHeightfieldPending(object?.terrainData)) terrainWork += 1;
+      if (isTerrainSplatPending(object?.terrainData)) terrainWork += 1;
+    }
+  }
   const assetWork = Math.max(1,
     documents('textures').length + documents('audio').length + documents('models').length
-    + documents('animations').length + documents('attachments').length,
+    + documents('animations').length + documents('attachments').length + terrainWork,
   );
   let completedWork = 0;
   const report = (detail: string, fraction = 0, phase?: string, diagnostic?: DiagnosticAttributes) => {
@@ -104,13 +154,12 @@ export async function loadGameContent(
   const traceAsset = (assetAlias: string) => diagnostics?.operationId && diagnostics.traceId
     ? { operationId: diagnostics.operationId, traceId: diagnostics.traceId, assetAlias }
     : undefined;
-  const recordAssetFailure = (
+  const recordAssetDiagnostic = (
     code: string,
     error: unknown,
     phase: string,
     diagnostic: DiagnosticAttributes,
   ) => {
-    assetFailureCount += 1;
     frontendDiagnostics.record('frontend', 'frontend.failure', {
       ...diagnostic,
       phase,
@@ -118,7 +167,17 @@ export async function loadGameContent(
       errorType: diagnosticErrorType(error),
     }, diagnostics, true);
   };
+  const recordAssetFailure = (
+    code: string,
+    error: unknown,
+    phase: string,
+    diagnostic: DiagnosticAttributes,
+  ) => {
+    assetFailureCount += 1;
+    recordAssetDiagnostic(code, error, phase, diagnostic);
+  };
 
+  let objects = objectDocuments;
   try {
     const textureAssetUrls = new Map<string, string>();
     for (const value of documents('textures')) {
@@ -211,6 +270,12 @@ export async function loadGameContent(
             if (!attached) texture.dispose();
           }
         }
+        // Material overrides layer on top of the texture overrides above, so a
+        // material without its own map override keeps the overridden texture.
+        loaded.materialOverrides = await hydrateMaterialOverrides(loaded.object, item.materialOverrides, {
+          resolveTextureUrl: (textureId) => textureAssetUrls.get(textureId),
+          assertCurrent,
+        });
         if (loaded.category === 'Animation') stripGeometry(loaded.object);
         if (generateThumbnails && !item.thumbnail && loaded.category !== 'Animation') {
           activePhase = 'thumbnail_generation';
@@ -295,6 +360,61 @@ export async function loadGameContent(
       }
       complete(`Loaded attachment — ${item.name}`, diagnostic);
     }
+    if (resolveTerrains) {
+      // Terrain heights and paint weights are binary assets referenced by the
+      // object documents. Resolved objects are copies; the input is not touched.
+      const heightfields = new Map<string, Promise<number[]>>();
+      const splatmaps = new Map<string, Promise<number[]>>();
+      const resolvedObjects: LevelObject[] = [];
+      for (const object of objectDocuments) {
+        const terrain = object?.terrainData;
+        if (!terrain) {
+          resolvedObjects.push(object);
+          continue;
+        }
+        const label = object.name || 'Terrain';
+        let resolved: TerrainData = terrain;
+        const heightfield = terrain.heightfield;
+        if (heightfield && isTerrainHeightfieldPending(terrain)) {
+          const assetAlias = frontendDiagnostics.nextAssetAlias();
+          const diagnostic: DiagnosticAttributes = { assetAlias, assetKind: 'terrain_heightfield' };
+          try {
+            report(`Loading terrain heights — ${label}`, 0.1, 'source_read', diagnostic);
+            const heights = await resolveSharedTerrainAsset(heightfields, heightfield, () => resolveTerrainHeightfield(
+              heightfield,
+              (assetId) => loadProjectAssetBytes(assetId, traceAsset(assetAlias)),
+            ));
+            assertCurrent();
+            resolved = { ...resolved, heights };
+          } catch (error) {
+            assertCurrent();
+            recordAssetFailure('terrain_heightfield_hydration_failed', error, 'source_read', diagnostic);
+          }
+          complete(`Loaded terrain heights — ${label}`, diagnostic);
+        }
+        const splatmap = terrain.splatmap;
+        if (splatmap && isTerrainSplatPending(terrain)) {
+          const assetAlias = frontendDiagnostics.nextAssetAlias();
+          const diagnostic: DiagnosticAttributes = { assetAlias, assetKind: 'terrain_splatmap' };
+          try {
+            report(`Loading terrain paint — ${label}`, 0.1, 'source_read', diagnostic);
+            const splat = await resolveSharedTerrainAsset(splatmaps, splatmap, () => resolveTerrainSplatmap(
+              splatmap,
+              (assetId) => loadProjectAssetBytes(assetId, traceAsset(assetAlias)),
+            ));
+            assertCurrent();
+            resolved = { ...resolved, splat };
+          } catch (error) {
+            assertCurrent();
+            // Paint is not essential to play: the terrain keeps its base layer.
+            recordAssetDiagnostic('terrain_splatmap_hydration_failed', error, 'source_read', { ...diagnostic, fallback: 'base_layer' });
+          }
+          complete(`Loaded terrain paint — ${label}`, diagnostic);
+        }
+        resolvedObjects.push(resolved === terrain ? object : { ...object, terrainData: resolved });
+      }
+      objects = resolvedObjects;
+    }
     assertCurrent();
     if (assetFailureCount > 0) {
       throw new Error(`Project hydration failed for ${assetFailureCount} asset${assetFailureCount === 1 ? '' : 's'}`);
@@ -315,10 +435,14 @@ export async function loadGameContent(
       sockets: documents('sockets') as SocketData[],
       textures,
       audioAssets,
+      prefabs: documents('prefabs') as PrefabData[],
     },
     levels: documents('levels') as LevelData[],
-    objects: documents('objects') as LevelObject[],
+    objects,
     hud: (hudDocument as HUDDocumentData | undefined) ?? null,
+    hudDocuments: documents('hud').filter(
+      (doc): doc is HUDDocumentData => typeof doc?.id === 'string' && Array.isArray(doc.elements),
+    ),
     settings: normalizeGameSettings(settingsDocument?.settings),
   };
 }

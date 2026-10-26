@@ -102,8 +102,8 @@ export class ProjectService {
     return () => this.listeners.delete(listener);
   }
 
-  async create(name = 'Untitled', diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> {
-    return this.call<ProjectSnapshot>('project.create', { name }, diagnostics);
+  async create(name = 'Untitled', diagnostics?: DiagnosticContext, template: 'blank' | 'starter' = 'blank'): Promise<ProjectSnapshot | null> {
+    return this.call<ProjectSnapshot>('project.create', template === 'blank' ? { name } : { name, template }, diagnostics);
   }
   async open(recoveryId?: string, diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> {
     return this.call<ProjectSnapshot>('project.open', { projectHandle: 'dialog', ...(recoveryId ? { recoveryId } : {}) }, diagnostics);

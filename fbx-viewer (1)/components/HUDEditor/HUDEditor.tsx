@@ -3,16 +3,34 @@ import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore }
 import { HUDCanvas } from './HUDCanvas';
 import { HUDLibrary } from './HUDLibrary';
 import { AIChatPanel } from './AIChatPanel';
+import { HUDActionField, describeMenuAction } from './HUDActionField';
+import { bindablePropsFor, HUDBindingField, hudBindingPath, withHUDBinding } from './HUDBindingField';
 import { clampHUDPosition, HUD_REFERENCE_SIZE, HUDElement, normalizeHUDLayout } from './types';
 import { AVAILABLE_COMPONENTS } from './componentRegistry';
-import { Code, Settings2, Sliders, Palette, Type, Move, Scaling, Undo2, Redo2 } from 'lucide-react';
+import { Code, Settings2, Sliders, Palette, Type, Move, Scaling, Undo2, Redo2, AlertTriangle } from 'lucide-react';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
 import { useNativeProjectDocument } from '../../utils/useNativeProjectDocument';
 import { useEditorHistory } from '../../utils/history';
 import { editorSession } from '../../utils/editorSession';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
+import { useLevel } from '../../context/LevelContext';
+import {
+    createDefaultLocalizationDocument,
+    localization,
+    LOCALIZATION_DOCUMENT_ID,
+    type LocalizationDocument,
+} from '../../runtime/localization';
+import {
+    findMenuDocument,
+    PAUSE_MENU_DOCUMENT_ID,
+    PAUSE_MENU_REQUIRED_ACTIONS,
+    TITLE_MENU_DOCUMENT_ID,
+    TITLE_MENU_REQUIRED_ACTIONS,
+    type MenuActionKind,
+} from '../../player/menus';
 
-interface HUDDocument {
+/** One authored HUD screen, stored as its own document in the project 'hud' domain. */
+export interface HUDDocument {
     id: string;
     name: string;
     elements: HUDElement[];
@@ -20,28 +38,146 @@ interface HUDDocument {
     commands: unknown[];
 }
 
-const HUD_DOCUMENT_ID = 'hud-main';
-const createDefaultHUDDocument = (): HUDDocument => ({
-    id: HUD_DOCUMENT_ID,
-    name: 'Main HUD',
-    elements: [],
-    layout: { ...HUD_REFERENCE_SIZE },
-    commands: [],
+const HUD_MAIN_DOCUMENT_ID = 'hud-main';
+
+export interface HUDDocumentDescriptor {
+    id: string;
+    label: string;
+    /** Stable per document: the project document hook re-hydrates when it changes. */
+    createDefault: () => HUDDocument;
+    /** A menu replaces the built-in one only when a visible element offers one of these. */
+    requiredActions?: readonly MenuActionKind[];
+}
+
+const STAGE_WIDTH = HUD_REFERENCE_SIZE.width;
+const BUTTON_SIZE = { width: 420, height: 72 };
+const BUTTON_GAP = 20;
+
+const element = (
+    id: string,
+    name: string,
+    type: string,
+    props: Record<string, unknown>,
+    position: HUDElement['position'],
+    size: HUDElement['size'],
+    zIndex: number,
+    isLocked = false,
+): HUDElement => ({ id, name, type, props, position, size, zIndex, isVisible: true, isLocked });
+
+const titleText = (documentId: string, text: string, top: number, fontSize: number): HUDElement => element(
+    `${documentId}-title`, 'Title', 'Text',
+    { text, color: '#ffffff', fontSize, fontWeight: 'bold', fontFamily: 'sans-serif', textAlign: 'center' },
+    { x: (STAGE_WIDTH - 1200) / 2, y: top }, { width: 1200, height: Math.round(fontSize * 1.4) }, 2,
+);
+
+type MenuButton = { action: string; label: string; variant?: string };
+
+/** A centred column of buttons; ids derive from the action so defaults are stable across loads. */
+const buttonColumn = (documentId: string, top: number, buttons: readonly MenuButton[]): HUDElement[] => buttons.map((button, index) => element(
+    `${documentId}-${button.action}`, `${button.label} Button`, 'Button',
+    { label: button.label, action: button.action, variant: button.variant ?? 'secondary', fontSize: 28 },
+    { x: (STAGE_WIDTH - BUTTON_SIZE.width) / 2, y: top + index * (BUTTON_SIZE.height + BUTTON_GAP) },
+    { ...BUTTON_SIZE }, 10 + index,
+));
+
+const createDocument = (id: string, name: string, elements: HUDElement[]): HUDDocument => ({
+    id, name, elements, layout: { ...HUD_REFERENCE_SIZE }, commands: [],
 });
+
+const createDefaultMainHUD = (): HUDDocument => createDocument(HUD_MAIN_DOCUMENT_ID, 'Main HUD', []);
+
+const createDefaultTitleMenu = (): HUDDocument => createDocument(TITLE_MENU_DOCUMENT_ID, 'Title Menu', [
+    titleText(TITLE_MENU_DOCUMENT_ID, 'GAME TITLE', 220, 96),
+    ...buttonColumn(TITLE_MENU_DOCUMENT_ID, 460, [
+        { action: 'play', label: 'Play', variant: 'primary' },
+        { action: 'continue', label: 'Continue' },
+        { action: 'options', label: 'Options' },
+        { action: 'quit', label: 'Quit', variant: 'outline' },
+    ]),
+]);
+
+const createDefaultPauseMenu = (): HUDDocument => createDocument(PAUSE_MENU_DOCUMENT_ID, 'Pause Menu', [
+    // Locked so clicks on the dimmed game do not drag the backdrop; unlock it from Layers.
+    element(
+        `${PAUSE_MENU_DOCUMENT_ID}-backdrop`, 'Backdrop', 'Container',
+        { backgroundColor: 'rgba(0,0,0,0.6)', borderColor: 'transparent', borderWidth: 0, borderRadius: 0 },
+        { x: 0, y: 0 }, { ...HUD_REFERENCE_SIZE }, 1, true,
+    ),
+    titleText(PAUSE_MENU_DOCUMENT_ID, 'PAUSED', 200, 72),
+    ...buttonColumn(PAUSE_MENU_DOCUMENT_ID, 360, [
+        { action: 'resume', label: 'Resume', variant: 'primary' },
+        { action: 'save', label: 'Save' },
+        { action: 'load', label: 'Load' },
+        { action: 'options', label: 'Options' },
+        { action: 'quit', label: 'Quit to title', variant: 'outline' },
+    ]),
+]);
+
+export const HUD_DOCUMENTS: readonly HUDDocumentDescriptor[] = [
+    { id: HUD_MAIN_DOCUMENT_ID, label: 'Game HUD', createDefault: createDefaultMainHUD },
+    { id: TITLE_MENU_DOCUMENT_ID, label: 'Title menu', createDefault: createDefaultTitleMenu, requiredActions: TITLE_MENU_REQUIRED_ACTIONS },
+    { id: PAUSE_MENU_DOCUMENT_ID, label: 'Pause menu', createDefault: createDefaultPauseMenu, requiredActions: PAUSE_MENU_REQUIRED_ACTIONS },
+];
+
+const getHUDDocumentDescriptor = (id: string): HUDDocumentDescriptor =>
+    HUD_DOCUMENTS.find(descriptor => descriptor.id === id) ?? HUD_DOCUMENTS[0];
+
+const listActions = (kinds: readonly MenuActionKind[]): string => {
+    const labels = kinds.map(describeMenuAction);
+    return labels.length > 1 ? `${labels.slice(0, -1).join(', ')} or ${labels[labels.length - 1]}` : labels.join('');
+};
 
 // Continuous edits to the same field (typing, scrubbing) within this window
 // collapse into one undo step.
 const HISTORY_COALESCE_MS = 800;
 
+/** Text and Button take a string-table key that wins over their literal text when set. */
+const LOCALIZED_KEY_PROPS: Readonly<Record<string, { literal: string; key: string; hint: string }>> = {
+    Text: { literal: 'text', key: 'textKey', hint: 'String key from Localization; overrides the text.' },
+    Button: { literal: 'label', key: 'labelKey', hint: 'String key from Localization; overrides the label.' },
+};
+
+/** Props the Attributes list edits, with the localized key listed right after its literal even when unset. */
+const attributeKeys = (element: HUDElement): string[] => {
+    // `action` and `bind` have their own fields below.
+    const keys = Object.keys(element.props).filter(key => key !== 'action' && key !== 'bind');
+    const localized = LOCALIZED_KEY_PROPS[element.type];
+    if (localized && !keys.includes(localized.key)) {
+        const after = keys.indexOf(localized.literal);
+        keys.splice(after === -1 ? keys.length : after + 1, 0, localized.key);
+    }
+    return keys;
+};
+
 // Helper to render dynamic inputs based on prop type
-const PropertyInput: React.FC<{ 
-    label: string; 
-    value: any; 
+const PropertyInput: React.FC<{
+    label: string;
+    value: any;
     onChange: (val: any) => void;
     isMultiline?: boolean;
-}> = ({ label, value, onChange, isMultiline }) => {
+    options?: readonly string[];
+    /** Id of a hint element describing this input. */
+    describedBy?: string;
+}> = ({ label, value, onChange, isMultiline, options, describedBy }) => {
     const type = typeof value;
     const isColor = label.toLowerCase().includes('color');
+
+    if (options) {
+        return (
+            <label className="block space-y-1">
+                <span className="text-[10px] text-gray-500 font-bold uppercase">{label}</span>
+                <select
+                    value={String(value ?? '')}
+                    aria-describedby={describedBy}
+                    onChange={(e) => onChange(e.target.value)}
+                    className="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
+                >
+                    {!options.includes(String(value ?? '')) && <option value={String(value ?? '')} disabled>{String(value ?? '') || '--'}</option>}
+                    {options.map(option => <option key={option} value={option}>{option}</option>)}
+                </select>
+            </label>
+        );
+    }
 
     if (isMultiline) {
         return (
@@ -110,22 +246,38 @@ const PropertyInput: React.FC<{
 
     // Default String/Text
     return (
-        <div className="space-y-1">
+        <label className="block space-y-1">
             <span className="text-[10px] text-gray-500 font-bold uppercase">{label}</span>
-            <input 
-                type="text" 
-                value={value} 
-                onChange={(e) => onChange(e.target.value)} 
+            <input
+                type="text"
+                value={value ?? ''}
+                aria-describedby={describedBy}
+                onChange={(e) => onChange(e.target.value)}
                 className="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
             />
-        </div>
+        </label>
     );
 };
 
 export const HUDEditor: React.FC = () => {
+    // The game HUD and each menu screen are separate documents in the 'hud' domain.
+    const [documentId, setDocumentId] = useState(HUD_MAIN_DOCUMENT_ID);
+    const descriptor = getHUDDocumentDescriptor(documentId);
     const { document, hydrated, error, replace, refresh } = useNativeProjectDocument<HUDDocument>(
-        'hud', HUD_DOCUMENT_ID, createDefaultHUDDocument,
+        'hud', descriptor.id, descriptor.createDefault,
     );
+    // The preview resolves textKey/labelKey against the project's string tables, so load them on open
+    // rather than only when the Localization panel saves.
+    const { document: localizationDocument } = useNativeProjectDocument<LocalizationDocument>(
+        'metadata', LOCALIZATION_DOCUMENT_ID, createDefaultLocalizationDocument,
+    );
+    useEffect(() => {
+        localization.load(localizationDocument.settings);
+    }, [localizationDocument]);
+    // The granular level context, so scene edits elsewhere do not re-render the HUD editor.
+    const { levels } = useLevel();
+    // Right after a switch the hook still holds the previous document until it re-hydrates.
+    const loading = !hydrated || document.id !== descriptor.id;
     const elements = document.elements;
     const layout = normalizeHUDLayout(document.layout);
     const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -143,10 +295,24 @@ export const HUDEditor: React.FC = () => {
             lastEditRef.current = null;
             void replace(restored).catch((cause) => frontendDiagnostics.failure('hud_history_apply_failed', cause));
         },
-        active: hydrated,
-        // Revision bumps re-hydrate after every write; only a project/session switch invalidates history.
-        resetKey: `${session.projectId}:${session.generation}:${historyEpoch}`,
+        active: !loading,
+        // Revision bumps re-hydrate after every write; only a project/session/document switch invalidates history.
+        resetKey: `${session.projectId}:${session.generation}:${historyEpoch}:${descriptor.id}`,
     });
+
+    const handleSwitchDocument = (nextId: string) => {
+        if (nextId === descriptor.id) return;
+        lastEditRef.current = null;
+        dragStartRef.current = null;
+        setSelectedId(null);
+        setDocumentId(nextId);
+    };
+
+    // A menu without a visible element offering a required action is ignored by the player.
+    const missingMenuActions = descriptor.requiredActions && !loading
+        && !findMenuDocument([document], descriptor.id, descriptor.requiredActions)
+        ? descriptor.requiredActions
+        : null;
 
     /** Snapshot the document before a change. Rapid edits sharing `coalesceKey` become one undo step. */
     const recordChange = (coalesceKey: string | null = null) => {
@@ -240,6 +406,31 @@ export const HUDEditor: React.FC = () => {
         }, `${selectedElement.id}:props.${key}`);
     };
 
+    const handleActionChange = (action: string | null) => {
+        if (!selectedElement) return;
+        const props = { ...selectedElement.props };
+        if (action === null) delete props.action;
+        else props.action = action;
+        handleUpdateElement(selectedElement.id, { props }, null);
+    };
+
+    /** Binds or unbinds one prop; picks are one undo step each, a typed variable name coalesces. */
+    const handleBindingChange = (prop: string, path: string | null, typing: boolean) => {
+        if (!selectedElement) return;
+        if (hudBindingPath(selectedElement.props.bind, prop) === path) return;
+        handleUpdateElement(
+            selectedElement.id,
+            { props: withHUDBinding(selectedElement.props, prop, path) },
+            typing ? `${selectedElement.id}:props.bind.${prop}` : null,
+        );
+    };
+
+    const selectedDefinition = selectedElement
+        ? AVAILABLE_COMPONENTS.find(component => component.type === selectedElement.type)
+        : undefined;
+    const selectedPropOptions = selectedDefinition?.propOptions;
+    const selectedLocalizedKey = selectedElement ? LOCALIZED_KEY_PROPS[selectedElement.type] : undefined;
+
     const handleDelete = (id: string) => {
         recordChange();
         void commitElements(elements.filter(el => el.id !== id))
@@ -279,7 +470,7 @@ export const HUDEditor: React.FC = () => {
                     {error.message}
                 </div>
             )}
-            {!hydrated && (
+            {loading && (
                 <div className="absolute inset-0 z-40 flex items-center justify-center bg-gray-950/70 text-xs text-gray-400">
                     Loading HUD…
                 </div>
@@ -299,11 +490,25 @@ export const HUDEditor: React.FC = () => {
             <div className="flex-1 flex flex-col min-w-0 bg-[#111111]">
                 <div className="h-8 bg-[#1a1a1a] border-b border-gray-800 flex items-center px-4 justify-between shrink-0">
                     <div className="flex items-center gap-3">
+                        <div role="tablist" aria-label="HUD document" className="flex items-center gap-0.5 rounded bg-gray-950 p-0.5 border border-gray-800">
+                            {HUD_DOCUMENTS.map(option => (
+                                <button
+                                    key={option.id}
+                                    type="button"
+                                    role="tab"
+                                    aria-selected={option.id === descriptor.id}
+                                    onClick={() => handleSwitchDocument(option.id)}
+                                    className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider transition-colors ${option.id === descriptor.id ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-gray-200 hover:bg-gray-800'}`}
+                                >
+                                    {option.label}
+                                </button>
+                            ))}
+                        </div>
                         <div className="flex items-center gap-1">
                             <button
                                 type="button"
                                 onClick={history.undo}
-                                disabled={!hydrated || !history.canUndo}
+                                disabled={loading || !history.canUndo}
                                 title="Undo (Ctrl+Z)"
                                 aria-label="Undo"
                                 className="p-1 rounded text-gray-400 hover:text-white hover:bg-gray-800 disabled:opacity-30 disabled:pointer-events-none"
@@ -313,7 +518,7 @@ export const HUDEditor: React.FC = () => {
                             <button
                                 type="button"
                                 onClick={history.redo}
-                                disabled={!hydrated || !history.canRedo}
+                                disabled={loading || !history.canRedo}
                                 title="Redo (Ctrl+Y)"
                                 aria-label="Redo"
                                 className="p-1 rounded text-gray-400 hover:text-white hover:bg-gray-800 disabled:opacity-30 disabled:pointer-events-none"
@@ -325,6 +530,13 @@ export const HUDEditor: React.FC = () => {
                     </div>
                     <div className="text-[10px] text-gray-600">Zoom: {Math.round(canvasScale * 100)}%</div>
                 </div>
+                {missingMenuActions && (
+                    <div role="status" className="flex items-center gap-2 px-4 py-1.5 bg-amber-950/60 border-b border-amber-900/60 text-[10px] text-amber-200 shrink-0">
+                        <AlertTriangle size={12} className="shrink-0" />
+                        The player keeps its built-in {descriptor.label.toLowerCase()} until a visible element here has
+                        a {listActions(missingMenuActions)} action.
+                    </div>
+                )}
                 <HUDCanvas
                     elements={elements}
                     selectedId={selectedId}
@@ -435,16 +647,46 @@ export const HUDEditor: React.FC = () => {
                                         </div>
                                         
                                         <div className="grid grid-cols-1 gap-3">
-                                            {Object.keys(selectedElement.props).map((key) => (
-                                                <PropertyInput 
-                                                    key={key} 
-                                                    label={key === 'code' ? 'React JSX Body' : key.replace(/([A-Z])/g, ' $1').trim()} 
-                                                    value={selectedElement.props[key]} 
-                                                    onChange={(val) => handlePropChange(key, val)}
-                                                    isMultiline={key === 'code'} 
-                                                />
-                                            ))}
+                                            {attributeKeys(selectedElement).map((key) => {
+                                                const boundTo = hudBindingPath(selectedElement.props.bind, key);
+                                                const hint = boundTo
+                                                    ? `Bound to ${boundTo}; shows the live value while playing.`
+                                                    : key === selectedLocalizedKey?.key ? selectedLocalizedKey.hint : null;
+                                                const hintId = `hud-prop-hint-${selectedElement.id}-${key}`;
+                                                return (
+                                                    <div key={key} className="space-y-1">
+                                                        <PropertyInput
+                                                            label={key === 'code' ? 'React JSX Body' : key.replace(/([A-Z])/g, ' $1').trim()}
+                                                            value={selectedElement.props[key]}
+                                                            onChange={(val) => handlePropChange(key, val)}
+                                                            isMultiline={key === 'code'}
+                                                            options={selectedPropOptions?.[key]}
+                                                            describedBy={hint ? hintId : undefined}
+                                                        />
+                                                        {hint && <p id={hintId} className="text-[10px] text-gray-500 leading-snug">{hint}</p>}
+                                                    </div>
+                                                );
+                                            })}
                                         </div>
+                                    </div>
+
+                                    {/* 4. Live game-state bindings */}
+                                    <div className="pt-2 border-t border-gray-800">
+                                        <HUDBindingField
+                                            key={selectedElement.id}
+                                            value={selectedElement.props.bind}
+                                            bindableProps={bindablePropsFor(selectedElement.props, selectedDefinition?.bindableProps)}
+                                            onChange={handleBindingChange}
+                                        />
+                                    </div>
+
+                                    {/* 5. Menu action */}
+                                    <div className="pt-2 border-t border-gray-800">
+                                        <HUDActionField
+                                            value={selectedElement.props.action}
+                                            levels={levels}
+                                            onChange={handleActionChange}
+                                        />
                                     </div>
                                 </>
                             ) : (

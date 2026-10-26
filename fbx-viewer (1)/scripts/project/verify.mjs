@@ -66,6 +66,11 @@ const strictExcludes = strictConfig.exclude ?? [];
 // Exact test files only (never globs). They import modules that are not yet noUnused-clean and
 // are still type-checked by the base strict tsconfig.
 const STRICT_EXCLUDE_ALLOWLIST = new Set([
+  'tests/frontend/triggers.test.ts',
+  'tests/frontend/hudMenus.test.tsx',
+  'tests/frontend/hudBindings.test.tsx',
+  'tests/frontend/terrainSplatPersistence.test.ts',
+  'tests/frontend/levelBlueprintNodesRuntime.test.tsx',
   'tests/frontend/contentBrowser.test.tsx',
   'tests/frontend/levelClipboard.test.ts',
   'tests/frontend/levelHierarchyEdits.test.tsx',
@@ -89,7 +94,7 @@ mustNotContain(header, /accept=["']\.forge|type=["']file|FileSaver|saveAs/i, 'pr
 if (!/const runProjectAction = \(action: \(\) => Promise<unknown>\) => \{[\s\S]*?action\(\)\.catch\(\(\) => undefined\)/.test(header)
   || /onClick=\{(?:saveProject|saveProjectAs|loadProject|importProject|importLegacyProject|migrateLegacyBrowserProject|exportProject|closeProject)\}/.test(header)
   || /void (?:openRecentProject|recoverProject)\(/.test(header)
-  || !/runProjectAction\(createNewProject\)/.test(header)) {
+  || !/runProjectAction\((?:createNewProject|\(\) => createNewProject\([^)]*\))\)/.test(header)) {
   failures.push('Header project actions must consume rejected promises at the UI boundary');
 }
 mustNotContain(service, /beginAssetUpload\(assetId|sha256\s*[,}]/, 'asset upload precomputed identity');

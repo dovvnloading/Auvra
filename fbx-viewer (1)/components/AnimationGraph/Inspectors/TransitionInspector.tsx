@@ -57,6 +57,23 @@ export const TransitionInspector: React.FC<TransitionInspectorProps> = ({
                     />
                 </div>
 
+                <div className="space-y-1.5">
+                    <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider flex items-center gap-1.5">
+                        <ToggleLeft size={10} /> Exit Time (0-1, empty = none)
+                    </label>
+                    <input
+                        type="number" step="0.05" min="0" max="1"
+                        value={transition.exitTime ?? ''}
+                        placeholder="none"
+                        onChange={(e) => {
+                            const value = e.target.value === '' ? undefined : Math.min(1, Math.max(0, parseFloat(e.target.value)));
+                            updateTransition({ exitTime: value === undefined || Number.isNaN(value) ? undefined : value });
+                        }}
+                        className="w-full bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 p-2 focus:outline-none focus:border-gray-500"
+                    />
+                    <p className="text-[10px] text-gray-600">Fires once the source clip reaches this point. With no conditions, the state returns on its own (e.g. attack back to idle).</p>
+                </div>
+
                 <div className="space-y-3">
                      <div className="flex items-center justify-between px-1">
                         <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider">Conditions</label>
@@ -126,7 +143,11 @@ export const TransitionInspector: React.FC<TransitionInspectorProps> = ({
                          })}
                          {transition.conditions.length === 0 && (
                             <div className="text-center py-4 border border-dashed border-gray-800 rounded bg-gray-900/50">
-                                <p className="text-[10px] text-gray-600 italic">No conditions (Transition occurs immediately)</p>
+                                <p className="text-[10px] text-gray-600 italic">
+                                    {typeof transition.exitTime === 'number'
+                                        ? 'No conditions: fires when the clip reaches its exit time'
+                                        : 'No conditions: add a condition or an exit time, or this transition never fires'}
+                                </p>
                             </div>
                          )}
                      </div>

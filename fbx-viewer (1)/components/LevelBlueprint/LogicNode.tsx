@@ -4,10 +4,30 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Play, GitBranch, CheckSquare, Combine, Activity, Database, MessageSquare, Trash, 
     Plus, Minus, X, Divide, ChevronRight, ChevronLeft, Equal, Hash, Type as TypeIcon, ToggleLeft, ArrowRight,
-    Skull, Shield, Clock, RefreshCcw, AlertTriangle
+    Skull, Shield, Clock, RefreshCcw, AlertTriangle,
+    ListOrdered, Repeat, Repeat1, ArrowLeftRight, DoorClosed, PackagePlus, Move3d, Volume2, Zap, Crosshair,
+    Variable, Gamepad2, Dices
 } from 'lucide-react';
 import { LogicNode, LogicPin, PinDataType, LevelObject } from '../../types';
 import { describeActor, isOverlapEvent, overlapEventName, overlapTargetWarning, resolveOverlapTarget, selectedOverlapActorId } from './overlapTargets';
+import { FLOW_NODE_DEFINITIONS, FlowNodeDefinition } from '../../hooks/levelBlueprintNodes/flow';
+import { WORLD_NODE_DEFINITIONS, WorldNodeDefinition } from '../../hooks/levelBlueprintNodes/world';
+
+/** A palette node declared by the flow or world node registries (both shapes fit this one). */
+export type LogicNodeDefinition = Omit<FlowNodeDefinition, 'type'> & {
+    type: FlowNodeDefinition['type'] | WorldNodeDefinition['type'];
+    pure?: boolean;
+    description?: string;
+};
+
+/** Registry definition for a node type, or undefined for the hand-built node kinds. */
+export const findLogicNodeDefinition = (type: string): LogicNodeDefinition | undefined =>
+    FLOW_NODE_DEFINITIONS.find(definition => definition.type === type)
+    ?? WORLD_NODE_DEFINITIONS.find(definition => definition.type === type);
+
+/** Pure registry nodes have no exec pins; the runtime evaluates them when an output is read. */
+export const isPureNodeDefinition = (definition: LogicNodeDefinition | undefined): boolean =>
+    definition?.pure === true;
 
 interface LogicNodeProps {
     node: LogicNode;
@@ -22,7 +42,10 @@ interface LogicNodeProps {
 
 // --- CONSTANTS FOR DETERMINISTIC LAYOUT ---
 const NODE_WIDTH = 200;
+const NODE_WIDTH_WIDE = 240;
 const NODE_WIDTH_COMPACT = 140;
+// Registry nodes whose longest input and output labels add up to more than this get the wide body.
+const WIDE_LABEL_CHARS = 20;
 const HEADER_HEIGHT = 32;
 const PIN_ROW_HEIGHT = 28;
 const BOTTOM_PADDING = 8;
@@ -60,7 +83,32 @@ const NODE_STYLES: Record<string, { border: string, bg: string, icon: React.Reac
     'LiteralBoolean': { border: 'border-red-700', bg: 'bg-red-950/80', icon: <ToggleLeft size={14} className="text-red-400" /> },
     'ToString': { border: 'border-pink-800', bg: 'bg-pink-900/40', icon: <ArrowRight size={14} className="text-pink-400" /> },
     'LevelAction': { border: 'border-indigo-800', bg: 'bg-indigo-900/80', icon: <RefreshCcw size={14} className="text-indigo-400" /> },
+    // Flow control
+    'Sequence': { border: 'border-slate-500', bg: 'bg-slate-800', icon: <ListOrdered size={14} className="text-slate-200" /> },
+    'ForLoop': { border: 'border-slate-500', bg: 'bg-slate-800', icon: <Repeat size={14} className="text-slate-200" /> },
+    'Delay': { border: 'border-slate-500', bg: 'bg-slate-800', icon: <Clock size={14} className="text-slate-200" /> },
+    'DoOnce': { border: 'border-slate-500', bg: 'bg-slate-800', icon: <Repeat1 size={14} className="text-slate-200" /> },
+    'FlipFlop': { border: 'border-slate-500', bg: 'bg-slate-800', icon: <ArrowLeftRight size={14} className="text-slate-200" /> },
+    'Gate': { border: 'border-slate-500', bg: 'bg-slate-800', icon: <DoorClosed size={14} className="text-slate-200" /> },
+    // World
+    'SpawnPrefab': { border: 'border-sky-800', bg: 'bg-sky-950/80', icon: <PackagePlus size={14} className="text-sky-400" /> },
+    'GetActorTransform': { border: 'border-sky-800', bg: 'bg-sky-950/60', icon: <Move3d size={14} className="text-sky-400" /> },
+    'SetActorTransform': { border: 'border-sky-800', bg: 'bg-sky-950/80', icon: <Move3d size={14} className="text-sky-400" /> },
+    'ApplyImpulse': { border: 'border-sky-800', bg: 'bg-sky-950/80', icon: <Zap size={14} className="text-sky-400" /> },
+    'Raycast': { border: 'border-sky-800', bg: 'bg-sky-950/80', icon: <Crosshair size={14} className="text-sky-400" /> },
+    'PlaySound': { border: 'border-amber-800', bg: 'bg-amber-950/70', icon: <Volume2 size={14} className="text-amber-400" /> },
+    'InputActionPressed': { border: 'border-orange-800', bg: 'bg-orange-950/70', icon: <Gamepad2 size={14} className="text-orange-400" /> },
+    'GetLevelVariable': { border: 'border-teal-800', bg: 'bg-teal-950/60', icon: <Variable size={14} className="text-teal-400" /> },
+    'SetLevelVariable': { border: 'border-teal-800', bg: 'bg-teal-950/80', icon: <Variable size={14} className="text-teal-400" /> },
+    'RandomFloat': { border: 'border-green-800', bg: 'bg-green-950/60', icon: <Dices size={14} className="text-green-400" /> },
+    'RandomInt': { border: 'border-cyan-800', bg: 'bg-cyan-950/60', icon: <Dices size={14} className="text-cyan-400" /> },
+    'Print': { border: 'border-pink-800', bg: 'bg-gray-800', icon: <MessageSquare size={14} className="text-pink-400" /> },
 };
+
+/** The node header icon for a node type (the palette reuses it); undefined for unstyled types. */
+export const logicNodeIcon = (type: string): React.ReactNode => NODE_STYLES[type]?.icon;
+
+const longestLabel = (pins: { name: string }[]) => pins.reduce((longest, pin) => Math.max(longest, pin.name.length), 0);
 
 export const LogicNodeComponent: React.FC<LogicNodeProps> = ({
     node,
@@ -74,8 +122,11 @@ export const LogicNodeComponent: React.FC<LogicNodeProps> = ({
 }) => {
     
     // --- 1. DETERMINE DIMENSIONS ---
+    const definition = findLogicNodeDefinition(node.type);
+    const isPure = isPureNodeDefinition(definition);
     const isCompact = node.type.startsWith('Literal');
-    const width = isCompact ? NODE_WIDTH_COMPACT : NODE_WIDTH;
+    const isWide = !!definition && longestLabel(node.inputs) + longestLabel(node.outputs) > WIDE_LABEL_CHARS;
+    const width = isCompact ? NODE_WIDTH_COMPACT : isWide ? NODE_WIDTH_WIDE : NODE_WIDTH;
     const maxPins = Math.max(node.inputs.length, node.outputs.length);
     const contentHeight = maxPins * PIN_ROW_HEIGHT;
     
@@ -159,14 +210,18 @@ export const LogicNodeComponent: React.FC<LogicNodeProps> = ({
             onPointerDown={onPointerDown}
         >
             {/* --- HEADER --- */}
-            <div 
+            <div
                 className="flex items-center justify-between px-2 bg-black/20"
                 style={{ height: HEADER_HEIGHT }}
+                title={definition?.description}
             >
                 <div className="flex items-center gap-2 overflow-hidden">
                     {style.icon}
                     <span className="text-xs font-bold text-gray-100 truncate">{node.name}</span>
                 </div>
+                {isPure && (
+                    <span className="shrink-0 ml-1 px-1 rounded bg-black/30 text-[8px] font-bold tracking-wider text-gray-400" title="Pure node: evaluated when an output is read">PURE</span>
+                )}
                 {/* Optional Status Icon */}
                 {node.data?.targetBlueprintType && (
                     node.data.targetBlueprintType === 'Enemy' 

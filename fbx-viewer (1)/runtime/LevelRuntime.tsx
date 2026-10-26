@@ -6,6 +6,11 @@ import { EffectComposer, Bloom, Vignette, ToneMapping } from '@react-three/postp
 import { ToneMappingMode } from 'postprocessing';
 import { SkeletonUtils } from 'three-stdlib';
 import { AuvraCanvas } from '../renderer/AuvraCanvas';
+import { ProfilerPanel, ProfilerProbe, useProfilerToggle } from './ProfilerOverlay';
+import { levelVariables } from './levelVariables';
+import { NavGridContext, useNavGrid } from './navigation';
+import { usePhysicsQueries } from './physics';
+import { LevelGroundColliders } from './terrainPhysics';
 import { InstancedLevelLayer } from '../components/Environment/InstancedLevelLayer';
 import { AudioSystem } from '../components/Environment/AudioSystem';
 import { SkySystem } from '../components/Environment/SkySystem';
@@ -23,9 +28,13 @@ import { useLevelBlueprintRuntime, UseLevelBlueprintRuntimeProps } from '../hook
 import { useRuntimeLevelWorld } from '../hooks/useRuntimeLevelWorld';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { AttachmentData, Blueprint, LevelComponent, LevelObject, LoadedModelData, SocketData } from '../types';
+import { instantiatePrefab } from '../utils/prefabs';
 import { useGameContent } from './GameContentContext';
 import { gameState, useGameState } from './gameState';
-import { PauseController } from './PauseController';
+import { PauseActionWatcher, PauseController } from './PauseController';
+import { PhysicsWorld } from './physics';
+import { TriggerEventsProvider } from './triggers';
+import { RuntimeServicesProvider, RuntimeSpawnerProvider, type SpawnPosition, toSpawnPoint } from './RuntimeServicesContext';
 import { ComponentHostContext } from './components/builtins';
 import { getComponentDefinition } from './components/registry';
 import type { ComponentDefinition } from './components/types';
@@ -53,6 +62,9 @@ interface SpawnedEnemy extends SpawnRequest {
 }
 
 const ORIGIN_START: PlayerStart = { position: [0, 0.5, 0], rotation: [0, 0, 0] };
+
+/** Levels are not arenas: AI bounds sit far beyond any authored level, so nothing is clamped to a fixed area. */
+const RUNTIME_WORLD_BOUNDARY = 100_000;
 
 const RUNTIME_GL = {
     powerPreference: 'high-performance',
@@ -133,7 +145,12 @@ const SpawnerSystem: React.FC<{
 
 // --- INTERNAL COMPONENT: LOGIC SYSTEM ---
 const LevelLogicSystem: React.FC<UseLevelBlueprintRuntimeProps> = (props) => {
-    useLevelBlueprintRuntime(props);
+    // The session renders inside PhysicsWorld, so Raycast and Apply Impulse nodes reach the level's bodies.
+    const physics = usePhysicsQueries();
+    const applyImpulse = useCallback((id: string, [x, y, z]: [number, number, number]) => {
+        physics.applyImpulse(id, { x, y, z });
+    }, [physics]);
+    useLevelBlueprintRuntime({ raycast: physics.raycast, applyImpulse, ...props });
     return null;
 };
 
@@ -359,9 +376,54 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
 
     // Play runs on a session copy of the level; the authored objects are never changed by gameplay.
     const {
-        objects: runtimeLevelObjects,
-        destroyObject: destroyRuntimeObject
+        objects: sessionLevelObjects,
+        destroyObject: destroySessionObject,
+        setObjectTransform: setSessionObjectTransform
     } = useRuntimeLevelWorld(authoredObjects);
+
+    // Prefabs spawned during play join the session copy only; they are never written to the project.
+    const [spawnedObjects, setSpawnedObjects] = useState<LevelObject[]>([]);
+    const runtimeLevelObjects = useMemo(
+        () => (spawnedObjects.length ? [...sessionLevelObjects, ...spawnedObjects] : sessionLevelObjects),
+        [sessionLevelObjects, spawnedObjects]
+    );
+    const destroyRuntimeObject = useCallback((id: string) => {
+        destroySessionObject(id);
+        setSpawnedObjects(prev => (prev.some(obj => obj.id === id) ? prev.filter(obj => obj.id !== id) : prev));
+    }, [destroySessionObject]);
+    const getRuntimeObject = useCallback(
+        (id: string) => runtimeLevelObjects.find(obj => obj.id === id) ?? null,
+        [runtimeLevelObjects]
+    );
+    const setRuntimeObjectTransform = useCallback((id: string, partial: Partial<Pick<LevelObject, 'position' | 'rotation' | 'scale'>>) => {
+        setSessionObjectTransform(id, partial);
+        setSpawnedObjects(prev => (prev.some(obj => obj.id === id)
+            ? prev.map(obj => (obj.id === id ? { ...obj, ...partial } : obj))
+            : prev));
+    }, [setSessionObjectTransform]);
+
+    // Prefab documents come with the game content (the project or game pack 'prefabs' domain).
+    const prefabs = content.prefabs;
+    const reportedMissingPrefabs = useRef(new Set<string>());
+    const spawnPrefab = useCallback((prefabId: string, position: SpawnPosition): string[] => {
+        const prefab = prefabs?.find(item => item.id === prefabId);
+        if (!prefab) {
+            // Once per prefab, so a spawner running every frame does not flood the output.
+            if (!reportedMissingPrefabs.current.has(prefabId)) {
+                reportedMissingPrefabs.current.add(prefabId);
+                host.print(`Spawn Prefab: this game has no prefab "${prefabId}"`, 'warning');
+            }
+            return [];
+        }
+        try {
+            const objects = instantiatePrefab(prefab, level.id, toSpawnPoint(position));
+            setSpawnedObjects(prev => [...prev, ...objects]);
+            return objects.map(obj => obj.id);
+        } catch (e) {
+            frontendDiagnostics.failure('runtime_prefab_spawn_failed', e);
+            return [];
+        }
+    }, [host, level.id, prefabs]);
 
     // --- References & State ---
     const playerApiRef = useRef<GraphRuntimeAPI | undefined>(undefined);
@@ -374,13 +436,19 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
     const [isAiming, setIsAiming] = useState(false);
     const [spawnedEnemies, setSpawnedEnemies] = useState<SpawnedEnemy[]>([]);
 
-    // Layout effect: runs before the entities' first stat reports, so it never overwrites them.
+    // Layout effect: runs before the entities' first stat reports, so it never overwrites them,
+    // and before BeginPlay (a passive effect), so the level script sees this session's variables.
+    const declaredVariables = level.blueprint?.variables;
     useLayoutEffect(() => {
         gameState.update({
             levelId: level.id,
             player: { health: 100, maxHealth: 100, stamina: 100, isAiming: false },
             vars: sessionRestore?.variables
         });
+        // Declared variables start at their defaults; a loaded save puts its values back on top.
+        levelVariables.reset(declaredVariables);
+        for (const [name, value] of Object.entries(sessionRestore?.variables ?? {})) levelVariables.set(name, value);
+    // Variables are read once per session; LevelSession remounts for every new session.
     }, [level.id, sessionRestore]);
 
     // --- CALCULATE ALL SCENE CLIPS ---
@@ -458,15 +526,19 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
     // Hierarchy and components render as transform groups; gameplay systems read world-space copies.
     const renderPlan = useMemo(() => planLevelRender(runtimeLevelObjects), [runtimeLevelObjects]);
     const worldLevelObjects = renderPlan.worldObjects;
+    // Enemies path around the level's static colliders; the hierarchy stays intact so moving parents are detected.
+    const navGrid = useNavGrid(runtimeLevelObjects);
 
     if (!runtimePlayerModel) return null;
 
     const controlsEnabled = !isGameOver && !paused;
 
     return (
-        <>
+        <RuntimeSpawnerProvider spawnPrefab={spawnPrefab}>
             {/* --- Replaced Hardcoded Lights with SkySystem --- */}
             <SkySystem levelObjects={runtimeLevelObjects} />
+
+            <LevelGroundColliders terrains={renderPlan.terrains} />
 
             <group>
                 {/* Render Terrain */}
@@ -518,6 +590,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                 onSpawnBlood={handleSpawnBlood}
             />
 
+            <NavGridContext.Provider value={navGrid}>
             {spawnedEnemies.map((enemyData) => {
                 const assets = resolveEnemyAssets(enemyData.blueprintId);
                 if (!assets) return null;
@@ -529,7 +602,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                         assets={assets}
                         playerObject={runtimePlayerModel.object}
                         projectileManagerRef={projectileManagerRef}
-                        boundarySize={50}
+                        boundarySize={RUNTIME_WORLD_BOUNDARY}
                         enabled={!isGameOver}
                         onDespawn={handleEnemyDespawn}
                         allSceneClips={allSceneClips}
@@ -538,6 +611,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                     />
                 );
             })}
+            </NavGridContext.Provider>
 
             <PlayerController
                 apiRef={playerApiRef}
@@ -550,6 +624,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                 onAimChange={handleAimChange}
                 weaponSounds={weaponSoundUrls}
                 weaponVolume={player.blueprint.weaponVolume ?? 1.0}
+                blueprint={player.blueprint}
             />
 
             <LevelLogicSystem
@@ -559,6 +634,8 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                 playerApiRef={playerApiRef}
                 enemyApiRef={enemyApiRef}
                 destroyActor={destroyRuntimeObject}
+                getObject={getRuntimeObject}
+                setObjectTransform={setRuntimeObjectTransform}
                 addNotification={handleNotification}
                 onRestart={host.restartLevel}
                 onEndLevel={host.endLevel}
@@ -578,7 +655,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                 isAiming={isAiming}
                 aimOffset={player.blueprint.aimOffset || [0.5, 4.5, 1.0]}
             />
-        </>
+        </RuntimeSpawnerProvider>
     );
 };
 
@@ -588,7 +665,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
  * Plays one level. Shared by play-in-editor and the standalone player: content comes from the
  * runtime content context, flow control (restart, end, open level, save, load, pause) from the host.
  */
-export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, playerStart, paused, host, sessionKey, overlay, restore }) => {
+export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, playerStart, paused, host, sessionKey, overlay, restore, playerOptions }) => {
     const content = useGameContent();
     const player = useMemo(() => resolvePlayerAssets(content, settings.playerBlueprintId), [content, settings.playerBlueprintId]);
     const start = useMemo(() => resolvePlayerStart(level, playerStart, restore), [level, playerStart, restore]);
@@ -620,6 +697,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
     const maxDpr = Math.max(0.5, settings.quality.maxDpr);
     const dpr = Math.min(dprLevel, maxDpr);
     const toggleQuality = useCallback(() => setHighQuality(prev => !prev), []);
+    const profilerVisible = useProfilerToggle();
 
     if (!player) {
         return (
@@ -654,6 +732,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                 />
 
                 <CameraSettings fov={settings.quality.fov} />
+                <ProfilerProbe enabled={profilerVisible} />
                 <PauseController
                     paused={paused}
                     canPause={!isGameOver}
@@ -671,21 +750,30 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                     </EffectComposer>
                 )}
 
-                {/* Remount = new play session (BeginPlay, overlaps, spawner counts); the canvas and its GL context stay. */}
-                <group key={sessionKey}>
-                    <LevelSession
-                        level={level}
-                        content={content}
-                        player={player}
-                        start={start}
-                        restore={restore}
-                        host={runtimeHost}
-                        sessionKey={sessionKey}
-                        isGameOver={isGameOver}
-                        paused={paused}
-                        onGameOver={handleGameOver}
-                    />
-                </group>
+                {/* Input, audio buses and player options live for the whole run; the session adds its prefab spawner. */}
+                <RuntimeServicesProvider settings={settings} playerOptions={playerOptions} inputEnabled={!paused}>
+                    <PauseActionWatcher enabled={!paused && !isGameOver} onRequestPause={runtimeHost.requestPause} />
+                    {/* Each session gets a fresh trigger bus and physics world, so no body or listener outlives it. */}
+                    <TriggerEventsProvider key={sessionKey}>
+                        <PhysicsWorld paused={paused}>
+                            {/* Remount = new play session (BeginPlay, overlaps, spawner counts); the canvas and its GL context stay. */}
+                            <group key={sessionKey}>
+                                <LevelSession
+                                    level={level}
+                                    content={content}
+                                    player={player}
+                                    start={start}
+                                    restore={restore}
+                                    host={runtimeHost}
+                                    sessionKey={sessionKey}
+                                    isGameOver={isGameOver}
+                                    paused={paused}
+                                    onGameOver={handleGameOver}
+                                />
+                            </group>
+                        </PhysicsWorld>
+                    </TriggerEventsProvider>
+                </RuntimeServicesProvider>
             </AuvraCanvas>
 
             {overlay ?? (
@@ -697,6 +785,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                     host={runtimeHost}
                 />
             )}
+            <ProfilerPanel visible={profilerVisible} />
         </div>
     );
 };
@@ -767,6 +856,7 @@ const RuntimeEnemyController: React.FC<{
                 boundarySize={boundarySize}
                 enabled={enabled}
                 onDealDamage={handleAttack}
+                stats={assets.blueprint?.stats}
             />
         </>
     );

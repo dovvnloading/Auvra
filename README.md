@@ -5,11 +5,17 @@ current repository is an early working prototype, not a stable release. Project
 files, workflows, and internal APIs may change while the engine is rebuilt on a
 more durable foundation.
 
-The editor currently includes scene assembly, environment tools, animation
-graphs, visual blueprints, sandbox play, HUD editing, and texture workflows. It
-uses React, TypeScript, Three.js, and Vite today. A Python launcher now owns the
-development startup process and runs the editor in the supported desktop frame.
-A versioned host boundary provides the foundation for future local services.
+The editor builds levels from painted terrain, foliage, props and logic actors
+arranged in an object hierarchy with components (physics colliders and rigid
+bodies, lights, particles, audio sources, movers, rotators) and prefabs. It
+includes animation graphs, level blueprints with flow-control and world nodes,
+enemy navigation, HUD and menu editing, localization, material overrides and
+texture workflows. Projects are built into standalone games: a static web build
+and a Windows build with its own small player executable. It uses React, TypeScript,
+Three.js and Vite; a Python launcher owns the development startup process and
+runs the editor in the supported desktop frame.
+
+User documentation lives in [docs/](docs/README.md).
 
 ## Development status
 
@@ -88,6 +94,19 @@ cd "fbx-viewer (1)"
 npm ci
 npm run dev
 ```
+
+## Building games
+
+**Build Web** and **Windows** in the editor header turn the open project into a
+standalone game. A web build is a static folder for any HTTP(S) host; a Windows
+build adds `<Game Name>.exe`, which serves the same files through WebView2 and
+keeps save games per player. Game name, startup level, player character and
+quality/input defaults come from **Game Settings**. Builds include
+`THIRD_PARTY_NOTICES.txt`. See [Building and shipping games](docs/building-games.md).
+
+The player bundle is produced by `npm run build` (editor and player) in
+`fbx-viewer (1)`; the Windows player is built from `player-desktop` with
+`cargo +1.98.0 build --release --locked`.
 
 ## Projects
 

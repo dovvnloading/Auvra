@@ -1,3 +1,5 @@
+import { BlueprintStat } from '../../../types';
+
 export const AI_CONFIG = {
   // Distances (in World Units)
   DISTANCES: {
@@ -42,6 +44,60 @@ export const AI_CONFIG = {
     REGEN_RATE: 15,
     MIN_TO_SPRINT: 20
   }
+};
+
+/** Blueprint stats that tune an enemy's AI. Distances and speeds are Unreal-style centimetres, the cooldown is seconds. */
+export const AI_STAT_NAMES = {
+  SPEED: 'Speed',                     // Chase (top) speed, cm/s
+  ATTACK_RANGE: 'Attack Range',       // cm
+  ATTACK_COOLDOWN: 'Attack Cooldown', // Seconds from one attack's start to the next
+  SIGHT_RANGE: 'Sight Range'          // cm
+} as const;
+
+const STAT_UNITS_PER_WORLD_UNIT = 100;
+
+/** Per-enemy AI tunables in world units and seconds. */
+export interface AITuning {
+  runSpeed: number;       // Chase speed
+  walkSpeed: number;      // Patrol / search speed
+  strafeSpeed: number;
+  attackRange: number;    // Distance at which an attack starts
+  stopDistance: number;   // Distance at which a chase stops closing in (inside the attack range)
+  attackCooldown: number;
+  sightRange: number;     // Max distance the target can be seen at
+}
+
+const { PHYSICS, DISTANCES, COMBAT } = AI_CONFIG;
+
+const buildTuning = (runSpeed: number, attackRange: number, attackCooldown: number, sightRange: number): AITuning => ({
+  runSpeed,
+  // Walk, strafe and stopping distance keep AI_CONFIG's proportions.
+  walkSpeed: runSpeed * (PHYSICS.WALK_SPEED_MAX / PHYSICS.RUN_SPEED_MAX),
+  strafeSpeed: runSpeed * (PHYSICS.STRAFE_SPEED / PHYSICS.RUN_SPEED_MAX),
+  attackRange,
+  stopDistance: attackRange * (DISTANCES.STOP / DISTANCES.ATTACK),
+  attackCooldown,
+  sightRange
+});
+
+export const DEFAULT_AI_TUNING: AITuning = buildTuning(PHYSICS.RUN_SPEED_MAX, DISTANCES.ATTACK, COMBAT.ATTACK_COOLDOWN, DISTANCES.AGGRO);
+
+/** AI tunables from an enemy blueprint's stats; a missing or invalid stat keeps the AI_CONFIG default. */
+export const resolveAITuning = (stats: readonly BlueprintStat[] | null | undefined): AITuning => {
+  const read = (name: string, allowZero: boolean): number | null => {
+    const value = stats?.find(stat => stat.name === name)?.value;
+    return typeof value === 'number' && Number.isFinite(value) && (allowZero ? value >= 0 : value > 0) ? value : null;
+  };
+  const inWorldUnits = (name: string, fallback: number): number => {
+    const value = read(name, false);
+    return value === null ? fallback : value / STAT_UNITS_PER_WORLD_UNIT;
+  };
+  return buildTuning(
+    inWorldUnits(AI_STAT_NAMES.SPEED, DEFAULT_AI_TUNING.runSpeed),
+    inWorldUnits(AI_STAT_NAMES.ATTACK_RANGE, DEFAULT_AI_TUNING.attackRange),
+    read(AI_STAT_NAMES.ATTACK_COOLDOWN, true) ?? DEFAULT_AI_TUNING.attackCooldown,
+    inWorldUnits(AI_STAT_NAMES.SIGHT_RANGE, DEFAULT_AI_TUNING.sightRange)
+  );
 };
 
 export type AIState = 

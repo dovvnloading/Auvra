@@ -57,6 +57,7 @@ _MIME_EXTENSIONS = {
     "audio/wav": "wav",
     "audio/ogg": "ogg",
     "application/vnd.auvra.heightfield": "ahf",
+    "application/vnd.auvra.splatmap": "asp",
 }
 _GENERIC_MIME = "application/octet-stream"
 _SAFE_ASSET_ID = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")

@@ -1,6 +1,6 @@
 
 import { useState, useCallback, useRef, useEffect, useSyncExternalStore } from 'react';
-import { LevelObject, LoadedModelData, LevelObjectType, LevelData, LevelBlueprintData, TerrainHeightfieldReference } from '../types';
+import { LevelObject, LoadedModelData, LevelObjectType, LevelData, LevelBlueprintData, TerrainData, TerrainHeightfieldReference, TerrainSplatmapReference } from '../types';
 import { dbOperations } from '../utils/db';
 import { projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
@@ -9,6 +9,8 @@ import { editorSession, selectObjectsForLevel, type EditorSessionLease } from '.
 import { subscribeDomainCascade, type DomainCascadeEvent } from '../utils/domainCascade';
 import { resolveTerrainHeightfield } from '../utils/terrainHeightfieldEditor';
 import { isTerrainHeightfieldPending, TerrainHeightfieldEncodingError } from '../utils/terrainHeightfieldCodec';
+import { resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplatEditor';
+import { isTerrainSplatPending, terrainLayersReferenceTexture, withoutTerrainLayerTexture } from '../components/Environment/Terrain/terrainSplatCodec';
 import { collectSubtree, sortByHierarchy } from '../utils/sceneGraph';
 
 const DEFAULT_LEVEL_ID = 'default_level';
@@ -49,15 +51,24 @@ const withDescendants = (objects: readonly LevelObject[], isRoot: (object: Level
 const modelCascadeIds = (objects: readonly LevelObject[], modelId: string): Set<string> =>
     withDescendants(objects, (object) => object.modelId === modelId);
 
+/** True when the terrain samples the texture, as its texture or in one of its paint layers. */
+const terrainReferencesTexture = (terrain: TerrainData | undefined, textureId: string): boolean =>
+    terrain?.textureId === textureId || terrainLayersReferenceTexture(terrain, textureId);
+
+/** The terrain without a deleted texture; its layers keep their slots so the splat channels still line up. */
+const withoutTerrainTexture = (terrain: TerrainData, textureId: string): TerrainData => {
+    const { textureId: _removed, ...withoutTexture } = terrain;
+    return withoutTerrainLayerTexture(terrain.textureId === textureId ? withoutTexture : terrain, textureId);
+};
+
 const applyDomainCascade = (objects: LevelObject[], event: DomainCascadeEvent): LevelObject[] => {
     if (event.kind === 'model') {
         const removed = modelCascadeIds(objects, event.id);
         return removed.size === 0 ? objects : objects.filter((object) => !removed.has(object.id));
     }
     return objects.map((object) => {
-        if (event.kind === 'texture' && object.terrainData?.textureId === event.id) {
-            const { textureId: _removed, ...terrainData } = object.terrainData;
-            return { ...object, terrainData };
+        if (event.kind === 'texture' && object.terrainData && terrainReferencesTexture(object.terrainData, event.id)) {
+            return { ...object, terrainData: withoutTerrainTexture(object.terrainData, event.id) };
         }
         if (event.kind === 'audio' && object.audioConfig?.audioId === event.id) {
             const { audioConfig: _removed, ...withoutAudioReference } = object;
@@ -69,9 +80,8 @@ const applyDomainCascade = (objects: LevelObject[], event: DomainCascadeEvent): 
 
 /** Remove a deleted asset reference from a not-yet-persisted partial edit. */
 const withoutDomainReference = (updates: Partial<LevelObject>, event: DomainCascadeEvent): Partial<LevelObject> => {
-    if (event.kind === 'texture' && updates.terrainData?.textureId === event.id) {
-        const { textureId: _removed, ...terrainData } = updates.terrainData;
-        return { ...updates, terrainData };
+    if (event.kind === 'texture' && updates.terrainData && terrainReferencesTexture(updates.terrainData, event.id)) {
+        return { ...updates, terrainData: withoutTerrainTexture(updates.terrainData, event.id) };
     }
     if (event.kind === 'audio' && updates.audioConfig?.audioId === event.id) {
         const { audioConfig: _removed, ...withoutAudioReference } = updates;
@@ -325,7 +335,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
           ? modelCascadeIds(currentObjects, event.id)
           : new Set(currentObjects
               .filter((object) => event.kind === 'texture'
-                  ? object.terrainData?.textureId === event.id
+                  ? terrainReferencesTexture(object.terrainData, event.id)
                   : object.audioConfig?.audioId === event.id)
               .map((object) => object.id));
       if (affectedIds.size === 0) return;
@@ -524,6 +534,50 @@ export const useLevelManager = (models: LoadedModelData[]) => {
               failedHeightfieldsRef.current.add(reference.assetId);
               frontendDiagnostics.failure('terrain_heightfield_resolve_failed', error);
               addNotification({ message: `Terrain heights could not be loaded (${describeError(error)}); sculpting is disabled for that terrain.`, type: 'error' });
+          });
+      }
+      return () => { active = false; };
+  }, [addNotification, levelObjects]);
+
+  // Terrain paint weights live in splat map assets and are resolved the same
+  // way into terrainData.splat. History snapshots are not patched: the host
+  // keeps replaced splat maps until the project closes, so an undone object
+  // that still carries only the reference is simply resolved again.
+  const failedSplatmapsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+      const references = new Map<string, TerrainSplatmapReference>();
+      for (const object of levelObjects) {
+          const reference = object.terrainData?.splatmap;
+          if (reference && isTerrainSplatPending(object.terrainData) && !failedSplatmapsRef.current.has(reference.assetId)) {
+              references.set(reference.assetId, reference);
+          }
+      }
+      if (references.size === 0) return;
+      let active = true;
+      for (const reference of references.values()) {
+          resolveTerrainSplatmap(reference).then((splat) => {
+              if (!active) return;
+              const resolves = (object: LevelObject): boolean => {
+                  const terrain = object.terrainData;
+                  return Boolean(terrain?.splatmap && isTerrainSplatPending(terrain)
+                      && terrain.splatmap.assetId === reference.assetId
+                      && terrain.splatmap.columns === reference.columns
+                      && terrain.splatmap.rows === reference.rows);
+              };
+              setWorkingState((current) => {
+                  let changed = false;
+                  const nextObjects = current.levelObjects.map((object) => {
+                      if (!resolves(object)) return object;
+                      changed = true;
+                      return { ...object, terrainData: { ...object.terrainData!, splat } };
+                  });
+                  return changed ? { ...current, levelObjects: nextObjects } : current;
+              });
+          }, (error) => {
+              if (!active) return;
+              failedSplatmapsRef.current.add(reference.assetId);
+              frontendDiagnostics.failure('terrain_splatmap_resolve_failed', error);
+              addNotification({ message: `Terrain paint could not be loaded (${describeError(error)}); painting is disabled for that terrain.`, type: 'error' });
           });
       }
       return () => { active = false; };
@@ -844,6 +898,12 @@ export const useLevelManager = (models: LoadedModelData[]) => {
           addNotification({ message: 'Terrain heights are still loading; the sculpt was not applied.', type: 'error' });
           return;
       }
+      // Likewise a paint stroke over a splat map that is still loading would
+      // replace the stored weights with unpainted ones.
+      if (updates.terrainData?.splat?.length && isTerrainSplatPending(previous.terrainData)) {
+          addNotification({ message: 'Terrain paint is still loading; the stroke was not applied.', type: 'error' });
+          return;
+      }
       setWorkingState(prev => ({
           ...prev,
           levelObjects: prev.levelObjects.map(o => o.id === id ? { ...o, ...updates } : o),
@@ -897,6 +957,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
           activeLevelBlueprint: level?.blueprint || EMPTY_BLUEPRINT,
       });
       failedHeightfieldsRef.current.clear();
+      failedSplatmapsRef.current.clear();
       history.current = { past: [], future: [] };
       updateHistoryState();
   }, [replaceWorkingState]);

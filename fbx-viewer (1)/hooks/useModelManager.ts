@@ -7,11 +7,18 @@ import { disposeModel, disposeObject } from '../utils/processing/ModelLifecycle'
 import { applyModelImportSettings, resolveImportSettings, stripGeometry } from '../utils/processing/ModelTransforms';
 import { prepareAnimationClips } from '../utils/animationBinding';
 import { generateThumbnail } from '../utils/thumbnailGenerator';
-import { dbOperations, normalizeAssetInfoUpdate } from '../utils/db';
+import { dbOperations, normalizeAssetInfoUpdate, withoutMaterialOverrideTexture } from '../utils/db';
 import { projectService } from '../utils/projectService';
 import { isAbortError, useOperationActions } from '../context/OperationContext';
 import { useNotification } from '../context/NotificationContext';
 import { assetDiagnosticAttributes, frontendDiagnostics, type DiagnosticAttributes } from '../diagnostics/runtime';
+import {
+  applyMaterialOverrides,
+  collectOverrideTextures,
+  normalizeMaterialOverrides,
+  overrideTextureCacheKey,
+  type MaterialOverrides,
+} from '../utils/materialOverrides';
 
 const MODEL_MIME_TYPES: Record<string, string> = {
   glb: 'model/gltf-binary', gltf: 'model/gltf+json', obj: 'model/obj', fbx: 'model/fbx',
@@ -69,6 +76,29 @@ const adoptOverrideTextures = (from: THREE.Object3D, to: THREE.Object3D, materia
   });
   // Adopted textures now belong to the replacement and must survive disposal of the old model.
   eachMaterial(from, (material) => { if (adopted.has(material.map)) material.map = null; });
+};
+
+/**
+ * Restore `root`'s materials to their imported values and hand back the
+ * textures its material overrides had bound (keyed `${slot}:${textureId}`),
+ * so disposing `root` afterwards leaves them alone.
+ */
+const detachMaterialOverrides = (root: THREE.Object3D): Map<string, THREE.Texture> => {
+  const textures = collectOverrideTextures(root);
+  applyMaterialOverrides(root, {});
+  return textures;
+};
+
+/**
+ * Apply `overrides` to `root`, binding textures from `textures` (from
+ * `detachMaterialOverrides` or the object itself). Textures left unbound are
+ * disposed: bound ones are owned by the materials, like any imported map.
+ */
+const attachMaterialOverrides = (root: THREE.Object3D, overrides: MaterialOverrides, textures: Map<string, THREE.Texture>): void => {
+  const { boundTextureKeys } = applyMaterialOverrides(root, overrides, (textureId, slot) => textures.get(overrideTextureCacheKey(textureId, slot)));
+  for (const [key, texture] of textures) {
+    if (!boundTextureKeys.has(key)) texture.dispose();
+  }
 };
 
 export const useModelManager = (
@@ -248,6 +278,7 @@ export const useModelManager = (
       replacement.category = category;
       replacement.isPlacedInScene = existing.isPlacedInScene;
       replacement.textureOverrides = existing.textureOverrides;
+      replacement.materialOverrides = existing.materialOverrides;
       replacement.folder = existing.folder;
       const importSettings = category === 'Animation' ? undefined : applyModelImportSettings(replacement, existing.importSettings);
       if (category === 'Animation') {
@@ -303,7 +334,11 @@ export const useModelManager = (
       await projectService.applyChanges([{ domain: 'models', operation: 'upsert', id: modelId, value: document }], trace);
 
       operation.update({ phase: 'library_publication', progress: 0.98, detail: 'Publishing to library', diagnostic });
+      // Material overrides sit on top of the texture overrides, so they come off
+      // the old object first and go onto the replacement last.
+      const materialOverrideTextures = detachMaterialOverrides(existing.object);
       adoptOverrideTextures(existing.object, replacement.object, Object.keys(existing.textureOverrides || {}));
+      attachMaterialOverrides(replacement.object, normalizeMaterialOverrides(existing.materialOverrides), materialOverrideTextures);
       const published = replacement;
       replacement = null;
       setModels((previous) => previous.map((model) => (model.id === modelId ? published : model)));
@@ -379,16 +414,40 @@ export const useModelManager = (
     }
   }, [clearSelectedModel, models, onModelRemoved]);
 
+  /** Persist a model's material overrides, then apply them to its loaded object; rejects when they cannot be saved. */
+  const updateModelMaterialOverrides = useCallback(async (modelId: string, overrides: MaterialOverrides): Promise<void> => {
+    projectService.assertWritable();
+    const model = models.find((candidate) => candidate.id === modelId);
+    if (!model) throw new Error('The model is no longer loaded.');
+    const next = normalizeMaterialOverrides(overrides);
+    try {
+      await dbOperations.updateModelMaterialOverrides(modelId, next);
+    } catch (error) {
+      frontendDiagnostics.failure('material_override_update_failed', error);
+      throw error;
+    }
+    // The textures are normally already bound by the material editor's live preview.
+    attachMaterialOverrides(model.object, next, collectOverrideTextures(model.object));
+    setModels((previous) => previous.map((candidate) => (candidate.id === modelId ? { ...candidate, materialOverrides: next } : candidate)));
+  }, [models]);
+
   const removeTextureReference = useCallback((textureId: string) => {
     setModels((previous) => previous.map((model) => {
       const overrides = model.textureOverrides;
-      if (!overrides) return model;
-      const nextOverrides = Object.fromEntries(
+      const nextOverrides = overrides && Object.fromEntries(
         Object.entries(overrides).filter(([, referencedTextureId]) => referencedTextureId !== textureId),
       );
-      return Object.keys(nextOverrides).length === Object.keys(overrides).length
-        ? model
-        : { ...model, textureOverrides: nextOverrides };
+      const texturesChanged = Boolean(overrides && nextOverrides && Object.keys(nextOverrides).length !== Object.keys(overrides).length);
+      const materialOverrides = model.materialOverrides && withoutMaterialOverrideTexture(model.materialOverrides, textureId);
+      const materialsChanged = materialOverrides !== model.materialOverrides;
+      if (!texturesChanged && !materialsChanged) return model;
+      // Unbind (and release) the deleted texture; applying is idempotent.
+      if (materialsChanged && materialOverrides) attachMaterialOverrides(model.object, materialOverrides, collectOverrideTextures(model.object));
+      return {
+        ...model,
+        ...(texturesChanged ? { textureOverrides: nextOverrides } : {}),
+        ...(materialsChanged ? { materialOverrides } : {}),
+      };
     }));
   }, []);
 
@@ -603,9 +662,11 @@ export const useModelManager = (
         newModelData.animations = model.animations;
         newModelData.isPlacedInScene = model.isPlacedInScene;
         newModelData.textureOverrides = {}; // Clear overrides
+        newModelData.materialOverrides = model.materialOverrides; // Kept: edited in the Materials panel
 
         // Clear DB overrides
         await dbOperations.updateModelTextureOverrides(modelId, {});
+        attachMaterialOverrides(newModelData.object, normalizeMaterialOverrides(model.materialOverrides), detachMaterialOverrides(model.object));
 
         setModels(prev => prev.map(m => {
             if (m.id === modelId) {
@@ -635,6 +696,7 @@ export const useModelManager = (
     updateModel,
     removeModel,
     removeTextureReference,
+    updateModelMaterialOverrides,
     placeInScene,
     removeFromScene,
     addAnimations,

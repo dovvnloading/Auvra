@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
 import type {
     AttachmentData, AudioData, Blueprint, LevelBlueprintData, LevelData, LevelObject,
-    LoadedModelData, SocketData, TextureData,
+    LoadedModelData, PrefabData, SocketData, TextureData,
 } from '../types';
+import type { PlayerOptionsStore } from './playerOptions';
 
 /** Everything the gameplay runtime needs from loaded content, whether it came from the editor or a game pack. */
 export interface GameContent {
@@ -12,6 +13,8 @@ export interface GameContent {
     sockets: SocketData[];
     textures: TextureData[];
     audioAssets: AudioData[];
+    /** Prefab documents that Spawn Prefab can instantiate during play. */
+    prefabs?: PrefabData[];
 }
 
 /** One playable level: its objects (already filtered to this level) and its level blueprint. */
@@ -90,6 +93,8 @@ export interface LevelRuntimeProps {
     overlay?: ReactNode;
     /** Applied to the session after it starts (load game). */
     restore?: SaveGameData | null;
+    /** The player's saved options (sensitivity, volumes, bindings); without one the game settings' defaults apply. */
+    playerOptions?: PlayerOptionsStore;
 }
 
 /** Checkpoint-style save. */
@@ -127,7 +132,7 @@ export interface GamePackManifest {
     assets: { id: string; file: string; mime: string; size: number }[];
 }
 
-/** HUD document stored in the project 'hud' domain (id 'hud-main'). */
+/** A document in the project 'hud' domain: the game HUD ('hud-main') or an authored menu ('menu-title', 'menu-pause'). */
 export interface HUDDocumentData {
     id: string;
     name?: string;
@@ -141,5 +146,7 @@ export interface LoadedGameContent {
     levels: LevelData[];
     objects: LevelObject[];
     hud: HUDDocumentData | null;
+    /** Every usable document in the 'hud' domain, including authored menus. */
+    hudDocuments?: HUDDocumentData[];
     settings: GameSettings;
 }

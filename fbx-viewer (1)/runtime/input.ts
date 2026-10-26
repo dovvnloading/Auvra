@@ -49,6 +49,9 @@ export const describeBinding = (binding: InputBinding): string => {
 export class InputState {
     private readonly keys = new Set<string>();
     private readonly mouse = new Set<number>();
+    // Pressed since the last endFrame, so a tap released before the next frame is not lost.
+    private readonly tappedKeys = new Set<string>();
+    private readonly tappedButtons = new Set<number>();
     private gamepads: (Gamepad | null)[] = [];
     private previous = new Set<string>();
     private current = new Set<string>();
@@ -56,12 +59,12 @@ export class InputState {
     constructor(private map: InputActionMap) {}
 
     setMap(map: InputActionMap) { this.map = map; }
-    keyDown(code: string) { this.keys.add(code); }
+    keyDown(code: string) { this.keys.add(code); this.tappedKeys.add(code); }
     keyUp(code: string) { this.keys.delete(code); }
-    mouseDown(button: number) { this.mouse.add(button); }
+    mouseDown(button: number) { this.mouse.add(button); this.tappedButtons.add(button); }
     mouseUp(button: number) { this.mouse.delete(button); }
     setGamepads(gamepads: (Gamepad | null)[]) { this.gamepads = gamepads; }
-    clear() { this.keys.clear(); this.mouse.clear(); }
+    clear() { this.keys.clear(); this.mouse.clear(); this.tappedKeys.clear(); this.tappedButtons.clear(); }
 
     /** Analog strength of one binding in [0, 1]. */
     private strength(binding: InputBinding): number {
@@ -89,7 +92,13 @@ export class InputState {
     /** Call once per frame before reading wasPressed/wasReleased. */
     endFrame() {
         this.previous = this.current;
-        this.current = new Set(this.map.filter(action => this.isDown(action.name)).map(action => action.name));
+        const tapped = (binding: InputBinding) => (binding.device === 'keyboard' && this.tappedKeys.has(binding.code))
+            || (binding.device === 'mouse' && this.tappedButtons.has(binding.button));
+        this.current = new Set(this.map
+            .filter(action => this.isDown(action.name) || action.bindings.some(tapped))
+            .map(action => action.name));
+        this.tappedKeys.clear();
+        this.tappedButtons.clear();
     }
 
     wasPressed(name: string): boolean { return this.current.has(name) && !this.previous.has(name); }

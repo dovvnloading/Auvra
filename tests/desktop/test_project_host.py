@@ -111,6 +111,16 @@ class NativeProjectHostTests(unittest.TestCase):
         self.registry.close()
         self.temp.cleanup()
 
+    def test_create_from_starter_template_opens_a_playable_project(self) -> None:
+        created = self.host.handle("project.create", {"name": "Starter", "template": "starter"})
+        snapshot = self.host.handle(
+            "project.getSnapshot",
+            {"projectId": created["projectId"], "domain": "objects", "pageSize": 200},
+        )
+        kinds = {item["type"] for item in snapshot["domains"]["objects"]["documents"]}
+        self.assertTrue({"terrain", "sky_sphere", "player_start", "prop"} <= kinds)
+        self.assertGreater(created["revision"], 0)
+
     def test_create_apply_snapshot_save_as_and_status_never_expose_paths(self) -> None:
         closed = self.host.handle("project.getStatus", {})
         self.assertIsNone(closed["projectId"])

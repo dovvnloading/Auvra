@@ -58,12 +58,16 @@ export const ENEMY_BLUEPRINT: Blueprint = {
   id: 'bp_enemy_default',
   name: 'Enemy Grunt',
   type: 'Enemy Controller',
-  description: 'Basic enemy AI that chases and attacks the player.',
+  description: 'Basic enemy AI that chases and attacks the player. Speed, Attack Range, Attack Cooldown and Sight Range tune its AI.',
   linkedModelId: null,
   stats: [
     { id: 'est1', name: 'Health', value: 50 },
     { id: 'est2', name: 'Damage', value: 10 },
-    { id: 'est3', name: 'Speed', value: 350 }
+    // AI tunables (components/Sandbox/AI/AIConfig.ts): speeds and ranges in cm, cooldown in seconds
+    { id: 'est3', name: 'Speed', value: 650 },
+    { id: 'est4', name: 'Attack Range', value: 220 },
+    { id: 'est5', name: 'Attack Cooldown', value: 3 },
+    { id: 'est6', name: 'Sight Range', value: 1500 }
   ],
   traits: ['AI_Controlled', 'Hostile'],
   variables: JSON.parse(JSON.stringify(ENEMY_VARIABLES)),

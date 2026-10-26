@@ -15,9 +15,16 @@ export const useRuntimeLevelWorld = (authoredObjects: LevelObject[]) => {
         setObjects(prev => prev.filter(obj => obj.id !== id));
     }, []);
 
+    // Transform writes from level scripts (Set Actor Transform) land on the session copy only.
+    const setObjectTransform = useCallback((id: string, partial: Partial<Pick<LevelObject, 'position' | 'rotation' | 'scale'>>) => {
+        setObjects(prev => (prev.some(obj => obj.id === id)
+            ? prev.map(obj => (obj.id === id ? { ...obj, ...partial } : obj))
+            : prev));
+    }, []);
+
     const reset = useCallback(() => {
         setObjects(structuredClone(authoredObjects));
     }, [authoredObjects]);
 
-    return { objects, destroyObject, reset };
+    return { objects, destroyObject, setObjectTransform, reset };
 };

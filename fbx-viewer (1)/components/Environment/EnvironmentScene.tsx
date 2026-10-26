@@ -776,6 +776,11 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                         const terr = objectById.get(id);
                         if(terr) updateLevelObject(id, { terrainData: { ...terr.terrainData!, heights } });
                     }}
+                    onPaintStrokeEnd={(id, splat) => {
+                        const terr = objectById.get(id);
+                        if (terr) updateLevelObject(id, { terrainData: { ...terr.terrainData!, splat } });
+                    }}
+                    onStrokeStart={onSnapshot}
                     enabled={isActiveView}
                 />
             )}

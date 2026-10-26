@@ -36,6 +36,17 @@ describe('input actions', () => {
     expect(input.wasReleased('Jump')).toBe(true);
   });
 
+  it('keeps a tap that is released before the next frame', () => {
+    const input = new InputState(DEFAULT_INPUT_MAP);
+    input.keyDown('Escape');
+    input.keyUp('Escape');
+    input.endFrame();
+    expect(input.wasPressed('Pause')).toBe(true);
+    input.endFrame();
+    expect(input.wasReleased('Pause')).toBe(true);
+    expect(input.wasPressed('Pause')).toBe(false);
+  });
+
   it('applies rebinding overrides', () => {
     const map = applyBindingOverrides(DEFAULT_INPUT_MAP, { Jump: [{ device: 'keyboard', code: 'KeyJ' }] });
     const input = new InputState(map);
