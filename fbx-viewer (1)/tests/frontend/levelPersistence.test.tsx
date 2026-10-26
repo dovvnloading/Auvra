@@ -225,6 +225,49 @@ describe('pending level edits', () => {
     expect(editorSession.getSnapshot().phase).toBe('ready');
   });
 
+  it('are reverted when the project rejects them, instead of blocking every later save', async () => {
+    const { ProjectHostError } = await vi.importActual<typeof import('../../utils/projectService')>('../../utils/projectService');
+    // e.g. a gizmo scale past the pivot, which the objects schema rejects.
+    vi.mocked(dbOperations.updateLevelObject).mockRejectedValueOnce(new ProjectHostError('Project operation failed', 'internal_error'));
+    const { result } = renderEditor();
+    act(() => result.current.levels.updateLevelObject('obj-1', { scale: [-0.5, 1, 1] }));
+    await act(() => result.current.project.saveProject());
+    expect(mocks.calls).toEqual(['read-objects', 'applyChanges', 'save']);
+    expect(result.current.levels.levelObjects.find((object) => object.id === 'obj-1')?.scale).toEqual([1, 1, 1]);
+    expect(mocks.addNotification).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'error', message: expect.stringMatching(/"obj-1" \(scale\) cannot be saved \(Project operation failed\) and has been reverted/),
+    }));
+    await act(() => result.current.project.closeProject());
+    expect(mocks.calls).toEqual(['read-objects', 'applyChanges', 'save', 'close']);
+  });
+
+  it('are discarded when the project rejects them because their object is gone', async () => {
+    const { ProjectHostError } = await vi.importActual<typeof import('../../utils/projectService')>('../../utils/projectService');
+    vi.mocked(dbOperations.updateLevelObject).mockRejectedValueOnce(new ProjectHostError('Project validation failed', 'invalid_project'));
+    vi.mocked(dbOperations.getAllNativeLevelObjects).mockResolvedValueOnce([spawn('obj-2')]);
+    const { result } = renderEditor();
+    act(() => result.current.levels.updateLevelObject('obj-1', { position: [5, 0, 0] }));
+    await act(() => result.current.levels.flushPendingLevelEdits());
+    expect(result.current.levels.levelObjects.map((object) => object.id)).toEqual(['obj-2']);
+    expect(mocks.addNotification).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'error', message: expect.stringMatching(/"obj-1" \(position\) cannot be saved .* discarded because the object no longer exists/),
+    }));
+  });
+
+  it('stay retryable when a rejected edit cannot be reverted', async () => {
+    const { ProjectHostError } = await vi.importActual<typeof import('../../utils/projectService')>('../../utils/projectService');
+    vi.mocked(dbOperations.updateLevelObject).mockRejectedValueOnce(new ProjectHostError('Project operation failed', 'internal_error'));
+    vi.mocked(dbOperations.getAllNativeLevelObjects).mockRejectedValueOnce(new Error('host unavailable'));
+    const { result } = renderEditor();
+    act(() => result.current.levels.updateLevelObject('obj-1', { position: [5, 0, 0] }));
+    await act(async () => {
+      await expect(result.current.levels.flushPendingLevelEdits()).rejects.toThrow(/Level edits could not be saved/);
+    });
+    expect(result.current.levels.levelObjects.find((object) => object.id === 'obj-1')?.position).toEqual([5, 0, 0]);
+    await act(() => result.current.levels.flushPendingLevelEdits());
+    expect(mocks.calls).toEqual(['update:obj-1']);
+  });
+
   it('are superseded when their object is deleted', async () => {
     vi.useFakeTimers();
     const { result } = renderEditor();
@@ -281,6 +324,57 @@ describe('terrain heightfields', () => {
     const size = new TextEncoder().encode(JSON.stringify(document)).byteLength;
     expect(size).toBeLessThan(2 * 1024);
     expect(size).toBeLessThan(SNAPSHOT_PAGE_LIMIT / 64);
+  });
+
+  it('revert a sculpt whose heights cannot be encoded', async () => {
+    const { dbOperations: realDb } = await vi.importActual<typeof import('../../utils/db')>('../../utils/db');
+    const stored = terrain({ resolution: 2, width: 10, depth: 10, heights: samples });
+    vi.mocked(dbOperations.updateLevelObject).mockImplementationOnce((id, updates, lease) => realDb.updateLevelObject(id, updates, lease));
+    vi.mocked(dbOperations.getAllNativeLevelObjects).mockResolvedValueOnce([stored]);
+    const { result } = renderEditor([stored]);
+    const broken = samples.map((value, index) => index === 4 ? Number.NaN : value);
+    act(() => result.current.levels.updateLevelObject('terrain', { terrainData: { resolution: 2, width: 10, depth: 10, heights: broken } }));
+    await act(() => result.current.levels.flushPendingLevelEdits());
+    expect(projectService.applyChanges).not.toHaveBeenCalled();
+    expect(result.current.levels.levelObjects[0].terrainData?.heights).toEqual(samples);
+    expect(mocks.addNotification).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'error', message: expect.stringMatching(/"Terrain" \(terrainData\) cannot be saved \(Terrain heights must be finite Float32 values\) and has been reverted/),
+    }));
+  });
+
+  it('give history snapshots taken while heights load the resolved heights, so undo can upload them again', async () => {
+    let release: (value: unknown) => void = () => undefined;
+    const download = new Promise((resolve) => { release = resolve; });
+    vi.mocked(projectService.resolveAsset).mockResolvedValue('https://assets.auvra.local/v1/get/token');
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      await download;
+      return { ok: true, status: 200, arrayBuffer: async () => encodeTerrainHeightfield(samples, 3, 3).buffer };
+    }));
+    const { result } = renderEditor([terrain({ resolution: 2, width: 10, depth: 10, heightfield })]);
+    act(() => result.current.levels.snapshotHistory());
+    release(undefined);
+    await waitFor(() => expect(result.current.levels.levelObjects[0].terrainData?.heights).toEqual(samples));
+
+    const sculpted = samples.map((value) => value + 1);
+    act(() => result.current.levels.updateLevelObject('terrain', { terrainData: { resolution: 2, width: 10, depth: 10, heightfield, heights: sculpted } }));
+    await act(() => result.current.levels.undo());
+    // The sculpt's commit may already have discarded the original heightfield;
+    // undo writes the heights, which are uploaded again.
+    const undone = vi.mocked(dbOperations.updateLevelObject).mock.calls.at(-1)?.[1] as LevelObject;
+    expect(undone.terrainData?.heights).toEqual(samples);
+    expect(result.current.levels.levelObjects[0].terrainData?.heights).toEqual(samples);
+  });
+
+  it('upload remembered heights again once the stored document references another heightfield', async () => {
+    const { dbOperations: realDb } = await vi.importActual<typeof import('../../utils/db')>('../../utils/db');
+    const resolved = await resolveTerrainHeightfield(heightfield, async () => encodeTerrainHeightfield(samples, 3, 3).buffer);
+    // A later commit replaced the heightfield these heights were loaded from,
+    // and the host discards a replaced heightfield.
+    mocks.snapshotObjects = [{ ...terrain({ resolution: 2, width: 10, depth: 10, heightfield: { ...heightfield, assetId: 'd'.repeat(64) } }) }];
+    await realDb.updateLevelObject('terrain', { terrainData: { resolution: 2, width: 10, depth: 10, heightfield, heights: resolved } });
+    expect(projectService.uploadAsset).toHaveBeenCalledTimes(1);
+    const [[changes]] = vi.mocked(projectService.applyChanges).mock.calls;
+    expect((changes[0].value as LevelObject).terrainData).toEqual({ resolution: 2, width: 10, depth: 10, heightfield });
   });
 
   it('does not re-upload resolved heights when other terrain fields change', async () => {

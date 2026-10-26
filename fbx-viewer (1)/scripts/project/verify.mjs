@@ -111,6 +111,12 @@ if (!/restorePendingEdits\(new Map\(\[\[id, edit\]\]\)\)/.test(levels)
   || !/await flushPendingLevelEdits\(\{ notify: false \}\);[\s\S]*?transition = transitionKind \? editorSession\.beginTransition\(\) : null;/.test(projectManager)) {
   failures.push('debounced level edits are not flushed before session-ending operations or are silently reverted on failure');
 }
+// An edit the project rejects (validation, a removed object) cannot succeed on
+// retry: its object is reverted and reported so later saves are not blocked.
+if (!/isRejectedLevelEdit\(error\)[\s\S]*?revertRejectedEdit\(id, edit, error\)/.test(levels)
+  || !/new ProjectHostError\(message, error\.code\)/.test(service)) {
+  failures.push('a level edit the project rejects is retried forever and blocks every later save');
+}
 // Terrain heights are a binary heightfield asset; object documents carry only its reference.
 if (!/canonicalChange\('objects', 'upsert', obj, obj\.id, lease, prepareLevelObjectDocument\)/.test(db)
   || !/canonicalChange\('objects', 'upsert', \{ id, \.\.\.updates \}, id, lease, prepareLevelObjectDocument\)/.test(db)

@@ -149,17 +149,8 @@ class DBOperations {
     this.requireEditorLease(lease);
     if (!projectService.getStatus().projectId) throw new Error('Open a native project before editing');
     if (projectService.getStatus().readOnly) throw new Error('Project is read-only');
-    let afterCommit: (() => void) | undefined;
-    if (prepare) {
-      // Runs inside the mutation queue so binary side data (terrain
-      // heightfields) is uploaded in the same order as the documents.
-      const prepared = await prepare(value);
-      value = prepared.value;
-      afterCommit = prepared.afterCommit;
-      this.requireEditorLease(lease);
-    }
-    let completeValue = value;
-    if (operation === 'upsert' && value && typeof value === 'object' && id) {
+    const upsertsDocument = operation === 'upsert' && Boolean(value && typeof value === 'object' && id);
+    const readStored = async (): Promise<Record<string, unknown> | undefined> => {
       const snapshot = await projectService.getSnapshotAll(domain);
       const rawDomain = snapshot?.domains?.[domain];
       const records = Array.isArray(rawDomain)
@@ -167,8 +158,22 @@ class DBOperations {
         : rawDomain && typeof rawDomain === 'object' && Array.isArray((rawDomain as { documents?: unknown[] }).documents)
           ? (rawDomain as { documents: unknown[] }).documents : snapshot?.documents || [];
       const current = records.find((record) => record && typeof record === 'object' && (record as { id?: unknown }).id === id);
-      if (current && typeof current === 'object') completeValue = { ...(current as Record<string, unknown>), ...(value as Record<string, unknown>) };
       this.requireEditorLease(lease);
+      return current && typeof current === 'object' ? current as Record<string, unknown> : undefined;
+    };
+    let afterCommit: (() => void) | undefined;
+    if (prepare) {
+      // Runs inside the mutation queue so binary side data (terrain
+      // heightfields) is uploaded in the same order as the documents.
+      const prepared = await prepare(value, upsertsDocument ? readStored : undefined);
+      value = prepared.value;
+      afterCommit = prepared.afterCommit;
+      this.requireEditorLease(lease);
+    }
+    let completeValue = value;
+    if (upsertsDocument && value && typeof value === 'object') {
+      const current = await readStored();
+      if (current) completeValue = { ...current, ...(value as Record<string, unknown>) };
     }
     this.requireEditorLease(lease);
     await projectService.applyChanges([{ domain, operation, id, value: completeValue }]);
@@ -703,16 +708,19 @@ function nativeDomainRecords(snapshot: Awaited<ReturnType<typeof projectService.
   return values.filter((value): value is Record<string, any> => Boolean(value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string'));
 }
 
-type DocumentPreparation = (value: unknown) => Promise<{ value: unknown; afterCommit?: () => void }>;
+/** Prepares a document for writing; `readStored` reads the document it replaces, if any. */
+type DocumentPreparation = (value: unknown, readStored?: () => Promise<Record<string, unknown> | undefined>) => Promise<{ value: unknown; afterCommit?: () => void }>;
 
 /** Level object documents carry a heightfield asset reference, never inline
  * terrain heights: a sculpted terrain would exceed the host message and
  * snapshot page limits and make the whole objects domain unreadable. */
-async function prepareLevelObjectDocument(value: unknown): Promise<{ value: unknown; afterCommit?: () => void }> {
+async function prepareLevelObjectDocument(value: unknown, readStored?: () => Promise<Record<string, unknown> | undefined>): Promise<{ value: unknown; afterCommit?: () => void }> {
   if (!value || typeof value !== 'object') return { value };
   const terrainData = (value as { terrainData?: unknown }).terrainData;
   if (!terrainData || typeof terrainData !== 'object') return { value };
-  const prepared = await externalizeTerrainData(terrainData as TerrainData);
+  const prepared = await externalizeTerrainData(terrainData as TerrainData, {
+    storedHeightfield: readStored && (async () => ((await readStored())?.terrainData as TerrainData | null | undefined)?.heightfield),
+  });
   return {
     value: { ...(value as Record<string, unknown>), terrainData: prepared.terrainData },
     afterCommit: prepared.remember,

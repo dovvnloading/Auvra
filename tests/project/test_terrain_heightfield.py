@@ -155,6 +155,49 @@ class HeightfieldRepositoryTests(unittest.TestCase):
         with self.assertRaises(InvalidProjectError):
             self.repo.apply_changes({"objects": [terrain_object(terrain)]}, expected_revision=1)
 
+    def upload(self, fill):
+        data = encode_heightfield([float(fill)] * (3 * 3), 3, 3)
+        return self.repo.assets.put_stream(io.BytesIO(data), mime=HEIGHTFIELD_MIME, name="terrain-heightfield.bin").asset_id
+
+    def commit(self, *objects):
+        self.repo.apply_changes({"objects": list(objects)}, expected_revision=self.repo.revision)
+
+    def terrain(self, asset_id, object_id="terrain"):
+        terrain = {"resolution": 2, "width": 10, "depth": 10, "heightfield": heightfield_reference(asset_id, 3)}
+        return {**terrain_object(terrain), "id": object_id}
+
+    def stored_blobs(self, root):
+        return sorted(path.name for path in (root / "Content" / "sha256").iterdir() if path.is_file())
+
+    def test_replaced_heightfield_is_discarded_once_the_replacement_commits(self):
+        first = self.upload(1)
+        self.commit(self.terrain(first))
+        strokes = [self.upload(fill) for fill in range(2, 6)]
+        for asset_id in strokes:
+            self.commit(self.terrain(asset_id))
+        # Only the live heightfield stays in Content, and so in every recovery point.
+        self.assertEqual(self.stored_blobs(self.repo.path), [strokes[-1]])
+        self.repo.autosave()
+        [point] = [path for path in (self.repo.path / ".auvra" / "autosaves").iterdir() if path.is_dir()]
+        self.assertEqual(self.stored_blobs(point), [strokes[-1]])
+        manifest = json.loads((point / "Content" / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(sorted(manifest), [strokes[-1]])
+
+    def test_shared_deleted_and_uncommitted_heightfields_are_kept(self):
+        shared, replacement = self.upload(1), self.upload(2)
+        self.commit(self.terrain(shared), self.terrain(shared, "copy"))
+        # Another terrain still references the replaced heightfield.
+        self.commit(self.terrain(replacement), self.terrain(shared, "copy"))
+        self.assertTrue(self.repo.assets.verify(shared))
+        # A deleted terrain keeps its heightfield until close (undo can restore it).
+        self.commit(self.terrain(replacement))
+        self.assertTrue(self.repo.assets.verify(shared))
+        # A replacement that fails to commit supersedes nothing.
+        with self.assertRaises(InvalidProjectError):
+            self.commit(self.terrain("b" * 64))
+        self.assertTrue(self.repo.assets.verify(replacement))
+        self.assertEqual(self.repo.get_domain("objects")["documents"][0]["terrainData"]["heightfield"]["assetId"], replacement)
+
 
 if __name__ == "__main__":
     unittest.main()

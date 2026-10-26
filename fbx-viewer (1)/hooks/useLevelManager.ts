@@ -8,7 +8,7 @@ import { frontendDiagnostics } from '../diagnostics/runtime';
 import { editorSession, selectObjectsForLevel, type EditorSessionLease } from '../utils/editorSession';
 import { subscribeDomainCascade, type DomainCascadeEvent } from '../utils/domainCascade';
 import { resolveTerrainHeightfield } from '../utils/terrainHeightfield';
-import { isTerrainHeightfieldPending } from '../utils/terrainHeightfieldCodec';
+import { isTerrainHeightfieldPending, TerrainHeightfieldEncodingError } from '../utils/terrainHeightfieldCodec';
 
 const DEFAULT_LEVEL_ID = 'default_level';
 const EMPTY_BLUEPRINT: LevelBlueprintData = { nodes: [], connections: [], variables: [] };
@@ -99,6 +99,15 @@ const changedLevelObjectIds = (currentState: LevelObject[], nextState: LevelObje
 
 const describeError = (error: unknown): string => error instanceof Error && error.message ? error.message : 'unknown error';
 
+// Host error codes for a level edit that writing it again cannot fix: the
+// document failed validation (a schema error is reported as internal_error),
+// it no longer exists, or the project is read-only. Conflicts, an unavailable
+// host and transport failures stay retryable.
+const REJECTED_EDIT_CODES = new Set(['invalid_request', 'invalid_project', 'internal_error', 'read_only']);
+
+const isRejectedLevelEdit = (error: unknown): boolean => error instanceof TerrainHeightfieldEncodingError
+    || (error instanceof Error && REJECTED_EDIT_CODES.has(String((error as { code?: unknown }).code)));
+
 const syncStateToDB = async (
     currentState: LevelObject[],
     nextState: LevelObject[],
@@ -150,6 +159,8 @@ export const useLevelManager = (models: LoadedModelData[]) => {
   const sessionSnapshot = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
   const [workingState, setWorkingState] = useState<LevelWorkingState>(EMPTY_WORKING_STATE);
   const { levels, currentLevelId, levelObjects, activeLevelBlueprint } = workingState;
+  const levelObjectsRef = useRef(levelObjects);
+  levelObjectsRef.current = levelObjects;
   const currentLevelIdRef = useRef<string | null>(null);
   const getCurrentLevelId = useCallback(() => currentLevelIdRef.current, []);
 
@@ -311,6 +322,40 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       });
   }), [session, supersedePendingEdits, workingState.levelObjects]);
 
+  /**
+   * Put the object of an edit the project rejected back to its stored
+   * document, keeping edits made since. Returns false when the stored state
+   * cannot be read, so the caller keeps the edit pending instead.
+   */
+  const revertRejectedEdit = useCallback(async (id: string, edit: PendingLevelEdit, error: unknown): Promise<boolean> => {
+      let stored: LevelObject | undefined;
+      try {
+          stored = (await dbOperations.getAllNativeLevelObjects()).find((object) => object.id === id);
+      } catch (readError) {
+          frontendDiagnostics.failure('level_edit_revert_failed', readError);
+          return false;
+      }
+      // Undo/redo, a delete or an asset cascade rewrote the object meanwhile,
+      // or the session ended; either way there is nothing left to revert.
+      if (inFlightUpdatesRef.current.get(id) !== edit || !session.isSameSession(edit.lease)) return true;
+      const name = levelObjectsRef.current.find((object) => object.id === id)?.name || stored?.name || id;
+      const newer = pendingUpdatesRef.current.get(id);
+      // Later partial edits of an object the project no longer has would be rejected too.
+      if (!stored) pendingUpdatesRef.current.delete(id);
+      const reverted = stored && newer ? { ...stored, ...newer.updates } : stored;
+      setWorkingState((current) => ({
+          ...current,
+          levelObjects: current.levelObjects.flatMap((object) => object.id !== id ? [object] : reverted ? [reverted] : []),
+      }));
+      frontendDiagnostics.failure('level_edit_rejected', error);
+      const fields = Object.keys(edit.updates).join(', ');
+      addNotification({
+          message: `The edit to "${name}"${fields ? ` (${fields})` : ''} cannot be saved (${describeError(error)}) and has been ${stored ? 'reverted' : 'discarded because the object no longer exists'}.`,
+          type: 'error',
+      });
+      return true;
+  }, [addNotification, session]);
+
   /** Write every pending edit of the current session; failed writes stay pending. */
   const writePendingEdits = useCallback(async () => {
       const failures: unknown[] = [];
@@ -333,6 +378,11 @@ export const useLevelManager = (models: LoadedModelData[]) => {
               try {
                   await dbOperations.updateLevelObject(id, edit.updates, lease);
               } catch (error) {
+                  // Retrying a rejected edit cannot succeed and would block every
+                  // later save, so its object is reverted (a superseding rewrite
+                  // already replaced it). Other failures are retried.
+                  const current = inFlightUpdatesRef.current.get(id) === edit;
+                  if (isRejectedLevelEdit(error) && (!current || await revertRejectedEdit(id, edit, error))) continue;
                   failures.push(error);
                   // Keep the edit (it is still shown) retryable instead of
                   // reverting it; edits made meanwhile are newer and win.
@@ -343,7 +393,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
           }
       }
       return { failures, fenced };
-  }, [restorePendingEdits, session]);
+  }, [restorePendingEdits, revertRejectedEdit, session]);
 
   /**
    * Persist all pending level edits and wait for them. Project operations,
@@ -416,16 +466,27 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       for (const reference of references.values()) {
           resolveTerrainHeightfield(reference).then((heights) => {
               if (!active) return;
+              const resolves = (object: LevelObject): boolean => {
+                  const terrain = object.terrainData;
+                  return Boolean(terrain?.heightfield && isTerrainHeightfieldPending(terrain)
+                      && terrain.heightfield.assetId === reference.assetId
+                      && terrain.heightfield.columns === reference.columns
+                      && terrain.heightfield.rows === reference.rows);
+              };
+              // Snapshots taken while the heights were loading get them too: the
+              // host discards a heightfield once a commit replaces it, so undo
+              // must be able to upload the heights again.
+              for (const snapshot of [...history.current.past, ...history.current.future]) {
+                  snapshot.forEach((object, index) => {
+                      if (resolves(object)) snapshot[index] = { ...object, terrainData: { ...object.terrainData!, heights: heights.slice() } };
+                  });
+              }
               setWorkingState((current) => {
                   let changed = false;
                   const nextObjects = current.levelObjects.map((object) => {
-                      const terrain = object.terrainData;
-                      if (!terrain?.heightfield || !isTerrainHeightfieldPending(terrain)
-                          || terrain.heightfield.assetId !== reference.assetId
-                          || terrain.heightfield.columns !== reference.columns
-                          || terrain.heightfield.rows !== reference.rows) return object;
+                      if (!resolves(object)) return object;
                       changed = true;
-                      return { ...object, terrainData: { ...terrain, heights } };
+                      return { ...object, terrainData: { ...object.terrainData!, heights } };
                   });
                   return changed ? { ...current, levelObjects: nextObjects } : current;
               });

@@ -258,6 +258,8 @@ class ProjectRepository:
         validated = {domain: domain_document(domain, copy.deepcopy(docs)) for domain, docs in changes.items()}
         candidate = {domain: (validated[domain] if domain in validated else self.get_domain(domain)) for domain in DOMAIN_NAMES}
         candidate_refs = self.referenced_asset_ids(candidate)
+        superseded = (_superseded_heightfields(self.get_domain("objects"), validated["objects"])
+                      if "objects" in validated else set())
         try:
             validate_project_references(candidate, asset_exists=self.assets.verify)
         except ValueError as exc:
@@ -269,6 +271,16 @@ class ProjectRepository:
             self.prune_unreferenced_assets(candidate_refs - self.referenced_asset_ids())
             raise
         self._dirty = True
+        if superseded:
+            # Every sculpt stroke, terrain undo and redo commits a new
+            # content-addressed heightfield, and the editor re-uploads any
+            # heights it needs again. Drop a replaced heightfield as soon as no
+            # committed document references it, instead of keeping it in
+            # Content (and copying it into every recovery point) until close.
+            try:
+                self.assets.remove_unreferenced(candidate_refs, superseded)
+            except (OSError, ValueError):
+                pass
         return self.revision
 
     def _transaction(self, docs: dict[str, dict[str, Any]], new_revision: int) -> None:
@@ -629,6 +641,27 @@ def _fsync_tree(root: Path) -> None:
             _fsync_file(path)
         elif path.is_dir():
             _fsync_directory(path)
+
+def _terrain_heightfields(objects: dict[str, Any]) -> dict[str, str]:
+    """Map each terrain object id to its heightfield asset id."""
+    references: dict[str, str] = {}
+    for document in objects.get("documents", []):
+        terrain = document.get("terrainData") if isinstance(document, dict) else None
+        heightfield = terrain.get("heightfield") if isinstance(terrain, dict) else None
+        if isinstance(heightfield, dict) and isinstance(heightfield.get("assetId"), str):
+            references[document.get("id")] = heightfield["assetId"]
+    return references
+
+def _superseded_heightfields(previous: dict[str, Any], committed: dict[str, Any]) -> set[str]:
+    """Heightfields that a kept object document replaced with another one.
+
+    Only replacements count: a deleted terrain keeps its heightfield until the
+    project closes, so undoing the delete can still restore its reference.
+    """
+    after = _terrain_heightfields(committed)
+    kept = {document.get("id") for document in committed.get("documents", []) if isinstance(document, dict)}
+    return {asset_id for object_id, asset_id in _terrain_heightfields(previous).items()
+            if object_id in kept and after.get(object_id) != asset_id}
 
 def _journal_path(project_root: Path, value: Any, area: str) -> Path:
     """Resolve only the journal's approved relative path namespaces."""

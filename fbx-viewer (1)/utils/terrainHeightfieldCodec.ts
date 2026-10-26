@@ -26,9 +26,17 @@ export const TERRAIN_HEIGHTFIELD_HEADER_BYTES = 16;
 export const MAX_TERRAIN_HEIGHTFIELD_SAMPLES_PER_SIDE = 4097;
 const MAGIC = 'AUVRAHF1';
 
-const assertDimension = (value: number, label: string): void => {
+/** The heights cannot be stored as a heightfield; writing the same data again cannot succeed. */
+export class TerrainHeightfieldEncodingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TerrainHeightfieldEncodingError';
+  }
+}
+
+const assertDimension = (value: number, label: string, Failure: new (message: string) => Error = Error): void => {
   if (!Number.isInteger(value) || value < 2 || value > MAX_TERRAIN_HEIGHTFIELD_SAMPLES_PER_SIDE) {
-    throw new Error(`Terrain heightfield ${label} is out of range`);
+    throw new Failure(`Terrain heightfield ${label} is out of range`);
   }
 };
 
@@ -43,10 +51,10 @@ export function isTerrainHeightfieldPending(terrain: TerrainHeightsState | null 
 }
 
 export function encodeTerrainHeightfield(heights: ArrayLike<number>, columns: number, rows: number): Uint8Array<ArrayBuffer> {
-  assertDimension(columns, 'columns');
-  assertDimension(rows, 'rows');
+  assertDimension(columns, 'columns', TerrainHeightfieldEncodingError);
+  assertDimension(rows, 'rows', TerrainHeightfieldEncodingError);
   const count = columns * rows;
-  if (heights.length !== count) throw new Error('Terrain heights do not match the terrain resolution');
+  if (heights.length !== count) throw new TerrainHeightfieldEncodingError('Terrain heights do not match the terrain resolution');
   const bytes = new Uint8Array(TERRAIN_HEIGHTFIELD_HEADER_BYTES + count * 4);
   const view = new DataView(bytes.buffer);
   for (let index = 0; index < MAGIC.length; index++) bytes[index] = MAGIC.charCodeAt(index);
@@ -54,7 +62,7 @@ export function encodeTerrainHeightfield(heights: ArrayLike<number>, columns: nu
   view.setUint32(12, rows, true);
   for (let index = 0; index < count; index++) {
     const value = Math.fround(heights[index]);
-    if (!Number.isFinite(value)) throw new Error('Terrain heights must be finite Float32 values');
+    if (!Number.isFinite(value)) throw new TerrainHeightfieldEncodingError('Terrain heights must be finite Float32 values');
     view.setFloat32(TERRAIN_HEIGHTFIELD_HEADER_BYTES + index * 4, value, true);
   }
   return bytes;

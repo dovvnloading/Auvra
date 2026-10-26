@@ -34,15 +34,23 @@ const loadHeightfield: TerrainHeightfieldLoader = async (assetId) => {
   return response.arrayBuffer();
 };
 
+const sameHeightfield = (a: TerrainHeightfieldReference, b: TerrainHeightfieldReference | undefined): boolean =>
+  Boolean(b && a.assetId === b.assetId && a.encoding === b.encoding && a.columns === b.columns && a.rows === b.rows);
+
 /**
  * Convert in-memory terrain data into its persisted reference form. Inline
  * heights (from a sculpt stroke or a legacy document) are uploaded as a
- * heightfield asset; an unresolved reference is kept as is. `remember` must be
- * called only after the document referencing the asset has been committed.
+ * heightfield asset; an unresolved reference is kept as is. `storedHeightfield`
+ * reads the heightfield of the document being replaced, if any. `remember`
+ * must be called only after the document referencing the asset has been
+ * committed.
  */
 export async function externalizeTerrainData(
   terrain: TerrainData,
-  upload: TerrainHeightfieldUploader = uploadHeightfield,
+  { storedHeightfield, upload = uploadHeightfield }: {
+    storedHeightfield?: () => Promise<TerrainHeightfieldReference | undefined>;
+    upload?: TerrainHeightfieldUploader;
+  } = {},
 ): Promise<{ terrainData: TerrainData; remember?: () => void }> {
   const { heights, heightfield, ...rest } = terrain;
   if (!heights || heights.length === 0) {
@@ -51,7 +59,11 @@ export async function externalizeTerrainData(
   const columns = terrainSamplesPerSide(terrain.resolution);
   const rows = columns;
   const known = knownHeightfields.get(heights);
-  if (known && known.columns === columns && known.rows === rows) {
+  // Skip the upload only for the asset the replaced document still references.
+  // The host discards a heightfield once a commit replaces it, so any other
+  // remembered asset (e.g. the one a rollback goes back to) may be gone.
+  if (known && known.columns === columns && known.rows === rows
+      && storedHeightfield && sameHeightfield(known, await storedHeightfield())) {
     return { terrainData: { ...rest, heightfield: known } };
   }
   return frontendDiagnostics.runAsync('terrain_heightfield', 'upload', async () => {
