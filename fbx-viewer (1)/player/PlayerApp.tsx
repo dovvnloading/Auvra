@@ -8,7 +8,17 @@ import { loadGameContent } from '../utils/projectHydration';
 import { HUDRenderer } from '../components/HUDEditor/HUDRenderer';
 import { loadGamePack, type GamePackSource } from './gamePack';
 import { OptionsMenu } from './OptionsMenu';
+import {
+    AuthoredMenu,
+    findMenuDocument,
+    PAUSE_MENU_DOCUMENT_ID,
+    PAUSE_MENU_REQUIRED_ACTIONS,
+    TITLE_MENU_DOCUMENT_ID,
+    TITLE_MENU_REQUIRED_ACTIONS,
+    type MenuActionHandlers,
+} from './menus';
 import { createPlayerOptionsStore, defaultPlayerOptions } from '../runtime/playerOptions';
+import { localization, localizationSettingsFromDocuments } from '../runtime/localization';
 
 type Screen = 'title' | 'playing';
 
@@ -63,9 +73,13 @@ export const PlayerApp: React.FC = () => {
             try {
                 source = await loadGamePack(window.location.href, controller.signal);
                 setPack(source);
+                localization.scopeToGame(source.manifest.gameId);
+                localization.load(localizationSettingsFromDocuments(source.domains.metadata));
                 const content = await loadGameContent(source.domains as Record<string, any[]>, {
                     resolveAssetUrl: source.resolveAssetUrl,
                     generateThumbnails: false,
+                    // The player has no level manager to load terrain heights and paint later.
+                    resolveTerrains: true,
                     onProgress: (value, label) => setProgress({ value, label }),
                     signal: controller.signal,
                 });
@@ -192,6 +206,42 @@ export const PlayerApp: React.FC = () => {
         beginSession(startupLevelId);
     }, [startupLevelId, settings, beginSession]);
 
+    // Authored 'menu-title' / 'menu-pause' HUD documents replace the built-in menus when present.
+    const titleMenu = useMemo(
+        () => findMenuDocument(pack?.domains.hud, TITLE_MENU_DOCUMENT_ID, TITLE_MENU_REQUIRED_ACTIONS),
+        [pack],
+    );
+    const pauseMenu = useMemo(
+        () => findMenuDocument(pack?.domains.hud, PAUSE_MENU_DOCUMENT_ID, PAUSE_MENU_REQUIRED_ACTIONS),
+        [pack],
+    );
+
+    const hasSaves = saveList.length > 0;
+    const latestSlot = hasSaves ? saveList[0].slot : null;
+    const menuHandlers = useMemo<MenuActionHandlers>(() => ({
+        play: startupLevelId ? startGame : undefined,
+        continue: latestSlot ? () => loadGame(latestSlot) : undefined,
+        load: hasSaves ? () => loadGame() : undefined,
+        options: optionsStore ? () => setOptionsOpen(true) : undefined,
+        openLevel: host.openLevel,
+    }), [startupLevelId, startGame, latestSlot, hasSaves, loadGame, optionsStore, host]);
+
+    const titleHandlers = useMemo<MenuActionHandlers>(() => ({
+        ...menuHandlers,
+        // Browsers only close windows a script opened; elsewhere this is a no-op.
+        quit: () => {
+            if (document.fullscreenElement) document.exitFullscreen?.().catch(() => undefined);
+            window.close();
+        },
+    }), [menuHandlers]);
+
+    const pauseHandlers = useMemo<MenuActionHandlers>(() => ({
+        ...menuHandlers,
+        resume: () => setPaused(false),
+        save: () => saveGame(),
+        quit: quitToTitle,
+    }), [menuHandlers, saveGame, quitToTitle]);
+
     const hudOverlay = useMemo(() => {
         const hud = loaded?.hud;
         return hud && Array.isArray(hud.elements) && hud.elements.length > 0
@@ -239,10 +289,15 @@ export const PlayerApp: React.FC = () => {
                         sessionKey={session.key}
                         overlay={hudOverlay}
                         restore={session.restore}
+                        playerOptions={optionsStore ?? undefined}
                     />
                 )}
 
-                {screen === 'title' && (
+                {screen === 'title' && titleMenu && (
+                    <AuthoredMenu document={titleMenu} handlers={titleHandlers} availableLevels={levels} />
+                )}
+
+                {screen === 'title' && !titleMenu && (
                     <Menu title={manifest.name}>
                         <Button onClick={startGame} disabled={!startupLevelId}>Play</Button>
                         {saveList.length > 0 && <Button onClick={() => loadGame(saveList[0].slot)}>Continue</Button>}
@@ -251,7 +306,11 @@ export const PlayerApp: React.FC = () => {
                     </Menu>
                 )}
 
-                {screen === 'playing' && paused && !gameOver && (
+                {screen === 'playing' && paused && !gameOver && pauseMenu && (
+                    <AuthoredMenu document={pauseMenu} handlers={pauseHandlers} availableLevels={levels} />
+                )}
+
+                {screen === 'playing' && paused && !gameOver && !pauseMenu && (
                     <Menu title="Paused">
                         <Button onClick={() => setPaused(false)}>Resume</Button>
                         <Button onClick={() => saveGame()}>Save</Button>

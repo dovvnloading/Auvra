@@ -176,6 +176,7 @@ export const SandboxWorld: React.FC<SandboxWorldProps> = ({
                         onAimChange={handleAimChange}
                         weaponSounds={weaponSoundUrls}
                         weaponVolume={playerBlueprint.weaponVolume ?? 1.0}
+                        blueprint={playerBlueprint}
                     />
                     
                     {/* AI Controller (Only runs if enemy is not despawned) */}
@@ -187,6 +188,7 @@ export const SandboxWorld: React.FC<SandboxWorldProps> = ({
                             boundarySize={boundarySize}
                             enabled={true}
                             onDealDamage={handleEnemyAttack}
+                            stats={enemyBlueprint?.stats}
                         />
                     )}
                 </>

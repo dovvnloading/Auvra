@@ -3,7 +3,8 @@ import React, { useMemo, useCallback } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import { GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
-import { AI_CONFIG } from './AI/AIConfig';
+import { AI_CONFIG, resolveAITuning } from './AI/AIConfig';
+import type { BlueprintStat } from '../../types';
 import { useAIBrain } from './AI/useAIBrain';
 import { useAILocomotion } from './AI/useAILocomotion';
 
@@ -14,6 +15,8 @@ interface AIControllerProps {
     boundarySize: number;
     enabled: boolean;
     onDealDamage?: () => void;
+    /** Enemy blueprint stats ('Speed', 'Attack Range', 'Attack Cooldown', 'Sight Range'). */
+    stats?: readonly BlueprintStat[];
 }
 
 export const AIController: React.FC<AIControllerProps> = ({
@@ -22,7 +25,8 @@ export const AIController: React.FC<AIControllerProps> = ({
     targetObject,
     boundarySize,
     enabled,
-    onDealDamage
+    onDealDamage,
+    stats
 }) => {
     // Callback wrapper
     const handleAttack = useCallback(() => {
@@ -30,7 +34,8 @@ export const AIController: React.FC<AIControllerProps> = ({
     }, [onDealDamage]);
 
     // --- Systems ---
-    const brain = useAIBrain(enemyApi, handleAttack);
+    const tuning = useMemo(() => resolveAITuning(stats), [stats]);
+    const brain = useAIBrain(enemyApi, handleAttack, tuning);
     const locomotion = useAILocomotion();
 
     // Reusable Vectors
@@ -82,7 +87,8 @@ export const AIController: React.FC<AIControllerProps> = ({
             destination: brainOutput.destination,
             targetFocus: brainOutput.targetFocus,
             state: brainOutput.state,
-            delta
+            delta,
+            tuning
         });
 
         // 4. Fail-safe Boundary Clamp

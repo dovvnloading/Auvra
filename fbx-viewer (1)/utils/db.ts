@@ -2,9 +2,12 @@
 import { AssetCategory, AssetInfoUpdate, AttachmentData, Blueprint, SocketData, TextureData, LevelObject, LevelData, AudioData, TerrainData, PrefabData } from '../types';
 import { AssetTransferOptions, projectService } from './projectService';
 import { externalizeTerrainData } from './terrainHeightfieldEditor';
+import { externalizeTerrainSplat } from '../components/Environment/Terrain/terrainSplatEditor';
+import { terrainLayersReferenceTexture, withoutTerrainLayerTexture } from '../components/Environment/Terrain/terrainSplatCodec';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { editorSession, type EditorSessionLease } from './editorSession';
 import { sortByHierarchy } from './sceneGraph';
+import { normalizeMaterialOverrides, setMaterialOverrideField, type MaterialOverrides } from './materialOverrides';
 
 const DB_NAME = 'OmniRenderDB';
 
@@ -300,6 +303,11 @@ class DBOperations {
       await this.canonicalChange('models', 'upsert', { id, textureOverrides: overrides }, id);
   }
 
+  /** Replace a model's per-material overrides (normalized; `{}` clears them all). */
+  async updateModelMaterialOverrides(id: string, overrides: MaterialOverrides): Promise<void> {
+      await this.canonicalChange('models', 'upsert', { id, materialOverrides: normalizeMaterialOverrides(overrides) }, id);
+  }
+
   /** Rename and/or move a model in the content browser; folder '' is the library root. */
   async updateModelInfo(id: string, updates: AssetInfoUpdate): Promise<void> {
       await this.canonicalChange('models', 'upsert', assetInfoDocument(id, updates), id);
@@ -562,8 +570,15 @@ class DBOperations {
     ];
     for (const record of nativeDomainRecords(snapshot, 'models')) {
       const textureOverrides = Object.fromEntries(Object.entries(record.textureOverrides || {}).filter(([, textureId]) => textureId !== id));
-      if (Object.keys(textureOverrides).length !== Object.keys(record.textureOverrides || {}).length) {
-        changes.push({ domain: 'models', operation: 'upsert', id: record.id, value: { ...record, textureOverrides } });
+      const materialOverrides = record.materialOverrides ? withoutMaterialOverrideTexture(record.materialOverrides, id) : undefined;
+      const texturesChanged = Object.keys(textureOverrides).length !== Object.keys(record.textureOverrides || {}).length;
+      const materialsChanged = materialOverrides !== undefined && materialOverrides !== record.materialOverrides;
+      if (texturesChanged || materialsChanged) {
+        changes.push({ domain: 'models', operation: 'upsert', id: record.id, value: {
+          ...record,
+          ...(texturesChanged ? { textureOverrides } : {}),
+          ...(materialsChanged ? { materialOverrides } : {}),
+        } });
       }
     }
     for (const record of nativeDomainRecords(snapshot, 'blueprints')) {
@@ -577,8 +592,11 @@ class DBOperations {
       if (textureIds.length !== (record.textureIds || []).length) changes.push({ domain: 'materials', operation: 'upsert', id: record.id, value: { ...record, textureIds } });
     }
     for (const record of nativeDomainRecords(snapshot, 'objects')) {
-      if (record.terrainData?.textureId === id) {
-        const { textureId: _removed, ...terrainData } = record.terrainData;
+      const stored = record.terrainData;
+      if (stored?.textureId === id || terrainLayersReferenceTexture(stored, id)) {
+        const { textureId: _removed, ...withoutTexture } = stored;
+        // Layers keep their slot (splat channel N weights layer N); only the texture goes.
+        const terrainData = withoutTerrainLayerTexture(stored.textureId === id ? withoutTexture : stored, id);
         changes.push({ domain: 'objects', operation: 'upsert', id: record.id, value: { ...record, terrainData } });
       }
     }
@@ -751,7 +769,7 @@ class DBOperations {
 
 frontendDiagnostics.instrumentClass(DBOperations, 'project_documents', [
   'addLevel', 'deleteLevel', 'addModel', 'updateModelPlacement',
-  'updateModelTextureOverrides', 'updateModelInfo', 'addModelTextureOverride', 'deleteModel',
+  'updateModelTextureOverrides', 'updateModelMaterialOverrides', 'updateModelInfo', 'addModelTextureOverride', 'deleteModel',
   'addAnimations', 'addAttachment', 'updateAttachment', 'deleteAttachment',
   'addSocket', 'updateSocket', 'deleteSocket', 'addLevelObject',
   'updateLevelObject', 'deleteLevelObject', 'getAllNativeLevelObjects', 'addTexture', 'updateTextureInfo', 'deleteTexture',
@@ -773,19 +791,29 @@ function nativeDomainRecords(snapshot: Awaited<ReturnType<typeof projectService.
 /** Prepares a document for writing; `readStored` reads the document it replaces, if any. */
 type DocumentPreparation = (value: unknown, readStored?: () => Promise<Record<string, unknown> | undefined>) => Promise<{ value: unknown; afterCommit?: () => void }>;
 
-/** Level object documents carry a heightfield asset reference, never inline
- * terrain heights: a sculpted terrain would exceed the host message and
- * snapshot page limits and make the whole objects domain unreadable. */
+/** Level object documents carry heightfield and splat map asset references,
+ * never inline terrain heights or paint weights: a sculpted or painted terrain
+ * would exceed the host message and snapshot page limits and make the whole
+ * objects domain unreadable. */
 async function prepareLevelObjectDocument(value: unknown, readStored?: () => Promise<Record<string, unknown> | undefined>): Promise<{ value: unknown; afterCommit?: () => void }> {
   if (!value || typeof value !== 'object') return { value };
   const terrainData = (value as { terrainData?: unknown }).terrainData;
   if (!terrainData || typeof terrainData !== 'object') return { value };
+  // Both steps compare against the document being replaced: read it once.
+  let storedTerrain: Promise<TerrainData | null | undefined> | undefined;
+  const readStoredTerrain = readStored && (() => {
+    storedTerrain ??= readStored().then((stored) => stored?.terrainData as TerrainData | null | undefined);
+    return storedTerrain;
+  });
   const prepared = await externalizeTerrainData(terrainData as TerrainData, {
-    storedHeightfield: readStored && (async () => ((await readStored())?.terrainData as TerrainData | null | undefined)?.heightfield),
+    storedHeightfield: readStoredTerrain && (async () => (await readStoredTerrain())?.heightfield),
+  });
+  const splat = await externalizeTerrainSplat(prepared.terrainData, {
+    storedSplatmap: readStoredTerrain && (async () => (await readStoredTerrain())?.splatmap),
   });
   return {
-    value: { ...(value as Record<string, unknown>), terrainData: prepared.terrainData },
-    afterCommit: prepared.remember,
+    value: { ...(value as Record<string, unknown>), terrainData: splat.terrainData },
+    afterCommit: () => { prepared.remember?.(); splat.remember?.(); },
   };
 }
 
@@ -805,6 +833,19 @@ export function normalizeAssetInfoUpdate(updates: AssetInfoUpdate): AssetInfoUpd
     normalized.folder = updates.folder;
   }
   return normalized;
+}
+
+/**
+ * `overrides` without any texture slot referencing `textureId` (entries left
+ * empty are dropped). Returns `overrides` itself when nothing references it.
+ */
+export function withoutMaterialOverrideTexture(overrides: MaterialOverrides, textureId: string): MaterialOverrides {
+  let next = overrides;
+  for (const [materialName, override] of Object.entries(overrides)) {
+    if (override?.mapTextureId === textureId) next = setMaterialOverrideField(next, materialName, 'mapTextureId', undefined);
+    if (override?.normalTextureId === textureId) next = setMaterialOverrideField(next, materialName, 'normalTextureId', undefined);
+  }
+  return next;
 }
 
 /** The partial asset document a rename/move merges into the stored one; only the given fields change. */

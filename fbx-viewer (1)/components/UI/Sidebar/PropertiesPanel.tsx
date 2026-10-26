@@ -1,12 +1,13 @@
 
 import React, { useState } from 'react';
 import * as THREE from 'three';
-import { Component, Crosshair, Paperclip, RotateCcw, Palette, Shield, Skull, FileCode, Target } from 'lucide-react';
+import { ChevronDown, ChevronRight, Component, Crosshair, Paperclip, RotateCcw, Palette, Shield, Skull, FileCode, Target } from 'lucide-react';
 import { useScene } from '../../../context/SceneContext';
 import { AnimationControls } from '../Properties/AnimationControls';
 import { AttachmentPanel } from '../Properties/AttachmentPanel';
 import { SocketPanel } from '../Properties/SocketPanel';
 import { ThumbnailTooltip } from '../ThumbnailTooltip';
+import { MaterialEditor } from '../../Tools/MaterialEditor';
 import { LoadedModelData } from '../../../types';
 
 interface PropertiesPanelProps {
@@ -26,8 +27,10 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
     onPlayPause,
     onSpeedChange
 }) => {
-    const { models, selectedModelId, resetModelTexture, isLoading, blueprints } = useScene();
+    const { models, selectedModelId, resetModelTexture, isLoading, blueprints, textures, updateModelMaterialOverrides, projectStatus } = useScene();
     const selectedModel = models.find(m => m.id === selectedModelId) || null;
+    // Closing the section ends the editing session (unsaved material edits are reverted).
+    const [materialsOpen, setMaterialsOpen] = useState(false);
 
     // Tooltip logic for header icon
     const [hoveredModel, setHoveredModel] = useState<LoadedModelData | null>(null);
@@ -112,6 +115,30 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                     
                     {/* Socket/Muzzle Panel */}
                     <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col">
+                        {/* Material Overrides Panel */}
+                        {selectedModel.category !== 'Animation' && (
+                            <div className="mt-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setMaterialsOpen(open => !open)}
+                                    aria-expanded={materialsOpen}
+                                    className="w-full px-4 pb-2 pt-2 text-xs font-semibold text-gray-400 hover:text-gray-200 flex items-center gap-2 border-t border-gray-800"
+                                >
+                                    {materialsOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                                    <Palette size={12} /> Material Overrides
+                                </button>
+                                {materialsOpen && (
+                                    <div className="h-[420px] mx-2 mb-2 rounded-md border border-gray-800 overflow-hidden">
+                                        <MaterialEditor
+                                            model={selectedModel}
+                                            textures={textures}
+                                            onSave={projectStatus.readOnly ? undefined : updateModelMaterialOverrides}
+                                        />
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
                         <div className="mt-2">
                             <div className="px-4 pb-2 pt-2 text-xs font-semibold text-gray-400 flex items-center gap-2 border-t border-gray-800">
                                 <Target size={12} /> Muzzle & Sockets

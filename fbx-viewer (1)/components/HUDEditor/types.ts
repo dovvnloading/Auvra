@@ -49,4 +49,8 @@ export interface HUDComponentDefinition {
   defaultProps: Record<string, any>;
   defaultSize: { width: number; height: number };
   icon?: React.ReactNode;
+  /** String props edited with a fixed choice list instead of free text. */
+  propOptions?: Readonly<Record<string, readonly string[]>>;
+  /** Props the Bind field offers for live game-state values (`props.bind`), most useful first. */
+  bindableProps?: readonly string[];
 }

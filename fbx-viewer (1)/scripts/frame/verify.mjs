@@ -52,7 +52,8 @@ check(source.index.includes("__AUVRA_EDITOR_CSP__"), "editor CSP placeholder mis
 check(source.hud.includes("__AUVRA_HUD_CSP__"), "HUD CSP placeholder missing");
 check(source.player.includes("__AUVRA_PLAYER_CSP__") && !source.player.includes("cdn.tailwindcss.com"), "player CSP placeholder missing");
 const playerCsp = source.vite.match(/const playerPackagedCsp\s*=\s*`([^`]+)`;/)?.[1] ?? "";
-check(/script-src 'self';/.test(playerCsp) && !/'unsafe-eval'|'nonce-/.test(playerCsp) && /form-action 'none'/.test(playerCsp), "player CSP does not confine script execution");
+// 'wasm-unsafe-eval' only allows compiling WebAssembly (the physics engine), not eval of script text.
+check(/script-src 'self'(?: 'wasm-unsafe-eval')?;/.test(playerCsp) && !/'unsafe-eval'|'nonce-/.test(playerCsp) && /form-action 'none'/.test(playerCsp), "player CSP does not confine script execution");
 check(/connect-src 'self' blob:;/.test(playerCsp) && !playerCsp.includes("assets.auvra.local"), "player CSP grants editor-only network access");
 check(source.vite.includes("'unsafe-eval'") && source.vite.includes("connect-src 'none'"), "HUD CSP does not confine evaluation and network access");
 const editorCspDefinitions = {

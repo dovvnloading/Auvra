@@ -26,6 +26,13 @@ HEIGHTFIELD_ENCODING = "float32le"
 MAX_HEIGHTFIELD_SAMPLES_PER_SIDE = 4097
 _HEIGHTFIELD_HEADER = struct.Struct("<8sII")
 
+# Terrain splat maps (paint layer weights): the same 16-byte header layout with
+# their own magic, followed by columns * rows row-major RGBA8 weights.
+SPLATMAP_MIME = "application/vnd.auvra.splatmap"
+SPLATMAP_MAGIC = b"AUVRASP1"
+SPLATMAP_ENCODING = "rgba8"
+_SPLATMAP_CHANNELS = 4
+
 # Model formats.  Binary glTF carries the ``glTF`` magic; glTF JSON and
 # Wavefront OBJ are text without a signature, so they are accepted by their
 # declared MIME after a content sanity check (text, and a JSON object for
@@ -96,7 +103,7 @@ class AssetStore:
             if size is not None and total != size:
                 raise ValueError("asset size does not match declared size")
             detected = sniff_mime(bytes(prefix))
-            known_media = {"image/png", "image/jpeg", "image/webp", "audio/wav", "audio/ogg", GLB_MIME, HEIGHTFIELD_MIME}
+            known_media = {"image/png", "image/jpeg", "image/webp", "audio/wav", "audio/ogg", GLB_MIME, HEIGHTFIELD_MIME, SPLATMAP_MIME}
             if mime in known_media and detected != mime:
                 raise ValueError("asset MIME does not match its content")
             declared = mime.lower() if isinstance(mime, str) else None
@@ -105,6 +112,8 @@ class AssetStore:
             mime = mime or detected or "application/octet-stream"
             if mime == HEIGHTFIELD_MIME:
                 validate_heightfield_file(tmp)
+            elif mime == SPLATMAP_MIME:
+                validate_splatmap_file(tmp)
             asset_id = digest.hexdigest(); target = self.path_for(asset_id)
             target.parent.mkdir(parents=True, exist_ok=True)
             # Serialize same-digest ingestion with manifest publication.  An
@@ -276,6 +285,7 @@ def sniff_mime(prefix: bytes) -> str | None:
     if prefix.startswith(b"OggS"): return "audio/ogg"
     if prefix.startswith(b"glTF"): return "model/gltf-binary"
     if prefix.startswith(HEIGHTFIELD_MAGIC): return HEIGHTFIELD_MIME
+    if prefix.startswith(SPLATMAP_MAGIC): return SPLATMAP_MIME
     return None
 
 def text_model_matches(mime: str, prefix: bytes) -> bool:
@@ -373,6 +383,22 @@ def validate_heightfield_file(path: Path, *, chunk_size: int = 1024 * 1024) -> N
         for block in iter(lambda: stream.read(chunk_size), b""):
             if not all(map(math.isfinite, _float32_samples(block))):
                 raise ValueError("terrain heightfield samples must be finite")
+
+def validate_splatmap_file(path: Path) -> None:
+    """Structurally validate a terrain splat map: header, dimensions and size."""
+
+    with path.open("rb") as stream:
+        header = stream.read(_HEIGHTFIELD_HEADER.size)
+        if len(header) != _HEIGHTFIELD_HEADER.size:
+            raise ValueError("terrain splat map asset is truncated")
+        magic, columns, rows = _HEIGHTFIELD_HEADER.unpack(header)
+        if magic != SPLATMAP_MAGIC:
+            raise ValueError("terrain splat map asset has an unknown format")
+        for dimension in (columns, rows):
+            if not 2 <= dimension <= MAX_HEIGHTFIELD_SAMPLES_PER_SIDE:
+                raise ValueError("terrain splat map dimensions are out of range")
+        if os.fstat(stream.fileno()).st_size != _HEIGHTFIELD_HEADER.size + _SPLATMAP_CHANNELS * columns * rows:
+            raise ValueError("terrain splat map asset size does not match its dimensions")
 
 def _is_reparse(path: Path) -> bool:
     try: return bool(getattr(path.stat(), "st_file_attributes", 0) & 0x400)

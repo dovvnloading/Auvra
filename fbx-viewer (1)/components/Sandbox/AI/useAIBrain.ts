@@ -1,7 +1,7 @@
 
 import React, { useRef, useCallback } from 'react';
 import * as THREE from 'three';
-import { AI_CONFIG, AIState } from './AIConfig';
+import { AI_CONFIG, AIState, AITuning, DEFAULT_AI_TUNING } from './AIConfig';
 import { GraphRuntimeAPI } from '../../AnimationGraph/GraphRuntime';
 import { checkVisibility } from './AISenses';
 import { evaluateNextState, calculateNavigation, DecisionContext } from './AIStateMachine';
@@ -24,7 +24,8 @@ export interface BrainOutput {
 
 export const useAIBrain = (
     graphApi: React.RefObject<GraphRuntimeAPI | undefined>,
-    onAttack?: () => void
+    onAttack?: () => void,
+    tuning: AITuning = DEFAULT_AI_TUNING // Per-enemy tunables (resolveAITuning on the blueprint's stats)
 ) => {
   const stateRef = useRef<AIState>('IDLE');
   
@@ -61,7 +62,7 @@ export const useAIBrain = (
         if (progress >= 0.75 && !damageDealtRef.current) {
             // Check Overlap/Range at the moment of impact
             // Use Attack Distance + small buffer (0.5m) for gameplay feel
-            if (distToTarget <= DISTANCES.ATTACK + 0.5) {
+            if (distToTarget <= tuning.attackRange + 0.5) {
                 if (onAttack) onAttack();
             }
             damageDealtRef.current = true;
@@ -69,7 +70,16 @@ export const useAIBrain = (
     }
 
     // --- 2. Senses (Perception) ---
-    const { canSee } = checkVisibility({ enemyPosition, enemyForward, targetPosition, distToTarget });
+    // checkVisibility gates on AI_CONFIG's fixed aggro range, so it gets the distance capped at the
+    // hearing radius (inside that range) and answers only "in the vision cone or heard?".
+    // The blueprint's sight range is applied here instead.
+    const { canSee: inConeOrHeard } = checkVisibility({
+        enemyPosition,
+        enemyForward,
+        targetPosition,
+        distToTarget: Math.min(distToTarget, DISTANCES.HEARING)
+    });
+    const canSee = distToTarget < tuning.sightRange && inConeOrHeard;
 
     // Memory Update
     if (canSee) {
@@ -83,7 +93,9 @@ export const useAIBrain = (
     // --- 3. Decision Making (State Transition) ---
     const decisionContext: DecisionContext = {
         currentState: stateRef.current,
-        distToTarget,
+        // evaluateNextState measures attack range against AI_CONFIG's; rescale the distance so
+        // that threshold stands for this enemy's attack range.
+        distToTarget: distToTarget * (DISTANCES.ATTACK / tuning.attackRange),
         distFromCenter,
         boundarySize,
         canSee,
@@ -136,7 +148,7 @@ export const useAIBrain = (
     // Trigger Logic (Impulse actions that happen even if state doesn't change, e.g. re-attacking)
     if (shouldAttack) {
         timers.current.attack = COMBAT.ATTACK_DURATION;
-        timers.current.cooldown = COMBAT.ATTACK_COOLDOWN;
+        timers.current.cooldown = tuning.attackCooldown;
         const atkIdx = Math.floor(Math.random() * 3) + 1;
         graphApi.current?.setVariable('AttackIndex', atkIdx);
         
@@ -163,7 +175,7 @@ export const useAIBrain = (
         destination,
         targetFocus
     };
-  }, [graphApi, onAttack]);
+  }, [graphApi, onAttack, tuning]);
 
   return { updateState };
 };

@@ -1,8 +1,12 @@
 
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { useThree, useFrame } from '@react-three/fiber';
+import { useThree } from '@react-three/fiber';
 import { LevelObject, AudioData, AudioConfig } from '../../types';
+import { frontendDiagnostics } from '../../diagnostics/runtime';
+import {
+    Sound, acquireAudioListener, releaseSound, resolveEmitterBus, routeSoundToBus, useRuntimeMixer
+} from '../../runtime/components/audioComponents';
 
 interface AudioSystemProps {
     levelObjects: LevelObject[];
@@ -12,14 +16,16 @@ interface AudioSystemProps {
 
 /**
  * Handles initialization and management of THREE.Audio and THREE.PositionalAudio.
- * This runs inside the Canvas context.
+ * This runs inside the Canvas context. In play, emitters route through the runtime mixer's buses
+ * (AudioConfig.bus, else 'music' for global loops and 'sfx' otherwise); without one they feed the listener.
  */
 export const AudioSystem: React.FC<AudioSystemProps> = ({ levelObjects, audioAssets, isMuted }) => {
     const { camera, scene } = useThree();
+    const mixer = useRuntimeMixer();
     const listenerRef = useRef<THREE.AudioListener | null>(null);
     // PositionalAudio specializes THREE.Audio with a PannerNode output.  The
     // map intentionally stores both variants behind the common Audio API.
-    const sourcesRef = useRef<Map<string, THREE.Audio<any>>>(new Map());
+    const sourcesRef = useRef<Map<string, Sound>>(new Map());
     
     // Store latest config per object ID to access inside async callbacks (avoiding stale closures)
     const latestConfigsRef = useRef<Map<string, AudioConfig>>(new Map());
@@ -27,25 +33,15 @@ export const AudioSystem: React.FC<AudioSystemProps> = ({ levelObjects, audioAss
     // Track the audio asset ID currently loaded in each source to detect file swaps
     const sourceAssetIdMap = useRef<Map<string, string>>(new Map());
 
-    // 1. Ensure AudioListener exists on the camera
+    // 1. Ensure AudioListener exists on the camera (shared with audioSource components)
     useEffect(() => {
-        const existing = camera.children.find(c => c.type === 'AudioListener');
-        let listener: THREE.AudioListener;
-        let ownsListener = false;
-        
-        if (!existing) {
-            listener = new THREE.AudioListener();
-            camera.add(listener);
-            ownsListener = true;
-        } else {
-            listener = existing as THREE.AudioListener;
-        }
+        const { listener, release } = acquireAudioListener(camera);
         listenerRef.current = listener;
-        
+
         // Initial mute state check
         listener.setMasterVolume(isMuted ? 0 : 1);
         return () => {
-            if (ownsListener) camera.remove(listener);
+            release();
             if (listenerRef.current === listener) listenerRef.current = null;
         };
     }, [camera]); // Only run when camera changes (e.g. initial mount)
@@ -69,6 +65,7 @@ export const AudioSystem: React.FC<AudioSystemProps> = ({ levelObjects, audioAss
                 if (obj.type === 'audio_emitter' && obj.audioConfig && obj.audioConfig.audioId) {
                     const config = obj.audioConfig;
                     const audioData = audioAssets.find(a => a.id === config.audioId);
+                    const bus = resolveEmitterBus(config);
                     
                     // Always update the ref with the latest config for this frame
                     latestConfigsRef.current.set(obj.id, config);
@@ -89,7 +86,7 @@ export const AudioSystem: React.FC<AudioSystemProps> = ({ levelObjects, audioAss
                     if (!sound || assetChanged || typeChanged) {
                         // Cleanup old if exists
                         if (sound) {
-                            if (sound.isPlaying) sound.stop();
+                            releaseSound(sound);
                             if (sound.userData.parentGroup) scene.remove(sound.userData.parentGroup);
                         }
 
@@ -99,6 +96,7 @@ export const AudioSystem: React.FC<AudioSystemProps> = ({ levelObjects, audioAss
                         } else {
                             sound = new THREE.Audio(listener);
                         }
+                        routeSoundToBus(sound, mixer, bus);
 
                         // Create container
                         const dummy = new THREE.Group();
@@ -146,6 +144,8 @@ export const AudioSystem: React.FC<AudioSystemProps> = ({ levelObjects, audioAss
                             if (currentConfig.autoplay && !createdSound.isPlaying) {
                                 createdSound.play();
                             }
+                        }, undefined, (error) => {
+                            if (sourcesRef.current.get(obj.id) === createdSound) frontendDiagnostics.failure('audio_emitter_load_failed', error);
                         });
 
                         sourcesRef.current.set(obj.id, createdSound);
@@ -155,6 +155,7 @@ export const AudioSystem: React.FC<AudioSystemProps> = ({ levelObjects, audioAss
                         // --- UPDATE EXISTING ---
                         const dummy = sound.userData.parentGroup;
                         if (dummy) dummy.position.set(...obj.position);
+                        routeSoundToBus(sound, mixer, bus);
 
                         // Volume + Local Mute Check
                         const targetVolume = config.muted ? 0 : config.volume;
@@ -215,7 +216,7 @@ export const AudioSystem: React.FC<AudioSystemProps> = ({ levelObjects, audioAss
         // Cleanup removed sources during updates
         sourcesRef.current.forEach((sound, id) => {
             if (!currentIds.has(id)) {
-                if (sound.isPlaying) sound.stop();
+                releaseSound(sound);
                 if (sound.userData.parentGroup) {
                     scene.remove(sound.userData.parentGroup);
                 }
@@ -225,15 +226,17 @@ export const AudioSystem: React.FC<AudioSystemProps> = ({ levelObjects, audioAss
             }
         });
 
-    }, [levelObjects, audioAssets, scene]);
+    }, [levelObjects, audioAssets, scene, mixer]);
 
     // 4. Global Cleanup on Unmount
     useEffect(() => {
         return () => {
             sourcesRef.current.forEach((sound) => {
-                if (sound.isPlaying) sound.stop();
-                // Optionally remove from scene, although scene destruction handles this usually.
-                // Stopping the audio context node is the critical part.
+                // Stop and detach from the listener/mixer bus; also drop the holder group, since the
+                // editor can unmount audio (preview toggle) while its scene lives on.
+                releaseSound(sound);
+                const group: THREE.Object3D | undefined = sound.userData.parentGroup;
+                group?.removeFromParent();
             });
             sourcesRef.current.clear();
             sourceAssetIdMap.current.clear();

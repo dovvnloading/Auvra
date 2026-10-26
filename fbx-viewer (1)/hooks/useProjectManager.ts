@@ -219,9 +219,9 @@ export const useProjectManager = ({
     }, 'Recovery point opened.', 'replace');
   }, [contextFor, hydrate, run]);
 
-  const createNewProject = useCallback(async () => {
+  const createNewProject = useCallback(async (template: 'blank' | 'starter' = 'blank') => {
     await run('project.create', 'Creating project', async (handle, transition) => {
-      await projectService.create('Untitled', contextFor(handle));
+      await projectService.create(template === 'starter' ? 'Starter Game' : 'Untitled', contextFor(handle), template);
       if (transition && !editorSession.isTransitionCurrent(transition)) throw new DOMException('Project creation was superseded.', 'AbortError');
       await hydrate(handle, 0.65, 0.33, transition);
     }, 'New project created.', 'replace');

@@ -1,18 +1,66 @@
 
-import React, { useRef, useMemo, useEffect } from 'react';
+import React, { useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
-import { SculptSettings } from '../types';
+import { SculptSettings, SculptTool } from '../types';
+import { paintTerrainSplat, TERRAIN_SPLAT_CHANNELS } from './terrainSplatCodec';
+
+/** Sculpt tools plus 'paint', which blends a texture layer into the splat map. */
+export type TerrainBrushTool = SculptTool | 'paint';
+
+export interface TerrainBrushSettings extends Omit<SculptSettings, 'tool'> {
+    tool: TerrainBrushTool;
+    /** Texture layer (0-3) the paint tool blends in. */
+    paintLayer?: number;
+}
+
+/**
+ * What a TerrainObject exposes on its mesh (userData.terrainPaint) for the
+ * paint brush: the live splat weights backing its layer material.
+ */
+export interface TerrainPaintTarget {
+    columns: number;
+    rows: number;
+    width: number;
+    depth: number;
+    /** RGBA weights, (columns * rows * 4), row-major in PlaneGeometry order. */
+    weights: Uint8Array;
+    layerCount: number;
+    /** The stored weights are still loading; painting would overwrite them. */
+    pending: boolean;
+    /** Upload the edited weights to the GPU. */
+    markDirty(): void;
+}
+
+// Fraction of the way a sample at the brush centre moves towards the layer per
+// frame at full strength. Painting runs every frame while the button is held.
+const PAINT_RATE = 0.25;
+export const TERRAIN_PAINT_CURSOR_COLOR = '#a855f7';
+
+export const getTerrainPaintTarget = (mesh: THREE.Object3D | null | undefined): TerrainPaintTarget | null => {
+    const target = mesh?.userData.terrainPaint as TerrainPaintTarget | undefined;
+    return target && target.weights instanceof Uint8Array ? target : null;
+};
+
+const canPaint = (target: TerrainPaintTarget | null, layer: number): target is TerrainPaintTarget => (
+    Boolean(target && !target.pending && layer >= 0 && layer < Math.min(target.layerCount, TERRAIN_SPLAT_CHANNELS))
+);
 
 interface TerrainSculptorProps {
-    settings: SculptSettings;
+    settings: TerrainBrushSettings;
     onStrokeEnd: (objectId: string, newHeights: number[]) => void;
+    /** A paint stroke ended: the terrain's full splat weights (0-255 RGBA per sample). */
+    onPaintStrokeEnd?: (objectId: string, splat: number[]) => void;
+    /** The first edit of a sculpt or paint stroke, before it is committed (take an undo snapshot). */
+    onStrokeStart?: () => void;
     enabled: boolean;
 }
 
 export const TerrainSculptor: React.FC<TerrainSculptorProps> = ({ 
     settings, 
     onStrokeEnd,
+    onPaintStrokeEnd,
+    onStrokeStart,
     enabled
 }) => {
     const { camera, raycaster, pointer, scene, gl } = useThree();
@@ -22,6 +70,27 @@ export const TerrainSculptor: React.FC<TerrainSculptorProps> = ({
     // Track the currently hovered/active terrain mesh
     const activeMeshRef = useRef<THREE.Mesh | null>(null);
     const terrainMeshesRef = useRef<THREE.Mesh[]>([]);
+    // Terrains whose splat weights the current paint stroke changed.
+    const paintedMeshesRef = useRef<Set<THREE.Mesh>>(new Set());
+    // The tool a stroke started with; changing tools mid-stroke must not commit
+    // the other kind of edit.
+    const strokeToolRef = useRef<TerrainBrushTool>(settings.tool);
+    // Set once the current stroke has changed a terrain (and taken its undo snapshot).
+    const strokeChangedRef = useRef(false);
+
+    // Input handlers are bound once per canvas; they read the latest props here.
+    const latest = useRef({ settings, onStrokeEnd, onPaintStrokeEnd, onStrokeStart });
+    latest.current = { settings, onStrokeEnd, onPaintStrokeEnd, onStrokeStart };
+
+    const paintLayer = Math.max(0, Math.floor(settings.paintLayer ?? 0));
+
+    // The level state does not change until the stroke ends, so a snapshot taken
+    // at the first edit of the stroke still records the terrain before it.
+    const noteStrokeChange = () => {
+        if (strokeChangedRef.current) return;
+        strokeChangedRef.current = true;
+        latest.current.onStrokeStart?.();
+    };
 
     // Scan scene for terrain meshes
     // We do this every few frames or on specific triggers to ensure we catch new terrains
@@ -121,10 +190,37 @@ export const TerrainSculptor: React.FC<TerrainSculptorProps> = ({
         }
 
         if (modified) {
+            noteStrokeChange();
             posAttr.needsUpdate = true;
             // Recompute normals for lighting updates (can be expensive, consider throttling)
             geom.computeVertexNormals();
             geom.computeBoundingSphere();
+        }
+    };
+
+    // --- PAINT LOGIC ---
+    const applyPaint = (point: THREE.Vector3, mesh: THREE.Mesh) => {
+        const target = getTerrainPaintTarget(mesh);
+        if (!canPaint(target, paintLayer)) return;
+
+        mesh.updateMatrixWorld();
+        const localPoint = mesh.worldToLocal(point.clone());
+        const worldScale = new THREE.Vector3();
+        mesh.getWorldScale(worldScale);
+        // The plane's own X/Y axes are the ground axes; its Z is the height.
+        const scaleFactor = (worldScale.x + worldScale.y) / 2 || 1;
+
+        const modified = paintTerrainSplat(target.weights, target, {
+            x: localPoint.x,
+            y: localPoint.y,
+            radius: settings.radius / scaleFactor,
+            strength: settings.strength * PAINT_RATE,
+            layer: paintLayer,
+        });
+        if (modified) {
+            noteStrokeChange();
+            target.markDirty();
+            paintedMeshesRef.current.add(mesh);
         }
     };
 
@@ -138,6 +234,7 @@ export const TerrainSculptor: React.FC<TerrainSculptorProps> = ({
         
         // Raycast against terrain meshes
         const intersects = raycaster.intersectObjects(terrainMeshesRef.current, false);
+        const painting = settings.tool === 'paint';
         
         if (intersects.length > 0) {
             const hit = intersects[0];
@@ -153,12 +250,20 @@ export const TerrainSculptor: React.FC<TerrainSculptorProps> = ({
                 // Scale cursor visual to World Radius
                 cursorRef.current.scale.set(settings.radius, settings.radius, settings.radius);
                 
-                // VISUAL FEEDBACK: Green = Hit
-                (cursorRef.current.material as THREE.MeshBasicMaterial).color.set(isSculpting.current ? '#ffff00' : '#4ade80');
+                // VISUAL FEEDBACK: Green = Hit (purple when painting), yellow while stroking,
+                // grey when this terrain cannot take the selected layer.
+                const idle = painting
+                    ? (canPaint(getTerrainPaintTarget(hitMesh), paintLayer) ? TERRAIN_PAINT_CURSOR_COLOR : '#6b7280')
+                    : '#4ade80';
+                (cursorRef.current.material as THREE.MeshBasicMaterial).color.set(isSculpting.current ? '#ffff00' : idle);
             }
 
             if (isSculpting.current && !hitMesh.userData.heightsPending) {
-                applySculpt(hit.point, hitMesh);
+                if (strokeToolRef.current === 'paint') {
+                    if (painting) applyPaint(hit.point, hitMesh);
+                } else if (!painting) {
+                    applySculpt(hit.point, hitMesh);
+                }
             }
         } else {
             // Missed terrain
@@ -185,6 +290,9 @@ export const TerrainSculptor: React.FC<TerrainSculptorProps> = ({
 
         const handleDown = (e: MouseEvent) => {
             if (enabled && e.button === 0 && !e.altKey && !e.ctrlKey) {
+                strokeToolRef.current = latest.current.settings.tool;
+                strokeChangedRef.current = false;
+                paintedMeshesRef.current.clear();
                 isSculpting.current = true;
             }
         };
@@ -192,6 +300,19 @@ export const TerrainSculptor: React.FC<TerrainSculptorProps> = ({
         const handleUp = () => {
             if (isSculpting.current) {
                 isSculpting.current = false;
+                const { onStrokeEnd: endSculpt, onPaintStrokeEnd: endPaint } = latest.current;
+
+                if (strokeToolRef.current === 'paint') {
+                    for (const mesh of paintedMeshesRef.current) {
+                        const target = getTerrainPaintTarget(mesh);
+                        const objectId = mesh.userData.levelObjectId;
+                        if (target && !target.pending && objectId && endPaint) {
+                            endPaint(objectId, Array.from(target.weights));
+                        }
+                    }
+                    paintedMeshesRef.current.clear();
+                    return;
+                }
                 
                 // Commit changes if we have a valid mesh
                 const mesh = activeMeshRef.current;
@@ -205,7 +326,7 @@ export const TerrainSculptor: React.FC<TerrainSculptorProps> = ({
                         for(let i=0; i<posAttr.count; i++) {
                             heights.push(posAttr.getZ(i));
                         }
-                        onStrokeEnd(objectId, heights);
+                        endSculpt(objectId, heights);
                     }
                 }
             }
@@ -224,7 +345,7 @@ export const TerrainSculptor: React.FC<TerrainSculptorProps> = ({
             window.removeEventListener('mouseup', handleUp);
             domElement.removeEventListener('mouseleave', handleLeave);
         };
-    }, [enabled, onStrokeEnd, gl]);
+    }, [enabled, gl]);
 
     return (
         <group>

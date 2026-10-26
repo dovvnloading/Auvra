@@ -668,7 +668,7 @@ class NativeProjectHost:
         destination = self._choose(lambda: self.dialogs.choose_create_location(name))
         self._queue("project.opening", self._status_value(busy=True, progress=0.0, operation="create"))
         self._retire_active_pending_assets()
-        status = self.service.create(destination, name)
+        status = self.service.create(destination, name, payload.get("template"))
         self._progress("create", 0.6)
         self._native_staged_assets.clear()
         self._hydrate_native(self.service.active, lambda value: self._progress("create", 0.6 + value * 0.35))

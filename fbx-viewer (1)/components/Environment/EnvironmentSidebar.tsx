@@ -5,6 +5,7 @@ import { LevelObject } from '../../types';
 import { editorSession } from '../../utils/editorSession';
 import { reparentPreservingWorld, wouldCreateCycle } from '../../utils/sceneGraph';
 import { PrefabPanel } from './PrefabPanel';
+import { LightingPanel } from './LightingPanel';
 
 const PLAYER_START_NAME = 'Player Start';
 
@@ -833,6 +834,21 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                         primaryObjectId={selectedObjectId}
                         placementTarget={null}
                         onPlaced={(id) => {
+                            if (onSetSelection) onSetSelection([id], id);
+                            else onSelectObject(id);
+                        }}
+                    />
+                </div>
+            )}
+
+            {/* Lights (outliner tab) */}
+            {activeTab === 'outliner' && (
+                <div className="h-48 shrink-0 border-t border-gray-800 flex flex-col min-h-0">
+                    <LightingPanel
+                        levelId={currentLevelId}
+                        selectedObjectId={selectedObjectId}
+                        placementTarget={null}
+                        onSelect={(id) => {
                             if (onSetSelection) onSetSelection([id], id);
                             else onSelectObject(id);
                         }}

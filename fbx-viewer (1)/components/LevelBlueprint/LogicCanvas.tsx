@@ -6,8 +6,8 @@ import { LogicNodeComponent, PIN_COLORS } from './LogicNode';
 import { LogicConnection as LogicConnectionComponent } from './LogicConnection';
 import { useGraphViewport } from '../AnimationGraph/hooks/useGraphViewport';
 
-/** The part of a level blueprint that undo/redo snapshots. */
-export type LogicGraphSnapshot = Pick<LevelBlueprintData, 'nodes' | 'connections'>;
+/** The part of a level blueprint that undo/redo snapshots: the graph and its declared variables. */
+export type LogicGraphSnapshot = Pick<LevelBlueprintData, 'nodes' | 'connections' | 'variables'>;
 
 interface LogicCanvasProps {
     blueprint: LevelBlueprintData;
@@ -87,7 +87,7 @@ export const LogicCanvas: React.FC<LogicCanvasProps> = ({
         const coords = getCanvasCoords(e.clientX, e.clientY);
         setDraggingNodeId(nodeId);
         setDragOffset({ x: coords.x - nodeX, y: coords.y - nodeY });
-        dragStartGraph.current = { snapshot: { nodes: blueprint.nodes, connections: blueprint.connections }, moved: false };
+        dragStartGraph.current = { snapshot: { nodes: blueprint.nodes, connections: blueprint.connections, variables: blueprint.variables }, moved: false };
         (e.target as Element).setPointerCapture(e.pointerId);
     };
 

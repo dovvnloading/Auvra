@@ -1,7 +1,8 @@
 import React, { useEffect } from 'react';
 import * as THREE from 'three';
-import { useThree } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import { frontendDiagnostics } from '../diagnostics/runtime';
+import { useRuntimeServices } from './RuntimeServicesContext';
 
 interface PauseControllerProps {
     paused: boolean;
@@ -28,7 +29,8 @@ const lockPointer = (canvas: HTMLCanvasElement) => {
  * Owns pausing for the level runtime. Renders inside the runtime canvas.
  *
  * Paused: the frame loop stops (all gameplay runs in useFrame), the level's audio context is
- * suspended and the pointer is released. Escape or losing the pointer lock asks the host to pause.
+ * suspended and the pointer is released. Losing the pointer lock asks the host to pause; the Pause
+ * input action does too, through PauseActionWatcher.
  */
 export const PauseController: React.FC<PauseControllerProps> = ({ paused, canPause, sessionKey, onRequestPause }) => {
     const setFrameloop = useThree(state => state.setFrameloop);
@@ -62,16 +64,12 @@ export const PauseController: React.FC<PauseControllerProps> = ({ paused, canPau
             requested = true;
             onRequestPause();
         };
-        const handleKey = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') requestPause();
-        };
         const handleLockChange = () => {
             const nowHeld = document.pointerLockElement === canvas;
             if (held && !nowHeld) requestPause();
             held = nowHeld;
         };
 
-        window.addEventListener('keydown', handleKey);
         document.addEventListener('pointerlockchange', handleLockChange);
         let timer: ReturnType<typeof setTimeout> | null = null;
         if (active) timer = setTimeout(() => lockPointer(canvas), POINTER_LOCK_DELAY_MS);
@@ -79,7 +77,6 @@ export const PauseController: React.FC<PauseControllerProps> = ({ paused, canPau
 
         return () => {
             if (timer) clearTimeout(timer);
-            window.removeEventListener('keydown', handleKey);
             document.removeEventListener('pointerlockchange', handleLockChange);
         };
     }, [canPause, gl, onRequestPause, paused, sessionKey]);
@@ -89,5 +86,17 @@ export const PauseController: React.FC<PauseControllerProps> = ({ paused, canPau
         if (document.pointerLockElement === gl.domElement) document.exitPointerLock();
     }, [gl]);
 
+    return null;
+};
+
+/**
+ * Requests a pause when the player presses the Pause action (Escape or gamepad Start unless
+ * rebound). Mount inside RuntimeServicesProvider; frames stop while paused, so it only fires in play.
+ */
+export const PauseActionWatcher: React.FC<{ enabled: boolean; onRequestPause: () => void }> = ({ enabled, onRequestPause }) => {
+    const { input } = useRuntimeServices();
+    useFrame(() => {
+        if (enabled && input.wasPressed('Pause')) onRequestPause();
+    });
     return null;
 };

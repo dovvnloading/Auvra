@@ -114,7 +114,7 @@ export const PLAYER_BLUEPRINT: Blueprint = {
     { id: 'st3', name: 'Walk Speed', value: 450 },
     { id: 'st4', name: 'Run Speed', value: 900 }
   ],
-  traits: ['Controllable', 'InventorySystem', 'QuestLog'],
+  traits: ['Controllable'],
   variables: JSON.parse(JSON.stringify(PLAYER_VARIABLES)),
   animationGraph: JSON.parse(JSON.stringify(PLAYER_GRAPH)),
   meshScale: 1.0,

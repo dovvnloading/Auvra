@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Layers, Plus, Eye, EyeOff, Lock, Unlock, Trash2, Search, Component, Layout } from 'lucide-react';
+import { Layers, Eye, EyeOff, Lock, Unlock, Trash2, Search, Component, Layout } from 'lucide-react';
 import { AVAILABLE_COMPONENTS } from './componentRegistry';
 import { HUDElement } from './types';
 

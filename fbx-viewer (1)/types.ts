@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import React from 'react';
 import type { ProjectStatus } from './utils/projectStatus';
+import type { MaterialOverrides } from './utils/materialOverrides';
 
 export type AssetCategory = 'Character' | 'Prop' | 'Environment' | 'Weapon' | 'Animation' | 'Audio' | 'Texture';
 
@@ -69,6 +70,8 @@ export interface LoadedModelData {
   isPlacedInScene: boolean; // Determines if visible in Scene/Hierarchy
   initialScale?: [number, number, number]; // Scale applied during normalization
   textureOverrides?: Record<string, string>; // Map<MaterialName, logical texture id>
+  /** Per-material colour/PBR/texture overrides, keyed by material name (see utils/materialOverrides). */
+  materialOverrides?: MaterialOverrides;
   folder?: string; // Content browser folder path, e.g. 'Characters/Enemies'
   importSettings?: ModelImportSettings;
 }
@@ -104,6 +107,20 @@ export interface TerrainHeightfieldReference {
     rows: number;          // resolution + 1
 }
 
+/** Project reference to a terrain splat map (per-sample RGBA layer weights) stored as a binary content-addressed asset. */
+export interface TerrainSplatmapReference {
+    assetId: string;   // SHA-256 of the encoded splat map asset
+    encoding: 'rgba8'; // 16-byte header ("AUVRASP1", uint32 columns, uint32 rows), then row-major RGBA8 weights
+    columns: number;   // resolution + 1
+    rows: number;      // resolution + 1
+}
+
+/** One terrain texture layer; splat channel N (R, G, B, A) weights layer N. */
+export interface TerrainTextureLayer {
+    textureId?: string; // textures domain id; a layer without one renders flat grey
+    tiling: number;     // texture repeats across the terrain width
+}
+
 export interface TerrainData {
     resolution: number; // e.g., 64, 128
     width: number;      // World units width
@@ -114,6 +131,11 @@ export interface TerrainData {
     heights?: number[];
     heightfield?: TerrainHeightfieldReference;
     textureId?: string; // Optional texture override
+    textureLayers?: TerrainTextureLayer[]; // at most 4, blended by the splat map
+    // Flattened (resolution + 1)^2 * 4 RGBA weights (0-255, heights order). In memory these are
+    // resolved from `splatmap`; persisted documents carry only the reference.
+    splat?: number[];
+    splatmap?: TerrainSplatmapReference;
 }
 
 export interface SkyConfig {
@@ -258,6 +280,8 @@ export interface GraphTransition {
   toStateId: string;
   duration: number; // Blending duration in seconds
   conditions: GraphCondition[];
+  /** Fraction (0..1) of the source state's clip after which the transition may fire. */
+  exitTime?: number;
 }
 
 export interface AnimationGraphData {
@@ -284,8 +308,13 @@ export interface LogicNode {
     id: string;
     type: 'Event' | 'Branch' | 'And' | 'Or' | 'Check' | 'VariableGet' | 'VariableSet' | 'PrintString' | 'DestroyActor' | 
           'Add' | 'Subtract' | 'Multiply' | 'Divide' | 'Greater' | 'Less' | 'Equal' | 
-          'LiteralFloat' | 'LiteralInteger' | 'LiteralString' | 'LiteralBoolean' | 'ToString' | 
-          'LevelAction';
+          'LiteralFloat' | 'LiteralInteger' | 'LiteralString' | 'LiteralBoolean' | 'ToString' |
+          'LevelAction' |
+          // Flow control (hooks/levelBlueprintNodes/flow.ts)
+          'Sequence' | 'ForLoop' | 'Delay' | 'DoOnce' | 'FlipFlop' | 'Gate' |
+          // World (hooks/levelBlueprintNodes/world.ts)
+          'SpawnPrefab' | 'GetActorTransform' | 'SetActorTransform' | 'PlaySound' | 'ApplyImpulse' | 'Raycast' |
+          'GetLevelVariable' | 'SetLevelVariable' | 'InputActionPressed' | 'RandomFloat' | 'RandomInt' | 'Print';
     name: string;
     position: { x: number; y: number };
     inputs: LogicPin[];
@@ -301,10 +330,18 @@ export interface LogicConnection {
     toPinId: string;
 }
 
+/** A variable declared in a level blueprint; each play session starts it at `value`. */
+export interface LevelVariable {
+    id: string;
+    name: string;
+    type: VariableType | 'String';
+    value: number | boolean | string;
+}
+
 export interface LevelBlueprintData {
     nodes: LogicNode[];
     connections: LogicConnection[];
-    variables: GraphVariable[]; // Local level variables
+    variables: LevelVariable[]; // Local level variables
 }
 
 // ... (keep Blueprint Types) ...
@@ -378,7 +415,7 @@ export interface SceneContextType {
   openRecentProject: (projectId: string) => Promise<void>;
   recoverProject: (recoveryId: string) => Promise<void>;
   closeProject: () => Promise<void>;
-  createNewProject: () => Promise<void>;
+  createNewProject: (template?: 'blank' | 'starter') => Promise<void>;
   projectStatus: ProjectStatus;
 
   // Model Actions
@@ -397,6 +434,8 @@ export interface SceneContextType {
   retextureModel: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<void>;
   previewTexture: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<void>;
   resetModelTexture: (modelId: string) => Promise<void>;
+  /** Persist a model's material overrides and apply them to its loaded object; rejects when they cannot be saved. */
+  updateModelMaterialOverrides: (modelId: string, overrides: MaterialOverrides) => Promise<void>;
 
   // Texture Actions
   textures: TextureData[];

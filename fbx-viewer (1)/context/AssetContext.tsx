@@ -16,6 +16,7 @@ import { useSelection } from './SelectionContext';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { projectService } from '../utils/projectService';
 import { emitDomainCascade, type DomainCascadeKind } from '../utils/domainCascade';
+import type { MaterialOverrides } from '../utils/materialOverrides';
 
 interface AssetContextType {
   // Models
@@ -31,6 +32,7 @@ interface AssetContextType {
   retextureModel: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<void>;
   previewTexture: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<void>;
   resetModelTexture: (modelId: string) => Promise<void>;
+  updateModelMaterialOverrides: (modelId: string, overrides: MaterialOverrides) => Promise<void>;
   setModels: (models: LoadedModelData[]) => void;
 
   // Attachments
@@ -167,6 +169,7 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     retextureModel: modelManager.retextureModel,
     previewTexture: modelManager.previewTexture,
     resetModelTexture: modelManager.resetModelTexture,
+    updateModelMaterialOverrides: modelManager.updateModelMaterialOverrides,
     setModels: modelManager.setModels,
 
     // Attachments

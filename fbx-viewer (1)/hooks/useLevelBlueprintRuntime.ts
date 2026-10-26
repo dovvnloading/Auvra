@@ -1,16 +1,52 @@
 
-import React, { useRef, useCallback, useEffect } from 'react';
+import React, { useRef, useCallback, useEffect, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { LevelBlueprintData, LevelObject } from '../types';
+import { LevelBlueprintData, LevelObject, LogicNode } from '../types';
 import { SandboxEntityHandle } from '../components/Sandbox/SandboxEntity';
 import { GraphRuntimeAPI } from '../components/AnimationGraph/GraphRuntime';
 import { isOverlapEvent, overlapEventTargets } from '../components/LevelBlueprint/overlapTargets';
 import { frontendDiagnostics } from '../diagnostics/runtime';
+import { TriggerEvent, useTriggerEvents } from '../runtime/triggers';
 import type { RuntimeHost } from '../runtime/types';
+import { levelVariables } from '../runtime/levelVariables';
+import { RuntimeServices, useRuntimeServices } from '../runtime/RuntimeServicesContext';
+import { FLOW_NODE_EXECUTORS, flowNodeOutputValue } from './levelBlueprintNodes/flow';
+import { isPureWorldNodeType, WORLD_NODE_EXECUTORS, WorldExecutionContext, WorldNodeServices } from './levelBlueprintNodes/world';
 
 const MAX_BLUEPRINT_EVALUATION_DEPTH = 128;
 const MAX_BLUEPRINT_EXECUTION_DEPTH = 256;
+
+/** Remaining time below this counts as due, so float drift cannot hold a timer back a frame. */
+const TIMER_EPSILON = 1e-9;
+
+/** Objects with an enabled collider get their overlaps from physics trigger events, not the distance check. */
+const hasCollider = (obj: LevelObject): boolean =>
+    (obj.components ?? []).some(component => component.type === 'collider' && component.enabled);
+
+/** A flow or world node's executor (pure world nodes included); undefined for the built-in node types. */
+const nodeExecutor = (type: string) => FLOW_NODE_EXECUTORS[type] ?? WORLD_NODE_EXECUTORS[type];
+
+/** An executor's evaluate(pinName): the named data input via `read`, or its `default_<pin>` when the pin is missing. */
+const readNamedInput = (node: LogicNode, pinName: string, read: (pinId: string) => any): any => {
+    const pin = node.inputs.find(p => p.name === pinName && p.dataType !== 'Exec');
+    return pin ? read(pin.id) : node.data?.[`default_${pinName}`] ?? null;
+};
+
+/** Per-node state for the play session, created empty on first use. */
+const nodeStateOf = (states: Map<string, Record<string, unknown>>, nodeId: string): Record<string, unknown> => {
+    let state = states.get(nodeId);
+    if (!state) {
+        state = {};
+        states.set(nodeId, state);
+    }
+    return state;
+};
+
+interface ScheduledRun {
+    remaining: number;
+    run: () => void;
+}
 
 /**
  * Interface for the Level Blueprint Runtime.
@@ -28,6 +64,14 @@ export interface UseLevelBlueprintRuntimeProps {
     onEndLevel?: () => void;
     /** Level travel and save/load for OpenLevel, SaveGame and LoadGame actions. Absent means those actions do nothing. */
     host?: Pick<RuntimeHost, 'openLevel' | 'saveGame' | 'loadGame'>;
+    /** Actor transform in the session copy, for Get/Set Actor Transform. Absent means no actor is found. */
+    getObject?: WorldNodeServices['getObject'];
+    /** Moves an actor in the session copy (never the project). Absent means Set Actor Transform does nothing. */
+    setObjectTransform?: WorldNodeServices['setObjectTransform'];
+    /** Pushes an actor's dynamic rigid body. Absent means Apply Impulse does nothing. */
+    applyImpulse?: WorldNodeServices['applyImpulse'];
+    /** Physics ray query for the Raycast node, e.g. usePhysicsQueries().raycast. Absent means nothing is hit. */
+    raycast?: WorldNodeServices['raycast'];
 }
 
 /** Optional save slot from a SaveGame/LoadGame node; blank means the host's default slot. */
@@ -39,10 +83,12 @@ const saveSlot = (value: unknown): string | undefined =>
  * 
  * This hook is responsible for executing the visual logic graph defined in the Level Blueprint.
  * It handles:
- * 1. Event Triggers (BeginPlay, Tick, Overlap).
- * 2. Forward Execution Flow (executing nodes in sequence).
+ * 1. Event Triggers (BeginPlay, Tick, Overlap). Overlap comes from physics trigger events for
+ *    objects with a collider component, and from a player distance check for objects without one.
+ * 2. Forward Execution Flow (executing nodes in sequence). Flow-control and world nodes run through
+ *    their executors (levelBlueprintNodes/flow.ts and world.ts), which fire their own exec outputs.
  * 3. Backward Data Evaluation (recursively calculating input values).
- * 
+ *
  * @param props Dependencies required to interact with the game world.
  */
 export const useLevelBlueprintRuntime = ({
@@ -55,11 +101,19 @@ export const useLevelBlueprintRuntime = ({
     addNotification,
     onRestart,
     onEndLevel,
-    host
+    host,
+    getObject,
+    setObjectTransform,
+    applyImpulse,
+    raycast
 }: UseLevelBlueprintRuntimeProps) => {
 
     // Tracks objects currently overlapping the player to prevent spamming 'OnOverlap' events every frame.
     const overlappingIds = useRef<Set<string>>(new Set());
+
+    // Trigger colliders the player is inside, per physics enter/exit events (several player colliders may report one entry).
+    const triggerOverlapIds = useRef<Set<string>>(new Set());
+    const triggerEvents = useTriggerEvents();
 
     // BeginPlay fires once per play session. A restart remounts the runtime, which starts a new session.
     const hasBegunPlay = useRef(false);
@@ -70,7 +124,41 @@ export const useLevelBlueprintRuntime = ({
     
     // Stores the current frame's delta time for the 'Event Tick' node.
     const currentDelta = useRef<number>(0);
-    
+
+    // Flow/world node state for this session (DoOnce/Gate open, FlipFlop side, latched data outputs).
+    const nodeStates = useRef(new Map<string, Record<string, unknown>>());
+
+    // Timed continuations (Delay) on the play clock: advanced in the frame loop, dropped when the session ends.
+    const timers = useRef<ScheduledRun[]>([]);
+    const mounted = useRef(false);
+    useEffect(() => {
+        mounted.current = true;
+        return () => {
+            mounted.current = false;
+            // StrictMode's simulated unmount remounts synchronously (and BeginPlay, which may have scheduled,
+            // does not run again), so only a real unmount drops the pending timers.
+            queueMicrotask(() => {
+                if (!mounted.current) timers.current = [];
+            });
+        };
+    }, []);
+
+    // World node services. Stable, reading the latest props, so the graph callbacks do not churn with them.
+    const runtimeServices: RuntimeServices | undefined = useRuntimeServices();
+    const world = useRef({ runtimeServices, getObject, setObjectTransform, applyImpulse, raycast, addNotification });
+    world.current = { runtimeServices, getObject, setObjectTransform, applyImpulse, raycast, addNotification };
+    const services = useMemo<WorldNodeServices>(() => ({
+        spawnPrefab: (prefabId, position) => world.current.runtimeServices?.spawnPrefab(prefabId, position) ?? [],
+        playSound: (audioId, bus) => world.current.runtimeServices?.playSound(audioId, bus),
+        getObject: id => world.current.getObject?.(id) ?? null,
+        setObjectTransform: (id, partial) => world.current.setObjectTransform?.(id, partial),
+        applyImpulse: (id, impulse) => world.current.applyImpulse?.(id, impulse),
+        raycast: (origin, direction, maxDistance) => world.current.raycast?.(origin, direction, maxDistance) ?? null,
+        input: { isDown: action => world.current.runtimeServices?.input.isDown(action) ?? false },
+        vars: levelVariables,
+        print: message => world.current.addNotification({ message: `[Output] ${message}`, type: 'info', duration: 3000 }),
+    }), []);
+
     // -------------------------------------------------------------------------
     // 1. DATA EVALUATION (Recursive Backwards Trace)
     // -------------------------------------------------------------------------
@@ -211,12 +299,28 @@ export const useLevelBlueprintRuntime = ({
                        (pinB ? evaluate(sourceNode.id, pinB.id, nextPath, depth + 1) : false);
             }
 
-            default:
-                return null;
+            // --- FLOW & WORLD NODES ---
+            // Data outputs are latched in node state. Pure world nodes (no exec pins) run on every read.
+            default: {
+                const executor = nodeExecutor(sourceNode.type);
+                const outPin = sourceNode.outputs.find(p => p.id === connection.fromPinId);
+                if (!executor || !outPin) return null;
+                const state = nodeStateOf(nodeStates.current, sourceNode.id);
+                if (isPureWorldNodeType(sourceNode.type)) {
+                    executor(sourceNode, {
+                        evaluate: pinName => readNamedInput(sourceNode, pinName, pinId => evaluate(sourceNode.id, pinId, nextPath, depth + 1)),
+                        fire: () => undefined,
+                        schedule: () => undefined,
+                        nodeState: state,
+                        services,
+                    });
+                }
+                return flowNodeOutputValue(state, outPin.name);
+            }
         }
         };
         return evaluate(nodeId, inputPinId, new Set(), 0);
-    }, [blueprint, playerApiRef, enemyApiRef]);
+    }, [blueprint, playerApiRef, enemyApiRef, services]);
 
     // -------------------------------------------------------------------------
     // 2. EXECUTION FLOW (Forward Trace)
@@ -227,8 +331,9 @@ export const useLevelBlueprintRuntime = ({
      * 
      * @param nodeId The ID of the node to execute.
      * @param context Contextual data passed from the event trigger (e.g. Other Actor ID).
+     * @param entryPinId The input exec pin the flow arrived on; omitted for event nodes.
      */
-    const executeNode = useCallback((nodeId: string, context: any, path: Set<string> = new Set(), depth = 0) => {
+    const executeNode = useCallback((nodeId: string, context: any, path: Set<string> = new Set(), depth = 0, entryPinId?: string) => {
         if (sessionEnded.current || depth >= MAX_BLUEPRINT_EXECUTION_DEPTH || path.has(nodeId)) return;
         const nextPath = new Set(path);
         nextPath.add(nodeId);
@@ -315,6 +420,40 @@ export const useLevelBlueprintRuntime = ({
                 api.setVariable(varName, value);
             }
         }
+        else {
+            const executor = nodeExecutor(node.type);
+            if (executor) {
+                // A scheduled continuation is a new call stack: it resumes from this node at depth 0.
+                let chainPath = nextPath;
+                let chainDepth = depth;
+                const state = nodeStateOf(nodeStates.current, node.id);
+                const ctx: WorldExecutionContext = {
+                    evaluate: pinName => readNamedInput(node, pinName, pinId => evaluateInput(node.id, pinId)),
+                    fire: (pinName, data) => {
+                        if (data) state.outputs = { ...(state.outputs as Record<string, unknown> | undefined), ...data };
+                        const pin = node.outputs.find(p => p.dataType === 'Exec' && p.name === pinName);
+                        const connection = pin && blueprint.connections.find(c => c.fromNodeId === node.id && c.fromPinId === pin.id);
+                        if (connection) executeNode(connection.toNodeId, context, chainPath, chainDepth + 1, connection.toPinId);
+                    },
+                    schedule: (seconds, fn) => {
+                        if (sessionEnded.current) return;
+                        timers.current.push({
+                            remaining: Number.isFinite(seconds) ? Math.max(0, seconds) : 0,
+                            run: () => {
+                                chainPath = new Set([node.id]);
+                                chainDepth = 0;
+                                fn();
+                            },
+                        });
+                    },
+                    nodeState: state,
+                    entryPin: entryPinId === undefined ? undefined : node.inputs.find(p => p.id === entryPinId)?.name,
+                    services,
+                };
+                executor(node, ctx);
+                return; // Executors fire their own exec outputs.
+            }
+        }
 
         // --- Determine Next Node ---
         // Some nodes have multiple Exec outputs (Branch, FlipFlop). 
@@ -332,7 +471,7 @@ export const useLevelBlueprintRuntime = ({
                 executeNode(connection.toNodeId, context, nextPath, depth + 1);
             }
         }
-    }, [blueprint, evaluateInput, destroyActor, addNotification, playerApiRef, enemyApiRef, onRestart, onEndLevel, host]);
+    }, [blueprint, evaluateInput, destroyActor, addNotification, playerApiRef, enemyApiRef, onRestart, onEndLevel, host, services]);
 
     // -------------------------------------------------------------------------
     // 3. LIFECYCLE HOOKS
@@ -359,16 +498,57 @@ export const useLevelBlueprintRuntime = ({
         }
     }, [blueprint.nodes, executeNode]); 
 
+    // --- Event: Overlap (physics trigger colliders) ---
+    // Props churn every render, so the listener reads the latest graph and objects through a ref
+    // and subscribes once per session's event bus.
+    const handleTriggerEvent = useRef<(event: TriggerEvent) => void>(() => undefined);
+    handleTriggerEvent.current = (event: TriggerEvent) => {
+        if (event.otherObjectId !== 'player') return;
+        const triggerId = event.triggerObjectId;
+        if (event.kind === 'exit') {
+            triggerOverlapIds.current.delete(triggerId);
+            return;
+        }
+        if (!hasBegunPlay.current || sessionEnded.current || triggerOverlapIds.current.has(triggerId)) return;
+        triggerOverlapIds.current.add(triggerId);
+        // By actor id; legacy name-only events by name while the actor is still in the session.
+        const actor = levelObjects?.find(obj => obj.id === triggerId);
+        const eventNodes = blueprint.nodes.filter(n =>
+            isOverlapEvent(n) && (actor ? overlapEventTargets(n, actor) : n.data?.targetActorId === triggerId)
+        );
+        eventNodes.forEach(node => executeNode(node.id, { otherActorId: triggerId }));
+    };
+    useEffect(() => triggerEvents.subscribe(event => handleTriggerEvent.current(event)), [triggerEvents]);
+
     // --- Event: Tick & Overlap Physics ---
-    useFrame((state, delta) => {
-        if (sessionEnded.current) return;
+    useFrame((_state, delta) => {
+        if (sessionEnded.current) {
+            timers.current = [];
+            return;
+        }
         currentDelta.current = delta;
 
-        // 1. Tick Event
+        // 1. Timed continuations that came due this frame, in the order they were scheduled.
+        // Ones scheduled while these run wait for the next frame.
+        if (timers.current.length > 0) {
+            const due: ScheduledRun[] = [];
+            timers.current = timers.current.filter(timer => {
+                timer.remaining -= delta;
+                if (timer.remaining > TIMER_EPSILON) return true;
+                due.push(timer);
+                return false;
+            });
+            due.forEach(timer => {
+                if (!sessionEnded.current) timer.run();
+            });
+            if (sessionEnded.current) return;
+        }
+
+        // 2. Tick Event
         const tickNodes = blueprint.nodes.filter(n => n.name === 'Event Tick');
         tickNodes.forEach(node => executeNode(node.id, {}));
 
-        // 2. Physics/Overlap Events
+        // 3. Physics/Overlap Events
         if (!playerEntityRef.current) return;
 
         // Get Player World Position
@@ -381,9 +561,10 @@ export const useLevelBlueprintRuntime = ({
 
         const currentOverlaps = new Set<string>();
 
-        // Check distance against all level objects (Simple Circle Collision)
+        // Check distance against level objects without colliders (Simple Circle Collision)
         if (levelObjects) {
             levelObjects.forEach(obj => {
+                if (hasCollider(obj)) return;
                 const objPos = new THREE.Vector3(...obj.position);
                 const radius = Math.max(obj.scale[0], obj.scale[2]) * 1.0; 
                 const playerRadius = 0.5;

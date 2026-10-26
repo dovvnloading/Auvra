@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { ProjectileManagerHandle } from '../ProjectileManager';
 import { SandboxEntityHandle } from '../SandboxEntity';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
+import { releaseSound, routeSoundToBus, useRuntimeMixer } from '../../../runtime/components/audioComponents';
 
 interface CombatConfig {
     FIRE_RATE: number;
@@ -31,6 +32,11 @@ export const usePlayerCombat = (
     
     // Audio Buffers Cache
     const soundBuffers = useRef<AudioBuffer[]>([]);
+
+    // Gunshots play on the mixer's sfx bus in play (plain listener output without runtime services).
+    const mixer = useRuntimeMixer();
+    const mixerRef = useRef(mixer);
+    mixerRef.current = mixer;
     
     // Preload sounds
     useEffect(() => {
@@ -68,6 +74,7 @@ export const usePlayerCombat = (
         // 2D Audio ensures crisp, consistent feedback regardless of camera zoom.
         
         const sound = new THREE.Audio(listener);
+        routeSoundToBus(sound, mixerRef.current, 'sfx');
         sound.setBuffer(buffer);
         sound.setVolume(Math.max(0, Math.min(2, baseVolume))); // Use configured volume
         
@@ -75,6 +82,12 @@ export const usePlayerCombat = (
         const detune = (Math.random() * 200) - 100; // +/- 100 cents
         sound.setDetune(detune);
 
+        // One-shot: detach its gain node from the bus once the shot finishes.
+        const finish = sound.onEnded.bind(sound);
+        sound.onEnded = () => {
+            finish();
+            releaseSound(sound);
+        };
         sound.play();
     };
 

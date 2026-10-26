@@ -131,6 +131,13 @@ export const evaluateNextState = (ctx: DecisionContext): DecisionResult => {
 };
 
 /**
+ * States that travel to their destination along a navigation path. The others
+ * hold position or move relative to the target (strafing), so they steer directly.
+ */
+export const usesPathfinding = (state: AIState): boolean =>
+    state === 'PATROL' || state === 'CHASE' || state === 'SEARCHING' || state === 'RETURNING';
+
+/**
  * Calculates the navigation destination based on the resolved state.
  */
 export const calculateNavigation = (

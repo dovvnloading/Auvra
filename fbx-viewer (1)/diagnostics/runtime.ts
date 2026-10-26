@@ -191,6 +191,11 @@ class FrontendDiagnostics {
     this.session = session && ID_PATTERN.test(session) ? session : null;
   }
 
+  /** The host session these diagnostics belong to, or null outside a native session. */
+  get sessionId(): string | null {
+    return this.session;
+  }
+
   setActiveOperations(count: number): void {
     this.activeCount = Math.max(0, Math.min(64, Math.floor(count)));
   }

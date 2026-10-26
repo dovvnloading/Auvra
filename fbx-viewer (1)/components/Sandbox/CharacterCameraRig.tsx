@@ -3,6 +3,7 @@ import React, { useRef, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { AnimationGraphData } from '../../types';
+import { useRuntimeServices } from '../../runtime/RuntimeServicesContext';
 
 interface CharacterCameraRigProps {
     target: THREE.Object3D;
@@ -11,13 +12,16 @@ interface CharacterCameraRigProps {
     active: boolean;
     isAiming: boolean;
     aimOffset?: [number, number, number]; // Offset for Scope Mode
+    /** Radians per pixel of mouse movement; defaults to the player's options. */
+    mouseSensitivity?: number;
+    /** Mouse up looks down; defaults to the player's options. */
+    invertY?: boolean;
 }
 
 // Reusable math objects
 const _targetWorldPos = new THREE.Vector3();
 const _finalPos = new THREE.Vector3();
 const _lookAtPos = new THREE.Vector3();
-const _dummyVec = new THREE.Vector3();
 
 export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({ 
     target, 
@@ -25,12 +29,20 @@ export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({
     offset = [0, 4.5, 0], 
     active,
     isAiming,
-    aimOffset = [0.5, 4.5, 1.0] 
+    aimOffset = [0.5, 4.5, 1.0],
+    mouseSensitivity,
+    invertY
 }) => {
     const { camera, gl } = useThree();
-    
+
+    // Look settings: explicit props, else the player's options (the game's defaults outside a runtime).
+    // Kept in a ref so changing them in the options menu applies without re-binding the listeners.
+    const { options } = useRuntimeServices();
+    const look = useRef({ sensitivity: 0, invertY: false });
+    look.current.sensitivity = mouseSensitivity ?? options.mouseSensitivity;
+    look.current.invertY = invertY ?? options.invertY;
+
     // Config
-    const mouseSensitivity = 0.002;
     const minPitch = 0.1;
     const maxPitch = Math.PI - 0.2;
 
@@ -57,10 +69,11 @@ export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({
             if (!active || document.pointerLockElement !== domElement) return;
 
             // Dampen sensitivity when aiming for precision
-            const sensitivity = isAiming ? mouseSensitivity * 0.3 : mouseSensitivity;
+            const sensitivity = isAiming ? look.current.sensitivity * 0.3 : look.current.sensitivity;
+            const pitchSign = look.current.invertY ? -1 : 1;
 
             state.current.theta -= e.movementX * sensitivity;
-            state.current.phi -= e.movementY * sensitivity;
+            state.current.phi -= e.movementY * sensitivity * pitchSign;
 
             // Clamp vertical rotation
             state.current.phi = Math.max(minPitch, Math.min(maxPitch, state.current.phi));
@@ -76,14 +89,21 @@ export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({
             state.current.currentDistance = Math.max(2.0, Math.min(15.0, state.current.currentDistance));
         };
 
+        // Right mouse is the default Aim binding; keep the browser menu from opening over the game.
+        const onContextMenu = (e: MouseEvent) => {
+            if (active) e.preventDefault();
+        };
+
         document.addEventListener('mousemove', onMouseMove);
         domElement.addEventListener('click', onClick);
         domElement.addEventListener('wheel', onWheel, { passive: true });
+        domElement.addEventListener('contextmenu', onContextMenu);
 
         return () => {
             document.removeEventListener('mousemove', onMouseMove);
             domElement.removeEventListener('click', onClick);
             domElement.removeEventListener('wheel', onWheel);
+            domElement.removeEventListener('contextmenu', onContextMenu);
         };
     }, [active, gl, isAiming]);
 

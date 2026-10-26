@@ -1,9 +1,10 @@
 
 import React, { useState } from 'react';
-import { Brush, Grid, Network, FileCode, Gamepad2, Download, Upload, LayoutTemplate, Trees, FilePlus, X, Save, FolderOpen, Settings2, SlidersHorizontal, Hammer } from 'lucide-react';
+import { Brush, Grid, Network, FileCode, Gamepad2, Download, Upload, LayoutTemplate, Trees, FilePlus, X, Save, FolderOpen, Settings2, SlidersHorizontal, Hammer, Languages } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
 import { SettingsModal } from '../Settings/SettingsModal';
 import { GameSettingsPanel } from '../Settings/GameSettingsPanel';
+import { LocalizationPanel } from '../Settings/LocalizationPanel';
 
 interface HeaderProps {
   activeTab?: 'scene' | 'graph' | 'blueprint' | 'sandbox' | 'hud' | 'retexture' | 'environment';
@@ -15,6 +16,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
   const [resetConfirm, setResetConfirm] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [gameSettingsOpen, setGameSettingsOpen] = useState(false);
+  const [localizationOpen, setLocalizationOpen] = useState(false);
 
   // Project actions notify through useProjectManager and retain their rejected
   // promise for programmatic callers.  Header events are fire-and-forget UI
@@ -26,7 +28,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
 
   const handleNewProject = () => {
       if (resetConfirm) {
-          runProjectAction(createNewProject);
+          runProjectAction(() => createNewProject());
           setResetConfirm(false);
       } else {
           setResetConfirm(true);
@@ -129,6 +131,14 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
                >
                    <FilePlus size={12} /> {resetConfirm ? "Confirm New?" : "New"}
                </button>
+               <button
+                 onClick={() => runProjectAction(() => createNewProject('starter'))}
+                 disabled={isLoading}
+                 className="flex items-center gap-2 px-2 py-1 text-xs font-bold text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50"
+                 title="Create a new project from the starter template: a playable level with terrain, sky, player and props"
+               >
+                   Starter
+               </button>
                <div className="w-px h-3 bg-gray-800 mx-1"></div>
                <button 
                  onClick={() => runProjectAction(saveProject)}
@@ -173,12 +183,16 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
            <button type="button" onClick={() => setGameSettingsOpen(true)} className="flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-900 px-3 py-1 text-xs font-bold text-gray-400 hover:bg-gray-800 hover:text-white" title="Game settings">
              <SlidersHorizontal size={13} /> Game Settings
            </button>
+           <button type="button" onClick={() => setLocalizationOpen(true)} className="flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-900 px-3 py-1 text-xs font-bold text-gray-400 hover:bg-gray-800 hover:text-white" title="Text translations for the game">
+             <Languages size={13} /> Localization
+           </button>
            <button type="button" onClick={() => setSettingsOpen(true)} className="flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-900 px-3 py-1 text-xs font-bold text-gray-400 hover:bg-gray-800 hover:text-white" title="Provider settings">
              <Settings2 size={13} /> Settings
            </button>
        </div>
        {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
        {gameSettingsOpen && <GameSettingsPanel onClose={() => setGameSettingsOpen(false)} />}
+       {localizationOpen && <LocalizationPanel onClose={() => setLocalizationOpen(false)} />}
     </div>
   );
 };

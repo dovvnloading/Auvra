@@ -2,11 +2,12 @@ import path from 'path';
 import { createHash, randomBytes } from 'node:crypto';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import { collectThirdPartyNotices } from './scripts/licenses/notices.mjs';
 
-const editorDevCsp = (port: number, nonce: string) => `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-${nonce}'; connect-src 'self' blob: https://assets.auvra.local http://127.0.0.1:${port} ws://127.0.0.1:${port}; form-action 'none'; navigate-to 'self';`;
-const editorPackagedCsp = `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' blob: https://assets.auvra.local; form-action 'none'; navigate-to 'self';`;
+const editorDevCsp = (port: number, nonce: string) => `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-${nonce}' 'wasm-unsafe-eval'; connect-src 'self' blob: https://assets.auvra.local http://127.0.0.1:${port} ws://127.0.0.1:${port}; form-action 'none'; navigate-to 'self';`;
+const editorPackagedCsp = `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' blob: https://assets.auvra.local; form-action 'none'; navigate-to 'self';`;
 const hudPackagedCsp = `default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'none'; connect-src 'none'; media-src 'none'; form-action 'none'; navigate-to 'none';`;
-const playerPackagedCsp = `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; connect-src 'self' blob:; form-action 'none'`;
+const playerPackagedCsp = `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src 'self' blob:; form-action 'none'`;
 const playerDevCsp = (port: number, nonce: string) => playerPackagedCsp
   .replace("script-src 'self'", `script-src 'self' 'nonce-${nonce}'`)
   .replace("connect-src 'self' blob:", `connect-src 'self' blob: http://127.0.0.1:${port} ws://127.0.0.1:${port}`);
@@ -43,6 +44,16 @@ const playerTemplatePlugin = (): Plugin => ({
   },
 });
 
+// Editor and player builds both ship the license texts of their npm dependencies. This runs
+// in the normal generateBundle phase, before the player template records every file's hash.
+const thirdPartyNoticesPlugin = (): Plugin => ({
+  name: 'auvra-third-party-notices',
+  apply: 'build',
+  generateBundle() {
+    this.emitFile({ type: 'asset', fileName: 'THIRD_PARTY_NOTICES.txt', source: collectThirdPartyNotices(__dirname) });
+  },
+});
+
 export default defineConfig(({ command, mode }) => {
   const isPlayer = mode === 'player';
   const editorInput: Record<string, string> = {
@@ -69,6 +80,7 @@ export default defineConfig(({ command, mode }) => {
   },
   plugins: [
     react(),
+    thirdPartyNoticesPlugin(),
     {
       name: 'auvra-csp-mode',
       transformIndexHtml(html: string, context) {

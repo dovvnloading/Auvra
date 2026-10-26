@@ -4,7 +4,7 @@ import { COMPONENT_DEFINITIONS, createComponent, getComponentDefinition } from '
 describe('component registry', () => {
   it('registers the built-in components once each, with a renderer and editable props', () => {
     const types = COMPONENT_DEFINITIONS.map(definition => definition.type);
-    expect(types).toEqual(['rotator', 'mover', 'pointLight', 'spotLight']);
+    expect(types).toEqual(['rotator', 'mover', 'pointLight', 'spotLight', 'collider', 'rigidBody', 'particles', 'audioSource']);
     for (const definition of COMPONENT_DEFINITIONS) {
       expect(getComponentDefinition(definition.type)).toBe(definition);
       expect(definition.label).not.toBe('');

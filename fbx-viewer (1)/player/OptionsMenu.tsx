@@ -2,12 +2,14 @@ import React, { useEffect, useState } from 'react';
 import { AUDIO_BUSES } from '../runtime/audioMixer';
 import { applyBindingOverrides, DEFAULT_INPUT_MAP, describeBinding, type InputBinding } from '../runtime/input';
 import { usePlayerOptions, type PlayerOptionsStore } from '../runtime/playerOptions';
+import { useLocale } from '../runtime/localization';
 
 const BUS_LABELS = { master: 'Master', music: 'Music', sfx: 'Effects', ui: 'Interface' } as const;
 
 /** Player-facing options: look, audio buses and key rebinding. Changes save immediately. */
 export const OptionsMenu: React.FC<{ store: PlayerOptionsStore; onClose: () => void }> = ({ store, onClose }) => {
     const options = usePlayerOptions(store);
+    const { locale, locales, setLocale } = useLocale();
     const [listening, setListening] = useState<string | null>(null);
     const actions = applyBindingOverrides(DEFAULT_INPUT_MAP, options.bindings);
 
@@ -55,6 +57,18 @@ export const OptionsMenu: React.FC<{ store: PlayerOptionsStore; onClose: () => v
                         <input type="checkbox" checked={options.invertY} onChange={event => store.update({ invertY: event.target.checked })} />
                     </label>
                 </section>
+
+                {locales.length > 1 && (
+                    <section className="space-y-3">
+                        <h3 className="text-xs uppercase tracking-wider text-white/50">Language</h3>
+                        <label className="flex items-center justify-between gap-4 text-sm">
+                            Text language
+                            <select value={locale} onChange={event => setLocale(event.target.value)} className="w-48 rounded bg-white/10 px-2 py-1">
+                                {locales.map(code => <option key={code} value={code} className="bg-gray-900">{code}</option>)}
+                            </select>
+                        </label>
+                    </section>
+                )}
 
                 <section className="space-y-3">
                     <h3 className="text-xs uppercase tracking-wider text-white/50">Audio</h3>

@@ -28,8 +28,12 @@ _NESTED_KEYS = {
     "audioConfig": {"audioId", "volume", "loop", "autoplay", "muted", "isSpatial", "refDistance", "maxDistance", "rolloffFactor", "loopStart", "loopEnd"},
     # ``heights`` is the legacy inline form; current documents reference a
     # binary heightfield asset instead (see ``_validate_terrain_heightfields``).
-    "terrainData": {"resolution", "width", "depth", "heights", "heightfield", "textureId"},
+    # Paint weights likewise live in a binary splat map asset (``splatmap``);
+    # the editor's in-memory ``splat`` array is never persisted.
+    "terrainData": {"resolution", "width", "depth", "heights", "heightfield", "textureId", "textureLayers", "splatmap"},
     "heightfield": {"assetId", "encoding", "columns", "rows"},
+    "splatmap": {"assetId", "encoding", "columns", "rows"},
+    "textureLayers": {"textureId", "tiling"},
     "skyConfig": {"timeOfDay", "sunIntensity", "ambienceIntensity", "sunColor", "fogColor", "fogDensity", "turbidity", "rayleigh", "mieCoefficient", "mieDirectionalG", "inclination", "azimuth"},
     "dimensions": {"width", "height"},
     "importSettings": {"normalize", "targetSize"},
@@ -41,7 +45,7 @@ _NESTED_KEYS = {
     "inputs": {"id", "key", "type", "targetVariableId", "targetValue", "name", "dataType", "direction"},
     "states": {"id", "name", "position", "loop", "isRoot", "stateType", "clipName", "blendSamples", "blendParamX", "blendParamY"},
     "blendSamples": {"id", "clipName", "position"},
-    "transitions": {"id", "fromStateId", "toStateId", "duration", "conditions"},
+    "transitions": {"id", "fromStateId", "toStateId", "duration", "conditions", "exitTime"},
     "conditions": {"variableId", "operator", "value"},
     "nodes": {"id", "type", "name", "position", "inputs", "outputs", "data", "customData"},
     "outputs": {"id", "name", "dataType", "direction"},
@@ -55,6 +59,10 @@ _NESTED_KEYS = {
     "render": {"visible", "radius", "selected", "lods"},
 }
 _FREEFORM_KEYS = {"settings", "overrides", "style", "payload", "data", "customData", "props"}
+# ``materialOverrides`` is keyed by authored material names, so its entries are
+# checked against the override fields instead of by their (arbitrary) key.
+_MATERIAL_OVERRIDE_KEYS = {"color", "roughness", "metalness", "emissive", "emissiveIntensity", "opacity", "mapTextureId", "normalTextureId"}
+_MATERIAL_TEXTURE_KEYS = ("mapTextureId", "normalTextureId")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 _COMMON = {
@@ -151,6 +159,8 @@ def validate_project_references(
         require("blueprints", (value.get("spawnConfig") or {}).get("blueprintId"), "spawn blueprint", optional=True)
         require("audio", (value.get("audioConfig") or {}).get("audioId"), "object audio", optional=True)
         require("textures", (value.get("terrainData") or {}).get("textureId"), "terrain texture", optional=True)
+        for layer in ((value.get("terrainData") or {}).get("textureLayers") or []):
+            require("textures", layer.get("textureId") if isinstance(layer, dict) else None, "terrain layer texture", optional=True)
         require("prefabs", value.get("prefabId"), "object prefab", optional=True)
     # Transform parents live in the same level, so a hierarchy never spans
     # levels and a level can be loaded (or deleted) as one tree.
@@ -186,6 +196,9 @@ def validate_project_references(
     for value in records["models"].values():
         for identity in (value.get("textureOverrides") or {}).values():
             require("textures", identity, "model texture")
+        for override in (value.get("materialOverrides") or {}).values():
+            for key in _MATERIAL_TEXTURE_KEYS:
+                require("textures", override.get(key), "model material texture", optional=True)
     for domain in ("attachments", "sockets"):
         for value in records[domain].values():
             require("models", value.get("parentModelId"), f"{domain} parent model")
@@ -269,9 +282,9 @@ def _normalize_object_transforms(value: Any) -> None:
         object_value["scale"] = _canonical_vector(scale, "scale", index, minimum=_MIN_SCALE, maximum=_MAX_SCALE)
 
 def _validate_terrain_heightfields(value: Any) -> None:
-    """A heightfield reference must describe the terrain grid it belongs to.
+    """Heightfield and splat map references must describe their terrain's grid.
 
-    The reference shape is enforced by the objects JSON Schema; this checks
+    The reference shapes are enforced by the objects JSON Schema; this checks
     the cross-field rule a schema cannot express. Legacy documents with inline
     ``heights`` are still accepted and are migrated by the editor on the next
     terrain commit.
@@ -280,15 +293,18 @@ def _validate_terrain_heightfields(value: Any) -> None:
         return
     for index, object_value in enumerate(value["documents"]):
         terrain = object_value.get("terrainData") if isinstance(object_value, dict) else None
-        if not isinstance(terrain, dict) or not isinstance(terrain.get("heightfield"), dict):
+        if not isinstance(terrain, dict):
             continue
-        resolution = terrain.get("resolution")
-        if not _is_number(resolution) or not float(resolution).is_integer():
-            raise ValueError(f"objects document {index} terrain heightfield requires an integer resolution")
-        samples = int(resolution) + 1
-        heightfield = terrain["heightfield"]
-        if heightfield.get("columns") != samples or heightfield.get("rows") != samples:
-            raise ValueError(f"objects document {index} terrain heightfield does not match its resolution")
+        for key, label in (("heightfield", "heightfield"), ("splatmap", "splat map")):
+            reference = terrain.get(key)
+            if not isinstance(reference, dict):
+                continue
+            resolution = terrain.get("resolution")
+            if not _is_number(resolution) or not float(resolution).is_integer():
+                raise ValueError(f"objects document {index} terrain {label} requires an integer resolution")
+            samples = int(resolution) + 1
+            if reference.get("columns") != samples or reference.get("rows") != samples:
+                raise ValueError(f"objects document {index} terrain {label} does not match its resolution")
 
 def _documents(value: Any) -> list[Any]:
     documents = value.get("documents") if isinstance(value, dict) else None
@@ -408,6 +424,12 @@ def _canonical_rotation(value: Any, index: int, *, domain: str = "objects") -> l
 
 def _assert_known_nested(value: Any, parent_key: str | None = None) -> None:
     if isinstance(value, dict):
+        if parent_key == "materialOverrides":
+            for name, override in value.items():
+                if not isinstance(override, dict): continue
+                unknown = set(override) - _MATERIAL_OVERRIDE_KEYS
+                if unknown: raise ValueError(f"unknown fields in materialOverrides[{name!r}]: {sorted(unknown)!r}")
+            return
         if parent_key in _FREEFORM_KEYS:
             if len(value) > 128: raise ValueError(f"{parent_key} exceeds property limit")
             for key, child in value.items():

@@ -39,6 +39,7 @@ PYTHON_EXEMPTIONS = {
     "Auvra/project/archive.py": "project-service-child",
     "Auvra/project/errors.py": "error-model",
     "Auvra/project/game_build.py": "project-service-child",
+    "Auvra/project/templates.py": "project-service-child",
     "Auvra/project/schemas.py": "data-model",
     "Auvra/project/serialization.py": "project-service-child",
     "Auvra/providers/commands.py": "provider-service-child",

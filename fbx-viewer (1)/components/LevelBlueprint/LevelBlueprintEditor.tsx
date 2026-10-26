@@ -4,13 +4,46 @@ import { Play, GitBranch, CheckSquare, Database, Trash2, ArrowLeft, MessageSquar
 import { useScene } from '../../context/SceneContext';
 import { LogicCanvas, LogicGraphSnapshot } from './LogicCanvas';
 import { LevelBlueprintInspector } from './LevelBlueprintInspector';
-import { LogicNode, LogicConnection } from '../../types';
+import { LogicNodeDefinition, logicNodeIcon } from './LogicNode';
+import { LevelVariablesPanel, LevelVariableEdit, LevelVariableEntry, LevelVariableNodeType, levelVariableTypeOf, renameLevelVariableReferences } from './LevelVariablesPanel';
+import { LogicNode, LogicConnection, PrefabData, LevelBlueprintData } from '../../types';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { useEditorHistory } from '../../utils/history';
+import { projectService } from '../../utils/projectService';
 import { migrateLegacyOverlapTargets, overlapEventName, overlapTargetData } from './overlapTargets';
+import { FLOW_NODE_DEFINITIONS } from '../../hooks/levelBlueprintNodes/flow';
+import { WORLD_NODE_DEFINITIONS, WorldNodeType } from '../../hooks/levelBlueprintNodes/world';
 
 // Repeated edits to the same field within this window (typing) merge into a single undo step.
 const HISTORY_COALESCE_MS = 1000;
+
+/** Palette sections for the registry-driven nodes, in display order. */
+const WORLD_PALETTE_GROUPS: { label: string, types: WorldNodeType[] }[] = [
+    { label: 'Actors', types: ['SpawnPrefab', 'GetActorTransform', 'SetActorTransform', 'ApplyImpulse', 'Raycast'] },
+    { label: 'Audio & Input', types: ['PlaySound', 'InputActionPressed'] },
+    { label: 'Level Variables', types: ['GetLevelVariable', 'SetLevelVariable'] },
+    { label: 'Utilities', types: ['RandomFloat', 'RandomInt', 'Print'] },
+];
+
+const REGISTRY_PALETTE: { label: string, definitions: LogicNodeDefinition[] }[] = (() => {
+    const groups: { label: string, definitions: LogicNodeDefinition[] }[] = [
+        { label: 'Flow Control', definitions: [...FLOW_NODE_DEFINITIONS] },
+        ...WORLD_PALETTE_GROUPS.map(group => ({
+            label: group.label,
+            definitions: group.types
+                .map(type => WORLD_NODE_DEFINITIONS.find(definition => definition.type === type))
+                .filter((definition): definition is (typeof WORLD_NODE_DEFINITIONS)[number] => !!definition),
+        })),
+    ];
+    // World nodes added to the registry later still reach the palette before they get a section.
+    const grouped = new Set<string>(WORLD_PALETTE_GROUPS.flatMap(group => group.types));
+    const ungrouped = WORLD_NODE_DEFINITIONS.filter(definition => !grouped.has(definition.type));
+    if (ungrouped.length > 0) groups.push({ label: 'World', definitions: [...ungrouped] });
+    return groups.filter(group => group.definitions.length > 0);
+})();
+
+/** Ids of every pin on a node, used to drop wires to pins an edit removed. */
+const pinIdsOf = (node: Pick<LogicNode, 'inputs' | 'outputs'>) => new Set([...node.inputs, ...node.outputs].map(pin => pin.id));
 
 /** Identifies which fields of a node an inspector edit changes, so keystrokes in one field coalesce. */
 const nodeEditKey = (node: LogicNode, updates: Partial<LogicNode>) => {
@@ -38,20 +71,37 @@ interface LevelBlueprintEditorProps {
  * - Handles adding new nodes to the active graph.
  */
 export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onClose, selectedObjectId }) => {
-    const { activeLevelBlueprint, updateLevelBlueprint, blueprints, levelObjects, levels, currentLevelId } = useScene();
+    const { activeLevelBlueprint, updateLevelBlueprint, blueprints, levelObjects, levels, currentLevelId, audioAssets } = useScene();
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+
+    // Prefabs live in their own project domain (not scene state); Spawn Prefab nodes pick from them.
+    // Without an open project there are none, and the db layer (IndexedDB-backed) is never loaded.
+    const [prefabs, setPrefabs] = useState<PrefabData[]>([]);
+    useEffect(() => {
+        if (!projectService.getStatus().projectId) return;
+        let cancelled = false;
+        import('../../utils/db')
+            .then(({ dbOperations }) => dbOperations.getAllPrefabs())
+            .then(loaded => {
+                if (!cancelled && loaded.length > 0) setPrefabs([...loaded].sort((a, b) => a.name.localeCompare(b.name)));
+            })
+            .catch(error => {
+                if (!cancelled) frontendDiagnostics.failure('level_blueprint_prefab_list_failed', error);
+            });
+        return () => { cancelled = true; };
+    }, []);
 
     // --- 0. UNDO / REDO ---
 
     const graph = useMemo<LogicGraphSnapshot>(
-        () => ({ nodes: activeLevelBlueprint.nodes, connections: activeLevelBlueprint.connections }),
-        [activeLevelBlueprint.nodes, activeLevelBlueprint.connections]
+        () => ({ nodes: activeLevelBlueprint.nodes, connections: activeLevelBlueprint.connections, variables: activeLevelBlueprint.variables }),
+        [activeLevelBlueprint.nodes, activeLevelBlueprint.connections, activeLevelBlueprint.variables]
     );
     const lastEdit = useRef<{ key: string; at: number } | null>(null);
     const applyGraph = useCallback((restored: LogicGraphSnapshot) => {
         lastEdit.current = null;
         try {
-            updateLevelBlueprint({ nodes: restored.nodes, connections: restored.connections });
+            updateLevelBlueprint({ nodes: restored.nodes, connections: restored.connections, variables: restored.variables });
         } catch (error) {
             frontendDiagnostics.failure('level_blueprint_history_apply_failed', error);
         }
@@ -300,6 +350,42 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
         );
     };
 
+    /** Places a flow or world registry node with its declared pins and default data. */
+    const handleAddDefinitionNode = (definition: LogicNodeDefinition) => {
+        const data: Record<string, unknown> = { ...(definition.data || {}) };
+        let name = definition.title;
+        // Like Actor Begin Overlap: an actor selected in the environment becomes the node's target.
+        const takesActor = definition.inputs.some(pin => pin.name === 'Actor' && pin.dataType === 'Object');
+        const actor = takesActor && selectedObjectId ? levelObjects.find(o => o.id === selectedObjectId) : undefined;
+        if (actor) {
+            data.default_Actor = actor.id;
+            name = `${definition.title} (${actor.name})`;
+        }
+        addNode(definition.type, name, definition.inputs, definition.outputs, Object.keys(data).length > 0 ? data : undefined);
+    };
+
+    /** Get/Set Level Variable node already naming a declared variable (the panel's GET / SET buttons). */
+    const handleAddLevelVariableNode = (type: LevelVariableNodeType, variableName: string) => {
+        const definition = WORLD_NODE_DEFINITIONS.find(d => d.type === type);
+        if (!definition) return;
+        addNode(type, `${definition.title} (${variableName})`, definition.inputs, definition.outputs, { ...(definition.data || {}), default_Name: variableName });
+    };
+
+    // --- LEVEL VARIABLES ---
+
+    const handleVariablesChange = (variables: LevelVariableEntry[], edit: LevelVariableEdit) => {
+        // Typing a default merges into one undo step like inspector fields; every other edit is its own step.
+        recordHistory(undefined, edit.kind === 'value' ? `variables:${edit.index}:value` : undefined);
+        // Entries written by the panel always carry an id; older stored ones may not.
+        const updates: Partial<LevelBlueprintData> = { variables: variables as LevelBlueprintData['variables'] };
+        if (edit.kind === 'rename') {
+            // Nodes that used the old name follow the rename in the same write (and undo step).
+            const nodes = renameLevelVariableReferences(activeLevelBlueprint.nodes, edit.from, edit.to);
+            if (nodes !== activeLevelBlueprint.nodes) updates.nodes = nodes;
+        }
+        updateLevelBlueprint(updates);
+    };
+
     // --- TEMPLATES ---
     const handleAddRestartTemplate = () => {
         // Only require that a Player Blueprint exists.
@@ -379,20 +465,50 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
 
     const handleNodeUpdate = (id: string, updates: Partial<LogicNode>) => {
         const node = activeLevelBlueprint.nodes.find(n => n.id === id);
-        if (node) recordHistory(undefined, nodeEditKey(node, updates));
+        const changesPins = !!(updates.inputs || updates.outputs);
+        // Pin edits (e.g. Sequence add/remove) are structural: each one is its own undo step.
+        if (node) recordHistory(undefined, changesPins ? undefined : nodeEditKey(node, updates));
         const updatedNodes = activeLevelBlueprint.nodes.map(n => 
             n.id === id ? { ...n, ...updates } : n
         );
+        if (node && changesPins) {
+            // Drop wires to pins the edit removed, in the same write as the node.
+            const pins = pinIdsOf({ inputs: updates.inputs ?? node.inputs, outputs: updates.outputs ?? node.outputs });
+            const connections = activeLevelBlueprint.connections.filter(c =>
+                (c.fromNodeId !== id || pins.has(c.fromPinId)) && (c.toNodeId !== id || pins.has(c.toPinId))
+            );
+            if (connections.length !== activeLevelBlueprint.connections.length) {
+                updateLevelBlueprint({ nodes: updatedNodes, connections });
+                return;
+            }
+        }
         updateLevelBlueprint({ nodes: updatedNodes });
     };
 
     const selectedNode = activeLevelBlueprint.nodes.find(n => n.id === selectedNodeId);
+
+    // Inputs fed by a wire ignore their default value, so the inspector shows them as connected.
+    const connectedPinIds = useMemo(
+        () => new Set(activeLevelBlueprint.connections.flatMap(c => [c.fromPinId, c.toPinId])),
+        [activeLevelBlueprint.connections]
+    );
+    const levelVariables = useMemo(
+        () => ((activeLevelBlueprint.variables ?? []) as LevelVariableEntry[])
+            .filter(v => typeof v.name === 'string' && v.name.trim() !== '')
+            .map(v => ({ name: v.name.trim(), type: levelVariableTypeOf(v) })),
+        [activeLevelBlueprint.variables]
+    );
 
     return (
         <div className="flex h-full w-full bg-gray-950 text-white font-sans overflow-hidden absolute inset-0 z-50">
             
             {/* LEFT SIDEBAR: PALETTE */}
             <div className="w-64 bg-gray-900 border-r border-gray-800 flex flex-col shrink-0">
+                <LevelVariablesPanel
+                    variables={activeLevelBlueprint.variables}
+                    onChange={handleVariablesChange}
+                    onAddNode={handleAddLevelVariableNode}
+                />
                 <div className="p-4 border-b border-gray-800 bg-gray-950 flex items-center justify-between">
                     <span className="text-xs font-bold text-gray-200 tracking-wider">LOGIC PALETTE</span>
                 </div>
@@ -484,6 +600,23 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                         </button>
                     </div>
 
+                    {/* Flow control and world nodes (hooks/levelBlueprintNodes) */}
+                    {REGISTRY_PALETTE.map(group => (
+                        <div key={group.label} className="space-y-1">
+                            <div className="px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">{group.label}</div>
+                            {group.definitions.map(definition => (
+                                <button
+                                    key={definition.type}
+                                    onClick={() => handleAddDefinitionNode(definition)}
+                                    title={definition.description}
+                                    className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 [&>svg]:w-3 [&>svg]:h-3"
+                                >
+                                    {logicNodeIcon(definition.type)} {definition.title}
+                                </button>
+                            ))}
+                        </div>
+                    ))}
+
                     {/* Entity Variables */}
                     {contextVariables.length > 0 && (
                         <div className="space-y-1 pt-2 border-t border-gray-800">
@@ -569,6 +702,10 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                     levelObjects={levelObjects}
                     levels={levels}
                     globalVariables={contextVariables}
+                    prefabs={prefabs}
+                    audioAssets={audioAssets}
+                    levelVariables={levelVariables}
+                    connectedPinIds={connectedPinIds}
                     onDelete={handleDelete}
                 />
             )}

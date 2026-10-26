@@ -200,7 +200,8 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
         retextureModel: assets.retextureModel,
         previewTexture: assets.previewTexture,
         resetModelTexture: assets.resetModelTexture,
-        
+        updateModelMaterialOverrides: assets.updateModelMaterialOverrides,
+
         attachments: assets.attachments,
         addAttachment: assets.addAttachment,
         addAttachmentFromLibrary: assets.addAttachmentFromLibrary,
