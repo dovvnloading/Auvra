@@ -19,7 +19,7 @@ import {
     type MenuActionHandlers,
 } from './menus';
 import { createPlayerOptionsStore, defaultPlayerOptions } from '../runtime/playerOptions';
-import { localization, localizationSettingsFromDocuments } from '../runtime/localization';
+import { localization, localizationSettingsFromDocuments, uiText, useUiText } from '../runtime/localization';
 
 type Screen = 'title' | 'playing';
 
@@ -65,6 +65,8 @@ export const PlayerApp: React.FC = () => {
     const [optionsOpen, setOptionsOpen] = useState(false);
     const toastId = useRef(0);
     const health = useGameState(state => state.player.health);
+    // Built-in screens follow the project's string tables; toasts below use uiText, read when they fire.
+    const text = useUiText();
 
     // --- Load the game pack and hydrate its content once ---
     useEffect(() => {
@@ -171,16 +173,16 @@ export const PlayerApp: React.FC = () => {
         };
         if (saves.save(data)) {
             setSaveList(saves.list());
-            print('Game saved', 'success');
+            print(uiText('ui.toast.saved'), 'success');
         } else {
-            print('Could not save the game', 'error');
+            print(uiText('ui.toast.saveFailed'), 'error');
         }
     }, [saves, session, manifest, levels, print]);
 
     const loadGame = useCallback((slot = 'auto') => {
         const data = saves?.load(slot) ?? null;
         if (!data || !levels.has(data.levelId)) {
-            print('No saved game to load', 'warning');
+            print(uiText('ui.toast.noSave'), 'warning');
             return;
         }
         beginSession(data.levelId, data);
@@ -192,7 +194,7 @@ export const PlayerApp: React.FC = () => {
         endLevel: quitToTitle,
         openLevel: levelId => {
             if (levels.has(levelId)) beginSession(levelId);
-            else print(`Level ${levelId} is not in this build`, 'error');
+            else print(uiText('ui.toast.missingLevel', { level: levelId }), 'error');
         },
         saveGame,
         loadGame,
@@ -259,9 +261,9 @@ export const PlayerApp: React.FC = () => {
 
     if (error) {
         return (
-            <Menu title="Could not start the game" subtitle={error}>
+            <Menu title={text('ui.startFailed')} subtitle={error}>
                 <p className="text-xs text-white/50 max-w-md text-center">
-                    Web builds must be served over http(s); opening index.html from disk does not work.
+                    {text('ui.startFailedHint')}
                 </p>
             </Menu>
         );
@@ -269,7 +271,7 @@ export const PlayerApp: React.FC = () => {
 
     if (!loaded || !manifest || !settings) {
         return (
-            <Menu title={manifest?.name ?? 'Loading'} subtitle={progress.label ?? 'Loading game content...'}>
+            <Menu title={manifest?.name ?? text('ui.loading')} subtitle={progress.label ?? text('ui.loadingContent')}>
                 <div className="w-64 h-1.5 rounded bg-white/10 overflow-hidden">
                     <div className="h-full bg-white/70 transition-all" style={{ width: `${Math.round(Math.min(1, Math.max(0, progress.value)) * 100)}%` }} />
                 </div>
@@ -301,10 +303,10 @@ export const PlayerApp: React.FC = () => {
 
                 {screen === 'title' && !titleMenu && (
                     <Menu title={manifest.name}>
-                        <Button onClick={startGame} disabled={!startupLevelId}>Play</Button>
-                        {saveList.length > 0 && <Button onClick={() => loadGame(saveList[0].slot)}>Continue</Button>}
-                        <Button onClick={() => setOptionsOpen(true)} disabled={!optionsStore}>Options</Button>
-                        {!startupLevelId && <p className="text-xs text-red-300">This build has no playable level.</p>}
+                        <Button onClick={startGame} disabled={!startupLevelId}>{text('ui.play')}</Button>
+                        {saveList.length > 0 && <Button onClick={() => loadGame(saveList[0].slot)}>{text('ui.continue')}</Button>}
+                        <Button onClick={() => setOptionsOpen(true)} disabled={!optionsStore}>{text('ui.options')}</Button>
+                        {!startupLevelId && <p className="text-xs text-red-300">{text('ui.noPlayableLevel')}</p>}
                     </Menu>
                 )}
 
@@ -313,22 +315,22 @@ export const PlayerApp: React.FC = () => {
                 )}
 
                 {screen === 'playing' && paused && !gameOver && !pauseMenu && (
-                    <Menu title="Paused">
-                        <Button onClick={() => setPaused(false)}>Resume</Button>
-                        <Button onClick={() => saveGame()}>Save</Button>
-                        <Button onClick={() => loadGame()} disabled={saveList.length === 0}>Load</Button>
-                        <Button onClick={() => setOptionsOpen(true)} disabled={!optionsStore}>Options</Button>
-                        <Button onClick={quitToTitle}>Quit to Title</Button>
+                    <Menu title={text('ui.paused')}>
+                        <Button onClick={() => setPaused(false)}>{text('ui.resume')}</Button>
+                        <Button onClick={() => saveGame()}>{text('ui.save')}</Button>
+                        <Button onClick={() => loadGame()} disabled={saveList.length === 0}>{text('ui.load')}</Button>
+                        <Button onClick={() => setOptionsOpen(true)} disabled={!optionsStore}>{text('ui.options')}</Button>
+                        <Button onClick={quitToTitle}>{text('ui.quitToTitle')}</Button>
                     </Menu>
                 )}
 
                 {optionsOpen && optionsStore && <OptionsMenu store={optionsStore} onClose={() => setOptionsOpen(false)} />}
 
                 {gameOver && (
-                    <Menu title="Game Over">
-                        <Button onClick={() => session && beginSession(session.levelId)}>Retry</Button>
-                        <Button onClick={() => loadGame()} disabled={saveList.length === 0}>Load Last Save</Button>
-                        <Button onClick={quitToTitle}>Quit to Title</Button>
+                    <Menu title={text('ui.gameOver')}>
+                        <Button onClick={() => session && beginSession(session.levelId)}>{text('ui.gameOver.retry')}</Button>
+                        <Button onClick={() => loadGame()} disabled={saveList.length === 0}>{text('ui.gameOver.loadLastSave')}</Button>
+                        <Button onClick={quitToTitle}>{text('ui.quitToTitle')}</Button>
                     </Menu>
                 )}
 

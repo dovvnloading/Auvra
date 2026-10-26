@@ -30,9 +30,12 @@ export const objectIdFromUserData = (userData: unknown): string | null => {
 export const objectIdFromRigidBody = (body: RapierRigidBody | null | undefined): string | null =>
     body ? objectIdFromUserData(body.userData) : null;
 
-/** A collider belongs to the object of the body it is attached to; a free-standing collider to none. */
+/**
+ * A collider belongs to the object it is tagged with (a child's collider folded into its parent's body
+ * carries the child's id), otherwise to the object of its body; a free-standing collider to none.
+ */
 export const objectIdFromCollider = (collider: RapierCollider | null | undefined): string | null =>
-    objectIdFromRigidBody(collider?.parent());
+    objectIdFromUserData((collider as { userData?: unknown } | null | undefined)?.userData) ?? objectIdFromRigidBody(collider?.parent());
 
 export interface PhysicsRaycastHit {
     /** LevelObject id (or PLAYER_PHYSICS_ID) of the body hit; null for a collider no object owns. */
@@ -83,7 +86,8 @@ export const createPhysicsQueries = (world: RapierWorld, rapier: RapierModule): 
         const excluded = options.excludeObjectId;
         const predicate = excluded === undefined
             ? undefined
-            : (collider: RapierCollider) => objectIdFromCollider(collider) !== excluded;
+            // Excluding an object also skips the children folded into its body.
+            : (collider: RapierCollider) => objectIdFromCollider(collider) !== excluded && objectIdFromRigidBody(collider.parent()) !== excluded;
         let hit: ReturnType<RapierWorld['castRayAndGetNormal']>;
         try {
             hit = world.castRayAndGetNormal(

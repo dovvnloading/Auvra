@@ -131,10 +131,10 @@ const listActions = (kinds: readonly MenuActionKind[]): string => {
 // collapse into one undo step.
 const HISTORY_COALESCE_MS = 800;
 
-/** Text and Button take a string-table key that wins over their literal text when set. */
+/** Text and Button take a string-table key that wins over their literal text when set, unless the literal is bound. */
 const LOCALIZED_KEY_PROPS: Readonly<Record<string, { literal: string; key: string; hint: string }>> = {
-    Text: { literal: 'text', key: 'textKey', hint: 'String key from Localization; overrides the text.' },
-    Button: { literal: 'label', key: 'labelKey', hint: 'String key from Localization; overrides the label.' },
+    Text: { literal: 'text', key: 'textKey', hint: 'String key from Localization; overrides the text unless it is bound.' },
+    Button: { literal: 'label', key: 'labelKey', hint: 'String key from Localization; overrides the label unless it is bound.' },
 };
 
 /** True when the element's string key is set, matching how the components decide the key wins. */
@@ -144,25 +144,20 @@ const hasLocalizedKey = (element: HUDElement, key: string): boolean => {
 };
 
 /**
- * The hint under one attribute. A set string key wins over the literal at runtime, even when the
- * literal is bound, so a bound literal with a key set says the live value will not show.
+ * The hint under one attribute. During play a live binding wins over the string key, and the key
+ * still shows its translation in the editor and wherever the value is not bound.
  */
 const attributeHint = (
     element: HUDElement,
     key: string,
     localized: { literal: string; key: string; hint: string } | undefined,
 ): string | null => {
-    const keySet = localized ? hasLocalizedKey(element, localized.key) : false;
     const boundTo = hudBindingPath(element.props.bind, key);
-    if (boundTo) {
-        return localized && key === localized.literal && keySet
-            ? `Bound to ${boundTo}, but ${localized.key} is set and overrides it; clear ${localized.key} to show the live value.`
-            : `Bound to ${boundTo}; shows the live value while playing.`;
-    }
+    if (boundTo) return `Bound to ${boundTo}; shows the live value while playing.`;
     if (!localized || key !== localized.key) return null;
     const literalBoundTo = hudBindingPath(element.props.bind, localized.literal);
-    return literalBoundTo && keySet
-        ? `${localized.hint} The live value of ${literalBoundTo} is not shown while it is set.`
+    return literalBoundTo && hasLocalizedKey(element, localized.key)
+        ? `${localized.hint} While playing, the live value of ${literalBoundTo} is shown instead.`
         : localized.hint;
 };
 

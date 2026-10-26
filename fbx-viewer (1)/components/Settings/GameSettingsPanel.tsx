@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { RotateCcw, Save, SlidersHorizontal, X } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
 import { useNativeProjectDocument } from '../../utils/useNativeProjectDocument';
@@ -96,8 +96,35 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  // A hydrate, project switch or successful save replaces the draft with the stored document.
-  useEffect(() => { setDraft(stored); }, [stored]);
+  // JSON of the stored settings the draft was last synced to. The draft is unedited while it matches.
+  const baselineRef = useRef(JSON.stringify(stored));
+
+  // An unedited draft follows the stored document (hydrate, another writer). An edited draft is kept
+  // until the user saves or reverts: every revision bump re-hydrates the document and a failed save
+  // rolls it back, and neither may discard what the user typed. A placeholder shown while loading
+  // never replaces the draft.
+  useEffect(() => {
+    if (!hydrated) return;
+    const next = JSON.stringify(stored);
+    if (next === baselineRef.current) return;
+    setDraft((current) => {
+      if (JSON.stringify(normalizeGameSettings(current)) !== baselineRef.current) return current;
+      baselineRef.current = next;
+      return stored;
+    });
+  }, [stored, hydrated]);
+
+  // A project switch always discards the draft.
+  useEffect(() => {
+    baselineRef.current = JSON.stringify(stored);
+    setDraft(stored);
+  }, [projectStatus.projectId]);
+
+  const revert = () => {
+    setMessage(null);
+    baselineRef.current = JSON.stringify(stored);
+    setDraft(stored);
+  };
 
   const playerBlueprints = useMemo(() => blueprints.filter((blueprint) => blueprint.type === 'Player Character'), [blueprints]);
   const missingLevel = draft.startupLevelId !== null && !levels.some((level) => level.id === draft.startupLevelId);
@@ -114,7 +141,12 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
   const save = async () => {
     setSaving(true); setMessage(null);
     try {
-      await replace({ ...document, id: GAME_SETTINGS_DOCUMENT_ID, settings: sanitizeGameSettings(draft) });
+      const settings = sanitizeGameSettings(draft);
+      await replace({ ...document, id: GAME_SETTINGS_DOCUMENT_ID, settings });
+      // The saved values (trimmed and clamped) become the new unedited baseline.
+      const saved = normalizeGameSettings(settings);
+      baselineRef.current = JSON.stringify(saved);
+      setDraft(saved);
       setMessage('Game settings saved to the project.');
     } catch (cause) {
       setMessage(cause instanceof Error ? cause.message : 'Game settings could not be saved.');
@@ -178,7 +210,7 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
           {(message || error) && <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs text-gray-300">{message || error?.message}</div>}
         </div>
         <div className="flex items-center justify-between gap-2 border-t border-gray-800 bg-gray-950 px-5 py-3">
-          <button type="button" disabled={disabled || !dirty} onClick={() => { setMessage(null); setDraft(stored); }} className="flex items-center gap-2 rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-50"><RotateCcw size={13} /> Revert</button>
+          <button type="button" disabled={disabled || !dirty} onClick={revert} className="flex items-center gap-2 rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-50"><RotateCcw size={13} /> Revert</button>
           <div className="flex items-center gap-2">
             <button type="button" onClick={onClose} className="rounded px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-800 hover:text-white">Close</button>
             <button type="button" disabled={disabled || !dirty || !writable} onClick={() => void save()} className="flex items-center gap-2 rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-500 disabled:opacity-50" title={writable ? 'Save game settings' : 'Open a writable project to save'}><Save size={13} /> {saving ? 'Saving…' : 'Save'}</button>

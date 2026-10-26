@@ -16,10 +16,17 @@ import type { LevelComponent, LevelObject } from '../types';
  * lights, are not solid). Objects that move (mover/rotator components, or a
  * non-fixed rigidBody on the object or an ancestor) are not baked.
  *
- * findPath runs A* over the grid (8-connected, no corner cutting) and smooths
- * the result by string pulling against grid line of sight. Walkable cells are
- * labelled into connected regions at build time, so an unreachable target is
- * rejected without searching.
+ * Box collider tops agents can stand on (platforms, ramps, stairs) are baked
+ * as raised walkable cells at their surface height, stacked bottom-up, and
+ * kept the agent radius back from their ledges. Neighbouring cells connect
+ * only where the step between their surfaces is at most maxStepHeight (plus
+ * the rise a walkable slope makes over the run), so a platform without a ramp
+ * or stairs up to it is a region of its own.
+ *
+ * findPath runs A* over those links (8-connected, no corner cutting) and
+ * smooths the result by string pulling against grid line of sight. Walkable
+ * cells are labelled into connected regions at build time, so an unreachable
+ * target is rejected without searching.
  */
 
 export interface NavPoint {
@@ -44,7 +51,10 @@ export interface NavGridOptions {
     agentHeight?: number;
     /** Steepest walkable ground in degrees (default 40). */
     maxSlopeDegrees?: number;
-    /** Obstacles whose top is at most this far above the ground are stepped over (default 0.35). */
+    /**
+     * Tallest step between neighbouring surfaces (the ground, collider tops); obstacles whose top is at
+     * most this far above the surface are stepped over (default 0.35).
+     */
     maxStepHeight?: number;
     /** Area to cover; defaults to the terrains and obstacles, plus padding, and at least +/-minHalfExtent. */
     bounds?: NavBounds;
@@ -73,12 +83,21 @@ export interface NavGrid {
     rows: number;
     /** 1 where an agent can stand. */
     walkable: Uint8Array;
-    /** Ground height at each cell centre. */
+    /** Surface height at each cell centre: the ground, or the collider top an agent stands on there. */
     heights: Float32Array;
-    /** Connected walkable region of each cell (4-connected); -1 when blocked. */
+    /** 1 where the surface is a collider top (platform, ramp, stairs) more than maxStepHeight above the ground under it. */
+    raised: Uint8Array;
+    /**
+     * Steps an agent can take from each cell, one bit per neighbour: bits 0-3 for (column, row) offsets
+     * (+1, 0), (-1, 0), (0, +1), (0, -1), bits 4-7 for the diagonals (+1, +1), (+1, -1), (-1, +1), (-1, -1).
+     * Set where both cells are walkable and the step between their surfaces is climbable; a diagonal
+     * also needs both orthogonal steps around it (no corner cutting).
+     */
+    links: Uint8Array;
+    /** Connected walkable region of each cell (through orthogonal links); -1 when blocked. */
     regions: Int32Array;
     agentRadius: number;
-    /** Obstacles at most this far above the ground were stepped over when baking. */
+    /** Tallest climb between neighbouring surfaces; obstacles at most this far above a surface were stepped over when baking. */
     maxStepHeight: number;
 }
 
@@ -94,7 +113,7 @@ export interface FindPathOptions {
 }
 
 export interface NavPathResult {
-    /** Waypoints from the start position to the end; y is the ground height (the endpoints keep their own y). */
+    /** Waypoints from the start position to the end; y is the surface height (the endpoints keep their own y). */
     points: THREE.Vector3[];
     /** False when the path stops at the closest reachable point (partial). */
     reachable: boolean;
@@ -117,6 +136,21 @@ const DYNAMIC_COMPONENT_TYPES: ReadonlySet<string> = new Set(['mover', 'rotator'
 // Smallest collider dimension physics builds (physicsComponents MIN_EXTENT).
 const MIN_COLLIDER_EXTENT = 0.01;
 const SQRT2 = Math.SQRT2;
+// A collider top must rise this far above the surface below to replace it (a floor slab flush with the ground does not).
+const SURFACE_EPSILON = 1e-3;
+// Surface samples per cell length when a step between two cell centres is checked for stair treads narrower than a cell.
+const STAIR_SAMPLES_PER_CELL = 4;
+// Neighbour offsets (the NavGrid.links bit order): four orthogonal steps, then four diagonals.
+const STEP_COLUMN = [1, -1, 0, 0, 1, 1, -1, -1];
+const STEP_ROW = [0, 0, 1, -1, 1, -1, 1, -1];
+const columnStep = (dc: number): number => (dc > 0 ? 0 : 1);
+const rowStep = (dr: number): number => (dr > 0 ? 2 : 3);
+const diagonalStep = (dc: number, dr: number): number => 4 + (dc > 0 ? 0 : 2) + (dr > 0 ? 0 : 1);
+// Where an obstacle that does not cover a cell centre is sampled around it: 8 directions at half and full radius.
+const RING_SAMPLES: Array<[number, number]> = [];
+for (const scale of [0.5, 1]) {
+    for (let i = 0; i < 8; i++) RING_SAMPLES.push([Math.cos((i * Math.PI) / 4) * scale, Math.sin((i * Math.PI) / 4) * scale]);
+}
 
 // ---------------------------------------------------------------------------
 // Scene sampling
@@ -260,12 +294,24 @@ const createTerrainSampler = (terrain: LevelObject, matrix: THREE.Matrix4): Terr
     return { bounds: boundsOfPoints(corners), sample };
 };
 
+/** Where a vertical line crosses an obstacle. */
+interface VerticalSpan {
+    bottom: number;
+    top: number;
+    /** Tangent of the slope of the face the line leaves through at the top (Infinity for a vertical face). */
+    slope: number;
+}
+
 interface Obstacle {
     bounds: NavBounds;
     minY: number;
     maxY: number;
     /** True when an agent of `radius` standing at (x, z) overlaps the obstacle's footprint. */
     covers: (x: number, z: number, radius: number) => boolean;
+    /** Boxes: writes the vertical line through (x, z)'s crossing of the obstacle to `out`; false when it misses. */
+    span?: (x: number, z: number, out: VerticalSpan) => boolean;
+    /** True when agents can stand on its top (box colliders), which then bakes as raised walkable cells. */
+    standable?: boolean;
 }
 
 const circleObstacle = (centerX: number, centerZ: number, radius: number, minY: number, maxY: number): Obstacle => ({
@@ -305,7 +351,7 @@ const segmentObstacle = (a: THREE.Vector3, b: THREE.Vector3, radius: number): Ob
     };
 };
 
-const boxObstacle = (matrix: THREE.Matrix4, center: THREE.Vector3, half: THREE.Vector3): Obstacle | null => {
+const boxObstacle = (matrix: THREE.Matrix4, center: THREE.Vector3, half: THREE.Vector3, standable = false): Obstacle | null => {
     if (Math.abs(matrix.determinant()) < 1e-12) return null;
     const corners: THREE.Vector3[] = [];
     for (let i = 0; i < 8; i++) {
@@ -321,6 +367,9 @@ const boxObstacle = (matrix: THREE.Matrix4, center: THREE.Vector3, half: THREE.V
     const inverse = matrix.clone().invert();
     const axisScale = new THREE.Vector3().setFromMatrixScale(matrix);
     const local = new THREE.Vector3();
+    const e = inverse.elements;
+    const lo = [center.x - half.x, center.y - half.y, center.z - half.z];
+    const hi = [center.x + half.x, center.y + half.y, center.z + half.z];
     return {
         bounds: boundsOfPoints(corners),
         minY,
@@ -330,7 +379,62 @@ const boxObstacle = (matrix: THREE.Matrix4, center: THREE.Vector3, half: THREE.V
             return Math.abs(local.x - center.x) <= half.x + agentRadius / Math.max(axisScale.x, 1e-6)
                 && Math.abs(local.z - center.z) <= half.z + agentRadius / Math.max(axisScale.z, 1e-6);
         },
+        span: (x, z, out) => {
+            // In box space the world line (x, y, z) is origin + y * direction, so clipping it to each
+            // axis slab bounds the world heights where it enters and leaves the box.
+            let enter = -Infinity;
+            let exit = Infinity;
+            let exitAxis = -1;
+            for (let axis = 0; axis < 3; axis++) {
+                const origin = e[axis] * x + e[8 + axis] * z + e[12 + axis];
+                const direction = e[4 + axis];
+                if (Math.abs(direction) < 1e-12) {
+                    if (origin < lo[axis] || origin > hi[axis]) return false;
+                    continue;
+                }
+                const a = (lo[axis] - origin) / direction;
+                const b = (hi[axis] - origin) / direction;
+                if (Math.min(a, b) > enter) enter = Math.min(a, b);
+                if (Math.max(a, b) < exit) {
+                    exit = Math.max(a, b);
+                    exitAxis = axis;
+                }
+            }
+            if (exitAxis < 0 || enter > exit) return false;
+            // Normals transform by the inverse transpose, so the exit face's normal is that row of the inverse.
+            const up = Math.abs(e[4 + exitAxis]);
+            out.bottom = enter;
+            out.top = exit;
+            out.slope = up > 1e-12 ? Math.hypot(e[exitAxis], e[8 + exitAxis]) / up : Infinity;
+            return true;
+        },
+        standable,
     };
+};
+
+/**
+ * The obstacle's vertical extent near (x, z) (within `radius`), written to `out`: exact where it
+ * covers the point, else the hull of samples around it, else (no span, or no sample hits) its whole height.
+ */
+const extentNear = (obstacle: Obstacle, x: number, z: number, radius: number, out: VerticalSpan): void => {
+    const span = obstacle.span;
+    if (span) {
+        if (span(x, z, out)) return;
+        let bottom = Infinity;
+        let top = -Infinity;
+        for (const [dx, dz] of RING_SAMPLES) {
+            if (!span(x + dx * radius, z + dz * radius, out)) continue;
+            bottom = Math.min(bottom, out.bottom);
+            top = Math.max(top, out.top);
+        }
+        if (top >= bottom) {
+            out.bottom = bottom;
+            out.top = top;
+            return;
+        }
+    }
+    out.bottom = obstacle.minY;
+    out.top = obstacle.maxY;
 };
 
 const colliderObstacle = (component: LevelComponent, matrix: THREE.Matrix4): Obstacle | null => {
@@ -339,7 +443,7 @@ const colliderObstacle = (component: LevelComponent, matrix: THREE.Matrix4): Obs
     const offset = vectorProp(props.offset, [0, 0, 0]);
     if (shape === 'box') {
         const size = vectorProp(props.size, [1, 1, 1]);
-        return boxObstacle(matrix, offset, new THREE.Vector3(Math.abs(size.x) / 2, Math.abs(size.y) / 2, Math.abs(size.z) / 2));
+        return boxObstacle(matrix, offset, new THREE.Vector3(Math.abs(size.x) / 2, Math.abs(size.y) / 2, Math.abs(size.z) / 2), true);
     }
     if (shape === 'sphere') {
         const scale = new THREE.Vector3().setFromMatrixScale(matrix);
@@ -449,7 +553,8 @@ const unionBounds = (target: NavBounds, other: NavBounds): void => {
     target.maxZ = Math.max(target.maxZ, other.maxZ);
 };
 
-const labelRegions = (walkable: Uint8Array, columns: number, rows: number): Int32Array => {
+/** Connected components of walkable cells through orthogonal links (links are symmetric). */
+const labelRegions = (walkable: Uint8Array, links: Uint8Array, columns: number): Int32Array => {
     const regions = new Int32Array(walkable.length).fill(-1);
     const queue = new Int32Array(walkable.length);
     let region = 0;
@@ -461,18 +566,15 @@ const labelRegions = (walkable: Uint8Array, columns: number, rows: number): Int3
         regions[seed] = region;
         while (head < tail) {
             const cell = queue[head++];
-            const column = cell % columns;
-            const row = (cell - column) / columns;
-            const visit = (next: number) => {
-                if (walkable[next] && regions[next] === -1) {
+            const cellLinks = links[cell];
+            for (let k = 0; k < 4; k++) {
+                if (((cellLinks >> k) & 1) === 0) continue;
+                const next = cell + STEP_ROW[k] * columns + STEP_COLUMN[k];
+                if (regions[next] === -1) {
                     regions[next] = region;
                     queue[tail++] = next;
                 }
-            };
-            if (column > 0) visit(cell - 1);
-            if (column < columns - 1) visit(cell + 1);
-            if (row > 0) visit(cell - columns);
-            if (row < rows - 1) visit(cell + columns);
+            }
         }
         region++;
     }
@@ -509,8 +611,11 @@ export function buildNavGrid(levelObjects: readonly LevelObject[], options: NavG
         terrains.forEach(terrain => unionBounds(bounds, terrain.bounds));
         // Without terrain the ground is y = 0, so an obstacle that is always stepped over or walked
         // under (a floor slab, say) blocks nothing and must not stretch the grid and coarsen its cells.
+        // A raised top agents can stand on counts even when it is out of reach from the ground.
         obstacles.forEach(obstacle => {
-            if (terrains.length > 0 || (obstacle.maxY > maxStepHeight && obstacle.minY < agentHeight)) unionBounds(bounds, obstacle.bounds);
+            if (terrains.length > 0 || (obstacle.maxY > maxStepHeight && (obstacle.minY < agentHeight || obstacle.standable))) {
+                unionBounds(bounds, obstacle.bounds);
+            }
         });
         bounds.minX -= padding;
         bounds.minZ -= padding;
@@ -549,6 +654,8 @@ export function buildNavGrid(levelObjects: readonly LevelObject[], options: NavG
 
     const walkable = new Uint8Array(cellCount);
     const heights = new Float32Array(cellCount);
+    // Tangent of each cell's surface slope.
+    const slopes = new Float32Array(cellCount);
     for (let row = 0; row < rows; row++) {
         for (let column = 0; column < columns; column++) {
             const h00 = corners[row * cornerStride + column];
@@ -559,31 +666,174 @@ export function buildNavGrid(levelObjects: readonly LevelObject[], options: NavG
             heights[cell] = (h00 + h10 + h01 + h11) / 4;
             const gradX = (h10 + h11 - h00 - h01) / (2 * cellSize);
             const gradZ = (h01 + h11 - h00 - h10) / (2 * cellSize);
-            walkable[cell] = Math.hypot(gradX, gradZ) <= maxSlope ? 1 : 0;
+            const slope = Math.hypot(gradX, gradZ);
+            slopes[cell] = slope;
+            walkable[cell] = slope <= maxSlope ? 1 : 0;
         }
     }
+    const groundHeights = heights.slice();
+
+    const centerX = (column: number): number => originX + (column + 0.5) * cellSize;
+    const centerZ = (row: number): number => originZ + (row + 0.5) * cellSize;
+    const visitCells = (area: NavBounds, margin: number, visit: (cell: number, x: number, z: number) => void): void => {
+        const c0 = Math.max(0, Math.floor((area.minX - margin - originX) / cellSize));
+        const c1 = Math.min(columns - 1, Math.floor((area.maxX + margin - originX) / cellSize));
+        const r0 = Math.max(0, Math.floor((area.minZ - margin - originZ) / cellSize));
+        const r1 = Math.min(rows - 1, Math.floor((area.maxZ + margin - originZ) / cellSize));
+        for (let row = r0; row <= r1; row++) {
+            for (let column = c0; column <= c1; column++) visit(row * columns + column, centerX(column), centerZ(row));
+        }
+    };
+
+    // Collider tops agents stand on, stacked bottom-up: a walkable top replaces the surface below it
+    // where its collider leaves no headroom over that surface (so agents walk under high ones).
+    const standable = obstacles.filter(obstacle => obstacle.standable && obstacle.span).sort((a, b) => a.minY - b.minY);
+    const span: VerticalSpan = { bottom: 0, top: 0, slope: 0 };
+    const stacksOnto = (surface: number): boolean =>
+        span.slope <= maxSlope && span.top > surface + SURFACE_EPSILON && span.bottom < surface + agentHeight;
+    const onTop = new Uint8Array(cellCount);
+    for (const obstacle of standable) {
+        visitCells(obstacle.bounds, 0, (cell, x, z) => {
+            if (!obstacle.span!(x, z, span) || !stacksOnto(heights[cell])) return;
+            heights[cell] = span.top;
+            slopes[cell] = span.slope;
+            walkable[cell] = 1;
+            onTop[cell] = 1;
+        });
+    }
+    // The same stacking at any point, for steps between cell centres.
+    const surfaceAt = (x: number, z: number): number => {
+        let surface = terrains.length > 0 ? groundHeight(x, z) : 0;
+        for (const obstacle of standable) {
+            const { minX, minZ, maxX, maxZ } = obstacle.bounds;
+            if (x < minX || x > maxX || z < minZ || z > maxZ || !obstacle.span!(x, z, span)) continue;
+            if (stacksOnto(surface)) surface = span.top;
+        }
+        return surface;
+    };
 
     // Obstacles are rasterized by testing cell centres. Inflating them by at least half a cell
     // diagonal keeps a thin wall from falling between centres once large bounds coarsen the cells;
-    // at the default 0.5 m cell this is just the agent radius.
+    // at the default 0.5 m cell this is just the agent radius. An obstacle blocks a cell when, near
+    // it, the obstacle rises more than a step above the cell's surface without headroom beneath.
     const rasterRadius = Math.max(agentRadius, cellSize * Math.SQRT1_2);
+    const extent: VerticalSpan = { bottom: 0, top: 0, slope: 0 };
     for (const obstacle of obstacles) {
-        const { minX, minZ, maxX, maxZ } = obstacle.bounds;
-        const c0 = Math.max(0, Math.floor((minX - rasterRadius - originX) / cellSize));
-        const c1 = Math.min(columns - 1, Math.floor((maxX + rasterRadius - originX) / cellSize));
-        const r0 = Math.max(0, Math.floor((minZ - rasterRadius - originZ) / cellSize));
-        const r1 = Math.min(rows - 1, Math.floor((maxZ + rasterRadius - originZ) / cellSize));
-        for (let row = r0; row <= r1; row++) {
-            for (let column = c0; column <= c1; column++) {
-                const cell = row * columns + column;
-                if (!walkable[cell]) continue;
-                const ground = heights[cell];
-                if (obstacle.maxY <= ground + maxStepHeight || obstacle.minY >= ground + agentHeight) continue;
-                if (obstacle.covers(originX + (column + 0.5) * cellSize, originZ + (row + 0.5) * cellSize, rasterRadius)) {
-                    walkable[cell] = 0;
+        visitCells(obstacle.bounds, rasterRadius, (cell, x, z) => {
+            if (!walkable[cell]) return;
+            const surface = heights[cell];
+            if (obstacle.maxY <= surface + maxStepHeight || obstacle.minY >= surface + agentHeight) return;
+            if (!obstacle.covers(x, z, rasterRadius)) return;
+            extentNear(obstacle, x, z, rasterRadius, extent);
+            if (extent.top <= surface + maxStepHeight || extent.bottom >= surface + agentHeight) return;
+            walkable[cell] = 0;
+        });
+    }
+
+    // Whether an agent can step between the surfaces of neighbouring cells: at most maxStepHeight up
+    // or down, plus the rise walkable slopes on either side make over the run (ramps). Two ground
+    // cells lie on one continuous heightfield, which the slope limit already covers.
+    const diagonalRun = cellSize * SQRT2;
+    const climbable = (a: number, b: number, run: number): boolean => {
+        if (!onTop[a] && !onTop[b]) return true;
+        const slopeA = Math.min(slopes[a], maxSlope);
+        const slopeB = Math.min(slopes[b], maxSlope);
+        if (Math.abs(heights[b] - heights[a]) <= maxStepHeight + (run * (slopeA + slopeB)) / 2) return true;
+        // Stair treads narrower than a cell: walk the surface between the centres in short steps.
+        const pieces = Math.ceil((run / cellSize) * STAIR_SAMPLES_PER_CELL);
+        const limit = maxStepHeight + (run / pieces) * Math.max(slopeA, slopeB);
+        const columnA = a % columns;
+        const columnB = b % columns;
+        const ax = centerX(columnA);
+        const az = centerZ((a - columnA) / columns);
+        const bx = centerX(columnB);
+        const bz = centerZ((b - columnB) / columns);
+        let previous = heights[a];
+        for (let i = 1; i <= pieces; i++) {
+            const t = i / pieces;
+            const height = i === pieces ? heights[b] : surfaceAt(ax + (bx - ax) * t, az + (bz - az) * t);
+            if (Math.abs(height - previous) > limit) return false;
+            previous = height;
+        }
+        return true;
+    };
+    const climbs = new Uint8Array(cellCount);
+    for (let row = 0; row < rows; row++) {
+        for (let column = 0; column < columns; column++) {
+            const cell = row * columns + column;
+            if (!walkable[cell]) continue;
+            for (let k = 0; k < 8; k++) {
+                const nextColumn = column + STEP_COLUMN[k];
+                const nextRow = row + STEP_ROW[k];
+                if (nextColumn < 0 || nextRow < 0 || nextColumn >= columns || nextRow >= rows) continue;
+                if (climbable(cell, nextRow * columns + nextColumn, k >= 4 ? diagonalRun : cellSize)) climbs[cell] |= 1 << k;
+            }
+        }
+    }
+
+    // Ledges: where a collider top drops by more than a step (to the ground around a platform, say),
+    // agents keep the raster radius back from the edge, as the inflated obstacles keep them off walls
+    // on the low side. The edge is taken to run along the side (or through the corner) the two cells share.
+    const eroded = new Uint8Array(cellCount);
+    const half = cellSize / 2;
+    const reach = Math.ceil(rasterRadius / cellSize) + 1;
+    const radiusSq = rasterRadius * rasterRadius;
+    for (let row = 0; row < rows; row++) {
+        for (let column = 0; column < columns; column++) {
+            const cell = row * columns + column;
+            if (!walkable[cell] || !onTop[cell]) continue;
+            for (let k = 0; k < 8; k++) {
+                const dc = STEP_COLUMN[k];
+                const dr = STEP_ROW[k];
+                const nextColumn = column + dc;
+                const nextRow = row + dr;
+                if (nextColumn < 0 || nextRow < 0 || nextColumn >= columns || nextRow >= rows) continue;
+                const next = nextRow * columns + nextColumn;
+                if ((climbs[cell] >> k) & 1 || heights[next] >= heights[cell]) continue;
+                const edgeX = centerX(column) + dc * half;
+                const edgeZ = centerZ(row) + dr * half;
+                const edgeHalfX = dc === 0 ? half : 0;
+                const edgeHalfZ = dr === 0 ? half : 0;
+                const above = heights[next] + maxStepHeight;
+                for (let r = Math.max(0, row - reach); r <= Math.min(rows - 1, row + reach); r++) {
+                    for (let c = Math.max(0, column - reach); c <= Math.min(columns - 1, column + reach); c++) {
+                        const near = r * columns + c;
+                        if (eroded[near] || !walkable[near] || !onTop[near] || heights[near] <= above) continue;
+                        const qx = Math.max(Math.abs(centerX(c) - edgeX) - edgeHalfX, 0);
+                        const qz = Math.max(Math.abs(centerZ(r) - edgeZ) - edgeHalfZ, 0);
+                        if (qx * qx + qz * qz <= radiusSq) eroded[near] = 1;
+                    }
                 }
             }
         }
+    }
+    for (let cell = 0; cell < cellCount; cell++) {
+        if (eroded[cell]) walkable[cell] = 0;
+    }
+
+    // Links between walkable neighbours that can be climbed; diagonals need both orthogonal steps too.
+    const links = new Uint8Array(cellCount);
+    for (let cell = 0; cell < cellCount; cell++) {
+        if (!walkable[cell]) continue;
+        for (let k = 0; k < 4; k++) {
+            if (((climbs[cell] >> k) & 1) && walkable[cell + STEP_ROW[k] * columns + STEP_COLUMN[k]]) links[cell] |= 1 << k;
+        }
+    }
+    for (let cell = 0; cell < cellCount; cell++) {
+        if (!walkable[cell]) continue;
+        for (let k = 4; k < 8; k++) {
+            const dc = STEP_COLUMN[k];
+            const dr = STEP_ROW[k];
+            const alongColumn = columnStep(dc);
+            const alongRow = rowStep(dr);
+            if (((climbs[cell] >> k) & 1) === 0 || ((links[cell] >> alongColumn) & 1) === 0 || ((links[cell] >> alongRow) & 1) === 0) continue;
+            if ((links[cell + dc] >> alongRow) & 1 && (links[cell + dr * columns] >> alongColumn) & 1) links[cell] |= 1 << k;
+        }
+    }
+
+    const raised = new Uint8Array(cellCount);
+    for (let cell = 0; cell < cellCount; cell++) {
+        if (onTop[cell] && heights[cell] - groundHeights[cell] > maxStepHeight) raised[cell] = 1;
     }
 
     return {
@@ -594,7 +844,9 @@ export function buildNavGrid(levelObjects: readonly LevelObject[], options: NavG
         rows,
         walkable,
         heights,
-        regions: labelRegions(walkable, columns, rows),
+        raised,
+        links,
+        regions: labelRegions(walkable, links, columns),
         agentRadius,
         maxStepHeight,
     };
@@ -629,23 +881,41 @@ export function isWalkable(grid: NavGrid, x: number, z: number): boolean {
 
 /**
  * Whether a point planPath cannot reach is really shut off at ground level (a closed pen), rather
- * than unknown to the grid: off the grid is unbaked open ground, and a point raised more than a
- * step above a blocked cell stands on a platform, ramp or stairs, which the single ground layer
- * bakes as solid. A point without y is taken to be on the ground.
+ * than out of the grid's reach: off the grid is unbaked open ground; a point on a raised collider
+ * top (a platform, ramp or stairs with no walkable way up) may still be reached by climbing or
+ * jumping; and a point more than a step above a blocked cell stands on something the grid bakes as
+ * solid. A point without y is taken to be on the ground.
  */
 export function isWalledOff(grid: NavGrid, point: NavPoint): boolean {
     const cell = cellIndexAt(grid, point.x, point.z);
     if (cell < 0) return false;
-    return grid.walkable[cell] === 1 || point.y === undefined || point.y - grid.heights[cell] <= grid.maxStepHeight;
+    if (point.y === undefined) return true;
+    // Below a raised top the point is at ground level beside or under it.
+    if (grid.raised[cell] === 1) return point.y < grid.heights[cell] - grid.maxStepHeight;
+    return grid.walkable[cell] === 1 || point.y - grid.heights[cell] <= grid.maxStepHeight;
 }
 
 /**
- * The walkable cell nearest (x, z) within maxDistance, preferring `region`
- * when any cell of it is in range; -1 when none.
+ * How far a point is off a cell's surface vertically, for snapping. Within a step of the surface it
+ * is on it; further below it is not (under or beside a raised top), which weighs heavily; further
+ * above (jumping, falling) weighs lightly.
  */
-const nearestWalkableCell = (grid: NavGrid, x: number, z: number, maxDistance: number, region = -1): number => {
+const surfaceGap = (grid: NavGrid, cell: number, y: number | undefined): number => {
+    if (y === undefined) return 0;
+    const below = grid.heights[cell] - grid.maxStepHeight - y;
+    if (below > 0) return below * 2;
+    const above = y - grid.heights[cell] - grid.maxStepHeight;
+    return above > 0 ? above * 0.25 : 0;
+};
+
+/**
+ * The walkable cell nearest the point within maxDistance (in XZ; the surface gap weighs in when the
+ * point has a y), preferring `region` when any cell of it is in range; -1 when none.
+ */
+const nearestWalkableCell = (grid: NavGrid, point: NavPoint, maxDistance: number, region = -1): number => {
+    const { x, y, z } = point;
     const own = cellIndexAt(grid, x, z);
-    if (own >= 0 && grid.walkable[own] && (region < 0 || grid.regions[own] === region)) return own;
+    if (own >= 0 && grid.walkable[own] && (region < 0 || grid.regions[own] === region) && surfaceGap(grid, own, y) === 0) return own;
     const { cellSize, columns, rows, originX, originZ } = grid;
     const reach = Math.ceil(maxDistance / cellSize);
     const centerColumn = Math.floor((x - originX) / cellSize);
@@ -661,8 +931,10 @@ const nearestWalkableCell = (grid: NavGrid, x: number, z: number, maxDistance: n
             if (!grid.walkable[cell]) continue;
             const dx = originX + (column + 0.5) * cellSize - x;
             const dz = originZ + (row + 0.5) * cellSize - z;
-            const distance = dx * dx + dz * dz;
-            if (distance > limit) continue;
+            const flat = dx * dx + dz * dz;
+            if (flat > limit) continue;
+            const gap = surfaceGap(grid, cell, y);
+            const distance = flat + gap * gap;
             if (distance < bestAnyDistance) {
                 bestAnyDistance = distance;
                 bestAny = cell;
@@ -697,9 +969,12 @@ const closestCellInRegion = (grid: NavGrid, region: number, x: number, z: number
 const walkableCell = (grid: NavGrid, column: number, row: number): boolean =>
     column >= 0 && row >= 0 && column < grid.columns && row < grid.rows && grid.walkable[row * grid.columns + column] === 1;
 
-/** True when the straight segment a -> b crosses only walkable cells (corner crossings need both side cells). */
+/**
+ * True when the straight segment a -> b crosses only walkable cells, each linked to the one before
+ * (no ledges or tall steps; corner crossings need the diagonal link, so both side cells as well).
+ */
 export function hasLineOfSight(grid: NavGrid, a: NavPoint, b: NavPoint): boolean {
-    const { cellSize, originX, originZ } = grid;
+    const { cellSize, originX, originZ, columns, links } = grid;
     const x0 = (a.x - originX) / cellSize;
     const z0 = (a.z - originZ) / cellSize;
     const x1 = (b.x - originX) / cellSize;
@@ -718,20 +993,22 @@ export function hasLineOfSight(grid: NavGrid, a: NavPoint, b: NavPoint): boolean
     // Walk every cell the segment enters, stopping once the next crossing lies beyond its end (t = 1).
     let steps = Math.abs(Math.floor(x1) - column) + Math.abs(Math.floor(z1) - row) + 2;
     while (Math.min(tMaxX, tMaxZ) < 1 - 1e-9 && steps-- > 0) {
+        const cellLinks = links[row * columns + column];
         if (Math.abs(tMaxX - tMaxZ) < 1e-9) {
-            if (!walkableCell(grid, column + stepColumn, row) || !walkableCell(grid, column, row + stepRow)) return false;
+            if (((cellLinks >> diagonalStep(stepColumn, stepRow)) & 1) === 0) return false;
             column += stepColumn;
             row += stepRow;
             tMaxX += tDeltaX;
             tMaxZ += tDeltaZ;
         } else if (tMaxX < tMaxZ) {
+            if (((cellLinks >> columnStep(stepColumn)) & 1) === 0) return false;
             column += stepColumn;
             tMaxX += tDeltaX;
         } else {
+            if (((cellLinks >> rowStep(stepRow)) & 1) === 0) return false;
             row += stepRow;
             tMaxZ += tDeltaZ;
         }
-        if (!walkableCell(grid, column, row)) return false;
     }
     return steps >= 0; // Running out of steps means the walk lost the segment: no sight.
 }
@@ -774,15 +1051,12 @@ const scratchFor = (grid: NavGrid): SearchScratch => {
     return scratch;
 };
 
-// Neighbour offsets: four orthogonal steps, then four diagonals.
-const STEP_COLUMN = [1, -1, 0, 0, 1, 1, -1, -1];
-const STEP_ROW = [0, 0, 1, -1, 1, -1, 1, -1];
 // A hair over 1 breaks f-ties toward the goal, which saves most expansions on open ground.
 const HEURISTIC_WEIGHT = 1.001;
 
-/** A* over cells; returns the cell chain start..goal, or null when the goal is not found within maxIterations. */
+/** A* over cell links; returns the cell chain start..goal, or null when the goal is not found within maxIterations. */
 const searchCells = (grid: NavGrid, start: number, goal: number, maxIterations: number): number[] | null => {
-    const { columns, rows, cellSize, heights, walkable } = grid;
+    const { columns, cellSize, heights, links } = grid;
     const scratch = scratchFor(grid);
     const { generation, opened, closed, cost, parent } = scratch;
     let heapCells = scratch.heapCells;
@@ -855,16 +1129,16 @@ const searchCells = (grid: NavGrid, start: number, goal: number, maxIterations: 
         const row = (cell - column) / columns;
         const cellCost = cost[cell];
         const cellHeight = heights[cell];
+        const cellLinks = links[cell];
         for (let k = 0; k < 8; k++) {
+            // Links cover walkability, climbable steps and corner cutting (a diagonal needs both orthogonal steps).
+            if (((cellLinks >> k) & 1) === 0) continue;
             const dc = STEP_COLUMN[k];
             const dr = STEP_ROW[k];
             const nextColumn = column + dc;
             const nextRow = row + dr;
-            if (nextColumn < 0 || nextRow < 0 || nextColumn >= columns || nextRow >= rows) continue;
             const next = cell + dr * columns + dc;
-            if (walkable[next] !== 1 || closed[next] === generation) continue;
-            // No corner cutting: a diagonal step needs both orthogonal cells free.
-            if (k >= 4 && (walkable[cell + dc] !== 1 || walkable[cell + dr * columns] !== 1)) continue;
+            if (closed[next] === generation) continue;
             const run = k >= 4 ? diagonal : cellSize;
             const rise = heights[next] - cellHeight;
             const nextCost = cellCost + (rise === 0 ? run : Math.sqrt(run * run + rise * rise));
@@ -900,10 +1174,10 @@ const smoothPath = (grid: NavGrid, points: THREE.Vector3[]): THREE.Vector3[] => 
  */
 export function planPath(grid: NavGrid, from: NavPoint, to: NavPoint, options: FindPathOptions = {}): NavPathResult | null {
     const snap = finite(options.maxSnapDistance, Math.max(1, grid.agentRadius + grid.cellSize * 1.5));
-    const start = nearestWalkableCell(grid, from.x, from.z, snap);
+    const start = nearestWalkableCell(grid, from, snap);
     if (start < 0) return null;
     const region = grid.regions[start];
-    let goal = nearestWalkableCell(grid, to.x, to.z, snap, region);
+    let goal = nearestWalkableCell(grid, to, snap, region);
     const reachable = goal >= 0 && grid.regions[goal] === region;
     if (!reachable) {
         if (!options.partial) return null;

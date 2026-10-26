@@ -1,5 +1,5 @@
 
-import React, { useRef, useMemo, useImperativeHandle, forwardRef } from 'react';
+import { useRef, useMemo, useImperativeHandle, forwardRef } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 
@@ -9,7 +9,6 @@ export interface BloodSystemHandle {
 
 const PARTICLE_COUNT = 400;
 const GRAVITY = 18;
-const DRAG = 2.0;
 
 export const BloodSystem = forwardRef<BloodSystemHandle, {}>((_, ref) => {
     const meshRef = useRef<THREE.InstancedMesh>(null);

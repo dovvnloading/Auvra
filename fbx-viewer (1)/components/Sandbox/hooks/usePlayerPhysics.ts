@@ -5,6 +5,7 @@ import { useRapier, type RapierContext } from '@react-three/rapier';
 import { PlayerInputState } from './usePlayerControls';
 import { BlueprintStat, DEFAULT_MODEL_IMPORT_SETTINGS, LevelObject } from '../../../types';
 import { PLAYER_PHYSICS_ID, physicsUserData } from '../../../runtime/physics';
+import { flatGroundHeight, terrainSurfaceHeight } from '../../../runtime/terrainPhysics';
 
 interface PhysicsConfig {
     ROTATION_SPEED: number;
@@ -63,79 +64,29 @@ export const resolveLocomotionSpeeds = (stats: readonly BlueprintStat[] | undefi
     return { walk, run };
 };
 
-// --- TERRAIN HEIGHT SAMPLER ---
-const getTerrainHeight = (worldX: number, worldZ: number, terrain: LevelObject): number => {
-    // Heights are resolved from the terrain's heightfield asset when the level
-    // loads; until then (or for a never-sculpted terrain) the ground is flat.
-    const heights = terrain.terrainData?.heights;
-    if (!terrain.terrainData || !heights) return 0;
+// --- FALLBACK GROUND ---
 
-    const { position } = terrain;
-    const { width, depth, resolution } = terrain.terrainData;
+/** The level's flat ground height (flatGroundHeight), per obstacle list and per terrain, so a frame does not rescan them. */
+const flatGroundHeights = new WeakMap<object, number>();
 
-    // Convert World Position to Local Terrain UV Space
-    // Terrain is rotated -90 deg on X axis.
-    // Local X aligns with World X.
-    // Local Y (Plane Height, mapped to World -Z) aligns with World -Z.
-    // Therefore: Local Y = Terrain.Z - World.Z
-
-    const lx = worldX - position[0];
-    const ly = position[2] - worldZ;
-
-    const halfW = width / 2;
-    const halfD = depth / 2;
-
-    // 1. Bounds Check
-    if (lx < -halfW || lx > halfW || ly < -halfD || ly > halfD) {
-        return 0; // Off terrain, fallback to zero level
-    }
-
-    // 2. Normalize to 0..1 (UV Space)
-    // PlaneGeometry local coords range from -half to +half
-    const u = (lx + halfW) / width;
-    const v = (ly + halfD) / depth;
-
-    // 3. Map to Grid Coordinates
-    // Rows start at Top (+D/2 which corresponds to v=1).
-    // Note: Standard PlaneGeometry builds vertices top-to-bottom.
-    // row 0 is v=1 (Top/Back in Local). row max is v=0 (Bottom/Front).
-    const gridX = u * resolution;
-    const gridY = (1 - v) * resolution;
-
-    const c0 = Math.floor(gridX);
-    const r0 = Math.floor(gridY);
-    const c1 = Math.min(c0 + 1, resolution);
-    const r1 = Math.min(r0 + 1, resolution);
-
-    // Clamp indices to be safe
-    if (c0 < 0 || c0 > resolution || r0 < 0 || r0 > resolution) return 0;
-
-    const tx = gridX - c0;
-    const ty = gridY - r0;
-
-    const stride = resolution + 1;
-
-    // 4. Sample Heights (Bilinear Interpolation)
-    const h00 = heights[r0 * stride + c0] || 0;
-    const h10 = heights[r0 * stride + c1] || 0;
-    const h01 = heights[r1 * stride + c0] || 0;
-    const h11 = heights[r1 * stride + c1] || 0;
-
-    // Interpolate X
-    const h0 = h00 * (1 - tx) + h10 * tx;
-    const h1 = h01 * (1 - tx) + h11 * tx;
-
-    // Interpolate Y
-    const height = h0 * (1 - ty) + h1 * ty;
-
-    // Add terrain world Y position
-    return height + position[1];
+const cachedFlatGroundHeight = (key: object, terrains: () => readonly LevelObject[]): number => {
+    const cached = flatGroundHeights.get(key);
+    if (cached !== undefined) return cached;
+    const height = flatGroundHeight(terrains());
+    flatGroundHeights.set(key, height);
+    return height;
 };
 
-/** Ground under a point when nothing in the physics world is: the terrain surface, else y = 0. */
-const legacyGroundHeight = (x: number, z: number, terrain: LevelObject | null): number => (
-    terrain ? getTerrainHeight(x, z, terrain) : 0
-);
+/**
+ * Ground under a point when nothing in the physics world is: the terrain surface, else the level's
+ * flat ground (y = 0 unless a terrain reaches below it, see flatGroundHeight), where bodies land too.
+ */
+const legacyGroundHeight = (x: number, z: number, terrain: LevelObject | null, obstacles: readonly LevelObject[]): number => {
+    const surface = terrain ? terrainSurfaceHeight(x, z, terrain) : null;
+    if (surface !== null) return surface;
+    const level = cachedFlatGroundHeight(obstacles, () => obstacles.filter(obj => obj.type === 'terrain'));
+    return terrain ? Math.min(level, cachedFlatGroundHeight(terrain, () => [terrain])) : level;
+};
 
 // --- RAPIER CHARACTER ---
 
@@ -276,8 +227,9 @@ const pushOutOfFootprints = (
 /**
  * One frame of Rapier KinematicCharacterController movement for `character`: gravity, jumping, slopes
  * and steps against the level's colliders. Where no collider lies below (levels authored before
- * colliders), `terrain` or y = 0 still holds the player up as it did without physics. It only catches
- * the player near that surface, so a player standing on colliders below it is never pulled up.
+ * colliders), `terrain` or else the level's flat ground (flatGroundHeight, y = 0 unless a terrain
+ * reaches below it, as for bodies) still holds the player up as it did without physics. It only
+ * catches the player near that surface, so a player standing on colliders below it is never pulled up.
  * `obstacles` are the level's objects; props among them without physics components keep their footprint.
  */
 export const stepCharacterPhysics = (
@@ -328,7 +280,7 @@ export const stepCharacterPhysics = (
         rapier.QueryFilterFlags.EXCLUDE_SENSORS, undefined, character.collider, character.body
     ) !== null;
     if (!hasGroundCollider) {
-        const floor = legacyGroundHeight(centre.x, centre.z, terrain);
+        const floor = legacyGroundHeight(centre.x, centre.z, terrain, obstacles);
         const depth = floor - (centre.y - character.centreOffset);
         const reach = character.height * CHARACTER.STEP_RATIO + Math.abs(moved.y);
         if (depth >= 0 && depth <= reach) {
@@ -389,7 +341,7 @@ export const usePlayerPhysics = (
         return rig.current;
     };
 
-    /** Kinematic movement for the Sandbox: circle push-out against props, feet snapped to the terrain. */
+    /** Kinematic movement for the Sandbox: circle push-out against props, feet snapped to the terrain or the flat ground. */
     const moveWithoutPhysics = (worldMoveVec: THREE.Vector3, speed: number, delta: number) => {
         const { COLLISION_RADIUS } = DEFAULT_CONFIG;
 
@@ -407,7 +359,7 @@ export const usePlayerPhysics = (
         // Terrain Ground Snapping
         // Always run this, even if not moving, to ensure we stay on ground if terrain changes
         // or if we spawned in air.
-        nextPos.y = legacyGroundHeight(nextPos.x, nextPos.z, activeTerrain.current);
+        nextPos.y = legacyGroundHeight(nextPos.x, nextPos.z, activeTerrain.current, obstacles);
 
         // Apply final position
         modelObject.position.copy(nextPos);

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { clampHUDPosition, HUDElement, HUDLayout, normalizeHUDLayout } from './types';
-import { COMPONENT_REGISTRY } from './componentRegistry';
+import { COMPONENT_REGISTRY, localizedTextProp, type LocalizedTextProp } from './componentRegistry';
 import { readGameStateBinding, useGameState } from '../../runtime/gameState';
 import type { HUDDocumentData } from '../../runtime/types';
 
@@ -57,16 +57,29 @@ const withoutBind = (props: Record<string, unknown>): Record<string, unknown> =>
     return rest;
 };
 
-const BoundHUDComponent: React.FC<{ Component: React.FC<any>; props: Record<string, unknown>; entries: BindingEntry[] }> = ({ Component, props, entries }) => {
+interface BoundHUDComponentProps {
+    Component: React.FC<any>;
+    props: Record<string, unknown>;
+    entries: BindingEntry[];
+    /** The component's literal text prop and the string key that would otherwise replace it. */
+    localized: LocalizedTextProp | null;
+}
+
+const BoundHUDComponent: React.FC<BoundHUDComponentProps> = ({ Component, props, entries, localized }) => {
     // A primitive key keeps useSyncExternalStore stable and re-renders only when a bound value changes.
     const key = useGameState(state => JSON.stringify(entries.map(([, path]) => readGameStateBinding(state, path))));
     const resolved = useMemo(() => {
         const values = JSON.parse(key) as (number | boolean | string | null)[];
         const next = { ...props };
-        // Unknown paths resolve to null and keep the authored value.
-        entries.forEach(([prop], index) => { if (values[index] !== null) next[prop] = values[index]; });
+        entries.forEach(([prop], index) => {
+            // Unknown paths resolve to null and keep the authored value (and its string key).
+            if (values[index] === null) return;
+            next[prop] = values[index];
+            // The live value is the content, so it wins over the literal's string-table key.
+            if (localized && prop === localized.literal) next[localized.key] = '';
+        });
         return next;
-    }, [entries, key, props]);
+    }, [entries, key, localized, props]);
     return <Component {...resolved} />;
 };
 
@@ -75,7 +88,7 @@ const HUDElementContent: React.FC<{ element: HUDElement; bindings: boolean }> = 
     const entries = useMemo(() => (bindings ? bindingEntries(element.props.bind) : null), [bindings, element.props.bind]);
     const props = useMemo(() => withoutBind(element.props), [element.props]);
     if (!Component) return null;
-    if (entries) return <BoundHUDComponent Component={Component} props={props} entries={entries} />;
+    if (entries) return <BoundHUDComponent Component={Component} props={props} entries={entries} localized={localizedTextProp(element.type)} />;
     return <Component {...props} />;
 };
 

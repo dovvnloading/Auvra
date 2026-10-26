@@ -38,8 +38,8 @@ interface UseProjectManagerProps {
 }
 
 export const useProjectManager = ({
-  setIsLoading, cameraState, setCameraState, selectedModelId,
-  selectedBlueprintId, selectModel, selectBlueprint, restoreSession, resetScene,
+  setIsLoading, cameraState, selectedModelId,
+  selectedBlueprintId, restoreSession, resetScene,
   getCurrentLevelId, flushPendingLevelEdits,
 }: UseProjectManagerProps) => {
   const { addNotification } = useNotification();

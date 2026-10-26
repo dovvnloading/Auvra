@@ -1,5 +1,5 @@
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback } from 'react';
 import { Gamepad2, User, Skull, Play, Square, MousePointer2, HeartPulse, AlertCircle, CheckCircle2, Keyboard, RotateCcw, AlertTriangle, XCircle, Zap, ZapOff } from 'lucide-react';
 import { Blueprint, LoadedModelData } from '../../types';
 import { ScopeReticle } from '../HUDEditor/assets/ScopeReticle';

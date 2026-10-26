@@ -21,7 +21,8 @@ export interface LocalizationDocument {
 
 export type TranslationParams = Readonly<Record<string, string | number | boolean | null | undefined>>;
 
-export type Translate = (key: string, params?: TranslationParams) => string;
+/** fallback is the text used (with params) while no locale has the key, e.g. the English for a built-in string. */
+export type Translate = (key: string, params?: TranslationParams, fallback?: string) => string;
 
 export const createDefaultLocalizationDocument = (): LocalizationDocument => ({
     id: LOCALIZATION_DOCUMENT_ID,
@@ -102,21 +103,77 @@ export const localeFallbackChain = (settings: LocalizationSettings, locale: stri
     return chain;
 };
 
-/** Looks up key in locale, falling back to the default locale and then to the key itself. Empty text counts as untranslated. */
+/**
+ * Looks up key in locale, falling back to the default locale, then to fallback and finally to the key itself.
+ * Empty text counts as untranslated.
+ */
 export const translate = (
     settings: LocalizationSettings,
     locale: string | null | undefined,
     key: string,
     params?: TranslationParams,
+    fallback?: string,
 ): string => {
-    if (typeof key !== 'string') return '';
-    if (!isValidStringKey(key)) return key;
+    const missing = typeof fallback === 'string' ? interpolate(fallback, params) : null;
+    if (typeof key !== 'string') return missing ?? '';
+    if (!isValidStringKey(key)) return missing ?? key;
     for (const candidate of localeFallbackChain(settings, locale)) {
         const table = settings.locales[candidate];
         if (hasOwn(table, key) && table[key] !== '') return interpolate(table[key], params);
     }
-    return key;
+    return missing ?? key;
 };
+
+/**
+ * English text of the player's built-in screens (title, pause and game-over menus, the Options screen
+ * and toasts). A project translates them by adding these keys in the Localization panel; a key no
+ * locale has keeps showing this English.
+ */
+export const BUILTIN_UI_STRINGS = {
+    'ui.play': 'Play',
+    'ui.continue': 'Continue',
+    'ui.options': 'Options',
+    'ui.resume': 'Resume',
+    'ui.save': 'Save',
+    'ui.load': 'Load',
+    'ui.quitToTitle': 'Quit to Title',
+    'ui.paused': 'Paused',
+    'ui.noPlayableLevel': 'This build has no playable level.',
+    'ui.loading': 'Loading',
+    'ui.loadingContent': 'Loading game content...',
+    'ui.startFailed': 'Could not start the game',
+    'ui.startFailedHint': 'Web builds must be served over http(s); opening index.html from disk does not work.',
+    'ui.gameOver': 'Game Over',
+    'ui.gameOver.retry': 'Retry',
+    'ui.gameOver.loadLastSave': 'Load Last Save',
+    'ui.toast.saved': 'Game saved',
+    'ui.toast.saveFailed': 'Could not save the game',
+    'ui.toast.noSave': 'No saved game to load',
+    'ui.toast.missingLevel': 'Level {level} is not in this build',
+    'ui.options.back': 'Back',
+    'ui.options.look': 'Look',
+    'ui.options.mouseSensitivity': 'Mouse sensitivity',
+    'ui.options.invertY': 'Invert vertical look',
+    'ui.options.language': 'Language',
+    'ui.options.textLanguage': 'Text language',
+    'ui.options.audio': 'Audio',
+    'ui.options.volume.master': 'Master',
+    'ui.options.volume.music': 'Music',
+    'ui.options.volume.sfx': 'Effects',
+    'ui.options.volume.ui': 'Interface',
+    'ui.options.controls': 'Controls',
+    'ui.options.rebind': 'Rebind',
+    'ui.options.pressKey': 'Press a key...',
+    'ui.options.resetControls': 'Reset controls',
+} as const satisfies StringTable;
+
+export type BuiltinUiKey = keyof typeof BUILTIN_UI_STRINGS;
+
+/** Translates a built-in player string; untranslated keys show the English from BUILTIN_UI_STRINGS. */
+export type UiText = (key: BuiltinUiKey, params?: TranslationParams) => string;
+
+/** Key for an input action's label on the Options screen ('ui.options.action.Jump'); its fallback is the action's own label. */
+export const uiActionLabelKey = (action: string): string => `ui.options.action.${action}`;
 
 /** Every key used by any locale, sorted. */
 export const collectStringKeys = (settings: LocalizationSettings): string[] => {
@@ -216,9 +273,9 @@ export const createLocalizationStore = (options: LocalizationStoreOptions = {}) 
             preferred = readPreferred();
             commit();
         },
-        /** Translates in the active locale. */
-        t(key: string, params?: TranslationParams): string {
-            return translate(snapshot.settings, snapshot.locale, key, params);
+        /** Translates in the active locale; fallback is shown while no locale has the key. */
+        t(key: string, params?: TranslationParams, fallback?: string): string {
+            return translate(snapshot.settings, snapshot.locale, key, params, fallback);
         },
         /** Clears the tables back to an empty default; the player's preference is kept. */
         reset() {
@@ -239,7 +296,10 @@ export type LocalizationStore = ReturnType<typeof createLocalizationStore>;
 export const localization = createLocalizationStore();
 
 /** Translates with the shared store; for code outside React. Components should use useTranslation so they re-render on locale changes. */
-export const t: Translate = (key, params) => localization.t(key, params);
+export const t: Translate = (key, params, fallback) => localization.t(key, params, fallback);
+
+/** Built-in player text from the shared store, for event handlers and other code outside render. */
+export const uiText: UiText = (key, params) => localization.t(key, params, BUILTIN_UI_STRINGS[key]);
 
 export interface LocaleState {
     locale: string;
@@ -266,7 +326,13 @@ export const useLocale = (store: LocalizationStore = localization): LocaleState 
 export const useTranslation = (store: LocalizationStore = localization): Translate => {
     const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
     return useCallback<Translate>(
-        (key, params) => translate(snapshot.settings, snapshot.locale, key, params),
+        (key, params, fallback) => translate(snapshot.settings, snapshot.locale, key, params, fallback),
         [snapshot],
     );
+};
+
+/** Built-in player text bound to the current snapshot; re-renders on locale or table changes like useTranslation. */
+export const useUiText = (store: LocalizationStore = localization): UiText => {
+    const translateKey = useTranslation(store);
+    return useCallback<UiText>((key, params) => translateKey(key, params, BUILTIN_UI_STRINGS[key]), [translateKey]);
 };

@@ -110,15 +110,49 @@ export const terrainLowestSurface = (terrain: LevelObject): number | null => {
     return terrain.position[1] + lowest;
 };
 
+/**
+ * The terrain's surface height under a world point (bilinear between grid samples), or null off its
+ * footprint or for a terrain that gets no heightfield. Like the heightfield (terrainHeightfieldShape),
+ * the footprint and heights take the terrain's scale, and heights that are missing, still loading or
+ * do not fit the grid give a flat surface at the terrain's own height. The terrain's rotation is not
+ * applied.
+ */
+export const terrainSurfaceHeight = (worldX: number, worldZ: number, terrain: LevelObject): number | null => {
+    const grid = terrainGrid(terrain);
+    if (!grid) return null;
+    const { resolution, samples, heights, scale } = grid;
+    // Column 0 at -X and row 0 at the far (-Z) edge, as the rendered plane and the heightfield have them.
+    const u = (worldX - terrain.position[0]) / scale.x + 0.5;
+    const v = (worldZ - terrain.position[2]) / scale.z + 0.5;
+    if (!(u >= 0 && u <= 1 && v >= 0 && v <= 1)) return null;
+    if (!heights) return terrain.position[1];
+
+    const gridX = u * resolution;
+    const gridY = v * resolution;
+    const c0 = Math.min(Math.floor(gridX), resolution - 1);
+    const r0 = Math.min(Math.floor(gridY), resolution - 1);
+    const tx = gridX - c0;
+    const ty = gridY - r0;
+    const at = (row: number, column: number) => {
+        const height = heights[row * samples + column];
+        return Number.isFinite(height) ? height : 0;
+    };
+    const near = at(r0, c0) * (1 - tx) + at(r0, c0 + 1) * tx;
+    const far = at(r0 + 1, c0) * (1 - tx) + at(r0 + 1, c0 + 1) * tx;
+    return terrain.position[1] + (near * (1 - ty) + far * ty) * scale.y;
+};
+
 const FLAT_GROUND_EXTENT = 4000;
 const FLAT_GROUND_CELLS = 64;
-/** How far below y = 0 a terrain surface may reach before the flat ground would cover it. */
+/** How far below y = 0 a terrain surface may reach before the flat ground drops below it. */
 const FLAT_GROUND_TOLERANCE = 1e-3;
+/** How far under the lowest terrain point the flat ground sits once a terrain reaches below y = 0. */
+export const FLAT_GROUND_CLEARANCE = 0.01;
 
 /**
- * Ground at y = 0, 4 km across. It is a flat heightfield rather than one huge box: the character
- * controller's sweeps lose precision against a box that large, so the player sank into it and could
- * fall through after a few jumps.
+ * Flat ground 4 km across, at flatGroundHeight. It is a flat heightfield rather than one huge box:
+ * the character controller's sweeps lose precision against a box that large, so the player sank into
+ * it and could fall through after a few jumps.
  */
 export const FLAT_GROUND_SHAPE: TerrainHeightfieldShape = {
     rows: FLAT_GROUND_CELLS,
@@ -128,12 +162,19 @@ export const FLAT_GROUND_SHAPE: TerrainHeightfieldShape = {
 };
 
 /**
- * Whether the level gets the flat ground at y = 0: always without terrain, and with terrain as long
- * as no terrain reaches below it. Off the terrain the player stands at y = 0, so bodies get ground
- * there too, while the flat ground never covers a terrain surface.
+ * Where the level's flat ground lies, for bodies and for the player alike: y = 0 (where the player has
+ * always stood off terrain) unless a terrain reaches below it, then just under the lowest terrain
+ * point. Every level has it, so whatever leaves the terrain lands somewhere, and it never covers a
+ * terrain surface. Objects that are not terrains, or get no heightfield, do not move it.
  */
-export const levelNeedsFlatGround = (terrains: readonly LevelObject[]): boolean =>
-    terrains.every(terrain => (terrainLowestSurface(terrain) ?? Infinity) >= -FLAT_GROUND_TOLERANCE);
+export const flatGroundHeight = (terrains: readonly LevelObject[]): number => {
+    let lowest = 0;
+    for (const terrain of terrains) {
+        const surface = terrainLowestSurface(terrain);
+        if (surface !== null && Number.isFinite(surface) && surface < lowest) lowest = surface;
+    }
+    return lowest >= -FLAT_GROUND_TOLERANCE ? 0 : lowest - FLAT_GROUND_CLEARANCE;
+};
 
 /**
  * Collider args for a shape, memoised per shape: args that change identity make the binding remove
@@ -165,26 +206,28 @@ const TerrainCollider: React.FC<{ terrain: LevelObject }> = ({ terrain }) => {
     );
 };
 
-const FlatGroundCollider: React.FC = () => {
+const FlatGroundCollider: React.FC<{ height: number }> = ({ height }) => {
     const args = useHeightfieldArgs(FLAT_GROUND_SHAPE);
     if (!args) return null;
     return (
-        <RigidBody type="fixed" colliders={false}>
+        // A changed height moves the body; the collider args stay, so it is not rebuilt.
+        <RigidBody type="fixed" colliders={false} position={[0, height, 0]}>
             <HeightfieldCollider args={args} />
         </RigidBody>
     );
 };
 
 /**
- * Static ground for physics play: a heightfield per terrain, plus flat ground at y = 0 (where the
- * player has always stood off terrain) unless a terrain reaches below it. Mount inside PhysicsWorld.
+ * Static ground for physics play: a heightfield per terrain, plus the flat ground at flatGroundHeight
+ * (y = 0, where the player has always stood off terrain, or just under the lowest terrain). Mount
+ * inside PhysicsWorld.
  */
 export const LevelGroundColliders: React.FC<{ terrains: readonly LevelObject[] }> = ({ terrains }) => {
     // Rapier bodies need a running world; without one the player falls back to terrain sampling.
     if (!usePhysicsAvailable()) return null;
     return (
         <>
-            {levelNeedsFlatGround(terrains) && <FlatGroundCollider />}
+            <FlatGroundCollider height={flatGroundHeight(terrains)} />
             {terrains.map(terrain => <TerrainCollider key={terrain.id} terrain={terrain} />)}
         </>
     );

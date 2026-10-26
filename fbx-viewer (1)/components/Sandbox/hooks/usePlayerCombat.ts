@@ -23,7 +23,7 @@ export const usePlayerCombat = (
     entityRef: React.MutableRefObject<SandboxEntityHandle | null>,
     projectileManager: React.MutableRefObject<ProjectileManagerHandle | null>,
     weaponSounds: string[] = [], // URLs
-    camera?: THREE.Camera, // For Attaching Audio Listener Context if needed
+    _camera?: THREE.Camera, // For Attaching Audio Listener Context if needed
     baseVolume: number = 1.0
 ) => {
     const fireCooldown = useRef(0);

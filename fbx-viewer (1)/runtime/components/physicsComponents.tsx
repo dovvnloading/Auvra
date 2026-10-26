@@ -12,7 +12,7 @@ import {
     useBeforePhysicsStep,
     useRapier
 } from '@react-three/rapier';
-import type { CollisionPayload, CuboidColliderProps, RapierRigidBody, RigidBodyProps } from '@react-three/rapier';
+import type { CollisionPayload, CuboidColliderProps, RapierCollider, RapierRigidBody, RigidBodyProps } from '@react-three/rapier';
 import type { LevelComponent, LevelObject } from '../../types';
 import { PhysicsFailureBoundary, objectIdFromRigidBody, physicsUserData, usePhysicsAvailable } from '../physics';
 import { useTriggerEvents } from '../triggers';
@@ -488,17 +488,29 @@ export const findCompoundOwner = (host: THREE.Object3D, objectId: string): Compo
     return null;
 };
 
-/** The object's colliders placed in the owner host's space, as the owner's body builds them. */
-export const foldColliders = (
-    ownerHost: THREE.Object3D,
-    host: THREE.Object3D,
+/**
+ * The transform of `host` in `ownerHost`'s space, written to `target`. Under the owner (where folded
+ * objects sit) it is the product of the local transforms in between, so it stays exactly the same
+ * while only the owner moves; elsewhere it comes from both world matrices.
+ */
+const relativeTransform = (ownerHost: THREE.Object3D, host: THREE.Object3D, target: THREE.Matrix4): THREE.Matrix4 => {
+    host.updateWorldMatrix(true, false);
+    target.identity();
+    for (let node: THREE.Object3D | null = host; node; node = node.parent) {
+        if (node === ownerHost) return target;
+        target.premultiply(node.matrix);
+    }
+    ownerHost.updateWorldMatrix(true, false);
+    return target.copy(ownerHost.matrixWorld).invert().multiply(host.matrixWorld);
+};
+
+/** The object's colliders placed at `relative`, the object's transform in the owner host's space. */
+const foldAt = (
+    relative: THREE.Matrix4,
     objectId: string,
     colliders: PhysicsBodyPlan['colliders'],
     content: HostGeometry | null
 ): FoldedCollider[] => {
-    ownerHost.updateWorldMatrix(true, false);
-    host.updateWorldMatrix(true, false);
-    const relative = new THREE.Matrix4().copy(ownerHost.matrixWorld).invert().multiply(host.matrixWorld);
     const translation = new THREE.Vector3();
     const quaternion = new THREE.Quaternion();
     const scale = new THREE.Vector3();
@@ -516,6 +528,64 @@ export const foldColliders = (
             scale: [scale.x, scale.y, scale.z]
         };
     });
+};
+
+/** The object's colliders placed in the owner host's space, as the owner's body builds them. */
+export const foldColliders = (
+    ownerHost: THREE.Object3D,
+    host: THREE.Object3D,
+    objectId: string,
+    colliders: PhysicsBodyPlan['colliders'],
+    content: HostGeometry | null
+): FoldedCollider[] => foldAt(relativeTransform(ownerHost, host, new THREE.Matrix4()), objectId, colliders, content);
+
+/** A collider-only object's colliders as placed in its owner's body, and where the object was then. */
+export interface FoldedPlacement {
+    /** The object's transform group in the owner host's space when its colliders were placed. */
+    relative: THREE.Matrix4;
+    colliders: FoldedCollider[];
+}
+
+const sameMatrix = (a: THREE.Matrix4, b: THREE.Matrix4): boolean =>
+    a.elements.every((value, index) => Math.abs(value - b.elements[index]) <= 1e-9 * Math.max(1, Math.abs(value)));
+
+/**
+ * Places the object's colliders in the owner's body (foldColliders). A scale that only differs from
+ * the one in `previous` by rounding keeps its value: round shapes and collider keys are built from it,
+ * so a turning object would otherwise have its colliders rebuilt on every step.
+ */
+export const placeFoldedColliders = (
+    ownerHost: THREE.Object3D,
+    host: THREE.Object3D,
+    objectId: string,
+    colliders: PhysicsBodyPlan['colliders'],
+    content: HostGeometry | null,
+    previous: FoldedPlacement | null = null
+): FoldedPlacement => {
+    const relative = relativeTransform(ownerHost, host, new THREE.Matrix4());
+    const folded = foldAt(relative, objectId, colliders, content);
+    for (const entry of folded) {
+        const before = previous?.colliders.find(other => other.key === entry.key);
+        if (before && sameScale(before.scale, entry.scale)) entry.scale = before.scale;
+    }
+    return { relative, colliders: folded };
+};
+
+const _relative = new THREE.Matrix4();
+
+/**
+ * Whether the object's transform group has moved in the owner host's space since `placement` (a Mover
+ * or Rotator on the object, or an animated object in between). The owner's own motion does not count.
+ */
+export const foldedPlacementMoved = (placement: FoldedPlacement, ownerHost: THREE.Object3D, host: THREE.Object3D): boolean =>
+    !sameMatrix(relativeTransform(ownerHost, host, _relative), placement.relative);
+
+/**
+ * Tags a collider with the object it belongs to, for a collider folded into another object's body:
+ * raycasts and contacts can then report that object rather than the body's owner.
+ */
+export const tagColliderObject = (collider: RapierCollider, objectId: string): void => {
+    (collider as RapierCollider & { userData?: unknown }).userData = physicsUserData(objectId);
 };
 
 // --- COLLIDERS ---
@@ -536,6 +606,8 @@ interface ObjectColliderProps {
     worldScale: Vec3;
     /** Where a collider folded in from a descendant sits in the body; the body's own colliders sit at their offset. */
     placement?: ColliderPlacement;
+    /** For a collider folded in from a descendant: that object, which raycast hits on it report. */
+    objectId?: string;
     mass?: number;
     /** Pairs a trigger reports: the defaults plus kinematic bodies (the player, movers) against fixed ones. */
     sensorCollisionTypes: number;
@@ -543,7 +615,12 @@ interface ObjectColliderProps {
     onTriggerExit: (payload: CollisionPayload) => void;
 }
 
-const ObjectCollider: React.FC<ObjectColliderProps> = ({ settings, content, worldScale, placement, mass, sensorCollisionTypes, onTriggerEnter, onTriggerExit }) => {
+const ObjectCollider: React.FC<ObjectColliderProps> = ({ settings, content, worldScale, placement, objectId, mass, sensorCollisionTypes, onTriggerEnter, onTriggerExit }) => {
+    // The binding calls a function ref with each collider it builds (again whenever it rebuilds one).
+    const tagFolded = useCallback((collider: RapierCollider | null) => {
+        if (collider && objectId) tagColliderObject(collider, objectId);
+    }, [objectId]);
+    const tag = objectId ? tagFolded : undefined;
     const pose: Pick<ColliderCommonProps, 'position' | 'rotation' | 'scale'> = placement
         ? { position: placement.position, rotation: placement.rotation, scale: placement.scale }
         : { position: settings.offset };
@@ -559,15 +636,15 @@ const ObjectCollider: React.FC<ObjectColliderProps> = ({ settings, content, worl
         : { ...pose, mass };
     switch (settings.shape) {
         case 'box':
-            return <CuboidCollider args={[settings.size[0] / 2, settings.size[1] / 2, settings.size[2] / 2]} {...common} />;
+            return <CuboidCollider ref={tag} args={[settings.size[0] / 2, settings.size[1] / 2, settings.size[2] / 2]} {...common} />;
         case 'sphere':
-            return <BallCollider args={[roundColliderArgs(settings, worldScale)[0]]} {...common} />;
+            return <BallCollider ref={tag} args={[roundColliderArgs(settings, worldScale)[0]]} {...common} />;
         case 'capsule': {
             const [halfHeight, radius] = roundColliderArgs(settings, worldScale);
-            return <CapsuleCollider args={[halfHeight, radius]} {...common} />;
+            return <CapsuleCollider ref={tag} args={[halfHeight, radius]} {...common} />;
         }
         case 'mesh':
-            return content ? <TrimeshCollider args={[content.positions, content.indices]} {...common} /> : null;
+            return content ? <TrimeshCollider ref={tag} args={[content.positions, content.indices]} {...common} /> : null;
     }
 };
 
@@ -675,6 +752,14 @@ const SimulatedBody: React.FC<SimulatedBodyProps> = ({ object, plan, host, conte
         lastPose.current = { position: _position.clone(), quaternion: _quaternion.clone() };
     });
 
+    // Folded colliders re-placed (a child turned by a Rotator, say) may now touch what a resting body would not notice.
+    const placedFolded = useRef(folded);
+    useEffect(() => {
+        if (placedFolded.current === folded) return;
+        placedFolded.current = folded;
+        bodyRef.current?.wakeUp();
+    }, [folded]);
+
     const foldedShapes = useMemo(() => folded.map(entry => entry.settings), [folded]);
     const scaleKey = shapeScale.join(',');
     const own = triggerHandlers(object.id);
@@ -715,6 +800,7 @@ const SimulatedBody: React.FC<SimulatedBodyProps> = ({ object, plan, host, conte
                         content={entry.content}
                         worldScale={worldScale}
                         placement={entry}
+                        objectId={entry.objectId}
                         mass={colliderMass(plan, entry.settings, foldedShapes)}
                         sensorCollisionTypes={sensorCollisionTypes}
                         onTriggerEnter={handlers.enter}
@@ -765,16 +851,9 @@ const ObjectBody: React.FC<{ object: LevelObject; plan: PhysicsBodyPlan }> = ({ 
         setContent(resolved && needsContent ? collectHostGeometry(resolved, object.id) : null);
     }, [hostRef, needsContent, object.id, plan.rigidBody]);
 
-    // Re-placed whenever the object's own transform is set, which moves it relative to the owner.
-    const { colliders } = plan;
-    useLayoutEffect(() => {
-        if (!owner || !host) return undefined;
-        owner.registry.set(object.id, foldColliders(owner.host, host, object.id, colliders, content));
-        return () => owner.registry.set(object.id, null);
-    }, [owner, host, object.id, colliders, content, object.position, object.rotation, object.scale]);
-
     return (
         <group ref={anchorRef} userData={anchorUserData}>
+            {host && owner && <FoldedIntoOwner owner={owner} host={host} object={object} colliders={plan.colliders} content={content} />}
             {host && !owner && (
                 <PhysicsFailureBoundary code="physics_body_failed">
                     <SimulatedBody object={object} plan={plan} host={host} content={content} folded={folded} />
@@ -782,6 +861,42 @@ const ObjectBody: React.FC<{ object: LevelObject; plan: PhysicsBodyPlan }> = ({ 
             )}
         </group>
     );
+};
+
+interface FoldedIntoOwnerProps {
+    owner: CompoundOwner;
+    host: THREE.Object3D;
+    object: LevelObject;
+    colliders: PhysicsBodyPlan['colliders'];
+    content: HostGeometry | null;
+}
+
+/**
+ * Keeps a collider-only object's colliders in its owner's body where the object is. They are placed
+ * when it mounts and when its transform is set, and again before a physics step once something else
+ * has moved its transform group relative to the owner: a Mover or Rotator on the object, or an
+ * animated object in between.
+ */
+const FoldedIntoOwner: React.FC<FoldedIntoOwnerProps> = ({ owner, host, object, colliders, content }) => {
+    const placement = useRef<FoldedPlacement | null>(null);
+    const { id, position, rotation, scale } = object;
+
+    useLayoutEffect(() => {
+        const placed = placeFoldedColliders(owner.host, host, id, colliders, content, placement.current);
+        placement.current = placed;
+        owner.registry.set(id, placed.colliders);
+        return () => owner.registry.set(id, null);
+    }, [owner, host, id, colliders, content, position, rotation, scale]);
+
+    useBeforePhysicsStep(() => {
+        const placed = placement.current;
+        if (!placed || !foldedPlacementMoved(placed, owner.host, host)) return;
+        const moved = placeFoldedColliders(owner.host, host, id, colliders, content, placed);
+        placement.current = moved;
+        owner.registry.set(id, moved.colliders);
+    });
+
+    return null;
 };
 
 /** Mounts the object's body from whichever of its physics components owns it, so it is built once. */

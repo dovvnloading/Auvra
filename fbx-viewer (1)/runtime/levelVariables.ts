@@ -46,6 +46,18 @@ const coerce = (kind: VariableKind | null, value: unknown): LevelVariableValue |
 const defaultFor = (kind: VariableKind | null): LevelVariableValue => kind === 'boolean' ? false : kind === 'string' ? '' : 0;
 
 /**
+ * Kind an undeclared variable takes from its first value. Values from String pins arrive as text, so
+ * exactly 'true'/'false' infer Boolean and a plain finite number in canonical form ('5', '-2.5', not
+ * '05', ' 5' or '1e3') infers Float, matching the inspector's literal parsing; other text stays String.
+ */
+const inferKind = (value: unknown): VariableKind | null => {
+    if (typeof value !== 'string') return kindOf(undefined, value);
+    if (value === 'true' || value === 'false') return 'boolean';
+    const number = Number(value);
+    return value !== '' && Number.isFinite(number) && String(number) === value ? 'number' : 'string';
+};
+
+/**
  * Observable level variables. reset() seeds them from the level blueprint; declared variables keep
  * their type on set(), undeclared names are created on first write. Every change is pushed to sync
  * (by default gameState vars) so HUD bindings 'vars.<name>' follow along.
@@ -70,10 +82,11 @@ export const createLevelVariablesStore = (sync: (vars: Record<string, LevelVaria
         set(name: string, value: unknown): boolean {
             const key = name.trim();
             if (!key) return false;
-            const kind = kinds[key] ?? null;
+            const declared = kinds[key] ?? null;
+            const kind = declared ?? inferKind(value);
             const next = coerce(kind, value);
             if (next === null) return false;
-            if (!kind) kinds = { ...kinds, [key]: kindOf(undefined, next) ?? 'string' };
+            if (!declared) kinds = { ...kinds, [key]: kind ?? 'string' };
             if (values[key] === next && Object.prototype.hasOwnProperty.call(values, key)) return true;
             commit({ ...values, [key]: next }, { [key]: next });
             return true;
