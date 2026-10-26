@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { CharacterCameraRig } from './CharacterCameraRig';
 import { SandboxEnvironment } from './SandboxEnvironment';
@@ -13,6 +13,7 @@ import { BloodSystem, BloodSystemHandle } from './BloodSystem';
 import { GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
 import { useSandboxConfiguration, SandboxConfiguration } from './hooks/useSandboxConfiguration';
 import { useScene } from '../../context/SceneContext'; // Import context to access audioAssets
+import { applyMeleeHit, resolveBlueprintDamage } from './combat';
 
 interface SandboxWorldProps {
     config: SandboxConfiguration;
@@ -59,16 +60,14 @@ export const SandboxWorld: React.FC<SandboxWorldProps> = ({
 
     const [isAiming, setIsAiming] = useState(false);
     const [enemyDespawned, setEnemyDespawned] = useState(false);
+    // Stable, so the enemy's despawn timer is not restarted by unrelated re-renders.
+    const handleEnemyDespawn = useCallback(() => setEnemyDespawned(true), []);
     
     // VFX Systems
     const bloodSystemRef = useRef<BloodSystemHandle>(null);
 
     // Calculate Enemy Damage based on Blueprint
-    const enemyDamage = useMemo(() => {
-        if (!enemyBlueprint) return 10;
-        const stat = enemyBlueprint.stats.find(s => s.name === 'Damage');
-        return stat ? stat.value : 10;
-    }, [enemyBlueprint]);
+    const enemyDamage = useMemo(() => resolveBlueprintDamage(enemyBlueprint), [enemyBlueprint]);
 
     // Resolve Weapon Sound URLs from Blueprint IDs
     const weaponSoundUrls = useMemo(() => {
@@ -79,12 +78,7 @@ export const SandboxWorld: React.FC<SandboxWorldProps> = ({
     }, [playerBlueprint, audioAssets]);
 
     const handleEnemyAttack = () => {
-        if (playerEntityRef.current) {
-            // Rough estimation for melee hit point (center of player)
-            const playerPos = playerModel?.object.position.clone() || new THREE.Vector3();
-            playerPos.y += 1.5; 
-            playerEntityRef.current.takeDamage(enemyDamage, playerPos);
-        }
+        applyMeleeHit(playerEntityRef.current, enemyDamage);
     };
 
     const handleSpawnBlood = (position: THREE.Vector3) => {
@@ -163,7 +157,7 @@ export const SandboxWorld: React.FC<SandboxWorldProps> = ({
                     onApiReady={(api) => { enemyApiRef.current = api; }}
                     registerHittable={(t) => projectileManagerRef.current?.registerTarget(t)}
                     unregisterHittable={(id) => projectileManagerRef.current?.unregisterTarget(id)}
-                    onDespawn={() => setEnemyDespawned(true)}
+                    onDespawn={handleEnemyDespawn}
                     onSpawnBlood={handleSpawnBlood}
                 />
             )}

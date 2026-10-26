@@ -99,7 +99,8 @@ export const usePlayerPhysics = (
     obstacles: LevelObject[] = [] // New: Level collision data
 ) => {
     const stamina = useRef(DEFAULT_CONFIG.MAX_STAMINA);
-    const isExhausted = useRef(false); 
+    const reportedStamina = useRef<number | null>(null);
+    const isExhausted = useRef(false);
 
     // Cache the terrain object reference to avoid searching every frame
     const activeTerrain = useRef<LevelObject | null>(null);
@@ -171,7 +172,12 @@ export const usePlayerPhysics = (
             stamina.current = Math.min(MAX_STAMINA, stamina.current + STAMINA_REGEN * delta);
         }
 
-        if (onStaminaChange) onStaminaChange(stamina.current);
+        // Report whole-point changes only, so HUD state is not updated on every frame.
+        const roundedStamina = Math.round(stamina.current);
+        if (onStaminaChange && roundedStamina !== reportedStamina.current) {
+            reportedStamina.current = roundedStamina;
+            onStaminaChange(roundedStamina);
+        }
 
         // --- 5. Apply Movement & Collision ---
         let currentSpeed = effectiveSprint ? MOVE_SPEED_RUN : MOVE_SPEED_WALK;

@@ -20,7 +20,9 @@ import { BloodSystem, BloodSystemHandle } from '../Sandbox/BloodSystem';
 import { GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
 import { useSandboxConfiguration } from '../Sandbox/hooks/useSandboxConfiguration';
 import { useNotification } from '../../context/NotificationContext';
-import { useLevelBlueprintRuntime } from '../../hooks/useLevelBlueprintRuntime';
+import { useLevelBlueprintRuntime, UseLevelBlueprintRuntimeProps } from '../../hooks/useLevelBlueprintRuntime';
+import { useRuntimeLevelWorld } from '../../hooks/useRuntimeLevelWorld';
+import { applyMeleeHit, resolveBlueprintDamage } from '../Sandbox/combat';
 import { LevelObject, LoadedModelData, Blueprint, AttachmentData, SocketData } from '../../types';
 import { TerrainObject } from './Terrain/TerrainObject';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
@@ -83,7 +85,7 @@ const SpawnerSystem: React.FC<{
 };
 
 // --- INTERNAL COMPONENT: LOGIC SYSTEM ---
-const LevelLogicSystem: React.FC<any> = (props) => {
+const LevelLogicSystem: React.FC<UseLevelBlueprintRuntimeProps> = (props) => {
     useLevelBlueprintRuntime(props);
     return null;
 };
@@ -92,8 +94,15 @@ const LevelLogicSystem: React.FC<any> = (props) => {
  * LEVEL GAME LOOP
  */
 export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosition }) => {
-    const { levelObjects, models, activeLevelBlueprint, removeLevelObject, blueprints, attachments, sockets, audioAssets } = useScene();
+    const { levelObjects, models, activeLevelBlueprint, blueprints, attachments, sockets, audioAssets } = useScene();
     const { addNotification } = useNotification();
+
+    // Play runs on a session copy of the level; the authored levelObjects are never changed by gameplay.
+    const {
+        objects: runtimeLevelObjects,
+        destroyObject: destroyRuntimeObject,
+        reset: resetRuntimeWorld
+    } = useRuntimeLevelWorld(levelObjects);
     
     // Config
     const config = useSandboxConfiguration();
@@ -105,6 +114,8 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
 
     // --- References & State ---
     const playerApiRef = useRef<GraphRuntimeAPI | undefined>(undefined);
+    // Level play has no single enemy instance, so 'Enemy'-targeted variable nodes resolve to nothing.
+    const enemyApiRef = useRef<GraphRuntimeAPI | undefined>(undefined);
     const playerEntityRef = useRef<SandboxEntityHandle>(null);
     const projectileManagerRef = useRef<ProjectileManagerHandle>(null);
     const bloodSystemRef = useRef<BloodSystemHandle>(null);
@@ -136,6 +147,25 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
     // --- VFX HANDLERS ---
     const handleSpawnBlood = useCallback((position: THREE.Vector3) => {
         bloodSystemRef.current?.spawn(position);
+    }, []);
+
+    // --- HUD STATS ---
+    // Stable callbacks that skip unchanged values, so stat reports do not re-render the play tree.
+    const handlePlayerHealthChange = useCallback((current: number, max: number) => {
+        setPlayerStats(prev => (prev.health === current && prev.maxHealth === max ? prev : { ...prev, health: current, maxHealth: max }));
+    }, []);
+
+    const handleStaminaChange = useCallback((stamina: number) => {
+        setPlayerStats(prev => (prev.stamina === stamina ? prev : { ...prev, stamina }));
+    }, []);
+
+    const handlePlayerHit = useCallback((damage: number) => {
+        applyMeleeHit(playerEntityRef.current, damage);
+    }, []);
+
+    // Stable, so a dead enemy's despawn timer is not restarted by unrelated re-renders.
+    const handleEnemyDespawn = useCallback((instanceId: string) => {
+        setSpawnedEnemies(prev => prev.filter(e => e.instanceId !== instanceId));
     }, []);
 
     // --- PLAYER INSTANCING ---
@@ -190,25 +220,26 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
         const foliage: any[] = [];
         const props: any[] = [];
         const terrains: any[] = [];
-        levelObjects.forEach(obj => {
+        runtimeLevelObjects.forEach(obj => {
             if (obj.type === 'foliage') foliage.push(obj);
             else if (obj.type === 'prop') props.push(obj);
             else if (obj.type === 'terrain') terrains.push(obj);
         });
         return { foliageObjects: foliage, propObjects: props, terrainObjects: terrains };
-    }, [levelObjects]);
+    }, [runtimeLevelObjects]);
 
     const handleRestart = useCallback(() => {
         setIsGameOver(false);
         setIsAiming(false);
         setPlayerStats(prev => ({ ...prev, health: 100, stamina: 100 }));
-        setSpawnedEnemies([]); 
+        setSpawnedEnemies([]);
+        resetRuntimeWorld();
         setRestartKey(prev => prev + 1);
         setTimeout(() => {
             const canvas = document.querySelector('canvas');
             if (canvas) canvas.requestPointerLock();
         }, 100);
-    }, []);
+    }, [resetRuntimeWorld]);
 
     useEffect(() => {
         if (playerStats.health <= 0 && !isGameOver) {
@@ -255,8 +286,8 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
                 shadows 
                 camera={{ fov: 60 }} 
                 dpr={dpr} // Dynamic DPI scaling based on performance
-                key={restartKey}
-                gl={{ 
+                key={restartKey} // Remount = new play session (BeginPlay, overlaps, spawner counts)
+                gl={{
                     powerPreference: 'high-performance', 
                     antialias: false, // Disable MSAA to allow PostProcessing (SMAA/Bloom) to work efficiently
                     stencil: false,
@@ -275,7 +306,7 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
                 />
 
                 {/* --- Replaced Hardcoded Lights with SkySystem --- */}
-                <SkySystem levelObjects={levelObjects} />
+                <SkySystem levelObjects={runtimeLevelObjects} />
 
                 {/* --- GPU POST PROCESSING PIPELINE --- */}
                 {highQuality && (
@@ -304,8 +335,8 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
                     <InstancedLevelLayer models={models} levelObjects={propObjects} interactive={false} />
                 </group>
 
-                <AudioSystem 
-                    levelObjects={levelObjects} 
+                <AudioSystem
+                    levelObjects={runtimeLevelObjects}
                     audioAssets={audioAssets}
                     isMuted={false} 
                 />
@@ -328,7 +359,7 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
                     onApiReady={(api) => { playerApiRef.current = api; }}
                     registerHittable={(t) => projectileManagerRef.current?.registerTarget(t)}
                     unregisterHittable={(id) => projectileManagerRef.current?.unregisterTarget(id)}
-                    onHealthChange={(current, max) => setPlayerStats(prev => ({ ...prev, health: current, maxHealth: max }))}
+                    onHealthChange={handlePlayerHealthChange}
                     onSpawnBlood={handleSpawnBlood}
                 />
 
@@ -345,39 +376,41 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
                             projectileManagerRef={projectileManagerRef}
                             boundarySize={50}
                             enabled={!isGameOver}
-                            onDespawn={() => setSpawnedEnemies(prev => prev.filter(e => e.instanceId !== enemyData.instanceId))}
-                            allSceneClips={allSceneClips} 
+                            onDespawn={handleEnemyDespawn}
+                            allSceneClips={allSceneClips}
                             onSpawnBlood={handleSpawnBlood}
+                            onHitPlayer={handlePlayerHit}
                         />
                     );
                 })}
 
-                <PlayerController 
+                <PlayerController
                     apiRef={playerApiRef}
                     entityRef={playerEntityRef}
                     projectileManager={projectileManagerRef}
                     modelObject={runtimePlayerModel.object}
                     enabled={!isGameOver}
-                    onStaminaChange={(val) => setPlayerStats(prev => ({ ...prev, stamina: val }))}
+                    levelObjects={runtimeLevelObjects}
+                    onStaminaChange={handleStaminaChange}
                     onAimChange={setIsAiming}
                     weaponSounds={weaponSoundUrls}
                     weaponVolume={playerBlueprint.weaponVolume ?? 1.0}
                 />
-                
-                <LevelLogicSystem 
+
+                <LevelLogicSystem
                     blueprint={activeLevelBlueprint}
-                    levelObjects={levelObjects}
+                    levelObjects={runtimeLevelObjects}
                     playerEntityRef={playerEntityRef}
                     playerApiRef={playerApiRef}
-                    enemyApiRef={{ current: undefined } as any}
-                    removeLevelObject={removeLevelObject}
+                    enemyApiRef={enemyApiRef}
+                    destroyActor={destroyRuntimeObject}
                     addNotification={addNotification}
                     onRestart={handleRestart}
                     onEndLevel={onExit}
                 />
 
-                <SpawnerSystem 
-                    levelObjects={levelObjects}
+                <SpawnerSystem
+                    levelObjects={runtimeLevelObjects}
                     isGameOver={isGameOver}
                     onSpawn={handleSpawn}
                 />
@@ -416,12 +449,14 @@ const RuntimeEnemyController: React.FC<{
     projectileManagerRef: React.RefObject<ProjectileManagerHandle | null>;
     boundarySize: number;
     enabled: boolean;
-    onDespawn: () => void;
+    onDespawn: (instanceId: string) => void;
     allSceneClips: THREE.AnimationClip[];
     onSpawnBlood: (pos: THREE.Vector3) => void;
-}> = ({ data, assets, playerObject, projectileManagerRef, boundarySize, enabled, onDespawn, allSceneClips, onSpawnBlood }) => {
+    onHitPlayer: (damage: number) => void;
+}> = ({ data, assets, playerObject, projectileManagerRef, boundarySize, enabled, onDespawn, allSceneClips, onSpawnBlood, onHitPlayer }) => {
     const apiRef = useRef<GraphRuntimeAPI | undefined>(undefined);
     const entityRef = useRef<SandboxEntityHandle>(null);
+    const damage = useMemo(() => resolveBlueprintDamage(assets.blueprint), [assets.blueprint]);
 
     const instanceModel = useMemo(() => {
         try {
@@ -440,12 +475,9 @@ const RuntimeEnemyController: React.FC<{
         }
     }, [assets.model, data.instanceId]);
 
-    const handleAttack = () => {
-        if (entityRef.current) {
-            const dist = entityRef.current.object.position.distanceTo(playerObject.position);
-            if (dist < 2.5) { }
-        }
-    };
+    // The AI brain only reports an attack when its impact frame lands within attack range.
+    const handleAttack = useCallback(() => onHitPlayer(damage), [onHitPlayer, damage]);
+    const handleDespawn = useCallback(() => onDespawn(data.instanceId), [onDespawn, data.instanceId]);
 
     if (!instanceModel) return null;
 
@@ -465,7 +497,7 @@ const RuntimeEnemyController: React.FC<{
                 onApiReady={(api) => { apiRef.current = api; }}
                 registerHittable={(t) => projectileManagerRef.current?.registerTarget(t)}
                 unregisterHittable={(id) => projectileManagerRef.current?.unregisterTarget(id)}
-                onDespawn={onDespawn}
+                onDespawn={handleDespawn}
                 onSpawnBlood={onSpawnBlood}
             />
             

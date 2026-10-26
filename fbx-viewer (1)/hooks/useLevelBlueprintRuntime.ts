@@ -13,13 +13,14 @@ const MAX_BLUEPRINT_EXECUTION_DEPTH = 256;
 /**
  * Interface for the Level Blueprint Runtime.
  */
-interface UseLevelBlueprintRuntimeProps {
+export interface UseLevelBlueprintRuntimeProps {
     blueprint: LevelBlueprintData;
     levelObjects: LevelObject[];
-    playerEntityRef: React.RefObject<SandboxEntityHandle>;
+    playerEntityRef: React.RefObject<SandboxEntityHandle | null>;
     playerApiRef: React.MutableRefObject<GraphRuntimeAPI | undefined>;
     enemyApiRef: React.MutableRefObject<GraphRuntimeAPI | undefined>;
-    removeLevelObject: (id: string) => void;
+    /** Removes an actor from the play session's runtime world. Must never write to the project. */
+    destroyActor: (id: string) => void;
     addNotification: (notification: any) => void;
     onRestart?: () => void;
     onEndLevel?: () => void;
@@ -42,14 +43,21 @@ export const useLevelBlueprintRuntime = ({
     playerEntityRef,
     playerApiRef,
     enemyApiRef,
-    removeLevelObject,
+    destroyActor,
     addNotification,
     onRestart,
     onEndLevel
 }: UseLevelBlueprintRuntimeProps) => {
-    
+
     // Tracks objects currently overlapping the player to prevent spamming 'OnOverlap' events every frame.
     const overlappingIds = useRef<Set<string>>(new Set());
+
+    // BeginPlay fires once per play session. A restart remounts the runtime, which starts a new session.
+    const hasBegunPlay = useRef(false);
+
+    // Set once Restart or EndGame fires, so the ending session cannot act on the next one
+    // (e.g. a later overlap in the same frame destroying an actor in the freshly reset world).
+    const sessionEnded = useRef(false);
     
     // Stores the current frame's delta time for the 'Event Tick' node.
     const currentDelta = useRef<number>(0);
@@ -212,7 +220,7 @@ export const useLevelBlueprintRuntime = ({
      * @param context Contextual data passed from the event trigger (e.g. Other Actor ID).
      */
     const executeNode = useCallback((nodeId: string, context: any, path: Set<string> = new Set(), depth = 0) => {
-        if (depth >= MAX_BLUEPRINT_EXECUTION_DEPTH || path.has(nodeId)) return;
+        if (sessionEnded.current || depth >= MAX_BLUEPRINT_EXECUTION_DEPTH || path.has(nodeId)) return;
         const nextPath = new Set(path);
         nextPath.add(nodeId);
         const node = blueprint.nodes.find(n => n.id === nodeId);
@@ -240,18 +248,20 @@ export const useLevelBlueprintRuntime = ({
         else if (node.type === 'DestroyActor') {
             // Context usually comes from Overlap event
             if (context.otherActorId) {
-                removeLevelObject(context.otherActorId);
+                destroyActor(context.otherActorId);
                 addNotification({ message: `Actor destroyed`, type: 'success' });
             }
         }
         else if (node.type === 'LevelAction') {
             const action = node.data?.action;
             if (action === 'Restart' && onRestart) {
+                sessionEnded.current = true;
                 addNotification({ message: "Restarting Level...", type: 'info' });
                 onRestart();
                 return; // Stop execution
             }
             if (action === 'EndGame' && onEndLevel) {
+                sessionEnded.current = true;
                 addNotification({ message: "Level Ended.", type: 'info' });
                 onEndLevel();
                 return; // Stop execution
@@ -293,14 +303,18 @@ export const useLevelBlueprintRuntime = ({
                 executeNode(connection.toNodeId, context, nextPath, depth + 1);
             }
         }
-    }, [blueprint, evaluateInput, removeLevelObject, addNotification, playerApiRef, enemyApiRef, onRestart, onEndLevel]);
+    }, [blueprint, evaluateInput, destroyActor, addNotification, playerApiRef, enemyApiRef, onRestart, onEndLevel]);
 
     // -------------------------------------------------------------------------
     // 3. LIFECYCLE HOOKS
     // -------------------------------------------------------------------------
     
     // --- Event: BeginPlay ---
+    // executeNode changes identity whenever any runtime prop does, so the guard (not the
+    // dependency list) is what keeps this to one run per session, including under StrictMode.
     useEffect(() => {
+        if (hasBegunPlay.current) return;
+        hasBegunPlay.current = true;
         const beginNodes = blueprint.nodes.filter(n => n.name === 'Event BeginPlay');
         const span = frontendDiagnostics.startSpan('level_blueprint_runtime', 'begin_play', {
             category: 'runtime_event',
@@ -318,6 +332,7 @@ export const useLevelBlueprintRuntime = ({
 
     // --- Event: Tick & Overlap Physics ---
     useFrame((state, delta) => {
+        if (sessionEnded.current) return;
         currentDelta.current = delta;
 
         // 1. Tick Event
