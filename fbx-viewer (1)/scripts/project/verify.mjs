@@ -111,6 +111,12 @@ if (!/restorePendingEdits\(new Map\(\[\[id, edit\]\]\)\)/.test(levels)
   || !/await flushPendingLevelEdits\(\{ notify: false \}\);[\s\S]*?transition = transitionKind \? editorSession\.beginTransition\(\) : null;/.test(projectManager)) {
   failures.push('debounced level edits are not flushed before session-ending operations or are silently reverted on failure');
 }
+// Terrain heights are a binary heightfield asset; object documents carry only its reference.
+if (!/canonicalChange\('objects', 'upsert', obj, obj\.id, lease, prepareLevelObjectDocument\)/.test(db)
+  || !/canonicalChange\('objects', 'upsert', \{ id, \.\.\.updates \}, id, lease, prepareLevelObjectDocument\)/.test(db)
+  || !/externalizeTerrainData\(/.test(db)) {
+  failures.push('level object writes can still persist inline terrain heights');
+}
 if (!/category === 'Animation'[\s\S]*selectAnimationTarget\(models, selectedModelId\)[\s\S]*addAnimations\(files, target\.id\)/.test(contentBrowser)) failures.push('Library animation import is not routed to the selected skeletal model');
 if (!/prepareAnimationClips\(targetModel\.object, loaded\.object, loaded\.animations\)/.test(modelManager)) failures.push('animation import bypasses target skeleton binding');
 if (!/prepareAnimationClips\(loaded\.object, animationModel\.object, animationModel\.animations\)/.test(persistence)) failures.push('native project hydration bypasses target skeleton binding');

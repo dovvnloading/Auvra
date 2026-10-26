@@ -1,6 +1,7 @@
 
-import { AssetCategory, AttachmentData, Blueprint, SocketData, TextureData, LevelObject, LevelData, AudioData } from '../types';
+import { AssetCategory, AttachmentData, Blueprint, SocketData, TextureData, LevelObject, LevelData, AudioData, TerrainData } from '../types';
 import { AssetTransferOptions, projectService } from './projectService';
+import { externalizeTerrainData } from './terrainHeightfield';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { editorSession, type EditorSessionLease } from './editorSession';
 
@@ -137,17 +138,26 @@ class DBOperations {
   /** Route authored JSON mutations to the native repository once a project is
    * open. IndexedDB remains a read-only migration source; binary uploads are
    * handled by the host asset transport and are therefore not sent here. */
-  private async canonicalChange(domain: string, operation: 'upsert' | 'remove', value: unknown, id?: string, lease?: EditorSessionLease): Promise<boolean> {
-    const run = () => this.performCanonicalChange(domain, operation, value, id, lease);
+  private async canonicalChange(domain: string, operation: 'upsert' | 'remove', value: unknown, id?: string, lease?: EditorSessionLease, prepare?: DocumentPreparation): Promise<boolean> {
+    const run = () => this.performCanonicalChange(domain, operation, value, id, lease, prepare);
     const result = this.mutationQueue.then(run, run);
     this.mutationQueue = result.catch(() => undefined);
     return result;
   }
 
-  private async performCanonicalChange(domain: string, operation: 'upsert' | 'remove', value: unknown, id?: string, lease?: EditorSessionLease): Promise<boolean> {
+  private async performCanonicalChange(domain: string, operation: 'upsert' | 'remove', value: unknown, id?: string, lease?: EditorSessionLease, prepare?: DocumentPreparation): Promise<boolean> {
     this.requireEditorLease(lease);
     if (!projectService.getStatus().projectId) throw new Error('Open a native project before editing');
     if (projectService.getStatus().readOnly) throw new Error('Project is read-only');
+    let afterCommit: (() => void) | undefined;
+    if (prepare) {
+      // Runs inside the mutation queue so binary side data (terrain
+      // heightfields) is uploaded in the same order as the documents.
+      const prepared = await prepare(value);
+      value = prepared.value;
+      afterCommit = prepared.afterCommit;
+      this.requireEditorLease(lease);
+    }
     let completeValue = value;
     if (operation === 'upsert' && value && typeof value === 'object' && id) {
       const snapshot = await projectService.getSnapshotAll(domain);
@@ -162,6 +172,7 @@ class DBOperations {
     }
     this.requireEditorLease(lease);
     await projectService.applyChanges([{ domain, operation, id, value: completeValue }]);
+    afterCommit?.();
     return true;
   }
 
@@ -421,7 +432,7 @@ class DBOperations {
   // --- LEVEL OBJECTS ---
 
   async addLevelObject(obj: DBLevelObject, lease?: EditorSessionLease): Promise<void> {
-    await this.canonicalChange('objects', 'upsert', obj, obj.id, lease);
+    await this.canonicalChange('objects', 'upsert', obj, obj.id, lease, prepareLevelObjectDocument);
   }
 
   /**
@@ -459,7 +470,7 @@ class DBOperations {
   }
 
   async updateLevelObject(id: string, updates: Partial<DBLevelObject>, lease?: EditorSessionLease): Promise<void> {
-    await this.canonicalChange('objects', 'upsert', { id, ...updates }, id, lease);
+    await this.canonicalChange('objects', 'upsert', { id, ...updates }, id, lease, prepareLevelObjectDocument);
   }
 
   async deleteLevelObject(id: string, lease?: EditorSessionLease): Promise<void> {
@@ -643,7 +654,11 @@ class DBOperations {
     ];
     for (const [store, domain, keys] of jsonStores) {
       for await (const page of this.readOnlyStorePages<Record<string, unknown>>(store)) {
-        for (const record of page) add(domain, pickDefined(record, keys));
+        for (const record of page) {
+          const value = pickDefined(record, keys);
+          // Sculpted legacy terrains move their heights into a heightfield asset.
+          add(domain, domain === 'objects' ? (await prepareLevelObjectDocument(value)).value as Record<string, unknown> : value);
+        }
       }
     }
     if (!changes.length) throw new Error('No legacy browser project data was found');
@@ -686,6 +701,22 @@ function nativeDomainRecords(snapshot: Awaited<ReturnType<typeof projectService.
     : raw && typeof raw === 'object' && Array.isArray((raw as { documents?: unknown[] }).documents)
       ? (raw as { documents: unknown[] }).documents : [];
   return values.filter((value): value is Record<string, any> => Boolean(value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string'));
+}
+
+type DocumentPreparation = (value: unknown) => Promise<{ value: unknown; afterCommit?: () => void }>;
+
+/** Level object documents carry a heightfield asset reference, never inline
+ * terrain heights: a sculpted terrain would exceed the host message and
+ * snapshot page limits and make the whole objects domain unreadable. */
+async function prepareLevelObjectDocument(value: unknown): Promise<{ value: unknown; afterCommit?: () => void }> {
+  if (!value || typeof value !== 'object') return { value };
+  const terrainData = (value as { terrainData?: unknown }).terrainData;
+  if (!terrainData || typeof terrainData !== 'object') return { value };
+  const prepared = await externalizeTerrainData(terrainData as TerrainData);
+  return {
+    value: { ...(value as Record<string, unknown>), terrainData: prepared.terrainData },
+    afterCommit: prepared.remember,
+  };
 }
 
 function pickDefined(source: Record<string, unknown>, keys: string[], extra: Record<string, unknown> = {}): Record<string, unknown> {

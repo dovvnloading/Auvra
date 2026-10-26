@@ -1,16 +1,21 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { LevelData, LevelObject } from '../../types';
+import type { LevelData, LevelObject, TerrainData } from '../../types';
 import type { EditorSessionLease } from '../../utils/editorSession';
 
-const mocks = vi.hoisted(() => ({
-  calls: [] as string[],
-  status: {
-    projectId: 'project-a' as string | null, name: 'Project', revision: 1, dirty: false, readOnly: false,
-    busy: false, progress: null, recoveryAvailable: false, recoveryPoints: [], recentProjects: [],
-  },
-  addNotification: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  // Legacy IndexedDB is opened (read-only) when utils/db.ts is imported.
+  (globalThis as { indexedDB?: unknown }).indexedDB = { open: () => ({}) };
+  return {
+    calls: [] as string[],
+    status: {
+      projectId: 'project-a' as string | null, name: 'Project', revision: 1, dirty: false, readOnly: false,
+      busy: false, progress: null, recoveryAvailable: false, recoveryPoints: [], recentProjects: [],
+    },
+    snapshotObjects: [] as Array<Record<string, unknown>>,
+    addNotification: vi.fn(),
+  };
+});
 
 vi.mock('../../utils/db', () => ({
   dbOperations: {
@@ -32,8 +37,11 @@ vi.mock('../../utils/projectService', () => ({
     subscribe: (listener: (status: typeof mocks.status) => void) => { listener({ ...mocks.status }); return () => undefined; },
     refreshStatus: vi.fn(),
     applyChanges: vi.fn(),
+    getSnapshotAll: vi.fn(),
     save: vi.fn(),
     close: vi.fn(),
+    resolveAsset: vi.fn(),
+    uploadAsset: vi.fn(),
   },
 }));
 
@@ -56,10 +64,19 @@ import { projectService } from '../../utils/projectService';
 import { editorSession } from '../../utils/editorSession';
 import { useLevelManager } from '../../hooks/useLevelManager';
 import { useProjectManager } from '../../hooks/useProjectManager';
+import { encodeTerrainHeightfield, TERRAIN_HEIGHTFIELD_HEADER_BYTES, TERRAIN_HEIGHTFIELD_MIME } from '../../utils/terrainHeightfieldCodec';
+import { resolveTerrainHeightfield } from '../../utils/terrainHeightfield';
+
+const SNAPSHOT_PAGE_LIMIT = 192 * 1024;
+const ASSET_ID = 'c'.repeat(64);
 
 const level = (id: string): LevelData => ({ id, name: id, createdAt: 0, blueprint: { nodes: [], connections: [], variables: [] } });
 const spawn = (id: string, levelId = 'level-a'): LevelObject => ({
   id, levelId, modelId: '', name: id, type: 'spawn_point', position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1],
+});
+const terrain = (terrainData: TerrainData): LevelObject => ({
+  id: 'terrain', levelId: 'level-a', modelId: '', name: 'Terrain', type: 'terrain',
+  position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1], terrainData,
 });
 
 /** Mirrors the host: a write needs the exact current revision and advances it. */
@@ -98,6 +115,7 @@ const renderEditor = (objects: LevelObject[] = [spawn('obj-1'), spawn('obj-2'), 
 
 beforeEach(() => {
   mocks.calls.length = 0;
+  mocks.snapshotObjects = [];
   mocks.status.projectId = 'project-a';
   mocks.status.revision = 1;
   mocks.addNotification.mockReset();
@@ -117,12 +135,17 @@ beforeEach(() => {
     editorSession.advanceRevision(mocks.status.projectId, mocks.status.revision);
     return { revision: mocks.status.revision, changes } as never;
   });
+  vi.mocked(projectService.getSnapshotAll).mockImplementation(async () => ({
+    revision: mocks.status.revision, domains: { objects: mocks.snapshotObjects },
+  }));
   vi.mocked(projectService.save).mockImplementation(async () => { mocks.calls.push('save'); return null; });
   vi.mocked(projectService.close).mockImplementation(async () => { mocks.calls.push('close'); mocks.status.projectId = null; });
+  vi.mocked(projectService.uploadAsset).mockResolvedValue(ASSET_ID);
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe('pending level edits', () => {
@@ -211,5 +234,62 @@ describe('pending level edits', () => {
     await act(() => vi.advanceTimersByTimeAsync(1500));
     expect(mocks.calls).toEqual(['delete:obj-1']);
     expect(mocks.addNotification).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'error' }));
+  });
+});
+
+describe('terrain heightfields', () => {
+  const heightfield = { assetId: ASSET_ID, encoding: 'float32le' as const, columns: 3, rows: 3 };
+  const samples = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+
+  it('resolve into in-memory heights when the level loads, and block sculpting until then', async () => {
+    let release: (value: unknown) => void = () => undefined;
+    const download = new Promise((resolve) => { release = resolve; });
+    vi.mocked(projectService.resolveAsset).mockResolvedValue('https://assets.auvra.local/v1/get/token');
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      await download;
+      return { ok: true, status: 200, arrayBuffer: async () => encodeTerrainHeightfield(samples, 3, 3).buffer };
+    }));
+    const { result } = renderEditor([terrain({ resolution: 2, width: 10, depth: 10, heightfield })]);
+
+    act(() => result.current.levels.updateLevelObject('terrain', { terrainData: { resolution: 2, width: 10, depth: 10, heightfield, heights: new Array(9).fill(0) } }));
+    expect(mocks.addNotification).toHaveBeenCalledWith(expect.objectContaining({ type: 'error', message: expect.stringMatching(/still loading/) }));
+    expect(result.current.levels.levelObjects[0].terrainData?.heights).toBeUndefined();
+
+    release(undefined);
+    await waitFor(() => expect(result.current.levels.levelObjects[0].terrainData?.heights).toEqual(samples));
+    expect(result.current.levels.levelObjects[0].terrainData?.heightfield).toEqual(heightfield);
+  });
+
+  it('commit a sculpted 513x513 terrain as an asset reference far below the snapshot page limit', async () => {
+    const { dbOperations: realDb } = await vi.importActual<typeof import('../../utils/db')>('../../utils/db');
+    const resolution = 512;
+    const heights = Array.from({ length: (resolution + 1) ** 2 }, (_, index) => Math.sin(index) * 25.123456789);
+    // The stored document is still the legacy inline form; the next terrain commit migrates it.
+    mocks.snapshotObjects = [{ ...terrain({ resolution, width: 100, depth: 100, heights: heights.map(() => 0) }) }];
+    await realDb.updateLevelObject('terrain', { terrainData: { resolution, width: 100, depth: 100, heights, textureId: 'texture' } });
+
+    expect(projectService.uploadAsset).toHaveBeenCalledTimes(1);
+    const file = vi.mocked(projectService.uploadAsset).mock.calls[0][0];
+    expect(file.type).toBe(TERRAIN_HEIGHTFIELD_MIME);
+    expect(file.size).toBe(TERRAIN_HEIGHTFIELD_HEADER_BYTES + heights.length * 4);
+    const [[changes]] = vi.mocked(projectService.applyChanges).mock.calls;
+    const document = changes[0].value as LevelObject;
+    expect(document.terrainData).toEqual({
+      resolution, width: 100, depth: 100, textureId: 'texture',
+      heightfield: { assetId: ASSET_ID, encoding: 'float32le', columns: 513, rows: 513 },
+    });
+    const size = new TextEncoder().encode(JSON.stringify(document)).byteLength;
+    expect(size).toBeLessThan(2 * 1024);
+    expect(size).toBeLessThan(SNAPSHOT_PAGE_LIMIT / 64);
+  });
+
+  it('does not re-upload resolved heights when other terrain fields change', async () => {
+    const { dbOperations: realDb } = await vi.importActual<typeof import('../../utils/db')>('../../utils/db');
+    const resolved = await resolveTerrainHeightfield(heightfield, async () => encodeTerrainHeightfield(samples, 3, 3).buffer);
+    mocks.snapshotObjects = [{ ...terrain({ resolution: 2, width: 10, depth: 10, heightfield }) }];
+    await realDb.updateLevelObject('terrain', { terrainData: { resolution: 2, width: 10, depth: 10, heightfield, heights: resolved, textureId: 'texture' } });
+    expect(projectService.uploadAsset).not.toHaveBeenCalled();
+    const [[changes]] = vi.mocked(projectService.applyChanges).mock.calls;
+    expect((changes[0].value as LevelObject).terrainData).toEqual({ resolution: 2, width: 10, depth: 10, textureId: 'texture', heightfield });
   });
 });

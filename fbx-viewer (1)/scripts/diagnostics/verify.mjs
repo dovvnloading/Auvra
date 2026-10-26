@@ -66,6 +66,7 @@ const EXEMPT = new Map(Object.entries({
   'utils/editorState.ts': 'data-model',
   'utils/processing/ModelMaterials.ts': 'import-child-phase',
   'utils/processing/ModelTransforms.ts': 'import-child-phase',
+  'utils/terrainHeightfieldCodec.ts': 'pure-utility',
   'utils/textureUtils.ts': 'pure-utility',
   'utils/thumbnailGenerator.ts': 'import-child-phase',
   'workers/fbxImport.worker.ts': 'worker-protocol',

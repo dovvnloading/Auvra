@@ -1,12 +1,14 @@
 
 import { useState, useCallback, useRef, useEffect, useSyncExternalStore } from 'react';
-import { LevelObject, LoadedModelData, LevelObjectType, LevelData, LevelBlueprintData } from '../types';
+import { LevelObject, LoadedModelData, LevelObjectType, LevelData, LevelBlueprintData, TerrainHeightfieldReference } from '../types';
 import { dbOperations } from '../utils/db';
 import { projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { editorSession, selectObjectsForLevel, type EditorSessionLease } from '../utils/editorSession';
 import { subscribeDomainCascade, type DomainCascadeEvent } from '../utils/domainCascade';
+import { resolveTerrainHeightfield } from '../utils/terrainHeightfield';
+import { isTerrainHeightfieldPending } from '../utils/terrainHeightfieldCodec';
 
 const DEFAULT_LEVEL_ID = 'default_level';
 const EMPTY_BLUEPRINT: LevelBlueprintData = { nodes: [], connections: [], variables: [] };
@@ -397,6 +399,46 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       void flushPendingLevelEditsRef.current().catch(() => undefined);
   }, []);
 
+  // Terrain heights live in heightfield assets. Resolve them into the
+  // in-memory objects once a level is published so rendering, sculpting and
+  // play-mode height sampling keep reading terrainData.heights.
+  const failedHeightfieldsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+      const references = new Map<string, TerrainHeightfieldReference>();
+      for (const object of levelObjects) {
+          const reference = object.terrainData?.heightfield;
+          if (reference && isTerrainHeightfieldPending(object.terrainData) && !failedHeightfieldsRef.current.has(reference.assetId)) {
+              references.set(reference.assetId, reference);
+          }
+      }
+      if (references.size === 0) return;
+      let active = true;
+      for (const reference of references.values()) {
+          resolveTerrainHeightfield(reference).then((heights) => {
+              if (!active) return;
+              setWorkingState((current) => {
+                  let changed = false;
+                  const nextObjects = current.levelObjects.map((object) => {
+                      const terrain = object.terrainData;
+                      if (!terrain?.heightfield || !isTerrainHeightfieldPending(terrain)
+                          || terrain.heightfield.assetId !== reference.assetId
+                          || terrain.heightfield.columns !== reference.columns
+                          || terrain.heightfield.rows !== reference.rows) return object;
+                      changed = true;
+                      return { ...object, terrainData: { ...terrain, heights } };
+                  });
+                  return changed ? { ...current, levelObjects: nextObjects } : current;
+              });
+          }, (error) => {
+              if (!active) return;
+              failedHeightfieldsRef.current.add(reference.assetId);
+              frontendDiagnostics.failure('terrain_heightfield_resolve_failed', error);
+              addNotification({ message: `Terrain heights could not be loaded (${describeError(error)}); sculpting is disabled for that terrain.`, type: 'error' });
+          });
+      }
+      return () => { active = false; };
+  }, [addNotification, levelObjects]);
+
   const initLevels = useCallback(async (signal?: AbortSignal) => {
       const initialSession = session.getSnapshot();
       if (projectService.getStatus().projectId || initialSession.phase !== 'closed') return;
@@ -656,6 +698,12 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       projectService.assertWritable();
       const previous = levelObjects.find((object) => object.id === id);
       if (!previous) return;
+      // A stroke sculpted over a terrain whose heightfield is still loading
+      // would replace the stored heights with a flat placeholder.
+      if (updates.terrainData?.heights?.length && isTerrainHeightfieldPending(previous.terrainData)) {
+          addNotification({ message: 'Terrain heights are still loading; the sculpt was not applied.', type: 'error' });
+          return;
+      }
       setWorkingState(prev => ({
           ...prev,
           levelObjects: prev.levelObjects.map(o => o.id === id ? { ...o, ...updates } : o),
@@ -666,7 +714,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
           lease,
       });
       scheduleFlush();
-  }, [levelObjects, scheduleFlush, session]);
+  }, [addNotification, levelObjects, scheduleFlush, session]);
 
   const updateLevelBlueprint = useCallback((data: Partial<LevelBlueprintData>) => {
       const lease = session.requireCurrent(session.captureReady());
@@ -708,6 +756,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
           levelObjects: selected ? selectObjectsForLevel(nextObjects, selected) : [],
           activeLevelBlueprint: level?.blueprint || EMPTY_BLUEPRINT,
       });
+      failedHeightfieldsRef.current.clear();
       history.current = { past: [], future: [] };
       updateHistoryState();
   }, [replaceWorkingState]);
