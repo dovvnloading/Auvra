@@ -59,6 +59,30 @@ def _terrain_height(column: int, row: int, flat_radius: float = _STARTER_FLAT_RA
     return _hills(x, z, flat_radius)
 
 
+def _ground_y(x: float, z: float, flat_radius: float = _STARTER_FLAT_RADIUS, sink: float = 0.1) -> float:
+    """Where a prop's base goes at world (x, z): on the hills, sunk ``sink`` into slopes so no gap shows under it.
+
+    Nothing snaps props to the terrain, and normalised models stand on y=0, so a prop's y is its base height.
+    """
+    if math.hypot(x, z) <= flat_radius:
+        return 0.0
+    return round(_hills(x, z, flat_radius) - sink, 2)
+
+
+# The sky the editor's Add Sky Sphere creates (EnvironmentSidebar): without a skyConfig the sky inspector hides
+# every control and the runtime falls back to a config with near-black fog.
+_SKY_CONFIG = {
+    "timeOfDay": 14.0, "sunIntensity": 1.5, "ambienceIntensity": 0.5, "sunColor": "#ffffff",
+    "fogColor": "#8caebf", "fogDensity": 0.02, "turbidity": 8.0, "rayleigh": 1.0,
+    "mieCoefficient": 0.005, "mieDirectionalG": 0.7, "inclination": 0.49, "azimuth": 0.25,
+}
+
+
+def _sky_object(object_id: str, level_id: str) -> dict[str, Any]:
+    # Raised like the editor's, so its icon is not buried in the ground.
+    return _object(object_id, level_id, "Sky", "sky_sphere", [0.0, 5.0, 0.0], skyConfig=dict(_SKY_CONFIG))
+
+
 def _object(object_id: str, level_id: str, name: str, kind: str, position: list[float], *,
             model_id: str = "", rotation_y: float = 0.0, scale: float = 1.0, **extra: Any) -> dict[str, Any]:
     document = {
@@ -116,7 +140,7 @@ def _apply_starter(repository: Any, project_name: str) -> None:
 
     objects = [
         _terrain_object("starter-terrain", level_id, heightfield_id, _TERRAIN_SAMPLES, _TERRAIN_SIZE),
-        _object("starter-sky", level_id, "Sky", "sky_sphere", [0.0, 0.0, 0.0]),
+        _sky_object("starter-sky", level_id),
         _object("starter-player-start", level_id, "Player Start", "player_start", [0.0, 0.0, 6.0]),
     ]
     # A loose ring of props around the start so there is something to walk to and edit.
@@ -125,15 +149,15 @@ def _apply_starter(repository: Any, project_name: str) -> None:
         ("crate", "starter-model-crate", [-6.0, 0.0, -6.0], 0.0), ("rock", "starter-model-rock", [-10.0, 0.0, 2.0], 0.8),
         ("rock", "starter-model-rock", [12.0, 0.0, 8.0], 2.4), ("rock", "starter-model-rock", [3.0, 0.0, -14.0], 1.7),
     ]
-    for index, (label, model_id, position, rotation) in enumerate(props):
-        objects.append(_object(f"starter-{label}-{index}", level_id, f"{label.title()} {index + 1}", "prop", position,
-                               model_id=model_id, rotation_y=rotation))
+    for index, (label, model_id, (x, _, z), rotation) in enumerate(props):
+        objects.append(_object(f"starter-{label}-{index}", level_id, f"{label.title()} {index + 1}", "prop",
+                               [x, _ground_y(x, z), z], model_id=model_id, rotation_y=rotation))
     for index in range(10):
         angle = index * 2 * math.pi / 10 + 0.4
         radius = 22.0 + 6.0 * math.sin(index * 1.7)
+        x, z = round(radius * math.cos(angle), 2), round(radius * math.sin(angle), 2)
         objects.append(_object(f"starter-tree-{index}", level_id, f"Tree {index + 1}", "prop",
-                               [round(radius * math.cos(angle), 2), 0.0, round(radius * math.sin(angle), 2)],
-                               model_id="starter-model-tree", rotation_y=round(angle, 3)))
+                               [x, _ground_y(x, z), z], model_id="starter-model-tree", rotation_y=round(angle, 3)))
 
     begin_play = {
         "nodes": [
@@ -340,7 +364,7 @@ def _arena_objects(heightfield_id: str) -> list[dict[str, Any]]:
     level = _ARENA_LEVEL_ID
     objects = [
         _terrain_object("arena-terrain", level, heightfield_id, _TERRAIN_SAMPLES, _TERRAIN_SIZE),
-        _object("arena-sky", level, "Sky", "sky_sphere", [0.0, 0.0, 0.0]),
+        _sky_object("arena-sky", level),
         _object("arena-player-start", level, "Player Start", "player_start", [0.0, 0.0, 6.0]),
     ]
     # Cover: a ring of solid crates (a collider without a rigid body is fixed scenery) with gaps to run through.
@@ -385,7 +409,7 @@ def _finish_objects(heightfield_id: str, samples: int, size: float) -> list[dict
     level = _FINISH_LEVEL_ID
     objects = [
         _terrain_object("finish-terrain", level, heightfield_id, samples, size),
-        _object("finish-sky", level, "Sky", "sky_sphere", [0.0, 0.0, 0.0]),
+        _sky_object("finish-sky", level),
         _object("finish-player-start", level, "Player Start", "player_start", [0.0, 0.0, 8.0]),
         _object("finish-podium", level, "Podium", "prop", [0.0, 0.0, -3.0], model_id="arena-model-crate",
                 components=[_crate_collider("finish-podium")]),

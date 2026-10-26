@@ -5,7 +5,6 @@ import type { HostTransport } from "./transport";
 const PROJECT_METHODS = ["project.getStatus", "project.create", "project.open", "project.openRecent", "project.close", "project.getSnapshot", "project.applyChanges", "project.save", "project.saveAs", "project.exportPack", "project.buildGame", "project.importPack", "project.importLegacy", "asset.beginUpload", "asset.resolve"] as const;
 const PROVIDER_METHODS = ["provider.list", "provider.getStatus", "provider.configureCredential", "provider.deleteCredential", "provider.configure", "provider.listModels", "provider.health", "inference.submit", "inference.get", "inference.list", "inference.cancel", "inference.retry", "media.discard", "media.commit", "command.preview", "command.approve", "command.undo"] as const;
 const ENGINE_METHODS = ["engine.getStatus", "engine.getSnapshot", "engine.applyChanges", "engine.openViewport", "engine.closeViewport", "engine.renderReference", "engine.getMetrics", "engine.recover"] as const;
-const METHODS = ["host.ping", "host.getCapabilities", ...PROJECT_METHODS, ...PROVIDER_METHODS, ...ENGINE_METHODS] as const;
 const MEDIA_CAPABILITIES = ["media.generate", "media.edit"] as const;
 const ENGINE_FEATURES = ["pbr_metallic_roughness", "skeletal_animation", "frustum_culling", "deterministic_lod", "instance_batching", "directional_lights", "point_lights", "spot_lights", "shadow_maps", "image_based_lighting", "entity_picking", "editor_gizmos", "hdr_intermediate", "aces_tone_mapping", "msaa_or_fxaa", "post_processing_chain"] as const;
 type Payload = Record<string, unknown>;

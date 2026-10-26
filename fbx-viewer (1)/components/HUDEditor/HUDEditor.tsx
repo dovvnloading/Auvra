@@ -137,6 +137,35 @@ const LOCALIZED_KEY_PROPS: Readonly<Record<string, { literal: string; key: strin
     Button: { literal: 'label', key: 'labelKey', hint: 'String key from Localization; overrides the label.' },
 };
 
+/** True when the element's string key is set, matching how the components decide the key wins. */
+const hasLocalizedKey = (element: HUDElement, key: string): boolean => {
+    const value = element.props[key];
+    return typeof value === 'string' && value.trim() !== '';
+};
+
+/**
+ * The hint under one attribute. A set string key wins over the literal at runtime, even when the
+ * literal is bound, so a bound literal with a key set says the live value will not show.
+ */
+const attributeHint = (
+    element: HUDElement,
+    key: string,
+    localized: { literal: string; key: string; hint: string } | undefined,
+): string | null => {
+    const keySet = localized ? hasLocalizedKey(element, localized.key) : false;
+    const boundTo = hudBindingPath(element.props.bind, key);
+    if (boundTo) {
+        return localized && key === localized.literal && keySet
+            ? `Bound to ${boundTo}, but ${localized.key} is set and overrides it; clear ${localized.key} to show the live value.`
+            : `Bound to ${boundTo}; shows the live value while playing.`;
+    }
+    if (!localized || key !== localized.key) return null;
+    const literalBoundTo = hudBindingPath(element.props.bind, localized.literal);
+    return literalBoundTo && keySet
+        ? `${localized.hint} The live value of ${literalBoundTo} is not shown while it is set.`
+        : localized.hint;
+};
+
 /** Props the Attributes list edits, with the localized key listed right after its literal even when unset. */
 const attributeKeys = (element: HUDElement): string[] => {
     // `action` and `bind` have their own fields below.
@@ -162,7 +191,7 @@ const PropertyInput: React.FC<{
     const type = typeof value;
     const isColor = label.toLowerCase().includes('color');
 
-    if (options) {
+    if (Array.isArray(options)) {
         return (
             <label className="block space-y-1">
                 <span className="text-[10px] text-gray-500 font-bold uppercase">{label}</span>
@@ -278,6 +307,8 @@ export const HUDEditor: React.FC = () => {
     const { levels } = useLevel();
     // Right after a switch the hook still holds the previous document until it re-hydrates.
     const loading = !hydrated || document.id !== descriptor.id;
+    // The host's AI commands read and write the canonical game HUD only.
+    const aiAvailable = descriptor.id === HUD_MAIN_DOCUMENT_ID;
     const elements = document.elements;
     const layout = normalizeHUDLayout(document.layout);
     const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -305,6 +336,7 @@ export const HUDEditor: React.FC = () => {
         lastEditRef.current = null;
         dragStartRef.current = null;
         setSelectedId(null);
+        if (nextId !== HUD_MAIN_DOCUMENT_ID) setRightPanelTab('props');
         setDocumentId(nextId);
     };
 
@@ -316,6 +348,8 @@ export const HUDEditor: React.FC = () => {
 
     /** Snapshot the document before a change. Rapid edits sharing `coalesceKey` become one undo step. */
     const recordChange = (coalesceKey: string | null = null) => {
+        // While re-hydrating, `document` is the default template and must never become an undo step.
+        if (loading) return;
         const now = Date.now();
         const last = lastEditRef.current;
         if (coalesceKey && last && last.key === coalesceKey && now - last.at < HISTORY_COALESCE_MS) {
@@ -331,9 +365,12 @@ export const HUDEditor: React.FC = () => {
         refresh();
     }, [refresh]);
 
+    // Every element write goes through here. After each write the hook resets `document` to the
+    // default template while the stored copy re-hydrates; writing then would save that template.
     const commitElements = useCallback((nextElements: HUDElement[]) => {
+        if (loading) return Promise.resolve();
         return replace({ ...document, elements: nextElements });
-    }, [document, replace]);
+    }, [document, replace, loading]);
 
     // Selection and editor-only tabs are transient and must not survive a
     // project switch or point at a document that was not restored.
@@ -449,7 +486,7 @@ export const HUDEditor: React.FC = () => {
     };
 
     const handleDragStart = () => {
-        dragStartRef.current = document;
+        dragStartRef.current = loading ? null : document;
     };
 
     const handleDragEnd = (id: string) => {
@@ -560,15 +597,18 @@ export const HUDEditor: React.FC = () => {
                     </button>
                     <button 
                         onClick={() => setRightPanelTab('ai')}
-                        className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 border-b-2 transition-colors ${rightPanelTab === 'ai' ? 'border-blue-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+                        disabled={!aiAvailable}
+                        title={aiAvailable ? undefined : 'AI Coder edits the Game HUD only'}
+                        className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 border-b-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${rightPanelTab === 'ai' && aiAvailable ? 'border-blue-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
                     >
                         <Code size={12} /> AI Coder
                     </button>
                 </div>
 
                 <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-                    {rightPanelTab === 'ai' ? (
+                    {rightPanelTab === 'ai' && aiAvailable ? (
                         <AIChatPanel 
+                            key={descriptor.id}
                             elements={elements}
                             selectedElementId={selectedId}
                             onSelectElement={setSelectedId}
@@ -648,10 +688,7 @@ export const HUDEditor: React.FC = () => {
                                         
                                         <div className="grid grid-cols-1 gap-3">
                                             {attributeKeys(selectedElement).map((key) => {
-                                                const boundTo = hudBindingPath(selectedElement.props.bind, key);
-                                                const hint = boundTo
-                                                    ? `Bound to ${boundTo}; shows the live value while playing.`
-                                                    : key === selectedLocalizedKey?.key ? selectedLocalizedKey.hint : null;
+                                                const hint = attributeHint(selectedElement, key, selectedLocalizedKey);
                                                 const hintId = `hud-prop-hint-${selectedElement.id}-${key}`;
                                                 return (
                                                     <div key={key} className="space-y-1">
@@ -660,7 +697,8 @@ export const HUDEditor: React.FC = () => {
                                                             value={selectedElement.props[key]}
                                                             onChange={(val) => handlePropChange(key, val)}
                                                             isMultiline={key === 'code'}
-                                                            options={selectedPropOptions?.[key]}
+                                                            // Own keys only: prop names come from project data and may match Object.prototype members.
+                                                            options={selectedPropOptions && Object.prototype.hasOwnProperty.call(selectedPropOptions, key) ? selectedPropOptions[key] : undefined}
                                                             describedBy={hint ? hintId : undefined}
                                                         />
                                                         {hint && <p id={hintId} className="text-[10px] text-gray-500 leading-snug">{hint}</p>}

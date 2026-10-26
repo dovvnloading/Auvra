@@ -62,7 +62,6 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
     startPosition,
     startRotation,
     team,
-    color,
     isAiming = false,
     onApiReady,
     registerHittable,

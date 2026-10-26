@@ -24,8 +24,12 @@ const TIMER_EPSILON = 1e-9;
 const hasCollider = (obj: LevelObject): boolean =>
     (obj.components ?? []).some(component => component.type === 'collider' && component.enabled);
 
+/** The table's own entry only, so a type named after an Object.prototype member ('valueOf', '__proto__') misses. */
+const ownExecutor = <T>(table: Readonly<Record<string, T | undefined>>, type: string): T | undefined =>
+    Object.hasOwn(table, type) ? table[type] : undefined;
+
 /** A flow or world node's executor (pure world nodes included); undefined for the built-in node types. */
-const nodeExecutor = (type: string) => FLOW_NODE_EXECUTORS[type] ?? WORLD_NODE_EXECUTORS[type];
+const nodeExecutor = (type: string) => ownExecutor(FLOW_NODE_EXECUTORS, type) ?? ownExecutor(WORLD_NODE_EXECUTORS, type);
 
 /** An executor's evaluate(pinName): the named data input via `read`, or its `default_<pin>` when the pin is missing. */
 const readNamedInput = (node: LogicNode, pinName: string, read: (pinId: string) => any): any => {
@@ -154,7 +158,10 @@ export const useLevelBlueprintRuntime = ({
         setObjectTransform: (id, partial) => world.current.setObjectTransform?.(id, partial),
         applyImpulse: (id, impulse) => world.current.applyImpulse?.(id, impulse),
         raycast: (origin, direction, maxDistance) => world.current.raycast?.(origin, direction, maxDistance) ?? null,
-        input: { isDown: action => world.current.runtimeServices?.input.isDown(action) ?? false },
+        input: {
+            isDown: action => world.current.runtimeServices?.input.isDown(action) ?? false,
+            wasPressed: action => world.current.runtimeServices?.input.wasPressed(action) ?? false,
+        },
         vars: levelVariables,
         print: message => world.current.addNotification({ message: `[Output] ${message}`, type: 'info', duration: 3000 }),
     }), []);
@@ -169,9 +176,10 @@ export const useLevelBlueprintRuntime = ({
      * 
      * @param nodeId The ID of the node requesting the value.
      * @param inputPinId The ID of the input pin on that node.
+     * @param context The running event's context; an overlap event's Other Actor output reads its otherActorId.
      * @returns The evaluated value (number, boolean, string, etc.) or null.
      */
-    const evaluateInput = useCallback((nodeId: string, inputPinId: string): any => {
+    const evaluateInput = useCallback((nodeId: string, inputPinId: string, context?: { otherActorId?: string }): any => {
         // Editor-made nodes start with an Exec pin, so data pins are found by name, then by data-pin order.
         const dataPin = (pins: LogicPin[], name: string, index: number): LogicPin | undefined =>
             pins.find(p => p.name === name) ?? pins.filter(p => p.dataType !== 'Exec')[index];
@@ -202,11 +210,10 @@ export const useLevelBlueprintRuntime = ({
         // --- Evaluate Source Node based on Type ---
         switch (sourceNode.type) {
             case 'Event': {
-                // Special case: Event nodes providing data (like Tick -> Delta Seconds)
-                if (sourceNode.name === 'Event Tick') {
-                    const pin = sourceNode.outputs.find(p => p.id === connection.fromPinId);
-                    if (pin?.name === 'Delta Seconds') return currentDelta.current;
-                }
+                // Special case: Event nodes providing data (Tick -> Delta Seconds, Overlap -> Other Actor)
+                const pin = sourceNode.outputs.find(p => p.id === connection.fromPinId);
+                if (sourceNode.name === 'Event Tick' && pin?.name === 'Delta Seconds') return currentDelta.current;
+                if (pin?.name === 'Other Actor') return context?.otherActorId ?? null;
                 return null;
             }
 
@@ -326,9 +333,12 @@ export const useLevelBlueprintRuntime = ({
      * @param entryPinId The input exec pin the flow arrived on; omitted for event nodes.
      */
     const executeNode = useCallback((nodeId: string, context: any, path: Set<string> = new Set(), depth = 0, entryPinId?: string) => {
-        if (sessionEnded.current || depth >= MAX_BLUEPRINT_EXECUTION_DEPTH || path.has(nodeId)) return;
+        // The cycle guard keys on node and entry pin: re-entering the same pin is a loop, but entering
+        // another one (Gate Open/Close/Toggle, DoOnce Reset, which fire nothing) only changes its state.
+        const execKey = `${nodeId}:${entryPinId ?? ''}`;
+        if (sessionEnded.current || depth >= MAX_BLUEPRINT_EXECUTION_DEPTH || path.has(execKey)) return;
         const nextPath = new Set(path);
-        nextPath.add(nodeId);
+        nextPath.add(execKey);
         const node = blueprint.nodes.find(n => n.id === nodeId);
         if (!node) return;
 
@@ -342,7 +352,7 @@ export const useLevelBlueprintRuntime = ({
             
             if (stringPin) {
                 // If connected, evaluates connection. If not, evaluates default_String.
-                const val = evaluateInput(node.id, stringPin.id);
+                const val = evaluateInput(node.id, stringPin.id, context);
                 if (val !== null && val !== undefined) {
                     msg = String(val);
                 }
@@ -396,7 +406,7 @@ export const useLevelBlueprintRuntime = ({
         else if (node.type === 'Branch') {
             // Evaluate Condition Input
             const condPin = node.inputs.find(p => p.name === 'Condition');
-            const condition = condPin ? evaluateInput(node.id, condPin.id) : false;
+            const condition = condPin ? evaluateInput(node.id, condPin.id, context) : false;
             
             // Route flow based on result
             nextExecPinName = condition ? 'True' : 'False';
@@ -405,7 +415,7 @@ export const useLevelBlueprintRuntime = ({
             const target = node.data?.targetBlueprintType || 'Player';
             const varName = node.data?.variableName;
             const valPin = node.inputs.find(p => p.name === 'Value');
-            const value = valPin ? evaluateInput(node.id, valPin.id) : null;
+            const value = valPin ? evaluateInput(node.id, valPin.id, context) : null;
 
             const api = target === 'Enemy' ? enemyApiRef.current : playerApiRef.current;
             if (api && varName && value !== null) {
@@ -415,12 +425,13 @@ export const useLevelBlueprintRuntime = ({
         else {
             const executor = nodeExecutor(node.type);
             if (executor) {
-                // A scheduled continuation is a new call stack: it resumes from this node at depth 0.
+                // A scheduled continuation is a new call stack: it resumes at depth 0 with an empty cycle
+                // guard, so a chain can loop back into this Delay (which only schedules again).
                 let chainPath = nextPath;
                 let chainDepth = depth;
                 const state = nodeStateOf(nodeStates.current, node.id);
                 const ctx: WorldExecutionContext = {
-                    evaluate: pinName => readNamedInput(node, pinName, pinId => evaluateInput(node.id, pinId)),
+                    evaluate: pinName => readNamedInput(node, pinName, pinId => evaluateInput(node.id, pinId, context)),
                     fire: (pinName, data) => {
                         if (data) state.outputs = { ...(state.outputs as Record<string, unknown> | undefined), ...data };
                         const pin = node.outputs.find(p => p.dataType === 'Exec' && p.name === pinName);
@@ -432,7 +443,7 @@ export const useLevelBlueprintRuntime = ({
                         timers.current.push({
                             remaining: Number.isFinite(seconds) ? Math.max(0, seconds) : 0,
                             run: () => {
-                                chainPath = new Set([node.id]);
+                                chainPath = new Set<string>();
                                 chainDepth = 0;
                                 fn();
                             },
@@ -459,8 +470,8 @@ export const useLevelBlueprintRuntime = ({
             // Find wire connected to this output
             const connection = blueprint.connections.find(c => c.fromPinId === activePin.id);
             if (connection) {
-                // Recursively call next node
-                executeNode(connection.toNodeId, context, nextPath, depth + 1);
+                // Recursively call next node, on the pin the wire enters (Gate Open, DoOnce Reset, ...)
+                executeNode(connection.toNodeId, context, nextPath, depth + 1, connection.toPinId);
             }
         }
     }, [blueprint, evaluateInput, destroyActor, addNotification, playerApiRef, enemyApiRef, onRestart, onEndLevel, host, services]);

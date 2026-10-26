@@ -90,7 +90,11 @@ class SplatmapAssetStoreTests(unittest.TestCase):
         self.assertEqual([path.name for path in self.store.content.iterdir() if path.is_file()], [])
 
     def test_game_builds_ship_splatmaps_with_their_own_extension(self):
-        self.assertEqual(_MIME_EXTENSIONS[SPLATMAP_MIME], "asp")
+        self.assertEqual(_MIME_EXTENSIONS[SPLATMAP_MIME], "splat")
+        # Web builds go on any static host, so no shipped extension may be one a server executes
+        # (IIS sends *.asp to Classic ASP, and splat weights are arbitrary bytes).
+        executable = {"asp", "aspx", "asa", "ashx", "asmx", "cer", "cgi", "jsp", "php", "phtml", "pl", "py", "shtml"}
+        self.assertEqual(set(_MIME_EXTENSIONS.values()) & executable, set())
 
 
 class SplatmapSchemaTests(unittest.TestCase):
@@ -190,14 +194,38 @@ class SplatmapRepositoryTests(unittest.TestCase):
         with self.assertRaises(InvalidProjectError):
             self.commit(painted_terrain(layers=[{"textureId": "missing", "tiling": 16}]))
 
-    def test_replaced_splatmaps_survive_for_undo(self):
+    def test_replaced_splatmap_is_discarded_once_the_replacement_commits(self):
         first, second = self.upload(255), self.upload(128)
         self.commit(painted_terrain(splatmap_reference(first)))
         self.commit(painted_terrain(splatmap_reference(second)))
-        # Unlike heightfields, an old splat map is kept until close so undo can restore it.
-        self.assertTrue(self.repo.assets.verify(first))
+        # Like a heightfield, a replaced splat map leaves Content, and so every recovery point.
+        self.assertFalse(self.repo.assets.verify(first))
+        self.assertTrue(self.repo.assets.verify(second))
+        self.repo.autosave()
+        [point] = [path for path in (self.repo.path / ".auvra" / "autosaves").iterdir() if path.is_dir()]
+        self.assertFalse((point / "Content" / "sha256" / first).exists())
+        self.assertTrue((point / "Content" / "sha256" / second).exists())
+        # Undo uploads the weights again, under the same content address.
+        self.assertEqual(self.upload(255), first)
         self.commit(painted_terrain(splatmap_reference(first)))
         self.assertEqual(self.repo.get_domain("objects")["documents"][0]["terrainData"]["splatmap"]["assetId"], first)
+        self.assertFalse(self.repo.assets.verify(second))
+
+    def test_shared_and_deleted_splatmaps_are_kept(self):
+        shared, replacement = self.upload(255), self.upload(128)
+
+        def commit(*assets):
+            objects = [terrain_object(painted_terrain(splatmap_reference(asset_id)), object_id)
+                       for object_id, asset_id in assets]
+            self.repo.apply_changes({"objects": objects}, expected_revision=self.repo.revision)
+
+        commit(("terrain", shared), ("copy", shared))
+        # Another terrain still references the replaced splat map.
+        commit(("terrain", replacement), ("copy", shared))
+        self.assertTrue(self.repo.assets.verify(shared))
+        # A deleted terrain keeps its splat map until close (undo can restore it).
+        commit(("terrain", replacement))
+        self.assertTrue(self.repo.assets.verify(shared))
 
 
 if __name__ == "__main__":

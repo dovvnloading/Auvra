@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Languages, Plus, RotateCcw, Save, Search, Star, Trash2, X } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
 import { useNativeProjectDocument } from '../../utils/useNativeProjectDocument';
@@ -21,6 +21,12 @@ const mapTables = (settings: LocalizationSettings, change: (locale: string, tabl
   ...settings,
   locales: Object.fromEntries(Object.entries(settings.locales).map(([locale, table]) => [locale, change(locale, table)])),
 });
+
+/** A locale's own text for key, or ''. Keys such as 'toString' must not reach Object.prototype. */
+const cellText = (settings: LocalizationSettings, locale: string, key: string): string => {
+  const table = settings.locales[locale];
+  return table && Object.prototype.hasOwnProperty.call(table, key) ? table[key] : '';
+};
 
 /** Adds key to every locale as untranslated text so it shows up as a row everywhere. */
 const addKey = (settings: LocalizationSettings, key: string): LocalizationSettings =>
@@ -67,8 +73,28 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  // A hydrate, project switch or successful save replaces the draft with the stored document.
-  useEffect(() => { setDraft(stored); }, [stored]);
+  // JSON of the stored settings the draft was last synced to. The draft is unedited while it matches.
+  const baselineRef = useRef(JSON.stringify(stored));
+
+  // An unedited draft follows the stored document (hydrate, another writer). An edited draft is kept:
+  // a failed save rolls the document back and every revision bump re-hydrates it, and neither may
+  // discard typed text. A content check against the last `stored` would not do, because the
+  // optimistic write makes the draft look clean just before the rollback arrives.
+  useEffect(() => {
+    const next = JSON.stringify(stored);
+    if (next === baselineRef.current) return;
+    setDraft((current) => {
+      if (JSON.stringify(normalizeLocalizationSettings(current)) !== baselineRef.current) return current;
+      baselineRef.current = next;
+      return stored;
+    });
+  }, [stored]);
+
+  // A project switch always discards the draft.
+  useEffect(() => {
+    baselineRef.current = JSON.stringify(stored);
+    setDraft(stored);
+  }, [projectStatus.projectId]);
 
   const locales = useMemo(() => {
     const others = Object.keys(draft.locales).filter((locale) => locale !== draft.defaultLocale).sort((a, b) => a.localeCompare(b));
@@ -79,9 +105,9 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
     const query = filter.trim().toLowerCase();
     if (!query) return keys;
     return keys.filter((key) => key.toLowerCase().includes(query)
-      || locales.some((locale) => (draft.locales[locale]?.[key] ?? '').toLowerCase().includes(query)));
+      || locales.some((locale) => cellText(draft, locale, key).toLowerCase().includes(query)));
   }, [draft, filter, keys, locales]);
-  const missing = useMemo(() => keys.reduce((count, key) => count + locales.filter((locale) => !draft.locales[locale]?.[key]).length, 0), [draft, keys, locales]);
+  const missing = useMemo(() => keys.reduce((count, key) => count + locales.filter((locale) => !cellText(draft, locale, key)).length, 0), [draft, keys, locales]);
 
   const dirty = JSON.stringify(normalizeLocalizationSettings(draft)) !== JSON.stringify(stored);
   const writable = Boolean(projectStatus.projectId) && !projectStatus.readOnly;
@@ -120,6 +146,7 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
     try {
       const settings = normalizeLocalizationSettings(draft);
       await replace({ ...document, id: LOCALIZATION_DOCUMENT_ID, settings });
+      baselineRef.current = JSON.stringify(settings);
       // Editor previews (HUD text keys) read the shared runtime store.
       localization.load(settings);
       setMessage('Localization saved to the project.');
@@ -202,7 +229,7 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
                       <tr key={key} className="border-t border-gray-800">
                         <th scope="row" className="sticky left-0 z-10 bg-gray-900 px-2 py-1.5 text-left align-top font-mono text-[11px] font-normal text-gray-300 break-all">{key}</th>
                         {locales.map((locale) => {
-                          const text = draft.locales[locale]?.[key] ?? '';
+                          const text = cellText(draft, locale, key);
                           const fallback = text ? '' : translate(draft, locale, key);
                           return (
                             <td key={locale} className="px-2 py-1.5 align-top">
@@ -235,7 +262,7 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
           {(message || error) && <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs text-gray-300">{message || error?.message}</div>}
         </div>
         <div className="flex items-center justify-between gap-2 border-t border-gray-800 bg-gray-950 px-5 py-3">
-          <button type="button" disabled={disabled || !dirty} onClick={() => { setMessage(null); setDraft(stored); }} className="flex items-center gap-2 rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-50"><RotateCcw size={13} /> Revert</button>
+          <button type="button" disabled={disabled || !dirty} onClick={() => { setMessage(null); baselineRef.current = JSON.stringify(stored); setDraft(stored); }} className="flex items-center gap-2 rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-50"><RotateCcw size={13} /> Revert</button>
           <div className="flex items-center gap-2">
             <button type="button" onClick={onClose} className="rounded px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-800 hover:text-white">Close</button>
             <button type="button" disabled={disabled || !dirty || !writable} onClick={() => void save()} className="flex items-center gap-2 rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-500 disabled:opacity-50" title={writable ? 'Save localization' : 'Open a writable project to save'}><Save size={13} /> {saving ? 'Saving…' : 'Save'}</button>

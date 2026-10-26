@@ -1,5 +1,5 @@
 import type { Event, Request, Response, Session } from "./generated/protocolV1";
-import { assertRequest, assertResponse, isValidMessage } from "./protocol";
+import { assertRequest, isValidMessage } from "./protocol";
 import type { HostTransport } from "./transport";
 import { frontendDiagnostics, type FrontendDiagnosticSpan } from "../diagnostics/runtime";
 

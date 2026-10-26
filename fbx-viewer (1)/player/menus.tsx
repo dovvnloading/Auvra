@@ -53,15 +53,22 @@ export function resolveMenuAction(
     return handlers[action.kind] ?? null;
 }
 
+/** canRun for findMenuDocument: an action counts only when this screen can run it right now (see resolveMenuAction). */
+export const menuActionRunnable = (handlers: MenuActionHandlers, availableLevels?: { has(levelId: string): boolean }) =>
+    (action: MenuAction): boolean => resolveMenuAction(action, handlers, availableLevels) !== null;
+
 /**
  * Finds an authored menu among the 'hud' domain documents. It is used only when it is
  * well formed and a visible element offers one of `required`, so a missing or
  * half-authored menu can never trap the player; otherwise the built-in menu shows.
+ * Pass `canRun` (menuActionRunnable) so an entry that would render disabled right now, such as
+ * Continue before any save exists or an openLevel to a level left out of the build, does not count.
  */
 export function findMenuDocument(
     documents: readonly unknown[] | null | undefined,
     id: string,
     required: readonly MenuActionKind[],
+    canRun?: (action: MenuAction) => boolean,
 ): HUDDocumentData | null {
     if (!Array.isArray(documents)) return null;
     const candidate = documents.find(document => isRecord(document) && document.id === id);
@@ -69,7 +76,7 @@ export function findMenuDocument(
     const offersRequired = toHUDElements(candidate.elements).some(element => {
         if (!element.isVisible || !COMPONENT_REGISTRY[element.type]) return false;
         const action = parseMenuAction(element.props.action);
-        return action !== null && required.includes(action.kind);
+        return action !== null && required.includes(action.kind) && (canRun?.(action) ?? true);
     });
     return offersRequired ? (candidate as unknown as HUDDocumentData) : null;
 }

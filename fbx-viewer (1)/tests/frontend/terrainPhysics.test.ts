@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import RAPIER from '@dimforge/rapier3d-compat';
 import type { LevelObject } from '../../types';
-import { terrainHeightfieldShape } from '../../runtime/terrainPhysics';
+import { levelNeedsFlatGround, terrainHeightfieldShape, terrainLowestSurface } from '../../runtime/terrainPhysics';
 
 const terrain = (heights: number[], resolution: number, extra: Partial<LevelObject> = {}): LevelObject => ({
   id: 'terrain-1', levelId: 'level-1', modelId: '', name: 'Terrain', type: 'terrain',
@@ -44,13 +44,55 @@ describe('terrain physics', () => {
     world.free();
   });
 
-  it('waits for heights and rejects malformed grids', () => {
-    expect(terrainHeightfieldShape(terrain([], 4))).toBeNull();
-    expect(terrainHeightfieldShape(terrain([0, 0, 0], 4))).toBeNull();
+  it('gives never-sculpted, pending and malformed terrains a flat field, and rejects invalid grids', () => {
+    const flat = (resolution: number) => ({
+      rows: resolution, columns: resolution, heights: new Float32Array((resolution + 1) ** 2), scale: { x: 40, y: 1, z: 20 },
+    });
+    // A new terrain has heights: [], and a saved never-sculpted one has none at all.
+    expect(terrainHeightfieldShape(terrain([], 4))).toEqual(flat(4));
+    expect(terrainHeightfieldShape(terrain(undefined as unknown as number[], 4))).toEqual(flat(4));
+    expect(terrainHeightfieldShape(terrain([0, 0, 0], 4))).toEqual(flat(4));
+    // TerrainObject draws a terrain whose heights are still loading flat too.
     const pending = terrain([], 2, {
-      terrainData: { resolution: 2, width: 10, depth: 10, heights: [], heightfield: { assetId: 'a'.repeat(64), encoding: 'float32le', columns: 3, rows: 3 } },
+      terrainData: { resolution: 2, width: 40, depth: 20, heights: [], heightfield: { assetId: 'a'.repeat(64), encoding: 'float32le', columns: 3, rows: 3 } },
     } as Partial<LevelObject>);
-    expect(terrainHeightfieldShape(pending)).toBeNull();
+    expect(terrainHeightfieldShape(pending)).toEqual(flat(2));
+
+    expect(terrainHeightfieldShape(terrain([], 0))).toBeNull();
+    expect(terrainHeightfieldShape(terrain([], 4, { terrainData: { resolution: 4, width: 0, depth: 20, heights: [] } }))).toBeNull();
+    expect(terrainHeightfieldShape(terrain([], 4, { terrainData: undefined }))).toBeNull();
+  });
+
+  it('holds bodies on an unsculpted terrain at its own height', () => {
+    const shape = terrainHeightfieldShape(terrain([], 4))!;
+    const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+    const body = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(5, 2, -3));
+    world.createCollider(RAPIER.ColliderDesc.heightfield(shape.rows, shape.columns, shape.heights, shape.scale), body);
+    world.step();
+    const hit = world.castRay(new RAPIER.Ray({ x: 8, y: 50, z: -1 }, { x: 0, y: -1, z: 0 }), 100, true);
+    expect(hit).not.toBeNull();
+    const { toi, timeOfImpact } = hit as unknown as { toi?: number; timeOfImpact?: number };
+    expect(50 - (timeOfImpact ?? toi ?? Number.NaN)).toBeCloseTo(2, 3);
+    world.free();
+  });
+
+  it('keeps the flat ground off-terrain unless a terrain reaches below it', () => {
+    expect(levelNeedsFlatGround([])).toBe(true);
+    // Flat at y = 2 (here unsculpted), or hills above y = 0: bodies knocked off the edge land at y = 0, like the player.
+    expect(terrainLowestSurface(terrain([], 4))).toBeCloseTo(2, 6);
+    expect(levelNeedsFlatGround([terrain([], 4)])).toBe(true);
+    expect(levelNeedsFlatGround([terrain(new Array(25).fill(3), 4, { position: [0, 0, 0] })])).toBe(true);
+    // A valley below y = 0 would be covered by the flat ground.
+    const valley = terrain([...new Array(24).fill(0), -1.5], 4, { position: [0, 0.5, 0] });
+    expect(terrainLowestSurface(valley)).toBeCloseTo(-1, 6);
+    expect(levelNeedsFlatGround([terrain([], 4), valley])).toBe(false);
+    // A tilted terrain dips below its origin.
+    const tilted = terrain([], 4, { position: [0, 0, 0], rotation: [0.2, 0, 0] });
+    expect(terrainLowestSurface(tilted)!).toBeLessThan(-1);
+    expect(levelNeedsFlatGround([tilted])).toBe(false);
+    // A terrain with no heightfield (invalid grid) neither gets one nor blocks the flat ground.
+    expect(terrainLowestSurface(terrain([], 0))).toBeNull();
+    expect(levelNeedsFlatGround([terrain([], 0, { position: [0, -10, 0] })])).toBe(true);
   });
 
   it('folds the terrain scale into the heightfield extent', () => {

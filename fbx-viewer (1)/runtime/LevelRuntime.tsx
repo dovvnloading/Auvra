@@ -25,6 +25,7 @@ import { BloodSystem, BloodSystemHandle } from '../components/Sandbox/BloodSyste
 import { applyMeleeHit, resolveBlueprintDamage } from '../components/Sandbox/combat';
 import { GraphRuntimeAPI } from '../components/AnimationGraph/GraphRuntime';
 import { useLevelBlueprintRuntime, UseLevelBlueprintRuntimeProps } from '../hooks/useLevelBlueprintRuntime';
+import { withWorldPose } from '../hooks/levelBlueprintNodes/world';
 import { useRuntimeLevelWorld } from '../hooks/useRuntimeLevelWorld';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { AttachmentData, Blueprint, LevelComponent, LevelObject, LoadedModelData, SocketData } from '../types';
@@ -144,13 +145,49 @@ const SpawnerSystem: React.FC<{
 };
 
 // --- INTERNAL COMPONENT: LOGIC SYSTEM ---
-const LevelLogicSystem: React.FC<UseLevelBlueprintRuntimeProps> = (props) => {
+type ObjectTransformWrite = NonNullable<UseLevelBlueprintRuntimeProps['setObjectTransform']>;
+
+type LevelLogicSystemProps = Omit<UseLevelBlueprintRuntimeProps, 'getObject' | 'setObjectTransform'> & {
+    /** The session copy's actor lookup, parent links included. */
+    getObject: (id: string) => LevelObject | null;
+    setObjectTransform: ObjectTransformWrite;
+};
+
+const LevelLogicSystem: React.FC<LevelLogicSystemProps> = ({ getObject, setObjectTransform, ...props }) => {
     // The session renders inside PhysicsWorld, so Raycast and Apply Impulse nodes reach the level's bodies.
     const physics = usePhysicsQueries();
     const applyImpulse = useCallback((id: string, [x, y, z]: [number, number, number]) => {
         physics.applyImpulse(id, { x, y, z });
     }, [physics]);
-    useLevelBlueprintRuntime({ raycast: physics.raycast, applyImpulse, ...props });
+
+    // A dynamic rigid body moves its actor without writing the session copy, so actor reads take the simulated
+    // pose. A position or rotation a script wrote in this frame or the previous one still wins: the body is only
+    // moved there on the physics step after the write's commit, and later nodes in the chain must see the write.
+    const frame = useRef(0);
+    useFrame(() => { frame.current += 1; });
+    const writes = useRef(new Map<string, { position?: number; rotation?: number }>());
+    const getLiveObject = useCallback((id: string): LevelObject | null => {
+        const object = getObject(id);
+        const pose = object ? physics.getBodyPose?.(id) : null;
+        if (!object || !pose) return object;
+        const live = withWorldPose(object, pose, getObject);
+        const write = writes.current.get(id);
+        const fresh = (writtenAt: number | undefined) => writtenAt !== undefined && frame.current - writtenAt <= 1;
+        return {
+            ...live,
+            position: fresh(write?.position) ? object.position : live.position,
+            rotation: fresh(write?.rotation) ? object.rotation : live.rotation
+        };
+    }, [getObject, physics]);
+    const setLiveObjectTransform = useCallback<ObjectTransformWrite>((id, partial) => {
+        const write = writes.current.get(id) ?? {};
+        if (partial.position) write.position = frame.current;
+        if (partial.rotation) write.rotation = frame.current;
+        writes.current.set(id, write);
+        setObjectTransform(id, partial);
+    }, [setObjectTransform]);
+
+    useLevelBlueprintRuntime({ raycast: physics.raycast, applyImpulse, ...props, getObject: getLiveObject, setObjectTransform: setLiveObjectTransform });
     return null;
 };
 
@@ -171,6 +208,8 @@ const CameraSettings: React.FC<{ fov: number }> = ({ fov }) => {
 interface LevelRenderPlan {
     /** Every object with its world transform (and no parent), for systems that read positions as world space. */
     worldObjects: LevelObject[];
+    /** World-space objects the player's footprint push-out may use: none under a moving or physics parent. */
+    playerObstacles: LevelObject[];
     /** Roots of the objects drawn as their own transform groups; nested groups are listed in groupChildren. */
     groupRoots: LevelObject[];
     groupChildren: Map<string, LevelObject[]>;
@@ -233,6 +272,7 @@ const planLevelRender = (objects: LevelObject[]): LevelRenderPlan => {
     const treeParent = new Map<string, string | null>();
     const parents = new Set<string>();
     const dynamic = new Set<string>();
+    const underBody = new Set<string>();
     const visit = (root: LevelObject) => {
         const stack: [LevelObject, string | null][] = [[root, null]];
         while (stack.length) {
@@ -245,6 +285,8 @@ const planLevelRender = (objects: LevelObject[]): LevelRenderPlan => {
             }
             worldMatrices.set(obj.id, world);
             treeParent.set(obj.id, parentId);
+            if (parentId && (underBody.has(parentId) || (index.get(parentId)?.components ?? [])
+                .some(c => c.enabled !== false && ['collider', 'rigidBody', 'mover', 'rotator'].includes(c.type)))) underBody.add(obj.id);
             if (mountedComponents(obj).length || (parentId && dynamic.has(parentId))) dynamic.add(obj.id);
             const children = childMap.get(obj.id);
             if (children) for (let i = children.length - 1; i >= 0; i--) stack.push([children[i], obj.id]);
@@ -258,7 +300,8 @@ const planLevelRender = (objects: LevelObject[]): LevelRenderPlan => {
         ? objects.map(obj => (treeParent.get(obj.id) ? toWorldObject(obj, worldMatrices.get(obj.id)!) : obj))
         : objects;
 
-    const plan: LevelRenderPlan = { worldObjects, groupRoots: [], groupChildren: new Map(), instancedFoliage: [], instancedProps: [], terrains: [] };
+    const playerObstacles = underBody.size ? worldObjects.filter((_, i) => !underBody.has(objects[i].id)) : worldObjects;
+    const plan: LevelRenderPlan = { worldObjects, playerObstacles, groupRoots: [], groupChildren: new Map(), instancedFoliage: [], instancedProps: [], terrains: [] };
     objects.forEach((obj, i) => {
         const worldObject = worldObjects[i];
         if (obj.type === 'terrain') plan.terrains.push(worldObject);
@@ -375,32 +418,14 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
     }, [level.objects, sessionRestore]);
 
     // Play runs on a session copy of the level; the authored objects are never changed by gameplay.
+    // Its getObject reads writes made earlier in the same frame, so one script chain can spawn, move and read an actor.
     const {
-        objects: sessionLevelObjects,
-        destroyObject: destroySessionObject,
-        setObjectTransform: setSessionObjectTransform
+        objects: runtimeLevelObjects,
+        getObject: getRuntimeObject,
+        destroyObject: destroyRuntimeObject,
+        setObjectTransform: setRuntimeObjectTransform,
+        spawnObjects: spawnRuntimeObjects
     } = useRuntimeLevelWorld(authoredObjects);
-
-    // Prefabs spawned during play join the session copy only; they are never written to the project.
-    const [spawnedObjects, setSpawnedObjects] = useState<LevelObject[]>([]);
-    const runtimeLevelObjects = useMemo(
-        () => (spawnedObjects.length ? [...sessionLevelObjects, ...spawnedObjects] : sessionLevelObjects),
-        [sessionLevelObjects, spawnedObjects]
-    );
-    const destroyRuntimeObject = useCallback((id: string) => {
-        destroySessionObject(id);
-        setSpawnedObjects(prev => (prev.some(obj => obj.id === id) ? prev.filter(obj => obj.id !== id) : prev));
-    }, [destroySessionObject]);
-    const getRuntimeObject = useCallback(
-        (id: string) => runtimeLevelObjects.find(obj => obj.id === id) ?? null,
-        [runtimeLevelObjects]
-    );
-    const setRuntimeObjectTransform = useCallback((id: string, partial: Partial<Pick<LevelObject, 'position' | 'rotation' | 'scale'>>) => {
-        setSessionObjectTransform(id, partial);
-        setSpawnedObjects(prev => (prev.some(obj => obj.id === id)
-            ? prev.map(obj => (obj.id === id ? { ...obj, ...partial } : obj))
-            : prev));
-    }, [setSessionObjectTransform]);
 
     // Prefab documents come with the game content (the project or game pack 'prefabs' domain).
     const prefabs = content.prefabs;
@@ -416,14 +441,15 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
             return [];
         }
         try {
+            // Spawned prefabs join the session copy only; they are never written to the project.
             const objects = instantiatePrefab(prefab, level.id, toSpawnPoint(position));
-            setSpawnedObjects(prev => [...prev, ...objects]);
+            spawnRuntimeObjects(objects);
             return objects.map(obj => obj.id);
         } catch (e) {
             frontendDiagnostics.failure('runtime_prefab_spawn_failed', e);
             return [];
         }
-    }, [host, level.id, prefabs]);
+    }, [host, level.id, prefabs, spawnRuntimeObjects]);
 
     // --- References & State ---
     const playerApiRef = useRef<GraphRuntimeAPI | undefined>(undefined);
@@ -527,7 +553,13 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
     const renderPlan = useMemo(() => planLevelRender(runtimeLevelObjects), [runtimeLevelObjects]);
     const worldLevelObjects = renderPlan.worldObjects;
     // Enemies path around the level's static colliders; the hierarchy stays intact so moving parents are detected.
-    const navGrid = useNavGrid(runtimeLevelObjects);
+    // Mesh colliders and auto hulls bake from the model's real bounds; memoized, since a new function re-bakes the grid.
+    const navShapeBounds = useCallback((object: LevelObject) => {
+        const model = models.find(m => m.id === object.modelId);
+        return model ? new THREE.Box3().setFromObject(model.object) : null;
+    }, [models]);
+    const navOptions = useMemo(() => ({ shapeBounds: navShapeBounds }), [navShapeBounds]);
+    const navGrid = useNavGrid(runtimeLevelObjects, navOptions);
 
     if (!runtimePlayerModel) return null;
 
@@ -619,7 +651,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                 projectileManager={projectileManagerRef}
                 modelObject={runtimePlayerModel.object}
                 enabled={controlsEnabled}
-                levelObjects={worldLevelObjects}
+                levelObjects={renderPlan.playerObstacles}
                 onStaminaChange={handleStaminaChange}
                 onAimChange={handleAimChange}
                 weaponSounds={weaponSoundUrls}

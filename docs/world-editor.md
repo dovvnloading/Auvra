@@ -83,7 +83,7 @@ A Collider on its own makes the object solid, fixed scenery. Sizes and the offse
 | Gravity Scale | 1 | -10 to 10; 0 makes the body float |
 | Lock Rotation | Off | Stops the body from tipping over |
 
-A Rigid Body uses the object's Collider components. Without one, it gets a convex hull wrapped around the model. The model and the object's children move with the body. Each object has one body; a child with its own physics components gets its own.
+A Rigid Body uses the object's Collider components. Without one, it gets a convex hull wrapped around the model. The model and the object's children move with the body. Each object has one body. A child with only Collider components under a dynamic or kinematic Rigid Body adds its colliders to that body; a child with its own Rigid Body (or under a fixed one) gets its own.
 
 ### The player and terrain
 

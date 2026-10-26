@@ -5,6 +5,35 @@ import * as THREE from 'three';
 import { AnimationGraphData } from '../../../types';
 import { blendWeights2D, clampAnimationDelta, DEFAULT_BLEND_SECONDS, stepWeight } from '../utils/blending';
 
+/**
+ * Steps every action's weight linearly toward its target, then rescales the results so they add
+ * up to the targets' total. Stepping each weight on its own lets the sum drop below 1 when several
+ * clips fade out at once (an interrupted crossfade, or a Blend2D whose weights shift unevenly), and
+ * three's PropertyMixer fills that shortfall with the bind pose. A state with no clips (target
+ * total 0) is not rescaled, so it still fades out to rest.
+ */
+export const stepActionWeights = (
+    current: Record<string, number>,
+    targets: Record<string, number>,
+    delta: number,
+    blend: number
+): Record<string, number> => {
+    const next: Record<string, number> = {};
+    let total = 0;
+    let targetTotal = 0;
+    Object.keys(current).forEach((name) => {
+        const target = targets[name] || 0;
+        next[name] = stepWeight(current[name], target, delta, blend);
+        total += next[name];
+        targetTotal += target;
+    });
+    if (targetTotal > 0 && total > 1e-6) {
+        const scale = targetTotal / total;
+        Object.keys(next).forEach((name) => { next[name] *= scale; });
+    }
+    return next;
+};
+
 export const useGraphAnimator = (
     mixer: THREE.AnimationMixer | null,
     actionsMap: Record<string, THREE.AnimationAction>,
@@ -110,13 +139,18 @@ export const useGraphAnimator = (
         }
 
         // 3. Apply Weights & Update Mixer
+        // Linear crossfade over the transition's duration, independent of frame rate, with the
+        // weights kept summing to 1 so the bind pose never bleeds through.
+        const currentWeights: Record<string, number> = {};
+        Object.keys(actionsMap).forEach((name) => {
+            currentWeights[name] = actionsMap[name].getEffectiveWeight();
+        });
+        const nextWeights = stepActionWeights(currentWeights, targetWeights, delta, blend);
+
         Object.keys(actionsMap).forEach((name) => {
             const action = actionsMap[name];
             const target = targetWeights[name] || 0;
-            const current = action.getEffectiveWeight();
-            
-            // Linear crossfade over the transition's duration, independent of frame rate.
-            const next = stepWeight(current, target, delta, blend);
+            const next = nextWeights[name];
             action.setEffectiveWeight(next);
             
             // Optimization & Playback Management

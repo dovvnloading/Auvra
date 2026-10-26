@@ -7,7 +7,10 @@ import { DynamicHUDComponent } from './DynamicHUDComponent';
 import { HUDComponentDefinition } from './types';
 import { useTranslation, type TranslationParams } from '../../runtime/localization';
 
-/** A string-table key wins over the literal text when it is set. */
+/**
+ * A string-table key wins over the literal text when it is set, including a literal the player
+ * fills from a binding. The HUD editor warns when an element has both.
+ */
 const useLocalizedText = (literal: unknown, key: unknown, params?: TranslationParams): string => {
     const t = useTranslation();
     if (typeof key === 'string' && key.trim()) return t(key.trim(), params);

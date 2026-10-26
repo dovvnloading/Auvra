@@ -1,5 +1,5 @@
 
-import { AssetCategory, AssetInfoUpdate, AttachmentData, Blueprint, SocketData, TextureData, LevelObject, LevelData, AudioData, TerrainData, PrefabData } from '../types';
+import { AssetCategory, AssetInfoUpdate, Blueprint, SocketData, LevelObject, LevelData, TerrainData, PrefabData } from '../types';
 import { AssetTransferOptions, projectService } from './projectService';
 import { externalizeTerrainData } from './terrainHeightfieldEditor';
 import { externalizeTerrainSplat } from '../components/Environment/Terrain/terrainSplatEditor';

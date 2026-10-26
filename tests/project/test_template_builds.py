@@ -331,7 +331,7 @@ class TemplateBuildTests(unittest.TestCase):
             splatmap = terrain.get("splatmap")
             if isinstance(splatmap, Mapping):
                 path = destination / "game" / "assets" / shipped[splatmap["assetId"]]["file"]
-                self.assertEqual(path.suffix, ".asp")
+                self.assertEqual(path.suffix, ".splat")
                 validate_splatmap_file(path)
                 self.assertEqual(path.stat().st_size, 16 + 4 * samples * samples, item["id"])
                 splatmaps += 1
@@ -411,7 +411,7 @@ class TemplateBuildTests(unittest.TestCase):
         heights = [float(column - row) / 4.0 for row in range(samples) for column in range(samples)]
         heightfield_id = upload(encode_heightfield(heights, samples, samples), "application/vnd.auvra.heightfield",
                                 "terrain.ahf")
-        splatmap_id = upload(splatmap_bytes(samples), "application/vnd.auvra.splatmap", "terrain.asp")
+        splatmap_id = upload(splatmap_bytes(samples), "application/vnd.auvra.splatmap", "terrain.splat")
         texture_id = upload(png_bytes(), "image/png", "grass.png")
         audio_id = upload(wav_bytes(), "audio/wav", "theme.wav")
 

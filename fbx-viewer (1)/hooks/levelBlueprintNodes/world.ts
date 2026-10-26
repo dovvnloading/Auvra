@@ -41,6 +41,43 @@ export type Vec3 = [number, number, number];
 
 export type WorldObjectTransform = Pick<LevelObject, 'id' | 'position' | 'rotation' | 'scale'>;
 
+/** A live world-space pose, such as a simulated rigid body's; rotation is Euler XYZ radians. */
+export interface WorldPose {
+    position: Vec3;
+    rotation: Vec3;
+}
+
+type ActorTransform = WorldObjectTransform & Partial<Pick<LevelObject, 'parentId'>>;
+
+const composeMatrix = (position: Vec3, rotation: Vec3, scale: Vec3): THREE.Matrix4 => new THREE.Matrix4().compose(
+    new THREE.Vector3(...position),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(...rotation)),
+    new THREE.Vector3(...scale),
+);
+
+/**
+ * `object` with the position and rotation of a world-space `pose`, in the actor's own space: local
+ * to its parent, unchanged for a root actor. Parents come from `getObject`; a missing parent or a
+ * parent cycle ends the walk. The scale stays the object's own (a pose carries none).
+ */
+export const withWorldPose = <T extends ActorTransform>(object: T, pose: WorldPose, getObject: (id: string) => ActorTransform | null | undefined): T => {
+    const parentWorld = new THREE.Matrix4();
+    const seen = new Set([object.id]);
+    for (let parent = object.parentId ? getObject(object.parentId) : null; parent && !seen.has(parent.id); parent = parent.parentId ? getObject(parent.parentId) : null) {
+        seen.add(parent.id);
+        parentWorld.premultiply(composeMatrix(parent.position, parent.rotation, parent.scale));
+    }
+    if (seen.size === 1) {
+        return { ...object, position: [...pose.position] as Vec3, rotation: [...pose.rotation] as Vec3 };
+    }
+    const local = composeMatrix(pose.position, pose.rotation, [1, 1, 1]).premultiply(parentWorld.invert());
+    const position = new THREE.Vector3();
+    const quaternion = new THREE.Quaternion();
+    local.decompose(position, quaternion, new THREE.Vector3());
+    const rotation = new THREE.Euler().setFromQuaternion(quaternion);
+    return { ...object, position: position.toArray() as Vec3, rotation: [rotation.x, rotation.y, rotation.z] };
+};
+
 /** Mirrors usePhysicsQueries().raycast, so play mode can pass it straight through. */
 export interface WorldRaycastHit {
     objectId: string | null;
@@ -57,7 +94,8 @@ export interface WorldNodeServices {
     setObjectTransform(id: string, partial: Partial<Pick<LevelObject, 'position' | 'rotation' | 'scale'>>): void;
     applyImpulse(id: string, impulse: Vec3): void;
     raycast(origin: THREE.Vector3, direction: THREE.Vector3, maxDistance: number): WorldRaycastHit | null;
-    input: Pick<InputState, 'isDown'>;
+    /** wasPressed (optional) reports a tap pressed and released between two runs, which isDown misses. */
+    input: Pick<InputState, 'isDown'> & Partial<Pick<InputState, 'wasPressed'>>;
     vars: Pick<LevelVariablesStore, 'get' | 'set'>;
     /** Shows a Print node's message (play mode: a notification). */
     print(message: string): void;
@@ -394,10 +432,11 @@ const runSetLevelVariable: WorldNodeExecutor = (_node, ctx) => {
 };
 
 // Edges are measured against this node's previous run, not the input frame, so the node works
-// however often its chain runs and never fires twice for one press.
+// however often its chain runs and never fires twice for one press. A tap released before the
+// next run still counts as down for the frame that reports it (wasPressed), so it is not lost.
 const runInputActionPressed: WorldNodeExecutor = (_node, ctx) => {
     const action = toText(ctx.evaluate('Action'));
-    const down = action ? ctx.services.input.isDown(action) : false;
+    const down = action ? ctx.services.input.isDown(action) || ctx.services.input.wasPressed?.(action) === true : false;
     const wasDown = ctx.nodeState.wasDown === true;
     ctx.nodeState.wasDown = down;
     const outputs = { 'Is Down': down };
