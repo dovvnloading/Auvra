@@ -18,6 +18,18 @@ MIN_WINDOWS_BUILD = 26100
 CHANNEL_IDENTITIES = {"stable": "Auvra", "beta": "Auvra.Beta", "dev": "Auvra.Dev"}
 FORBIDDEN = (".git", ".auvra-local", "agents.md", "node_modules", ".venv", "__pycache__", ".pytest_cache", ".pfx", ".pem", ".key", ".env")
 MSIX_CONTAINER_METADATA = {"AppxBlockMap.xml"}
+# ``Auvra/host/validation.py`` and ``Auvra/project/schemas.py`` resolve their
+# schemas from ``parents[2]`` of their own file.  In a package that is the
+# ``host`` tree, so both schema directories are staged next to ``host/Auvra``.
+# The project names must equal ``DOMAIN_NAMES`` plus the descriptor schema.
+PROTOCOL_SCHEMA = "host/protocol/v1/auvra-host.schema.json"
+PROJECT_SCHEMA_DIR = "host/project/v1"
+PROJECT_SCHEMA_NAMES = (
+    "metadata", "worlds", "scenes", "levels", "objects", "environment",
+    "models", "animations", "attachments", "sockets", "textures", "audio",
+    "materials", "blueprints", "graphs", "hud", "project",
+)
+HOST_SCHEMA_FILES = (PROTOCOL_SCHEMA, *(f"{PROJECT_SCHEMA_DIR}/{name}.schema.json" for name in PROJECT_SCHEMA_NAMES))
 
 
 class RuntimeVerificationError(RuntimeError):
@@ -86,6 +98,7 @@ def verify_installed_package(package_root: Path | str) -> dict[str, Any]:
     required_files = (
         "AppxManifest.xml", "sbom.json", "frontend/index.html", "native/auvra-native.exe",
         "runtime/python/pythonw.exe", "runtime/python/python314._pth", "host/auvra_startup.py", "host/auvra_release_verify.py",
+        *HOST_SCHEMA_FILES,
     )
     required_dirs = ("runtime/webview2-sdk", "runtime/webview2")
     for relative in required_dirs:
@@ -96,3 +109,37 @@ def verify_installed_package(package_root: Path | str) -> dict[str, Any]:
         if not target.is_file():
             raise RuntimeVerificationError(f"required package file is missing: {relative}")
     return manifest
+
+
+def verify_packaged_schemas(package_root: Path | str) -> dict[str, Any]:
+    """Compile the host protocol and project schemas as the packaged host does.
+
+    The packaged interpreter imports ``Auvra`` from ``host``; this proves that
+    the shipped modules resolve their schema files inside that tree (never a
+    developer checkout) and that every shipped schema loads and compiles.
+    """
+    import importlib
+
+    root = Path(package_root).resolve()
+    try:
+        validation = importlib.import_module("Auvra.host.validation")
+        schemas = importlib.import_module("Auvra.project.schemas")
+    except Exception as exc:
+        raise RuntimeVerificationError(f"packaged schema modules could not be imported: {type(exc).__name__}") from exc
+    if Path(validation.SCHEMA_PATH).resolve() != root / PROTOCOL_SCHEMA:
+        raise RuntimeVerificationError("packaged protocol schema does not resolve inside the package host tree")
+    if Path(schemas.SCHEMA_DIR).resolve() != root / PROJECT_SCHEMA_DIR:
+        raise RuntimeVerificationError("packaged project schemas do not resolve inside the package host tree")
+    names = (*schemas.DOMAIN_NAMES, schemas.PROJECT_SCHEMA_NAME)
+    if sorted(names) != sorted(PROJECT_SCHEMA_NAMES):
+        raise RuntimeVerificationError("packaged project schema list does not match the release contract")
+    try:
+        validation._validator()
+    except Exception as exc:
+        raise RuntimeVerificationError(f"packaged protocol schema could not be loaded: {type(exc).__name__}") from exc
+    for name in names:
+        try:
+            schemas.validator_for(name)
+        except Exception as exc:
+            raise RuntimeVerificationError(f"packaged project schema could not be loaded: {name}") from exc
+    return {"protocolSchema": PROTOCOL_SCHEMA, "projectSchemas": len(names)}
