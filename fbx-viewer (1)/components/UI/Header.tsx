@@ -1,7 +1,9 @@
 
 import React, { useState } from 'react';
-import { Brush, Grid, Network, FileCode, Gamepad2, Download, Upload, LayoutTemplate, Trees, FilePlus, X, Save, FolderOpen, Settings2, SlidersHorizontal, Hammer, Languages } from 'lucide-react';
+import { Brush, Grid, Network, FileCode, Gamepad2, Download, Upload, LayoutTemplate, Trees, X, Save, FolderOpen, Settings2, SlidersHorizontal, Hammer, Languages } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
+import type { ProjectTemplate } from '../../types';
+import { NewProjectMenu } from './NewProjectMenu';
 import { SettingsModal } from '../Settings/SettingsModal';
 import { GameSettingsPanel } from '../Settings/GameSettingsPanel';
 import { LocalizationPanel } from '../Settings/LocalizationPanel';
@@ -13,7 +15,6 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
   const { saveProject, saveProjectAs, exportProject, buildGame, importProject, importLegacyProject, migrateLegacyBrowserProject, loadProject, openRecentProject, recoverProject, createNewProject, closeProject, isLoading, projectStatus } = useScene();
-  const [resetConfirm, setResetConfirm] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [gameSettingsOpen, setGameSettingsOpen] = useState(false);
   const [localizationOpen, setLocalizationOpen] = useState(false);
@@ -26,15 +27,10 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
       void action().catch(() => undefined);
   };
 
-  const handleNewProject = () => {
-      if (resetConfirm) {
-          runProjectAction(() => createNewProject());
-          setResetConfirm(false);
-      } else {
-          setResetConfirm(true);
-          // Auto-reset state after 3s to prevent accidental clicks later
-          setTimeout(() => setResetConfirm(false), 3000);
-      }
+  // Opening the menu and choosing a template are two deliberate steps, which
+  // replaces the old click-twice confirmation for a new project.
+  const handleNewProject = (template: ProjectTemplate) => {
+      runProjectAction(() => createNewProject(template));
   };
 
   return (
@@ -118,27 +114,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
            </div>}
            {/* Project Controls */}
            <div className="flex items-center bg-gray-900 p-0.5 rounded-lg border border-gray-800 mr-2">
-               <button 
-                 onClick={handleNewProject}
-                 className={`
-                    flex items-center gap-2 px-3 py-1 text-xs font-bold rounded transition-all duration-200
-                    ${resetConfirm 
-                        ? 'bg-red-600 text-white hover:bg-red-500 animate-pulse ring-2 ring-red-900' 
-                        : 'text-gray-400 hover:text-red-400 hover:bg-gray-800'
-                    }
-                 `}
-                 title={resetConfirm ? "Click again to create a new project" : "Create a new project"}
-               >
-                   <FilePlus size={12} /> {resetConfirm ? "Confirm New?" : "New"}
-               </button>
-               <button
-                 onClick={() => runProjectAction(() => createNewProject('starter'))}
-                 disabled={isLoading}
-                 className="flex items-center gap-2 px-2 py-1 text-xs font-bold text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50"
-                 title="Create a new project from the starter template: a playable level with terrain, sky, player and props"
-               >
-                   Starter
-               </button>
+               <NewProjectMenu onCreate={handleNewProject} disabled={isLoading} unsavedChanges={Boolean(projectStatus.projectId && projectStatus.dirty)} />
                <div className="w-px h-3 bg-gray-800 mx-1"></div>
                <button 
                  onClick={() => runProjectAction(saveProject)}

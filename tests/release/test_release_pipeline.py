@@ -30,6 +30,12 @@ from release.windows_lifecycle import WINDOWS_LIFECYCLE_SCRIPT, run_windows_life
 REPOSITORY = Path(__file__).parents[2]
 
 
+def _notices(title: str, component: str) -> bytes:
+    """A minimal staged notices file in the release.notices entry format."""
+    rule = "=" * 78
+    return f"{title}\n\n{rule}\n{component}\n{rule}\n\nPermission is hereby granted, free of charge.\n".encode("utf-8")
+
+
 class ReleasePipelineTests(unittest.TestCase):
     @staticmethod
     def _powershell() -> str | None:
@@ -111,6 +117,14 @@ class ReleasePipelineTests(unittest.TestCase):
             "webview2-fixed/Auvra.runtime-pin.json": b'{"schema":1,"kind":"webview2Fixed","version":"151.0.4129.107","sha256":"f1e1c2c9b34c79ba4d88df77fb79a05441e1bd7481d6a985d76dd377cda45f33"}',
             "native/auvra-native.exe": b"native",
             "game-player/auvra-player.exe": b"player",
+            # Third-party notices: Vite emits the frontend file, stage_inputs.ps1
+            # writes the Rust crate files, and Python notices come from dist-info.
+            "frontend/THIRD_PARTY_NOTICES.txt": _notices("Third-party software notices", "react@18.2.0 (MIT)"),
+            "native/THIRD_PARTY_NOTICES.txt": _notices("Native engine crates", "wgpu@30.0.1 (MIT OR Apache-2.0)"),
+            "game-player/THIRD_PARTY_NOTICES.txt": _notices("Game player crates", "wry@0.57.1 (Apache-2.0 OR MIT)"),
+            "python-site-packages/example_package-1.0.0.dist-info/METADATA":
+                b"Metadata-Version: 2.4\nName: example-package\nVersion: 1.0.0\nLicense-Expression: MIT\nLicense-File: LICENSE\n",
+            "python-site-packages/example_package-1.0.0.dist-info/licenses/LICENSE": b"MIT License\n\nCopyright (c) Example\n",
             "host/Auvra/__init__.py": b"",
             "host/Auvra/launcher/__init__.py": b"",
             "host/Auvra/launcher/cli.py": b"def main(argv=None): return 0\n",

@@ -2,7 +2,7 @@
 import React, { useRef, useCallback, useEffect, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { LevelBlueprintData, LevelObject, LogicNode } from '../types';
+import { LevelBlueprintData, LevelObject, LogicNode, LogicPin } from '../types';
 import { SandboxEntityHandle } from '../components/Sandbox/SandboxEntity';
 import { GraphRuntimeAPI } from '../components/AnimationGraph/GraphRuntime';
 import { isOverlapEvent, overlapEventTargets } from '../components/LevelBlueprint/overlapTargets';
@@ -172,6 +172,9 @@ export const useLevelBlueprintRuntime = ({
      * @returns The evaluated value (number, boolean, string, etc.) or null.
      */
     const evaluateInput = useCallback((nodeId: string, inputPinId: string): any => {
+        // Editor-made nodes start with an Exec pin, so data pins are found by name, then by data-pin order.
+        const dataPin = (pins: LogicPin[], name: string, index: number): LogicPin | undefined =>
+            pins.find(p => p.name === name) ?? pins.filter(p => p.dataType !== 'Exec')[index];
         const evaluate = (currentNodeId: string, currentInputPinId: string, path: Set<string>, depth: number): any => {
         if (depth >= MAX_BLUEPRINT_EVALUATION_DEPTH) return null;
         const pathKey = `${currentNodeId}:${currentInputPinId}`;
@@ -216,7 +219,8 @@ export const useLevelBlueprintRuntime = ({
             }
 
             case 'ToString': {
-                const val = evaluate(sourceNode.id, sourceNode.inputs[0].id, nextPath, depth + 1);
+                const pin = dataPin(sourceNode.inputs, 'Value', 0);
+                const val = pin ? evaluate(sourceNode.id, pin.id, nextPath, depth + 1) : undefined;
                 return val !== null && val !== undefined ? String(val) : '';
             }
 
@@ -233,33 +237,21 @@ export const useLevelBlueprintRuntime = ({
             }
 
             // --- MATH OPERATIONS ---
-            case 'Add': {
-                const a = Number(evaluate(sourceNode.id, sourceNode.inputs[0].id, nextPath, depth + 1) ?? 0);
-                const b = Number(evaluate(sourceNode.id, sourceNode.inputs[1].id, nextPath, depth + 1) ?? 0);
-                // Check if outputs expect Int to determine rounding, or rely on JS floats
-                const isInt = sourceNode.outputs[0].dataType === 'Integer';
-                const result = a + b;
-                return isInt ? Math.floor(result) : result;
-            }
-            case 'Subtract': {
-                const a = Number(evaluate(sourceNode.id, sourceNode.inputs[0].id, nextPath, depth + 1) ?? 0);
-                const b = Number(evaluate(sourceNode.id, sourceNode.inputs[1].id, nextPath, depth + 1) ?? 0);
-                const isInt = sourceNode.outputs[0].dataType === 'Integer';
-                const result = a - b;
-                return isInt ? Math.floor(result) : result;
-            }
-            case 'Multiply': {
-                const a = Number(evaluate(sourceNode.id, sourceNode.inputs[0].id, nextPath, depth + 1) ?? 0);
-                const b = Number(evaluate(sourceNode.id, sourceNode.inputs[1].id, nextPath, depth + 1) ?? 0);
-                const isInt = sourceNode.outputs[0].dataType === 'Integer';
-                const result = a * b;
-                return isInt ? Math.floor(result) : result;
-            }
+            case 'Add':
+            case 'Subtract':
+            case 'Multiply':
             case 'Divide': {
-                const a = Number(evaluate(sourceNode.id, sourceNode.inputs[0].id, nextPath, depth + 1) ?? 0);
-                const b = Number(evaluate(sourceNode.id, sourceNode.inputs[1].id, nextPath, depth + 1) ?? 0);
-                const isInt = sourceNode.outputs[0].dataType === 'Integer';
-                const result = b !== 0 ? a / b : 0;
+                const pinA = dataPin(sourceNode.inputs, 'A', 0);
+                const pinB = dataPin(sourceNode.inputs, 'B', 1);
+                const a = Number((pinA ? evaluate(sourceNode.id, pinA.id, nextPath, depth + 1) : 0) ?? 0);
+                const b = Number((pinB ? evaluate(sourceNode.id, pinB.id, nextPath, depth + 1) : 0) ?? 0);
+                // An Integer result pin rounds down; Float keeps JS floats.
+                const isInt = dataPin(sourceNode.outputs, 'Result', 0)?.dataType === 'Integer';
+                let result: number;
+                if (sourceNode.type === 'Add') result = a + b;
+                else if (sourceNode.type === 'Subtract') result = a - b;
+                else if (sourceNode.type === 'Multiply') result = a * b;
+                else result = b !== 0 ? a / b : 0;
                 return isInt ? Math.floor(result) : result;
             }
 

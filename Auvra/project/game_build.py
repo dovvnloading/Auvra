@@ -25,6 +25,10 @@ from .schemas import DOMAIN_NAMES, SCHEMA_VERSION
 from .serialization import canonical_json
 
 TEMPLATE_MANIFEST = "player-template.json"
+# The player template ships the web player's npm notices under this name; the
+# release package stages the Windows player's Rust crate notices beside
+# auvra-player.exe under the same name (release/notices.py).
+NOTICES_FILE = "THIRD_PARTY_NOTICES.txt"
 BUILD_MARKER = "auvra-build.json"
 BUILD_KIND = "auvra-game-build"
 BUILD_SCHEMA = 1
@@ -108,7 +112,9 @@ def build_game(
     and MIME type of one referenced asset id.  ``destination`` is only ever
     replaced when it is absent or already holds a marked Auvra build.
     A ``windows`` build also needs ``player_executable`` (auvra-player.exe), which
-    is copied in as ``<Game Name>.exe`` next to the web files it serves.
+    is copied in as ``<Game Name>.exe`` next to the web files it serves.  The
+    player's Rust crate notices (``THIRD_PARTY_NOTICES.txt`` beside the exe)
+    are appended to the build's ``THIRD_PARTY_NOTICES.txt``.
     """
 
     if target not in BUILD_TARGETS:
@@ -125,6 +131,7 @@ def build_game(
 
     _require_replaceable(destination)
     executable: bytes | None = None
+    player_notices: bytes | None = None
     if target == "windows":
         if player_executable is None or not Path(player_executable).is_file():
             raise GameBuildError(
@@ -135,10 +142,16 @@ def build_game(
             executable = Path(player_executable).read_bytes()
         except OSError as error:
             raise _filesystem_error(error, "could not read the Windows game player") from error
+        player_notices = _read_player_notices(Path(player_executable))
     template = _read_template(template_root)
     content = _prepare_domains(domains)
     settings, levels = _resolve_settings(content)
     warnings: list[str] = []
+    if executable is not None and player_notices is None:
+        warnings.append(
+            "the Windows game player's third-party notices were not found beside auvra-player.exe; "
+            f"the build's {NOTICES_FILE} covers only the web player"
+        )
     blueprint_id = settings.get("playerBlueprintId")
     if blueprint_id and blueprint_id not in {item["id"] for item in content["blueprints"]}:
         warnings.append(f"player blueprint {blueprint_id} does not exist; the default player is used")
@@ -186,6 +199,8 @@ def build_game(
         _write(staging, "game/game.json", canonical_json(manifest).encode("utf-8"), records)
         if executable is not None:
             _write(staging, f"{_executable_name(settings['name'])}.exe", executable, records)
+        if player_notices is not None:
+            _append_notices(staging, player_notices, records)
         records.sort(key=lambda item: item["path"])
         marker = {
             "schema": BUILD_SCHEMA,
@@ -322,6 +337,30 @@ def _write(staging: Path, relative: str, data: bytes, records: list[dict[str, An
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(data)
     records.append({"path": relative, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+
+
+def _read_player_notices(player_executable: Path) -> bytes | None:
+    """The player's crate notices staged beside it, or None when absent (dev builds)."""
+
+    path = player_executable.with_name(NOTICES_FILE)
+    if not path.is_file():
+        return None
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        raise _filesystem_error(error, "could not read the Windows game player's notices") from error
+    return data if data.strip() else None
+
+
+def _append_notices(staging: Path, notices: bytes, records: list[dict[str, Any]]) -> None:
+    """Append ``notices`` to the template's notices file (or create it) and re-record it."""
+
+    existing = next((item for item in records if item["path"] == NOTICES_FILE), None)
+    combined = notices.strip() + b"\n"
+    if existing is not None:
+        records.remove(existing)
+        combined = staging.joinpath(NOTICES_FILE).read_bytes().rstrip() + b"\n\n" + combined
+    _write(staging, NOTICES_FILE, combined, records)
 
 
 def _load_asset(read_asset: Callable[[str], tuple[bytes, str]], asset_id: str) -> tuple[bytes, str]:

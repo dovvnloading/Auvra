@@ -1,5 +1,6 @@
 import { getHostTransport } from '../host/bootstrap';
 import type { ProjectStatus } from './projectStatus';
+import type { ProjectTemplate } from '../types';
 import type { Event, Response } from '../host/generated/protocolV1';
 import { frontendDiagnostics, type DiagnosticContext } from '../diagnostics/runtime';
 
@@ -102,7 +103,7 @@ export class ProjectService {
     return () => this.listeners.delete(listener);
   }
 
-  async create(name = 'Untitled', diagnostics?: DiagnosticContext, template: 'blank' | 'starter' = 'blank'): Promise<ProjectSnapshot | null> {
+  async create(name = 'Untitled', diagnostics?: DiagnosticContext, template: ProjectTemplate = 'blank'): Promise<ProjectSnapshot | null> {
     return this.call<ProjectSnapshot>('project.create', template === 'blank' ? { name } : { name, template }, diagnostics);
   }
   async open(recoveryId?: string, diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> {

@@ -71,6 +71,7 @@ const STRICT_EXCLUDE_ALLOWLIST = new Set([
   'tests/frontend/hudBindings.test.tsx',
   'tests/frontend/terrainSplatPersistence.test.ts',
   'tests/frontend/levelBlueprintNodesRuntime.test.tsx',
+  'tests/frontend/levelBlueprintMath.test.tsx',
   'tests/frontend/contentBrowser.test.tsx',
   'tests/frontend/levelClipboard.test.ts',
   'tests/frontend/levelHierarchyEdits.test.tsx',
@@ -335,7 +336,7 @@ if (!/MAX_BLUEPRINT_EVALUATION_DEPTH/.test(blueprintRuntime)
   || !/MAX_BLUEPRINT_EXECUTION_DEPTH/.test(blueprintRuntime)
   || !/path\.has\(pathKey\)/.test(blueprintRuntime)
   || !/path\.has\(nodeId\)/.test(blueprintRuntime)
-  || !/const b = Number\(evaluate\([\s\S]*?\?\? 0\)/.test(blueprintRuntime)
+  || !/const b = Number\(\(pinB \? evaluate\([\s\S]*?\?\? 0\)/.test(blueprintRuntime)
   || !/b !== 0 \? a \/ b : 0/.test(blueprintRuntime)) {
   failures.push('blueprint runtime lacks bounded cycle-safe evaluation and execution');
 }

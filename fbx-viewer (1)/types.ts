@@ -396,6 +396,9 @@ export interface Hittable {
     team: 'Player' | 'Enemy';
 }
 
+/** Host project template ids accepted by project.create (protocol/v1 projectCreatePayload.template). */
+export type ProjectTemplate = 'blank' | 'starter' | 'arena';
+
 export interface SceneContextType {
   models: LoadedModelData[];
   attachments: AttachmentData[];
@@ -415,7 +418,7 @@ export interface SceneContextType {
   openRecentProject: (projectId: string) => Promise<void>;
   recoverProject: (recoveryId: string) => Promise<void>;
   closeProject: () => Promise<void>;
-  createNewProject: (template?: 'blank' | 'starter') => Promise<void>;
+  createNewProject: (template?: ProjectTemplate) => Promise<void>;
   projectStatus: ProjectStatus;
 
   // Model Actions

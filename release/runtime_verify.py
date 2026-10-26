@@ -97,6 +97,7 @@ def verify_installed_package(package_root: Path | str) -> dict[str, Any]:
         raise RuntimeVerificationError("installed package payload integrity check failed")
     required_files = (
         "AppxManifest.xml", "sbom.json", "frontend/index.html", "native/auvra-native.exe", "game-player/auvra-player.exe",
+        "THIRD_PARTY_NOTICES.txt", "game-player/THIRD_PARTY_NOTICES.txt",
         "runtime/python/pythonw.exe", "runtime/python/python314._pth", "host/auvra_startup.py", "host/auvra_release_verify.py",
         *HOST_SCHEMA_FILES,
     )

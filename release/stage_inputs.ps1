@@ -43,6 +43,15 @@ $gamePlayer = (Resolve-Path -LiteralPath $GamePlayerBinary -ErrorAction Stop).Pa
 if ([IO.Path]::GetFileName($gamePlayer) -ne 'auvra-player.exe') { throw 'GamePlayerBinary must be auvra-player.exe' }
 New-Item -ItemType Directory -Force -Path (Join-Path $Output 'game-player') | Out-Null
 Copy-Item -LiteralPath $gamePlayer -Destination (Join-Path $Output 'game-player\auvra-player.exe') -Force
+# Third-party notices for the Rust crates each binary ships, written beside it
+# from this checkout's Cargo.lock and the offline cargo registry. Assembly
+# composes them into the package-root THIRD_PARTY_NOTICES.txt, and exported
+# Windows games copy the player's notices next to the game executable.
+$repository = Split-Path -Parent $PSScriptRoot
+python -m release.notices rust --strict --manifest-dir (Join-Path $repository 'native') --output (Join-Path $Output 'native\THIRD_PARTY_NOTICES.txt')
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+python -m release.notices rust --strict --manifest-dir (Join-Path $repository 'player-desktop') --output (Join-Path $Output 'game-player\THIRD_PARTY_NOTICES.txt')
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 python -m release.pipeline inventory --input-root $Output --output (Join-Path $Output 'inputs-manifest.json')
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

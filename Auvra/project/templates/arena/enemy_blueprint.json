@@ -1,0 +1,391 @@
+{
+ "id": "arena-enemy",
+ "name": "Red Guard",
+ "type": "Enemy Controller",
+ "description": "Arena guard: patrols, chases the player on sight and attacks in range. Speed, Attack Range, Attack Cooldown and Sight Range tune its AI.",
+ "linkedModelId": "arena-model-enemy",
+ "stats": [
+  {
+   "id": "est1",
+   "name": "Health",
+   "value": 60
+  },
+  {
+   "id": "est2",
+   "name": "Damage",
+   "value": 10
+  },
+  {
+   "id": "est3",
+   "name": "Speed",
+   "value": 400
+  },
+  {
+   "id": "est4",
+   "name": "Attack Range",
+   "value": 250
+  },
+  {
+   "id": "est5",
+   "name": "Attack Cooldown",
+   "value": 2.5
+  },
+  {
+   "id": "est6",
+   "name": "Sight Range",
+   "value": 1800
+  }
+ ],
+ "traits": [
+  "AI_Controlled",
+  "Hostile"
+ ],
+ "variables": [
+  {
+   "id": "v_speed",
+   "name": "Speed",
+   "type": "Float",
+   "value": 0
+  },
+  {
+   "id": "v_input_x",
+   "name": "InputX",
+   "type": "Float",
+   "value": 0
+  },
+  {
+   "id": "v_input_y",
+   "name": "InputY",
+   "type": "Float",
+   "value": 0
+  },
+  {
+   "id": "v_sprint",
+   "name": "IsSprinting",
+   "type": "Boolean",
+   "value": false
+  },
+  {
+   "id": "v_stamina",
+   "name": "Stamina",
+   "type": "Float",
+   "value": 100
+  },
+  {
+   "id": "v_attack",
+   "name": "AttackIndex",
+   "type": "Float",
+   "value": 0
+  },
+  {
+   "id": "v_dead",
+   "name": "IsDead",
+   "type": "Boolean",
+   "value": false
+  },
+  {
+   "id": "v_crawl",
+   "name": "IsCrawling",
+   "type": "Boolean",
+   "value": false
+  },
+  {
+   "id": "v_taunt",
+   "name": "IsTaunting",
+   "type": "Boolean",
+   "value": false
+  }
+ ],
+ "animationGraph": {
+  "variables": [
+   {
+    "id": "v_speed",
+    "name": "Speed",
+    "type": "Float",
+    "value": 0
+   },
+   {
+    "id": "v_input_x",
+    "name": "InputX",
+    "type": "Float",
+    "value": 0
+   },
+   {
+    "id": "v_input_y",
+    "name": "InputY",
+    "type": "Float",
+    "value": 0
+   },
+   {
+    "id": "v_sprint",
+    "name": "IsSprinting",
+    "type": "Boolean",
+    "value": false
+   },
+   {
+    "id": "v_stamina",
+    "name": "Stamina",
+    "type": "Float",
+    "value": 100
+   },
+   {
+    "id": "v_attack",
+    "name": "AttackIndex",
+    "type": "Float",
+    "value": 0
+   },
+   {
+    "id": "v_dead",
+    "name": "IsDead",
+    "type": "Boolean",
+    "value": false
+   },
+   {
+    "id": "v_crawl",
+    "name": "IsCrawling",
+    "type": "Boolean",
+    "value": false
+   },
+   {
+    "id": "v_taunt",
+    "name": "IsTaunting",
+    "type": "Boolean",
+    "value": false
+   }
+  ],
+  "inputs": [],
+  "states": [
+   {
+    "id": "es1",
+    "name": "Idle",
+    "clipName": null,
+    "position": {
+     "x": 400,
+     "y": 300
+    },
+    "loop": true,
+    "isRoot": true,
+    "stateType": "Single",
+    "blendSamples": [],
+    "blendParamX": "",
+    "blendParamY": ""
+   },
+   {
+    "id": "es2",
+    "name": "Chase",
+    "clipName": null,
+    "position": {
+     "x": 700,
+     "y": 300
+    },
+    "loop": true,
+    "stateType": "Single",
+    "blendSamples": [],
+    "blendParamX": "",
+    "blendParamY": ""
+   },
+   {
+    "id": "es3",
+    "name": "Attack",
+    "clipName": null,
+    "position": {
+     "x": 550,
+     "y": 100
+    },
+    "loop": false,
+    "stateType": "Single",
+    "blendSamples": [],
+    "blendParamX": "",
+    "blendParamY": ""
+   },
+   {
+    "id": "es4",
+    "name": "Death",
+    "clipName": null,
+    "position": {
+     "x": 800,
+     "y": 500
+    },
+    "loop": false,
+    "stateType": "Single",
+    "blendSamples": [],
+    "blendParamX": "",
+    "blendParamY": ""
+   },
+   {
+    "id": "es5",
+    "name": "Strafe",
+    "clipName": null,
+    "position": {
+     "x": 400,
+     "y": 500
+    },
+    "loop": true,
+    "stateType": "Single",
+    "blendSamples": [],
+    "blendParamX": "",
+    "blendParamY": ""
+   }
+  ],
+  "transitions": [
+   {
+    "id": "et1",
+    "fromStateId": "es1",
+    "toStateId": "es2",
+    "duration": 0.2,
+    "conditions": [
+     {
+      "variableId": "v_speed",
+      "operator": ">",
+      "value": 0.1
+     }
+    ]
+   },
+   {
+    "id": "et2",
+    "fromStateId": "es2",
+    "toStateId": "es1",
+    "duration": 0.2,
+    "conditions": [
+     {
+      "variableId": "v_speed",
+      "operator": "<=",
+      "value": 0.1
+     }
+    ]
+   },
+   {
+    "id": "et3",
+    "fromStateId": "es1",
+    "toStateId": "es3",
+    "duration": 0.1,
+    "conditions": [
+     {
+      "variableId": "v_attack",
+      "operator": ">",
+      "value": 0
+     }
+    ]
+   },
+   {
+    "id": "et4",
+    "fromStateId": "es2",
+    "toStateId": "es3",
+    "duration": 0.1,
+    "conditions": [
+     {
+      "variableId": "v_attack",
+      "operator": ">",
+      "value": 0
+     }
+    ]
+   },
+   {
+    "id": "et9",
+    "fromStateId": "es5",
+    "toStateId": "es3",
+    "duration": 0.1,
+    "conditions": [
+     {
+      "variableId": "v_attack",
+      "operator": ">",
+      "value": 0
+     }
+    ]
+   },
+   {
+    "id": "et5",
+    "fromStateId": "es3",
+    "toStateId": "es1",
+    "duration": 0.2,
+    "conditions": [
+     {
+      "variableId": "v_attack",
+      "operator": "==",
+      "value": 0
+     }
+    ]
+   },
+   {
+    "id": "et_strafe_start",
+    "fromStateId": "es1",
+    "toStateId": "es5",
+    "duration": 0.2,
+    "conditions": [
+     {
+      "variableId": "v_input_x",
+      "operator": "!=",
+      "value": 0
+     }
+    ]
+   },
+   {
+    "id": "et_strafe_end",
+    "fromStateId": "es5",
+    "toStateId": "es1",
+    "duration": 0.2,
+    "conditions": [
+     {
+      "variableId": "v_input_x",
+      "operator": "==",
+      "value": 0
+     }
+    ]
+   },
+   {
+    "id": "et6",
+    "fromStateId": "es1",
+    "toStateId": "es4",
+    "duration": 0.1,
+    "conditions": [
+     {
+      "variableId": "v_dead",
+      "operator": "==",
+      "value": true
+     }
+    ]
+   },
+   {
+    "id": "et7",
+    "fromStateId": "es2",
+    "toStateId": "es4",
+    "duration": 0.1,
+    "conditions": [
+     {
+      "variableId": "v_dead",
+      "operator": "==",
+      "value": true
+     }
+    ]
+   },
+   {
+    "id": "et8",
+    "fromStateId": "es3",
+    "toStateId": "es4",
+    "duration": 0.1,
+    "conditions": [
+     {
+      "variableId": "v_dead",
+      "operator": "==",
+      "value": true
+     }
+    ]
+   },
+   {
+    "id": "et10",
+    "fromStateId": "es5",
+    "toStateId": "es4",
+    "duration": 0.1,
+    "conditions": [
+     {
+      "variableId": "v_dead",
+      "operator": "==",
+      "value": true
+     }
+    ]
+   }
+  ],
+  "activeStateId": "es1"
+ },
+ "meshScale": 1
+}

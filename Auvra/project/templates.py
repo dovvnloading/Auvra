@@ -3,6 +3,12 @@
 ``blank`` creates an empty project. ``starter`` adds a playable first level: rolling terrain, a
 sky, a player start, a player character blueprint, scattered props and game settings, so a new
 user can press Play immediately and learn by editing something that works.
+
+``arena`` ("Arena Sample") is a small complete game to learn from. Level 1 is a walled arena:
+collect every spinning coin while red guards from a spawner hunt you, then travel to the Finish
+level. It shows solid and trigger colliders, dynamic rigid bodies, rotator, mover, particle and
+light components, a level blueprint that keeps score in a level variable, plays a sound and
+changes level, an enemy blueprint, a HUD bound to the score and authored title and pause menus.
 """
 
 from __future__ import annotations
@@ -10,14 +16,21 @@ from __future__ import annotations
 import io
 import json
 import math
+import wave
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from .assets import encode_heightfield
 from .errors import InvalidProjectError
 
-TEMPLATE_NAMES = ("blank", "starter")
-_STARTER_ROOT = Path(__file__).resolve().parent / "templates" / "starter"
+TEMPLATE_NAMES = ("blank", "starter", "arena")
+_TEMPLATES_ROOT = Path(__file__).resolve().parent / "templates"
+_STARTER_ROOT = _TEMPLATES_ROOT / "starter"
+_ARENA_ROOT = _TEMPLATES_ROOT / "arena"
+
+FBX_MIME = "model/fbx"
+WAV_MIME = "audio/wav"
+HEIGHTFIELD_MIME = "application/vnd.auvra.heightfield"
 
 # Model id -> (asset file, display name, category, normalised size in world units).
 _STARTER_MODELS = {
@@ -29,15 +42,21 @@ _STARTER_MODELS = {
 
 _TERRAIN_SAMPLES = 65  # (resolution + 1) per side
 _TERRAIN_SIZE = 120.0
+_STARTER_FLAT_RADIUS = 12.0
 
 
-def _terrain_height(column: int, row: int) -> float:
-    """Gentle hills that stay flat around the player start in the middle."""
+def _hills(x: float, z: float, flat_radius: float) -> float:
+    """Gentle hills that stay flat within ``flat_radius`` of the middle."""
+    distance = math.hypot(x, z)
+    falloff = min(1.0, max(0.0, (distance - flat_radius) / 25.0))
+    return falloff * (2.2 * math.sin(x / 9.0) * math.cos(z / 11.0) + 1.5 * math.sin((x + z) / 17.0))
+
+
+def _terrain_height(column: int, row: int, flat_radius: float = _STARTER_FLAT_RADIUS) -> float:
+    """Height of one heightfield sample: row 0 is the -Z edge, column 0 the -X edge."""
     x = (column / (_TERRAIN_SAMPLES - 1) - 0.5) * _TERRAIN_SIZE
     z = (row / (_TERRAIN_SAMPLES - 1) - 0.5) * _TERRAIN_SIZE
-    distance = math.hypot(x, z)
-    falloff = min(1.0, max(0.0, (distance - 12.0) / 25.0))
-    return falloff * (2.2 * math.sin(x / 9.0) * math.cos(z / 11.0) + 1.5 * math.sin((x + z) / 17.0))
+    return _hills(x, z, flat_radius)
 
 
 def _object(object_id: str, level_id: str, name: str, kind: str, position: list[float], *,
@@ -50,38 +69,53 @@ def _object(object_id: str, level_id: str, name: str, kind: str, position: list[
     return document
 
 
+def _store_file(repository: Any, path: Path, mime: str) -> str:
+    with path.open("rb") as stream:
+        return repository.assets.put_stream(stream, size=path.stat().st_size, mime=mime, name=path.name).asset_id
+
+
+def _store_heightfield(repository: Any, heights: list[float], samples: int, name: str) -> str:
+    data = encode_heightfield(heights, samples, samples)
+    return repository.assets.put_stream(io.BytesIO(data), size=len(data), mime=HEIGHTFIELD_MIME, name=name).asset_id
+
+
+def _terrain_object(object_id: str, level_id: str, heightfield_id: str, samples: int, size: float) -> dict[str, Any]:
+    return _object(object_id, level_id, "Terrain", "terrain", [0.0, 0.0, 0.0], terrainData={
+        "resolution": samples - 1, "width": size, "depth": size,
+        "heightfield": {"assetId": heightfield_id, "encoding": "float32le", "columns": samples, "rows": samples},
+    })
+
+
+def _model_document(model_id: str, asset_id: str, name: str, category: str, size: float) -> dict[str, Any]:
+    return {"id": model_id, "name": name, "category": category, "assetId": asset_id,
+            "isPlacedInScene": False, "importSettings": {"normalize": True, "targetSize": size}}
+
+
 def apply_template(repository: Any, template: str | None, *, project_name: str) -> None:
     """Populate a freshly created project. ``blank`` (or None) leaves it empty."""
 
     if template in (None, "blank"):
         return
-    if template != "starter":
+    builder = _BUILDERS.get(template) if isinstance(template, str) else None
+    if builder is None:
         raise InvalidProjectError(f"unknown project template: {template!r}")
+    builder(repository, project_name)
 
-    asset_ids: dict[str, str] = {}
-    for model_id, (file_name, _, _, _) in _STARTER_MODELS.items():
-        path = _STARTER_ROOT / "assets" / file_name
-        with path.open("rb") as stream:
-            asset_ids[model_id] = repository.assets.put_stream(
-                stream, size=path.stat().st_size, mime="model/fbx", name=file_name,
-            ).asset_id
+
+# --- starter --------------------------------------------------------------------------------
+
+def _apply_starter(repository: Any, project_name: str) -> None:
+    asset_ids = {model_id: _store_file(repository, _STARTER_ROOT / "assets" / file_name, FBX_MIME)
+                 for model_id, (file_name, _, _, _) in _STARTER_MODELS.items()}
 
     heights = [_terrain_height(column, row) for row in range(_TERRAIN_SAMPLES) for column in range(_TERRAIN_SAMPLES)]
-    heightfield_bytes = encode_heightfield(heights, _TERRAIN_SAMPLES, _TERRAIN_SAMPLES)
-    heightfield_id = repository.assets.put_stream(
-        io.BytesIO(heightfield_bytes), size=len(heightfield_bytes),
-        mime="application/vnd.auvra.heightfield", name="starter-terrain.ahf",
-    ).asset_id
+    heightfield_id = _store_heightfield(repository, heights, _TERRAIN_SAMPLES, "starter-terrain.ahf")
 
     level_id = "starter-level-1"
     player = json.loads((_STARTER_ROOT / "player_blueprint.json").read_text(encoding="utf-8"))
 
     objects = [
-        _object("starter-terrain", level_id, "Terrain", "terrain", [0.0, 0.0, 0.0], terrainData={
-            "resolution": _TERRAIN_SAMPLES - 1, "width": _TERRAIN_SIZE, "depth": _TERRAIN_SIZE,
-            "heightfield": {"assetId": heightfield_id, "encoding": "float32le",
-                            "columns": _TERRAIN_SAMPLES, "rows": _TERRAIN_SAMPLES},
-        }),
+        _terrain_object("starter-terrain", level_id, heightfield_id, _TERRAIN_SAMPLES, _TERRAIN_SIZE),
         _object("starter-sky", level_id, "Sky", "sky_sphere", [0.0, 0.0, 0.0]),
         _object("starter-player-start", level_id, "Player Start", "player_start", [0.0, 0.0, 6.0]),
     ]
@@ -116,11 +150,8 @@ def apply_template(repository: Any, template: str | None, *, project_name: str) 
     }
 
     changes = {
-        "models": [
-            {"id": model_id, "name": name, "category": category, "assetId": asset_ids[model_id],
-             "isPlacedInScene": False, "importSettings": {"normalize": True, "targetSize": size}}
-            for model_id, (_, name, category, size) in _STARTER_MODELS.items()
-        ],
+        "models": [_model_document(model_id, asset_ids[model_id], name, category, size)
+                   for model_id, (_, name, category, size) in _STARTER_MODELS.items()],
         "blueprints": [player],
         "levels": [{"id": level_id, "name": "Level 1", "createdAt": 0, "blueprint": begin_play}],
         "objects": objects,
@@ -129,3 +160,439 @@ def apply_template(repository: Any, template: str | None, *, project_name: str) 
         }}],
     }
     repository.apply_changes(changes, expected_revision=repository.revision)
+
+
+# --- level blueprint graphs -----------------------------------------------------------------
+
+def _pin_slug(name: str) -> str:
+    return name.lower().replace(" ", "-")
+
+
+class _LogicGraph:
+    """Builds a level blueprint with readable, stable ids, in the pin shapes the editor palette places.
+
+    Pins are ``{id, name, dataType, direction}``; an unwired data input reads ``data['default_<pin>']``.
+    Every input takes at most one wire (the editor's rule); an output may feed many inputs.
+    """
+
+    def __init__(self, prefix: str) -> None:
+        self.prefix = prefix
+        self.nodes: list[dict[str, Any]] = []
+        self.connections: list[dict[str, Any]] = []
+        self._by_id: dict[str, dict[str, Any]] = {}
+
+    def add(self, key: str, kind: str, name: str, at: tuple[int, int], *,
+            inputs: Iterable[tuple[str, str]] = (), outputs: Iterable[tuple[str, str]] = (),
+            data: dict[str, Any] | None = None) -> str:
+        node_id = f"{self.prefix}-{key}"
+        node: dict[str, Any] = {
+            "id": node_id, "type": kind, "name": name, "position": {"x": at[0], "y": at[1]},
+            "inputs": [{"id": f"{node_id}-in-{_pin_slug(pin)}", "name": pin, "dataType": data_type, "direction": "Input"}
+                       for pin, data_type in inputs],
+            "outputs": [{"id": f"{node_id}-out-{_pin_slug(pin)}", "name": pin, "dataType": data_type, "direction": "Output"}
+                        for pin, data_type in outputs],
+        }
+        if data:
+            node["data"] = data
+        self.nodes.append(node)
+        self._by_id[node_id] = node
+        return node_id
+
+    def wire(self, source: str, output: str, target: str, input: str) -> None:
+        from_pin = next(pin["id"] for pin in self._by_id[source]["outputs"] if pin["name"] == output)
+        to_pin = next(pin["id"] for pin in self._by_id[target]["inputs"] if pin["name"] == input)
+        if any(connection["toPinId"] == to_pin for connection in self.connections):
+            raise ValueError(f"{target}.{input} already has a wire")
+        self.connections.append({"id": f"{from_pin}--{to_pin}", "fromNodeId": source, "fromPinId": from_pin,
+                                 "toNodeId": target, "toPinId": to_pin})
+
+    def chain(self, *steps: tuple[str, str, str]) -> None:
+        """Wires exec flow through ``(node, input pin, output pin)`` steps in order."""
+        for (source, _, output), (target, input, _) in zip(steps, steps[1:]):
+            self.wire(source, output, target, input)
+
+    def document(self, variables: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        return {"nodes": self.nodes, "connections": self.connections, "variables": variables or []}
+
+    # Built-in nodes (hooks/useLevelBlueprintRuntime.ts), shaped like LevelBlueprintEditor's palette.
+
+    def begin_play(self, key: str, at: tuple[int, int]) -> str:
+        return self.add(key, "Event", "Event BeginPlay", at, outputs=[("Exec", "Exec")])
+
+    def tick(self, key: str, at: tuple[int, int]) -> str:
+        return self.add(key, "Event", "Event Tick", at, outputs=[("Exec", "Exec"), ("Delta Seconds", "Float")])
+
+    def overlap(self, key: str, actor: dict[str, Any], at: tuple[int, int]) -> str:
+        return self.add(key, "Event", f"On Overlap ({actor['name']})", at,
+                        outputs=[("Exec", "Exec"), ("Other Actor", "Object")], data={"targetActorId": actor["id"]})
+
+    def print_string(self, key: str, message: str, at: tuple[int, int]) -> str:
+        return self.add(key, "PrintString", "Print String", at, inputs=[("Exec", "Exec"), ("String", "String")],
+                        outputs=[("Out", "Exec")], data={"printMessage": message, "default_String": message})
+
+    def destroy_actor(self, key: str, at: tuple[int, int]) -> str:
+        return self.add(key, "DestroyActor", "Destroy Actor", at, inputs=[("Exec", "Exec")], outputs=[("Out", "Exec")])
+
+    def level_action(self, key: str, name: str, at: tuple[int, int], **data: Any) -> str:
+        return self.add(key, "LevelAction", name, at, inputs=[("Exec", "Exec")], outputs=[("Out", "Exec")], data=data)
+
+    def branch(self, key: str, at: tuple[int, int]) -> str:
+        return self.add(key, "Branch", "Branch (If)", at, inputs=[("Exec", "Exec"), ("Condition", "Boolean")],
+                        outputs=[("True", "Exec"), ("False", "Exec")])
+
+    def player_variable(self, key: str, variable: str, data_type: str, at: tuple[int, int]) -> str:
+        return self.add(key, "VariableGet", f"Get {variable}", at, outputs=[("Value", data_type)],
+                        data={"variableName": variable, "targetBlueprintType": "Player"})
+
+    def pure_math(self, key: str, kind: str, name: str, at: tuple[int, int], result: str, **defaults: Any) -> str:
+        # Pure: no exec pins. The runtime reads a math node's first two inputs as A and B.
+        return self.add(key, kind, name, at, inputs=[("A", "Float"), ("B", "Float")], outputs=[("Result", result)],
+                        data={f"default_{pin}": value for pin, value in defaults.items()})
+
+    # Flow and world nodes (hooks/levelBlueprintNodes/flow.ts, world.ts), with their declared pins.
+
+    def sequence(self, key: str, at: tuple[int, int]) -> str:
+        return self.add(key, "Sequence", "Sequence", at, inputs=[("Exec", "Exec")],
+                        outputs=[("Then 0", "Exec"), ("Then 1", "Exec")])
+
+    def do_once(self, key: str, at: tuple[int, int]) -> str:
+        return self.add(key, "DoOnce", "Do Once", at,
+                        inputs=[("Exec", "Exec"), ("Reset", "Exec"), ("Start Closed", "Boolean")],
+                        outputs=[("Completed", "Exec")], data={"default_Start Closed": False})
+
+    def delay(self, key: str, seconds: float, at: tuple[int, int]) -> str:
+        return self.add(key, "Delay", "Delay", at, inputs=[("Exec", "Exec"), ("Duration", "Float")],
+                        outputs=[("Out", "Exec")], data={"default_Duration": seconds})
+
+    def get_level_variable(self, key: str, variable: str, at: tuple[int, int]) -> str:
+        return self.add(key, "GetLevelVariable", f"Get Level Variable ({variable})", at, inputs=[("Name", "String")],
+                        outputs=[("Value", "String"), ("Is Set", "Boolean")], data={"default_Name": variable})
+
+    def set_level_variable(self, key: str, variable: str, at: tuple[int, int]) -> str:
+        return self.add(key, "SetLevelVariable", f"Set Level Variable ({variable})", at,
+                        inputs=[("Exec", "Exec"), ("Name", "String"), ("Value", "String")],
+                        outputs=[("Out", "Exec"), ("Success", "Boolean")],
+                        data={"default_Name": variable, "default_Value": ""})
+
+    def play_sound(self, key: str, audio_id: str, at: tuple[int, int]) -> str:
+        return self.add(key, "PlaySound", "Play Sound", at, inputs=[("Exec", "Exec"), ("Sound", "String"), ("Bus", "String")],
+                        outputs=[("Out", "Exec")], data={"default_Sound": audio_id, "default_Bus": "sfx"})
+
+    def print_format(self, key: str, format_text: str, at: tuple[int, int]) -> str:
+        return self.add(key, "Print", "Print (Format)", at,
+                        inputs=[("Exec", "Exec"), ("Format", "String"), ("Arg 0", "String"), ("Arg 1", "String"), ("Arg 2", "String")],
+                        outputs=[("Out", "Exec"), ("Message", "String")], data={"default_Format": format_text})
+
+
+# --- arena ----------------------------------------------------------------------------------
+
+_ARENA_LEVEL_ID = "arena-level-1"
+_FINISH_LEVEL_ID = "arena-level-2"
+_ARENA_PLAYER_ID = "arena-player"
+_ARENA_ENEMY_ID = "arena-enemy"
+_COIN_SOUND_ID = "arena-sound-coin"
+_SCORE_VARIABLE = "score"
+_ARENA_FLAT_RADIUS = 26.0
+_CRATE_SIZE = 2.5  # the crate model is a unit cube on its base, normalised to this size
+_COIN_SIZE = 1.5   # an upright disc on its rim, normalised to this height
+
+_ARENA_MODELS = {
+    "arena-model-character": (_STARTER_ROOT / "assets" / "character.fbx", "Character", "Character", 5.0),
+    "arena-model-enemy": (_ARENA_ROOT / "assets" / "enemy.fbx", "Guard", "Character", 5.0),
+    "arena-model-crate": (_STARTER_ROOT / "assets" / "crate.fbx", "Crate", "Prop", _CRATE_SIZE),
+    "arena-model-coin": (_ARENA_ROOT / "assets" / "coin.fbx", "Coin", "Prop", _COIN_SIZE),
+    "arena-model-rock": (_STARTER_ROOT / "assets" / "rock.fbx", "Rock", "Environment", 3.0),
+    "arena-model-tree": (_STARTER_ROOT / "assets" / "tree.fbx", "Tree", "Environment", 9.0),
+}
+
+# Coin (x, z) positions inside the cover ring; the last one waits beyond it, by the guard spawner.
+_COIN_POSITIONS = ((8.5, -3.0), (-8.0, 5.0), (-3.0, -9.0), (0.0, -19.0))
+_COVER_CRATES = 12
+_COVER_RADIUS = 13.0
+_PUSHABLE_CRATES = ((4.5, 2.0, 0.4), (-4.5, 0.5, 1.2), (1.5, -5.5, 2.0))
+
+
+def _component(owner_id: str, kind: str, suffix: str = "", **props: Any) -> dict[str, Any]:
+    return {"id": f"{owner_id}-{suffix or kind}", "type": kind, "enabled": True, "props": props}
+
+
+def _crate_collider(owner_id: str) -> dict[str, Any]:
+    half = _CRATE_SIZE / 2
+    return _component(owner_id, "collider", shape="box", size=[_CRATE_SIZE] * 3, offset=[0.0, half, 0.0], isTrigger=False)
+
+
+def _coin_components(owner_id: str) -> list[dict[str, Any]]:
+    return [
+        _component(owner_id, "collider", "trigger", shape="sphere", radius=1.3, offset=[0.0, _COIN_SIZE / 2, 0.0],
+                   isTrigger=True),
+        _component(owner_id, "rotator", axis="y", speed=120),
+        _component(owner_id, "mover", offset=[0.0, 0.5, 0.0], period=2.4, pingPong=True),
+        _component(owner_id, "particles", preset="sparks", rate=6, burst=0, loop=True),
+    ]
+
+
+def _bowl_height(x: float, z: float) -> float:
+    """The finish level's ground: flat in the middle, rising gently to a rim."""
+    return 3.0 * min(1.0, max(0.0, (math.hypot(x, z) - 12.0) / 12.0)) ** 2
+
+
+def _arena_objects(heightfield_id: str) -> list[dict[str, Any]]:
+    level = _ARENA_LEVEL_ID
+    objects = [
+        _terrain_object("arena-terrain", level, heightfield_id, _TERRAIN_SAMPLES, _TERRAIN_SIZE),
+        _object("arena-sky", level, "Sky", "sky_sphere", [0.0, 0.0, 0.0]),
+        _object("arena-player-start", level, "Player Start", "player_start", [0.0, 0.0, 6.0]),
+    ]
+    # Cover: a ring of solid crates (a collider without a rigid body is fixed scenery) with gaps to run through.
+    for index in range(_COVER_CRATES):
+        angle = (index + 0.5) * 2 * math.pi / _COVER_CRATES
+        object_id = f"arena-cover-{index + 1}"
+        objects.append(_object(object_id, level, f"Cover Crate {index + 1}", "prop",
+                               [round(_COVER_RADIUS * math.cos(angle), 2), 0.0, round(_COVER_RADIUS * math.sin(angle), 2)],
+                               model_id="arena-model-crate", rotation_y=round(-angle, 3),
+                               components=[_crate_collider(object_id)]))
+    # Dynamic rigid bodies: the player shoves these around.
+    for index, (x, z, rotation) in enumerate(_PUSHABLE_CRATES):
+        object_id = f"arena-pushable-{index + 1}"
+        objects.append(_object(object_id, level, f"Pushable Crate {index + 1}", "prop", [x, 0.0, z],
+                               model_id="arena-model-crate", rotation_y=rotation, components=[
+                                   _component(object_id, "rigidBody", type="dynamic", mass=12, gravityScale=1,
+                                              lockRotation=False),
+                                   _crate_collider(object_id),
+                               ]))
+    # Pickups: a trigger collider reports the player to the level blueprint, which counts and removes the coin.
+    for index, (x, z) in enumerate(_COIN_POSITIONS):
+        object_id = f"arena-coin-{index + 1}"
+        objects.append(_object(object_id, level, f"Coin {index + 1}", "prop", [x, 0.6, z],
+                               model_id="arena-model-coin", components=_coin_components(object_id)))
+    objects.append(_object("arena-guard-spawner", level, "Guard Spawner", "spawn_point", [0.0, 0.0, -24.0],
+                           spawnConfig={"blueprintId": _ARENA_ENEMY_ID, "interval": 8, "maxSpawns": 2, "team": "Enemy"}))
+    for index, (x, z, rotation) in enumerate(((-17.0, 9.0, 0.8), (18.0, -6.0, 2.4), (10.0, 17.0, 1.7), (-15.0, -15.0, 0.3))):
+        objects.append(_object(f"arena-rock-{index + 1}", level, f"Rock {index + 1}", "prop", [x, 0.0, z],
+                               model_id="arena-model-rock", rotation_y=rotation))
+    for index in range(12):
+        angle = index * 2 * math.pi / 12 + 0.25
+        radius = 36.0 + 4.0 * math.sin(index * 1.3)
+        x, z = round(radius * math.cos(angle), 2), round(radius * math.sin(angle), 2)
+        # Out on the hills: sit each trunk slightly into the slope.
+        objects.append(_object(f"arena-tree-{index + 1}", level, f"Tree {index + 1}", "prop",
+                               [x, round(_hills(x, z, _ARENA_FLAT_RADIUS) - 0.3, 2), z],
+                               model_id="arena-model-tree", rotation_y=round(angle, 3)))
+    return objects
+
+
+def _finish_objects(heightfield_id: str, samples: int, size: float) -> list[dict[str, Any]]:
+    level = _FINISH_LEVEL_ID
+    objects = [
+        _terrain_object("finish-terrain", level, heightfield_id, samples, size),
+        _object("finish-sky", level, "Sky", "sky_sphere", [0.0, 0.0, 0.0]),
+        _object("finish-player-start", level, "Player Start", "player_start", [0.0, 0.0, 8.0]),
+        _object("finish-podium", level, "Podium", "prop", [0.0, 0.0, -3.0], model_id="arena-model-crate",
+                components=[_crate_collider("finish-podium")]),
+        _object("finish-trophy", level, "Trophy Coin", "prop", [0.0, _CRATE_SIZE + 0.2, -3.0], model_id="arena-model-coin",
+                scale=1.6, components=[
+                    _component("finish-trophy", "rotator", axis="y", speed=60),
+                    _component("finish-trophy", "particles", preset="sparks", rate=16, burst=0, loop=True),
+                    _component("finish-trophy", "pointLight", color="#ffd27a", intensity=30, distance=14, castShadow=False),
+                ]),
+    ]
+    for index in range(6):
+        angle = index * 2 * math.pi / 6 + 0.5
+        x, z = round(17.0 * math.cos(angle), 2), round(17.0 * math.sin(angle), 2)
+        objects.append(_object(f"finish-tree-{index + 1}", level, f"Tree {index + 1}", "prop",
+                               [x, round(_bowl_height(x, z) - 0.3, 2), z], model_id="arena-model-tree",
+                               rotation_y=round(angle, 3)))
+    return objects
+
+
+def _arena_logic(coins: list[dict[str, Any]]) -> dict[str, Any]:
+    """Level 1: each coin overlap adds one to ``score``, plays a chime, removes the coin and prints the
+    tally; every frame a Sequence checks for all coins (then travels to the finish) and for a dead player."""
+
+    graph = _LogicGraph("arena-logic")
+    begin = graph.begin_play("begin", (80, 40))
+    hint = graph.print_string("hint", f"Collect all {len(coins)} coins. Watch out for the red guards!", (380, 40))
+    graph.chain((begin, "", "Exec"), (hint, "Exec", "Out"))
+
+    shared_y = 220 + len(coins) * 180
+    score = graph.get_level_variable("get-score", _SCORE_VARIABLE, (80, shared_y))
+    plus_one = graph.pure_math("score-plus-one", "Add", "Add (+)", (400, shared_y), "Float", B=1)
+    graph.wire(score, "Value", plus_one, "A")
+
+    for index, coin in enumerate(coins):
+        row = 220 + index * 180
+        key = f"coin-{index + 1}"
+        overlap = graph.overlap(f"{key}-overlap", coin, (80, row))
+        add_one = graph.set_level_variable(f"{key}-add", _SCORE_VARIABLE, (400, row))
+        chime = graph.play_sound(f"{key}-chime", _COIN_SOUND_ID, (720, row))
+        remove = graph.destroy_actor(f"{key}-destroy", (1020, row))
+        tally = graph.print_format(f"{key}-tally", f"Coins: {{0}} / {len(coins)}", (1280, row))
+        graph.wire(plus_one, "Result", add_one, "Value")
+        graph.wire(score, "Value", tally, "Arg 0")
+        # Destroy Actor removes the actor the overlap event fired for: this coin.
+        graph.chain((overlap, "", "Exec"), (add_one, "Exec", "Out"), (chime, "Exec", "Out"),
+                    (remove, "Exec", "Out"), (tally, "Exec", "Out"))
+
+    checks_y = shared_y + 200
+    tick = graph.tick("tick", (80, checks_y))
+    checks = graph.sequence("checks", (340, checks_y))
+    graph.chain((tick, "", "Exec"), (checks, "Exec", ""))
+
+    all_collected = graph.pure_math("all-collected", "Equal", "Equal (==)", (340, checks_y + 200), "Boolean", B=len(coins))
+    graph.wire(score, "Value", all_collected, "A")
+    won = graph.branch("if-all-collected", (620, checks_y))
+    once = graph.do_once("finish-once", (880, checks_y))
+    cheer = graph.print_string("level-complete", "Level complete! Every coin collected.", (1140, checks_y))
+    pause = graph.delay("before-travel", 2.0, (1400, checks_y))
+    travel = graph.level_action("open-finish", "Open Level (Finish)", (1660, checks_y),
+                                action="OpenLevel", levelId=_FINISH_LEVEL_ID)
+    graph.wire(checks, "Then 0", won, "Exec")
+    graph.wire(all_collected, "Result", won, "Condition")
+    graph.wire(won, "True", once, "Exec")
+    graph.chain((once, "", "Completed"), (cheer, "Exec", "Out"), (pause, "Exec", "Out"), (travel, "Exec", ""))
+
+    dead = graph.player_variable("player-is-dead", "IsDead", "Boolean", (340, checks_y + 380))
+    caught = graph.branch("if-player-dead", (620, checks_y + 340))
+    restart = graph.level_action("restart", "Restart Level", (880, checks_y + 340), action="Restart")
+    graph.wire(checks, "Then 1", caught, "Exec")
+    graph.wire(dead, "Value", caught, "Condition")
+    graph.wire(caught, "True", restart, "Exec")
+
+    return graph.document([{"id": "arena-variable-score", "name": _SCORE_VARIABLE, "type": "Float", "value": 0}])
+
+
+def _finish_logic() -> dict[str, Any]:
+    graph = _LogicGraph("finish-logic")
+    begin = graph.begin_play("begin", (80, 120))
+    welcome = graph.print_string("welcome", "You made it to the finish! Thanks for playing the Arena sample.", (380, 120))
+    pause = graph.delay("pause", 4.0, (680, 120))
+    explore = graph.print_string("explore", "Open the Level Blueprint of the Arena level to see how this game works.",
+                                 (940, 120))
+    graph.chain((begin, "", "Exec"), (welcome, "Exec", "Out"), (pause, "Exec", "Out"), (explore, "Exec", ""))
+    return graph.document()
+
+
+# HUD documents live on a 1920x1080 stage (HUD_REFERENCE_SIZE in fbx-viewer (1)/components/HUDEditor/types.ts).
+_HUD_STAGE = {"width": 1920, "height": 1080}
+_MENU_BUTTON = (420, 72)
+_MENU_BUTTON_GAP = 20
+
+
+def _hud_element(element_id: str, name: str, kind: str, props: dict[str, Any], x: float, y: float,
+                 width: float, height: float, z_index: int, *, locked: bool = False) -> dict[str, Any]:
+    return {"id": element_id, "name": name, "type": kind, "props": props, "position": {"x": x, "y": y},
+            "size": {"width": width, "height": height}, "zIndex": z_index, "isVisible": True, "isLocked": locked}
+
+
+def _hud_text(element_id: str, name: str, text: str, x: float, y: float, width: float, height: float, *,
+              size: int, color: str = "#ffffff", weight: str = "bold", align: str = "left",
+              bind: dict[str, str] | None = None) -> dict[str, Any]:
+    props: dict[str, Any] = {"text": text, "textKey": "", "color": color, "fontSize": size, "fontWeight": weight,
+                             "fontFamily": "sans-serif", "textAlign": align}
+    if bind:
+        props["bind"] = bind
+    return _hud_element(element_id, name, "Text", props, x, y, width, height, 2)
+
+
+def _hud_document(document_id: str, name: str, elements: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"id": document_id, "name": name, "elements": elements, "layout": dict(_HUD_STAGE), "commands": []}
+
+
+def _menu(document_id: str, name: str, title: str, subtitle: str, top: int,
+          buttons: list[tuple[str, str, str]]) -> dict[str, Any]:
+    """A full-screen backdrop, a title and a centred column of Button elements (``props.action`` runs them)."""
+
+    stage_width, stage_height = _HUD_STAGE["width"], _HUD_STAGE["height"]
+    width, height = _MENU_BUTTON
+    elements = [
+        # Locked so clicks on the backdrop never drag it in the editor; unlock it from Layers.
+        _hud_element(f"{document_id}-backdrop", "Backdrop", "Container",
+                     {"backgroundColor": "rgba(8,12,24,0.78)", "borderColor": "transparent", "borderWidth": 0,
+                      "borderRadius": 0}, 0, 0, stage_width, stage_height, 1, locked=True),
+        _hud_text(f"{document_id}-title", "Title", title, (stage_width - 1200) / 2, top - 180, 1200, 120,
+                  size=96, color="#ffd75a", align="center"),
+        _hud_text(f"{document_id}-subtitle", "Subtitle", subtitle, (stage_width - 1200) / 2, top - 70, 1200, 44,
+                  size=28, color="rgba(255,255,255,0.8)", weight="normal", align="center"),
+    ]
+    for index, (action, label, variant) in enumerate(buttons):
+        elements.append(_hud_element(
+            f"{document_id}-{action}", f"{label} Button", "Button",
+            {"label": label, "labelKey": "", "action": action, "variant": variant, "fontSize": 28},
+            (stage_width - width) / 2, top + index * (height + _MENU_BUTTON_GAP), width, height, 10 + index,
+        ))
+    return _hud_document(document_id, name, elements)
+
+
+def _arena_hud(coin_count: int) -> list[dict[str, Any]]:
+    main = _hud_document("hud-main", "Main HUD", [
+        _hud_element("hud-main-panel", "Score Panel", "Container",
+                     {"backgroundColor": "rgba(0,0,0,0.45)", "borderColor": "rgba(255,215,90,0.7)", "borderWidth": 2,
+                      "borderRadius": 12}, 32, 32, 380, 150, 1),
+        _hud_text("hud-main-coins-label", "Coins Label", "Coins:", 56, 50, 140, 56, size=40, color="#ffd75a"),
+        # Bound text: props.bind maps the 'text' prop to the level variable the blueprint counts in.
+        _hud_text("hud-main-coins-value", "Coins Value", "0", 196, 50, 60, 56, size=40, align="center",
+                  bind={"text": f"vars.{_SCORE_VARIABLE}"}),
+        _hud_text("hud-main-coins-total", "Coins Total", f"/ {coin_count}", 262, 50, 120, 56, size=40,
+                  color="rgba(255,255,255,0.7)"),
+        _hud_element("hud-main-health", "Health", "HealthBar",
+                     {"value": 100, "max": 100, "barColor": "#dc2626", "backgroundColor": "#1f2937", "showIcon": True,
+                      "showText": True, "bind": {"value": "player.health", "max": "player.maxHealth"}},
+                     48, 116, 340, 52, 2),
+        _hud_text("hud-main-hint", "Hint", "Collect every coin. Push the loose crates. Avoid the red guards.",
+                  360, 1000, 1200, 40, size=24, color="rgba(255,255,255,0.85)", weight="normal", align="center"),
+    ])
+    title = _menu("menu-title", "Title Menu", "ARENA", "Collect every coin. Avoid the red guards.", 480, [
+        ("play", "Play", "primary"), ("options", "Options", "secondary"), ("quit", "Quit", "outline"),
+    ])
+    pause = _menu("menu-pause", "Pause Menu", "PAUSED", f"Collect all {coin_count} coins to reach the finish.", 400, [
+        ("resume", "Resume", "primary"), ("save", "Save", "secondary"), ("load", "Load", "secondary"),
+        ("options", "Options", "secondary"), ("quit", "Quit to title", "outline"),
+    ])
+    return [main, title, pause]
+
+
+def _wav_duration(path: Path) -> float:
+    with wave.open(str(path), "rb") as audio:
+        return round(audio.getnframes() / audio.getframerate(), 3)
+
+
+def _apply_arena(repository: Any, project_name: str) -> None:
+    asset_ids = {model_id: _store_file(repository, path, FBX_MIME) for model_id, (path, _, _, _) in _ARENA_MODELS.items()}
+    sound_path = _ARENA_ROOT / "assets" / "coin.wav"
+    sound_asset = _store_file(repository, sound_path, WAV_MIME)
+
+    heights = [_terrain_height(column, row, _ARENA_FLAT_RADIUS)
+               for row in range(_TERRAIN_SAMPLES) for column in range(_TERRAIN_SAMPLES)]
+    arena_heightfield = _store_heightfield(repository, heights, _TERRAIN_SAMPLES, "arena-terrain.ahf")
+    finish_samples, finish_size = 33, 48.0
+    finish_heights = [_bowl_height((column / (finish_samples - 1) - 0.5) * finish_size,
+                                   (row / (finish_samples - 1) - 0.5) * finish_size)
+                      for row in range(finish_samples) for column in range(finish_samples)]
+    finish_heightfield = _store_heightfield(repository, finish_heights, finish_samples, "arena-finish-terrain.ahf")
+
+    player = json.loads((_STARTER_ROOT / "player_blueprint.json").read_text(encoding="utf-8"))
+    player.update(id=_ARENA_PLAYER_ID, linkedModelId="arena-model-character")
+    enemy = json.loads((_ARENA_ROOT / "enemy_blueprint.json").read_text(encoding="utf-8"))
+
+    arena_objects = _arena_objects(arena_heightfield)
+    coins = [item for item in arena_objects if item["modelId"] == "arena-model-coin"]
+    changes = {
+        "models": [_model_document(model_id, asset_ids[model_id], name, category, size)
+                   for model_id, (_, name, category, size) in _ARENA_MODELS.items()],
+        "blueprints": [player, enemy],
+        "audio": [{"id": _COIN_SOUND_ID, "name": "Coin Pickup", "assetId": sound_asset, "type": WAV_MIME,
+                   "duration": _wav_duration(sound_path)}],
+        "levels": [
+            {"id": _ARENA_LEVEL_ID, "name": "Arena", "createdAt": 0, "blueprint": _arena_logic(coins)},
+            {"id": _FINISH_LEVEL_ID, "name": "Finish", "createdAt": 0, "blueprint": _finish_logic()},
+        ],
+        "objects": arena_objects + _finish_objects(finish_heightfield, finish_samples, finish_size),
+        "hud": _arena_hud(len(coins)),
+        "metadata": [{"id": "game-settings", "settings": {
+            "schema": 1, "name": project_name, "startupLevelId": _ARENA_LEVEL_ID, "playerBlueprintId": _ARENA_PLAYER_ID,
+        }}],
+    }
+    repository.apply_changes(changes, expected_revision=repository.revision)
+
+
+_BUILDERS = {"starter": _apply_starter, "arena": _apply_arena}

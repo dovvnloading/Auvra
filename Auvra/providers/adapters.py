@@ -8,12 +8,19 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 from urllib.parse import unquote, urlsplit
 
-from .commands import COMMAND_JSON_SCHEMA, CommandProposal, validate_command
+from .commands import CommandProposal, provider_command_schema, validate_provider_command
 from .descriptors import Capability, ProviderDescriptor, ProviderRegistry
 from .errors import ErrorCode, ProviderError, normalize_error
 from .media import MediaArtifact, MediaDownloader
 from .transport import BoundedTransport, HttpRequest, HttpResponse, Transport
 from Auvra.diagnostics import trace_public_class
+
+# Schema name (OpenAI-compatible APIs) and tool name (Anthropic) of a HUD command proposal.
+COMMAND_TOOL_NAME = "auvra_hud_commands"
+_COMMAND_TOOL_DESCRIPTION = "Propose HUD element commands for the host to review and apply."
+# Forced tool_choice ("tool"/"any") is rejected by the newest Claude models, so tool routes ask with
+# "auto" and this instruction; a reply without the call fails host validation like any bad proposal.
+_COMMAND_TOOL_INSTRUCTION = f"Reply only by calling the {COMMAND_TOOL_NAME} tool once with the proposed commands."
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,7 +145,9 @@ class TextAdapter(Adapter):
         if structured_command:
             # The host-selected target is the only binding an update/delete
             # proposal may use; never trust a target supplied by model output.
-            try: return validate_command(json.loads(text), target_element_id=target_element_id)
+            # Strict structured outputs send null for absent optional fields;
+            # validate_provider_command drops those before host validation.
+            try: return validate_provider_command(json.loads(text), target_element_id=target_element_id)
             except (ValueError, TypeError, json.JSONDecodeError) as exc:
                 raise ProviderError(ErrorCode.REMOTE, "provider returned an invalid command proposal", self.provider_id) from exc
         if len(text) > 65536: raise ProviderError(ErrorCode.REMOTE, "provider text exceeded size limit", self.provider_id)
@@ -150,28 +159,49 @@ class TextAdapter(Adapter):
 
     def _complete_json(self, *, model: str, prompt: str, system: str | None,
                        temperature: float | None, structured_command: bool) -> Mapping[str, Any]:
+        # Each provider gets the command schema projected onto the JSON Schema
+        # subset it accepts; host validation of the output stays authoritative.
+        schema = provider_command_schema(self.provider_id) if structured_command else None
         payload: dict[str, Any] = {"model": model, "messages": ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]}
         if temperature is not None: payload["temperature"] = temperature
-        if structured_command: payload["response_format"] = {"type": "json_schema", "json_schema": {"name": "auvra_hud_commands", "strict": True, "schema": COMMAND_JSON_SCHEMA}}
+        if schema is not None: payload["response_format"] = {"type": "json_schema", "json_schema": {"name": COMMAND_TOOL_NAME, "strict": True, "schema": schema}}
         path = "/v1/chat/completions"
         if self.provider_id in {"openai", "xai"}:
             path = "/v1/responses"
             payload = {"model": model, "input": prompt, "store": False, "max_output_tokens": 4096}
             if system: payload["instructions"] = system
             if temperature is not None: payload["temperature"] = temperature
-            if structured_command: payload["text"] = {"format": {"type": "json_schema", "name": "auvra_hud_commands", "strict": True, "schema": COMMAND_JSON_SCHEMA}}
+            if schema is not None: payload["text"] = {"format": {"type": "json_schema", "name": COMMAND_TOOL_NAME, "strict": True, "schema": schema}}
         elif self.provider_id == "openrouter":
             payload["provider"] = {"allow_fallbacks": False, "require_parameters": True, "data_collection": "deny"}
+            if schema is not None and model.startswith("anthropic/"):
+                # Claude endpoints cannot compile the strict schema (see the anthropic branch below),
+                # so routed Claude models get the command as one tool call instead.
+                payload.pop("response_format", None)
+                payload["messages"] = ([{"role": "system", "content": f"{system}\n\n{_COMMAND_TOOL_INSTRUCTION}" if system else _COMMAND_TOOL_INSTRUCTION}]
+                                       + [{"role": "user", "content": prompt}])
+                payload["tools"] = [{"type": "function", "function": {"name": COMMAND_TOOL_NAME, "description": _COMMAND_TOOL_DESCRIPTION,
+                                                                      "parameters": provider_command_schema("anthropic")}}]
+                payload["tool_choice"] = "auto"
         if self.provider_id == "anthropic":
             payload = {"model": model, "max_tokens": 4096, "messages": [{"role": "user", "content": prompt}]}
             if system: payload["system"] = system
-            if structured_command:
-                payload["output_config"] = {"format": {"type": "json_schema", "schema": COMMAND_JSON_SCHEMA}}
+            if schema is not None:
+                # output_config.format and strict tools compile the schema into a
+                # grammar capped at 24 optional and 16 union-typed parameters per
+                # request (400 "Schema is too complex for compilation"); the HUD
+                # vocabulary has far more optional props, so the command comes
+                # back as the input of one non-strict tool instead.
+                payload["tools"] = [{"name": COMMAND_TOOL_NAME, "description": _COMMAND_TOOL_DESCRIPTION, "input_schema": schema}]
+                payload["tool_choice"] = {"type": "auto"}
+                payload["system"] = f"{system}\n\n{_COMMAND_TOOL_INSTRUCTION}" if system else _COMMAND_TOOL_INSTRUCTION
             path = "/v1/messages"
         elif self.provider_id == "ollama":
             path = "/api/chat"
             payload["stream"] = False
-            if structured_command: payload["format"] = COMMAND_JSON_SCHEMA
+            # Native /api/chat takes the schema only as "format".
+            payload.pop("response_format", None)
+            if schema is not None: payload["format"] = schema
         elif self.provider_id == "openrouter":
             # OpenRouter's OpenAI-compatible API is rooted at /api/v1.
             path = "/api/v1/chat/completions"
@@ -183,6 +213,9 @@ class TextAdapter(Adapter):
         if self.provider_id == "anthropic":
             content = value.get("content", [])
             if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, Mapping) and block.get("type") == "tool_use" and block.get("name") == COMMAND_TOOL_NAME and isinstance(block.get("input"), Mapping):
+                        return json.dumps(block["input"], separators=(",", ":"))
                 text = "".join(block["text"] for block in content if isinstance(block, Mapping) and block.get("type") == "text" and isinstance(block.get("text"), str))
                 if text: return text
         elif self.provider_id == "ollama":
@@ -202,6 +235,12 @@ class TextAdapter(Adapter):
         if isinstance(choices, list) and choices and isinstance(choices[0], Mapping):
             message = choices[0].get("message", choices[0])
             if isinstance(message, Mapping):
+                tool_calls = message.get("tool_calls")
+                if isinstance(tool_calls, list):
+                    for call in tool_calls:
+                        function = call.get("function") if isinstance(call, Mapping) else None
+                        if isinstance(function, Mapping) and function.get("name") == COMMAND_TOOL_NAME and isinstance(function.get("arguments"), str):
+                            return function["arguments"]
                 content = message.get("content")
                 if isinstance(content, str): return content
                 if isinstance(content, list):
