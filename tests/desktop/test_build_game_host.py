@@ -62,11 +62,15 @@ class BuildGameHostTests(unittest.TestCase):
             trusted_origin="http://127.0.0.1:3000",
         )
         self.dialogs = _BuildDialogs(self.root / "projects", self.builds)
+        # A stand-in player so Windows builds never depend on a local cargo build.
+        self.player = self.root / "auvra-player.exe"
+        self.player.write_bytes(b"MZ" + bytes(62))
         self.host = NativeProjectHost(
             self.root / "state",
             asset_registry=self.registry,
             dialogs=self.dialogs,
             player_template_root=self.template,
+            player_executable=self.player,
         )
         self.project_id, self.revision = self._create_game_project()
 
