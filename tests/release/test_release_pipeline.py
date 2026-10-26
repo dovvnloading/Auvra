@@ -6,17 +6,28 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
 import xml.etree.ElementTree as ET
 
+from Auvra.project.schemas import DOMAIN_NAMES, PROJECT_SCHEMA_NAME
+from release import pipeline
 from release.asset_cooking import cook_assets
 from release.cross_backend import verify_cross_backend
 from release.lifecycle import LifecycleState
 from release.pipeline import ReleaseError, assemble, sign_msix, verify_package, write_input_inventory
-from release.runtime_verify import verify_installed_package
+from release.runtime_verify import (
+    HOST_SCHEMA_FILES,
+    PROJECT_SCHEMA_NAMES,
+    RuntimeVerificationError,
+    verify_installed_package,
+)
 from release.windows_lifecycle import WINDOWS_LIFECYCLE_SCRIPT, run_windows_lifecycle_smoke
+
+
+REPOSITORY = Path(__file__).parents[2]
 
 
 class ReleasePipelineTests(unittest.TestCase):
@@ -106,6 +117,11 @@ class ReleasePipelineTests(unittest.TestCase):
             path = staged / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
+        # Mirror the CI host-input step: the real schema files sit beside Auvra.
+        for relative in HOST_SCHEMA_FILES:
+            path = staged / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes((REPOSITORY / relative.removeprefix("host/")).read_bytes())
         for directory, kind, version, digest in (
             ("python-embed", "pythonEmbed", "3.14.7", "d297e5ff019966817ad8502465176139f2d3d840fa4ed84b13bed399a6ab1f15"),
             ("webview2-fixed", "webview2Fixed", "151.0.4129.107", "f1e1c2c9b34c79ba4d88df77fb79a05441e1bd7481d6a985d76dd377cda45f33"),
@@ -244,6 +260,90 @@ class ReleasePipelineTests(unittest.TestCase):
             self.assertTrue((output / "runtime" / "webview2").is_dir())
             self.assertTrue((output / "native" / "auvra-native.exe").is_file())
             self.assertTrue((output / "release-manifest.json").is_file())
+
+    def test_release_schema_contract_matches_host_schema_modules(self) -> None:
+        self.assertEqual(sorted(PROJECT_SCHEMA_NAMES), sorted((*DOMAIN_NAMES, PROJECT_SCHEMA_NAME)))
+        for relative in HOST_SCHEMA_FILES:
+            self.assertTrue((REPOSITORY / relative.removeprefix("host/")).is_file(), relative)
+
+    def test_host_schemas_are_required_staged_inputs_and_package_contents(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs = self.staged_inputs(root)
+            for relative in ("host/protocol/v1/auvra-host.schema.json", "host/project/v1/hud.schema.json"):
+                schema = inputs / relative
+                original = schema.read_bytes()
+                schema.unlink()
+                with self.assertRaisesRegex(ReleaseError, "missing the packaged host schema"):
+                    write_input_inventory(inputs, root / "inventory.json")
+                with self.assertRaisesRegex(ReleaseError, "missing the packaged host schema"):
+                    assemble(inputs, root / "package", channel="dev", version="1.0.0")
+                self.assertFalse((root / "package").exists())
+                schema.write_bytes(original)
+            # Even a package assembled around the input contract cannot verify.
+            shutil.rmtree(inputs / "host" / "protocol")
+            with mock.patch.object(pipeline, "_require_host_schemas"):
+                assemble(inputs, root / "schemaless", channel="dev", version="1.0.0")
+            with self.assertRaisesRegex(ReleaseError, "missing the packaged host schema: protocol/v1/auvra-host.schema.json"):
+                verify_package(root / "schemaless")
+            with self.assertRaisesRegex(RuntimeVerificationError, "host/protocol/v1/auvra-host.schema.json"):
+                verify_installed_package(root / "schemaless")
+
+    @staticmethod
+    def _stage_application_host(inputs: Path) -> None:
+        """Replace the stub host with the real application tree, as CI does."""
+        host_application = inputs / "host" / "Auvra"
+        shutil.rmtree(host_application)
+        shutil.copytree(
+            REPOSITORY / "Auvra", host_application,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "Auvra.py", "Auvra.pyproj", "bootstrap.py"),
+        )
+
+    def test_packaged_non_ui_smoke_loads_host_schemas_from_the_package_tree(self) -> None:
+        loader = (
+            "import json, sys\n"
+            "from pathlib import Path\n"
+            "root = Path(sys.argv[1]).resolve()\n"
+            "sys.path.insert(0, str(root / 'host'))\n"
+            "from auvra_release_verify import verify_packaged_schemas\n"
+            "verify_packaged_schemas(root)\n"
+            "from Auvra.host import validation\n"
+            "from Auvra.project import schemas\n"
+            "print(json.dumps({'protocol': str(validation.SCHEMA_PATH), 'project': str(schemas.SCHEMA_DIR)}))\n"
+        )
+        def run(*arguments: str) -> subprocess.CompletedProcess[str]:
+            # ``-I`` keeps the developer checkout off sys.path; ``-B`` keeps the
+            # package free of bytecode, which the runtime verifier rejects.
+            return subprocess.run(
+                [sys.executable, "-I", "-B", *arguments],
+                env={**os.environ, "AUVRA_RELEASE_NON_UI_SMOKE": "1"},
+                capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+            )
+
+        with tempfile.TemporaryDirectory(prefix="auvra packaged schemas ") as temporary:
+            root = Path(temporary)
+            inputs = self.staged_inputs(root)
+            self._stage_application_host(inputs)
+            package = root / "package"
+            assemble(inputs, package, channel="dev", version="1.0.0")
+            smoke = run(str(package / "host" / "auvra_startup.py"))
+            self.assertEqual(smoke.returncode, 0, smoke.stdout + smoke.stderr)
+            resolved = run("-c", loader, str(package))
+            self.assertEqual(resolved.returncode, 0, resolved.stdout + resolved.stderr)
+            values = json.loads(resolved.stdout)
+            host = package.resolve() / "host"
+            self.assertEqual(Path(values["protocol"]), host / "protocol" / "v1" / "auvra-host.schema.json")
+            self.assertEqual(Path(values["project"]), host / "project" / "v1")
+
+            # A manifest-consistent package whose shipped schema cannot load
+            # must fail the packaged smoke, not merely the file inventory.
+            (inputs / "host" / "project" / "v1" / "hud.schema.json").write_text("{not json", encoding="utf-8")
+            broken = root / "broken-package"
+            assemble(inputs, broken, channel="dev", version="1.0.0")
+            verify_installed_package(broken)
+            failed = run(str(broken / "host" / "auvra_startup.py"))
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("packaged project schema could not be loaded: hud", failed.stderr)
 
     def test_integrity_and_forbidden_inputs_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -13,6 +13,11 @@ import Auvra.desktop.contracts as contracts
 from Auvra.diagnostics.core import DiagnosticsSession, install_diagnostics
 from Auvra.desktop.controller import FrameController, FrameProcessExitedError
 from Auvra.desktop.contracts import FrameConfig, FrameConfigurationError, FrameFailure, FrameMode, FrameStartupError, FrameState
+from Auvra.desktop.native_engine import (
+    NativeEngineChildExitedError,
+    NativeEngineStartupError,
+    NativeEngineUnavailableHost,
+)
 from Auvra.desktop.policy import FramePolicy
 
 
@@ -125,6 +130,75 @@ class ControllerTests(unittest.TestCase):
             controller.close()
             controller.close()
             self.assertEqual(owner.closes, 1)
+
+    def test_native_startup_failure_records_its_cause_on_the_web_fallback(self):
+        class FakeNativeEngine:
+            def __init__(self, command, **_roots):
+                self.command = command
+
+        class FailingNativeHost:
+            error: Exception = RuntimeError("unset")
+            closes = 0
+
+            def __init__(self, engine, **_roots):
+                self.engine = engine
+
+            def start(self, *, editor_session):
+                raise type(self).error
+
+            def close(self, *, timeout=None):
+                type(self).closes += 1
+
+        cases = (
+            ("packaged", NativeEngineChildExitedError(101), "child_exited", "child_exited, exit status 101"),
+            ("development", NativeEngineStartupError("not ready", code="startup_timeout"),
+             "startup_timeout", "(startup_timeout)"),
+        )
+        for mode, error, code, cause in cases:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory(prefix="auvra native fallback ") as temp:
+                session = DiagnosticsSession(Path(temp) / "diagnostics", run_id="run-native-fallback", mode="test")
+                session.start()
+                install_diagnostics(session)
+                FailingNativeHost.error = error
+                FailingNativeHost.closes = 0
+                process = Mock(is_alive=Mock(return_value=True))
+                root = Path(temp) / "dist"
+                root.mkdir()
+                (root / "index.html").write_text("<!doctype html>")
+                with patch.object(contracts, "_CONTROLLED_TEST_PROFILE_PARENTS", {Path(temp)}), \
+                     patch("Auvra.desktop.contracts._REPO_FRONTEND_DIST", root), \
+                     patch.object(controller_module, "NativeEngine", FakeNativeEngine), \
+                     patch.object(controller_module, "NativeEngineHost", FailingNativeHost):
+                    if mode == "packaged":
+                        controller = FrameController.packaged(
+                            process, root, profile_parent=Path(temp),
+                            native_command=["auvra-native.exe"], frame_factory=FakeFrame,
+                        )
+                    else:
+                        controller = FrameController.development(
+                            process, "http://127.0.0.1:3099/", profile_parent=Path(temp),
+                            native_command=["auvra-native.exe"], frame_factory=FakeFrame,
+                        )
+                try:
+                    host = controller.native_engine_host
+                    self.assertIsInstance(host, NativeEngineUnavailableHost)
+                    self.assertEqual(host.code, code)
+                    self.assertIn(cause, host.reason)
+                    self.assertIs(controller.dispatcher._engine_service, host)
+                    status = host.handle("engine.getStatus", {})
+                    self.assertEqual((status["status"], status["fallbackReason"]), ("degraded", host.reason))
+                    self.assertEqual(FailingNativeHost.closes, 1)
+                    records = [record for record in session.snapshot()
+                               if record["event"] == "native.lifecycle"
+                               and record.get("attributes", {}).get("state") == "unavailable"]
+                    self.assertEqual(len(records), 1)
+                    self.assertEqual(records[0]["attributes"]["code"], code)
+                    self.assertEqual(records[0]["attributes"]["errorType"], type(error).__name__)
+                    self.assertEqual(records[0]["attributes"].get("returnCode"), getattr(error, "returncode", None))
+                finally:
+                    controller.close()
+                    install_diagnostics(None)
+                    session.close(outcome="success")
 
     def test_native_owner_is_closed_when_frame_start_fails(self):
         class FailingFrame(FakeFrame):

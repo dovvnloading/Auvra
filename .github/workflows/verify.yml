@@ -258,6 +258,12 @@ jobs:
           $hostAuvra = Join-Path $hostInput 'Auvra'
           Remove-Item -LiteralPath (Join-Path $hostAuvra 'Auvra.py'), (Join-Path $hostAuvra 'Auvra.pyproj'), (Join-Path $hostAuvra 'launcher\bootstrap.py') -Force -ErrorAction SilentlyContinue
           Get-ChildItem -LiteralPath $hostAuvra -Directory -Filter '__pycache__' -Recurse | Remove-Item -Recurse -Force
+          # Host modules resolve protocol/v1 and project/v1 beside Auvra; ship only the schema files.
+          foreach ($schemaDir in 'protocol\v1', 'project\v1') {
+            $schemaTarget = Join-Path $hostInput $schemaDir
+            New-Item -ItemType Directory -Path $schemaTarget -Force | Out-Null
+            Copy-Item -Path (Join-Path (Join-Path $env:GITHUB_WORKSPACE $schemaDir) '*.schema.json') -Destination $schemaTarget -Force
+          }
           $licenses = Join-Path $env:RUNNER_TEMP 'auvra-license-input'
           New-Item -ItemType Directory -Path $licenses -Force | Out-Null
           Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'LICENSE') -Destination (Join-Path $licenses 'Auvra-LICENSE')
@@ -294,7 +300,7 @@ jobs:
           $env:AUVRA_RELEASE_NON_UI_SMOKE = '1'
           & (Join-Path $unpacked 'runtime\python\python.exe') -S (Join-Path $unpacked 'host\auvra_startup.py')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Write-Output 'offline packaged startup non-UI smoke: OK'
+          Write-Output 'offline packaged startup non-UI smoke (manifest and host schemas): OK'
           $env:AUVRA_RELEASE_SMOKE = '1'
           $env:AUVRA_RELEASE_PACKAGE_ROOT = $unpacked
           uv run --locked --no-sync python -W error::ResourceWarning -m unittest tests.desktop.test_release_smoke -v

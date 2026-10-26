@@ -66,6 +66,13 @@ def _read_source(frame: object) -> str:
     return values[0]
 
 
+def _native_fallback_cause(controller: FrameController) -> str:
+    """Name why the packaged controller fell back from the native engine."""
+    host = controller.native_engine_host
+    return (f"packaged native engine fell back to {type(host).__name__}: "
+            f"code={getattr(host, 'code', None)!r}, reason={getattr(host, 'reason', None)!r}")
+
+
 class ReleaseSmokeTests(unittest.TestCase):
     def test_verified_packaged_frame_starts_hidden_and_cleans_owned_resources(self) -> None:
         if os.name != "nt" or os.environ.get("AUVRA_RELEASE_SMOKE") != "1":
@@ -110,13 +117,16 @@ class ReleaseSmokeTests(unittest.TestCase):
                         sdk=sdk,
                         browser_executable_folder=runtime,
                     )
+                    # Native startup is settled before the frame starts; report
+                    # its recorded cause even if the frame would fail later.
+                    self.assertIsInstance(controller.native_engine_host, NativeEngineHost,
+                                          _native_fallback_cause(controller))
                     # The production frame starts with the form hidden; keep
                     # this assertion explicit without changing production code.
                     object.__setattr__(controller.frame.config, "visible", False)
                     controller.start()
                     self.assertEqual(controller.frame.state.value, "ready")
                     self.assertTrue(_read_source(controller.frame).startswith("https://app.auvra.local/"))
-                    self.assertIsInstance(controller.native_engine_host, NativeEngineHost)
                     self.assertIs(controller.dispatcher._engine_service, controller.native_engine_host)
                     self.assertEqual(controller.native_engine_host.engine.state, NativeEngineState.READY)
                     self.assertIsNotNone(controller.native_engine_host.engine.status.pid)

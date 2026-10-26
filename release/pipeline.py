@@ -27,6 +27,8 @@ from urllib.parse import urlsplit
 import xml.etree.ElementTree as ET
 import zlib
 
+from .runtime_verify import HOST_SCHEMA_FILES
+
 
 ROOT = Path(__file__).resolve().parent
 POLICY_PATH = ROOT / "policy.json"
@@ -196,6 +198,16 @@ def _input_inventory(input_root: Path, policy: Mapping[str, Any]) -> dict[str, A
     return inventory
 
 
+def _require_host_schemas(host_root: Path, *, label: str) -> None:
+    """Require the schema files the packaged host resolves beside ``Auvra``."""
+
+    for relative in HOST_SCHEMA_FILES:
+        within_host = relative.removeprefix("host/")
+        path = host_root / within_host
+        if not path.is_file() or path.is_symlink() or _is_reparse(path):
+            raise ReleaseError(f"{label} is missing the packaged host schema: {within_host}")
+
+
 def _validate_runtime_pin_markers(input_root: Path, policy: Mapping[str, Any]) -> None:
     """Require acquisition attestations for extracted third-party runtimes."""
 
@@ -284,6 +296,7 @@ def write_input_inventory(input_root: Path, output: Path) -> dict[str, Any]:
     policy = _read_policy()
     inventory = _input_inventory(input_root.resolve(), policy)
     _validate_runtime_pin_markers(input_root.resolve(), policy)
+    _require_host_schemas(input_root.resolve() / "host", label="host input")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(canonical_json(inventory))
     return inventory
@@ -546,9 +559,10 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'host'))
-from auvra_release_verify import verify_installed_package
+from auvra_release_verify import verify_installed_package, verify_packaged_schemas
 verify_installed_package(ROOT)
 if os.environ.get('AUVRA_RELEASE_NON_UI_SMOKE') == '1':
+    verify_packaged_schemas(ROOT)
     raise SystemExit(0)
 from Auvra.launcher.config import Paths
 from Auvra.launcher.cli import main, run_start
@@ -611,6 +625,7 @@ def _assemble_into(input_root: Path, output_root: Path, *, channel: str, version
     input_root = input_root.resolve()
     inventory = _input_inventory(input_root, policy)
     _validate_runtime_pin_markers(input_root, policy)
+    _require_host_schemas(input_root / "host", label="host input")
     if output_root.exists() and (output_root.is_symlink() or not output_root.is_dir()):
         raise ReleaseError("package output is not a regular directory")
     output_root.mkdir(parents=True, exist_ok=True)
@@ -744,6 +759,7 @@ def verify_package(package_root: Path, *, expected_channel: str | None = None) -
         raise ReleaseError("fixed WebView2 Runtime or managed SDK is missing from package")
     if not (root / "native" / "auvra-native.exe").is_file():
         raise ReleaseError("native engine is missing from package")
+    _require_host_schemas(root / "host", label="package")
     return manifest
 
 
