@@ -727,7 +727,7 @@ impl Viewport {
     fn pump_events(
         &mut self,
         renderer: &mut Renderer,
-        extraction: &RenderExtraction,
+        extraction: Option<&RenderExtraction>,
     ) -> Result<bool, String> {
         self.app.resized = None;
         self.app.redraw_requested = false;
@@ -766,8 +766,11 @@ impl Viewport {
         }
         // Present on every bounded pump, not only on the first open or after
         // explicit recovery. This keeps world mutations and redraw/resize
-        // events visible while the IPC loop remains responsive.
-        renderer.present_surface(surface, self.format, self.width, self.height, extraction)?;
+        // events visible while the IPC loop remains responsive.  Without any
+        // good extraction there is nothing to present, but events still pump.
+        if let Some(extraction) = extraction {
+            renderer.present_surface(surface, self.format, self.width, self.height, extraction)?;
+        }
         Ok(true)
     }
 
@@ -917,6 +920,21 @@ struct App {
     pending_asset_ids: BTreeSet<String>,
     hydration: Option<HydrationDraft>,
     render_state: ProjectRenderState,
+    /// Last extraction the open viewport presented, kept so a failed
+    /// per-frame extraction re-presents it instead of ending the IPC loop.
+    viewport_extraction: Option<RenderExtraction>,
+    viewport_frame: ViewportFrameHealth,
+}
+
+/// Health of the per-frame viewport extraction.  It is tracked so that a
+/// degraded viewport is reported once when it degrades, not on every pump.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ViewportFrameHealth {
+    Healthy,
+    /// Extraction succeeded but left entities beyond the draw budget out.
+    OverBudget,
+    /// Extraction failed; the last good frame is presented instead.
+    ExtractionFailed,
 }
 
 #[derive(Clone)]
@@ -1009,6 +1027,8 @@ impl App {
             pending_asset_ids: BTreeSet::new(),
             hydration: None,
             render_state: ProjectRenderState::default(),
+            viewport_extraction: None,
+            viewport_frame: ViewportFrameHealth::Healthy,
         })
     }
 
@@ -1124,7 +1144,7 @@ impl App {
             "viewport.open" => in_native_phase("viewport_open", || self.open_viewport(&req.params)),
             "viewport.close" => {
                 native_phase("viewport_close");
-                self.viewport = None;
+                self.release_viewport();
                 Ok(json!({"open": false, "world_revision": self.world.revision()}))
             }
             "shutdown" => in_native_phase("shutdown", || Ok(json!({"stopped": true}))),
@@ -1638,7 +1658,10 @@ impl App {
                     self.viewport = Some(viewport);
                     true
                 }
-                Err(error) if viewport_capability_error(&error) => false,
+                Err(error) if viewport_capability_error(&error) => {
+                    self.release_viewport();
+                    false
+                }
                 Err(error) => return Err(error),
             }
         } else {
@@ -1863,6 +1886,49 @@ impl App {
         extract_render_world(&input, gpu::capabilities()).map_err(|e| e.to_string())
     }
 
+    /// Refresh the extraction the open viewport presents.  This cannot fail:
+    /// the live IPC loop must outlive any single frame, so a failed
+    /// extraction keeps the last good frame and an over-budget world presents
+    /// its budget-trimmed extraction.  Each is reported once as it begins.
+    fn refresh_viewport_extraction(&mut self) {
+        let health = match self.build_extraction(&Value::Null) {
+            Ok(extraction) => {
+                let health = if extraction.snapshot.budget_culled_entities > 0 {
+                    ViewportFrameHealth::OverBudget
+                } else {
+                    ViewportFrameHealth::Healthy
+                };
+                self.viewport_extraction = Some(extraction);
+                health
+            }
+            Err(_) => ViewportFrameHealth::ExtractionFailed,
+        };
+        if health != self.viewport_frame {
+            match health {
+                ViewportFrameHealth::Healthy => {}
+                ViewportFrameHealth::OverBudget => diagnostic(
+                    "warning",
+                    "native.render_budget_exceeded",
+                    None,
+                    Some("render_budget_exceeded"),
+                ),
+                ViewportFrameHealth::ExtractionFailed => diagnostic(
+                    "error",
+                    "native.viewport_frame_degraded",
+                    None,
+                    Some("render_extraction_failed"),
+                ),
+            }
+            self.viewport_frame = health;
+        }
+    }
+
+    fn release_viewport(&mut self) {
+        self.viewport = None;
+        self.viewport_extraction = None;
+        self.viewport_frame = ViewportFrameHealth::Healthy;
+    }
+
     fn open_viewport(&mut self, params: &Value) -> Result<Value, String> {
         if let Some(viewport) = &self.viewport {
             return Ok(
@@ -1905,6 +1971,7 @@ impl App {
             title,
             &extraction,
         )?);
+        self.viewport_extraction = Some(extraction);
         Ok(
             json!({"open": true, "alreadyOpen": false, "width": width, "height": height, "ownership": "separate-native-surface", "dockSupport": "unsupported", "dockActive": false, "dockReason": "same-build-native-parenting-gate-not-passed"}),
         )
@@ -2963,18 +3030,21 @@ fn pump_viewport(app: &mut App) -> Result<(), String> {
     if app.viewport.is_none() {
         return Ok(());
     }
-    let extraction = app.build_extraction(&Value::Null)?;
+    // Extraction problems degrade this frame only; they never leave the loop.
+    app.refresh_viewport_extraction();
     let Some(renderer) = app.renderer.as_mut() else {
-        app.viewport = None;
+        app.release_viewport();
         return Ok(());
     };
     let mut viewport = app
         .viewport
         .take()
         .ok_or("viewport disappeared during event pump")?;
-    let still_open = viewport.pump_events(renderer, &extraction)?;
+    let still_open = viewport.pump_events(renderer, app.viewport_extraction.as_ref())?;
     if still_open {
         app.viewport = Some(viewport);
+    } else {
+        app.release_viewport();
     }
     Ok(())
 }
@@ -3520,6 +3590,68 @@ mod tests {
                 .unwrap();
         assert_eq!(third.get("id").and_then(Value::as_u64), Some(43));
         assert_eq!(third.get("ok").and_then(Value::as_bool), Some(true));
+    }
+
+    #[test]
+    fn over_budget_and_failed_viewport_frames_degrade_instead_of_ending_the_loop() {
+        use auvra_native::render_world::MAX_RENDER_ENTITIES;
+        let mut app = App::new().unwrap();
+        // A valid world (the native limit is 16,384 entities) that exceeds
+        // the per-frame draw budget.  Its extraction used to fail, and the
+        // live IPC loop's viewport pump propagated that out of run_ipc as
+        // native.fatal.
+        let over = 8;
+        let entities = (0..MAX_RENDER_ENTITIES + over)
+            .map(|index| Entity {
+                id: format!("entity-{index:05}"),
+                position: [index as f64 * 0.001, 0.0, 0.0],
+                color: [0.7, 0.7, 0.7, 1.0],
+                generation: 0,
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0, 1.0, 1.0],
+                velocity: [0.0, 0.0, 0.0],
+                render: None,
+                light: None,
+                animation: None,
+            })
+            .collect();
+        app.world.hydrate(0, entities).unwrap();
+        let extraction = app.build_extraction(&Value::Null).unwrap();
+        assert_eq!(extraction.snapshot.entities.len(), MAX_RENDER_ENTITIES);
+        assert_eq!(extraction.snapshot.budget_culled_entities, over as u32);
+        let farthest = stable_id(&format!("entity-{:05}", MAX_RENDER_ENTITIES + over - 1));
+        assert!(!extraction.snapshot.visible_entity_ids.contains(&farthest));
+
+        let presented_hash = |app: &App| {
+            app.viewport_extraction
+                .as_ref()
+                .map(|extraction| extraction.snapshot.extraction_hash.clone())
+        };
+        app.refresh_viewport_extraction();
+        assert_eq!(app.viewport_frame, ViewportFrameHealth::OverBudget);
+        let presented = presented_hash(&app);
+        assert_eq!(presented, Some(extraction.snapshot.extraction_hash));
+
+        // An extraction that fails outright keeps the last good frame.
+        app.render_state.msaa_samples = 3;
+        assert!(app.build_extraction(&Value::Null).is_err());
+        app.refresh_viewport_extraction();
+        assert_eq!(app.viewport_frame, ViewportFrameHealth::ExtractionFailed);
+        assert_eq!(presented_hash(&app), presented);
+
+        // The next good frame replaces it; closing the viewport resets state.
+        app.render_state.msaa_samples = 0;
+        app.world.hydrate(1, Vec::new()).unwrap();
+        app.refresh_viewport_extraction();
+        assert_eq!(app.viewport_frame, ViewportFrameHealth::Healthy);
+        assert!(
+            app.viewport_extraction
+                .as_ref()
+                .is_some_and(|extraction| extraction.snapshot.entities.is_empty())
+        );
+        app.release_viewport();
+        assert!(app.viewport_extraction.is_none());
+        assert!(pump_viewport(&mut app).is_ok());
     }
 
     fn project_payload() -> Value {
