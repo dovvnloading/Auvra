@@ -1,4 +1,4 @@
-import React, { useRef, useLayoutEffect, useMemo, forwardRef, useImperativeHandle, useState, useEffect } from 'react';
+import { useRef, useLayoutEffect, useMemo, forwardRef, useImperativeHandle, useState, useEffect } from 'react';
 import * as THREE from 'three';
 import { ThreeEvent } from '@react-three/fiber';
 import { LevelObject } from '../../../types';
@@ -238,7 +238,7 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
         }
     };
 
-    const handlePointerUp = (e: ThreeEvent<PointerEvent>) => {
+    const handlePointerUp = (_e: ThreeEvent<PointerEvent>) => {
         if (isSculpting.current) {
             isSculpting.current = false;
             

@@ -194,7 +194,7 @@ describe('HUD editor attributes from project data', () => {
 });
 
 describe('HUD editor binding hints with a string key', () => {
-    it('says the string key hides the live value of a bound text', () => {
+    it('says the live value of a bound text wins over its string key while playing', () => {
         documents.set('hud/hud-main', {
             id: 'hud-main',
             elements: [textElement('score', { text: '0', textKey: 'hud.score', color: '#ffffff', bind: { text: 'vars.score' } })],
@@ -202,15 +202,13 @@ describe('HUD editor binding hints with a string key', () => {
         const { container } = render(<HUDEditor />);
         selectOnCanvas(container, 'score');
 
-        expect(screen.getByLabelText('text')).toHaveAccessibleDescription(
-            'Bound to vars.score, but textKey is set and overrides it; clear textKey to show the live value.',
-        );
+        expect(screen.getByLabelText('text')).toHaveAccessibleDescription('Bound to vars.score; shows the live value while playing.');
         expect(screen.getByLabelText('text Key')).toHaveAccessibleDescription(
-            'String key from Localization; overrides the text. The live value of vars.score is not shown while it is set.',
+            'String key from Localization; overrides the text unless it is bound. While playing, the live value of vars.score is shown instead.',
         );
 
         fireEvent.change(screen.getByLabelText('text Key'), { target: { value: '' } });
         expect(screen.getByLabelText('text')).toHaveAccessibleDescription('Bound to vars.score; shows the live value while playing.');
-        expect(screen.getByLabelText('text Key')).toHaveAccessibleDescription('String key from Localization; overrides the text.');
+        expect(screen.getByLabelText('text Key')).toHaveAccessibleDescription('String key from Localization; overrides the text unless it is bound.');
     });
 });

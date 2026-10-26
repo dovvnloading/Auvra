@@ -18,6 +18,16 @@ export interface NativeProjectDocumentState<T extends { id: string }> {
   refresh: () => void;
 }
 
+/** Which stored document a value belongs to. Revisions are not part of it. */
+const documentIdentity = (domain: string, documentId: string, projectId: string | null): string => (
+  JSON.stringify([domain, documentId, projectId])
+);
+
+const sameContent = (left: unknown, right: unknown): boolean => {
+  if (left === right) return true;
+  try { return JSON.stringify(left) === JSON.stringify(right); } catch { return false; }
+};
+
 export function useNativeProjectDocument<T extends { id: string }>(
   domain: string,
   documentId: string,
@@ -35,6 +45,12 @@ export function useNativeProjectDocument<T extends { id: string }>(
   );
   const writeQueue = useRef<Promise<void>>(Promise.resolve());
   const writeSequence = useRef(0);
+  // The identity `document` currently describes. A revision bump, session
+  // re-lease or refresh re-hydrates the same document, and the hook keeps
+  // returning it meanwhile: editors copy `document` into drafts, so a
+  // placeholder default here would wipe the user's data. Only the first load
+  // or a project/document switch starts from the default.
+  const shownIdentity = useRef(documentIdentity(domain, documentId, projectId));
 
   useEffect(() => projectService.subscribe((status) => {
     setProjectId(status.projectId);
@@ -71,7 +87,11 @@ export function useNativeProjectDocument<T extends { id: string }>(
     };
     setHydrated(false);
     setError(null);
-    setDocument(createDefault());
+    const identity = documentIdentity(domain, documentId, projectId);
+    if (shownIdentity.current !== identity) {
+      shownIdentity.current = identity;
+      setDocument(createDefault());
+    }
 
     if (!projectId) {
       setHydrated(true);
@@ -101,7 +121,10 @@ export function useNativeProjectDocument<T extends { id: string }>(
         (candidate as { id?: unknown }).id === documentId
       ));
       if (controller.signal.aborted || !isCurrent()) return;
-      setDocument(loaded ? loaded : createDefault());
+      const value = loaded ? loaded : createDefault();
+      // Equal content keeps the current object, so the re-hydrate after every
+      // write does not hand consumers a new document they would re-sync to.
+      setDocument((current) => (sameContent(current, value) ? current : value));
       setHydrated(true);
       finish('success');
     }).catch((cause: unknown) => {

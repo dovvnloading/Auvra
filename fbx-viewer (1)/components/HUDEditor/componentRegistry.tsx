@@ -7,14 +7,30 @@ import { DynamicHUDComponent } from './DynamicHUDComponent';
 import { HUDComponentDefinition } from './types';
 import { useTranslation, type TranslationParams } from '../../runtime/localization';
 
+/** The literal text prop of a localizable component and the string-table key prop that can replace it. */
+export interface LocalizedTextProp {
+    literal: string;
+    key: string;
+}
+
+const LOCALIZED_TEXT_PROPS: Readonly<Record<string, LocalizedTextProp>> = {
+    Text: { literal: 'text', key: 'textKey' },
+    Button: { literal: 'label', key: 'labelKey' },
+};
+
+/** The literal/key pair of a component type, or null when it takes no string key. */
+export const localizedTextProp = (type: string): LocalizedTextProp | null =>
+    Object.prototype.hasOwnProperty.call(LOCALIZED_TEXT_PROPS, type) ? LOCALIZED_TEXT_PROPS[type] : null;
+
 /**
- * A string-table key wins over the literal text when it is set, including a literal the player
- * fills from a binding. The HUD editor warns when an element has both.
+ * A string-table key wins over the authored literal text when it is set. A live binding on the
+ * literal wins over the key: while playing, the HUD renderer clears the key whenever the bound
+ * value resolves, so the bound value is the content. An unresolved binding keeps the key.
  */
 const useLocalizedText = (literal: unknown, key: unknown, params?: TranslationParams): string => {
     const t = useTranslation();
     if (typeof key === 'string' && key.trim()) return t(key.trim(), params);
-    return typeof literal === 'string' || typeof literal === 'number' ? String(literal) : '';
+    return typeof literal === 'string' || typeof literal === 'number' || typeof literal === 'boolean' ? String(literal) : '';
 };
 
 // Generic Components

@@ -1,5 +1,5 @@
 
-import React, { useRef, useImperativeHandle, forwardRef, useMemo, useState } from 'react';
+import { useRef, useImperativeHandle, forwardRef, useMemo } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import { Hittable } from '../../types';
@@ -19,7 +19,7 @@ export interface ProjectileManagerHandle {
     unregisterTarget: (id: string) => void;
 }
 
-export const ProjectileManager = forwardRef<ProjectileManagerHandle, {}>((props, ref) => {
+export const ProjectileManager = forwardRef<ProjectileManagerHandle, {}>((_props, ref) => {
     const meshRef = useRef<THREE.InstancedMesh>(null);
     const projectilesRef = useRef<ProjectileData[]>([]);
     const targetsRef = useRef<Hittable[]>([]);
@@ -28,8 +28,6 @@ export const ProjectileManager = forwardRef<ProjectileManagerHandle, {}>((props,
     const rayStart = useMemo(() => new THREE.Vector3(), []);
     const rayEnd = useMemo(() => new THREE.Vector3(), []);
     
-    // Force re-renders for React logic if needed
-    const [, setTick] = useState(0);
 
     useImperativeHandle(ref, () => ({
         fire: (origin: THREE.Vector3, direction: THREE.Vector3, speed: number, team: 'Player' | 'Enemy', damage: number) => {

@@ -54,7 +54,7 @@ describe('level ground colliders', () => {
     expect(distinctArgs('hills')).toBe(2);
   });
 
-  it('give an unsculpted terrain a field and keep the flat ground unless a terrain dips below it', () => {
+  it('give an unsculpted terrain a field and keep the flat ground, under any terrain that dips below y = 0', () => {
     rapier.args.clear();
     const view = render(<LevelGroundColliders terrains={[terrain('plain', [0, 5, 0])]} />);
     expect(rapier.args.has('plain')).toBe(true);
@@ -63,6 +63,7 @@ describe('level ground colliders', () => {
     rapier.args.clear();
     view.rerender(<LevelGroundColliders terrains={[terrain('pit', [0, 0, 0], [0, 0, 0, 0, -2, 0, 0, 0, 0])]} />);
     expect(rapier.args.has('pit')).toBe(true);
-    expect(rapier.args.has('flat')).toBe(false);
+    // Bodies that leave the terrain still land; the flat ground's height is covered in terrainPhysics.test.ts.
+    expect(rapier.args.has('flat')).toBe(true);
   });
 });

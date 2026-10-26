@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import RAPIER from '@dimforge/rapier3d-compat';
 import type { LevelObject } from '../../types';
-import { levelNeedsFlatGround, terrainHeightfieldShape, terrainLowestSurface } from '../../runtime/terrainPhysics';
+import { FLAT_GROUND_CLEARANCE, flatGroundHeight, terrainHeightfieldShape, terrainLowestSurface } from '../../runtime/terrainPhysics';
 
 const terrain = (heights: number[], resolution: number, extra: Partial<LevelObject> = {}): LevelObject => ({
   id: 'terrain-1', levelId: 'level-1', modelId: '', name: 'Terrain', type: 'terrain',
@@ -76,23 +76,23 @@ describe('terrain physics', () => {
     world.free();
   });
 
-  it('keeps the flat ground off-terrain unless a terrain reaches below it', () => {
-    expect(levelNeedsFlatGround([])).toBe(true);
+  it('keeps the flat ground at y = 0 unless a terrain reaches below it, then just under that terrain', () => {
+    expect(flatGroundHeight([])).toBe(0);
     // Flat at y = 2 (here unsculpted), or hills above y = 0: bodies knocked off the edge land at y = 0, like the player.
     expect(terrainLowestSurface(terrain([], 4))).toBeCloseTo(2, 6);
-    expect(levelNeedsFlatGround([terrain([], 4)])).toBe(true);
-    expect(levelNeedsFlatGround([terrain(new Array(25).fill(3), 4, { position: [0, 0, 0] })])).toBe(true);
-    // A valley below y = 0 would be covered by the flat ground.
+    expect(flatGroundHeight([terrain([], 4)])).toBe(0);
+    expect(flatGroundHeight([terrain(new Array(25).fill(3), 4, { position: [0, 0, 0] })])).toBe(0);
+    // A valley below y = 0: the flat ground drops under it rather than covering it, or going away.
     const valley = terrain([...new Array(24).fill(0), -1.5], 4, { position: [0, 0.5, 0] });
     expect(terrainLowestSurface(valley)).toBeCloseTo(-1, 6);
-    expect(levelNeedsFlatGround([terrain([], 4), valley])).toBe(false);
+    expect(flatGroundHeight([terrain([], 4), valley])).toBeCloseTo(-1 - FLAT_GROUND_CLEARANCE, 6);
     // A tilted terrain dips below its origin.
     const tilted = terrain([], 4, { position: [0, 0, 0], rotation: [0.2, 0, 0] });
     expect(terrainLowestSurface(tilted)!).toBeLessThan(-1);
-    expect(levelNeedsFlatGround([tilted])).toBe(false);
-    // A terrain with no heightfield (invalid grid) neither gets one nor blocks the flat ground.
+    expect(flatGroundHeight([tilted])).toBeCloseTo(terrainLowestSurface(tilted)! - FLAT_GROUND_CLEARANCE, 6);
+    // A terrain with no heightfield (invalid grid) neither gets one nor moves the flat ground.
     expect(terrainLowestSurface(terrain([], 0))).toBeNull();
-    expect(levelNeedsFlatGround([terrain([], 0, { position: [0, -10, 0] })])).toBe(true);
+    expect(flatGroundHeight([terrain([], 0, { position: [0, -10, 0] })])).toBe(0);
   });
 
   it('folds the terrain scale into the heightfield extent', () => {

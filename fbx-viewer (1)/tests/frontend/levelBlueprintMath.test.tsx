@@ -86,6 +86,8 @@ describe('level blueprint math on editor-made nodes', () => {
   });
 
   it('converts its Value pin to text', () => {
+    // Declared String: an undeclared name would infer Float from the numeric text '7'.
+    levelVariables.reset([{ name: 'label', type: 'String', value: '' }]);
     expect(run([literal('seven', 7), toStringNode], [link('seven', 'seven:out', 'str', 'str:value')], 'label', 'str', 'str:string')).toBe('7');
   });
 });

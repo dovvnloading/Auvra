@@ -1,5 +1,4 @@
 
-import * as THREE from 'three';
 
 export type InteractionMode = 'select' | 'place' | 'paint' | 'mask' | 'blueprint' | 'sculpt';
 export type PaintMode = 'add' | 'erase';

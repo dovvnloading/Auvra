@@ -156,7 +156,7 @@ describe('HUD editor localization preview', () => {
         selectOnCanvas(container, 'menu-title-title');
         const textKey = screen.getByLabelText('text Key');
         expect(textKey).toHaveValue('');
-        expect(textKey).toHaveAccessibleDescription('String key from Localization; overrides the text.');
+        expect(textKey).toHaveAccessibleDescription('String key from Localization; overrides the text unless it is bound.');
 
         fireEvent.change(textKey, { target: { value: 'menu.title' } });
         expect(storedElements('menu-title').find(element => element.id === 'menu-title-title')?.props.textKey).toBe('menu.title');
@@ -166,7 +166,7 @@ describe('HUD editor localization preview', () => {
 
         selectOnCanvas(container, 'menu-title-play');
         const labelKey = screen.getByLabelText('label Key');
-        expect(labelKey).toHaveAccessibleDescription('String key from Localization; overrides the label.');
+        expect(labelKey).toHaveAccessibleDescription('String key from Localization; overrides the label unless it is bound.');
         fireEvent.change(labelKey, { target: { value: 'menu.play' } });
         expect(container.querySelector('[data-hud-element="menu-title-play"]')).toHaveTextContent('Start');
     });

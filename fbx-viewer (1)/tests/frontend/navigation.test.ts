@@ -263,6 +263,90 @@ describe('navigation grid', () => {
   });
 });
 
+describe('raised collider tops', () => {
+  // A 6 x 6 m platform, 1 m high, over x 1..7, z -3..3.
+  const platform = wall('platform', [4, 0, 0], [6, 1, 6]);
+  // A 2 m wide ramp whose top face runs from the ground at x = -4 up to the platform edge at (1, 1).
+  const rampAngle = Math.atan2(1, 5);
+  const ramp = levelObject('ramp', {
+    position: [-1.5 + Math.sin(rampAngle) * 0.1, 0.5 - Math.cos(rampAngle) * 0.1, 0],
+    rotation: [0, 0, rampAngle],
+    components: [boxCollider('ramp', [Math.hypot(5, 1), 0.2, 2], { offset: [0, 0, 0] })],
+  });
+  // Stairs up the platform's south side: 0.25 m risers on 0.4 m treads, narrower than a cell.
+  const stairs = [1, 2, 3].map(i => wall(`step${i}`, [4, 0, -3 - 0.4 * (4 - i) + 0.2], [2, 0.25 * i, 0.4]));
+  const top = { x: 4, y: 1, z: 0 };
+
+  const cellAt = (grid: ReturnType<typeof buildNavGrid>, x: number, z: number): number =>
+    Math.floor((z - grid.originZ) / grid.cellSize) * grid.columns + Math.floor((x - grid.originX) / grid.cellSize);
+
+  it('bakes a platform top as a raised walkable region of its own', () => {
+    const grid = buildNavGrid([platform], OPTIONS);
+    const cell = cellAt(grid, 4, 0);
+    expect(isWalkable(grid, 4, 0)).toBe(true);
+    expect(grid.heights[cell]).toBeCloseTo(1);
+    expect(grid.raised[cell]).toBe(1);
+    // Kept the agent radius back from its ledges, and walled by the inflated obstacle at ground level.
+    expect(isWalkable(grid, 1.25, 0)).toBe(false);
+    expect(isWalkable(grid, 0.75, 0)).toBe(false);
+    expect(isWalkable(grid, 0.25, 0)).toBe(true);
+
+    // A 1 m climb is more than a step: no path, and no sight line across the ledge.
+    const ground = { x: -8, y: 0, z: 0 };
+    expect(grid.regions[cell]).not.toBe(grid.regions[cellAt(grid, -8, 0)]);
+    expect(findPath(grid, ground, top)).toBeNull();
+    expect(hasLineOfSight(grid, ground, top)).toBe(false);
+    const partial = planPath(grid, ground, top, { partial: true })!;
+    expect(partial.reachable).toBe(false);
+    expect(partial.points[partial.points.length - 1].y).toBeCloseTo(0);
+    // Up on the platform the target may still be reached by jumping; at ground level under it, it is shut off.
+    expect(isWalledOff(grid, top)).toBe(false);
+    expect(isWalledOff(grid, { x: 4, y: 0, z: 0 })).toBe(true);
+  });
+
+  it('climbs onto a platform up a ramp, with waypoints at the surface height', () => {
+    const grid = buildNavGrid([platform, ramp], OPTIONS);
+    // The cell centred on x = -1.25 sits 2.75 m up the 1-in-5 ramp.
+    expect(grid.heights[cellAt(grid, -1.25, 0)]).toBeCloseTo(0.55, 3);
+    const plan = planPath(grid, { x: -8, y: 0, z: 0 }, top)!;
+    expect(plan).not.toBeNull();
+    expect(plan.reachable).toBe(true);
+    expect(plan.points[plan.points.length - 1].y).toBeCloseTo(1);
+
+    const cells = findPath(grid, { x: -8, y: 0, z: 0 }, top, { smooth: false })!;
+    for (let i = 1; i < cells.length; i++) expect(Math.abs(cells[i].y - cells[i - 1].y)).toBeLessThanOrEqual(grid.maxStepHeight);
+    // Everything above a step off the ground is on the ramp or the platform.
+    for (const point of cells.filter(p => p.y > grid.maxStepHeight)) {
+      expect(point.x > 1 || (point.x > -4 && Math.abs(point.z) < 1)).toBe(true);
+    }
+    expect(cells.some(p => p.x > -3 && p.x < 0 && p.y > 0.2 && p.y < 0.8)).toBe(true);
+  });
+
+  it('climbs stairs with treads narrower than a cell, but not risers above maxStepHeight', () => {
+    const from = { x: 4, y: 0, z: -8 };
+    const grid = buildNavGrid([platform, ...stairs], OPTIONS);
+    const plan = planPath(grid, from, top);
+    expect(plan).not.toBeNull();
+    expect(plan!.reachable).toBe(true);
+    const cells = findPath(grid, from, top, { smooth: false })!;
+    for (let i = 1; i < cells.length; i++) expect(Math.abs(cells[i].y - cells[i - 1].y)).toBeLessThanOrEqual(0.5 + 1e-6);
+
+    const lowStep = buildNavGrid([platform, ...stairs], { ...OPTIONS, maxStepHeight: 0.2 });
+    expect(planPath(lowStep, from, top)).toBeNull();
+    expect(isWalkable(lowStep, 4, 0)).toBe(true);
+  });
+
+  it('keeps walking under a top with headroom above the ground', () => {
+    const canopy = levelObject('canopy', { position: [0, 2, 0], components: [boxCollider('canopy', [4, 0.2, 4])] });
+    const grid = buildNavGrid([canopy], OPTIONS);
+    const cell = cellAt(grid, 0, 0);
+    expect(isWalkable(grid, 0, 0)).toBe(true);
+    expect(grid.heights[cell]).toBeCloseTo(0);
+    expect(grid.raised[cell]).toBe(0);
+    expect(findPath(grid, { x: -5, z: 0 }, { x: 5, z: 0 })).toHaveLength(2);
+  });
+});
+
 describe('nav grid re-baking', () => {
   afterEach(() => {
     vi.useRealTimers();

@@ -43,7 +43,7 @@ export const AIController: React.FC<AIControllerProps> = ({
     const vTarget = useMemo(() => new THREE.Vector3(), []);
     const vForward = useMemo(() => new THREE.Vector3(), []);
 
-    useFrame((state, delta) => {
+    useFrame((_state, delta) => {
         if (!enabled || !enemyApi.current || !enemyObject || !targetObject) return;
 
         // CRITICAL: Check death status using the proper name lookup

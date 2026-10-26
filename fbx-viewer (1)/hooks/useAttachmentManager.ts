@@ -1,6 +1,5 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import * as THREE from 'three';
 import { AttachmentData, LoadedModelData } from '../types';
 import { importPhaseLabel, loadFBXFile } from '../utils/modelLoader';
 import { disposeObject } from '../utils/processing/ModelLifecycle';

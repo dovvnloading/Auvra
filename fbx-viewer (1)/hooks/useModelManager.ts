@@ -17,6 +17,7 @@ import {
   collectOverrideTextures,
   normalizeMaterialOverrides,
   overrideTextureCacheKey,
+  overrideTextureFlipY,
   type MaterialOverrides,
 } from '../utils/materialOverrides';
 
@@ -49,6 +50,17 @@ const nativeDocuments = (snapshot: Awaited<ReturnType<typeof projectService.getS
   return values.filter((value): value is Record<string, any> => Boolean(value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string'));
 };
 
+/**
+ * Give a texture moved onto `root` that model's UV orientation (a reimport
+ * may change the source format), as a reload would; a change re-uploads it.
+ */
+const alignOverrideTextureFlipY = (texture: THREE.Texture, root: THREE.Object3D): void => {
+  const flipY = overrideTextureFlipY(root);
+  if (texture.flipY === flipY) return;
+  texture.flipY = flipY;
+  texture.needsUpdate = true;
+};
+
 /** Move material-override textures from a replaced model onto same-named materials of its replacement. */
 const adoptOverrideTextures = (from: THREE.Object3D, to: THREE.Object3D, materialNames: string[]): void => {
   if (!materialNames.length) return;
@@ -67,6 +79,7 @@ const adoptOverrideTextures = (from: THREE.Object3D, to: THREE.Object3D, materia
     const texture = textures.get(material.name);
     if (!texture) return;
     if (material.map && material.map !== texture) material.map.dispose();
+    alignOverrideTextureFlipY(texture, to);
     material.map = texture;
     material.transparent = true;
     material.alphaTest = 0.5;
@@ -342,6 +355,7 @@ export const useModelManager = (
       // Material overrides sit on top of the texture overrides, so they come off
       // the old object first and go onto the replacement last.
       const materialOverrideTextures = detachMaterialOverrides(existing.object);
+      for (const texture of materialOverrideTextures.values()) alignOverrideTextureFlipY(texture, replacement.object);
       adoptOverrideTextures(existing.object, replacement.object, Object.keys(existing.textureOverrides || {}));
       attachMaterialOverrides(replacement.object, normalizeMaterialOverrides(materialOverrides), materialOverrideTextures);
       const published = replacement;
@@ -422,8 +436,7 @@ export const useModelManager = (
   /** Persist a model's material overrides, then apply them to its loaded object; rejects when they cannot be saved. */
   const updateModelMaterialOverrides = useCallback(async (modelId: string, overrides: MaterialOverrides): Promise<void> => {
     projectService.assertWritable();
-    const model = models.find((candidate) => candidate.id === modelId);
-    if (!model) throw new Error('The model is no longer loaded.');
+    if (!models.some((candidate) => candidate.id === modelId)) throw new Error('The model is no longer loaded.');
     const next = normalizeMaterialOverrides(overrides);
     try {
       await dbOperations.updateModelMaterialOverrides(modelId, next);
@@ -431,9 +444,15 @@ export const useModelManager = (
       frontendDiagnostics.failure('material_override_update_failed', error);
       throw error;
     }
-    // The textures are normally already bound by the material editor's live preview.
-    attachMaterialOverrides(model.object, next, collectOverrideTextures(model.object));
-    setModels((previous) => previous.map((candidate) => (candidate.id === modelId ? { ...candidate, materialOverrides: next } : candidate)));
+    // A reimport or texture reset may have replaced (and disposed) the object
+    // while the save awaited, so apply to the model in state, not the one
+    // captured above. The textures are normally already bound by the material
+    // editor's live preview; applying is idempotent.
+    setModels((previous) => previous.map((candidate) => {
+      if (candidate.id !== modelId) return candidate;
+      attachMaterialOverrides(candidate.object, next, collectOverrideTextures(candidate.object));
+      return { ...candidate, materialOverrides: next };
+    }));
   }, [models]);
 
   const removeTextureReference = useCallback((textureId: string) => {
@@ -559,10 +578,14 @@ export const useModelManager = (
       const extension = mime.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
       const file = new File([blob], `material-override.${extension}`, { type: mime });
       const newTexture = await new THREE.TextureLoader().loadAsync(textureUrl);
-      newTexture.colorSpace = THREE.SRGBColorSpace;
-      newTexture.flipY = true;
       const model = models.find((candidate) => candidate.id === modelId);
-      if (!model) throw new Error('Model not found');
+      if (!model) {
+        newTexture.dispose();
+        throw new Error('Model not found');
+      }
+      newTexture.colorSpace = THREE.SRGBColorSpace;
+      // glTF UVs start top-left; project hydration orients the stored override the same way.
+      newTexture.flipY = overrideTextureFlipY(model.object);
       let targetMapUUID: string | null = targetTextureUuid || null;
 
       if (!targetMapUUID) {
@@ -626,7 +649,7 @@ export const useModelManager = (
     if (!model || !textureUrl) throw new Error('Model or preview texture not found');
     const newTexture = await new THREE.TextureLoader().loadAsync(textureUrl);
     newTexture.colorSpace = THREE.SRGBColorSpace;
-    newTexture.flipY = true;
+    newTexture.flipY = overrideTextureFlipY(model.object);
     let targetMapUUID: string | null = targetTextureUuid || null;
     if (!targetMapUUID) model.object.traverse((child) => {
       if (targetMapUUID || !(child as THREE.Mesh).isMesh) return;

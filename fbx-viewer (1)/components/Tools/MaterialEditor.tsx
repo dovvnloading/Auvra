@@ -31,6 +31,24 @@ export interface MaterialEditorProps {
   className?: string;
 }
 
+/**
+ * Names the project protocol reserves as JSON keys, so the host refuses
+ * material overrides keyed by them: `_PROTOCOL_RESERVED_KEY` in
+ * Auvra/project/schemas.py and `reservedMaterialName` in
+ * project/v1/models.schema.json. Python's `re.I` also folds dotted and dotless
+ * I (U+0130, U+0131) to i, long s (U+017F) to s and the Kelvin sign (U+212A)
+ * to k, which `isReservedMaterialName` folds first, and its `$` allows one
+ * trailing newline, which `\n?` mirrors.
+ */
+const RESERVED_MATERIAL_NAME = /^(?:path|filepath|filesystempath|sourcepath|assetpath|directorypath|absolutepath|localpath|base64|binary|bytes|blob|credential|credentials|secret|token|api[_-]?key|password|authorization|auth[_-]?header|file|animationfiles|object|url)\n?(?![\s\S])/i;
+
+/** True when the project cannot store overrides for a material with this name. */
+export const isReservedMaterialName = (name: string): boolean =>
+  RESERVED_MATERIAL_NAME.test(name.replace(/[\u0130\u0131]/g, 'i').replace(/\u017f/g, 's').replace(/\u212a/g, 'k'));
+
+const reservedNameTooltip = (name: string) =>
+  `Materials named “${name.trim()}” cannot be overridden: the project format reserves that name. Rename the material in the source file to edit it.`;
+
 const formatNumber = (value: number) => (Number.isInteger(value) ? String(value) : value.toFixed(2));
 
 const FieldRow: React.FC<{
@@ -341,7 +359,9 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
       <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-2 space-y-1.5">
         {materials.length === 0 && <div className="text-center py-8 text-gray-600 text-xs italic">This model has no materials.</div>}
         {visible.map((material) => {
-          const editable = material.name !== '';
+          const unnamed = material.name === '';
+          const reserved = !unnamed && isReservedMaterialName(material.name);
+          const editable = !unnamed && !reserved;
           const isOpen = editable && expanded === material.name;
           const override = draft[material.name];
           const fieldCount = override ? Object.keys(override).length : 0;
@@ -354,13 +374,14 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
                 onClick={() => setExpanded(isOpen ? null : material.name)}
                 aria-expanded={isOpen}
                 className="w-full flex items-center gap-2 px-2 py-2 text-left disabled:cursor-not-allowed"
-                title={editable ? undefined : 'Unnamed materials cannot be overridden.'}
+                title={editable ? undefined : reserved ? reservedNameTooltip(material.name) : 'Unnamed materials cannot be overridden.'}
               >
                 {isOpen ? <ChevronDown size={12} className="text-gray-500 shrink-0" /> : <ChevronRight size={12} className="text-gray-500 shrink-0" />}
                 <span className="w-4 h-4 rounded border border-gray-700 shrink-0" style={{ backgroundColor: swatch }} aria-hidden />
-                <span className={`flex-1 min-w-0 truncate text-xs ${editable ? 'text-gray-200' : 'text-gray-600 italic'}`}>
-                  {editable ? material.name : 'Unnamed material'}
+                <span className={`flex-1 min-w-0 truncate text-xs ${editable ? 'text-gray-200' : reserved ? 'text-gray-500' : 'text-gray-600 italic'}`}>
+                  {unnamed ? 'Unnamed material' : material.name}
                 </span>
+                {reserved && <span className="text-[9px] font-bold text-amber-500/80 uppercase shrink-0">Reserved</span>}
                 <span className="text-[9px] text-gray-600 uppercase shrink-0">{material.type.replace(/^Mesh|Material$/g, '')}</span>
                 {fieldCount > 0 && (
                   <span className="text-[9px] font-bold text-blue-300 bg-blue-900/40 border border-blue-800/50 rounded px-1.5 shrink-0">{fieldCount}</span>

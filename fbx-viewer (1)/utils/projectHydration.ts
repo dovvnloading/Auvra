@@ -9,7 +9,7 @@ import { applyModelImportSettings, stripGeometry } from './processing/ModelTrans
 import { generateThumbnail } from './thumbnailGenerator';
 import { disposeModel, disposeObject } from './processing/ModelLifecycle';
 import { prepareAnimationClips } from './animationBinding';
-import { hydrateMaterialOverrides } from './materialOverrides';
+import { hydrateMaterialOverrides, overrideTextureFlipY } from './materialOverrides';
 import {
   assetDiagnosticAttributes,
   diagnosticErrorType,
@@ -248,7 +248,8 @@ export async function loadGameContent(
           try {
             assertCurrent();
             texture.colorSpace = THREE.SRGBColorSpace;
-            texture.flipY = true;
+            // glTF UVs start top-left; the editor's retexture orients it the same way.
+            texture.flipY = overrideTextureFlipY(loaded.object);
             loaded.object.traverse((child) => {
               if (!(child as THREE.Mesh).isMesh) return;
               const material = (child as THREE.Mesh).material;
