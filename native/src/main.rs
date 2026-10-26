@@ -2044,7 +2044,14 @@ fn project_candidate(
         let rotation = vector4(value.get("rotation"), [0.0, 0.0, 0.0, 1.0])?;
         let scale = vector3(value.get("scale"), [1.0, 1.0, 1.0])?;
         let color = vector4(value.get("color"), [0.7, 0.7, 0.7, 1.0])?;
-        let render = if let Some(model_id) = value.get("modelId").and_then(Value::as_str) {
+        // Editor-authored spawners, audio emitters, sky spheres and terrain
+        // carry an empty modelId.  Treat it exactly like an absent one: such
+        // objects have no mesh reference and therefore no render component.
+        let render = if let Some(model_id) = value
+            .get("modelId")
+            .and_then(Value::as_str)
+            .filter(|model_id| !model_id.trim().is_empty())
+        {
             let asset_hash = model_assets
                 .get(model_id)
                 .ok_or("invalid_project|object references a missing model")?;
@@ -3589,6 +3596,64 @@ mod tests {
             stable_id("environment")
         );
         assert_eq!(extraction.snapshot.gizmos.len(), 1);
+    }
+
+    #[test]
+    fn empty_model_ids_on_non_mesh_objects_hydrate_without_a_render_component() {
+        let model = "0000000000000000000000000000000000000000000000000000000000000000";
+        let non_mesh_types = ["spawn_point", "audio_emitter", "sky_sphere", "terrain"];
+        let mut objects = non_mesh_types
+            .iter()
+            .map(|kind| json!({"id": kind, "levelId": "level", "modelId": "", "type": kind}))
+            .collect::<Vec<_>>();
+        objects.push(json!({"id": "blank", "levelId": "level", "modelId": "  \t"}));
+        objects.push(json!({"id": "absent", "levelId": "level"}));
+        objects.push(json!({"id": "prop", "levelId": "level", "modelId": "model", "type": "prop"}));
+        let payload = json!({
+            "projectId": "editor-objects",
+            "projectRevision": 2,
+            "domains": {
+                "levels": {"schemaVersion": 1, "documents": [{"id": "level"}]},
+                "models": {"schemaVersion": 1, "documents": [{"id": "model", "assetId": model}]},
+                "objects": {"schemaVersion": 1, "documents": objects},
+            }
+        });
+        let (_, _, entities, _, _) = project_candidate(&payload).unwrap();
+        let renders = entities
+            .iter()
+            .map(|entity| (entity.id.as_str(), entity.render.as_ref()))
+            .collect::<BTreeMap<_, _>>();
+        for id in non_mesh_types.iter().copied().chain(["blank", "absent"]) {
+            assert!(renders[id].is_none(), "{id} must not reference a model");
+        }
+        assert_eq!(
+            renders["prop"].and_then(|render| render.asset_hash.as_deref()),
+            Some(model)
+        );
+
+        // The same editor payload hydrates the live world end to end.
+        let mut app = App::new().unwrap();
+        app.authenticated = true;
+        let hydrated = app
+            .dispatch(Request {
+                id: 1,
+                protocol: PROTOCOL.into(),
+                method: "world.hydrate".into(),
+                params: payload,
+            })
+            .unwrap();
+        assert!(hydrated.ok, "{:?}", hydrated.error);
+        assert_eq!(app.world.len(), non_mesh_types.len() + 3);
+
+        // A non-empty modelId must still name a real model.
+        let missing = json!({"projectId": "editor-objects", "projectRevision": 3, "domains": {
+            "levels": {"schemaVersion": 1, "documents": [{"id": "level"}]},
+            "objects": {"schemaVersion": 1, "documents": [{"id": "prop", "levelId": "level", "modelId": "gone"}]},
+        }});
+        assert_eq!(
+            project_candidate(&missing).unwrap_err(),
+            "invalid_project|object references a missing model"
+        );
     }
 
     #[test]
