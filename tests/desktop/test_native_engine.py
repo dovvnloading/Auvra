@@ -305,6 +305,28 @@ class NativeEngineTests(unittest.TestCase):
         self.assertNotIn("do-not-print-this-token", encoded)
         self.assertNotIn("x" * 9000, encoded)
 
+    def test_native_renderer_degradation_diagnostics_are_forwarded(self) -> None:
+        engine = self.make_engine()
+        for level, event, code in (
+            ("warning", "native.renderer_unavailable", "renderer_initialization_failed"),
+            ("warning", "native.render_budget_exceeded", "render_budget_exceeded"),
+            ("error", "native.viewport_frame_degraded", "render_extraction_failed"),
+        ):
+            accepted = engine._diagnostics_append({
+                "schema": "auvra.native-diagnostic/1",
+                "level": level,
+                "event": event,
+                "code": code,
+            })
+            self.assertTrue(accepted, event)
+            record = next(
+                item for item in reversed(self.diagnostic_session.snapshot())
+                if item.get("attributes", {}).get("state") == event
+            )
+            self.assertEqual(record["attributes"]["code"], code)
+        encoded = json.dumps(self.diagnostic_session.snapshot())
+        self.assertNotIn("native.diagnostic_invalid", encoded)
+
     def test_native_operation_diagnostic_preserves_only_safe_correlation(self) -> None:
         engine = self.make_engine()
         accepted = engine._diagnostics_append({

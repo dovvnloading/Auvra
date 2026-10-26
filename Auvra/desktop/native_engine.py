@@ -44,11 +44,15 @@ _NATIVE_DIAGNOSTIC_EVENTS = frozenset({
     "native.configuration_failed", "native.fatal", "native.diagnostic_failure",
     "native.operation_started", "native.operation_phase",
     "native.operation_completed", "native.operation_failed",
+    "native.renderer_unavailable", "native.render_budget_exceeded",
+    "native.viewport_frame_degraded",
 })
 _NATIVE_DIAGNOSTIC_CODES = frozenset({
     "fatal_protocol_error", "invalid_session_token", "fatal_error",
     "serialization_failed",
     "operation_failed",
+    "renderer_initialization_failed", "render_budget_exceeded",
+    "render_extraction_failed",
 })
 _NATIVE_DIAGNOSTIC_PHASES = frozenset({
     "dispatch", "complete", "world_validate", "world_commit", "world_advance",
