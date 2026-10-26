@@ -8,9 +8,11 @@ const MAX_PENDING = 64;
 const MAX_COMPLETED_IDS = 256;
 const REQUEST_TIMEOUT_MS = 15_000;
 const LONG_REQUEST_TIMEOUT_MS = 120_000;
+// Building a game copies every shipped asset; give it far longer than other project work.
+const BUILD_REQUEST_TIMEOUT_MS = 900_000;
 const LONG_RUNNING_METHODS = new Set<Request['method']>([
   'project.create', 'project.open', 'project.openRecent', 'project.save', 'project.saveAs',
-  'project.exportPack', 'project.importPack', 'project.importLegacy',
+  'project.exportPack', 'project.importPack', 'project.importLegacy', 'project.buildGame',
 ]);
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
@@ -128,9 +130,11 @@ export class NativeHostTransport implements HostTransport {
     span.phase('queued', { method: request.method, queueDepth: this.pending.size });
 
     return new Promise<Response>((resolve, reject) => {
-      const requestTimeout = LONG_RUNNING_METHODS.has(request.method)
-        ? Math.max(this.timeoutMs, LONG_REQUEST_TIMEOUT_MS)
-        : this.timeoutMs;
+      const requestTimeout = request.method === 'project.buildGame'
+        ? Math.max(this.timeoutMs, BUILD_REQUEST_TIMEOUT_MS)
+        : LONG_RUNNING_METHODS.has(request.method)
+          ? Math.max(this.timeoutMs, LONG_REQUEST_TIMEOUT_MS)
+          : this.timeoutMs;
       const timer = setTimeout(() => {
         this.pending.delete(request.id);
         this.rememberCompleted(request.id);

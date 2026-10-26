@@ -141,6 +141,28 @@ jobs:
           AUVRA_NATIVE_SESSION_TOKEN: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
         run: cargo +1.98.0 run --release --locked -- --self-test
 
+  desktop-player-build:
+    name: Desktop game player (windows-latest)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: player-desktop
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Select pinned Rust toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt
+
+      - name: Check player formatting
+        run: cargo +1.98.0 fmt -- --check
+
+      - name: Run locked player tests
+        run: cargo +1.98.0 test --locked
+
+      - name: Build locked desktop player
+        run: cargo +1.98.0 build --release --locked
+
   native-project-smoke:
     name: Native project lifecycle (Windows WebView2)
     runs-on: windows-latest
@@ -224,6 +246,10 @@ jobs:
         working-directory: native
         run: cargo +1.98.0 build --release --locked
 
+      - name: Build locked Windows game player
+        working-directory: player-desktop
+        run: cargo +1.98.0 build --release --locked
+
       - name: Set up CPython and locked host environment
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
@@ -274,7 +300,7 @@ jobs:
           $developmentSuffixes = '.pyc', '.pdb', '.ilk', '.obj', '.lib', '.exp', '.map', '.log', '.dmp', '.dump'
           Get-ChildItem -LiteralPath $site -File -Recurse | Where-Object { $developmentSuffixes -contains $_.Extension.ToLowerInvariant() } | Remove-Item -Force
           $stage = Join-Path $env:RUNNER_TEMP 'auvra-stage-inputs'
-          pwsh -NoProfile -File release/stage_inputs.ps1 -Frontend (Join-Path $env:GITHUB_WORKSPACE 'fbx-viewer (1)\dist') -PythonEmbed (Join-Path $env:AUVRA_RUNTIME 'python-embed') -PythonSitePackages $site -WebView2Sdk $env:AUVRA_SDK -WebView2Fixed (Join-Path $env:AUVRA_RUNTIME 'webview2-fixed') -NativeBinary (Join-Path $env:GITHUB_WORKSPACE 'native\target\release\auvra-native.exe') -HostInput $hostInput -Licenses $licenses -Output $stage
+          pwsh -NoProfile -File release/stage_inputs.ps1 -Frontend (Join-Path $env:GITHUB_WORKSPACE 'fbx-viewer (1)\dist') -PythonEmbed (Join-Path $env:AUVRA_RUNTIME 'python-embed') -PythonSitePackages $site -WebView2Sdk $env:AUVRA_SDK -WebView2Fixed (Join-Path $env:AUVRA_RUNTIME 'webview2-fixed') -NativeBinary (Join-Path $env:GITHUB_WORKSPACE 'native\target\release\auvra-native.exe') -GamePlayerBinary (Join-Path $env:GITHUB_WORKSPACE 'player-desktop\target\release\auvra-player.exe') -HostInput $hostInput -Licenses $licenses -Output $stage
           "AUVRA_STAGE=$stage" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Assemble and MakeAppx-validate unsigned dev package

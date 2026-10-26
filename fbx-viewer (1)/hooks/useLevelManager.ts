@@ -7,7 +7,7 @@ import { useNotification } from '../context/NotificationContext';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { editorSession, selectObjectsForLevel, type EditorSessionLease } from '../utils/editorSession';
 import { subscribeDomainCascade, type DomainCascadeEvent } from '../utils/domainCascade';
-import { resolveTerrainHeightfield } from '../utils/terrainHeightfield';
+import { resolveTerrainHeightfield } from '../utils/terrainHeightfieldEditor';
 import { isTerrainHeightfieldPending, TerrainHeightfieldEncodingError } from '../utils/terrainHeightfieldCodec';
 
 const DEFAULT_LEVEL_ID = 'default_level';
@@ -690,6 +690,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
         name: type === 'spawn_point' ? 'Enemy Spawner' : 
               type === 'audio_emitter' ? 'Audio Emitter' :
               type === 'sky_sphere' ? 'Sky Atmosphere' :
+              type === 'player_start' ? 'Player Start' :
               type === 'terrain' ? `Terrain_${Math.floor(Math.random()*100)}` :
               (type === 'foliage' ? `${model?.name}_Foliage` : `${model?.name}_Prop`),
         position,

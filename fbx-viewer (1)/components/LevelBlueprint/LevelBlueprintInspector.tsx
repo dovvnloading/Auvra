@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Settings2, MessageSquare, Box, Database, Trash2, Shield, Skull, Hash, Type, ToggleLeft, AlertTriangle } from 'lucide-react';
+import { Settings2, MessageSquare, Box, Database, Trash2, Shield, Skull, Hash, Type, ToggleLeft, AlertTriangle, DoorOpen, Save } from 'lucide-react';
 import { LogicNode, LevelObject } from '../../types';
 import { describeActor, isOverlapEvent, overlapEventName, overlapTargetData, overlapTargetWarning, resolveOverlapTarget, selectedOverlapActorId } from './overlapTargets';
 
@@ -8,6 +8,8 @@ interface LevelBlueprintInspectorProps {
     node: LogicNode;
     onUpdate: (updates: Partial<LogicNode>) => void;
     levelObjects: LevelObject[];
+    /** Levels an Open Level node can travel to. */
+    levels?: { id: string, name: string }[];
     globalVariables: { blueprintName: string, name: string, type: string, blueprintType: string }[];
     onDelete: () => void;
 }
@@ -16,6 +18,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
     node,
     onUpdate,
     levelObjects,
+    levels = [],
     globalVariables,
     onDelete
 }) => {
@@ -32,6 +35,10 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
 
     const overlapTarget = isOverlapEvent(node) ? resolveOverlapTarget(node, levelObjects) : null;
     const overlapWarning = overlapTarget ? overlapTargetWarning(overlapTarget) : null;
+
+    const levelAction = node.type === 'LevelAction' ? node.data?.action : undefined;
+    const openLevelId = typeof node.data?.levelId === 'string' ? node.data.levelId : '';
+    const openLevelMissing = levelAction === 'OpenLevel' && openLevelId !== '' && !levels.some(level => level.id === openLevelId);
 
     return (
         <div className="w-80 bg-gray-900 border-l border-gray-800 flex flex-col shrink-0 shadow-xl z-20 animate-in slide-in-from-right-10 duration-200 h-full">
@@ -166,6 +173,61 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                                 <span>{overlapWarning}</span>
                             </div>
                         )}
+                    </div>
+                )}
+
+                {/* Specific: Open Level */}
+                {levelAction === 'OpenLevel' && (
+                    <div className="space-y-3">
+                        <div className="flex items-center gap-2 text-indigo-400 text-xs font-bold">
+                            <DoorOpen size={14} /> Level Travel
+                        </div>
+                        <div className="space-y-1">
+                            <label className="text-[10px] text-gray-400">Target Level</label>
+                            <select
+                                value={openLevelId}
+                                onChange={(e) => {
+                                    const level = levels.find(l => l.id === e.target.value);
+                                    // One update: name and data together, so neither overwrites the other.
+                                    if (level) onUpdate({ name: `Open Level (${level.name})`, data: { ...(node.data || {}), levelId: level.id } });
+                                }}
+                                className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                            >
+                                <option value="" disabled>-- Select Level --</option>
+                                {openLevelMissing && (
+                                    <option value={openLevelId} disabled>Missing level</option>
+                                )}
+                                {levels.map(level => (
+                                    <option key={level.id} value={level.id}>{level.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                        {(openLevelMissing || !openLevelId) && (
+                            <div role="alert" className="flex items-start gap-2 rounded border border-amber-700/60 bg-amber-950/40 p-2 text-[10px] text-amber-300">
+                                <AlertTriangle size={12} className="shrink-0 mt-px" />
+                                <span>{openLevelMissing ? 'Missing level: it was deleted.' : 'No level selected; this node does nothing.'}</span>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* Specific: Save / Load Game */}
+                {(levelAction === 'SaveGame' || levelAction === 'LoadGame') && (
+                    <div className="space-y-3">
+                        <div className="flex items-center gap-2 text-indigo-400 text-xs font-bold">
+                            <Save size={14} /> Save Slot
+                        </div>
+                        <div className="space-y-1">
+                            <label htmlFor={`save-slot-${node.id}`} className="text-[10px] text-gray-400">Slot (blank for default)</label>
+                            <input
+                                id={`save-slot-${node.id}`}
+                                type="text"
+                                value={typeof node.data?.slot === 'string' ? node.data.slot : ''}
+                                onChange={(e) => updateData('slot', e.target.value)}
+                                placeholder="default"
+                                className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                            />
+                        </div>
                     </div>
                 )}
 

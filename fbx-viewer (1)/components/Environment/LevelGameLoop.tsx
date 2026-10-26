@@ -1,514 +1,102 @@
-
-import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { useFrame } from '@react-three/fiber';
-import { AuvraCanvas } from '../../renderer/AuvraCanvas';
-import { Environment, PerformanceMonitor } from '@react-three/drei';
-import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing';
-import { SkeletonUtils } from 'three-stdlib';
 import { useScene } from '../../context/SceneContext';
-import { InstancedLevelLayer } from './InstancedLevelLayer';
-import { AudioSystem } from './AudioSystem';
-import { SkySystem } from './SkySystem'; // Added Import
-import { SandboxEntity, SandboxEntityHandle } from '../Sandbox/SandboxEntity';
-import { PlayerController } from '../Sandbox/PlayerController';
-import { AIController } from '../Sandbox/AIController';
-import { CharacterCameraRig } from '../Sandbox/CharacterCameraRig';
-import { SandboxUI } from '../Sandbox/SandboxUI';
-import { ProjectileManager, ProjectileManagerHandle } from '../Sandbox/ProjectileManager';
-import { BloodSystem, BloodSystemHandle } from '../Sandbox/BloodSystem';
-import { GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
-import { useSandboxConfiguration } from '../Sandbox/hooks/useSandboxConfiguration';
 import { useNotification } from '../../context/NotificationContext';
-import { useLevelBlueprintRuntime, UseLevelBlueprintRuntimeProps } from '../../hooks/useLevelBlueprintRuntime';
-import { useRuntimeLevelWorld } from '../../hooks/useRuntimeLevelWorld';
-import { applyMeleeHit, resolveBlueprintDamage } from '../Sandbox/combat';
-import { LevelObject, LoadedModelData, Blueprint, AttachmentData, SocketData } from '../../types';
-import { TerrainObject } from './Terrain/TerrainObject';
-import { frontendDiagnostics } from '../../diagnostics/runtime';
+import { useNativeProjectDocument } from '../../utils/useNativeProjectDocument';
+import { LevelRuntime } from '../../runtime/LevelRuntime';
+import { gameState } from '../../runtime/gameState';
+import {
+    DEFAULT_GAME_SETTINGS,
+    GAME_SETTINGS_DOCUMENT_ID,
+    GameSettings,
+    normalizeGameSettings,
+    PlayerStart,
+    RuntimeHost,
+    RuntimeLevel,
+} from '../../runtime/types';
 
 interface LevelGameLoopProps {
     onExit: () => void;
     spawnPosition?: THREE.Vector3;
 }
 
-// Helper to bundle all necessary assets for a specific enemy type
-interface EnemyAssetBundle {
-    model: LoadedModelData;
-    blueprint: Blueprint;
-    attachments: AttachmentData[];
-    sockets: SocketData[];
+interface GameSettingsDocument {
+    id: string;
+    settings: GameSettings;
 }
 
-// --- INTERNAL COMPONENT: SPAWNER SYSTEM ---
-const SpawnerSystem: React.FC<{
-    levelObjects: LevelObject[];
-    isGameOver: boolean;
-    onSpawn: (data: { blueprintId: string; position: [number, number, number]; rotation: [number, number, number]; spawnerId: string }) => void;
-}> = ({ levelObjects, isGameOver, onSpawn }) => {
-    const spawnerState = useRef<Map<string, { timer: number, count: number }>>(new Map());
-
-    useFrame((state, delta) => {
-        if (isGameOver) return;
-
-        levelObjects.forEach(obj => {
-            if (obj.type === 'spawn_point' && obj.spawnConfig) {
-                const cfg = obj.spawnConfig;
-                if (!cfg.blueprintId) return;
-
-                if (!spawnerState.current.has(obj.id)) {
-                    spawnerState.current.set(obj.id, { timer: 0, count: 0 });
-                }
-
-                const sState = spawnerState.current.get(obj.id)!;
-
-                if (cfg.maxSpawns > 0 && sState.count >= cfg.maxSpawns) return;
-
-                sState.timer += delta;
-
-                if (sState.timer >= cfg.interval) {
-                    sState.timer = 0;
-                    sState.count++;
-
-                    onSpawn({
-                        blueprintId: cfg.blueprintId,
-                        position: obj.position,
-                        rotation: obj.rotation,
-                        spawnerId: obj.id
-                    });
-                }
-            }
-        });
-    });
-
-    return null;
-};
-
-// --- INTERNAL COMPONENT: LOGIC SYSTEM ---
-const LevelLogicSystem: React.FC<UseLevelBlueprintRuntimeProps> = (props) => {
-    useLevelBlueprintRuntime(props);
-    return null;
-};
+// Module scoped so the document hook sees a stable factory.
+const createDefaultGameSettingsDocument = (): GameSettingsDocument => ({
+    id: GAME_SETTINGS_DOCUMENT_ID,
+    settings: DEFAULT_GAME_SETTINGS,
+});
 
 /**
- * LEVEL GAME LOOP
+ * PLAY IN EDITOR
+ *
+ * Thin shell over the shared level runtime: plays the level open in the editor with the project's
+ * game settings, and returns to the editor when the level ends or Escape is pressed.
  */
 export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosition }) => {
-    const { levelObjects, models, activeLevelBlueprint, blueprints, attachments, sockets, audioAssets } = useScene();
+    const { levelObjects, activeLevelBlueprint, levels, currentLevelId } = useScene();
     const { addNotification } = useNotification();
+    const { document: settingsDocument, hydrated: settingsHydrated } = useNativeProjectDocument<GameSettingsDocument>(
+        'metadata', GAME_SETTINGS_DOCUMENT_ID, createDefaultGameSettingsDocument,
+    );
+    const settings = useMemo(() => normalizeGameSettings(settingsDocument.settings), [settingsDocument]);
+    const [sessionKey, setSessionKey] = useState(0);
 
-    // Play runs on a session copy of the level; the authored levelObjects are never changed by gameplay.
-    const {
-        objects: runtimeLevelObjects,
-        destroyObject: destroyRuntimeObject,
-        reset: resetRuntimeWorld
-    } = useRuntimeLevelWorld(levelObjects);
-    
-    // Config
-    const config = useSandboxConfiguration();
-    const { 
-        playerModel, playerBlueprint, 
-        playerAttachments, playerSockets, 
-        allClips 
-    } = config;
+    const level = useMemo<RuntimeLevel>(() => ({
+        id: currentLevelId ?? 'editor-level',
+        name: levels.find(l => l.id === currentLevelId)?.name ?? 'Untitled Level',
+        objects: levelObjects,
+        blueprint: activeLevelBlueprint,
+    }), [activeLevelBlueprint, currentLevelId, levelObjects, levels]);
 
-    // --- References & State ---
-    const playerApiRef = useRef<GraphRuntimeAPI | undefined>(undefined);
-    // Level play has no single enemy instance, so 'Enemy'-targeted variable nodes resolve to nothing.
-    const enemyApiRef = useRef<GraphRuntimeAPI | undefined>(undefined);
-    const playerEntityRef = useRef<SandboxEntityHandle>(null);
-    const projectileManagerRef = useRef<ProjectileManagerHandle>(null);
-    const bloodSystemRef = useRef<BloodSystemHandle>(null);
+    // Play starts where the editor camera is, on the ground.
+    const playerStart = useMemo<PlayerStart | null>(() => (
+        spawnPosition ? { position: [spawnPosition.x, 0.5, spawnPosition.z], rotation: [0, 0, 0] } : null
+    ), [spawnPosition]);
 
-    const [playerStats, setPlayerStats] = useState({ health: 100, maxHealth: 100, stamina: 100 });
-    const [isAiming, setIsAiming] = useState(false);
-    const [restartKey, setRestartKey] = useState(0);
-    const [isGameOver, setIsGameOver] = useState(false);
+    const exitRef = useRef(onExit);
+    const notifyRef = useRef(addNotification);
+    useLayoutEffect(() => {
+        exitRef.current = onExit;
+        notifyRef.current = addNotification;
+    }, [onExit, addNotification]);
 
-    // --- Rendering Quality State ---
-    // highQuality: requested by user. 
-    // dpr: actual device pixel ratio (scaled down on low perf).
-    const [highQuality, setHighQuality] = useState(true);
-    const [dpr, setDpr] = useState(1.5); 
-
-    // --- CALCULATE ALL SCENE CLIPS ---
-    const allSceneClips = useMemo(() => {
-        return models.flatMap(m => m.animations || []);
-    }, [models]);
-
-    // --- RESOLVE WEAPON AUDIO ---
-    const weaponSoundUrls = useMemo(() => {
-        if (!playerBlueprint || !playerBlueprint.weaponSounds) return [];
-        return playerBlueprint.weaponSounds
-            .map(id => audioAssets.find(a => a.id === id)?.url)
-            .filter((url): url is string => !!url);
-    }, [playerBlueprint, audioAssets]);
-
-    // --- VFX HANDLERS ---
-    const handleSpawnBlood = useCallback((position: THREE.Vector3) => {
-        bloodSystemRef.current?.spawn(position);
-    }, []);
-
-    // --- HUD STATS ---
-    // Stable callbacks that skip unchanged values, so stat reports do not re-render the play tree.
-    const handlePlayerHealthChange = useCallback((current: number, max: number) => {
-        setPlayerStats(prev => (prev.health === current && prev.maxHealth === max ? prev : { ...prev, health: current, maxHealth: max }));
-    }, []);
-
-    const handleStaminaChange = useCallback((stamina: number) => {
-        setPlayerStats(prev => (prev.stamina === stamina ? prev : { ...prev, stamina }));
-    }, []);
-
-    const handlePlayerHit = useCallback((damage: number) => {
-        applyMeleeHit(playerEntityRef.current, damage);
-    }, []);
-
-    // Stable, so a dead enemy's despawn timer is not restarted by unrelated re-renders.
-    const handleEnemyDespawn = useCallback((instanceId: string) => {
-        setSpawnedEnemies(prev => prev.filter(e => e.instanceId !== instanceId));
-    }, []);
-
-    // --- PLAYER INSTANCING ---
-    const runtimePlayerModel = useMemo(() => {
-        if (!playerModel || !playerModel.object) return null;
-        try {
-            const clonedObject = SkeletonUtils.clone(playerModel.object) as THREE.Group;
-            clonedObject.position.set(0,0,0);
-            clonedObject.rotation.set(0,0,0);
-            clonedObject.scale.set(1,1,1);
-            return { ...playerModel, object: clonedObject, id: `runtime_player_${restartKey}` };
-        } catch(e) {
-            frontendDiagnostics.failure('player_model_clone_failed', e);
-            return null;
-        }
-    }, [playerModel, restartKey]);
-
-    // --- DYNAMIC SPAWN SYSTEM ---
-    const [spawnedEnemies, setSpawnedEnemies] = useState<{
-        instanceId: string;
-        blueprintId: string;
-        position: [number, number, number];
-        rotation: [number, number, number];
-        spawnerId: string;
-    }[]>([]);
-
-    const handleSpawn = useCallback((data: { blueprintId: string; position: [number, number, number]; rotation: [number, number, number]; spawnerId: string }) => {
-        setSpawnedEnemies(prev => [...prev, {
-            instanceId: crypto.randomUUID(),
-            ...data
-        }]);
-    }, []);
-
-    const resolveEnemyAssets = useCallback((blueprintId: string): EnemyAssetBundle | null => {
-        const bp = blueprints.find(b => b.id === blueprintId);
-        if (!bp || !bp.linkedModelId) return null;
-        const model = models.find(m => m.id === bp.linkedModelId);
-        if (!model) return null;
+    const host = useMemo<RuntimeHost>(() => {
+        const print: RuntimeHost['print'] = (message, type = 'info') => {
+            notifyRef.current({ message, type: type === 'warning' ? 'info' : type });
+        };
         return {
-            model,
-            blueprint: bp,
-            attachments: attachments.filter(a => a.parentModelId === model.id),
-            sockets: sockets.filter(s => s.parentModelId === model.id)
+            print,
+            restartLevel: () => setSessionKey(key => key + 1),
+            endLevel: () => exitRef.current(),
+            // Play-in-editor plays only the level open in the editor.
+            openLevel: () => print('OpenLevel is available in the built game', 'warning'),
+            saveGame: () => print('Save Game is available in the built game'),
+            loadGame: () => print('Load Game is available in the built game'),
+            // Escape returns to the editor, as it always has in play-in-editor.
+            requestPause: () => exitRef.current(),
         };
-    }, [blueprints, models, attachments, sockets]);
-
-    const startPos = useMemo(() => 
-        spawnPosition ? [spawnPosition.x, 0.5, spawnPosition.z] as [number, number, number] : [0, 0.5, 0] as [number, number, number], 
-    [spawnPosition]);
-
-    const { foliageObjects, propObjects, terrainObjects } = useMemo(() => {
-        const foliage: any[] = [];
-        const props: any[] = [];
-        const terrains: any[] = [];
-        runtimeLevelObjects.forEach(obj => {
-            if (obj.type === 'foliage') foliage.push(obj);
-            else if (obj.type === 'prop') props.push(obj);
-            else if (obj.type === 'terrain') terrains.push(obj);
-        });
-        return { foliageObjects: foliage, propObjects: props, terrainObjects: terrains };
-    }, [runtimeLevelObjects]);
-
-    const handleRestart = useCallback(() => {
-        setIsGameOver(false);
-        setIsAiming(false);
-        setPlayerStats(prev => ({ ...prev, health: 100, stamina: 100 }));
-        setSpawnedEnemies([]);
-        resetRuntimeWorld();
-        setRestartKey(prev => prev + 1);
-        setTimeout(() => {
-            const canvas = document.querySelector('canvas');
-            if (canvas) canvas.requestPointerLock();
-        }, 100);
-    }, [resetRuntimeWorld]);
-
-    useEffect(() => {
-        if (playerStats.health <= 0 && !isGameOver) {
-            setIsGameOver(true);
-            document.exitPointerLock(); 
-        }
-    }, [playerStats.health, isGameOver]);
-
-    useEffect(() => {
-        const timer = setTimeout(() => {
-            const canvas = document.querySelector('canvas');
-            if (canvas) canvas.requestPointerLock();
-        }, 100);
-        return () => clearTimeout(timer);
     }, []);
 
-    useEffect(() => {
-        const handleKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
-                if (isGameOver) return;
-                document.exitPointerLock();
-                onExit();
-            }
-        };
-        window.addEventListener('keydown', handleKey);
-        return () => window.removeEventListener('keydown', handleKey);
-    }, [onExit, isGameOver]);
+    // Each play-in-editor run starts from a clean game state.
+    useEffect(() => () => gameState.reset(), []);
 
-    if (!runtimePlayerModel || !playerBlueprint) {
-        return (
-            <div className="flex items-center justify-center h-full text-red-400 flex-col gap-2">
-                <span className="font-bold">Player Configuration Missing</span>
-                <span className="text-xs">Ensure a Player Blueprint and Linked Model exist in the project.</span>
-                <button onClick={onExit} className="px-4 py-2 bg-gray-800 rounded text-white mt-4">Back to Editor</button>
-            </div>
-        );
+    if (!settingsHydrated) {
+        return <div className="flex items-center justify-center h-full w-full bg-black text-xs text-gray-500">Starting play session...</div>;
     }
 
     return (
-        <div className="relative w-full h-full bg-black cursor-none">
-            <AuvraCanvas
-                surfaceId="runtime-level-game-loop"
-                role="runtime"
-                shadows 
-                camera={{ fov: 60 }} 
-                dpr={dpr} // Dynamic DPI scaling based on performance
-                key={restartKey} // Remount = new play session (BeginPlay, overlaps, spawner counts)
-                gl={{
-                    powerPreference: 'high-performance', 
-                    antialias: false, // Disable MSAA to allow PostProcessing (SMAA/Bloom) to work efficiently
-                    stencil: false,
-                    depth: true
-                }}
-            >
-                {/* AUTO-FALLBACK: Monitoring FPS to adjust quality */}
-                <PerformanceMonitor 
-                    onIncline={() => setDpr(2)} 
-                    onDecline={() => setDpr(1)} 
-                    flipflops={3} 
-                    onFallback={() => {
-                        frontendDiagnostics.warning('renderer_quality_reduced');
-                        setHighQuality(false); // Force low quality
-                    }}
-                />
-
-                {/* --- Replaced Hardcoded Lights with SkySystem --- */}
-                <SkySystem levelObjects={runtimeLevelObjects} />
-
-                {/* --- GPU POST PROCESSING PIPELINE --- */}
-                {highQuality && (
-                    <EffectComposer enableNormalPass={false}>
-                        <Bloom luminanceThreshold={1.2} mipmapBlur intensity={0.6} />
-                        <Vignette eskil={false} offset={0.1} darkness={1.1} />
-                        {/* Additional effects like ToneMapping, Noise, or SMAA can be added here */}
-                    </EffectComposer>
-                )}
-
-                <group>
-                    {/* Render Terrain */}
-                    {terrainObjects.map(terrain => (
-                        <TerrainObject 
-                            key={terrain.id} 
-                            data={terrain} 
-                            isSelected={false} 
-                            visible={true}
-                            castShadow
-                            receiveShadow
-                            sculptingEnabled={false}
-                        />
-                    ))}
-
-                    <InstancedLevelLayer models={models} levelObjects={foliageObjects} interactive={false} />
-                    <InstancedLevelLayer models={models} levelObjects={propObjects} interactive={false} />
-                </group>
-
-                <AudioSystem
-                    levelObjects={runtimeLevelObjects}
-                    audioAssets={audioAssets}
-                    isMuted={false} 
-                />
-
-                <BloodSystem ref={bloodSystemRef} />
-                <ProjectileManager ref={projectileManagerRef} />
-
-                <SandboxEntity 
-                    ref={playerEntityRef}
-                    model={runtimePlayerModel}
-                    blueprint={playerBlueprint}
-                    attachments={playerAttachments}
-                    sockets={playerSockets}
-                    allClips={allClips} 
-                    startPosition={startPos}
-                    startRotation={[0, 0, 0]}
-                    team="Player"
-                    color="#3b82f6"
-                    isAiming={isAiming}
-                    onApiReady={(api) => { playerApiRef.current = api; }}
-                    registerHittable={(t) => projectileManagerRef.current?.registerTarget(t)}
-                    unregisterHittable={(id) => projectileManagerRef.current?.unregisterTarget(id)}
-                    onHealthChange={handlePlayerHealthChange}
-                    onSpawnBlood={handleSpawnBlood}
-                />
-
-                {spawnedEnemies.map((enemyData) => {
-                    const assets = resolveEnemyAssets(enemyData.blueprintId);
-                    if (!assets) return null;
-
-                    return (
-                        <RuntimeEnemyController 
-                            key={enemyData.instanceId}
-                            data={enemyData}
-                            assets={assets}
-                            playerObject={runtimePlayerModel.object}
-                            projectileManagerRef={projectileManagerRef}
-                            boundarySize={50}
-                            enabled={!isGameOver}
-                            onDespawn={handleEnemyDespawn}
-                            allSceneClips={allSceneClips}
-                            onSpawnBlood={handleSpawnBlood}
-                            onHitPlayer={handlePlayerHit}
-                        />
-                    );
-                })}
-
-                <PlayerController
-                    apiRef={playerApiRef}
-                    entityRef={playerEntityRef}
-                    projectileManager={projectileManagerRef}
-                    modelObject={runtimePlayerModel.object}
-                    enabled={!isGameOver}
-                    levelObjects={runtimeLevelObjects}
-                    onStaminaChange={handleStaminaChange}
-                    onAimChange={setIsAiming}
-                    weaponSounds={weaponSoundUrls}
-                    weaponVolume={playerBlueprint.weaponVolume ?? 1.0}
-                />
-
-                <LevelLogicSystem
-                    blueprint={activeLevelBlueprint}
-                    levelObjects={runtimeLevelObjects}
-                    playerEntityRef={playerEntityRef}
-                    playerApiRef={playerApiRef}
-                    enemyApiRef={enemyApiRef}
-                    destroyActor={destroyRuntimeObject}
-                    addNotification={addNotification}
-                    onRestart={handleRestart}
-                    onEndLevel={onExit}
-                />
-
-                <SpawnerSystem
-                    levelObjects={runtimeLevelObjects}
-                    isGameOver={isGameOver}
-                    onSpawn={handleSpawn}
-                />
-
-                <CharacterCameraRig 
-                    target={runtimePlayerModel.object} 
-                    graph={playerBlueprint.animationGraph}
-                    active={!isGameOver}
-                    isAiming={isAiming}
-                    aimOffset={playerBlueprint.aimOffset || [0.5, 4.5, 1.0]}
-                />
-            </AuvraCanvas>
-
-            <SandboxUI 
-                isPlaying={true}
-                isGameOver={isGameOver}
-                onStart={handleRestart}
-                onStop={onExit}
-                playerBlueprint={playerBlueprint}
-                enemyBlueprint={playerBlueprint} 
-                playerModel={playerModel} 
-                enemyModel={undefined} 
-                playerStats={playerStats}
-                isAiming={isAiming}
-                highQuality={highQuality}
-                onToggleQuality={() => setHighQuality(!highQuality)}
-            />
-        </div>
-    );
-};
-
-const RuntimeEnemyController: React.FC<{
-    data: any;
-    assets: EnemyAssetBundle;
-    playerObject: THREE.Object3D;
-    projectileManagerRef: React.RefObject<ProjectileManagerHandle | null>;
-    boundarySize: number;
-    enabled: boolean;
-    onDespawn: (instanceId: string) => void;
-    allSceneClips: THREE.AnimationClip[];
-    onSpawnBlood: (pos: THREE.Vector3) => void;
-    onHitPlayer: (damage: number) => void;
-}> = ({ data, assets, playerObject, projectileManagerRef, boundarySize, enabled, onDespawn, allSceneClips, onSpawnBlood, onHitPlayer }) => {
-    const apiRef = useRef<GraphRuntimeAPI | undefined>(undefined);
-    const entityRef = useRef<SandboxEntityHandle>(null);
-    const damage = useMemo(() => resolveBlueprintDamage(assets.blueprint), [assets.blueprint]);
-
-    const instanceModel = useMemo(() => {
-        try {
-            const clonedObject = SkeletonUtils.clone(assets.model.object) as THREE.Group;
-            clonedObject.position.set(0, 0, 0);
-            clonedObject.rotation.set(0, 0, 0);
-            clonedObject.scale.set(1, 1, 1);
-            return {
-                ...assets.model,
-                id: `instance_${data.instanceId}_${assets.model.id}`,
-                object: clonedObject
-            };
-        } catch(e) {
-            frontendDiagnostics.failure('enemy_model_clone_failed', e);
-            return null;
-        }
-    }, [assets.model, data.instanceId]);
-
-    // The AI brain only reports an attack when its impact frame lands within attack range.
-    const handleAttack = useCallback(() => onHitPlayer(damage), [onHitPlayer, damage]);
-    const handleDespawn = useCallback(() => onDespawn(data.instanceId), [onDespawn, data.instanceId]);
-
-    if (!instanceModel) return null;
-
-    return (
-        <>
-            <SandboxEntity 
-                ref={entityRef}
-                model={instanceModel}
-                blueprint={assets.blueprint}
-                attachments={assets.attachments}
-                sockets={assets.sockets}
-                allClips={allSceneClips} 
-                startPosition={data.position}
-                startRotation={data.rotation}
-                team="Enemy"
-                color="#ef4444"
-                onApiReady={(api) => { apiRef.current = api; }}
-                registerHittable={(t) => projectileManagerRef.current?.registerTarget(t)}
-                unregisterHittable={(id) => projectileManagerRef.current?.unregisterTarget(id)}
-                onDespawn={handleDespawn}
-                onSpawnBlood={onSpawnBlood}
-            />
-            
-            <AIController 
-                enemyApi={apiRef}
-                enemyObject={instanceModel.object}
-                targetObject={playerObject}
-                boundarySize={boundarySize}
-                enabled={enabled}
-                onDealDamage={handleAttack}
-            />
-        </>
+        <LevelRuntime
+            level={level}
+            settings={settings}
+            playerStart={playerStart}
+            paused={false}
+            host={host}
+            sessionKey={sessionKey}
+        />
     );
 };

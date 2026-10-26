@@ -14,7 +14,8 @@ export const useGraphRuntime = (
     graph: AnimationGraphData,
     allClips: THREE.AnimationClip[],
     enableInputs: boolean,
-    onActiveStateChange?: (id: string) => void
+    onActiveStateChange?: (id: string) => void,
+    driveLocomotion: boolean = true
 ) => {
     
     // 1. Central Data Store for Variables
@@ -67,7 +68,7 @@ export const useGraphRuntime = (
     useInputHandler(graph, enableInputs, setVariable);
 
     // -- Physics: Handles Mesh Movement
-    useGraphLocomotion(modelObject, graph, variablesRef);
+    useGraphLocomotion(modelObject, graph, variablesRef, driveLocomotion);
 
     // -- Animation: Handles Weight Blending & Playback
     useGraphAnimator(mixer, actionsMap, graph, activeStateRef, previousStateRef, variablesRef);

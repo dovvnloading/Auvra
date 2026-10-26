@@ -1,17 +1,26 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree, type CanvasProps } from "@react-three/fiber";
 import * as THREE from "three";
-import { nativeEngine, type NativeEngineStatus } from "../host/engine";
 import { rendererCoordinator, type RendererSurfaceRole } from "./registry";
-import { frontendDiagnostics } from "../diagnostics/runtime";
 
 type AuvraCanvasGlOptions = Partial<THREE.WebGLRendererParameters> & Partial<Pick<THREE.WebGLRenderer, "outputColorSpace" | "toneMapping" | "toneMappingExposure">>;
+
+export type RequestedRendererBackend = "auto" | "native" | "webgpu" | "webgl2";
 
 export interface AuvraCanvasProps extends Omit<CanvasProps, "onCreated" | "gl"> {
   surfaceId: string;
   role?: RendererSurfaceRole;
   recoveryTimeoutMs?: number;
   gl?: AuvraCanvasGlOptions;
+  /** Reported fallback reason supplied by a wrapper whose own backend could not present this surface. */
+  fallbackReason?: string | null;
+}
+
+/** Reads the `?renderer=` backend request; host-owned backends are resolved by wrappers, never here. */
+export function readRequestedRendererBackend(): RequestedRendererBackend {
+  if (typeof window === "undefined") return "auto";
+  const value = new URLSearchParams(window.location.search).get("renderer");
+  return value === "native" || value === "webgpu" || value === "webgl2" || value === "auto" ? value : "auto";
 }
 
 const RendererMetricsReporter: React.FC<{ surfaceId: string }> = ({ surfaceId }) => {
@@ -91,50 +100,19 @@ const RendererLifecycleBridge: React.FC<{
   return <RendererMetricsReporter surfaceId={surfaceId} />;
 };
 
-const NativeViewportBridge: React.FC<{ surfaceId: string; onFailure: (message: string) => void }> = ({ surfaceId, onFailure }) => {
-  const [status, setStatus] = useState<NativeEngineStatus>(() => nativeEngine.getStatus());
-  useEffect(() => {
-    const unsubscribe = nativeEngine.subscribe(setStatus);
-    void nativeEngine.openViewport().then(setStatus).catch((error: unknown) => {
-      onFailure(error instanceof Error ? error.message : "Native viewport startup failed");
-    });
-    // The Python host owns the native process and viewport across document
-    // reloads. A React unmount therefore must not destroy either resource.
-    return unsubscribe;
-  }, [onFailure]);
-  return (
-    <div data-auvra-native-surface={surfaceId} data-auvra-native-dock-active={status.dockActive === true ? "true" : "false"} className="flex h-full w-full items-center justify-center bg-zinc-950 text-zinc-200">
-      <div className="max-w-md rounded border border-zinc-700 bg-zinc-900 p-5 text-sm shadow-xl">
-        <div className="font-semibold">Native viewport: {status.viewport}</div>
-        <div className="mt-1 text-zinc-400">{status.backend ?? "Starting renderer"}{status.adapter ? ` · ${status.adapter}` : ""}</div>
-        <div className="mt-2 text-xs text-zinc-500">
-          World revision {status.worldRevision}, tick {status.tick ?? 0}. {status.dockActive
-            ? "The native viewport is attached to this desktop frame."
-            : "The scene is rendered in the separately owned native window."}
-        </div>
-        {!status.dockActive && status.dockReason ? <div className="mt-1 text-xs text-zinc-600">{status.dockReason}</div> : null}
-      </div>
-    </div>
-  );
-};
-
-/** Presentation canvas with one centrally owned context policy. */
+/** Host-free presentation canvas with one centrally owned context policy. */
 export const AuvraCanvas: React.FC<AuvraCanvasProps> = ({
   surfaceId,
   role = "presentation",
   recoveryTimeoutMs = 2000,
   gl: providedGl,
+  fallbackReason = null,
   children,
   ...props
 }) => {
   const [generation, setGeneration] = useState(0);
-  const [nativeFailure, setNativeFailure] = useState<string | null>(null);
 
-  const requestedBackend = useMemo(() => {
-    if (typeof window === "undefined") return "auto";
-    const value = new URLSearchParams(window.location.search).get("renderer");
-    return value === "native" || value === "webgpu" || value === "webgl2" || value === "auto" ? value : "auto";
-  }, []);
+  const requestedBackend = useMemo(readRequestedRendererBackend, []);
 
   const gl = useMemo(() => ({
     antialias: true,
@@ -146,24 +124,10 @@ export const AuvraCanvas: React.FC<AuvraCanvasProps> = ({
   }), [providedGl]);
 
   const remount = useCallback(() => setGeneration((value) => value + 1), []);
-  const failNative = useCallback((message: string) => {
-    frontendDiagnostics.record("renderer", "renderer.backend_failed", {
-      backend: "native",
-      fallback: true,
-      code: "native_viewport_start_failed",
-      errorType: "NativeViewportError",
-      surfaceRole: role,
-    }, {}, true);
-    setNativeFailure(message);
-  }, [role]);
-  const nativeEligible = surfaceId === "editor-scene-viewer";
-  if (requestedBackend === "native" && nativeEligible && !nativeFailure) {
-    return <NativeViewportBridge surfaceId={surfaceId} onFailure={failNative} />;
-  }
   const webBackend = requestedBackend === "native" ? "auto" : requestedBackend;
-  const nativeFallback = requestedBackend === "native"
-    ? nativeFailure ?? "This surface is not owned by the separate native viewport; using the web compatibility renderer"
-    : null;
+  const nativeFallback = fallbackReason ?? (requestedBackend === "native"
+    ? "This surface is not owned by the separate native viewport; using the web compatibility renderer"
+    : null);
   return <Canvas key={`${surfaceId}:${generation}`} {...props} gl={gl}><RendererLifecycleBridge surfaceId={surfaceId} role={role} requestedBackend={webBackend} fallbackReasonOverride={nativeFallback} recoveryTimeoutMs={recoveryTimeoutMs} remount={remount} />{children}</Canvas>;
 };
 

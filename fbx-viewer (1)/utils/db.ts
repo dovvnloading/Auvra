@@ -1,7 +1,7 @@
 
 import { AssetCategory, AttachmentData, Blueprint, SocketData, TextureData, LevelObject, LevelData, AudioData, TerrainData } from '../types';
 import { AssetTransferOptions, projectService } from './projectService';
-import { externalizeTerrainData } from './terrainHeightfield';
+import { externalizeTerrainData } from './terrainHeightfieldEditor';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { editorSession, type EditorSessionLease } from './editorSession';
 

@@ -2,14 +2,26 @@
 import React, { useEffect, useRef, useMemo } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
-import { SocketData } from '../../types';
-import { useScene } from '../../context/SceneContext';
+import { SocketData, TextureData } from '../../types';
 
 interface SocketControllerProps {
     data: SocketData;
     parentObject: THREE.Group;
     onMount?: (obj: THREE.Object3D) => void;
+    /** Changes each time the socket should fire its flash; 0 means it has never fired. */
+    flashTrigger: number;
+    /** Resolved URL of the flash texture, or null for the synthetic flash. */
+    flashTextureUrl: string | null;
+    /** Gameplay runtime: editor-only state such as the flash preview is ignored. */
+    runtime?: boolean;
 }
+
+/** Resolves a socket's configured flash texture to its URL, or null when it has none. */
+export const resolveSocketFlashTextureUrl = (socket: SocketData, textures: TextureData[]): string | null => {
+    const textureId = socket.flashConfig?.textureId;
+    if (!textureId) return null;
+    return textures.find(t => t.id === textureId)?.url ?? null;
+};
 
 // --- SHADERS FOR SOFT FALLOFF ---
 const softFlashVertexShader = `
@@ -48,12 +60,20 @@ void main() {
 }
 `;
 
-export const SocketController: React.FC<SocketControllerProps> = ({ data, parentObject, onMount }) => {
+export const SocketController: React.FC<SocketControllerProps> = ({
+    data,
+    parentObject,
+    onMount,
+    flashTrigger,
+    flashTextureUrl,
+    runtime = false
+}) => {
     const objRef = useRef<THREE.Group>(null);
     const flashRef = useRef<THREE.Object3D>(null);
     const gizmoRef = useRef<THREE.Group>(null);
-    const { flashTriggers, textures } = useScene();
-    
+    const parentWorldScale = useRef(new THREE.Vector3());
+    const flashColor = useRef(new THREE.Color());
+
     // Internal state for flash animation
     const flashState = useRef({
         active: false,
@@ -71,18 +91,14 @@ export const SocketController: React.FC<SocketControllerProps> = ({ data, parent
     }, [onMount]);
 
     // Texture Loader
-    const textureUrl = useMemo(() => {
-        if (!data.flashConfig?.textureId) return null;
-        const tex = textures.find(t => t.id === data.flashConfig?.textureId);
-        return tex ? tex.url : null;
-    }, [data.flashConfig?.textureId, textures]);
-
     const flashTexture = useMemo(() => {
-        if (!textureUrl) return null;
-        const tex = new THREE.TextureLoader().load(textureUrl);
+        if (!flashTextureUrl) return null;
+        const tex = new THREE.TextureLoader().load(flashTextureUrl);
         tex.colorSpace = THREE.SRGBColorSpace;
         return tex;
-    }, [textureUrl]);
+    }, [flashTextureUrl]);
+
+    useEffect(() => () => flashTexture?.dispose(), [flashTexture]);
 
     // Create the Soft Material instance once
     const softMaterial = useMemo(() => {
@@ -99,6 +115,8 @@ export const SocketController: React.FC<SocketControllerProps> = ({ data, parent
             depthTest: true
         });
     }, []);
+
+    useEffect(() => () => softMaterial.dispose(), [softMaterial]);
 
     // Attach to Bone Logic
     useEffect(() => {
@@ -141,9 +159,8 @@ export const SocketController: React.FC<SocketControllerProps> = ({ data, parent
     }, [data.position, data.rotation, data.scale]);
 
     // --- TRIGGER LOGIC ---
-    const lastTrigger = flashTriggers[data.id];
     useEffect(() => {
-        if (lastTrigger && data.flashConfig?.enabled) {
+        if (flashTrigger && data.flashConfig?.enabled) {
             flashState.current.active = true;
             flashState.current.timeLeft = data.flashConfig.duration;
             
@@ -154,11 +171,12 @@ export const SocketController: React.FC<SocketControllerProps> = ({ data, parent
                 flashRef.current.visible = true;
             }
         }
-    }, [lastTrigger]);
+    }, [flashTrigger]);
 
-    // --- PREVIEW MODE LOGIC ---
+    // --- PREVIEW MODE LOGIC (editor only) ---
+    const previewFlash = !runtime && !!data.flashConfig?.preview;
     useEffect(() => {
-        if (data.flashConfig?.preview) {
+        if (previewFlash) {
             flashState.current.active = true;
             flashState.current.timeLeft = Infinity;
             if (flashRef.current) flashRef.current.visible = true;
@@ -168,21 +186,21 @@ export const SocketController: React.FC<SocketControllerProps> = ({ data, parent
                 flashState.current.timeLeft = 0;
             }
         }
-    }, [data.flashConfig?.preview]);
+    }, [previewFlash]);
 
     // Animation & Compensation Loop
     useFrame((_, delta) => {
         if (!objRef.current) return;
 
         // --- 1. SCALE COMPENSATION ---
-        const parentWorldScale = new THREE.Vector3();
+        const worldScale = parentWorldScale.current;
         if (objRef.current.parent) {
-            objRef.current.parent.getWorldScale(parentWorldScale);
+            objRef.current.parent.getWorldScale(worldScale);
         } else {
-            parentWorldScale.set(1, 1, 1);
+            worldScale.set(1, 1, 1);
         }
 
-        const maxScale = Math.max(parentWorldScale.x, parentWorldScale.y, parentWorldScale.z, 0.0001);
+        const maxScale = Math.max(worldScale.x, worldScale.y, worldScale.z, 0.0001);
         const invScale = 1.0 / maxScale;
 
         if (gizmoRef.current) {
@@ -215,7 +233,7 @@ export const SocketController: React.FC<SocketControllerProps> = ({ data, parent
                         opacity = progress > 0.7 ? (1 - progress) * 3 : 1.0; 
                     }
 
-                    const targetColor = new THREE.Color(data.flashConfig?.color || '#ffffff');
+                    const targetColor = flashColor.current.set(data.flashConfig?.color || '#ffffff');
                     
                     // Update Material Properties (Supports both Basic and Shader)
                     flashRef.current.traverse((child) => {

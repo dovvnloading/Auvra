@@ -1,13 +1,32 @@
 
-import React, { useEffect, forwardRef, useImperativeHandle, useRef, useMemo, useState } from 'react';
+import React, { useEffect, forwardRef, useImperativeHandle, useRef, useMemo, useState, useCallback } from 'react';
 import * as THREE from 'three';
+import { useFrame } from '@react-three/fiber';
 import { LoadedModelData, Blueprint, AttachmentData, SocketData, Hittable, Hitbox } from '../../types';
 import { GraphRuntime, GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
 import { AttachmentController } from '../Scene/AttachmentController';
-import { SocketController } from '../Scene/SocketController'; // Using Visual Controller now
+import { SocketController, resolveSocketFlashTextureUrl } from '../Scene/SocketController'; // Using Visual Controller now
 import { useEntityHealth } from './hooks/useEntityHealth';
 import { WorldHealthBar } from './UI/WorldHealthBar';
-import { useScene } from '../../context/SceneContext';
+import { useGameContent } from '../../runtime/GameContentContext';
+
+/** Seconds the death animation plays before the body starts fading. */
+const DEATH_ANIM_DURATION = 3;
+/** Seconds the body takes to fade out before despawning. */
+const FADE_DURATION = 1.5;
+/** Largest frame step the death sequence accepts, so a resumed or backgrounded tab does not skip it. */
+const MAX_DEATH_STEP = 0.1;
+
+const collectMaterials = (object: THREE.Object3D): THREE.Material[] => {
+    const materials: THREE.Material[] = [];
+    object.traverse((child) => {
+        if ((child as THREE.Mesh).isMesh) {
+            const mesh = child as THREE.Mesh;
+            materials.push(...(Array.isArray(mesh.material) ? mesh.material : [mesh.material]));
+        }
+    });
+    return materials;
+};
 
 interface SandboxEntityProps {
     model: LoadedModelData;
@@ -52,8 +71,14 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
     onDespawn,
     onSpawnBlood
 }, ref) => {
-    
-    const { triggerSocketFlash } = useScene();
+
+    const { textures } = useGameContent();
+
+    // --- Muzzle Flash (entity-local, one tick counter per socket) ---
+    const [flashTicks, setFlashTicks] = useState<Record<string, number>>({});
+    const triggerSocketFlash = useCallback((socketId: string) => {
+        setFlashTicks(prev => ({ ...prev, [socketId]: (prev[socketId] ?? 0) + 1 }));
+    }, []);
 
     // --- Infrastructure ---
     const groupRef = useRef<THREE.Group>(null);
@@ -153,55 +178,46 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
     }, [isAiming, model.object]);
 
     // --- Death & Despawn Sequence ---
+    // Driven by the frame loop (not wall-clock timers) so pausing the game pauses it.
+    const onDespawnRef = useRef(onDespawn);
+    onDespawnRef.current = onDespawn;
+    const deathSequence = useRef<{ elapsed: number; fadeMaterials: THREE.Material[] | null; despawned: boolean } | null>(null);
+
     useEffect(() => {
-        model.object.traverse((child) => {
-            if ((child as THREE.Mesh).isMesh) {
-                const mesh = child as THREE.Mesh;
-                const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-                materials.forEach(mat => {
-                    mat.opacity = 1;
-                    mat.transparent = false;
-                    mat.needsUpdate = true;
-                });
-            }
+        collectMaterials(model.object).forEach(mat => {
+            mat.opacity = 1;
+            mat.transparent = false;
+            mat.needsUpdate = true;
+        });
+        deathSequence.current = isDead ? { elapsed: 0, fadeMaterials: null, despawned: false } : null;
+    }, [isDead, model.object]);
+
+    useFrame((_, delta) => {
+        const sequence = deathSequence.current;
+        if (!sequence || sequence.despawned) return;
+
+        sequence.elapsed += Math.min(delta, MAX_DEATH_STEP);
+        if (sequence.elapsed < DEATH_ANIM_DURATION) return;
+
+        if (!sequence.fadeMaterials) {
+            sequence.fadeMaterials = collectMaterials(model.object);
+            sequence.fadeMaterials.forEach(mat => {
+                mat.transparent = true;
+                mat.needsUpdate = true;
+            });
+        }
+
+        const t = Math.min(1, (sequence.elapsed - DEATH_ANIM_DURATION) / FADE_DURATION);
+        const alpha = 1 - t;
+        sequence.fadeMaterials.forEach(mat => {
+            mat.opacity = alpha;
         });
 
-        if (isDead) {
-            const DEATH_ANIM_DURATION = 3000;
-            const FADE_DURATION = 1500;
-            
-            const timer = setTimeout(() => {
-                let start = performance.now();
-                
-                const fade = () => {
-                    const elapsed = performance.now() - start;
-                    const t = Math.min(1, elapsed / FADE_DURATION);
-                    const alpha = 1 - t;
-                    
-                    model.object.traverse((child) => {
-                        if ((child as THREE.Mesh).isMesh) {
-                            const mesh = child as THREE.Mesh;
-                            const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-                            materials.forEach(mat => {
-                                mat.transparent = true;
-                                mat.opacity = alpha;
-                                mat.needsUpdate = true;
-                            });
-                        }
-                    });
-
-                    if (t < 1) {
-                        requestAnimationFrame(fade);
-                    } else {
-                        if (onDespawn) onDespawn();
-                    }
-                };
-                requestAnimationFrame(fade);
-            }, DEATH_ANIM_DURATION);
-
-            return () => clearTimeout(timer);
+        if (t >= 1) {
+            sequence.despawned = true;
+            onDespawnRef.current?.();
         }
-    }, [isDead, model.object, onDespawn]);
+    });
 
     // --- Physics / Gameplay Interface ---
 
@@ -302,28 +318,33 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
             </primitive>
 
             {attachments.map(att => (
-                <AttachmentController 
-                    key={att.id} 
-                    data={att} 
-                    parentObject={model.object} 
+                <AttachmentController
+                    key={att.id}
+                    data={att}
+                    parentObject={model.object}
+                    cloneForInstance
                 />
             ))}
-            
+
             {/* Replaced SocketLogicController with SocketController for Visuals */}
             {sockets.map(sock => (
-                <SocketController 
+                <SocketController
                     key={sock.id}
                     data={sock}
                     parentObject={model.object}
                     onMount={(obj) => socketRefs.current.set(sock.id, obj)}
+                    flashTrigger={flashTicks[sock.id] ?? 0}
+                    flashTextureUrl={resolveSocketFlashTextureUrl(sock, textures)}
+                    runtime
                 />
             ))}
 
-            <GraphRuntime 
+            <GraphRuntime
                 modelObject={model.object}
                 graph={blueprint.animationGraph}
                 allClips={allClips}
-                enableInputs={false} 
+                enableInputs={false}
+                driveLocomotion={false}
                 apiRef={internalApiRef}
             />
         </group>

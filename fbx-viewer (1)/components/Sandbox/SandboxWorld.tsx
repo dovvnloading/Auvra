@@ -171,6 +171,7 @@ export const SandboxWorld: React.FC<SandboxWorldProps> = ({
                         projectileManager={projectileManagerRef as React.MutableRefObject<ProjectileManagerHandle | null>}
                         modelObject={playerModel.object}
                         enabled={true}
+                        levelObjects={levelObjects}
                         onStaminaChange={onStaminaChange}
                         onAimChange={handleAimChange}
                         weaponSounds={weaponSoundUrls}

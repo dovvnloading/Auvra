@@ -7,6 +7,7 @@ import { SandboxEntityHandle } from '../components/Sandbox/SandboxEntity';
 import { GraphRuntimeAPI } from '../components/AnimationGraph/GraphRuntime';
 import { isOverlapEvent, overlapEventTargets } from '../components/LevelBlueprint/overlapTargets';
 import { frontendDiagnostics } from '../diagnostics/runtime';
+import type { RuntimeHost } from '../runtime/types';
 
 const MAX_BLUEPRINT_EVALUATION_DEPTH = 128;
 const MAX_BLUEPRINT_EXECUTION_DEPTH = 256;
@@ -25,7 +26,13 @@ export interface UseLevelBlueprintRuntimeProps {
     addNotification: (notification: any) => void;
     onRestart?: () => void;
     onEndLevel?: () => void;
+    /** Level travel and save/load for OpenLevel, SaveGame and LoadGame actions. Absent means those actions do nothing. */
+    host?: Pick<RuntimeHost, 'openLevel' | 'saveGame' | 'loadGame'>;
 }
+
+/** Optional save slot from a SaveGame/LoadGame node; blank means the host's default slot. */
+const saveSlot = (value: unknown): string | undefined =>
+    typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
 /**
  * THE LEVEL BLUEPRINT RUNTIME ENGINE
@@ -47,7 +54,8 @@ export const useLevelBlueprintRuntime = ({
     destroyActor,
     addNotification,
     onRestart,
-    onEndLevel
+    onEndLevel,
+    host
 }: UseLevelBlueprintRuntimeProps) => {
 
     // Tracks objects currently overlapping the player to prevent spamming 'OnOverlap' events every frame.
@@ -56,7 +64,7 @@ export const useLevelBlueprintRuntime = ({
     // BeginPlay fires once per play session. A restart remounts the runtime, which starts a new session.
     const hasBegunPlay = useRef(false);
 
-    // Set once Restart or EndGame fires, so the ending session cannot act on the next one
+    // Set once Restart, EndGame, OpenLevel or LoadGame fires, so the ending session cannot act on the next one
     // (e.g. a later overlap in the same frame destroying an actor in the freshly reset world).
     const sessionEnded = useRef(false);
     
@@ -267,6 +275,26 @@ export const useLevelBlueprintRuntime = ({
                 onEndLevel();
                 return; // Stop execution
             }
+            if (action === 'OpenLevel' && host) {
+                const levelId = typeof node.data?.levelId === 'string' ? node.data.levelId : '';
+                if (!levelId) {
+                    addNotification({ message: "Open Level has no level selected.", type: 'warning' });
+                } else {
+                    sessionEnded.current = true;
+                    addNotification({ message: "Opening Level...", type: 'info' });
+                    host.openLevel(levelId);
+                    return; // Stop execution
+                }
+            }
+            if (action === 'SaveGame' && host) {
+                host.saveGame(saveSlot(node.data?.slot));
+            }
+            if (action === 'LoadGame' && host) {
+                sessionEnded.current = true;
+                addNotification({ message: "Loading Game...", type: 'info' });
+                host.loadGame(saveSlot(node.data?.slot));
+                return; // Stop execution
+            }
         }
         else if (node.type === 'Branch') {
             // Evaluate Condition Input
@@ -304,7 +332,7 @@ export const useLevelBlueprintRuntime = ({
                 executeNode(connection.toNodeId, context, nextPath, depth + 1);
             }
         }
-    }, [blueprint, evaluateInput, destroyActor, addNotification, playerApiRef, enemyApiRef, onRestart, onEndLevel]);
+    }, [blueprint, evaluateInput, destroyActor, addNotification, playerApiRef, enemyApiRef, onRestart, onEndLevel, host]);
 
     // -------------------------------------------------------------------------
     // 3. LIFECYCLE HOOKS

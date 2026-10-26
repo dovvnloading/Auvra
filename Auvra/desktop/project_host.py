@@ -31,10 +31,17 @@ from Auvra.project.errors import RecoveryRequiredError
 from Auvra.project.schemas import DOMAIN_NAMES
 
 from .assets import AssetResourceRequest, AssetTransferRegistry, AssetUpload
-from .dialogs import DialogSelection, WinFormsProjectDialogs
+from .dialogs import DialogSelection, WinFormsProjectDialogs, _validated_name
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+# Development builds copy the Vite player entry; packaged builds pass the
+# immutable ``<frontend root>/player`` tree explicitly.
+_DEV_PLAYER_TEMPLATE_ROOT = Path(__file__).resolve().parents[2] / "fbx-viewer (1)" / "dist" / "player"
+_DEV_PLAYER_EXECUTABLE = Path(__file__).resolve().parents[2] / "player-desktop" / "target" / "release" / "auvra-player.exe"
+_BUILD_TARGET_SUFFIX = {"web": "Web", "windows": "Windows"}
+# GameBuildError codes that are already host protocol error codes.
+_BUILD_ERROR_CODES = frozenset({"invalid_request", "invalid_project", "locking", "unsupported_capability"})
 _SNAPSHOT_SOFT_LIMIT = 192 * 1024
 # A snapshot page also carries the project status envelope (recent projects,
 # recovery points).  Writes are capped below the page limit by this reserve so
@@ -58,9 +65,17 @@ class NativeProjectHost:
         preview_store: Any = None,
         now: Callable[[], float] = time.time,
         native_authoritative: bool = False,
+        player_template_root: Path | None = None,
+        player_executable: Path | None = None,
     ) -> None:
         state_root = Path(state_root).expanduser().absolute()
         state_root.mkdir(parents=True, exist_ok=True)
+        self._state_root = state_root
+        self.player_template_root = Path(player_template_root or _DEV_PLAYER_TEMPLATE_ROOT).expanduser().absolute()
+        self.player_executable = Path(player_executable or _DEV_PLAYER_EXECUTABLE).expanduser().absolute()
+        # Opaque build handles map to a chosen parent folder for one session;
+        # paths never cross the protocol.
+        self._build_destinations: dict[str, tuple[str, Path]] = {}
         self.assets = asset_registry
         self.dialogs = dialogs or WinFormsProjectDialogs()
         self.service = service or ProjectService(ProjectIndex(state_root / "projects.sqlite3"))
@@ -122,6 +137,7 @@ class NativeProjectHost:
             "project.save": self._save,
             "project.saveAs": self._save_as,
             "project.exportPack": self._export,
+            "project.buildGame": self._build_game,
             "project.importPack": self._import_pack,
             "project.importLegacy": self._import_legacy,
             "asset.beginUpload": self._begin_upload,
@@ -137,6 +153,10 @@ class NativeProjectHost:
         except Exception as exc:
             self._queue("project.status", self._status_value(busy=False, progress=None))
             raise self._mapped_error(exc) from None
+
+    def build_game(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Build a standalone game from the open project (read-only allowed)."""
+        return self.handle("project.buildGame", payload)
 
     def asset_resource(self, request: AssetResourceRequest):
         with self._operation_lock:
@@ -552,7 +572,7 @@ class NativeProjectHost:
             for item in self.service.recent(20)
         ]
 
-    def _require(self, payload: dict[str, Any], *, expected: bool = False):
+    def _require(self, payload: dict[str, Any], *, expected: bool = False, writable: bool = True):
         active = self.service.active
         if active is None or payload.get("projectId") != active.project_id:
             raise HostOperationError("invalid_project", "Project is not open")
@@ -566,7 +586,7 @@ class NativeProjectHost:
                     "actualRevision": active.revision,
                 },
             )
-        if expected and active.read_only:
+        if expected and writable and active.read_only:
             raise HostOperationError("read_only", "Project is read-only")
         return active
 
@@ -791,6 +811,114 @@ class NativeProjectHost:
         destination = self._choose(lambda: self.dialogs.choose_export_pack(active.name))
         self.service.export_pack(destination, project_id=active.project_id)
         return self._status_value()
+
+    def _build_game(self, payload: dict[str, Any]) -> dict[str, Any]:
+        # Building only reads the project, so read-only projects may build.
+        active = self._require(payload, expected=True, writable=False)
+        target = payload.get("target")
+        suffix = _BUILD_TARGET_SUFFIX.get(target) if isinstance(target, str) else None
+        if suffix is None:
+            raise HostOperationError("invalid_request", "Build target is not supported")
+        from Auvra.project.game_build import TEMPLATE_MANIFEST, GameBuildError, build_game
+
+        template_root = self.player_template_root
+        if not (template_root / TEMPLATE_MANIFEST).is_file():
+            # Fail before asking for a folder the build could never fill.
+            raise HostOperationError("unsupported_capability", "The game player template is not installed")
+        project_id = active.project_id
+        domains = {domain: active.get_domain(domain) for domain in DOMAIN_NAMES}
+        game_name = self._game_name(domains, active.name)
+        handle = payload.get("destinationHandle")
+        if handle is not None:
+            remembered = self._build_destinations.get(handle) if isinstance(handle, str) else None
+            if remembered is None or remembered[0] != project_id:
+                raise HostOperationError("invalid_request", "Build destination is no longer available")
+            parent = remembered[1]
+        else:
+            chooser = getattr(self.dialogs, "choose_build_destination", None)
+            if not callable(chooser):
+                raise HostOperationError("unsupported_capability", "Build destination dialog is unavailable")
+            parent = self._choose(lambda: chooser(game_name))
+            handle = "build-" + secrets.token_urlsafe(24)
+        destination = self._build_destination(
+            active, parent, _validated_name(f"{game_name[:80]}-{suffix}", f"AuvraGame-{suffix}"),
+        )
+        store = active.assets
+
+        def read_asset(asset_id: str) -> tuple[bytes, str]:
+            # ValueError (bad id, missing metadata) becomes invalid_project.
+            mime = store.reference(asset_id).mime or "application/octet-stream"
+            with store.open(asset_id) as stream:
+                return stream.read(), mime
+
+        self._progress("buildGame", 0.0)
+        try:
+            report = build_game(
+                domains=domains,
+                read_asset=read_asset,
+                template_root=template_root,
+                destination=destination,
+                target=target,
+                build_id=secrets.token_hex(16),
+                game_id=project_id,
+                player_executable=self.player_executable if target == "windows" else None,
+            )
+        except GameBuildError as exc:
+            raise self._build_error(exc) from None
+        self._build_destinations[handle] = (project_id, parent)
+        self._queue("project.status", self._status_value(busy=False, progress=None))
+        return self._status_value(
+            handle=handle,
+            report={
+                "target": report.target,
+                "files": report.files,
+                "bytes": report.bytes,
+                "assets": report.assets,
+                "levels": report.levels,
+            },
+        )
+
+    @staticmethod
+    def _game_name(domains: dict[str, Any], fallback: str) -> str:
+        documents = domains.get("metadata", {}).get("documents", [])
+        for document in documents if isinstance(documents, list) else []:
+            if isinstance(document, dict) and document.get("id") == "game-settings":
+                settings = document.get("settings")
+                name = settings.get("name") if isinstance(settings, dict) else None
+                if isinstance(name, str) and name.strip():
+                    return name.strip()
+        return str(fallback or "AuvraGame").strip() or "AuvraGame"
+
+    def _build_destination(self, active: Any, parent: Path, name: str) -> Path:
+        from .provider_host import _assert_state_path_safe
+
+        destination = Path(parent).expanduser().absolute() / name
+        try:
+            _assert_state_path_safe(destination)
+            resolved = destination.resolve(strict=False)
+            protected = (
+                Path(active.path).expanduser().absolute().resolve(strict=False),
+                self._state_root.resolve(strict=False),
+            )
+        except OSError:
+            raise HostOperationError("invalid_request", "Build destination cannot contain links") from None
+        for root in protected:
+            # A build replaces its destination, so it must neither live inside
+            # nor contain the project or host state.
+            if resolved == root or root in resolved.parents or resolved in root.parents:
+                raise HostOperationError("invalid_request", "Build destination overlaps the project")
+        return destination
+
+    @staticmethod
+    def _build_error(exc: Exception) -> HostOperationError:
+        code = getattr(exc, "code", None)
+        mapped = code if code in _BUILD_ERROR_CODES else "internal_error"
+        message = getattr(exc, "message", None)
+        if (not isinstance(message, str) or not message.strip() or len(message) > 200
+                or "/" in message or "\\" in message):
+            # Build messages may name files; never forward a path.
+            message = "Game build failed"
+        return HostOperationError(mapped, message)
 
     def _import_pack(self, payload: dict[str, Any]) -> dict[str, Any]:
         source = self._choose(self.dialogs.choose_import_pack)

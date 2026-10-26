@@ -1,7 +1,7 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
-import { compileHUDCode } from '../../components/HUDEditor/DynamicHUDComponent';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { compileHUDCode, loadHUDCompiler } from '../../components/HUDEditor/DynamicHUDComponent';
 import { createExecutionGuard } from '../../components/HUDEditor/hudExecutionGuard';
 
 const BUDGET_ERROR = 'HUD execution exceeded the sandbox budget';
@@ -15,6 +15,7 @@ const instantiate = (code: string) => {
 const later = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
 
 describe('HUD sandbox execution budget', () => {
+  beforeAll(async () => { await loadHUDCompiler(); });
   it('keeps the return value of concise arrow functions', () => {
     const Component = instantiate('const label = (n) => <b>{n}</b>; return <div>{[1, 2].map(n => label(n))}</div>;');
 

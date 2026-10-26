@@ -638,6 +638,7 @@ def _assemble_into(input_root: Path, output_root: Path, *, channel: str, version
     _copy_tree(input_root / "host", output_root / "host", policy=policy, label="host")
     _copy_tree(input_root / "licenses", output_root / "licenses", policy=policy, label="licenses")
     _copy_required_file(input_root / "native", output_root / "native" / "auvra-native.exe", label="native", suffix="auvra-native.exe")
+    _copy_required_file(input_root / "game-player", output_root / "game-player" / "auvra-player.exe", label="game-player", suffix="auvra-player.exe")
     if not (output_root / "host" / "Auvra").is_dir():
         raise ReleaseError("host input must contain the importable Auvra application package")
     _write_packaged_startup(output_root, channel)
@@ -759,6 +760,8 @@ def verify_package(package_root: Path, *, expected_channel: str | None = None) -
         raise ReleaseError("fixed WebView2 Runtime or managed SDK is missing from package")
     if not (root / "native" / "auvra-native.exe").is_file():
         raise ReleaseError("native engine is missing from package")
+    if not (root / "game-player" / "auvra-player.exe").is_file():
+        raise ReleaseError("Windows game player is missing from package")
     _require_host_schemas(root / "host", label="package")
     return manifest
 

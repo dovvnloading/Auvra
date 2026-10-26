@@ -178,6 +178,9 @@ export class ProjectService {
   async save(diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> { return this.call<ProjectSnapshot>('project.save', { projectId: this.requireProjectId(), expectedRevision: this.status.revision }, diagnostics); }
   async saveAs(name = this.status.name || 'Untitled', diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> { return this.call<ProjectSnapshot>('project.saveAs', { projectId: this.requireProjectId(), expectedRevision: this.status.revision, name }, diagnostics); }
   async exportPack(diagnostics?: DiagnosticContext): Promise<void> { await this.call('project.exportPack', { projectId: this.requireProjectId(), expectedRevision: this.status.revision, destinationHandle: 'dialog' }, diagnostics); }
+  async buildGame(target: 'web' | 'windows', destinationHandle: string = 'dialog', diagnostics?: DiagnosticContext): Promise<{ handle?: string; report?: Record<string, unknown> } | null> {
+    return this.call<{ handle?: string; report?: Record<string, unknown> }>('project.buildGame', { projectId: this.requireProjectId(), expectedRevision: this.status.revision, target, destinationHandle }, diagnostics);
+  }
   async importPack(diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> { return this.call<ProjectSnapshot>('project.importPack', { sourceHandle: 'dialog' }, diagnostics); }
   async importLegacy(diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> { return this.call<ProjectSnapshot>('project.importLegacy', { sourceHandle: 'dialog' }, diagnostics); }
 

@@ -6,7 +6,7 @@ import { LoadedModelData, Blueprint } from '../../types';
 import { useScene } from '../../context/SceneContext';
 import { GraphRuntime, GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
 import { AttachmentController } from './AttachmentController';
-import { SocketController } from './SocketController';
+import { SocketController, resolveSocketFlashTextureUrl } from './SocketController';
 
 interface ModelViewerProps {
   data: LoadedModelData;
@@ -27,7 +27,7 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
 }) => {
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
   const runtimeApiRef = useRef<GraphRuntimeAPI | undefined>(undefined);
-  const { attachments, sockets, models, characterFireTriggers } = useScene();
+  const { attachments, sockets, models, characterFireTriggers, flashTriggers, textures } = useScene();
   
   // Filter attachments for this model
   const myAttachments = useMemo(() => 
@@ -135,6 +135,8 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
                 key={sock.id}
                 data={sock}
                 parentObject={data.object}
+                flashTrigger={flashTriggers[sock.id] ?? 0}
+                flashTextureUrl={resolveSocketFlashTextureUrl(sock, textures)}
              />
          ))}
 

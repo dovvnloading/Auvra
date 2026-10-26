@@ -156,6 +156,32 @@ class DispatcherTests(unittest.TestCase):
         conflict = dict(mutation, id="change2", revision=changed["revision"], payload=dict(mutation["payload"], expectedRevision=0))
         self.assertEqual(self.dispatcher.dispatch(conflict)["error"]["code"], "revision_conflict")
 
+    def test_build_game_is_a_project_method_and_routes_to_bound_service(self):
+        capabilities = self.dispatcher.dispatch(self.request(method="host.getCapabilities"))
+        self.assertIn("project.buildGame", capabilities["result"]["projectMethods"])
+        self.assertNotIn("project.buildGame", capabilities["result"]["providerMethods"])
+        created = self.dispatcher.dispatch(self.request(method="project.create", payload={"name": "Demo"}))
+        payload = {"projectId": created["result"]["projectId"], "expectedRevision": 0, "target": "web"}
+        built = self.dispatcher.dispatch(self.request(id="build1", revision=created["revision"], method="project.buildGame", payload=payload))
+        self.assertTrue(built["ok"])
+        self.assertEqual(built["result"]["handle"], "build-0001")
+        self.assertEqual(built["result"]["report"], {"target": "web", "files": 0})
+        invalid = self.dispatcher.dispatch(self.request(id="build2", revision=built["revision"], method="project.buildGame", payload=dict(payload, target="linux")))
+        self.assertEqual(invalid["error"]["code"], "invalid_request")
+        calls = []
+        class Service:
+            def build_game(self, value):
+                calls.append(value)
+                return {"projectId": "service-project", "handle": "build-0002", "report": {"target": value["target"], "files": 3}}
+        dispatcher = HostDispatcher(SessionManager("s1"))
+        dispatcher.bind_services(project_service=Service())
+        bound_payload = {"projectId": "service-project", "expectedRevision": 2, "target": "windows"}
+        response = dispatcher.dispatch(self.request(method="project.buildGame", payload=bound_payload))
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["result"]["report"], {"target": "windows", "files": 3})
+        self.assertEqual(response["revision"], 1)
+        self.assertEqual(calls, [bound_payload])
+
     def test_bound_services_receive_protocol_method_without_paths(self):
         calls = []
         class Service:

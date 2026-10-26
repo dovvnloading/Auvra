@@ -1,5 +1,4 @@
 import React, { useEffect, useRef, useState } from "react";
-import * as Babel from "@babel/standalone";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { frontendDiagnostics } from "../../diagnostics/runtime";
 
@@ -12,6 +11,31 @@ const MAX_MESSAGE_BYTES = 256 * 1024;
 const MAX_CODE_BYTES = 192 * 1024;
 const MAX_PROPS_BYTES = 32 * 1024;
 const HUD_GUARD_IDENTIFIER = "__auvraHudGuard";
+// Relative to Vite's base so the sandbox page resolves wherever the editor or player is served from.
+const HUD_FRAME_SRC = `${(import.meta as ImportMeta & { env: { BASE_URL: string } }).env.BASE_URL}hud-frame.html`;
+
+type HUDCompiler = Pick<typeof import("@babel/standalone"), "transform">;
+let hudCompiler: HUDCompiler | null = null;
+let hudCompilerLoad: Promise<HUDCompiler> | null = null;
+
+/**
+ * Loads @babel/standalone on first use so the compiler stays out of the
+ * startup bundle; a HUD without Custom elements never downloads it.
+ */
+export function loadHUDCompiler(): Promise<HUDCompiler> {
+  if (hudCompiler) return Promise.resolve(hudCompiler);
+  hudCompilerLoad ??= import("@babel/standalone").then((module) => {
+    // CommonJS interop may expose the API on the namespace or on `default`.
+    const loaded = typeof module.transform === "function" ? module : (module as { default?: HUDCompiler }).default;
+    if (!loaded || typeof loaded.transform !== "function") throw new Error("HUD compiler failed to load");
+    hudCompiler = loaded;
+    return loaded;
+  }).catch((caught: unknown) => {
+    hudCompilerLoad = null;
+    throw caught;
+  });
+  return hudCompilerLoad;
+}
 
 // Babel compiles user code before it crosses the sandbox boundary. Every
 // loop and function body receives a cheap guard tick, allowing the iframe to
@@ -62,15 +86,17 @@ function byteLength(value: unknown): number {
 
 /**
  * Compiles HUD component body source into the guarded component expression the
- * sandbox evaluates with `React` and `__auvraHudGuard` in scope.
+ * sandbox evaluates with `React` and `__auvraHudGuard` in scope. Call
+ * loadHUDCompiler() first or pass the loaded compiler.
  */
-export function compileHUDCode(code: string): string {
+export function compileHUDCode(code: string, Babel: HUDCompiler | null = hudCompiler): string {
   if (new TextEncoder().encode(code).byteLength > MAX_CODE_BYTES) {
     throw new Error("HUD code exceeds the sandbox limit");
   }
   if (new RegExp(`\\b${HUD_GUARD_IDENTIFIER}\\b`).test(code)) {
     throw new Error("HUD code uses a reserved sandbox identifier");
   }
+  if (!Babel) throw new Error("HUD compiler is not loaded");
   const sourceForBabel = `function GeneratedComponent(props) {${code}}`;
   const compiled = Babel.transform(sourceForBabel, {
     presets: ["react"],
@@ -100,17 +126,21 @@ export const DynamicHUDComponent: React.FC<DynamicHUDComponentProps> = ({ code, 
       setCompiledCode(null);
       return;
     }
-    try {
-      setCompiledCode(compileHUDCode(code));
+    let cancelled = false;
+    loadHUDCompiler().then((compiler) => {
+      if (cancelled) return;
+      setCompiledCode(compileHUDCode(code, compiler));
       setError(null);
-    } catch (caught) {
+    }).catch((caught: unknown) => {
+      if (cancelled) return;
       frontendDiagnostics.failure('hud_compile_failed', caught);
       let message = caught instanceof Error ? caught.message : "HUD compile failed";
       if (message.includes("return outside of function")) message = "Code error: Ensure 'return' is inside logic.";
       else if (message.includes("Adjacent JSX elements")) message = "JSX Error: Wrap elements in <>.</> .";
       setError(message.slice(0, 256));
       setCompiledCode(null);
-    }
+    });
+    return () => { cancelled = true; };
   }, [code]);
 
   const teardown = (): void => {
@@ -176,7 +206,7 @@ export const DynamicHUDComponent: React.FC<DynamicHUDComponentProps> = ({ code, 
   }
   return <iframe
     ref={iframeRef}
-    src="/hud-frame.html"
+    src={HUD_FRAME_SRC}
     onLoad={handleFrameLoad}
     // Scripts run in an opaque origin; no same-origin permission is granted.
     sandbox="allow-scripts"

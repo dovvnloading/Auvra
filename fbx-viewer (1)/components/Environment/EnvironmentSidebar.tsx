@@ -1,10 +1,12 @@
 
 // ... existing imports ...
-import React, { useState } from 'react';
-import { Search, Trees, Box, Image, MousePointer2, Layers, Trash2, Eye, Plus, ChevronDown, Skull, Music, Sun } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Search, Trees, Box, Image, MousePointer2, Layers, Trash2, Eye, Plus, ChevronDown, Skull, Music, Sun, PersonStanding } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
 import { LoadedModelData } from '../../types';
 import { editorSession } from '../../utils/editorSession';
+
+const PLAYER_START_NAME = 'Player Start';
 
 interface EnvironmentSidebarProps {
     selectedModelId: string | null;
@@ -19,10 +21,11 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
     selectedObjectId,
     onSelectObject
 }) => {
-    const { models, levelObjects, removeLevelObject, levels, currentLevelId, createLevel, loadLevel, deleteLevel, addLevelObject } = useScene();
+    const { models, levelObjects, removeLevelObject, levels, currentLevelId, createLevel, loadLevel, deleteLevel, addLevelObject, updateLevelObject } = useScene();
     const [activeTab, setActiveTab] = useState<'assets' | 'outliner'>('assets');
     const [search, setSearch] = useState('');
     const [showLevelMenu, setShowLevelMenu] = useState(false);
+    const pendingPlayerStartName = useRef<string | null>(null);
 
     // Filter models suitable for environment placement
     const filteredModels = models.filter(m => 
@@ -73,6 +76,41 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
         );
         if (newId) onSelectObject(newId);
     };
+
+    const handleAddPlayerStart = async () => {
+        if (!canEdit()) return;
+        // One Player Start per level: re-adding selects the existing one.
+        const existing = levelObjects.find(o => o.type === 'player_start');
+        if (existing) {
+            onSelectObject(existing.id);
+            return;
+        }
+
+        const newId = await addLevelObject(
+            '',
+            [0, 0, 0], // Marker origin is the player's feet
+            [0, 0, 0],
+            [1, 1, 1],
+            'player_start'
+        );
+        if (newId) {
+            pendingPlayerStartName.current = newId;
+            onSelectObject(newId);
+        }
+    };
+
+    // The level manager names objects it has no explicit case for after their model
+    // ("undefined_Prop" here). Rename a freshly created Player Start once it lands in state.
+    useEffect(() => {
+        const id = pendingPlayerStartName.current;
+        if (!id) return;
+        const created = levelObjects.find(o => o.id === id);
+        if (!created) return;
+        pendingPlayerStartName.current = null;
+        if (created.name !== PLAYER_START_NAME && canEdit()) {
+            updateLevelObject(id, { name: PLAYER_START_NAME });
+        }
+    }, [levelObjects, updateLevelObject]);
 
     const handleAddSkySphere = async () => {
         if (!canEdit()) return;
@@ -225,7 +263,17 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                         {/* Special Actors */}
                         <div className="mt-2">
                             <div className="text-[9px] text-gray-500 font-bold uppercase px-1 mb-1">Logic Actors</div>
-                            <div 
+                            <div
+                                onClick={handleAddPlayerStart}
+                                className="flex items-center gap-3 px-3 py-2.5 rounded-md cursor-pointer transition-all border border-transparent hover:bg-gray-800 hover:text-white text-gray-400 group"
+                                title="Add Player Start (one per level)"
+                            >
+                                <div className="w-8 h-8 rounded bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0 text-green-500 group-hover:bg-green-900/20 group-hover:border-green-500/50">
+                                    <PersonStanding size={16} />
+                                </div>
+                                <div className="text-xs font-bold">Add Player Start</div>
+                            </div>
+                            <div
                                 onClick={handleAddSpawner}
                                 className="flex items-center gap-3 px-3 py-2.5 rounded-md cursor-pointer transition-all border border-transparent hover:bg-gray-800 hover:text-white text-gray-400 group"
                                 title="Add Enemy Spawn Point"
@@ -313,7 +361,8 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                             const isSpawner = obj.type === 'spawn_point';
                             const isAudio = obj.type === 'audio_emitter';
                             const isSky = obj.type === 'sky_sphere';
-                            
+                            const isPlayerStart = obj.type === 'player_start';
+
                             return (
                                 <div 
                                     key={obj.id}
@@ -329,10 +378,11 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                     {isSpawner ? <Skull size={14} className="text-red-400" /> : 
                                      isAudio ? <Music size={14} className="text-amber-400" /> :
                                      isSky ? <Sun size={14} className="text-cyan-400" /> :
+                                     isPlayerStart ? <PersonStanding size={14} className="text-green-400" /> :
                                      <Box size={14} className={isSelected ? "text-blue-400" : "text-gray-600"} />}
-                                    
+
                                     <span className="text-xs truncate flex-1 font-medium">
-                                        {obj.name || (isSpawner ? "Enemy Spawner" : (isAudio ? "Audio Emitter" : (isSky ? "Sky Sphere" : "Object")))}
+                                        {obj.name || (isSpawner ? "Enemy Spawner" : (isAudio ? "Audio Emitter" : (isSky ? "Sky Sphere" : (isPlayerStart ? PLAYER_START_NAME : "Object"))))}
                                     </span>
 
                                     <button 

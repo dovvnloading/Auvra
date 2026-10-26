@@ -23,7 +23,8 @@ METHODS = (
     "host.ping", "host.getCapabilities", "project.getStatus", "project.create",
     "project.open", "project.openRecent", "project.close", "project.getSnapshot",
     "project.applyChanges", "project.save", "project.saveAs", "project.exportPack",
-    "project.importPack", "project.importLegacy", "asset.beginUpload", "asset.resolve",
+    "project.buildGame", "project.importPack", "project.importLegacy", "asset.beginUpload",
+    "asset.resolve",
     "provider.list", "provider.getStatus", "provider.configureCredential",
     "provider.deleteCredential", "provider.configure", "provider.listModels",
     "provider.health", "inference.submit", "inference.get", "inference.list",
@@ -33,13 +34,13 @@ METHODS = (
     "engine.openViewport", "engine.closeViewport", "engine.renderReference",
     "engine.getMetrics", "engine.recover",
 )
-PROJECT_METHODS = METHODS[2:16]
-PROVIDER_METHODS = METHODS[16:33]
-ENGINE_METHODS = METHODS[33:]
+PROJECT_METHODS = METHODS[2:17]
+PROVIDER_METHODS = METHODS[17:34]
+ENGINE_METHODS = METHODS[34:]
 MUTATING_METHODS = frozenset({
     "project.create", "project.open", "project.openRecent", "project.close",
     "project.applyChanges", "project.save", "project.saveAs", "project.exportPack",
-    "project.importPack", "project.importLegacy", "asset.beginUpload",
+    "project.buildGame", "project.importPack", "project.importLegacy", "asset.beginUpload",
     "media.commit", "command.approve", "command.undo",
     "provider.configureCredential", "provider.deleteCredential", "provider.configure",
     "media.discard",
@@ -47,6 +48,8 @@ MUTATING_METHODS = frozenset({
     "engine.recover",
 })
 _LONG_RUNNING_METHODS = frozenset({"inference.submit", "engine.renderReference"})
+# Bound services without ``handle`` may expose these snake_case operations.
+_BOUND_METHOD_ALIASES = {"project.buildGame": "build_game"}
 EVENTS = frozenset({
     "host.session", "host.revision", "project.status", "project.opening", "project.opened",
     "project.closing", "project.closed", "project.revision", "project.dirty",
@@ -114,6 +117,7 @@ class HostDispatcher:
             "project.save": self._save_project,
             "project.saveAs": self._save_as,
             "project.exportPack": self._export_pack,
+            "project.buildGame": self._build_game,
             "project.importPack": self._import_pack,
                 "project.importLegacy": self._import_legacy,
                 "asset.beginUpload": self._begin_upload,
@@ -392,6 +396,10 @@ class HostDispatcher:
         candidate = getattr(service, name, None)
         if callable(candidate):
             return candidate
+        alias = _BOUND_METHOD_ALIASES.get(method)
+        candidate = getattr(service, alias, None) if alias else None
+        if callable(candidate):
+            return candidate
         def missing(payload: dict[str, Any]) -> dict[str, Any]:
             raise HostOperationError("internal_error", "Bound host service does not implement the method")
         return missing
@@ -496,6 +504,10 @@ class HostDispatcher:
     def _export_pack(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._require_project(payload, expected=True)
         return self._result(handle="pack-0001")
+
+    def _build_game(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_project(payload, expected=True)
+        return self._result(handle="build-0001", report={"target": payload["target"], "files": 0})
 
     def _import_pack(self, payload: dict[str, Any]) -> dict[str, Any]:
         if payload["sourceHandle"] in {"invalid", "bomb"}:

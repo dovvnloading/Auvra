@@ -188,6 +188,74 @@ describe('level blueprint runtime', () => {
 
     expect(destroyActor.mock.calls).toEqual([['coin-1'], ['coin-2']]);
   });
+
+  const levelActionOnTick = (data: Record<string, unknown>): LevelBlueprintData => ({
+    nodes: [
+      ...overlapGraph.nodes,
+      node('tick', 'Event', 'Event Tick', [], [pin('tick-out', 'Out', 'Exec', 'Output')]),
+      node('action', 'LevelAction', 'Level Action', [pin('action-in', 'In', 'Exec', 'Input')], [pin('action-out', 'Out', 'Exec', 'Output')], data),
+      node('print', 'PrintString', 'Print String', [pin('print-in', 'In', 'Exec', 'Input')], [pin('print-out', 'Out', 'Exec', 'Output')], { printMessage: 'after' }),
+    ],
+    connections: [
+      ...overlapGraph.connections,
+      { id: 'c2', fromNodeId: 'tick', fromPinId: 'tick-out', toNodeId: 'action', toPinId: 'action-in' },
+      { id: 'c3', fromNodeId: 'action', fromPinId: 'action-out', toNodeId: 'print', toPinId: 'print-in' },
+    ],
+    variables: [],
+  });
+
+  const levelHost = () => ({ openLevel: vi.fn(), saveGame: vi.fn(), loadGame: vi.fn() });
+
+  it('opens a level once and stops acting later in the same frame', () => {
+    const destroyActor = vi.fn();
+    const addNotification = vi.fn();
+    const host = levelHost();
+    const player = { object: new THREE.Group() } as unknown as SandboxEntityHandle;
+    renderHook(() => useLevelBlueprintRuntime(runtimeProps({
+      blueprint: levelActionOnTick({ action: 'OpenLevel', levelId: 'level-2' }),
+      levelObjects: [levelObject('coin-1', 'Coin', [0, 0, 0])],
+      playerEntityRef: { current: player },
+      destroyActor,
+      addNotification,
+      host,
+    })));
+
+    runFrame();
+    runFrame();
+
+    expect(host.openLevel).toHaveBeenCalledTimes(1);
+    expect(host.openLevel).toHaveBeenCalledWith('level-2');
+    expect(destroyActor).not.toHaveBeenCalled();
+    expect(addNotification).not.toHaveBeenCalledWith(expect.objectContaining({ message: '[Output] after' }));
+  });
+
+  it('saves the game to the node slot and keeps executing', () => {
+    const addNotification = vi.fn();
+    const host = levelHost();
+    renderHook(() => useLevelBlueprintRuntime(runtimeProps({
+      blueprint: levelActionOnTick({ action: 'SaveGame', slot: ' slot-1 ' }),
+      addNotification,
+      host,
+    })));
+
+    runFrame();
+
+    expect(host.saveGame).toHaveBeenCalledTimes(1);
+    expect(host.saveGame).toHaveBeenCalledWith('slot-1');
+    expect(host.loadGame).not.toHaveBeenCalled();
+    expect(addNotification).toHaveBeenCalledWith(expect.objectContaining({ message: '[Output] after' }));
+  });
+
+  it('loads the default slot once and ends the session', () => {
+    const host = levelHost();
+    renderHook(() => useLevelBlueprintRuntime(runtimeProps({ blueprint: levelActionOnTick({ action: 'LoadGame' }), host })));
+
+    runFrame();
+    runFrame();
+
+    expect(host.loadGame).toHaveBeenCalledTimes(1);
+    expect(host.loadGame).toHaveBeenCalledWith(undefined);
+  });
 });
 
 const sceneWith = (blueprint: LevelBlueprintData, levelObjects: LevelObject[]) => {
@@ -242,5 +310,29 @@ describe('level blueprint overlap actor references', () => {
 
     expect(onUpdate).toHaveBeenCalledTimes(1);
     expect(onUpdate).toHaveBeenCalledWith({ name: 'On Overlap (Crate_Prop)', data: { targetActorId: 'crate-2' } });
+  });
+});
+
+describe('level blueprint level actions inspector', () => {
+  const actionNode = (data: Record<string, unknown>) => node('action', 'LevelAction', 'Level Action', [pin('action-in', 'In', 'Exec', 'Input')], [pin('action-out', 'Out', 'Exec', 'Output')], data);
+
+  it('picks the Open Level target and names the node in one update', () => {
+    const onUpdate = vi.fn();
+    render(<LevelBlueprintInspector node={actionNode({ action: 'OpenLevel' })} onUpdate={onUpdate} levelObjects={[]} levels={[{ id: 'level-1', name: 'Intro' }, { id: 'level-2', name: 'Caves' }]} globalVariables={[]} onDelete={() => undefined} />);
+
+    expect(screen.getByRole('alert')).toHaveTextContent('No level selected');
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'level-2' } });
+
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(onUpdate).toHaveBeenCalledWith({ name: 'Open Level (Caves)', data: { action: 'OpenLevel', levelId: 'level-2' } });
+  });
+
+  it('edits the save slot', () => {
+    const onUpdate = vi.fn();
+    render(<LevelBlueprintInspector node={actionNode({ action: 'SaveGame' })} onUpdate={onUpdate} levelObjects={[]} globalVariables={[]} onDelete={() => undefined} />);
+
+    fireEvent.change(screen.getByLabelText('Slot (blank for default)'), { target: { value: 'slot-2' } });
+
+    expect(onUpdate).toHaveBeenCalledWith({ data: { action: 'SaveGame', slot: 'slot-2' } });
   });
 });
