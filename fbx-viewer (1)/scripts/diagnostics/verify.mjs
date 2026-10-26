@@ -25,6 +25,7 @@ const EXEMPT = new Map(Object.entries({
   'components/Environment/AudioSystem.tsx': 'hot-loop-controller',
   'components/Environment/types.ts': 'data-model',
   'components/HUDEditor/types.ts': 'data-model',
+  'components/LevelBlueprint/overlapTargets.ts': 'pure-utility',
   'components/Sandbox/AIController.tsx': 'hot-loop-controller',
   'components/Sandbox/CharacterCameraRig.tsx': 'hot-loop-controller',
   'components/Sandbox/PlayerController.tsx': 'hot-loop-controller',
