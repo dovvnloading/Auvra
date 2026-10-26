@@ -25,6 +25,8 @@ interface LevelContextType {
   removeLevelObject: (id: string) => void;
   removeLevelObjects: (ids: string[]) => void;
   updateLevelObject: (id: string, updates: Partial<LevelObject>) => void;
+  /** Persist debounced level edits now; rejects (after notifying) if any write failed. */
+  flushPendingLevelEdits: (options?: { notify?: boolean }) => Promise<void>;
   hydrateProjectState: (levels: LevelData[], objects: LevelObject[], currentLevelId?: string | null) => void;
 
   undo: () => void;

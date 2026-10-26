@@ -1,6 +1,6 @@
 
 import { useState, useCallback, useRef, useEffect, useSyncExternalStore } from 'react';
-import { LevelObject, LoadedModelData, LevelObjectType, LevelData, LevelBlueprintData, TerrainData } from '../types';
+import { LevelObject, LoadedModelData, LevelObjectType, LevelData, LevelBlueprintData } from '../types';
 import { dbOperations } from '../utils/db';
 import { projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
@@ -26,6 +26,12 @@ const EMPTY_WORKING_STATE: LevelWorkingState = {
     activeLevelBlueprint: EMPTY_BLUEPRINT,
 };
 
+/** A debounced partial edit of one level object, fenced to the session it was made in. */
+interface PendingLevelEdit {
+    updates: Partial<LevelObject>;
+    lease: EditorSessionLease;
+}
+
 const applyDomainCascade = (objects: LevelObject[], event: DomainCascadeEvent): LevelObject[] => {
     if (event.kind === 'model') {
         return objects.filter((object) => object.modelId !== event.id);
@@ -43,14 +49,20 @@ const applyDomainCascade = (objects: LevelObject[], event: DomainCascadeEvent): 
     });
 };
 
-const syncStateToDB = async (
-    currentState: LevelObject[],
-    nextState: LevelObject[],
-    lease?: EditorSessionLease,
-    allowRollback = true,
-) => {
-    if (lease && !editorSession.isCurrent(lease)) return false;
-    let activeLease = lease;
+/** Remove a deleted asset reference from a not-yet-persisted partial edit. */
+const withoutDomainReference = (updates: Partial<LevelObject>, event: DomainCascadeEvent): Partial<LevelObject> => {
+    if (event.kind === 'texture' && updates.terrainData?.textureId === event.id) {
+        const { textureId: _removed, ...terrainData } = updates.terrainData;
+        return { ...updates, terrainData };
+    }
+    if (event.kind === 'audio' && updates.audioConfig?.audioId === event.id) {
+        const { audioConfig: _removed, ...withoutAudioReference } = updates;
+        return withoutAudioReference;
+    }
+    return updates;
+};
+
+const diffLevelObjects = (currentState: LevelObject[], nextState: LevelObject[]) => {
     const currentMap = new Map(currentState.map(o => [o.id, o]));
     const nextMap = new Map(nextState.map(o => [o.id, o]));
 
@@ -75,6 +87,25 @@ const syncStateToDB = async (
             }
         }
     }
+    return { toDelete, toAdd, toUpdate };
+};
+
+const changedLevelObjectIds = (currentState: LevelObject[], nextState: LevelObject[]): string[] => {
+    const { toDelete, toAdd, toUpdate } = diffLevelObjects(currentState, nextState);
+    return [...toDelete, ...toAdd.map((object) => object.id), ...toUpdate.map((object) => object.id)];
+};
+
+const describeError = (error: unknown): string => error instanceof Error && error.message ? error.message : 'unknown error';
+
+const syncStateToDB = async (
+    currentState: LevelObject[],
+    nextState: LevelObject[],
+    lease?: EditorSessionLease,
+    allowRollback = true,
+) => {
+    if (lease && !editorSession.isCurrent(lease)) return false;
+    let activeLease = lease;
+    const { toDelete, toAdd, toUpdate } = diffLevelObjects(currentState, nextState);
 
     try {
         for (const id of toDelete) {
@@ -127,6 +158,41 @@ export const useLevelManager = (models: LoadedModelData[]) => {
 
   const { addNotification } = useNotification();
 
+  // Debounced partial edits (gizmo, inspector, sculpt). An edit stays in
+  // pendingUpdatesRef until it is written; while a write is running it is
+  // tracked in inFlightUpdatesRef so undo/redo, deletes and asset cascades
+  // can supersede it and a failed write is not re-queued over newer data.
+  const pendingUpdatesRef = useRef<Map<string, PendingLevelEdit>>(new Map());
+  const inFlightUpdatesRef = useRef<Map<string, PendingLevelEdit>>(new Map());
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushChainRef = useRef<Promise<unknown>>(Promise.resolve());
+
+  const clearSaveTimeout = () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+  };
+
+  /** Take pending and in-flight edits for objects whose whole document is about to be rewritten or removed. */
+  const supersedePendingEdits = useCallback((ids: Iterable<string>) => {
+      const superseded = new Map<string, PendingLevelEdit>();
+      for (const id of ids) {
+          const pending = pendingUpdatesRef.current.get(id);
+          if (pending) superseded.set(id, pending);
+          pendingUpdatesRef.current.delete(id);
+          inFlightUpdatesRef.current.delete(id);
+      }
+      return superseded;
+  }, []);
+
+  /** Put superseded edits back after the operation that took them failed; newer edits win. */
+  const restorePendingEdits = useCallback((superseded: Map<string, PendingLevelEdit>) => {
+      for (const [id, edit] of superseded) {
+          if (!session.isSameSession(edit.lease)) continue;
+          const newer = pendingUpdatesRef.current.get(id);
+          pendingUpdatesRef.current.set(id, newer ? { updates: { ...edit.updates, ...newer.updates }, lease: newer.lease } : edit);
+      }
+  }, [session]);
+
   // History State
   const history = useRef<{ past: LevelObject[][], future: LevelObject[][] }>({ past: [], future: [] });
   const historyMutationRef = useRef(false);
@@ -154,9 +220,13 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       if (!previousState) return;
       const currentSnapshot = JSON.parse(JSON.stringify(levelObjects));
       historyMutationRef.current = true;
+      // Rewritten documents supersede pending partial edits of the same objects.
+      const superseded = supersedePendingEdits(changedLevelObjectIds(levelObjects, previousState));
+      let applied = false;
       try {
           // Keep both stacks untouched until every host change succeeds.
           if (!await syncStateToDB(levelObjects, previousState, lease) || !session.isSameSession(lease)) return;
+          applied = true;
           if (history.current.past[history.current.past.length - 1] !== previousState) return;
           history.current.past.pop();
           history.current.future.push(currentSnapshot);
@@ -166,10 +236,11 @@ export const useLevelManager = (models: LoadedModelData[]) => {
           frontendDiagnostics.failure('level_undo_failed', error);
           addNotification({ message: "Undo failed; no history was consumed.", type: 'error' });
       } finally {
+          if (!applied) restorePendingEdits(superseded);
           historyMutationRef.current = false;
           updateHistoryState();
       }
-  }, [levelObjects, addNotification, session]);
+  }, [levelObjects, addNotification, restorePendingEdits, session, supersedePendingEdits]);
 
   const redo = useCallback(async () => {
       if (historyMutationRef.current) return;
@@ -178,9 +249,12 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       if (!nextState) return;
       const currentSnapshot = JSON.parse(JSON.stringify(levelObjects));
       historyMutationRef.current = true;
+      const superseded = supersedePendingEdits(changedLevelObjectIds(levelObjects, nextState));
+      let applied = false;
       try {
           // Keep both stacks untouched until every host change succeeds.
           if (!await syncStateToDB(levelObjects, nextState, lease) || !session.isSameSession(lease)) return;
+          applied = true;
           if (history.current.future[history.current.future.length - 1] !== nextState) return;
           history.current.future.pop();
           history.current.past.push(currentSnapshot);
@@ -190,19 +264,16 @@ export const useLevelManager = (models: LoadedModelData[]) => {
           frontendDiagnostics.failure('level_redo_failed', error);
           addNotification({ message: "Redo failed; no history was consumed.", type: 'error' });
       } finally {
+          if (!applied) restorePendingEdits(superseded);
           historyMutationRef.current = false;
           updateHistoryState();
       }
-  }, [levelObjects, addNotification, session]);
+  }, [levelObjects, addNotification, restorePendingEdits, session, supersedePendingEdits]);
 
   useEffect(() => {
       history.current = { past: [], future: [] };
       updateHistoryState();
   }, [currentLevelId]);
-
-  const pendingUpdatesRef = useRef<Map<string, { updates: Partial<LevelObject>; lease: EditorSessionLease; previous: LevelObject }>>(new Map());
-  const invalidatedIdsRef = useRef<Set<string>>(new Set());
-  const saveTimeoutRef = useRef<any>(null);
 
   useEffect(() => subscribeDomainCascade((event) => {
       const status = projectService.getStatus();
@@ -216,14 +287,19 @@ export const useLevelManager = (models: LoadedModelData[]) => {
                   : object.audioConfig?.audioId === event.id)
           .map((object) => object.id));
       if (affectedIds.size === 0) return;
+      // The host already rewrote the stored documents. Unwritten edits of the
+      // affected objects are re-queued without the deleted reference (or
+      // dropped with a removed model's objects) so they cannot resurrect it.
       for (const id of affectedIds) {
-          invalidatedIdsRef.current.add(id);
-          pendingUpdatesRef.current.delete(id);
+          const inFlight = inFlightUpdatesRef.current.get(id);
+          const pending = pendingUpdatesRef.current.get(id);
+          supersedePendingEdits([id]);
+          const edit = pending ?? inFlight;
+          if (event.kind === 'model' || !edit) continue;
+          const updates = withoutDomainReference({ ...(inFlight?.updates || {}), ...(pending?.updates || {}) }, event);
+          if (Object.keys(updates).length > 0) pendingUpdatesRef.current.set(id, { updates, lease: edit.lease });
       }
-      if (pendingUpdatesRef.current.size === 0 && saveTimeoutRef.current) {
-          clearTimeout(saveTimeoutRef.current);
-          saveTimeoutRef.current = null;
-      }
+      if (pendingUpdatesRef.current.size === 0) clearSaveTimeout();
       setWorkingState((current) => {
           const nextObjects = applyDomainCascade(current.levelObjects, event);
           return nextObjects.length === current.levelObjects.length
@@ -231,48 +307,94 @@ export const useLevelManager = (models: LoadedModelData[]) => {
               ? current
               : { ...current, levelObjects: nextObjects };
       });
-  }), [session, workingState.levelObjects]);
+  }), [session, supersedePendingEdits, workingState.levelObjects]);
 
-  const commitUpdates = useCallback(async () => {
-      if (pendingUpdatesRef.current.size === 0) return;
-      const batch = new Map<string, { updates: Partial<LevelObject>; lease: EditorSessionLease; previous: LevelObject }>(pendingUpdatesRef.current);
-      pendingUpdatesRef.current.clear();
-      for (const [id, pending] of batch.entries()) {
-          if (invalidatedIdsRef.current.has(id)) {
-              invalidatedIdsRef.current.delete(id);
-              continue;
-          }
-          if (!session.isCurrent(pending.lease)) continue;
-          try {
-              await dbOperations.updateLevelObject(id, pending.updates, pending.lease);
-              if (!session.isSameSession(pending.lease)) continue;
-          } catch (error) {
-              if (!pendingUpdatesRef.current.has(id)) {
-                  setWorkingState(current => current.levelObjects.some((object) => object.id === id && object === pending.previous)
-                      ? current
-                      : { ...current, levelObjects: current.levelObjects.map((object) => object.id === id ? pending.previous : object) });
+  /** Write every pending edit of the current session; failed writes stay pending. */
+  const writePendingEdits = useCallback(async () => {
+      const failures: unknown[] = [];
+      let fenced = 0;
+      while (pendingUpdatesRef.current.size > 0 && failures.length === 0) {
+          const batch = [...pendingUpdatesRef.current.entries()];
+          pendingUpdatesRef.current.clear();
+          for (const [id, edit] of batch) inFlightUpdatesRef.current.set(id, edit);
+          for (const [id, edit] of batch) {
+              // Superseded by undo/redo, a delete or an asset cascade.
+              if (inFlightUpdatesRef.current.get(id) !== edit) continue;
+              // Never write an edit into a different project, level or session;
+              // the write itself uses the newest revision of that same session.
+              const lease = session.isSameSession(edit.lease) ? session.captureReady() : null;
+              if (!lease) {
+                  inFlightUpdatesRef.current.delete(id);
+                  fenced++;
+                  continue;
               }
-              frontendDiagnostics.failure('level_batch_persist_failed', error);
+              try {
+                  await dbOperations.updateLevelObject(id, edit.updates, lease);
+              } catch (error) {
+                  failures.push(error);
+                  // Keep the edit (it is still shown) retryable instead of
+                  // reverting it; edits made meanwhile are newer and win.
+                  if (inFlightUpdatesRef.current.get(id) === edit) restorePendingEdits(new Map([[id, edit]]));
+              } finally {
+                  if (inFlightUpdatesRef.current.get(id) === edit) inFlightUpdatesRef.current.delete(id);
+              }
           }
       }
-  }, [session]);
+      return { failures, fenced };
+  }, [restorePendingEdits, session]);
+
+  /**
+   * Persist all pending level edits and wait for them. Project operations,
+   * level switches and unmount call this before the session ends; a failure
+   * is reported, keeps the edits pending and rejects so callers can stop.
+   */
+  const flushPendingLevelEdits = useCallback(async ({ notify = true }: { notify?: boolean } = {}): Promise<void> => {
+      clearSaveTimeout();
+      // Serialize flushes so a save never overtakes a debounced write in progress.
+      const result = flushChainRef.current.then(() => writePendingEdits());
+      flushChainRef.current = result.catch(() => undefined);
+      const { failures, fenced } = await result;
+      if (fenced > 0) {
+          frontendDiagnostics.warning('level_pending_edits_fenced', fenced);
+          addNotification({ message: `${fenced} level edit${fenced === 1 ? ' was' : 's were'} discarded because the editor session changed.`, type: 'error' });
+      }
+      if (failures.length === 0) return;
+      frontendDiagnostics.failure('level_batch_persist_failed', failures[0]);
+      const error = new Error(`Level edits could not be saved: ${describeError(failures[0])}. They are kept and will be retried on the next edit or save.`);
+      if (notify) addNotification({ message: error.message, type: 'error' });
+      throw error;
+  }, [addNotification, writePendingEdits]);
+
+  const flushPendingLevelEditsRef = useRef(flushPendingLevelEdits);
+  flushPendingLevelEditsRef.current = flushPendingLevelEdits;
+
+  const scheduleFlush = useCallback(() => {
+      clearSaveTimeout();
+      saveTimeoutRef.current = setTimeout(() => {
+          saveTimeoutRef.current = null;
+          // The flush reports its own failure and keeps the edits pending.
+          void flushPendingLevelEditsRef.current().catch(() => undefined);
+      }, 1500);
+  }, []);
 
   useEffect(() => session.subscribe(() => {
-      if (session.getSnapshot().phase === 'transitioning') {
-          if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-          saveTimeoutRef.current = null;
-          pendingUpdatesRef.current.clear();
+      if (session.getSnapshot().phase !== 'transitioning') return;
+      clearSaveTimeout();
+      // Project operations and level switches flush before they begin a
+      // transition. Anything still pending belongs to a session that was
+      // replaced underneath the editor and can no longer be written.
+      const discarded = pendingUpdatesRef.current.size;
+      pendingUpdatesRef.current.clear();
+      if (discarded > 0) {
+          frontendDiagnostics.warning('level_pending_edits_discarded', discarded);
+          addNotification({ message: `${discarded} unsaved level edit${discarded === 1 ? ' was' : 's were'} discarded because the project session changed.`, type: 'error' });
       }
-  }), [session]);
+  }), [addNotification, session]);
 
-  useEffect(() => {
-    return () => {
-        if (saveTimeoutRef.current) {
-            clearTimeout(saveTimeoutRef.current);
-            saveTimeoutRef.current = null;
-        }
-        pendingUpdatesRef.current.clear();
-    };
+  useEffect(() => () => {
+      // Cleanup cannot await: start writing what is still pending. The writes
+      // stay ordered in the project mutation queue.
+      void flushPendingLevelEditsRef.current().catch(() => undefined);
   }, []);
 
   const initLevels = useCallback(async (signal?: AbortSignal) => {
@@ -360,18 +482,23 @@ export const useLevelManager = (models: LoadedModelData[]) => {
   }, [addNotification, session]);
 
   const loadLevel = useCallback(async (id: string) => {
-      const lease = session.requireCurrent(session.captureReady());
+      session.requireCurrent(session.captureReady());
       if (id === currentLevelIdRef.current) return;
       if (!levels.some((level) => level.id === id)) throw new Error('Cannot load an unknown level.');
+      // The current level's pending edits belong to its session: persist them
+      // before the switch ends it. A failed flush has been reported and keeps
+      // this level open so the edits stay retryable.
+      try {
+          await flushPendingLevelEdits();
+      } catch {
+          return;
+      }
+      const lease = session.requireCurrent(session.captureReady());
+      if (id === currentLevelIdRef.current) return;
       const authoritative = projectService.getStatus();
       if (!authoritative.projectId) throw new Error('Cannot load a level without an open native project.');
       session.requireWritable(lease, authoritative);
       const transition = session.beginTransition();
-      if (saveTimeoutRef.current) {
-          clearTimeout(saveTimeoutRef.current);
-          saveTimeoutRef.current = null;
-          pendingUpdatesRef.current.clear();
-      }
       try {
           // Native project data is authoritative for an open project. Capture
           // its identity before the asynchronous read and prove it again
@@ -404,11 +531,15 @@ export const useLevelManager = (models: LoadedModelData[]) => {
           session.fail(transition);
           throw error;
       }
-  }, [levels, addNotification, replaceWorkingState, session]);
+  }, [levels, addNotification, flushPendingLevelEdits, replaceWorkingState, session]);
 
   const deleteLevel = useCallback(async (id: string) => {
       const lease = session.requireCurrent(session.captureReady());
       projectService.assertWritable();
+      // Deleting the current level deletes its objects; their pending edits go with them.
+      const superseded = id === currentLevelId
+          ? supersedePendingEdits([...pendingUpdatesRef.current.keys(), ...inFlightUpdatesRef.current.keys()])
+          : new Map<string, PendingLevelEdit>();
       try {
           await dbOperations.deleteLevel(id, lease);
           session.requireSameSession(lease);
@@ -423,10 +554,11 @@ export const useLevelManager = (models: LoadedModelData[]) => {
           }
           addNotification({ message: "Level deleted.", type: 'info' });
       } catch (e) {
+          restorePendingEdits(superseded);
           frontendDiagnostics.failure('level_delete_failed', e);
           addNotification({ message: "Failed to delete level.", type: 'error' });
       }
-  }, [currentLevelId, levels, loadLevel, initLevels, addNotification, session]);
+  }, [currentLevelId, levels, loadLevel, initLevels, addNotification, restorePendingEdits, session, supersedePendingEdits]);
 
   const addLevelObject = useCallback(async (
       modelId: string, 
@@ -483,30 +615,41 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       const lease = session.requireCurrent(session.captureReady());
       projectService.assertWritable();
       snapshotHistory();
+      // A partial edit written after the delete would recreate a broken document.
+      const superseded = supersedePendingEdits([id]);
       try {
           await dbOperations.deleteLevelObject(id, lease);
           if (!session.isSameSession(lease)) return;
           setWorkingState(prev => ({ ...prev, levelObjects: prev.levelObjects.filter(o => o.id !== id) }));
-      } catch(e) { frontendDiagnostics.failure('level_object_delete_failed', e); }
-  }, [snapshotHistory, session]);
+      } catch(e) {
+          restorePendingEdits(superseded);
+          frontendDiagnostics.failure('level_object_delete_failed', e);
+      }
+  }, [restorePendingEdits, snapshotHistory, session, supersedePendingEdits]);
 
   const removeLevelObjects = useCallback(async (ids: string[]) => {
       const lease = session.requireCurrent(session.captureReady());
       projectService.assertWritable();
       if (ids.length === 0) return;
       snapshotHistory();
+      const superseded = supersedePendingEdits(ids);
+      const deleted = new Set<string>();
       try {
           let activeLease: EditorSessionLease = lease;
           for (const id of ids) {
               session.requireCurrent(activeLease);
               await dbOperations.deleteLevelObject(id, activeLease);
+              deleted.add(id);
               if (!session.isSameSession(lease)) return;
               activeLease = session.captureReady()!;
           }
           if (!session.isSameSession(lease)) return;
           setWorkingState(prev => ({ ...prev, levelObjects: prev.levelObjects.filter(o => !ids.includes(o.id)) }));
-      } catch(e) { frontendDiagnostics.failure('level_object_batch_delete_failed', e); }
-  }, [snapshotHistory, session]);
+      } catch(e) {
+          restorePendingEdits(new Map([...superseded].filter(([id]) => !deleted.has(id))));
+          frontendDiagnostics.failure('level_object_batch_delete_failed', e);
+      }
+  }, [restorePendingEdits, snapshotHistory, session, supersedePendingEdits]);
 
   const updateLevelObject = useCallback((id: string, updates: Partial<LevelObject>) => {
       const lease = session.requireCurrent(session.captureReady());
@@ -521,11 +664,9 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       pendingUpdatesRef.current.set(id, {
           updates: { ...(existing?.updates || {}), ...updates },
           lease,
-          previous: existing?.previous || previous,
       });
-      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-      saveTimeoutRef.current = setTimeout(commitUpdates, 1500);
-  }, [commitUpdates, levelObjects, session]);
+      scheduleFlush();
+  }, [levelObjects, scheduleFlush, session]);
 
   const updateLevelBlueprint = useCallback((data: Partial<LevelBlueprintData>) => {
       const lease = session.requireCurrent(session.captureReady());
@@ -588,6 +729,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       removeLevelObject,
       removeLevelObjects,
       updateLevelObject,
+      flushPendingLevelEdits,
       activeLevelBlueprint,
       updateLevelBlueprint,
       hydrateProjectState,

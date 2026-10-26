@@ -26,12 +26,14 @@ interface UseProjectManagerProps {
   restoreSession: (onProgress?: HydrationProgress, signal?: AbortSignal, diagnostics?: DiagnosticContext, transition?: EditorSessionTransition) => Promise<void>;
   resetScene: () => Promise<void>;
   getCurrentLevelId: () => string | null;
+  /** Persists debounced World Editor edits; rejects if any of them failed. */
+  flushPendingLevelEdits: (options?: { notify?: boolean }) => Promise<void>;
 }
 
 export const useProjectManager = ({
   setIsLoading, cameraState, setCameraState, selectedModelId,
   selectedBlueprintId, selectModel, selectBlueprint, restoreSession, resetScene,
-  getCurrentLevelId,
+  getCurrentLevelId, flushPendingLevelEdits,
 }: UseProjectManagerProps) => {
   const { addNotification } = useNotification();
   const { startOperation } = useOperationActions();
@@ -63,9 +65,6 @@ export const useProjectManager = ({
     success: string,
     transitionKind?: 'replace' | 'close',
   ) => {
-    // This is deliberately before the first host operation. It synchronously
-    // invalidates every old World Editor lease, including delayed writes.
-    const transition: EditorSessionTransition | null = transitionKind ? editorSession.beginTransition() : null;
     const handle = startOperation({
       kind,
       phase: 'host_request',
@@ -77,8 +76,17 @@ export const useProjectManager = ({
     activeOperation.current = handle;
     let outcome: 'success' | 'failure' = 'success';
     let failure: unknown;
+    let transition: EditorSessionTransition | null = null;
     setIsLoading(true);
     try {
+      // Debounced level edits belong to the current session: write them (and
+      // wait) before saving, exporting or replacing it. A failed flush keeps
+      // the edits pending and cancels the operation instead of losing them.
+      await flushPendingLevelEdits({ notify: false });
+      // The transition is begun before the operation's first host request. It
+      // synchronously invalidates every old World Editor lease, including
+      // delayed writes.
+      transition = transitionKind ? editorSession.beginTransition() : null;
       await operation(handle, transition);
       if (transition) {
         const status = projectService.getStatus();
@@ -106,7 +114,7 @@ export const useProjectManager = ({
       handle.finish(outcome, failure);
       if (ownsLoadingState) setIsLoading(false);
     }
-  }, [addNotification, getCurrentLevelId, setIsLoading, startOperation]);
+  }, [addNotification, flushPendingLevelEdits, getCurrentLevelId, setIsLoading, startOperation]);
 
   const contextFor = useCallback((handle: OperationHandle): DiagnosticContext => ({
     operationId: handle.id,
