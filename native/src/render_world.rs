@@ -9,7 +9,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
 
+/// Per-frame draw budget: at most this many entities survive extraction.
 pub const MAX_RENDER_ENTITIES: usize = 4_096;
+/// Largest render input accepted.  It matches the authoritative world bound
+/// so every valid world can be extracted; the draw budget above is applied
+/// after culling instead of rejecting the whole frame.
+pub const MAX_RENDER_INPUT_ENTITIES: usize = crate::world::MAX_ENTITIES;
 pub const MAX_RENDER_LIGHTS: usize = 256;
 pub const MAX_LOD_LEVELS: usize = 8;
 pub const MAX_INSTANCE_BATCHES: usize = 4_096;
@@ -424,6 +429,10 @@ pub struct RenderSnapshot {
     pub fixed_tick: u64,
     pub entities: Box<[ExtractedEntity]>,
     pub visible_entity_ids: Box<[u64]>,
+    /// Entities that survived culling but were left out of this frame
+    /// because they exceeded [`MAX_RENDER_ENTITIES`].
+    #[serde(default)]
+    pub budget_culled_entities: u32,
     pub batches: Box<[InstanceBatch]>,
     pub lights: Box<[ExtractedLight]>,
     pub shadow_light_ids: Box<[u64]>,
@@ -482,7 +491,6 @@ pub fn extract_render_world(
     }
 
     let mut extracted = Vec::with_capacity(source.len());
-    let mut visible_ids = Vec::with_capacity(source.len());
     for entity in source {
         if capabilities
             .bits
@@ -518,7 +526,6 @@ pub fn extract_render_world(
                 bind_pose: true,
             })
         };
-        visible_ids.push(entity.id);
         extracted.push(ExtractedEntity {
             id: entity.id,
             mesh_id: entity.mesh_id,
@@ -532,6 +539,33 @@ pub fn extract_render_world(
             pick_id: 0,
         });
     }
+
+    // The draw budget applies after culling so off-screen entities never
+    // consume it.  Selected entities are kept first (their gizmos stay
+    // visible), then the nearest to the camera, with the stable id breaking
+    // ties, so the surviving set is deterministic for a given input.
+    let selected_ids = input
+        .entities
+        .iter()
+        .filter(|entity| entity.selected)
+        .map(|entity| entity.id)
+        .collect::<BTreeSet<_>>();
+    let budget_culled_entities = extracted.len().saturating_sub(MAX_RENDER_ENTITIES);
+    if budget_culled_entities > 0 {
+        extracted.sort_by(|a, b| {
+            selected_ids
+                .contains(&b.id)
+                .cmp(&selected_ids.contains(&a.id))
+                .then_with(|| {
+                    distance_sq(input.camera_position, a.position)
+                        .total_cmp(&distance_sq(input.camera_position, b.position))
+                })
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        extracted.truncate(MAX_RENDER_ENTITIES);
+        extracted.sort_by_key(|entity| entity.id);
+    }
+    let visible_ids = extracted.iter().map(|entity| entity.id).collect::<Vec<_>>();
 
     let mut picks = Vec::new();
     if capabilities
@@ -621,12 +655,7 @@ pub fn extract_render_world(
     let gizmos = if capabilities.bits.contains(RenderFeatureBits::EDITOR_GIZMOS) {
         extracted
             .iter()
-            .filter(|entity| {
-                input
-                    .entities
-                    .iter()
-                    .any(|source| source.id == entity.id && source.selected)
-            })
+            .filter(|entity| selected_ids.contains(&entity.id))
             .take(MAX_GIZMOS)
             .map(|entity| GizmoOverlay {
                 entity_id: entity.id,
@@ -650,6 +679,7 @@ pub fn extract_render_world(
         fixed_tick: input.fixed_tick,
         entities: extracted.into_boxed_slice(),
         visible_entity_ids: visible_ids.into_boxed_slice(),
+        budget_culled_entities: budget_culled_entities as u32,
         batches: batches.into_boxed_slice(),
         lights: lights.into_boxed_slice(),
         shadow_light_ids: shadow_ids.into_boxed_slice(),
@@ -800,7 +830,7 @@ fn pass_feature(pass: RenderPassKind) -> RenderFeature {
 }
 
 fn validate_input(input: &WorldRenderInput) -> Result<(), RenderExtractionError> {
-    if input.entities.len() > MAX_RENDER_ENTITIES {
+    if input.entities.len() > MAX_RENDER_INPUT_ENTITIES {
         return Err(RenderExtractionError::Limit("render entity limit exceeded"));
     }
     if input.lights.len() > MAX_RENDER_LIGHTS {
@@ -1156,7 +1186,7 @@ mod tests {
     #[test]
     fn bounds_and_invalid_input_fail_closed() {
         let mut value = input();
-        value.entities = (1..=MAX_RENDER_ENTITIES as u64 + 1)
+        value.entities = (1..=MAX_RENDER_INPUT_ENTITIES as u64 + 1)
             .map(|id| entity(id, 1.0))
             .collect();
         assert!(matches!(
@@ -1186,6 +1216,60 @@ mod tests {
             extract_render_world(&value, RenderCapabilities::portable()),
             Err(RenderExtractionError::Limit("render light limit exceeded"))
         ));
+    }
+
+    #[test]
+    fn draw_budget_applies_after_culling_to_any_world_sized_input() {
+        assert_eq!(MAX_RENDER_INPUT_ENTITIES, crate::world::MAX_ENTITIES);
+        let visible = MAX_RENDER_ENTITIES as u64 + 10;
+        let farthest_selected = visible;
+        let mut value = input();
+        // A world at its entity limit: the visible entities exceed the draw
+        // budget by ten and the rest sit outside the frustum.
+        value.entities = (1..=MAX_RENDER_INPUT_ENTITIES as u64)
+            .map(|id| {
+                let x = if id <= visible {
+                    id as f32 * 0.001
+                } else {
+                    -20.0
+                };
+                let mut value = entity(id, x);
+                value.selected = id == farthest_selected;
+                value
+            })
+            .collect();
+        let result = extract_render_world(&value, RenderCapabilities::portable()).unwrap();
+        let snapshot = &result.snapshot;
+        assert_eq!(snapshot.entities.len(), MAX_RENDER_ENTITIES);
+        assert_eq!(snapshot.budget_culled_entities, 10);
+        let kept = snapshot
+            .entities
+            .iter()
+            .map(|entity| entity.id)
+            .collect::<Vec<_>>();
+        assert_eq!(snapshot.visible_entity_ids.as_ref(), kept.as_slice());
+        assert!(kept.windows(2).all(|ids| ids[0] < ids[1]));
+        // The selected entity survives although it is the farthest; the
+        // nearest unselected entities fill the rest of the budget.
+        let mut expected = (1..MAX_RENDER_ENTITIES as u64).collect::<Vec<_>>();
+        expected.push(farthest_selected);
+        assert_eq!(kept, expected);
+        assert_eq!(snapshot.picks.len(), MAX_RENDER_ENTITIES);
+        assert_eq!(snapshot.gizmos.len(), 1);
+        assert_eq!(snapshot.gizmos[0].entity_id, farthest_selected);
+        // Input order does not change which entities survive.
+        value.entities.reverse();
+        assert_eq!(
+            extract_render_world(&value, RenderCapabilities::portable()).unwrap(),
+            result
+        );
+        // Culled entities never consume the budget.
+        value
+            .entities
+            .retain(|entity| entity.id <= MAX_RENDER_ENTITIES as u64 || entity.id > visible);
+        let within = extract_render_world(&value, RenderCapabilities::portable()).unwrap();
+        assert_eq!(within.snapshot.entities.len(), MAX_RENDER_ENTITIES);
+        assert_eq!(within.snapshot.budget_culled_entities, 0);
     }
 
     #[test]
