@@ -26,6 +26,7 @@
     "tests/frontend/hudMenus.test.tsx",
     "tests/frontend/hudRenderer.test.tsx",
     "tests/frontend/hudSandbox.test.tsx",
+    "tests/frontend/levelBlueprintMath.test.tsx",
     "tests/frontend/levelBlueprintNodesRuntime.test.tsx",
     "tests/frontend/levelBlueprintRuntime.test.tsx",
     "tests/frontend/levelClipboard.test.ts",

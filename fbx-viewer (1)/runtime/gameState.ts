@@ -42,13 +42,17 @@ export const gameState = {
 };
 
 /** Reads a binding path: 'player.health', 'player.maxHealth', 'player.stamina', 'player.isAiming', 'level.id', 'vars.<name>'. */
+const ownValue = (record: object, key: string): unknown =>
+    (Object.prototype.hasOwnProperty.call(record, key) ? (record as Record<string, unknown>)[key] : undefined);
+
+/** Only own number/boolean/string values resolve, so a path like vars.toString never reaches a prototype member. */
+const bindingValue = (value: unknown): number | boolean | string | null =>
+    (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'string' ? value : null);
+
 export const readGameStateBinding = (state: GameStateSnapshot, path: string): number | boolean | string | null => {
     if (path === 'level.id') return state.levelId;
-    if (path.startsWith('player.')) {
-        const key = path.slice('player.'.length) as keyof GameStateSnapshot['player'];
-        return key in state.player ? state.player[key] : null;
-    }
-    if (path.startsWith('vars.')) return state.vars[path.slice('vars.'.length)] ?? null;
+    if (path.startsWith('player.')) return bindingValue(ownValue(state.player, path.slice('player.'.length)));
+    if (path.startsWith('vars.')) return bindingValue(ownValue(state.vars, path.slice('vars.'.length)));
     return null;
 };
 

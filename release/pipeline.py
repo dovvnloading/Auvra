@@ -27,6 +27,8 @@ from urllib.parse import urlsplit
 import xml.etree.ElementTree as ET
 import zlib
 
+from . import notices as third_party
+from .notices import NOTICES_FILE, NoticesError
 from .runtime_verify import HOST_SCHEMA_FILES
 
 
@@ -292,11 +294,50 @@ def _manifest_files(manifest: Mapping[str, Any], policy: Mapping[str, Any]) -> d
     return result
 
 
+def _editor_notices(input_root: Path, policy: Mapping[str, Any]) -> str:
+    """Compose the package-root third-party notices from the staged inputs.
+
+    Frontend notices come from the Vite build (scripts/licenses/notices.mjs),
+    the Rust crate notices are staged beside each binary by stage_inputs.ps1
+    (python -m release.notices rust), and Python notices are read from the
+    staged site-packages metadata, so the result depends on inputs only.
+    """
+
+    try:
+        text = third_party.editor_notices_from_inputs(input_root, policy["runtimePins"])
+        third_party.verify_editor_notices(text)
+    except NoticesError as exc:
+        raise ReleaseError(f"third-party notices: {exc}") from exc
+    return text
+
+
+def _verify_package_notices(root: Path) -> None:
+    """Require complete notices at the package root and beside the game player."""
+
+    path = root / NOTICES_FILE
+    if not path.is_file() or path.is_symlink():
+        raise ReleaseError(f"{NOTICES_FILE} is missing from the package root")
+    try:
+        third_party.verify_editor_notices(path.read_bytes().decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise ReleaseError(f"{NOTICES_FILE} is not UTF-8 text") from exc
+    except NoticesError as exc:
+        raise ReleaseError(f"package third-party notices are incomplete: {exc}") from exc
+    player = root / "game-player" / NOTICES_FILE
+    try:
+        player_text = player.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ReleaseError(f"game-player/{NOTICES_FILE} is missing or unreadable") from exc
+    if third_party.count_components(player_text) < 1:
+        raise ReleaseError(f"game-player/{NOTICES_FILE} lists no crates")
+
+
 def write_input_inventory(input_root: Path, output: Path) -> dict[str, Any]:
     policy = _read_policy()
     inventory = _input_inventory(input_root.resolve(), policy)
     _validate_runtime_pin_markers(input_root.resolve(), policy)
     _require_host_schemas(input_root.resolve() / "host", label="host input")
+    _editor_notices(input_root.resolve(), policy)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(canonical_json(inventory))
     return inventory
@@ -399,6 +440,18 @@ def _sbom_component(
 def _locked_dependency_components(input_root: Path) -> list[dict[str, Any]]:
     """Collect identities for dependencies that can be shipped in a release."""
 
+    def staged_licenses(*relatives: str) -> dict[tuple[str, str], str]:
+        # Declared licenses as recorded in the staged third-party notices.
+        result: dict[tuple[str, str], str] = {}
+        for relative in relatives:
+            try:
+                result.update(third_party.component_licenses((input_root / relative).read_bytes().decode("utf-8")))
+            except (OSError, UnicodeDecodeError):
+                continue
+        return result
+
+    npm_licenses = staged_licenses(f"frontend/{NOTICES_FILE}")
+    cargo_licenses = staged_licenses(f"native/{NOTICES_FILE}", f"game-player/{NOTICES_FILE}")
     components: list[dict[str, Any]] = []
     package_lock = ROOT.parent / "fbx-viewer (1)" / "package-lock.json"
     try:
@@ -414,20 +467,21 @@ def _locked_dependency_components(input_root: Path) -> list[dict[str, Any]]:
         version = metadata.get("version")
         if not isinstance(version, str) or not version:
             continue
-        components.append(_sbom_component("npm", name, version))
+        components.append(_sbom_component("npm", name, version, license_name=npm_licenses.get((name, version))))
 
-    cargo_lock = ROOT.parent / "native" / "Cargo.lock"
-    try:
-        lock = tomllib.loads(cargo_lock.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
-        lock = {}
-    for package in lock.get("package", []) if isinstance(lock, dict) else []:
-        if not isinstance(package, Mapping):
-            continue
-        name, version = package.get("name"), package.get("version")
-        if not isinstance(name, str) or not isinstance(version, str):
-            continue
-        components.append(_sbom_component("cargo", name, version, digest=package.get("checksum")))
+    for cargo_lock in (ROOT.parent / "native" / "Cargo.lock", ROOT.parent / "player-desktop" / "Cargo.lock"):
+        try:
+            lock = tomllib.loads(cargo_lock.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+            lock = {}
+        for package in lock.get("package", []) if isinstance(lock, dict) else []:
+            if not isinstance(package, Mapping):
+                continue
+            name, version = package.get("name"), package.get("version")
+            if not isinstance(name, str) or not isinstance(version, str):
+                continue
+            components.append(_sbom_component("cargo", name, version, digest=package.get("checksum"),
+                                              license_name=cargo_licenses.get((name, version))))
 
     uv_lock = ROOT.parent / "uv.lock"
     try:
@@ -458,10 +512,11 @@ def _locked_dependency_components(input_root: Path) -> list[dict[str, Any]]:
             values: dict[str, str] = {}
             for line in fields:
                 key, separator, value = line.partition(":")
-                if separator and key in {"Name", "Version", "License"}:
-                    values[key] = value.strip()
+                if separator and key in {"Name", "Version", "License", "License-Expression"}:
+                    values.setdefault(key, value.strip())
             if values.get("Name") and values.get("Version"):
-                components.append(_sbom_component("pypi", values["Name"], values["Version"], license_name=values.get("License")))
+                components.append(_sbom_component("pypi", values["Name"], values["Version"],
+                                                  license_name=values.get("License-Expression") or values.get("License")))
     deduplicated: dict[str, dict[str, Any]] = {}
     for component in components:
         deduplicated[component["purl"]] = component
@@ -639,6 +694,10 @@ def _assemble_into(input_root: Path, output_root: Path, *, channel: str, version
     _copy_tree(input_root / "licenses", output_root / "licenses", policy=policy, label="licenses")
     _copy_required_file(input_root / "native", output_root / "native" / "auvra-native.exe", label="native", suffix="auvra-native.exe")
     _copy_required_file(input_root / "game-player", output_root / "game-player" / "auvra-player.exe", label="game-player", suffix="auvra-player.exe")
+    # One complete notices file at the package root; the player's own crate
+    # notices also sit beside it so exported Windows games can ship them.
+    (output_root / NOTICES_FILE).write_bytes(_editor_notices(input_root, policy).encode("utf-8"))
+    shutil.copyfile(input_root / "game-player" / NOTICES_FILE, output_root / "game-player" / NOTICES_FILE)
     if not (output_root / "host" / "Auvra").is_dir():
         raise ReleaseError("host input must contain the importable Auvra application package")
     _write_packaged_startup(output_root, channel)
@@ -763,6 +822,7 @@ def verify_package(package_root: Path, *, expected_channel: str | None = None) -
     if not (root / "game-player" / "auvra-player.exe").is_file():
         raise ReleaseError("Windows game player is missing from package")
     _require_host_schemas(root / "host", label="package")
+    _verify_package_notices(root)
     return manifest
 
 

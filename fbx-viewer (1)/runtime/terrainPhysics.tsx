@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { CuboidCollider, HeightfieldCollider, RigidBody } from '@react-three/rapier';
+import { HeightfieldCollider, RigidBody } from '@react-three/rapier';
 import type { LevelObject } from '../types';
 import { isTerrainHeightfieldPending, terrainSamplesPerSide } from '../utils/terrainHeightfieldCodec';
 import { physicsUserData, usePhysicsAvailable } from './physics';
@@ -46,8 +46,20 @@ export const terrainHeightfieldShape = (terrain: LevelObject): TerrainHeightfiel
     };
 };
 
-/** Half extent of the ground slab used when a level has no terrain. */
-const GROUND_HALF_EXTENT = 2000;
+const FLAT_GROUND_EXTENT = 4000;
+const FLAT_GROUND_CELLS = 64;
+
+/**
+ * Ground at y = 0 for a level without terrain, 4 km across. It is a flat heightfield rather than one
+ * huge box: the character controller's sweeps lose precision against a box that large, so the player
+ * sank into it and could fall through after a few jumps.
+ */
+export const FLAT_GROUND_SHAPE: TerrainHeightfieldShape = {
+    rows: FLAT_GROUND_CELLS,
+    columns: FLAT_GROUND_CELLS,
+    heights: new Float32Array((FLAT_GROUND_CELLS + 1) * (FLAT_GROUND_CELLS + 1)),
+    scale: { x: FLAT_GROUND_EXTENT, y: 1, z: FLAT_GROUND_EXTENT },
+};
 
 const TerrainCollider: React.FC<{ terrain: LevelObject }> = ({ terrain }) => {
     const shape = useMemo(() => terrainHeightfieldShape(terrain), [terrain]);
@@ -70,7 +82,7 @@ const TerrainCollider: React.FC<{ terrain: LevelObject }> = ({ terrain }) => {
 };
 
 /**
- * Static ground for physics play: a heightfield per terrain, or a flat slab at y = 0 for levels
+ * Static ground for physics play: a heightfield per terrain, or flat ground at y = 0 for levels
  * without terrain (where the player has always stood). Mount inside PhysicsWorld.
  */
 export const LevelGroundColliders: React.FC<{ terrains: readonly LevelObject[] }> = ({ terrains }) => {
@@ -79,7 +91,9 @@ export const LevelGroundColliders: React.FC<{ terrains: readonly LevelObject[] }
     if (!terrains.length) {
         return (
             <RigidBody type="fixed" colliders={false}>
-                <CuboidCollider args={[GROUND_HALF_EXTENT, 0.5, GROUND_HALF_EXTENT]} position={[0, -0.5, 0]} />
+                <HeightfieldCollider
+                    args={[FLAT_GROUND_SHAPE.rows, FLAT_GROUND_SHAPE.columns, FLAT_GROUND_SHAPE.heights as unknown as number[], { ...FLAT_GROUND_SHAPE.scale }]}
+                />
             </RigidBody>
         );
     }

@@ -62,7 +62,7 @@
       ]
     },
     "projectStatusPayload": {"oneOf":[{"$ref":"#/$defs/emptyObject"},{"type":"object","required":["projectId"],"properties":{"projectId":{"$ref":"#/$defs/projectId"}},"additionalProperties":false}]},
-    "projectCreatePayload": {"type":"object","required":["name"],"properties":{"name":{"$ref":"#/$defs/name"},"parentHandle":{"$ref":"#/$defs/handle"},"template":{"enum":["blank","starter"]}},"additionalProperties":false},
+    "projectCreatePayload": {"type":"object","required":["name"],"properties":{"name":{"$ref":"#/$defs/name"},"parentHandle":{"$ref":"#/$defs/handle"},"template":{"enum":["blank","starter","arena"]}},"additionalProperties":false},
     "projectOpenPayload": {"type":"object","required":["projectHandle"],"properties":{"projectHandle":{"$ref":"#/$defs/handle"},"recoveryId":{"$ref":"#/$defs/handle"}},"additionalProperties":false},
     "projectRecentPayload": {"type":"object","required":["recentId"],"properties":{"recentId":{"$ref":"#/$defs/handle"},"recoveryId":{"$ref":"#/$defs/handle"}},"additionalProperties":false},
     "closePayload": {"type":"object","required":["projectId","expectedRevision"],"properties":{"projectId":{"$ref":"#/$defs/projectId"},"expectedRevision":{"$ref":"#/$defs/revision"}},"additionalProperties":false},

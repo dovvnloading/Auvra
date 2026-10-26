@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CameraState } from '../types';
+import { CameraState, type ProjectTemplate } from '../types';
 import { ProjectStatus, projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
 import { dbOperations } from '../utils/db';
@@ -14,6 +14,13 @@ type HydrationProgress = (
   phase?: string,
   diagnostic?: DiagnosticAttributes,
 ) => void;
+
+/** Name given to a project created from each template; the user can rename it later. */
+const DEFAULT_PROJECT_NAMES: Record<ProjectTemplate, string> = {
+  blank: 'Untitled',
+  starter: 'Starter Game',
+  arena: 'Arena Sample',
+};
 
 interface UseProjectManagerProps {
   setIsLoading: (loading: boolean) => void;
@@ -219,9 +226,9 @@ export const useProjectManager = ({
     }, 'Recovery point opened.', 'replace');
   }, [contextFor, hydrate, run]);
 
-  const createNewProject = useCallback(async (template: 'blank' | 'starter' = 'blank') => {
+  const createNewProject = useCallback(async (template: ProjectTemplate = 'blank') => {
     await run('project.create', 'Creating project', async (handle, transition) => {
-      await projectService.create(template === 'starter' ? 'Starter Game' : 'Untitled', contextFor(handle), template);
+      await projectService.create(DEFAULT_PROJECT_NAMES[template], contextFor(handle), template);
       if (transition && !editorSession.isTransitionCurrent(transition)) throw new DOMException('Project creation was superseded.', 'AbortError');
       await hydrate(handle, 0.65, 0.33, transition);
     }, 'New project created.', 'replace');

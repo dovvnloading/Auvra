@@ -42,7 +42,14 @@ class ProjectService:
         repository = ProjectRepository.create(path, name)
         if template not in (None, "blank"):
             from .templates import apply_template
-            apply_template(repository, template, project_name=repository.name)
+            try:
+                apply_template(repository, template, project_name=repository.name)
+            except BaseException:
+                # A project its template could not finish is removed, so the same path can be used again.
+                created = repository.path
+                repository.close()
+                shutil.rmtree(created, ignore_errors=True)
+                raise
         return self._activate(repository)
     def open(self, path: str | Path) -> ProjectStatus:
         candidate_path = Path(path).absolute()

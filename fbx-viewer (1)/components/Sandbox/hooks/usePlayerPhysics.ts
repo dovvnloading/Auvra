@@ -29,7 +29,7 @@ const DEFAULT_CONFIG: PhysicsConfig = {
 };
 
 /** Character controller tuning. Ratios scale with the character's measured height. */
-const CHARACTER = {
+export const CHARACTER = {
     RADIUS_RATIO: 0.12,      // Capsule radius
     STEP_RATIO: 0.15,        // Tallest ledge climbed without jumping
     SNAP_RATIO: 0.1,         // How far down the character sticks to slopes and stairs
@@ -145,7 +145,10 @@ type CharacterBody = ReturnType<RapierWorld['createRigidBody']>;
 type CharacterCollider = ReturnType<RapierWorld['createCollider']>;
 type GroundRay = InstanceType<RapierContext['rapier']['Ray']>;
 
-interface CharacterRig {
+/** The Rapier world and module a character moves in: useRapier's context, or the same pair built without React. */
+export type CharacterPhysicsContext = Pick<RapierContext, 'world' | 'rapier'>;
+
+export interface CharacterRig {
     world: RapierWorld;
     model: THREE.Object3D;
     controller: CharacterController;
@@ -183,7 +186,7 @@ const measureCharacterHeight = (model: THREE.Object3D): number => {
 };
 
 /** A kinematic capsule sized to the model, standing where the model stands, with its character controller. */
-const createCharacterRig = ({ world, rapier }: RapierContext, model: THREE.Object3D): CharacterRig => {
+export const createCharacterRig = ({ world, rapier }: CharacterPhysicsContext, model: THREE.Object3D): CharacterRig => {
     const height = measureCharacterHeight(model);
     const radius = height * CHARACTER.RADIUS_RATIO;
     const halfHeight = Math.max(0.01, height / 2 - radius);
@@ -270,6 +273,82 @@ const pushOutOfFootprints = (
     }
 };
 
+/**
+ * One frame of Rapier KinematicCharacterController movement for `character`: gravity, jumping, slopes
+ * and steps against the level's colliders. Where no collider lies below (levels authored before
+ * colliders), `terrain` or y = 0 still holds the player up as it did without physics. It only catches
+ * the player near that surface, so a player standing on colliders below it is never pulled up.
+ * `obstacles` are the level's objects; props among them without physics components keep their footprint.
+ */
+export const stepCharacterPhysics = (
+    context: CharacterPhysicsContext,
+    character: CharacterRig,
+    input: Pick<PlayerInputState, 'jumpPressed'>,
+    worldMoveVec: { readonly x: number; readonly z: number },
+    speed: number,
+    delta: number,
+    obstacles: readonly LevelObject[],
+    terrain: LevelObject | null
+) => {
+    const { rapier, world: physicsWorld } = context;
+    const { centre, model: modelObject } = character;
+    const dt = Math.min(delta, CHARACTER.MAX_STEP);
+
+    // Spawned, restarted or loaded elsewhere: move the capsule to the model instead of the reverse.
+    if (modelObject.position.distanceTo(character.placedAt) > CHARACTER.TELEPORT_DISTANCE) {
+        centre.copy(modelObject.position);
+        centre.y += character.centreOffset;
+        character.collider.setTranslation(centre);
+        character.body.setTranslation(centre, true);
+        character.verticalSpeed = 0;
+        character.grounded = false;
+    }
+
+    const gravity = physicsWorld.gravity.y < 0 ? physicsWorld.gravity.y : CHARACTER.DEFAULT_GRAVITY;
+    if (character.grounded && input.jumpPressed) {
+        character.verticalSpeed = Math.sqrt(2 * -gravity * character.height * CHARACTER.JUMP_RATIO);
+    }
+    character.verticalSpeed = Math.max(-CHARACTER.TERMINAL_SPEED, character.verticalSpeed + gravity * dt);
+
+    _desired.set(worldMoveVec.x * speed * dt, character.verticalSpeed * dt, worldMoveVec.z * speed * dt);
+    character.controller.computeColliderMovement(character.collider, _desired, rapier.QueryFilterFlags.EXCLUDE_SENSORS);
+    const moved = character.controller.computedMovement();
+    let grounded = character.controller.computedGrounded();
+    centre.set(centre.x + moved.x, centre.y + moved.y, centre.z + moved.z);
+    // Props with no collider component (levels authored before colliders) keep their footprint.
+    pushOutOfFootprints(centre, obstacles, isLegacySolidProp, DEFAULT_CONFIG.COLLISION_RADIUS);
+
+    // Head hit a ceiling: stop rising.
+    if (character.verticalSpeed > 0 && moved.y < _desired.y * 0.5) character.verticalSpeed = 0;
+
+    const { groundRay } = character;
+    groundRay.origin = { x: centre.x, y: centre.y, z: centre.z };
+    const hasGroundCollider = physicsWorld.castRay(
+        groundRay, 1e5, true,
+        rapier.QueryFilterFlags.EXCLUDE_SENSORS, undefined, character.collider, character.body
+    ) !== null;
+    if (!hasGroundCollider) {
+        const floor = legacyGroundHeight(centre.x, centre.z, terrain);
+        const depth = floor - (centre.y - character.centreOffset);
+        const reach = character.height * CHARACTER.STEP_RATIO + Math.abs(moved.y);
+        if (depth >= 0 && depth <= reach) {
+            centre.y = floor + character.centreOffset;
+            grounded = true;
+        }
+    }
+
+    if (grounded && character.verticalSpeed < 0) character.verticalSpeed = 0;
+    character.grounded = grounded;
+
+    // The collider moves now so the next frame's sweep starts here even if the world has not stepped yet;
+    // the body follows on the next step.
+    character.collider.setTranslation(centre);
+    character.body.setNextKinematicTranslation(centre);
+
+    modelObject.position.set(centre.x, centre.y - character.centreOffset, centre.z);
+    character.placedAt.copy(modelObject.position);
+};
+
 export const usePlayerPhysics = (
     modelObject: THREE.Object3D,
     camera: THREE.Camera,
@@ -332,73 +411,6 @@ export const usePlayerPhysics = (
 
         // Apply final position
         modelObject.position.copy(nextPos);
-    };
-
-    /**
-     * Rapier KinematicCharacterController movement: gravity, jumping, slopes and steps against the
-     * level's colliders. Where no collider lies below (levels authored before colliders), the terrain
-     * or y = 0 still holds the player up as it did without physics. It only catches the player near
-     * that surface, so a player standing on colliders below it is never pulled up.
-     */
-    const moveWithPhysics = (context: RapierContext, input: PlayerInputState, worldMoveVec: THREE.Vector3, speed: number, delta: number) => {
-        const character = getRig(context);
-        const { rapier, world: physicsWorld } = context;
-        const { centre } = character;
-        const dt = Math.min(delta, CHARACTER.MAX_STEP);
-
-        // Spawned, restarted or loaded elsewhere: move the capsule to the model instead of the reverse.
-        if (modelObject.position.distanceTo(character.placedAt) > CHARACTER.TELEPORT_DISTANCE) {
-            centre.copy(modelObject.position);
-            centre.y += character.centreOffset;
-            character.collider.setTranslation(centre);
-            character.body.setTranslation(centre, true);
-            character.verticalSpeed = 0;
-            character.grounded = false;
-        }
-
-        const gravity = physicsWorld.gravity.y < 0 ? physicsWorld.gravity.y : CHARACTER.DEFAULT_GRAVITY;
-        if (character.grounded && input.jumpPressed) {
-            character.verticalSpeed = Math.sqrt(2 * -gravity * character.height * CHARACTER.JUMP_RATIO);
-        }
-        character.verticalSpeed = Math.max(-CHARACTER.TERMINAL_SPEED, character.verticalSpeed + gravity * dt);
-
-        _desired.set(worldMoveVec.x * speed * dt, character.verticalSpeed * dt, worldMoveVec.z * speed * dt);
-        character.controller.computeColliderMovement(character.collider, _desired, rapier.QueryFilterFlags.EXCLUDE_SENSORS);
-        const moved = character.controller.computedMovement();
-        let grounded = character.controller.computedGrounded();
-        centre.set(centre.x + moved.x, centre.y + moved.y, centre.z + moved.z);
-        // Props with no collider component (levels authored before colliders) keep their footprint.
-        pushOutOfFootprints(centre, obstacles, isLegacySolidProp, DEFAULT_CONFIG.COLLISION_RADIUS);
-
-        // Head hit a ceiling: stop rising.
-        if (character.verticalSpeed > 0 && moved.y < _desired.y * 0.5) character.verticalSpeed = 0;
-
-        const { groundRay } = character;
-        groundRay.origin = { x: centre.x, y: centre.y, z: centre.z };
-        const hasGroundCollider = physicsWorld.castRay(
-            groundRay, 1e5, true,
-            rapier.QueryFilterFlags.EXCLUDE_SENSORS, undefined, character.collider, character.body
-        ) !== null;
-        if (!hasGroundCollider) {
-            const floor = legacyGroundHeight(centre.x, centre.z, activeTerrain.current);
-            const depth = floor - (centre.y - character.centreOffset);
-            const reach = character.height * CHARACTER.STEP_RATIO + Math.abs(moved.y);
-            if (depth >= 0 && depth <= reach) {
-                centre.y = floor + character.centreOffset;
-                grounded = true;
-            }
-        }
-
-        if (grounded && character.verticalSpeed < 0) character.verticalSpeed = 0;
-        character.grounded = grounded;
-
-        // The collider moves now so the next frame's sweep starts here even if the world has not stepped yet;
-        // the body follows on the next step.
-        character.collider.setTranslation(centre);
-        character.body.setNextKinematicTranslation(centre);
-
-        modelObject.position.set(centre.x, centre.y - character.centreOffset, centre.z);
-        character.placedAt.copy(modelObject.position);
     };
 
     const updatePhysics = (input: PlayerInputState, delta: number) => {
@@ -474,7 +486,7 @@ export const usePlayerPhysics = (
         if (input.isAiming) currentSpeed *= 0.5;
 
         if (physics) {
-            moveWithPhysics(physics, input, worldMoveVec, currentSpeed, delta);
+            stepCharacterPhysics(physics, getRig(physics), input, worldMoveVec, currentSpeed, delta, obstacles, activeTerrain.current);
         } else {
             moveWithoutPhysics(worldMoveVec, currentSpeed, delta);
         }

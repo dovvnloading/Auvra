@@ -1,11 +1,12 @@
 from __future__ import annotations
-import hashlib, io, json, sqlite3, sys, tempfile, unittest
+import hashlib, io, json, re, sqlite3, sys, tempfile, unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
 from Auvra.providers import *
 from Auvra.providers.adapters import MediaJob, TextResult, _fal_cdn_url
+from Auvra.providers.commands import BINDABLE_PROPS, BINDING_SOURCES, BUTTON_VARIANTS, HUD_TYPES, MENU_ACTIONS, OPEN_LEVEL_PREFIX, PROP_FIELDS, TEXT_ALIGN, VARIABLE_BINDING_PREFIX
 from Auvra.providers.descriptors import ProviderFeature
 from Auvra.providers.credentials import _WinCredNative
 import Auvra.providers.jobs as jobs_module
@@ -460,7 +461,7 @@ class ProviderCoreTests(unittest.TestCase):
 
     def test_all_authored_hud_types_and_update_delete(self):
         base = {"name":"e", "props":{}, "position":{"x":0,"y":0}, "size":{"width":1,"height":1}, "zIndex":0, "isVisible":True, "isLocked":False}
-        for kind in ("Container", "Text", "HealthBar", "Crosshair", "Scope"):
+        for kind in ("Container", "Text", "HealthBar", "Crosshair", "Scope", "Button"):
             self.assertEqual(validate_command({"commands":[{"op":"create", "element":{**base, "type":kind}}]}).commands[0]["element"]["type"], kind)
         self.assertEqual(validate_command({"commands":[{"op":"update","name":"e","delta":{"isVisible":False}}]}, target_element_id="e").commands[0]["op"], "update")
         self.assertEqual(validate_command({"commands":[{"op":"delete","name":"e"}]}, target_element_id="e").commands[0]["op"], "delete")
@@ -468,6 +469,100 @@ class ProviderCoreTests(unittest.TestCase):
             with self.assertRaises(CommandValidationError): validate_command({"commands":[{"op":"create", "element":{**base, "type":"Text", "props":bad}}]})
         with self.assertRaises(CommandValidationError): validate_command({"commands":[{"op":"update","name":"e","delta":{"isVisible":False}}]})
         with self.assertRaises(CommandValidationError): validate_command({"commands":[{"op":"delete","name":"other"}]}, target_element_id="e")
+
+    _HUD_BASE = {"position":{"x":0,"y":0}, "size":{"width":320,"height":64}, "zIndex":1, "isVisible":True, "isLocked":False}
+
+    def _create(self, kind, props, name="e"):
+        return validate_command({"commands":[{"op":"create", "element":{**self._HUD_BASE, "name":name, "type":kind, "props":props}}]}).commands[0]["element"]
+
+    def test_hud_commands_accept_buttons_menu_actions_and_live_bindings(self):
+        button_props = {"label":"Play", "labelKey":"menu.play", "action":"play", "variant":"primary", "fontSize":28, "bind":{"label":"vars.playLabel"}}
+        button = self._create("Button", button_props)
+        self.assertEqual(button["props"], button_props)
+        self.assertIsNot(button["props"]["bind"], button_props["bind"])
+        self.assertEqual(self._create("Text", {"text":"0", "textKey":"", "textAlign":"center", "bind":{"text":"vars.score", "color":"vars.Score_Color"}})["props"]["bind"], {"text":"vars.score", "color":"vars.Score_Color"})
+        self.assertEqual(self._create("HealthBar", {"bind":{"value":"player.health", "max":"player.maxHealth"}, "action":"openLevel:level-2"})["props"]["action"], "openLevel:level-2")
+        self.assertEqual(self._create("Scope", {"bind":{"opacity":"player.stamina", "scale":"player.isAiming"}})["type"], "Scope")
+        self.assertEqual(self._create("Container", {"bind":{"backgroundColor":"vars.panel", "borderColor":"level.id"}, "action":""})["type"], "Container")
+        self.assertEqual(self._create("Crosshair", {"bind":{"color":"vars.crosshairColor"}, "action":"resume"})["type"], "Crosshair")
+        for action in sorted(MENU_ACTIONS) + ["", "openLevel:default_level", "openLevel:3f2b8c1e-9d4a-4c51-8f0e-2a6b7c9d0e1f"]:
+            self.assertEqual(self._create("Button", {"action":action})["props"]["action"], action)
+        update = validate_command({"commands":[{"op":"update", "name":"e", "delta":{"props":{"action":"save", "bind":{"label":"level.id"}}}}]}, target_element_id="e").commands[0]
+        self.assertEqual(update["delta"]["props"], {"action":"save", "bind":{"label":"level.id"}})
+        self.assertEqual(validate_update({"props":{"labelKey":"menu.resume", "action":"resume"}}, "Button")["props"]["labelKey"], "menu.resume")
+        self.assertEqual(validate_update({"props":{"bind":{}}}, "Text")["props"], {"bind":{}})
+
+    def test_hud_commands_reject_unknown_actions_variants_keys_and_bindings(self):
+        bad_button_props = (
+            {"action":"jump"}, {"action":"openLevel:"}, {"action":"openLevel:../levels"}, {"action":"openLevel:a b"}, {"action":" play"}, {"action":"play\n"},
+            {"action":"Play"}, {"action":1}, {"action":True}, {"variant":"danger"}, {"variant":1}, {"labelKey":" menu.play"}, {"labelKey":"menu play"},
+            {"labelKey":"k" * 201}, {"labelKey":"__proto__"}, {"labelKey":5}, {"label":"x" * 257}, {"label":3}, {"fontSize":"24"}, {"fontSize":-1}, {"fontSize":True},
+            {"text":"Play"}, {"textKey":"menu.play"}, {"bind":"vars.score"}, {"bind":["label"]}, {"bind":{"text":"vars.score"}}, {"bind":{"action":"vars.score"}},
+            {"bind":{"labelKey":"vars.score"}}, {"bind":{"label":"player.toString"}}, {"bind":{"label":"player.health.x"}}, {"bind":{"label":"vars.constructor"}},
+            {"bind":{"label":"vars.__proto__"}}, {"bind":{"label":"vars.toString"}}, {"bind":{"label":"vars.bad name"}}, {"bind":{"label":"vars."}}, {"bind":{"label":"vars.9lives"}},
+            {"bind":{"label":"vars." + "v" * 65}}, {"bind":{"label":"vars.score\n"}}, {"bind":{"label":"vars.profile"}}, {"bind":{"label":"levelId"}}, {"bind":{"label":"state.vars.score"}},
+            {"bind":{"label":3}}, {"bind":{"label":None}}, {"bind":{"label":{"path":"vars.score"}}}, {"bind":{"label":["vars.score"]}},
+        )
+        for props in bad_button_props:
+            with self.subTest(props=props), self.assertRaises(CommandValidationError): self._create("Button", props)
+        for kind, props in (("Text", {"textAlign":"justify"}), ("Text", {"textKey":5}), ("Text", {"label":"x"}), ("Text", {"bind":{"value":"player.health"}}),
+                            ("HealthBar", {"bind":{"text":"vars.score"}}), ("Scope", {"bind":{"color":"vars.c"}}), ("Crosshair", {"bind":{"size":"vars.s"}}),
+                            ("Container", {"bind":{"borderWidth":"vars.w"}}), ("Container", {"variant":"primary"})):
+            with self.subTest(kind=kind, props=props), self.assertRaises(CommandValidationError): self._create(kind, props)
+        for props in ({"bind":{"glowIntensity":"player.health"}}, {"bind":{"label":"vars.toString"}}, {"action":"teleport"}, {"unknownProp":1}):
+            with self.subTest(update=props), self.assertRaises(CommandValidationError):
+                validate_command({"commands":[{"op":"update", "name":"e", "delta":{"props":props}}]}, target_element_id="e")
+        with self.assertRaises(CommandValidationError): validate_update({"props":{"bind":{"value":"player.health"}}}, "Text")
+        with self.assertRaises(CommandValidationError): validate_update({"props":{"variant":"primary"}}, "Text")
+
+    def test_hud_command_schema_documents_the_validated_vocabulary(self):
+        elements = {option["properties"]["type"]["const"]: option["properties"]["props"] for option in COMMAND_JSON_SCHEMA["properties"]["commands"]["items"]["oneOf"][0]["properties"]["element"]["oneOf"]}
+        self.assertEqual(set(elements), set(HUD_TYPES))
+        for kind, props in elements.items():
+            with self.subTest(kind=kind):
+                self.assertEqual(set(props["properties"]), set(PROP_FIELDS[kind]))
+                self.assertFalse(props["additionalProperties"])
+                self.assertEqual(set(props["properties"]["bind"]["properties"]), set(BINDABLE_PROPS[kind]))
+                bind_pattern = next(iter(props["properties"]["bind"]["properties"].values()))["pattern"]
+                for source in sorted(BINDING_SOURCES) + ["vars.score"]: self.assertRegex(source, bind_pattern)
+                for source in ("levelId", "vars.", "vars.bad name", "player.health.x"): self.assertNotRegex(source, bind_pattern)
+                action_pattern = props["properties"]["action"]["pattern"]
+                for action in sorted(MENU_ACTIONS) + ["", "openLevel:level-1"]: self.assertRegex(action, action_pattern)
+                for action in ("jump", "openLevel:", "openLevel:../x"): self.assertNotRegex(action, action_pattern)
+        self.assertEqual(elements["Button"]["properties"]["variant"]["enum"], sorted(BUTTON_VARIANTS))
+        self.assertEqual(elements["Text"]["properties"]["textAlign"]["enum"], sorted(TEXT_ALIGN))
+        self.assertIn("Button", COMMAND_JSON_SCHEMA["description"])
+        json.dumps(COMMAND_JSON_SCHEMA)
+
+    def test_hud_command_vocabulary_matches_the_editor_sources(self):
+        frontend = Path(__file__).resolve().parents[2] / "fbx-viewer (1)"
+        registry, binding, menus = (frontend / "components" / "HUDEditor" / "componentRegistry.tsx", frontend / "components" / "HUDEditor" / "HUDBindingField.tsx", frontend / "player" / "menus.tsx")
+        if not all(path.exists() for path in (registry, binding, menus)): self.skipTest("editor sources are not available")
+        source = registry.read_text(encoding="utf-8")
+        variants = re.search(r"BUTTON_VARIANTS\s*=\s*\[([^\]]*)\]", source)
+        self.assertIsNotNone(variants)
+        self.assertEqual(set(re.findall(r"'(\w+)'", variants.group(1))), set(BUTTON_VARIANTS))
+        components = source[source.index("AVAILABLE_COMPONENTS"):]
+        seen = set()
+        for chunk in re.split(r"\n\s*\{\s*\n", components)[1:]:
+            kind = re.search(r"type:\s*'(\w+)'", chunk).group(1)
+            if kind == "Custom": continue
+            seen.add(kind)
+            with self.subTest(kind=kind):
+                defaults = re.search(r"defaultProps:\s*\{([^}]*)\}", chunk)
+                self.assertTrue(set(re.findall(r"(\w+)\s*:", defaults.group(1))) <= PROP_FIELDS[kind])
+                bindable = re.search(r"bindableProps:\s*\[([^\]]*)\]", chunk)
+                self.assertEqual(set(re.findall(r"'(\w+)'", bindable.group(1))), set(BINDABLE_PROPS[kind]))
+                align = re.search(r"textAlign:\s*\[([^\]]*)\]", chunk)
+                if align: self.assertEqual(set(re.findall(r"'(\w+)'", align.group(1))), set(TEXT_ALIGN))
+        self.assertEqual(seen, set(HUD_TYPES))
+        sources = re.search(r"HUD_BINDING_SOURCES[^=]*=\s*\[(.*?)\];", binding.read_text(encoding="utf-8"), re.S)
+        self.assertEqual(set(re.findall(r"path:\s*'([\w.]+)'", sources.group(1))), set(BINDING_SOURCES))
+        self.assertIn(f"HUD_VARIABLE_BINDING_PREFIX = '{VARIABLE_BINDING_PREFIX}'", binding.read_text(encoding="utf-8"))
+        menu_source = menus.read_text(encoding="utf-8")
+        actions = re.search(r"SIMPLE_ACTIONS\s*=\s*\[([^\]]*)\]", menu_source)
+        self.assertEqual(set(re.findall(r"'(\w+)'", actions.group(1))), set(MENU_ACTIONS))
+        self.assertIn(f"OPEN_LEVEL_PREFIX = '{OPEN_LEVEL_PREFIX}'", menu_source)
 
 
 if __name__ == "__main__": unittest.main()
