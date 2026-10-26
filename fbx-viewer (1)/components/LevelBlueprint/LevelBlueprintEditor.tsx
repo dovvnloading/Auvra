@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Play, GitBranch, CheckSquare, Database, Trash2, ArrowLeft, MessageSquare, Box, Shield, Skull, Calculator, Timer, Hash, Type, ToggleLeft, Activity, X, LayoutTemplate, RefreshCcw } from 'lucide-react';
+import { Play, GitBranch, CheckSquare, Database, Trash2, ArrowLeft, MessageSquare, Box, Shield, Skull, Calculator, Timer, Hash, Type, ToggleLeft, Activity, X, LayoutTemplate, RefreshCcw, DoorOpen, Save, FolderOpen } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
 import { LogicCanvas } from './LogicCanvas';
 import { LevelBlueprintInspector } from './LevelBlueprintInspector';
@@ -22,7 +22,7 @@ interface LevelBlueprintEditorProps {
  * - Handles adding new nodes to the active graph.
  */
 export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onClose, selectedObjectId }) => {
-    const { activeLevelBlueprint, updateLevelBlueprint, blueprints, levelObjects } = useScene();
+    const { activeLevelBlueprint, updateLevelBlueprint, blueprints, levelObjects, levels } = useScene();
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
     // --- 1. DATA AGGREGATION ---
@@ -156,7 +156,7 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
         );
     };
 
-    const handleAddLevelAction = (action: 'Restart' | 'EndGame', label: string) => {
+    const handleAddLevelAction = (action: 'Restart' | 'EndGame' | 'OpenLevel' | 'SaveGame' | 'LoadGame', label: string) => {
         addNode('LevelAction', label, 
             [
                 { name: 'Exec', dataType: 'Exec', direction: 'Input' }
@@ -410,6 +410,15 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                         <button onClick={() => handleAddLevelAction('EndGame', 'End Game')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2">
                             <X size={12} className="text-indigo-400" /> End Game
                         </button>
+                        <button onClick={() => handleAddLevelAction('OpenLevel', 'Open Level')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2">
+                            <DoorOpen size={12} className="text-indigo-400" /> Open Level
+                        </button>
+                        <button onClick={() => handleAddLevelAction('SaveGame', 'Save Game')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2">
+                            <Save size={12} className="text-indigo-400" /> Save Game
+                        </button>
+                        <button onClick={() => handleAddLevelAction('LoadGame', 'Load Game')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2">
+                            <FolderOpen size={12} className="text-indigo-400" /> Load Game
+                        </button>
                     </div>
 
                     {/* Logic */}
@@ -487,6 +496,7 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                     node={selectedNode}
                     onUpdate={(updates) => handleNodeUpdate(selectedNode.id, updates)}
                     levelObjects={levelObjects}
+                    levels={levels}
                     globalVariables={contextVariables}
                     onDelete={handleDelete}
                 />

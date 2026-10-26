@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const files = {
   index: resolve(root, "index.html"),
+  player: resolve(root, "player.html"),
   hud: resolve(root, "hud-frame.html"),
   hudScript: resolve(root, "hud-frame.tsx"),
   dynamic: resolve(root, "components/HUDEditor/DynamicHUDComponent.tsx"),
@@ -49,6 +50,10 @@ for (const [name, text] of Object.entries(source)) {
 check(!source.index.includes("cdn.tailwindcss.com"), "editor still references Tailwind CDN");
 check(source.index.includes("__AUVRA_EDITOR_CSP__"), "editor CSP placeholder missing");
 check(source.hud.includes("__AUVRA_HUD_CSP__"), "HUD CSP placeholder missing");
+check(source.player.includes("__AUVRA_PLAYER_CSP__") && !source.player.includes("cdn.tailwindcss.com"), "player CSP placeholder missing");
+const playerCsp = source.vite.match(/const playerPackagedCsp\s*=\s*`([^`]+)`;/)?.[1] ?? "";
+check(/script-src 'self';/.test(playerCsp) && !/'unsafe-eval'|'nonce-/.test(playerCsp) && /form-action 'none'/.test(playerCsp), "player CSP does not confine script execution");
+check(/connect-src 'self' blob:;/.test(playerCsp) && !playerCsp.includes("assets.auvra.local"), "player CSP grants editor-only network access");
 check(source.vite.includes("'unsafe-eval'") && source.vite.includes("connect-src 'none'"), "HUD CSP does not confine evaluation and network access");
 const editorCspDefinitions = {
   development: source.vite.match(/const editorDevCsp[^`]+`([^`]+)`;/)?.[1],

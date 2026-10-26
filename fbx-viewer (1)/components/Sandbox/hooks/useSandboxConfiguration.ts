@@ -1,6 +1,6 @@
 
 import { useMemo } from 'react';
-import { useScene } from '../../../context/SceneContext';
+import { useGameContent } from '../../../runtime/GameContentContext';
 import { Blueprint, LoadedModelData, AttachmentData, SocketData } from '../../../types';
 import * as THREE from 'three';
 
@@ -17,11 +17,16 @@ export interface SandboxConfiguration {
     allClips: THREE.AnimationClip[];
 }
 
-export const useSandboxConfiguration = (): SandboxConfiguration => {
-    const { blueprints, models, attachments, sockets } = useScene();
+/** The requested player blueprint when it exists, otherwise the first 'Player Character'. */
+export const selectPlayerBlueprint = (blueprints: Blueprint[], playerBlueprintId?: string): Blueprint | undefined =>
+    (playerBlueprintId ? blueprints.find(bp => bp.id === playerBlueprintId) : undefined)
+    ?? blueprints.find(bp => bp.type === 'Player Character');
+
+export const useSandboxConfiguration = (playerBlueprintId?: string): SandboxConfiguration => {
+    const { blueprints, models, attachments, sockets } = useGameContent();
 
     // 1. Blueprint Selection
-    const playerBlueprint = useMemo(() => blueprints.find(bp => bp.type === 'Player Character'), [blueprints]);
+    const playerBlueprint = useMemo(() => selectPlayerBlueprint(blueprints, playerBlueprintId), [blueprints, playerBlueprintId]);
     const enemyBlueprint = useMemo(() => blueprints.find(bp => bp.type === 'Enemy Controller'), [blueprints]);
 
     // 2. Model Resolution

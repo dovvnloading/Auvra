@@ -5,6 +5,7 @@ module.exports = {
     './components/**/*.{js,ts,jsx,tsx}', './context/**/*.{js,ts,jsx,tsx}',
     './hooks/**/*.{js,ts,jsx,tsx}', './services/**/*.{js,ts,jsx,tsx}',
     './utils/**/*.{js,ts,jsx,tsx}', './host/**/*.{js,ts,jsx,tsx}',
+    './player.html', './player/**/*.{js,ts,jsx,tsx}', './runtime/**/*.{js,ts,jsx,tsx}',
   ],
   theme: {
     extend: {

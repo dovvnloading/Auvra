@@ -15,6 +15,8 @@ const graphManager = await readFile(resolve(root, 'hooks/useGraphManager.ts'), '
 const socketManager = await readFile(resolve(root, 'hooks/useSocketManager.ts'), 'utf8');
 const assetContext = await readFile(resolve(root, 'context/AssetContext.tsx'), 'utf8');
 const persistence = await readFile(resolve(root, 'hooks/useScenePersistence.ts'), 'utf8');
+// Snapshot hydration lives in utils/projectHydration.ts so the standalone player can share it.
+const projectHydration = await readFile(resolve(root, 'utils/projectHydration.ts'), 'utf8');
 const levels = await readFile(resolve(root, 'hooks/useLevelManager.ts'), 'utf8');
 const attachments = await readFile(resolve(root, 'hooks/useAttachmentManager.ts'), 'utf8');
 const sockets = await readFile(resolve(root, 'hooks/useSocketManager.ts'), 'utf8');
@@ -39,6 +41,8 @@ const environmentViewport = await readFile(resolve(root, 'components/Environment
 const audioSystem = await readFile(resolve(root, 'components/Environment/AudioSystem.tsx'), 'utf8');
 const blueprintRuntime = await readFile(resolve(root, 'hooks/useLevelBlueprintRuntime.ts'), 'utf8');
 const levelGameLoop = await readFile(resolve(root, 'components/Environment/LevelGameLoop.tsx'), 'utf8');
+const levelRuntime = await readFile(resolve(root, 'runtime/LevelRuntime.tsx'), 'utf8');
+const pauseController = await readFile(resolve(root, 'runtime/PauseController.tsx'), 'utf8');
 const runtimeLevelWorld = await readFile(resolve(root, 'hooks/useRuntimeLevelWorld.ts'), 'utf8');
 const graphPreview = await readFile(resolve(root, 'components/AnimationGraph/GraphPreview.tsx'), 'utf8');
 const domainCascade = await readFile(resolve(root, 'utils/domainCascade.ts'), 'utf8');
@@ -48,6 +52,7 @@ const blueprintListPanel = await readFile(resolve(root, 'components/Blueprint/Bl
 const browserToolbar = await readFile(resolve(root, 'components/UI/Browser/BrowserToolbar.tsx'), 'utf8');
 const hudEditor = await readFile(resolve(root, 'components/HUDEditor/HUDEditor.tsx'), 'utf8');
 const hudCanvas = await readFile(resolve(root, 'components/HUDEditor/HUDCanvas.tsx'), 'utf8');
+const hudRenderer = await readFile(resolve(root, 'components/HUDEditor/HUDRenderer.tsx'), 'utf8');
 const hudLibrary = await readFile(resolve(root, 'components/HUDEditor/HUDLibrary.tsx'), 'utf8');
 const selectControl = await readFile(resolve(root, 'components/UI/Select.tsx'), 'utf8');
 const scrubbableInput = await readFile(resolve(root, 'components/UI/Properties/ScrubbableInput.tsx'), 'utf8');
@@ -60,6 +65,10 @@ const strictExcludes = strictConfig.exclude ?? [];
 // Exact test files only (never globs). They import modules that are not yet noUnused-clean and
 // are still type-checked by the base strict tsconfig.
 const STRICT_EXCLUDE_ALLOWLIST = new Set([
+  'tests/frontend/attachmentController.test.tsx',
+  'tests/frontend/hudRenderer.test.tsx',
+  'tests/frontend/projectHydration.test.ts',
+  'tests/frontend/saveGame.test.ts',
   'tests/frontend/environmentScene.test.tsx',
   'tests/frontend/hudSandbox.test.tsx',
   'tests/frontend/levelBlueprintRuntime.test.tsx',
@@ -95,7 +104,7 @@ if (!/requestQueue/.test(service) || !/performCall/.test(service)) failures.push
 if (/class\s+Sha256|hashBlob|readAsDataURL/.test(service)) failures.push('project service: browser-side asset hashing or encoding remains');
 if (!/addModelTextureOverride/.test(db) || !/textureOverrides\[materialName\]\s*=\s*textureId/.test(db)) failures.push('material overrides must reference native texture documents');
 if (/newOverrides\[m\.name\]\s*=\s*textureUrl|textureOverrides[^\n]*Base64/.test(modelManager)) failures.push('model manager still persists temporary texture URLs');
-if (!/textureAssetUrls/.test(persistence) || !/loadProjectAssetUrl/.test(persistence)) failures.push('native texture overrides are not hydrated through asset tickets');
+if (!/textureAssetUrls/.test(projectHydration) || !/loadProjectAssetUrl/.test(projectHydration)) failures.push('native texture overrides are not hydrated through asset tickets');
 if (!/getSnapshotAll\(\)/.test(db) || !/record\.levelId === id/.test(db)) failures.push('referential delete cascades are missing');
 if (!/migrateLegacyDatabase/.test(db) || !/readOnlyStorePages/.test(db) || !/requires an empty native project/.test(db)) failures.push('read-only paged browser migration bridge is missing');
 if (!/Browser data/.test(header) || !/migrateLegacyBrowserProject/.test(header)) failures.push('browser migration is not exposed through native project controls');
@@ -127,7 +136,7 @@ if (!/canonicalChange\('objects', 'upsert', obj, obj\.id, lease, prepareLevelObj
 }
 if (!/category === 'Animation'[\s\S]*selectAnimationTarget\(models, selectedModelId\)[\s\S]*addAnimations\(files, target\.id\)/.test(contentBrowser)) failures.push('Library animation import is not routed to the selected skeletal model');
 if (!/prepareAnimationClips\(targetModel\.object, loaded\.object, loaded\.animations\)/.test(modelManager)) failures.push('animation import bypasses target skeleton binding');
-if (!/prepareAnimationClips\(loaded\.object, animationModel\.object, animationModel\.animations\)/.test(persistence)) failures.push('native project hydration bypasses target skeleton binding');
+if (!/prepareAnimationClips\(loaded\.object, animationModel\.object, animationModel\.animations\)/.test(projectHydration)) failures.push('native project hydration bypasses target skeleton binding');
 if (!/setActiveClip\(selectedAnimations\[0\] \|\| null\)/.test(app)) failures.push('valid imported animation is not selected for preview');
 if (!/retargetClip/.test(animationBinding) || !/clipBindsDirectly/.test(animationBinding)) failures.push('animation binding lacks direct and retargeted paths');
 if (/clip\.duration > 0\.1/.test(modelLoader) || !/clip\.duration > 0/.test(modelLoader)) failures.push('valid short animation clips are still discarded');
@@ -219,9 +228,9 @@ if (!/playerCreationInFlightRef/.test(blueprintManager)
 if (!/HUD_REFERENCE_SIZE/.test(hudEditor)
   || !/normalizeHUDLayout/.test(hudEditor)
   || !/clampHUDPosition/.test(hudEditor)
-  || !/ResizeObserver/.test(hudCanvas)
-  || !/Math\.min\(viewport\.width \/ normalizedLayout\.width, viewport\.height \/ normalizedLayout\.height\)/.test(hudCanvas)
-  || !/transform: `scale\(\$\{scale\}\)`/.test(hudCanvas)
+  || !/ResizeObserver/.test(hudRenderer)
+  || !/Math\.min\(viewport\.width \/ normalizedLayout\.width, viewport\.height \/ normalizedLayout\.height\)/.test(hudRenderer)
+  || !/transform: `scale\(\$\{scale\}\)`/.test(hudRenderer)
   || !/clientX - rect\.left/.test(hudCanvas)
   || !/clampHUDPosition/.test(hudCanvas)) {
   failures.push('HUD editing does not scale logical coordinates to the pane and clamp element bounds');
@@ -270,7 +279,7 @@ for (const phase of ['thumbnail_generation', 'animation_binding', 'project_uploa
 if (!db.includes("'project_record_commit'")) failures.push('asset operation diagnostic phase is missing: project_record_commit');
 if (!/assetDiagnosticAttributes/.test(modelManager) || !/nextAssetAlias/.test(modelManager) || !/traceId/.test(operationContext)) failures.push('asset aliases or operation trace identity are missing');
 if (!/worker\.phase/.test(modelLoader) || !/worker\.failed/.test(modelLoader) || !/workerState/.test(modelLoader)) failures.push('worker lifecycle is not traced with stable state');
-if (!/diagnostics:\s*traceAsset/.test(persistence) || !/animation_hydration_failed/.test(persistence)) failures.push('project-open FBX/animation hydration is not traced');
+if (!/diagnostics:\s*traceAsset/.test(projectHydration) || !/animation_hydration_failed/.test(projectHydration)) failures.push('project-open FBX/animation hydration is not traced');
 if (!/`\$\{traceId\}\.req-\$\{requestNumber\}`/.test(service)) failures.push('host request IDs are not correlated to the browser trace');
 if (!/MAX_RECORDS\s*=\s*256/.test(diagnosticsRuntime) || !/MAX_BUFFER_BYTES\s*=\s*512\s*\*\s*1024/.test(diagnosticsRuntime) || !/MAX_BATCH_RECORDS\s*=\s*16/.test(diagnosticsRuntime)) failures.push('browser diagnostics bounds are missing');
 if (!/HEARTBEAT_MS\s*=\s*1_000/.test(diagnosticsRuntime) || !/EVENT_LOOP_STALL_MS/.test(diagnosticsRuntime)) failures.push('browser heartbeat or event-loop stall detection is missing');
@@ -319,25 +328,49 @@ if (!/MAX_BLUEPRINT_EVALUATION_DEPTH/.test(blueprintRuntime)
 }
 
 // Play mode runs on a session copy of the level; gameplay code must not reach project mutation APIs.
-for (const [source, label] of [[levelGameLoop, 'level play loop'], [blueprintRuntime, 'level blueprint runtime'], [runtimeLevelWorld, 'runtime level world']]) {
+for (const [source, label] of [[levelGameLoop, 'play-in-editor shell'], [levelRuntime, 'level runtime'], [pauseController, 'level pause controller'], [blueprintRuntime, 'level blueprint runtime'], [runtimeLevelWorld, 'runtime level world']]) {
   mustNotContain(source, /\b(?:addLevelObject|removeLevelObjects?|updateLevelObject|updateLevelBlueprint|snapshotHistory|dbOperations)\b/, label);
 }
-const PLAY_SCENE_READS = new Set(['levelObjects', 'models', 'activeLevelBlueprint', 'blueprints', 'attachments', 'sockets', 'audioAssets']);
+// The shared runtime also runs in the standalone player: content comes from the runtime context, never the editor scene.
+mustNotContain(levelRuntime, /\buseScene\b|context\/SceneContext|useSandboxConfiguration/, 'level runtime');
+const PLAY_SCENE_READS = new Set(['levelObjects', 'activeLevelBlueprint', 'levels', 'currentLevelId']);
 const playSceneFields = levelGameLoop.match(/const \{([^}]*)\} = useScene\(\)/)?.[1].split(',').map(field => field.trim()).filter(Boolean) ?? [];
 if (!playSceneFields.length || playSceneFields.some(field => !PLAY_SCENE_READS.has(field))) {
-  failures.push('level play loop reads scene fields outside its read-only allowlist');
+  failures.push('play-in-editor shell reads scene fields outside its read-only allowlist');
 }
-if (!/useRuntimeLevelWorld\(levelObjects\)/.test(levelGameLoop)
-  || !/destroyActor=\{destroyRuntimeObject\}/.test(levelGameLoop)
-  || /=\{levelObjects\}/.test(levelGameLoop)
-  || !/<AuvraCanvas[^>]*key=\{restartKey\}/.test(levelGameLoop)) {
-  failures.push('level play loop does not run each session on its own runtime level copy');
+const playSettingsReads = levelGameLoop.match(/const \{([^}]*)\} = useNativeProjectDocument/)?.[1].split(',').map(field => field.split(':')[0].trim()).filter(Boolean) ?? [];
+if (playSettingsReads.some(field => field !== 'document' && field !== 'hydrated')) {
+  failures.push('play-in-editor shell may only read the game settings document');
 }
-if (!/onHitPlayer=\{handlePlayerHit\}/.test(levelGameLoop)
-  || !/applyMeleeHit\(playerEntityRef\.current, damage\)/.test(levelGameLoop)
-  || !/const handleAttack = useCallback\(\(\) => onHitPlayer\(damage\)/.test(levelGameLoop)
-  || !/onDealDamage=\{handleAttack\}/.test(levelGameLoop)) {
+if (!/<LevelRuntime\b/.test(levelGameLoop) || /useRuntimeLevelWorld|<AuvraCanvas/.test(levelGameLoop)) {
+  failures.push('play-in-editor shell does not delegate gameplay to the shared level runtime');
+}
+if (!/const authoredObjects = useMemo\(\(\) => \{[\s\S]*?level\.objects[\s\S]*?\}, \[level\.objects/.test(levelRuntime)
+  || !/useRuntimeLevelWorld\(authoredObjects\)/.test(levelRuntime)
+  || !/destroyActor=\{destroyRuntimeObject\}/.test(levelRuntime)
+  || /=\{(?:level\.objects|authoredObjects|levelObjects)\}/.test(levelRuntime)
+  || !/<group key=\{sessionKey\}>\s*<LevelSession\b/.test(levelRuntime)
+  || /<AuvraCanvas[^>]*\bkey=/.test(levelRuntime)) {
+  failures.push('level runtime does not run each session on its own runtime level copy');
+}
+if (!/onHitPlayer=\{handlePlayerHit\}/.test(levelRuntime)
+  || !/applyMeleeHit\(playerEntityRef\.current, damage\)/.test(levelRuntime)
+  || !/const handleAttack = useCallback\(\(\) => onHitPlayer\(damage\)/.test(levelRuntime)
+  || !/onDealDamage=\{handleAttack\}/.test(levelRuntime)) {
   failures.push('level play enemies are not wired to damage the player');
+}
+if (!/gameState\.update\(\{ player: \{ health: current, maxHealth: max \} \}\)/.test(levelRuntime)
+  || /useState\(\{ health/.test(levelRuntime)) {
+  failures.push('level runtime player stats are not published to the runtime game state');
+}
+if (!/setFrameloop\(paused \? 'never' : 'always'\)/.test(pauseController)
+  || !/context\.suspend\(\)/.test(pauseController)
+  || !/context\.resume\(\)/.test(pauseController)
+  || !/const canvas = gl\.domElement/.test(pauseController)
+  || !/frameloop=\{paused \? 'never' : 'always'\}/.test(levelRuntime)
+  || !/<PauseController\b[\s\S]*?onRequestPause=\{runtimeHost\.requestPause\}/.test(levelRuntime)
+  || /document\.querySelector/.test(levelRuntime + pauseController)) {
+  failures.push('level runtime pause does not freeze frames and audio, or captures a pointer outside its own canvas');
 }
 
 const bundledBinding = await build({

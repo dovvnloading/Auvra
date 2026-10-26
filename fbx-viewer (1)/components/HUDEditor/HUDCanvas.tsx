@@ -1,7 +1,7 @@
-
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { clampHUDPosition, HUD_REFERENCE_SIZE, HUDLayout, HUDElement, normalizeHUDLayout } from './types';
-import { COMPONENT_REGISTRY } from './componentRegistry';
+import { HUDRenderer } from './HUDRenderer';
+import type { HUDDocumentData } from '../../runtime/types';
 
 interface HUDCanvasProps {
     elements: HUDElement[];
@@ -16,37 +16,18 @@ export const HUDCanvas: React.FC<HUDCanvasProps> = ({ elements, selectedId, onSe
     const canvasRef = useRef<HTMLDivElement>(null);
     const stageRef = useRef<HTMLDivElement>(null);
     const normalizedLayout = useMemo(() => normalizeHUDLayout(layout || HUD_REFERENCE_SIZE), [layout]);
-    const [viewport, setViewport] = useState({ width: 0, height: 0 });
+    const hudDocument = useMemo<HUDDocumentData>(() => ({ id: 'hud-editor', elements, layout: normalizedLayout }), [elements, normalizedLayout]);
+    const [scale, setScale] = useState(1);
     const [isDragging, setIsDragging] = useState(false);
     const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
     const [dragId, setDragId] = useState<string | null>(null);
     const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
 
-    useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const updateViewport = () => {
-            const rect = canvas.getBoundingClientRect();
-            setViewport({ width: rect.width, height: rect.height });
-        };
-        updateViewport();
-        if (typeof ResizeObserver === 'undefined') return;
-        const observer = new ResizeObserver(updateViewport);
-        observer.observe(canvas);
-        return () => observer.disconnect();
-    }, []);
-
-    const scale = viewport.width > 0 && viewport.height > 0
-        ? Math.min(viewport.width / normalizedLayout.width, viewport.height / normalizedLayout.height)
-        : 1;
-    const stageOffset = {
-        x: Math.max(0, (viewport.width - normalizedLayout.width * scale) / 2),
-        y: Math.max(0, (viewport.height - normalizedLayout.height * scale) / 2),
-    };
-
-    useEffect(() => {
-        onScaleChange?.(scale);
-    }, [onScaleChange, scale]);
+    // HUDRenderer owns the letterboxed stage layout; the editor only needs its scale.
+    const handleScaleChange = useCallback((next: number) => {
+        setScale(next);
+        onScaleChange?.(next);
+    }, [onScaleChange]);
 
     const toLogicalPoint = useCallback((e: React.PointerEvent) => {
         const rect = stageRef.current?.getBoundingClientRect();
@@ -57,11 +38,7 @@ export const HUDCanvas: React.FC<HUDCanvasProps> = ({ elements, selectedId, onSe
         };
     }, [scale]);
 
-    const renderedPosition = useCallback((element: HUDElement) => (
-        clampHUDPosition(element.position, element.size, normalizedLayout)
-    ), [normalizedLayout]);
-
-    const handlePointerDown = (e: React.PointerEvent, element: HUDElement) => {
+    const handlePointerDown = (e: React.PointerEvent, element: HUDElement, position: HUDElement['position']) => {
         if (element.isLocked) return;
         
         e.stopPropagation();
@@ -70,7 +47,6 @@ export const HUDCanvas: React.FC<HUDCanvasProps> = ({ elements, selectedId, onSe
         onSelect(element.id);
         
         const point = toLogicalPoint(e);
-        const position = renderedPosition(element);
         // Calculate the offset in logical document coordinates, not screen pixels.
         setDragOffset({
             x: point.x - position.x,
@@ -111,10 +87,54 @@ export const HUDCanvas: React.FC<HUDCanvasProps> = ({ elements, selectedId, onSe
     };
 
     const handleCanvasClick = (e: React.MouseEvent) => {
-        // Deselect if clicked on empty canvas
-        if (e.target === e.currentTarget || e.target === canvasRef.current) {
+        // Deselect if clicked on empty canvas or stage, never on an element.
+        if (!(e.target as Element).closest?.('[data-hud-element]')) {
             onSelect(null);
         }
+    };
+
+    const renderElement = (el: HUDElement, position: HUDElement['position'], content: React.ReactNode) => {
+        const isSelected = selectedId === el.id;
+        return (
+            <div
+                data-hud-element={el.id}
+                onPointerDown={(e) => handlePointerDown(e, el, position)}
+                style={{
+                    position: 'absolute',
+                    left: position.x,
+                    top: position.y,
+                    width: el.size.width,
+                    height: el.size.height,
+                    cursor: isDragging && dragId === el.id ? 'grabbing' : (el.isLocked ? 'default' : 'grab'),
+                    zIndex: el.zIndex,
+                    transform: 'translate(0, 0)', // GPU handling
+                }}
+                className={`
+                    group transition-shadow duration-75
+                    ${isSelected ? 'ring-2 ring-blue-500 z-50' : 'hover:ring-1 hover:ring-white/30'}
+                `}
+            >
+                {/* Resize Handles (Visual Only for now) */}
+                {isSelected && !el.isLocked && (
+                    <>
+                        <div className="absolute -top-1 -left-1 w-2 h-2 bg-blue-500 rounded-sm" />
+                        <div className="absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-sm" />
+                        <div className="absolute -bottom-1 -left-1 w-2 h-2 bg-blue-500 rounded-sm" />
+                        <div className="absolute -bottom-1 -right-1 w-2 h-2 bg-blue-500 rounded-sm" />
+                    </>
+                )}
+
+                {/* Component Render */}
+                <div className="w-full h-full overflow-hidden">
+                    {content}
+                </div>
+
+                {/* Label on Hover */}
+                <div className="absolute -top-5 left-0 bg-blue-600 text-white text-[9px] px-1 rounded opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity">
+                    {el.name}
+                </div>
+            </div>
+        );
     };
 
     return (
@@ -135,78 +155,18 @@ export const HUDCanvas: React.FC<HUDCanvasProps> = ({ elements, selectedId, onSe
                 X: {mousePos.x} Y: {mousePos.y}
             </div>
 
-            {/* The stage owns the logical document coordinate space.  It is
-                fitted into the available pane, but its children keep their
-                authored 1920x1080 coordinates. */}
-            <div
-                ref={stageRef}
-                className="absolute bg-[#111111]"
-                onClick={handleCanvasClick}
-                style={{
-                    left: stageOffset.x,
-                    top: stageOffset.y,
-                    width: normalizedLayout.width,
-                    height: normalizedLayout.height,
-                    transform: `scale(${scale})`,
-                    transformOrigin: 'top left',
-                }}
-            >
-                {/* Viewport safe zone in logical document coordinates. */}
-                <div className="absolute inset-8 pointer-events-none border-2 border-blue-500/20" />
-                <div className="absolute top-9 left-9 text-[10px] text-blue-500/50 font-mono pointer-events-none">VIEWPORT SAFE ZONE</div>
-
-                {elements
-                    .filter(el => el.isVisible)
-                    .sort((a, b) => a.zIndex - b.zIndex)
-                    .map(el => {
-                        const Component = COMPONENT_REGISTRY[el.type];
-                        if (!Component) return null;
-
-                        const isSelected = selectedId === el.id;
-                        const position = renderedPosition(el);
-
-                        return (
-                            <div
-                                key={el.id}
-                                onPointerDown={(e) => handlePointerDown(e, el)}
-                                style={{
-                                    position: 'absolute',
-                                    left: position.x,
-                                    top: position.y,
-                                    width: el.size.width,
-                                    height: el.size.height,
-                                    cursor: isDragging && dragId === el.id ? 'grabbing' : (el.isLocked ? 'default' : 'grab'),
-                                    zIndex: el.zIndex,
-                                    transform: 'translate(0, 0)', // GPU handling
-                                }}
-                                className={`
-                                    group transition-shadow duration-75
-                                    ${isSelected ? 'ring-2 ring-blue-500 z-50' : 'hover:ring-1 hover:ring-white/30'}
-                                `}
-                            >
-                                {/* Resize Handles (Visual Only for now) */}
-                                {isSelected && !el.isLocked && (
-                                    <>
-                                        <div className="absolute -top-1 -left-1 w-2 h-2 bg-blue-500 rounded-sm" />
-                                        <div className="absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-sm" />
-                                        <div className="absolute -bottom-1 -left-1 w-2 h-2 bg-blue-500 rounded-sm" />
-                                        <div className="absolute -bottom-1 -right-1 w-2 h-2 bg-blue-500 rounded-sm" />
-                                    </>
-                                )}
-
-                                {/* Component Render */}
-                                <div className="w-full h-full overflow-hidden">
-                                    <Component {...el.props} />
-                                </div>
-
-                                {/* Label on Hover */}
-                                <div className="absolute -top-5 left-0 bg-blue-600 text-white text-[9px] px-1 rounded opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity">
-                                    {el.name}
-                                </div>
-                            </div>
-                        );
-                    })}
-            </div>
+            <HUDRenderer
+                document={hudDocument}
+                stageRef={stageRef}
+                stageClassName="bg-[#111111]"
+                onScaleChange={handleScaleChange}
+                renderElement={renderElement}
+                stageChildren={<>
+                    {/* Viewport safe zone in logical document coordinates. */}
+                    <div className="absolute inset-8 pointer-events-none border-2 border-blue-500/20" />
+                    <div className="absolute top-9 left-9 text-[10px] text-blue-500/50 font-mono pointer-events-none">VIEWPORT SAFE ZONE</div>
+                </>}
+            />
         </div>
     );
 };

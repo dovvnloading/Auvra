@@ -163,6 +163,12 @@ export const useProjectManager = ({
     await run('project.export', 'Exporting project package', (handle) => projectService.exportPack(contextFor(handle)), 'Project package exported.');
   }, [contextFor, run]);
 
+  const buildGame = useCallback(async (target: 'web' | 'windows' = 'web') => {
+    await run('project.buildGame', target === 'web' ? 'Building web game' : 'Building Windows game',
+      (handle) => projectService.buildGame(target, 'dialog', contextFor(handle)),
+      target === 'web' ? 'Web game built. Serve the folder over http(s) to play it.' : 'Windows game built.');
+  }, [contextFor, run]);
+
   const importProject = useCallback(async () => {
     await run('project.import', 'Importing project package', async (handle, transition) => {
       await projectService.importPack(contextFor(handle));
@@ -229,7 +235,7 @@ export const useProjectManager = ({
   }, [contextFor, resetScene, run]);
 
   return frontendDiagnostics.traceActions('project_manager', {
-    saveProject, saveProjectAs, exportProject, importProject, importLegacyProject, migrateLegacyBrowserProject,
+    saveProject, saveProjectAs, exportProject, buildGame, importProject, importLegacyProject, migrateLegacyBrowserProject,
     loadProject, openRecentProject, recoverProject, createNewProject, closeProject, projectStatus,
   });
 };

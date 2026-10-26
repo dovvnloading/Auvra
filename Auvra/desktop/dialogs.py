@@ -34,6 +34,7 @@ def _validated_name(value: str, fallback: str = "AuvraProject") -> str:
 @trace_public_class("project_dialogs", concise=(
     "choose_create_location", "choose_open_project", "choose_save_as_location",
     "choose_export_pack", "choose_import_pack", "choose_import_legacy",
+    "choose_build_destination",
 ))
 class WinFormsProjectDialogs:
     """Use the already-approved Windows/.NET dialog surface lazily."""
@@ -108,6 +109,19 @@ class WinFormsProjectDialogs:
             if not self._accepted(forms, dialog):
                 return None
             return self._selection(dialog.FileName)
+        finally:
+            dialog.Dispose()
+
+    def choose_build_destination(self, suggested_name: str) -> DialogSelection | None:
+        """Return the parent folder; the host names the build folder inside it."""
+        forms = self._backend_loader()
+        dialog = forms.FolderBrowserDialog()
+        try:
+            dialog.Description = f"Choose where to build {_validated_name(suggested_name, 'the game')}"
+            dialog.ShowNewFolderButton = True
+            if not self._accepted(forms, dialog):
+                return None
+            return self._selection(dialog.SelectedPath)
         finally:
             dialog.Dispose()
 

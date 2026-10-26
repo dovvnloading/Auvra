@@ -19,6 +19,7 @@ import {
   type DiagnosticContext,
 } from '../diagnostics/runtime';
 import { createDefaultCameraState, readEditorState } from '../utils/editorState';
+import { loadGameContent } from '../utils/projectHydration';
 
 export interface ScenePersistenceProps {
   setModels: (models: LoadedModelData[]) => void;
@@ -52,8 +53,6 @@ interface SnapshotHydrationTargets {
   setSelectedBlueprintId: (value: string | null) => void;
   hydrateProjectState?: (levels: LevelData[], objects: LevelObject[], currentLevelId?: string | null) => void;
   hydrateGraphs?: (graphs: Record<string, import('../types').AnimationGraphData>) => void;
-  trackTexture?: (texture: THREE.Texture) => void;
-  releaseTexture?: (texture: THREE.Texture) => void;
   trackUrl?: (url: string) => void;
 }
 
@@ -104,8 +103,6 @@ const detachedTargets = (state: DetachedHydration): SnapshotHydrationTargets => 
   },
   hydrateGraphs: (value) => { state.graphs = value; },
   setCameraState: (value) => { state.cameraState = value; },
-  trackTexture: (value) => { state.standaloneTextures.add(value); },
-  releaseTexture: (value) => { state.standaloneTextures.delete(value); },
   trackUrl: (value) => { state.ownedUrls.add(value); },
 });
 
@@ -156,6 +153,9 @@ const throwIfAborted = (signal?: AbortSignal): void => {
   if (signal?.aborted) throw new DOMException('Project loading was cancelled.', 'AbortError');
 };
 
+/** Domains read from a native snapshot. */
+const SNAPSHOT_DOMAINS = ['metadata', 'worlds', 'scenes', 'levels', 'objects', 'environment', 'models', 'animations', 'attachments', 'sockets', 'textures', 'audio', 'materials', 'blueprints', 'graphs', 'hud'];
+
 /** Hydrate authored domains from a bounded native snapshot. Binary assets are
  * resolved only through opaque host tickets and never embedded in JSON. */
 async function hydrateSnapshot(
@@ -166,11 +166,8 @@ async function hydrateSnapshot(
   diagnostics?: DiagnosticContext,
   isCurrent?: () => boolean,
 ): Promise<boolean> {
-  const assertCurrent = () => {
-    throwIfAborted(signal);
-    if (isCurrent && !isCurrent()) throw new DOMException('Project loading was superseded.', 'AbortError');
-  };
-  assertCurrent();
+  throwIfAborted(signal);
+  if (isCurrent && !isCurrent()) throw new DOMException('Project loading was superseded.', 'AbortError');
   const source = snapshot.domains && typeof snapshot.domains === 'object'
     ? snapshot.domains
     : snapshot as Record<string, unknown>;
@@ -182,8 +179,7 @@ async function hydrateSnapshot(
     }
     return [];
   };
-  const hasDomain = ['metadata', 'worlds', 'scenes', 'levels', 'objects', 'environment', 'models', 'animations', 'attachments', 'sockets', 'textures', 'audio', 'materials', 'blueprints', 'graphs', 'hud']
-    .some((key) => domainDocuments(key).length > 0);
+  const hasDomain = SNAPSHOT_DOMAINS.some((key) => domainDocuments(key).length > 0);
   const isNativePage = Array.isArray((snapshot as Record<string, unknown>).documents);
   const pageDocuments = Array.isArray((snapshot as Record<string, unknown>).documents)
     ? (snapshot as Record<string, unknown>).documents as unknown[] : [];
@@ -219,252 +215,38 @@ async function hydrateSnapshot(
     if (domain) (docsByDomain[domain] ||= []).push(document);
   }
   const documents = (key: string): unknown[] => domainDocuments(key).length ? domainDocuments(key) : docsByDomain[key] || [];
+  const domains: Record<string, any[]> = {};
+  for (const key of SNAPSHOT_DOMAINS) domains[key] = documents(key);
   const editorState = readEditorState(snapshot);
-  let hydratedModelIds = new Set<string>();
-  let hydratedBlueprintIds = new Set<string>();
   targets.setCameraState(editorState.cameraState);
-  const assetWork = Math.max(1,
-    documents('textures').length + documents('audio').length + documents('models').length
-    + documents('animations').length + documents('attachments').length,
-  );
-  let completedWork = 0;
-  const report = (detail: string, fraction = 0, phase?: string, diagnostic?: DiagnosticAttributes) => {
-    assertCurrent();
-    onProgress(Math.min(0.99, (completedWork + fraction) / assetWork), detail, phase, diagnostic);
-  };
-  const complete = (detail: string, diagnostic?: DiagnosticAttributes) => {
-    completedWork += 1;
-    report(detail, 0, 'library_publication', diagnostic);
-  };
-  let assetFailureCount = 0;
-  const traceAsset = (assetAlias: string) => diagnostics?.operationId && diagnostics.traceId
-    ? { operationId: diagnostics.operationId, traceId: diagnostics.traceId, assetAlias }
-    : undefined;
-  const recordAssetFailure = (
-    code: string,
-    error: unknown,
-    phase: string,
-    diagnostic: DiagnosticAttributes,
-  ) => {
-    assetFailureCount += 1;
-    frontendDiagnostics.record('frontend', 'frontend.failure', {
-      ...diagnostic,
-      phase,
-      code,
-      errorType: diagnosticErrorType(error),
-    }, diagnostics, true);
-  };
-  const textureAssetUrls = new Map<string, string>();
-  if (targets.setBlueprints) {
-    const blueprints = documents('blueprints') as Blueprint[];
-    hydratedBlueprintIds = new Set(blueprints.map((blueprint) => blueprint.id));
-    targets.setBlueprints(blueprints);
-  }
-  if (targets.setTextures) {
-    const textures: TextureData[] = [];
-    for (const value of documents('textures')) {
-      const item = value as Partial<TextureData> & { assetId?: string };
-      if (!item.id || !item.name || !item.assetId) continue;
-      const assetAlias = frontendDiagnostics.nextAssetAlias();
-      const diagnostic: DiagnosticAttributes = { assetAlias, assetKind: 'texture' };
-      try {
-        report(`Loading texture — ${item.name}`, 0.1, 'source_read', diagnostic);
-        const url = await loadProjectAssetUrl(item.assetId, signal, traceAsset(assetAlias), isCurrent, targets.trackUrl);
-        assertCurrent();
-        textureAssetUrls.set(item.id, url);
-        textures.push({ id: item.id, name: item.name, dimensions: item.dimensions || { width: 0, height: 0 }, url });
-      }
-      catch (error) { recordAssetFailure('texture_hydration_failed', error, 'source_read', diagnostic); }
-      complete(`Loaded texture — ${item.name}`, diagnostic);
-    }
-    targets.setTextures(textures);
-  }
-  if (targets.setAudioAssets) {
-    const audios: AudioData[] = [];
-    for (const value of documents('audio')) {
-      const item = value as Partial<AudioData> & { assetId?: string };
-      if (!item.id || !item.name || !item.assetId) continue;
-      const assetAlias = frontendDiagnostics.nextAssetAlias();
-      const diagnostic: DiagnosticAttributes = { assetAlias, assetKind: 'audio' };
-      try {
-        report(`Loading audio — ${item.name}`, 0.1, 'source_read', diagnostic);
-        const url = await loadProjectAssetUrl(item.assetId, signal, traceAsset(assetAlias), isCurrent, targets.trackUrl);
-        assertCurrent();
-        audios.push({ id: item.id, name: item.name, type: item.type || 'application/octet-stream', duration: item.duration || 0, url });
-      }
-      catch (error) { recordAssetFailure('audio_hydration_failed', error, 'source_read', diagnostic); }
-      complete(`Loaded audio — ${item.name}`, diagnostic);
-    }
-    targets.setAudioAssets(audios);
-  }
-  if (targets.setModels) {
-    const models: LoadedModelData[] = [];
-    // Register the live staging container before the first await so models
-    // completed earlier in the loop remain reachable by stale-run cleanup.
-    targets.setModels(models);
-    const animationDocuments = documents('animations') as Array<{ assetId?: string; modelId?: string; name?: string }>;
-    for (const value of documents('models')) {
-      const item = value as Record<string, any>;
-      if (!item.id || !item.name || !item.assetId) continue;
-      const assetAlias = frontendDiagnostics.nextAssetAlias();
-      let diagnostic: DiagnosticAttributes = { assetAlias, assetKind: item.category === 'Animation' ? 'animation' : 'model' };
-      let activePhase: string = 'source_read';
-      let loadedModel: LoadedModelData | null = null;
-      try {
-        report(`Downloading model — ${item.name}`, 0.05, activePhase, diagnostic);
-        const sourceFile = await loadProjectAssetFile(item.assetId, item.name, signal, traceAsset(assetAlias), isCurrent);
-        assertCurrent();
-        diagnostic = assetDiagnosticAttributes(sourceFile, item.category === 'Animation' ? 'animation' : 'model', assetAlias);
-        const loaded = await loadFBXFile(sourceFile, {
-          normalize: item.category !== 'Animation',
-          manualId: item.id,
-          signal,
-          diagnostics: traceAsset(assetAlias),
-          onProgress: (progress, phase) => {
-            activePhase = phase;
-            report(`${importPhaseLabel(phase)} — ${item.name}`, progress * 0.8 + 0.1, phase, diagnostic);
-          },
-        });
-        loadedModel = loaded;
-        assertCurrent();
-        loaded.category = item.category || 'Prop';
-        loaded.isPlacedInScene = Boolean(item.isPlacedInScene);
-        loaded.textureOverrides = item.textureOverrides;
-        for (const [materialName, textureId] of Object.entries(item.textureOverrides || {}) as Array<[string, string]>) {
-          const textureUrl = textureAssetUrls.get(textureId);
-          if (!textureUrl) continue;
-          const texture = await new THREE.TextureLoader().loadAsync(textureUrl);
-          targets.trackTexture?.(texture);
-          assertCurrent();
-          texture.colorSpace = THREE.SRGBColorSpace;
-          texture.flipY = true;
-          let attached = false;
-          loaded.object.traverse((child) => {
-            if (!(child as THREE.Mesh).isMesh) return;
-            const material = (child as THREE.Mesh).material;
-            const materials = Array.isArray(material) ? material : [material];
-            for (const candidate of materials as any[]) {
-              if (candidate.name !== materialName) continue;
-              attached = true;
-              if (candidate.map) candidate.map.dispose();
-              candidate.map = texture;
-              candidate.transparent = true;
-              candidate.alphaTest = 0.5;
-              candidate.side = THREE.DoubleSide;
-              candidate.needsUpdate = true;
-            }
-          });
-          if (attached) targets.releaseTexture?.(texture);
-        }
-        if (loaded.category === 'Animation') stripGeometry(loaded.object);
-        if (!item.thumbnail && loaded.category !== 'Animation') {
-          activePhase = 'thumbnail_generation';
-          report(`Generating thumbnail — ${item.name}`, 0.94, activePhase, diagnostic);
-          loaded.thumbnail = generateThumbnail(loaded.object);
-        }
-        const animations = animationDocuments.filter((animation) => animation.modelId === item.id);
-        complete(`Loaded model — ${item.name}`, diagnostic);
-        for (const animation of animations) {
-          if (!animation?.assetId) continue;
-          const animationAlias = frontendDiagnostics.nextAssetAlias();
-          let animationDiagnostic: DiagnosticAttributes = { assetAlias: animationAlias, assetKind: 'animation' };
-          let animationPhase: string = 'source_read';
-          try {
-            const animationName = animation.name || 'animation.fbx';
-            report(`Downloading animation — ${animationName}`, 0.05, animationPhase, animationDiagnostic);
-            const animationFile = await loadProjectAssetFile(animation.assetId, animationName, signal, traceAsset(animationAlias), isCurrent);
-            assertCurrent();
-            animationDiagnostic = assetDiagnosticAttributes(animationFile, 'animation', animationAlias);
-            let animationModel: LoadedModelData | null = null;
-            try {
-              animationModel = await loadFBXFile(animationFile, {
-                normalize: false,
-                signal,
-                diagnostics: traceAsset(animationAlias),
-                onProgress: (progress, phase) => {
-                  animationPhase = phase;
-                  report(`${importPhaseLabel(phase)} — ${animationName}`, progress * 0.85 + 0.1, phase, animationDiagnostic);
-                },
-              });
-              assertCurrent();
-              animationPhase = 'animation_binding';
-              report(`Binding animation — ${animationName}`, 0.96, animationPhase, animationDiagnostic);
-              const prepared = prepareAnimationClips(loaded.object, animationModel.object, animationModel.animations);
-              animationDiagnostic = { ...animationDiagnostic, bindingMode: prepared.mode, clipCount: prepared.clips.length };
-              loaded.animations.push(...prepared.clips);
-            } finally {
-              if (animationModel) disposeModel(animationModel);
-            }
-          } catch (error) { recordAssetFailure('animation_hydration_failed', error, animationPhase, animationDiagnostic); }
-          complete(`Loaded animation — ${animation.name || 'animation.fbx'}`, animationDiagnostic);
-        }
-        models.push(loaded);
-      } catch (error) {
-        if (loadedModel) {
-          try { disposeModel(loadedModel); } catch { /* best effort */ }
-        }
-        recordAssetFailure('model_hydration_failed', error, activePhase, diagnostic);
-        complete(`Skipped model — ${item.name}`, diagnostic);
-      }
-    }
-    hydratedModelIds = new Set(models.map((model) => model.id));
-    targets.setModels(models);
-  }
-  if (targets.setAttachments) {
-    const attachments: AttachmentData[] = [];
-    // As with models, keep all earlier completed attachments owned by the
-    // detached result while later attachment work is still pending.
-    targets.setAttachments(attachments);
-    for (const value of documents('attachments')) {
-      const item = value as Record<string, any>;
-      if (!item.id || !item.name || !item.assetId) continue;
-      const assetAlias = frontendDiagnostics.nextAssetAlias();
-      let diagnostic: DiagnosticAttributes = { assetAlias, assetKind: 'attachment' };
-      let activePhase: string = 'source_read';
-      let loadedAttachment: LoadedModelData | null = null;
-      try {
-        report(`Downloading attachment — ${item.name}`, 0.05, activePhase, diagnostic);
-        const sourceFile = await loadProjectAssetFile(item.assetId, item.name, signal, traceAsset(assetAlias), isCurrent);
-        assertCurrent();
-        diagnostic = assetDiagnosticAttributes(sourceFile, 'attachment', assetAlias);
-        const loaded = await loadFBXFile(sourceFile, {
-          normalize: false,
-          manualId: item.id,
-          signal,
-          diagnostics: traceAsset(assetAlias),
-          onProgress: (progress, phase) => {
-            activePhase = phase;
-            report(`${importPhaseLabel(phase)} — ${item.name}`, progress * 0.85 + 0.1, phase, diagnostic);
-          },
-        });
-        loadedAttachment = loaded;
-        assertCurrent();
-        attachments.push({ id: item.id, name: item.name, url: loaded.url, object: loaded.object, parentModelId: item.parentModelId || '', boneName: item.boneName || 'Hips', position: item.position || [0, 0, 0], rotation: item.rotation || [0, 0, 0], scale: item.scale || [1, 1, 1] });
-      } catch (error) {
-        if (loadedAttachment) {
-          try { disposeModel(loadedAttachment); } catch { /* best effort */ }
-        }
-        recordAssetFailure('attachment_hydration_failed', error, activePhase, diagnostic);
-      }
-      complete(`Loaded attachment — ${item.name}`, diagnostic);
-    }
-    targets.setAttachments(attachments);
-  }
-  if (targets.setSockets) targets.setSockets(documents('sockets') as SocketData[]);
-  const levels = documents('levels') as LevelData[];
-  const objects = documents('objects') as LevelObject[];
-  if (targets.setLevelObjects) targets.setLevelObjects(objects);
+  const loaded = await loadGameContent(domains, {
+    resolveAssetUrl: (assetId, assetDiagnostics) => projectService.resolveAsset(assetId, assetDiagnostics),
+    generateThumbnails: true,
+    onProgress: (progress, detail, phase, diagnostic) => onProgress(progress, detail || '', phase, diagnostic),
+    signal,
+    diagnostics,
+    isCurrent,
+  });
+  // The detached result owns the blob URLs from here on, so a later stale
+  // check releases them with the rest of the unpublished project.
+  for (const texture of loaded.content.textures) targets.trackUrl?.(texture.url);
+  for (const audio of loaded.content.audioAssets) targets.trackUrl?.(audio.url);
+  const { content, levels, objects } = loaded;
+  targets.setBlueprints?.(content.blueprints);
+  targets.setTextures?.(content.textures);
+  targets.setAudioAssets?.(content.audioAssets);
+  targets.setModels(content.models);
+  targets.setAttachments(content.attachments);
+  targets.setSockets(content.sockets);
+  targets.setLevelObjects?.(objects);
   targets.hydrateProjectState?.(levels, objects, levels[0]?.id || null);
-  const graphDocs = documents('graphs');
   if (targets.hydrateGraphs) {
     const graphs: Record<string, import('../types').AnimationGraphData> = {};
-    graphDocs.forEach((doc) => { const value = doc as { modelId?: string; id?: string; graph?: import('../types').AnimationGraphData }; const key = value.modelId || value.id; if (key) graphs[key] = value.graph || value as unknown as import('../types').AnimationGraphData; });
-  targets.hydrateGraphs(graphs);
+    documents('graphs').forEach((doc) => { const value = doc as { modelId?: string; id?: string; graph?: import('../types').AnimationGraphData }; const key = value.modelId || value.id; if (key) graphs[key] = value.graph || value as unknown as import('../types').AnimationGraphData; });
+    targets.hydrateGraphs(graphs);
   }
-  assertCurrent();
-  if (assetFailureCount > 0) {
-    throw new Error(`Project hydration failed for ${assetFailureCount} asset${assetFailureCount === 1 ? '' : 's'}`);
-  }
+  const hydratedModelIds = new Set(content.models.map((model) => model.id));
+  const hydratedBlueprintIds = new Set(content.blueprints.map((blueprint) => blueprint.id));
   const selectedModelId = editorState.selectedModelId && hydratedModelIds.has(editorState.selectedModelId)
     ? editorState.selectedModelId : null;
   const selectedBlueprintId = selectedModelId
@@ -473,42 +255,7 @@ async function hydrateSnapshot(
       ? editorState.selectedBlueprintId : null;
   targets.setSelectedModelId(selectedModelId);
   targets.setSelectedBlueprintId(selectedBlueprintId);
-  onProgress(1, 'Project assets ready');
   return true;
-}
-
-async function loadProjectAssetFile(
-  assetId: string,
-  name: string,
-  signal?: AbortSignal,
-  diagnostics?: DiagnosticContext,
-  isCurrent?: () => boolean,
-): Promise<File> {
-  throwIfAborted(signal);
-  const url = await projectService.resolveAsset(assetId, diagnostics);
-  throwIfAborted(signal);
-  if (isCurrent && !isCurrent()) throw new DOMException('Project loading was superseded.', 'AbortError');
-  const response = await fetch(url, { method: 'GET', signal });
-  if (!response.ok) throw new Error(`Asset download failed (${response.status})`);
-  const blob = await response.blob();
-  throwIfAborted(signal);
-  if (isCurrent && !isCurrent()) throw new DOMException('Project loading was superseded.', 'AbortError');
-  return new File([blob], name, { type: response.headers.get('Content-Type') || 'application/octet-stream' });
-}
-
-async function loadProjectAssetUrl(
-  assetId: string,
-  signal?: AbortSignal,
-  diagnostics?: DiagnosticContext,
-  isCurrent?: () => boolean,
-  trackUrl?: (url: string) => void,
-): Promise<string> {
-  const file = await loadProjectAssetFile(assetId, assetId, signal, diagnostics, isCurrent);
-  throwIfAborted(signal);
-  if (isCurrent && !isCurrent()) throw new DOMException('Project loading was superseded.', 'AbortError');
-  const url = URL.createObjectURL(file);
-  trackUrl?.(url);
-  return url;
 }
 
 export const useScenePersistence = ({

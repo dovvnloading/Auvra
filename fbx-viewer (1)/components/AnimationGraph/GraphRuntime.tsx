@@ -17,23 +17,31 @@ interface GraphRuntimeProps {
     enableInputs: boolean;
     onActiveStateChange?: (id: string) => void;
     apiRef?: React.MutableRefObject<GraphRuntimeAPI | undefined>;
+    /**
+     * When true (default) the graph translates the model from its InputX/InputY
+     * variables (editor preview). Pass false when a character controller already
+     * owns the transform so the model is not moved twice.
+     */
+    driveLocomotion?: boolean;
 }
 
-export const GraphRuntime: React.FC<GraphRuntimeProps> = ({ 
-    modelObject, 
-    graph, 
+export const GraphRuntime: React.FC<GraphRuntimeProps> = ({
+    modelObject,
+    graph,
     allClips,
     enableInputs,
     onActiveStateChange,
-    apiRef
+    apiRef,
+    driveLocomotion = true
 }) => {
-    
+
     const { setVariable, getVariable, getVariables } = useGraphRuntime(
         modelObject,
         graph,
         allClips,
         enableInputs,
-        onActiveStateChange
+        onActiveStateChange,
+        driveLocomotion
     );
 
     // Expose API

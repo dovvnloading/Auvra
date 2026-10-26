@@ -347,7 +347,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
         const terrains: any[] = [];
         levelObjects.forEach(obj => {
             if (obj.type === 'foliage') foliage.push(obj);
-            else if (obj.type === 'spawn_point' || obj.type === 'audio_emitter' || obj.type === 'sky_sphere') spawns.push(obj);
+            else if (obj.type === 'spawn_point' || obj.type === 'audio_emitter' || obj.type === 'sky_sphere' || obj.type === 'player_start') spawns.push(obj);
             else if (obj.type === 'terrain') terrains.push(obj);
             else props.push(obj);
         });
@@ -458,7 +458,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                 interactive={isActiveView && interactionMode !== 'place' && interactionMode !== 'paint'}
             />
 
-            {/* Render Unique Objects (Spawners, Audio, Sky) */}
+            {/* Render Unique Objects (Spawners, Audio, Sky, Player Start) */}
             {spawners.map(obj => (
                 <SpawnerInstance 
                     key={obj.id}

@@ -9,7 +9,7 @@ import { useScene } from '../../context/SceneContext';
 import { AnimationGraphData, LoadedModelData } from '../../types';
 import { GraphRuntime } from './GraphRuntime';
 import { AttachmentController } from '../Scene/AttachmentController';
-import { SocketController } from '../Scene/SocketController';
+import { SocketController, resolveSocketFlashTextureUrl } from '../Scene/SocketController';
 import { LocalEnvironment } from '../Scene/LocalEnvironment';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 
@@ -102,7 +102,7 @@ export const GraphPreview: React.FC<{
     scale?: number; // Optional scaling multiplier
     textureUrl?: string | null; // Optional texture override
 }> = ({ graph: propGraph, allClips, model, scale = 1.0, textureUrl }) => {
-    const { models, selectedModelId, graphData, updateGraph, attachments, sockets } = useScene();
+    const { models, selectedModelId, graphData, updateGraph, attachments, sockets, flashTriggers, textures } = useScene();
     
     // Determine which model to show. 
     // Priority: Explicit prop (from BlueprintEditor) > Global Selection (from GraphEditor context)
@@ -242,6 +242,8 @@ export const GraphPreview: React.FC<{
                         key={sock.id}
                         data={sock}
                         parentObject={displayObject}
+                        flashTrigger={flashTriggers[sock.id] ?? 0}
+                        flashTextureUrl={resolveSocketFlashTextureUrl(sock, textures)}
                     />
                 ))}
                 

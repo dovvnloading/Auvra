@@ -1,5 +1,4 @@
 import type { TerrainData, TerrainHeightfieldReference } from '../types';
-import { projectService } from './projectService';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import {
   decodeTerrainHeightfield,
@@ -14,6 +13,10 @@ import {
  * object document carries only a small reference, so a sculpted 512x512
  * terrain neither exceeds the host message limit nor inflates the paged
  * objects snapshot that every level read depends on.
+ *
+ * This module is storage-agnostic so the standalone player can resolve
+ * heightfields from a game pack; the editor binds it to the open project in
+ * terrainHeightfieldEditor.ts.
  */
 export const TERRAIN_HEIGHTFIELD_FILE_NAME = 'terrain-heightfield.bin';
 
@@ -24,15 +27,6 @@ export type TerrainHeightfieldLoader = (assetId: string) => Promise<ArrayBuffer>
 // terrain be rewritten (e.g. a texture change) without another upload.
 const knownHeightfields = new WeakMap<readonly number[], TerrainHeightfieldReference>();
 const pendingResolutions = new Map<string, Promise<number[]>>();
-
-const uploadHeightfield: TerrainHeightfieldUploader = (file) => projectService.uploadAsset(file);
-
-const loadHeightfield: TerrainHeightfieldLoader = async (assetId) => {
-  const url = await projectService.resolveAsset(assetId);
-  const response = await fetch(url, { method: 'GET' });
-  if (!response.ok) throw new Error(`Terrain heightfield download failed (${response.status})`);
-  return response.arrayBuffer();
-};
 
 const sameHeightfield = (a: TerrainHeightfieldReference, b: TerrainHeightfieldReference | undefined): boolean =>
   Boolean(b && a.assetId === b.assetId && a.encoding === b.encoding && a.columns === b.columns && a.rows === b.rows);
@@ -47,10 +41,10 @@ const sameHeightfield = (a: TerrainHeightfieldReference, b: TerrainHeightfieldRe
  */
 export async function externalizeTerrainData(
   terrain: TerrainData,
-  { storedHeightfield, upload = uploadHeightfield }: {
+  { storedHeightfield, upload }: {
     storedHeightfield?: () => Promise<TerrainHeightfieldReference | undefined>;
-    upload?: TerrainHeightfieldUploader;
-  } = {},
+    upload: TerrainHeightfieldUploader;
+  },
 ): Promise<{ terrainData: TerrainData; remember?: () => void }> {
   const { heights, heightfield, ...rest } = terrain;
   if (!heights || heights.length === 0) {
@@ -80,7 +74,7 @@ export async function externalizeTerrainData(
 /** Load and decode a referenced heightfield. Concurrent requests share one read. */
 export function resolveTerrainHeightfield(
   reference: TerrainHeightfieldReference,
-  load: TerrainHeightfieldLoader = loadHeightfield,
+  load: TerrainHeightfieldLoader,
 ): Promise<number[]> {
   const key = `${reference.assetId}:${reference.columns}x${reference.rows}`;
   const pending = pendingResolutions.get(key);

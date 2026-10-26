@@ -4,17 +4,24 @@ import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { AnimationGraphData } from '../../../types';
 
-const MOVE_SPEED = 0.05;
+// Units per second (the former 0.05 per frame at 60 fps).
+const MOVE_SPEED = 3;
 const RUN_MULTIPLIER = 2.5;
+// Clamp long frames (tab switches, hitches) so preview movement never teleports.
+const MAX_FRAME_DELTA = 0.1;
 
 export const useGraphLocomotion = (
     modelObject: THREE.Group,
     graph: AnimationGraphData,
-    variablesRef: React.MutableRefObject<Record<string, number | boolean>>
+    variablesRef: React.MutableRefObject<Record<string, number | boolean>>,
+    driveLocomotion: boolean = true
 ) => {
-    
-    useFrame(() => {
-        if (!modelObject) return;
+
+    useFrame((_state, delta) => {
+        // When a controller owns the character transform, the graph only
+        // drives animation; translating here too would double the movement.
+        if (!driveLocomotion || !modelObject) return;
+        const step = MOVE_SPEED * Math.min(Math.max(delta, 0), MAX_FRAME_DELTA);
 
         // Helper to safely get variables regardless of case
         const getVar = (name: string, def: any) => {
@@ -30,9 +37,9 @@ export const useGraphLocomotion = (
         
         // Basic Locomotion Logic
         // In a real engine, this would use a CharacterController with collision
-        if (inputY !== 0) moveVec.z += inputY * MOVE_SPEED;
+        if (inputY !== 0) moveVec.z += inputY * step;
         // FIX: Corrected axis direction. +X is Right. InputX=1 should move Right.
-        if (inputX !== 0) moveVec.x += inputX * MOVE_SPEED; 
+        if (inputX !== 0) moveVec.x += inputX * step;
 
         // FIX: Prevent sprinting when moving backwards (InputY < 0)
         // Only apply multiplier if we are moving, and not moving backwards.

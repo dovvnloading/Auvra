@@ -69,7 +69,7 @@ export interface LoadedModelData {
   textureOverrides?: Record<string, string>; // Map<MaterialName, logical texture id>
 }
 
-export type LevelObjectType = 'prop' | 'foliage' | 'spawn_point' | 'audio_emitter' | 'terrain' | 'sky_sphere';
+export type LevelObjectType = 'prop' | 'foliage' | 'spawn_point' | 'audio_emitter' | 'terrain' | 'sky_sphere' | 'player_start';
 
 export interface SpawnConfig {
     blueprintId: string; // ID of the Enemy Blueprint to spawn
@@ -329,6 +329,7 @@ export interface SceneContextType {
   saveProject: () => Promise<void>;
   saveProjectAs: () => Promise<void>;
   exportProject: () => Promise<void>;
+  buildGame: (target?: 'web' | 'windows') => Promise<void>;
   importProject: () => Promise<void>;
   importLegacyProject: () => Promise<void>;
   migrateLegacyBrowserProject: () => Promise<number>;

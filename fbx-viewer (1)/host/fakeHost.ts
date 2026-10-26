@@ -2,7 +2,7 @@ import { assertRequest, assertResponse, isValidMessage } from "./protocol";
 import type { ErrorCode, Event, ProjectResult, Request, Response, SuccessResult } from "./generated/protocolV1";
 import type { HostTransport } from "./transport";
 
-const PROJECT_METHODS = ["project.getStatus", "project.create", "project.open", "project.openRecent", "project.close", "project.getSnapshot", "project.applyChanges", "project.save", "project.saveAs", "project.exportPack", "project.importPack", "project.importLegacy", "asset.beginUpload", "asset.resolve"] as const;
+const PROJECT_METHODS = ["project.getStatus", "project.create", "project.open", "project.openRecent", "project.close", "project.getSnapshot", "project.applyChanges", "project.save", "project.saveAs", "project.exportPack", "project.buildGame", "project.importPack", "project.importLegacy", "asset.beginUpload", "asset.resolve"] as const;
 const PROVIDER_METHODS = ["provider.list", "provider.getStatus", "provider.configureCredential", "provider.deleteCredential", "provider.configure", "provider.listModels", "provider.health", "inference.submit", "inference.get", "inference.list", "inference.cancel", "inference.retry", "media.discard", "media.commit", "command.preview", "command.approve", "command.undo"] as const;
 const ENGINE_METHODS = ["engine.getStatus", "engine.getSnapshot", "engine.applyChanges", "engine.openViewport", "engine.closeViewport", "engine.renderReference", "engine.getMetrics", "engine.recover"] as const;
 const METHODS = ["host.ping", "host.getCapabilities", ...PROJECT_METHODS, ...PROVIDER_METHODS, ...ENGINE_METHODS] as const;
@@ -103,6 +103,7 @@ export class FakeHost implements HostTransport {
       case "project.save": this.requireMutation(payload); this.projectDirty = false; this.revision++; return this.result({ dirty: false });
       case "project.saveAs": this.requireMutation(payload); this.projectName = String(payload.name); this.projectDirty = false; this.revision++; return this.result({ name: this.projectName, dirty: false });
       case "project.exportPack": this.requireMutation(payload); return this.result({ handle: "pack-0001" });
+      case "project.buildGame": this.requireMutation(payload); return this.result({ handle: "build-0001", report: { target: String(payload.target), files: 0 } });
       case "project.importPack": if (payload.sourceHandle === "invalid" || payload.sourceHandle === "bomb") throw { code: "invalid_project", message: "Project archive failed validation" }; this.projectOpen = true; this.projectReadOnly = false; this.revision++; return this.result({ handle: String(payload.sourceHandle) });
       case "project.importLegacy": if (payload.sourceHandle === "invalid") throw { code: "migration_failed", message: "Legacy source could not be migrated" }; this.projectOpen = true; this.revision++; return this.result({ report: { migrated: true } });
       case "asset.beginUpload": { this.requireMutation(payload); const token = "A".repeat(43); this.tickets.set(token, { method: "PUT", size: Number(payload.size), mime: String(payload.mime), expiresAt: this.clock + 300, consumed: false }); this.projectRevision++; this.revision++; return this.result({ uploadId: token, size: Number(payload.size), mime: String(payload.mime), method: "PUT", expiresAt: this.clock + 300, url: `https://assets.auvra.local/v1/put/${token}` }); }

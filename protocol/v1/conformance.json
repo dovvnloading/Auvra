@@ -23,9 +23,13 @@
     {"name":"empty project status request","message":{"protocol":"auvra.host/1","type":"request","id":"r6","session":"s1","revision":0,"method":"project.getStatus","payload":{}}},
     {"name":"close mutation request","message":{"protocol":"auvra.host/1","type":"request","id":"r7","session":"s1","revision":0,"method":"project.close","payload":{"projectId":"p1","expectedRevision":0}}},
     {"name":"pathfinding authored field","message":{"protocol":"auvra.host/1","type":"request","id":"r8","session":"s1","revision":0,"method":"project.applyChanges","payload":{"projectId":"p1","expectedRevision":0,"changes":[{"domain":"levels","documentId":"level-1","operation":"upsert","document":{"pathfinding":true}}]}}},
+    {"name":"build game request","message":{"protocol":"auvra.host/1","type":"request","id":"r-build","session":"s1","revision":0,"method":"project.buildGame","payload":{"projectId":"p1","expectedRevision":0,"target":"web","destinationHandle":"dialog"}}},
     {"name":"session","message":{"protocol":"auvra.host/1","type":"session","session":"s1","revision":0,"status":"created"}}
   ],
   "invalid": [
+    {"name":"build game unknown target","message":{"protocol":"auvra.host/1","type":"request","id":"r-build","session":"s1","revision":0,"method":"project.buildGame","payload":{"projectId":"p1","expectedRevision":0,"target":"linux"}}},
+    {"name":"build game path field","message":{"protocol":"auvra.host/1","type":"request","id":"r-build","session":"s1","revision":0,"method":"project.buildGame","payload":{"projectId":"p1","expectedRevision":0,"target":"windows","path":"C:/out"}}},
+    {"name":"build game missing expectedRevision","message":{"protocol":"auvra.host/1","type":"request","id":"r-build","session":"s1","revision":0,"method":"project.buildGame","payload":{"projectId":"p1","target":"web"}}},
     {"name":"unknown protocol","message":{"protocol":"auvra.host/2","type":"request","id":"r1","session":"s1","revision":0,"method":"host.ping","payload":{}}},
     {"name":"unknown request field","message":{"protocol":"auvra.host/1","type":"request","id":"r1","session":"s1","revision":0,"method":"host.ping","payload":{},"extra":1}},
     {"name":"unknown method","message":{"protocol":"auvra.host/1","type":"request","id":"r1","session":"s1","revision":0,"method":"host.shell","payload":{}}},

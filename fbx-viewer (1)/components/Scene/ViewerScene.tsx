@@ -1,7 +1,7 @@
 
 import React, { useMemo, useRef, useEffect } from 'react';
 import * as THREE from 'three';
-import { AuvraCanvas } from '../../renderer/AuvraCanvas';
+import { EditorAuvraCanvas } from '../../renderer/EditorAuvraCanvas';
 import { Grid } from '@react-three/drei';
 import { useScene } from '../../context/SceneContext';
 import { ModelViewer } from './ModelViewer';
@@ -50,7 +50,7 @@ export const ViewerScene: React.FC<ViewerSceneProps> = ({
 
   return (
     <div className="w-full h-full bg-gray-950 relative">
-        <AuvraCanvas
+        <EditorAuvraCanvas
             surfaceId="editor-scene-viewer"
             role="editor"
             shadows
@@ -114,7 +114,7 @@ export const ViewerScene: React.FC<ViewerSceneProps> = ({
             <ProjectileManager ref={projectileRef} />
 
             <SceneCamera mode={cameraMode} resetTrigger={resetTrigger} />
-        </AuvraCanvas>
+        </EditorAuvraCanvas>
     </div>
   );
 };

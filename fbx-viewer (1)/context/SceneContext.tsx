@@ -1,5 +1,5 @@
 
-import React, { createContext, useContext, useState, ReactNode, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, ReactNode, useCallback, useMemo, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { SceneContextType } from '../types';
 import { useNotification } from './NotificationContext';
@@ -18,6 +18,8 @@ import { useProjectManager } from '../hooks/useProjectManager';
 import { useOperationBusy } from './OperationContext';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import type { DetachedHydration } from '../hooks/useScenePersistence';
+import { GameContentProvider } from '../runtime/GameContentContext';
+import type { GameContent } from '../runtime/types';
 
 // Export granular hooks for high-performance consumption
 export { useViewport, useSelection, useAssets, useLevel };
@@ -258,6 +260,7 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
         saveProject: projectManager.saveProject,
         saveProjectAs: projectManager.saveProjectAs,
         exportProject: projectManager.exportProject,
+        buildGame: projectManager.buildGame,
         importProject: projectManager.importProject,
         importLegacyProject: projectManager.importLegacyProject,
         migrateLegacyBrowserProject: projectManager.migrateLegacyBrowserProject,
@@ -269,9 +272,21 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
         projectStatus: projectManager.projectStatus,
     };
 
+    // Gameplay code reads content through the runtime context, so the same code runs in the editor and the player.
+    const gameContent = useMemo<GameContent>(() => ({
+        models: assets.models,
+        blueprints: assets.blueprints,
+        attachments: assets.attachments,
+        sockets: assets.sockets,
+        textures: assets.textures,
+        audioAssets: assets.audioAssets,
+    }), [assets.models, assets.blueprints, assets.attachments, assets.sockets, assets.textures, assets.audioAssets]);
+
     return (
         <SceneContext.Provider value={value}>
-            {children}
+            <GameContentProvider value={gameContent}>
+                {children}
+            </GameContentProvider>
         </SceneContext.Provider>
     );
 };

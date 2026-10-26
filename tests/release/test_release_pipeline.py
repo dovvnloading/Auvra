@@ -73,20 +73,22 @@ class ReleasePipelineTests(unittest.TestCase):
                 name: root / name
                 for name in (
                     "frontend", "python-embed", "python-site-packages", "webview2-sdk",
-                    "webview2-fixed", "native", "host", "licenses",
+                    "webview2-fixed", "native", "game-player", "host", "licenses",
                 )
             }
             for directory in directories.values():
                 directory.mkdir()
             native = directories["native"] / "auvra-native.exe"
             native.write_bytes(b"native")
+            game_player = directories["game-player"] / "auvra-player.exe"
+            game_player.write_bytes(b"player")
             result = self._run_wrapper(
                 "stage_inputs.ps1", "-Frontend", str(directories["frontend"]),
                 "-PythonEmbed", str(directories["python-embed"]),
                 "-PythonSitePackages", str(directories["python-site-packages"]),
                 "-WebView2Sdk", str(directories["webview2-sdk"]),
                 "-WebView2Fixed", str(directories["webview2-fixed"]),
-                "-NativeBinary", str(native), "-HostInput", str(directories["host"]),
+                "-NativeBinary", str(native), "-GamePlayerBinary", str(game_player), "-HostInput", str(directories["host"]),
                 "-Licenses", str(directories["licenses"]), "-Output", str(root / "staged"),
             )
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
@@ -108,6 +110,7 @@ class ReleasePipelineTests(unittest.TestCase):
             "webview2-fixed/resources.pak": b"\x00internal roadmap\x00",
             "webview2-fixed/Auvra.runtime-pin.json": b'{"schema":1,"kind":"webview2Fixed","version":"151.0.4129.107","sha256":"f1e1c2c9b34c79ba4d88df77fb79a05441e1bd7481d6a985d76dd377cda45f33"}',
             "native/auvra-native.exe": b"native",
+            "game-player/auvra-player.exe": b"player",
             "host/Auvra/__init__.py": b"",
             "host/Auvra/launcher/__init__.py": b"",
             "host/Auvra/launcher/cli.py": b"def main(argv=None): return 0\n",
@@ -259,6 +262,7 @@ class ReleasePipelineTests(unittest.TestCase):
             self.assertTrue((output / "runtime" / "python").is_dir())
             self.assertTrue((output / "runtime" / "webview2").is_dir())
             self.assertTrue((output / "native" / "auvra-native.exe").is_file())
+            self.assertTrue((output / "game-player" / "auvra-player.exe").is_file())
             self.assertTrue((output / "release-manifest.json").is_file())
 
     def test_release_schema_contract_matches_host_schema_modules(self) -> None:

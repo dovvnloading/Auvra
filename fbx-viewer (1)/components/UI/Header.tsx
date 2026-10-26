@@ -1,8 +1,9 @@
 
 import React, { useState } from 'react';
-import { Brush, Grid, Network, FileCode, Gamepad2, Download, Upload, LayoutTemplate, Trees, FilePlus, X, Save, FolderOpen, Settings2 } from 'lucide-react';
+import { Brush, Grid, Network, FileCode, Gamepad2, Download, Upload, LayoutTemplate, Trees, FilePlus, X, Save, FolderOpen, Settings2, SlidersHorizontal, Hammer } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
 import { SettingsModal } from '../Settings/SettingsModal';
+import { GameSettingsPanel } from '../Settings/GameSettingsPanel';
 
 interface HeaderProps {
   activeTab?: 'scene' | 'graph' | 'blueprint' | 'sandbox' | 'hud' | 'retexture' | 'environment';
@@ -10,9 +11,10 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
-  const { saveProject, saveProjectAs, exportProject, importProject, importLegacyProject, migrateLegacyBrowserProject, loadProject, openRecentProject, recoverProject, createNewProject, closeProject, isLoading, projectStatus } = useScene();
+  const { saveProject, saveProjectAs, exportProject, buildGame, importProject, importLegacyProject, migrateLegacyBrowserProject, loadProject, openRecentProject, recoverProject, createNewProject, closeProject, isLoading, projectStatus } = useScene();
   const [resetConfirm, setResetConfirm] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [gameSettingsOpen, setGameSettingsOpen] = useState(false);
 
   // Project actions notify through useProjectManager and retain their rejected
   // promise for programmatic callers.  Header events are fire-and-forget UI
@@ -159,11 +161,23 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
                    <X size={12} />
                </button>
            </div>
+           <div className="flex items-center gap-1 rounded-lg border border-gray-800 bg-gray-900 p-0.5">
+             <button type="button" onClick={() => runProjectAction(() => buildGame('web'))} disabled={isLoading || !projectStatus.projectId} className="flex items-center gap-2 px-3 py-1 text-xs font-bold text-emerald-300 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50" title="Build a web version of the game (static folder to host over http/https)">
+               <Hammer size={12} /> Build Web
+             </button>
+             <button type="button" onClick={() => runProjectAction(() => buildGame('windows'))} disabled={isLoading || !projectStatus.projectId} className="flex items-center gap-2 px-2 py-1 text-xs font-bold text-emerald-300 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50" title="Build a Windows version of the game (folder with a .exe)">
+               Windows
+             </button>
+           </div>
+           <button type="button" onClick={() => setGameSettingsOpen(true)} className="flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-900 px-3 py-1 text-xs font-bold text-gray-400 hover:bg-gray-800 hover:text-white" title="Game settings">
+             <SlidersHorizontal size={13} /> Game Settings
+           </button>
            <button type="button" onClick={() => setSettingsOpen(true)} className="flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-900 px-3 py-1 text-xs font-bold text-gray-400 hover:bg-gray-800 hover:text-white" title="Provider settings">
              <Settings2 size={13} /> Settings
            </button>
        </div>
        {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+       {gameSettingsOpen && <GameSettingsPanel onClose={() => setGameSettingsOpen(false)} />}
     </div>
   );
 };

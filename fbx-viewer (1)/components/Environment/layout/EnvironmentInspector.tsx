@@ -1,6 +1,7 @@
 
 import React, { useState } from 'react';
-import { Box, Move, RotateCw, Scaling, Trash2, X, RotateCcw, Skull, Timer, Users, UserPlus, Hash, Music, Volume2, Radio, Ear, Repeat, VolumeX, Mountain, Layers, Plus, CircleDashed, Hammer, ArrowUp, ArrowDown, Minus, Activity, Wind, AlertTriangle, Grid, Sun, CloudFog } from 'lucide-react';
+import * as THREE from 'three';
+import { Box, Move, RotateCw, Scaling, Trash2, X, RotateCcw, Skull, Timer, Users, UserPlus, Hash, Music, Volume2, Radio, Ear, Repeat, VolumeX, Mountain, Layers, Plus, CircleDashed, Hammer, ArrowUp, ArrowDown, Minus, Activity, Wind, AlertTriangle, Grid, Sun, CloudFog, PersonStanding } from 'lucide-react';
 import { EditorState } from '../types';
 import { LevelObject } from '../../../types';
 import { EnvironmentBrushPanel } from '../EnvironmentBrushPanel';
@@ -277,6 +278,14 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
         const isAudio = selectedObject.type === 'audio_emitter';
         const isTerrain = selectedObject.type === 'terrain';
         const isSky = selectedObject.type === 'sky_sphere';
+        const isPlayerStart = selectedObject.type === 'player_start';
+        const AXES = ['X', 'Y', 'Z'] as const;
+        const AXIS_COLORS = ['text-red-400', 'text-green-400', 'text-blue-400'];
+        const setAxis = (field: 'position' | 'rotation', axis: number, value: number) => {
+            const next = [...selectedObject[field]] as [number, number, number];
+            next[axis] = value;
+            actions.updateLevelObject(selectedObject.id, { [field]: next });
+        };
 
         return (
             <div className="absolute right-0 top-12 bottom-0 z-20 pointer-events-auto flex">
@@ -289,8 +298,9 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                              isAudio ? <Music size={14} className="text-amber-400"/> :
                              isTerrain ? <Mountain size={14} className="text-amber-500" /> :
                              isSky ? <Sun size={14} className="text-cyan-400" /> :
-                             <Box size={14} className="text-blue-400"/>} 
-                            {isSpawner ? 'Spawner Config' : (isAudio ? 'Audio Config' : (isTerrain ? 'Terrain Props' : (isSky ? 'Sky Atmosphere' : 'Object Inspector')))}
+                             isPlayerStart ? <PersonStanding size={14} className="text-green-400" /> :
+                             <Box size={14} className="text-blue-400"/>}
+                            {isSpawner ? 'Spawner Config' : (isAudio ? 'Audio Config' : (isTerrain ? 'Terrain Props' : (isSky ? 'Sky Atmosphere' : (isPlayerStart ? 'Player Start' : 'Object Inspector'))))}
                         </span>
                         <button onClick={() => actions.setSelectedObjectId(null)} className="text-gray-500 hover:text-white transition-colors" title="Deselect Object">
                             <X size={14} />
@@ -308,6 +318,50 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                 title="Rename Object"
                             />
                         </div>
+
+                        {/* --- PLAYER START TRANSFORM --- */}
+                        {isPlayerStart && (
+                            <div className="space-y-4 pt-2 border-t border-gray-800/50">
+                                <div className="space-y-2">
+                                    <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
+                                        <Move size={12} /> Position
+                                    </div>
+                                    <div className="grid grid-cols-3 gap-1">
+                                        {AXES.map((axis, i) => (
+                                            <ScrubbableInput
+                                                key={axis}
+                                                label={axis}
+                                                labelColor={AXIS_COLORS[i]}
+                                                value={selectedObject.position[i]}
+                                                onChange={(v) => setAxis('position', i, v)}
+                                                step={0.1}
+                                            />
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className="space-y-2">
+                                    <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
+                                        <RotateCw size={12} /> Rotation (Degrees)
+                                    </div>
+                                    {/* LevelObject.rotation is stored in radians; degrees are presentation only. */}
+                                    <div className="grid grid-cols-3 gap-1">
+                                        {AXES.map((axis, i) => (
+                                            <ScrubbableInput
+                                                key={axis}
+                                                label={axis}
+                                                labelColor={AXIS_COLORS[i]}
+                                                value={Math.round(THREE.MathUtils.radToDeg(selectedObject.rotation[i]) * 10) / 10}
+                                                onChange={(v) => setAxis('rotation', i, THREE.MathUtils.degToRad(v))}
+                                                step={1}
+                                            />
+                                        ))}
+                                    </div>
+                                </div>
+                                <p className="text-[10px] text-gray-500 leading-relaxed">
+                                    The player spawns here when the level starts, facing the green arrow. Only one Player Start is used per level.
+                                </p>
+                            </div>
+                        )}
 
                         {isTerrain && (
                             <div className="space-y-2 text-xs text-gray-400 bg-gray-800 p-2 rounded">

@@ -31,7 +31,7 @@ export const LevelObjectRenderer = forwardRef<THREE.Group, LevelObjectRendererPr
     // Expose internal ref to parent
     useImperativeHandle(ref, () => internalRef.current!, []);
 
-    const isGizmo = data.type === 'spawn_point' || data.type === 'audio_emitter' || data.type === 'sky_sphere';
+    const isGizmo = data.type === 'spawn_point' || data.type === 'audio_emitter' || data.type === 'sky_sphere' || data.type === 'player_start';
 
     // Clone ONLY when the model definition changes.
     // This prevents re-cloning on every render frame.
@@ -136,6 +136,69 @@ export const LevelObjectRenderer = forwardRef<THREE.Group, LevelObjectRendererPr
             )}
         </group>
     );
+
+    // --- CASE 0: Player Start ---
+    // The marker's origin is the player's feet; the arrow points along local +Z,
+    // which is the facing the runtime derives from yaw (atan2(x, z)).
+    if (data.type === 'player_start') {
+        const color = '#22c55e';
+        const accent = isSelected || hovered ? color : '#15803d';
+        return (
+            <group
+                ref={internalRef}
+                position={data.position}
+                rotation={data.rotation}
+                scale={data.scale}
+                onClick={onClick}
+                onPointerOver={(e) => { e.stopPropagation(); setHovered(true); }}
+                onPointerOut={(e) => { e.stopPropagation(); setHovered(false); }}
+                visible={visible}
+                userData={{ levelObjectId: data.id }}
+            >
+                {/* Hit volume covering the capsule and arrow */}
+                <mesh position={[0, 0.9, 0.3]}>
+                    <boxGeometry args={[1, 1.9, 1.6]} />
+                    <meshBasicMaterial visible={false} />
+                </mesh>
+
+                {/* Player capsule (radius 0.35, 1.8m tall, feet at the origin) */}
+                <mesh position={[0, 0.9, 0]}>
+                    <capsuleGeometry args={[0.35, 1.1, 4, 12]} />
+                    <meshBasicMaterial color={color} transparent opacity={isSelected ? 0.35 : 0.2} depthWrite={false} />
+                </mesh>
+                <mesh position={[0, 0.9, 0]}>
+                    <capsuleGeometry args={[0.35, 1.1, 4, 12]} />
+                    <meshBasicMaterial color={accent} wireframe transparent opacity={0.6} />
+                </mesh>
+
+                {/* Forward arrow along +Z at chest height */}
+                <mesh position={[0, 1.2, 0.55]} rotation={[Math.PI / 2, 0, 0]}>
+                    <cylinderGeometry args={[0.04, 0.04, 0.5, 8]} />
+                    <meshBasicMaterial color={accent} />
+                </mesh>
+                <mesh position={[0, 1.2, 0.9]} rotation={[Math.PI / 2, 0, 0]}>
+                    <coneGeometry args={[0.12, 0.25, 12]} />
+                    <meshBasicMaterial color={accent} />
+                </mesh>
+
+                {/* Ground footprint */}
+                <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
+                    <ringGeometry args={[0.4, 0.45, 32]} />
+                    <meshBasicMaterial color={accent} transparent opacity={0.8} side={THREE.DoubleSide} />
+                </mesh>
+
+                {isSelected && visible && (
+                    <Billboard position={[0, 2.2, 0]} follow={true} lockX={false} lockY={false} lockZ={false}>
+                        <Html transform center style={{ pointerEvents: 'none' }}>
+                            <div className="select-none whitespace-nowrap text-sm font-semibold text-white [text-shadow:0_1px_3px_#000,0_0_2px_#000]">
+                                PLAYER START
+                            </div>
+                        </Html>
+                    </Billboard>
+                )}
+            </group>
+        );
+    }
 
     // --- CASE 1: Spawn Point ---
     if (data.type === 'spawn_point') {
