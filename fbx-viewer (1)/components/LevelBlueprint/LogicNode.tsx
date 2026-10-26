@@ -4,9 +4,10 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Play, GitBranch, CheckSquare, Combine, Activity, Database, MessageSquare, Trash, 
     Plus, Minus, X, Divide, ChevronRight, ChevronLeft, Equal, Hash, Type as TypeIcon, ToggleLeft, ArrowRight,
-    Skull, Shield, Clock, RefreshCcw
+    Skull, Shield, Clock, RefreshCcw, AlertTriangle
 } from 'lucide-react';
 import { LogicNode, LogicPin, PinDataType, LevelObject } from '../../types';
+import { describeActor, isOverlapEvent, overlapEventName, overlapTargetWarning, resolveOverlapTarget, selectedOverlapActorId } from './overlapTargets';
 
 interface LogicNodeProps {
     node: LogicNode;
@@ -78,10 +79,14 @@ export const LogicNodeComponent: React.FC<LogicNodeProps> = ({
     const maxPins = Math.max(node.inputs.length, node.outputs.length);
     const contentHeight = maxPins * PIN_ROW_HEIGHT;
     
+    // Overlap events pick their actor by id; unresolvable references carry a warning.
+    const overlapTarget = isOverlapEvent(node) ? resolveOverlapTarget(node, levelObjects) : null;
+    const overlapWarning = overlapTarget ? overlapTargetWarning(overlapTarget) : null;
+
     // Extra space for custom controls (dropdowns, inputs) inside the node body
     let customContentHeight = 0;
     if (isCompact) customContentHeight = 28; // Input field
-    if (node.type === 'Event' && node.name.includes('Overlap')) customContentHeight = 32; // Dropdown
+    if (overlapTarget) customContentHeight = overlapWarning ? 54 : 32; // Dropdown (+ warning)
     if (node.data?.printMessage) customContentHeight = 20; // Message text
 
     const totalHeight = HEADER_HEIGHT + contentHeight + customContentHeight + BOTTOM_PADDING;
@@ -265,16 +270,27 @@ export const LogicNodeComponent: React.FC<LogicNodeProps> = ({
                         </div>
                     )}
 
-                    {node.type === 'Event' && node.name.includes('Overlap') && onNodeUpdate && (
+                    {overlapTarget && onNodeUpdate && (
                         <select
                             className="w-full bg-black/40 border border-gray-700 text-[9px] text-gray-300 rounded px-1 py-1 mt-1 focus:outline-none focus:border-red-500"
-                            value={node.data?.targetActorName || ''}
-                            onChange={(e) => onNodeUpdate(node.id, { targetActorName: e.target.value, name: `On Overlap (${e.target.value})` })}
-                            onPointerDown={(e) => e.stopPropagation()} 
+                            value={selectedOverlapActorId(overlapTarget)}
+                            onChange={(e) => {
+                                const actor = levelObjects.find(obj => obj.id === e.target.value);
+                                if (actor) onNodeUpdate(node.id, { targetActorId: actor.id, targetActorName: undefined, name: overlapEventName(actor) });
+                            }}
+                            onPointerDown={(e) => e.stopPropagation()}
                         >
                             <option value="" disabled>Select Actor</option>
-                            {levelObjects.map(obj => <option key={obj.id} value={obj.name}>{obj.name}</option>)}
+                            {overlapTarget.kind === 'missing' && <option value={overlapTarget.actorId} disabled>Missing actor</option>}
+                            {levelObjects.map(obj => <option key={obj.id} value={obj.id}>{describeActor(obj)}</option>)}
                         </select>
+                    )}
+
+                    {overlapWarning && (
+                        <div role="alert" title={overlapWarning} className="mt-1 flex items-start gap-1 text-[9px] leading-tight text-amber-300">
+                            <AlertTriangle size={10} className="shrink-0 mt-px" />
+                            <span className="line-clamp-2">{overlapWarning}</span>
+                        </div>
                     )}
 
                     {node.data?.printMessage && (

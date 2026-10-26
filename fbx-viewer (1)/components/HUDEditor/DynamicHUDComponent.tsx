@@ -29,6 +29,8 @@ const boundedExecutionPlugin = ({ types: t }: any) => {
       node.body.unshift(tick());
       return node;
     }
+    // A concise arrow body is an expression, the arrow's return value.
+    if (t.isExpression(node)) return t.blockStatement([tick(), t.returnStatement(node)]);
     return t.blockStatement([tick(), node]);
   };
   return {
@@ -41,7 +43,10 @@ const boundedExecutionPlugin = ({ types: t }: any) => {
       DoWhileStatement(path: any) { path.node.body = guardBody(path.node.body); },
       FunctionDeclaration(path: any) { path.node.body = guardBody(path.node.body); },
       FunctionExpression(path: any) { path.node.body = guardBody(path.node.body); },
-      ArrowFunctionExpression(path: any) { path.node.body = guardBody(path.node.body); },
+      ArrowFunctionExpression(path: any) {
+        path.node.body = guardBody(path.node.body);
+        path.node.expression = false;
+      },
     },
   };
 };
@@ -53,6 +58,27 @@ function byteLength(value: unknown): number {
   } catch {
     return MAX_MESSAGE_BYTES + 1;
   }
+}
+
+/**
+ * Compiles HUD component body source into the guarded component expression the
+ * sandbox evaluates with `React` and `__auvraHudGuard` in scope.
+ */
+export function compileHUDCode(code: string): string {
+  if (new TextEncoder().encode(code).byteLength > MAX_CODE_BYTES) {
+    throw new Error("HUD code exceeds the sandbox limit");
+  }
+  if (new RegExp(`\\b${HUD_GUARD_IDENTIFIER}\\b`).test(code)) {
+    throw new Error("HUD code uses a reserved sandbox identifier");
+  }
+  const sourceForBabel = `function GeneratedComponent(props) {${code}}`;
+  const compiled = Babel.transform(sourceForBabel, {
+    presets: ["react"],
+    plugins: [boundedExecutionPlugin],
+  }).code;
+  const clean = compiled?.replace('"use strict";', "").trim() || null;
+  if (!clean || byteLength(clean) > MAX_CODE_BYTES) throw new Error("HUD code exceeds the sandbox limit");
+  return clean;
 }
 
 function createNonce(): string {
@@ -75,20 +101,7 @@ export const DynamicHUDComponent: React.FC<DynamicHUDComponentProps> = ({ code, 
       return;
     }
     try {
-      if (new TextEncoder().encode(code).byteLength > MAX_CODE_BYTES) {
-        throw new Error("HUD code exceeds the sandbox limit");
-      }
-      if (new RegExp(`\\b${HUD_GUARD_IDENTIFIER}\\b`).test(code)) {
-        throw new Error("HUD code uses a reserved sandbox identifier");
-      }
-      const sourceForBabel = `function GeneratedComponent(props) {${code}}`;
-      const compiled = Babel.transform(sourceForBabel, {
-        presets: ["react"],
-        plugins: [boundedExecutionPlugin],
-      }).code;
-      const clean = compiled?.replace('"use strict";', "").trim() || null;
-      if (!clean || byteLength(clean) > MAX_CODE_BYTES) throw new Error("HUD code exceeds the sandbox limit");
-      setCompiledCode(clean);
+      setCompiledCode(compileHUDCode(code));
       setError(null);
     } catch (caught) {
       frontendDiagnostics.failure('hud_compile_failed', caught);

@@ -1,7 +1,8 @@
 
 import React from 'react';
-import { Settings2, MessageSquare, Box, Database, Trash2, Shield, Skull, Hash, Type, ToggleLeft } from 'lucide-react';
+import { Settings2, MessageSquare, Box, Database, Trash2, Shield, Skull, Hash, Type, ToggleLeft, AlertTriangle } from 'lucide-react';
 import { LogicNode, LevelObject } from '../../types';
+import { describeActor, isOverlapEvent, overlapEventName, overlapTargetData, overlapTargetWarning, resolveOverlapTarget, selectedOverlapActorId } from './overlapTargets';
 
 interface LevelBlueprintInspectorProps {
     node: LogicNode;
@@ -28,6 +29,9 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
             }
         });
     };
+
+    const overlapTarget = isOverlapEvent(node) ? resolveOverlapTarget(node, levelObjects) : null;
+    const overlapWarning = overlapTarget ? overlapTargetWarning(overlapTarget) : null;
 
     return (
         <div className="w-80 bg-gray-900 border-l border-gray-800 flex flex-col shrink-0 shadow-xl z-20 animate-in slide-in-from-right-10 duration-200 h-full">
@@ -128,7 +132,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                 )}
 
                 {/* Specific: Event (Overlap) */}
-                {node.type === 'Event' && node.name.includes('Overlap') && (
+                {overlapTarget && (
                     <div className="space-y-3">
                         <div className="flex items-center gap-2 text-red-400 text-xs font-bold">
                             <Box size={14} /> Trigger Settings
@@ -136,19 +140,32 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                         <div className="space-y-1">
                             <label className="text-[10px] text-gray-400">Target Actor</label>
                             <select
-                                value={node.data?.targetActorName || ''}
+                                value={selectedOverlapActorId(overlapTarget)}
                                 onChange={(e) => {
-                                    updateData('targetActorName', e.target.value);
-                                    onUpdate({ name: `On Overlap (${e.target.value})` });
+                                    const actor = levelObjects.find(obj => obj.id === e.target.value);
+                                    // One update: name and data together, so neither overwrites the other.
+                                    if (actor) onUpdate({ name: overlapEventName(actor), data: overlapTargetData(node.data, actor) });
                                 }}
                                 className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-xs text-white focus:outline-none focus:border-red-500"
                             >
                                 <option value="" disabled>-- Select Actor --</option>
+                                {overlapTarget.kind === 'missing' && (
+                                    <option value={overlapTarget.actorId} disabled>Missing actor</option>
+                                )}
                                 {levelObjects.map(obj => (
-                                    <option key={obj.id} value={obj.name}>{obj.name}</option>
+                                    <option key={obj.id} value={obj.id}>{describeActor(obj)}</option>
                                 ))}
                             </select>
+                            {(overlapTarget.kind === 'linked' || overlapTarget.kind === 'legacy-unique') && (
+                                <div className="text-[10px] text-gray-500">Current name: {overlapTarget.actor.name}</div>
+                            )}
                         </div>
+                        {overlapWarning && (
+                            <div role="alert" className="flex items-start gap-2 rounded border border-amber-700/60 bg-amber-950/40 p-2 text-[10px] text-amber-300">
+                                <AlertTriangle size={12} className="shrink-0 mt-px" />
+                                <span>{overlapWarning}</span>
+                            </div>
+                        )}
                     </div>
                 )}
 

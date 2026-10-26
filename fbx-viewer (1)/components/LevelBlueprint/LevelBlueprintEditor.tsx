@@ -1,10 +1,12 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Play, GitBranch, CheckSquare, Database, Trash2, ArrowLeft, MessageSquare, Box, Shield, Skull, Calculator, Timer, Hash, Type, ToggleLeft, Activity, X, LayoutTemplate, RefreshCcw } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
 import { LogicCanvas } from './LogicCanvas';
 import { LevelBlueprintInspector } from './LevelBlueprintInspector';
 import { LogicNode, LogicConnection } from '../../types';
+import { frontendDiagnostics } from '../../diagnostics/runtime';
+import { migrateLegacyOverlapTargets, overlapEventName, overlapTargetData } from './overlapTargets';
 
 interface LevelBlueprintEditorProps {
     onClose: () => void;
@@ -89,25 +91,35 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
     // --- 3. CONTEXTUAL ACTIONS ---
 
     const handleAddBeginOverlap = () => {
-        let targetName = '';
-        // If an object was selected in the environment before opening BP, pre-select it
-        if (selectedObjectId) {
-            const obj = levelObjects.find(o => o.id === selectedObjectId);
-            if (obj) targetName = obj.name;
-        }
-        // Fallback to first available object
-        if (!targetName && levelObjects.length > 0) {
-            targetName = levelObjects[0].name;
-        }
+        // If an object was selected in the environment before opening BP, pre-select it,
+        // otherwise fall back to the first available object.
+        const target = (selectedObjectId && levelObjects.find(o => o.id === selectedObjectId)) || levelObjects[0];
 
-        addNode('Event', targetName ? `On Overlap (${targetName})` : 'On Overlap (Select Actor)', [], 
+        addNode('Event', target ? overlapEventName(target) : 'On Overlap (Select Actor)', [],
             [
                 { name: 'Exec', dataType: 'Exec', direction: 'Output' },
                 { name: 'Other Actor', dataType: 'Object', direction: 'Output' }
-            ], 
-            { targetActorName: targetName || '' }
+            ],
+            target ? overlapTargetData(undefined, target) : {}
         );
     };
+
+    // Legacy overlap events referenced their actor by name. Once a name identifies exactly one
+    // actor, persist the stable id instead; ambiguous or missing names stay as they are and are
+    // flagged on the node and in the inspector. The ref keeps a StrictMode re-run, or a failed
+    // write rolling back to the same nodes, from persisting the migration again.
+    const migratedNodes = useRef<LogicNode[] | null>(null);
+    useEffect(() => {
+        if (migratedNodes.current === activeLevelBlueprint.nodes) return;
+        const migrated = migrateLegacyOverlapTargets(activeLevelBlueprint.nodes, levelObjects);
+        if (!migrated) return;
+        try {
+            updateLevelBlueprint({ nodes: migrated });
+            migratedNodes.current = activeLevelBlueprint.nodes;
+        } catch (error) {
+            frontendDiagnostics.failure('level_blueprint_target_migration_failed', error);
+        }
+    }, [activeLevelBlueprint.nodes, levelObjects, updateLevelBlueprint]);
 
     const handleAddEvent = (type: string, label: string) => {
         if (type === 'BeginPlay') {

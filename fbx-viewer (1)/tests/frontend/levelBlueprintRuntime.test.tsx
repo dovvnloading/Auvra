@@ -1,16 +1,21 @@
 import { StrictMode } from 'react';
-import { act, renderHook } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen } from '@testing-library/react';
 import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
+import { LevelBlueprintEditor } from '../../components/LevelBlueprint/LevelBlueprintEditor';
+import { LevelBlueprintInspector } from '../../components/LevelBlueprint/LevelBlueprintInspector';
 import type { SandboxEntityHandle } from '../../components/Sandbox/SandboxEntity';
 import { useLevelBlueprintRuntime, UseLevelBlueprintRuntimeProps } from '../../hooks/useLevelBlueprintRuntime';
 import type { LevelBlueprintData, LevelObject, LogicNode, LogicPin, PinDataType, PinDirection } from '../../types';
 
 const frame = vi.hoisted(() => ({ callback: null as ((state: unknown, delta: number) => void) | null }));
+const scene = vi.hoisted(() => ({ current: null as unknown }));
 
 vi.mock('@react-three/fiber', () => ({
   useFrame: (callback: (state: unknown, delta: number) => void) => { frame.callback = callback; },
 }));
+
+vi.mock('../../context/SceneContext', () => ({ useScene: () => scene.current }));
 
 const runFrame = () => act(() => { frame.callback?.({}, 1 / 60); });
 
@@ -41,6 +46,11 @@ const overlapGraph: LevelBlueprintData = {
   connections: [{ id: 'c1', fromNodeId: 'overlap', fromPinId: 'overlap-out', toNodeId: 'destroy', toPinId: 'destroy-in' }],
   variables: [],
 };
+
+const overlapGraphFor = (name: string, data: Record<string, unknown>): LevelBlueprintData => ({
+  ...overlapGraph,
+  nodes: [{ ...overlapGraph.nodes[0], name, data }, overlapGraph.nodes[1]],
+});
 
 // Mirrors how LevelGameLoop used to render: fresh refs and callbacks on every render.
 const runtimeProps = (overrides: Partial<UseLevelBlueprintRuntimeProps>): UseLevelBlueprintRuntimeProps => ({
@@ -125,5 +135,112 @@ describe('level blueprint runtime', () => {
     // Tick (Restart) runs before overlaps in a frame; the ending session must not destroy the coin.
     expect(onRestart).toHaveBeenCalledTimes(1);
     expect(destroyActor).not.toHaveBeenCalled();
+  });
+
+  it('fires an id-referenced overlap only for that actor among same-named placements', () => {
+    const destroyActor = vi.fn();
+    const player = { object: new THREE.Group() } as unknown as SandboxEntityHandle;
+    renderHook(() => useLevelBlueprintRuntime(runtimeProps({
+      blueprint: overlapGraphFor('On Overlap (Crate_Prop)', { targetActorId: 'crate-2' }),
+      // Every placement of a model gets the same default name; the player overlaps all three.
+      levelObjects: [
+        levelObject('crate-1', 'Crate_Prop', [0, 0, 0]),
+        levelObject('crate-2', 'Crate_Prop', [0.5, 0, 0]),
+        levelObject('crate-3', 'Crate_Prop', [-0.5, 0, 0]),
+      ],
+      playerEntityRef: { current: player },
+      destroyActor,
+    })));
+
+    runFrame();
+
+    expect(destroyActor).toHaveBeenCalledTimes(1);
+    expect(destroyActor).toHaveBeenCalledWith('crate-2');
+  });
+
+  it('keeps firing for an id-referenced actor after it is renamed', () => {
+    const destroyActor = vi.fn();
+    const player = { object: new THREE.Group() } as unknown as SandboxEntityHandle;
+    renderHook(() => useLevelBlueprintRuntime(runtimeProps({
+      // Authored while the actor was called 'Coin'.
+      blueprint: overlapGraphFor('On Overlap (Coin)', { targetActorId: 'coin-1' }),
+      levelObjects: [levelObject('coin-1', 'Gold Coin', [0, 0, 0])],
+      playerEntityRef: { current: player },
+      destroyActor,
+    })));
+
+    runFrame();
+
+    expect(destroyActor).toHaveBeenCalledWith('coin-1');
+  });
+
+  it('keeps legacy name-only overlaps matching every actor with that name', () => {
+    const destroyActor = vi.fn();
+    const player = { object: new THREE.Group() } as unknown as SandboxEntityHandle;
+    renderHook(() => useLevelBlueprintRuntime(runtimeProps({
+      blueprint: overlapGraph,
+      levelObjects: [levelObject('coin-1', 'Coin', [0, 0, 0]), levelObject('coin-2', 'Coin', [0.5, 0, 0])],
+      playerEntityRef: { current: player },
+      destroyActor,
+    })));
+
+    runFrame();
+
+    expect(destroyActor.mock.calls).toEqual([['coin-1'], ['coin-2']]);
+  });
+});
+
+const sceneWith = (blueprint: LevelBlueprintData, levelObjects: LevelObject[]) => {
+  const updateLevelBlueprint = vi.fn();
+  scene.current = { activeLevelBlueprint: blueprint, updateLevelBlueprint, blueprints: [], levelObjects };
+  return updateLevelBlueprint;
+};
+
+const renderInspector = (overlapNode: LogicNode, levelObjects: LevelObject[], onUpdate = vi.fn()) => {
+  render(<LevelBlueprintInspector node={overlapNode} onUpdate={onUpdate} levelObjects={levelObjects} globalVariables={[]} onDelete={() => undefined} />);
+  return onUpdate;
+};
+
+describe('level blueprint overlap actor references', () => {
+  it('migrates a legacy name that identifies exactly one actor to its id', () => {
+    const updateLevelBlueprint = sceneWith(overlapGraph, [levelObject('coin-1', 'Coin', [0, 0, 0]), levelObject('rock-1', 'Rock', [5, 0, 0])]);
+
+    render(<StrictMode><LevelBlueprintEditor onClose={() => undefined} /></StrictMode>);
+
+    expect(updateLevelBlueprint).toHaveBeenCalledTimes(1);
+    const { nodes } = updateLevelBlueprint.mock.calls[0][0] as LevelBlueprintData;
+    expect(nodes.find(n => n.id === 'overlap')?.data).toEqual({ targetActorId: 'coin-1' });
+    expect(nodes.find(n => n.id === 'destroy')).toBe(overlapGraph.nodes[1]);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps an ambiguous legacy name and warns on the node and in the inspector', () => {
+    const coins = [levelObject('coin-1', 'Coin', [0, 0, 0]), levelObject('coin-2', 'Coin', [5, 0, 0])];
+    const updateLevelBlueprint = sceneWith(overlapGraph, coins);
+
+    render(<LevelBlueprintEditor onClose={() => undefined} />);
+
+    expect(updateLevelBlueprint).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('"Coin" matches 2 actors');
+
+    renderInspector(overlapGraph.nodes[0], coins);
+    expect(screen.getAllByRole('alert')[1]).toHaveTextContent('"Coin" matches 2 actors');
+  });
+
+  it('warns about a deleted actor', () => {
+    renderInspector(overlapGraphFor('On Overlap (Coin)', { targetActorId: 'coin-1' }).nodes[0], [levelObject('rock-1', 'Rock', [0, 0, 0])]);
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Missing actor');
+  });
+
+  it('picks the actor by id and stores the reference and node name in one update', () => {
+    const crates = [levelObject('crate-1', 'Crate_Prop', [0, 0, 0]), levelObject('crate-2', 'Crate_Prop', [5, 0, 0])];
+    const onUpdate = renderInspector(overlapGraphFor('On Overlap (Select Actor)', {}).nodes[0], crates);
+
+    expect(screen.getByRole('option', { name: 'Crate_Prop · prop · crate-1' })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'crate-2' } });
+
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(onUpdate).toHaveBeenCalledWith({ name: 'On Overlap (Crate_Prop)', data: { targetActorId: 'crate-2' } });
   });
 });

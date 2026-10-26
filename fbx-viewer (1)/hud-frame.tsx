@@ -1,5 +1,6 @@
 import React from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { createExecutionGuard } from "./components/HUDEditor/hudExecutionGuard";
 import "./styles.css";
 
 const MAX_MESSAGE_BYTES = 256 * 1024;
@@ -43,25 +44,14 @@ function isRender(value: unknown, nonce: string): value is RenderMessage {
     byteLength(candidate.props) <= MAX_PROPS_BYTES;
 }
 
-function createExecutionGuard(): { tick: () => void } {
-  const started = performance.now();
-  let steps = 0;
-  return {
-    tick: () => {
-      steps += 1;
-      if (steps > MAX_EXECUTION_STEPS || performance.now() - started > MAX_EXECUTION_MS) {
-        throw new Error("HUD execution exceeded the sandbox budget");
-      }
-    },
-  };
-}
-
 function renderMessage(value: RenderMessage): void {
   try {
     // This is the only dynamic evaluation site and is intentionally confined to
-    // the opaque-origin, sandboxed HUD document.
+    // the opaque-origin, sandboxed HUD document. The guard budgets every
+    // synchronous slice of the component's code (render, handlers, timers).
     const getComponent = new Function("React", "__auvraHudGuard", `return (${value.code});`);
-    const Component = getComponent(React, createExecutionGuard()) as React.ComponentType<Record<string, unknown>>;
+    const guard = createExecutionGuard({ maxSteps: MAX_EXECUTION_STEPS, maxMs: MAX_EXECUTION_MS });
+    const Component = getComponent(React, guard) as React.ComponentType<Record<string, unknown>>;
     root.render(React.createElement(Component, value.props));
   } catch (error) {
     channel?.postMessage({ type: "diagnostic", code: "runtime_error" });
