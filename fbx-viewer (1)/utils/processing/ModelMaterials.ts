@@ -5,9 +5,23 @@ import * as THREE from 'three';
  * Converts older Phong/Lambert materials to Physical/Standard materials
  * for better compatibility with HDR environments.
  */
+/**
+ * FBX exporters (Blender among them) write a white emissive colour with zero strength.
+ * Imports round-trip through glTF before this step, which drops the zero strength, so a
+ * mapless, near-white emissive is treated as an export artifact on every material type.
+ */
+const sanitizeEmissive = (mat: THREE.MeshStandardMaterial) => {
+  if (mat.emissiveMap) return;
+  const { r, g, b } = mat.emissive;
+  if (mat.emissiveIntensity === 0 || (r > 0.9 && g > 0.9 && b > 0.9)) {
+    mat.emissive.set(0x000000);
+  }
+};
+
 const upgradeMaterial = (mat: THREE.Material): THREE.Material => {
-  // If it's already a PBR material, just return it
+  // If it's already a PBR material, keep it but still drop exporter emissive artifacts
   if ((mat as any).isMeshStandardMaterial || (mat as any).isMeshPhysicalMaterial) {
+    sanitizeEmissive(mat as THREE.MeshStandardMaterial);
     return mat;
   }
 
