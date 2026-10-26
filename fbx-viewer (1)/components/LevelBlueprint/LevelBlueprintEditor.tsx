@@ -1,12 +1,28 @@
 
-import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Play, GitBranch, CheckSquare, Database, Trash2, ArrowLeft, MessageSquare, Box, Shield, Skull, Calculator, Timer, Hash, Type, ToggleLeft, Activity, X, LayoutTemplate, RefreshCcw, DoorOpen, Save, FolderOpen } from 'lucide-react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { Play, GitBranch, CheckSquare, Database, Trash2, ArrowLeft, MessageSquare, Box, Shield, Skull, Calculator, Timer, Hash, Type, ToggleLeft, Activity, X, LayoutTemplate, RefreshCcw, DoorOpen, Save, FolderOpen, Undo2, Redo2 } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
-import { LogicCanvas } from './LogicCanvas';
+import { LogicCanvas, LogicGraphSnapshot } from './LogicCanvas';
 import { LevelBlueprintInspector } from './LevelBlueprintInspector';
 import { LogicNode, LogicConnection } from '../../types';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
+import { useEditorHistory } from '../../utils/history';
 import { migrateLegacyOverlapTargets, overlapEventName, overlapTargetData } from './overlapTargets';
+
+// Repeated edits to the same field within this window (typing) merge into a single undo step.
+const HISTORY_COALESCE_MS = 1000;
+
+/** Identifies which fields of a node an inspector edit changes, so keystrokes in one field coalesce. */
+const nodeEditKey = (node: LogicNode, updates: Partial<LogicNode>) => {
+    const fields = Object.keys(updates).filter(key => key !== 'data');
+    if (updates.data) {
+        const before = node.data || {};
+        Object.keys(updates.data).forEach(key => {
+            if (updates.data[key] !== before[key]) fields.push(`data.${key}`);
+        });
+    }
+    return `inspector:${node.id}:${fields.sort().join(',')}`;
+};
 
 interface LevelBlueprintEditorProps {
     onClose: () => void;
@@ -22,8 +38,39 @@ interface LevelBlueprintEditorProps {
  * - Handles adding new nodes to the active graph.
  */
 export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onClose, selectedObjectId }) => {
-    const { activeLevelBlueprint, updateLevelBlueprint, blueprints, levelObjects, levels } = useScene();
+    const { activeLevelBlueprint, updateLevelBlueprint, blueprints, levelObjects, levels, currentLevelId } = useScene();
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+
+    // --- 0. UNDO / REDO ---
+
+    const graph = useMemo<LogicGraphSnapshot>(
+        () => ({ nodes: activeLevelBlueprint.nodes, connections: activeLevelBlueprint.connections }),
+        [activeLevelBlueprint.nodes, activeLevelBlueprint.connections]
+    );
+    const lastEdit = useRef<{ key: string; at: number } | null>(null);
+    const applyGraph = useCallback((restored: LogicGraphSnapshot) => {
+        lastEdit.current = null;
+        try {
+            updateLevelBlueprint({ nodes: restored.nodes, connections: restored.connections });
+        } catch (error) {
+            frontendDiagnostics.failure('level_blueprint_history_apply_failed', error);
+        }
+    }, [updateLevelBlueprint]);
+    // The editor is only mounted while it is the visible overlay, so its shortcuts are always live.
+    const history = useEditorHistory<LogicGraphSnapshot>({
+        value: graph,
+        apply: applyGraph,
+        active: true,
+        resetKey: currentLevelId,
+    });
+    const { record } = history;
+    const recordHistory = useCallback((before?: LogicGraphSnapshot, coalesceKey?: string) => {
+        const now = Date.now();
+        const previous = lastEdit.current;
+        lastEdit.current = coalesceKey ? { key: coalesceKey, at: now } : null;
+        if (coalesceKey && previous?.key === coalesceKey && now - previous.at < HISTORY_COALESCE_MS) return;
+        record(before);
+    }, [record]);
 
     // --- 1. DATA AGGREGATION ---
     
@@ -85,6 +132,7 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
             outputs: outputs.map((p, i) => ({ id: crypto.randomUUID(), ...p })),
             data
         };
+        recordHistory();
         updateLevelBlueprint({ nodes: [...activeLevelBlueprint.nodes, newNode] });
     };
 
@@ -312,13 +360,15 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
         connections.push({ id: crypto.randomUUID(), fromNodeId: getId, fromPinId: getValOut, toNodeId: branchId, toPinId: branchCondIn });
         connections.push({ id: crypto.randomUUID(), fromNodeId: branchId, fromPinId: branchTrueOut, toNodeId: restartId, toPinId: restartExecIn });
 
+        recordHistory();
         updateLevelBlueprint({ nodes: [...activeLevelBlueprint.nodes, ...nodes], connections: [...activeLevelBlueprint.connections, ...connections] });
     };
 
     // --- 4. STATE MANAGEMENT ---
 
     const handleDelete = () => {
-        if (selectedNodeId) {
+        if (selectedNodeId && activeLevelBlueprint.nodes.some(n => n.id === selectedNodeId)) {
+            recordHistory();
             const newNodes = activeLevelBlueprint.nodes.filter(n => n.id !== selectedNodeId);
             // Cleanup connections attached to deleted node
             const newConns = activeLevelBlueprint.connections.filter(c => c.fromNodeId !== selectedNodeId && c.toNodeId !== selectedNodeId);
@@ -328,6 +378,8 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
     };
 
     const handleNodeUpdate = (id: string, updates: Partial<LogicNode>) => {
+        const node = activeLevelBlueprint.nodes.find(n => n.id === id);
+        if (node) recordHistory(undefined, nodeEditKey(node, updates));
         const updatedNodes = activeLevelBlueprint.nodes.map(n => 
             n.id === id ? { ...n, ...updates } : n
         );
@@ -470,7 +522,25 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
-                        {selectedNodeId && (
+                        <button
+                            onClick={history.undo}
+                            disabled={!history.canUndo}
+                            title="Undo (Ctrl+Z)"
+                            aria-label="Undo"
+                            className="p-1.5 rounded hover:bg-gray-800 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 transition-colors"
+                        >
+                            <Undo2 size={14} />
+                        </button>
+                        <button
+                            onClick={history.redo}
+                            disabled={!history.canRedo}
+                            title="Redo (Ctrl+Y)"
+                            aria-label="Redo"
+                            className="p-1.5 rounded hover:bg-gray-800 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 transition-colors"
+                        >
+                            <Redo2 size={14} />
+                        </button>
+                        {selectedNode && (
                             <button 
                                 onClick={handleDelete}
                                 className="flex items-center gap-2 px-3 py-1.5 bg-red-900/20 hover:bg-red-900/40 text-red-400 border border-red-900/50 rounded text-xs font-bold transition-colors"
@@ -487,6 +557,7 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                     onSelectNode={setSelectedNodeId}
                     selectedNodeId={selectedNodeId}
                     levelObjects={levelObjects}
+                    recordHistory={recordHistory}
                 />
             </div>
 

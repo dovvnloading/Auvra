@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Play, Pause, Film, StopCircle, Plus, CornerDownRight } from 'lucide-react';
 import { LoadedModelData } from '../../../types';
 import { useScene } from '../../../context/SceneContext';
+import { MODEL_FILE_ACCEPT } from '../../../utils/modelLoader';
 
 interface AnimationControlsProps {
   model: LoadedModelData | null;
@@ -122,7 +123,7 @@ export const AnimationControls: React.FC<AnimationControlsProps> = ({
                     <span>Import Clips</span>
                     <input 
                         type="file" 
-                        accept=".fbx" 
+                        accept={MODEL_FILE_ACCEPT} 
                         multiple
                         className="hidden" 
                         onChange={handleAnimationUpload}

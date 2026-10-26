@@ -1,10 +1,25 @@
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { InteractionMode, PaintMode, PaintSettings, TransformSettings, ViewportLayout, SculptSettings } from '../types';
 import { useScene } from '../../../context/SceneContext';
 import { projectService } from '../../../utils/projectService';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
+
+interface SelectionState {
+    /** Every selected object, in selection order. */
+    ids: string[];
+    /** The active object (gizmo, inspector); always one of `ids`, or null when nothing is selected. */
+    primary: string | null;
+}
+
+const EMPTY_SELECTION: SelectionState = { ids: [], primary: null };
+
+const normalizeSelection = (ids: readonly string[], primary?: string | null): SelectionState => {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return EMPTY_SELECTION;
+    return { ids: unique, primary: primary && unique.includes(primary) ? primary : unique[unique.length - 1] };
+};
 
 export const useEnvironmentState = () => {
     const { cameraState, levelObjects } = useScene();
@@ -13,7 +28,10 @@ export const useEnvironmentState = () => {
     const [interactionMode, setInteractionMode] = useState<InteractionMode>('select');
     const [paintMode, setPaintMode] = useState<PaintMode>('add');
     const [selectedBrushId, setSelectedBrushId] = useState<string | null>(null);
-    const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
+    const [selection, setSelectionState] = useState<SelectionState>(EMPTY_SELECTION);
+    const [focusRequest, setFocusRequest] = useState<{ id: string; nonce: number } | null>(null);
+    const selectedObjectId = selection.primary;
+    const selectedObjectIds = selection.ids;
     const [isPlaying, setIsPlaying] = useState(false);
     const [layout, setLayout] = useState<ViewportLayout>('single');
     const [cameraSpeed, setCameraSpeed] = useState<number>(1);
@@ -47,6 +65,39 @@ export const useEnvironmentState = () => {
         flattenHeight: 0
     });
 
+    /** Select exactly `id` (or nothing); the single-object form of setSelection. */
+    const setSelectedObjectId = useCallback((id: string | null) => {
+        setSelectionState(id ? { ids: [id], primary: id } : EMPTY_SELECTION);
+    }, []);
+
+    /** Replace the selection; `primary` defaults to the last id. */
+    const setSelection = useCallback((ids: string[], primary?: string) => {
+        setSelectionState(normalizeSelection(ids, primary));
+    }, []);
+
+    /** Add `id` (making it primary) or remove it from the selection. */
+    const toggleSelection = useCallback((id: string) => {
+        setSelectionState(prev => prev.ids.includes(id)
+            ? normalizeSelection(prev.ids.filter(selected => selected !== id), prev.primary)
+            : normalizeSelection([...prev.ids, id], id));
+    }, []);
+
+    /** Ask the viewport to frame `id`; the nonce makes repeated requests for the same object distinct. */
+    const requestFocus = useCallback((id: string) => {
+        setFocusRequest(prev => ({ id, nonce: (prev?.nonce ?? 0) + 1 }));
+    }, []);
+
+    // Deleted (or undone) objects leave the selection.
+    useEffect(() => {
+        setSelectionState(prev => {
+            if (prev.ids.length === 0) return prev;
+            const live = new Set(levelObjects.map(object => object.id));
+            return prev.ids.every(id => live.has(id))
+                ? prev
+                : normalizeSelection(prev.ids.filter(id => live.has(id)), prev.primary);
+        });
+    }, [levelObjects]);
+
     // Selection, tools, and play mode are editor-session state. Clear them
     // when the native host switches projects so no transient environment UI
     // can continue pointing at objects from the previous project.
@@ -54,7 +105,8 @@ export const useEnvironmentState = () => {
         if (projectIdRef.current === status.projectId) return;
         projectIdRef.current = status.projectId;
         setSelectedBrushId(null);
-        setSelectedObjectId(null);
+        setSelectionState(EMPTY_SELECTION);
+        setFocusRequest(null);
         setInteractionMode('select');
         setIsPlaying(false);
         editorCameraPos.current = undefined;
@@ -127,6 +179,8 @@ export const useEnvironmentState = () => {
             paintMode,
             selectedBrushId,
             selectedObjectId,
+            selectedObjectIds,
+            focusRequest,
             transformSettings,
             paintSettings,
             sculptSettings,
@@ -141,6 +195,9 @@ export const useEnvironmentState = () => {
             setPaintMode,
             setSelectedBrushId,
             setSelectedObjectId,
+            setSelection,
+            toggleSelection,
+            requestFocus,
             handleViewportSelect,
             handlePlayStart,
             handlePlayStop,

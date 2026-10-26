@@ -1,7 +1,7 @@
 
 import { useState, useCallback } from 'react';
-import { TextureData } from '../types';
-import { dbOperations } from '../utils/db';
+import { AssetInfoUpdate, TextureData } from '../types';
+import { dbOperations, normalizeAssetInfoUpdate } from '../utils/db';
 import { projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
 import { isAbortError, useOperationActions } from '../context/OperationContext';
@@ -134,11 +134,26 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
       }
   }, [addNotification]);
 
+  /** Rename and/or move a texture (folder '' is the library root); rejects when the change cannot be saved. */
+  const updateTexture = useCallback(async (id: string, updates: AssetInfoUpdate): Promise<void> => {
+      projectService.assertWritable();
+      const info = normalizeAssetInfoUpdate(updates);
+      if (info.name === undefined && info.folder === undefined) return;
+      try {
+          await dbOperations.updateTextureInfo(id, info);
+      } catch (e) {
+          frontendDiagnostics.failure('texture_info_update_failed', e);
+          throw e;
+      }
+      setTextures(prev => prev.map(t => (t.id === id ? { ...t, ...info } : t)));
+  }, []);
+
   return frontendDiagnostics.traceActions('texture_manager', {
       textures,
       setTextures, // Exposed for persistence loading
       addTexture,
       saveTextureToLibrary,
-      removeTexture
+      removeTexture,
+      updateTexture
   });
 };

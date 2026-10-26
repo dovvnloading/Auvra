@@ -7,6 +7,7 @@ import { InspectorPanel } from './InspectorPanel';
 import { GraphCanvas } from './GraphCanvas';
 import { Select } from '../UI/Select';
 import { useGraphContext } from './hooks/useGraphContext';
+import { useGraphHistory } from './hooks/useGraphHistory';
 
 interface GraphEditorProps {
     visible: boolean;
@@ -32,16 +33,25 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
   // Memoize clips to prevent infinite reset loop in mixer
   const previewClips = useMemo(() => allSceneClips.map(a => a.clip), [allSceneClips]);
 
+  // Undo/redo over the selected graph; history resets when another model/blueprint is opened.
+  const history = useGraphHistory({
+      graph: currentGraph,
+      updateGraph: handleUpdateGraph,
+      active: visible && !!selectedContextId,
+      resetKey: `${contextType}:${selectedContextId ?? ''}`,
+  });
+  const { updateGraphWithHistory } = history;
+
   const handleDeleteState = (id: string) => {
       const updatedStates = currentGraph.states.filter(s => s.id !== id);
       const updatedTrans = currentGraph.transitions.filter(t => t.fromStateId !== id && t.toStateId !== id);
-      handleUpdateGraph('', { states: updatedStates, transitions: updatedTrans });
+      updateGraphWithHistory('', { states: updatedStates, transitions: updatedTrans });
       setSelectedNodeId(null);
   };
 
   const handleDeleteTransition = (id: string) => {
       const updatedTrans = currentGraph.transitions.filter(t => t.id !== id);
-      handleUpdateGraph('', { transitions: updatedTrans });
+      updateGraphWithHistory('', { transitions: updatedTrans });
       setSelectedNodeId(null);
   };
 
@@ -111,8 +121,8 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
                     {activeSidebarTab === 'blackboard' && (
                         <BlackboardPanel 
                             graph={currentGraph} 
-                            modelId={selectedContextId} 
-                            updateGraph={handleUpdateGraph} 
+                            modelId={selectedContextId}
+                            updateGraph={updateGraphWithHistory}
                         />
                     )}
                     {activeSidebarTab === 'inspector' && (
@@ -120,7 +130,7 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
                             selectedNodeId={selectedNodeId}
                             graph={currentGraph}
                             modelId={selectedContextId}
-                            updateGraph={handleUpdateGraph}
+                            updateGraph={updateGraphWithHistory}
                             availableClips={allSceneClips}
                             onDeleteState={handleDeleteState}
                             onDeleteTransition={handleDeleteTransition}
@@ -160,7 +170,13 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
                     key={selectedContextId}
                     graph={currentGraph}
                     modelId={selectedContextId}
-                    updateGraph={handleUpdateGraph}
+                    updateGraph={updateGraphWithHistory}
+                    updateGraphLive={handleUpdateGraph}
+                    onMoveEnd={history.commitMove}
+                    onUndo={history.undo}
+                    onRedo={history.redo}
+                    canUndo={history.canUndo}
+                    canRedo={history.canRedo}
                     selectedNodeId={selectedNodeId}
                     onSelectNode={handleSelectNode}
                     availableClips={allSceneClips}

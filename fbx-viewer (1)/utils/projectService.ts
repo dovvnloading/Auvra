@@ -1,20 +1,10 @@
 import { getHostTransport } from '../host/bootstrap';
+import type { ProjectStatus } from './projectStatus';
 import type { Event, Response } from '../host/generated/protocolV1';
 import { frontendDiagnostics, type DiagnosticContext } from '../diagnostics/runtime';
 
 /** Host-owned project state. Paths and binary data intentionally never enter this type. */
-export interface ProjectStatus {
-  projectId: string | null;
-  name: string | null;
-  revision: number;
-  dirty: boolean;
-  readOnly: boolean;
-  busy: boolean;
-  progress: number | null;
-  recoveryAvailable: boolean;
-  recoveryPoints: Array<{ recoveryId: string; kind: 'manual' | 'autosave'; size?: number }>;
-  recentProjects: Array<{ projectId: string; name: string }>;
-}
+export type { ProjectStatus } from './projectStatus';
 
 export interface ProjectSnapshot {
   revision: number;

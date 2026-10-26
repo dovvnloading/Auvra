@@ -7,6 +7,8 @@ import type { LoadedGameContent, PlayerStart, RuntimeHost, RuntimeLevel, SaveGam
 import { loadGameContent } from '../utils/projectHydration';
 import { HUDRenderer } from '../components/HUDEditor/HUDRenderer';
 import { loadGamePack, type GamePackSource } from './gamePack';
+import { OptionsMenu } from './OptionsMenu';
+import { createPlayerOptionsStore, defaultPlayerOptions } from '../runtime/playerOptions';
 
 type Screen = 'title' | 'playing';
 
@@ -49,6 +51,7 @@ export const PlayerApp: React.FC = () => {
     const [session, setSession] = useState<Session | null>(null);
     const [paused, setPaused] = useState(false);
     const [toasts, setToasts] = useState<Toast[]>([]);
+    const [optionsOpen, setOptionsOpen] = useState(false);
     const toastId = useRef(0);
     const health = useGameState(state => state.player.health);
 
@@ -80,6 +83,10 @@ export const PlayerApp: React.FC = () => {
     const manifest = pack?.manifest ?? null;
     const settings = loaded?.settings ?? null;
     const saves = useMemo(() => (manifest ? createSaveGameStore(manifest.gameId) : null), [manifest]);
+    const optionsStore = useMemo(
+        () => (manifest && settings ? createPlayerOptionsStore(manifest.gameId, defaultPlayerOptions(settings)) : null),
+        [manifest, settings],
+    );
     const [saveList, setSaveList] = useState(() => saves?.list() ?? []);
     useEffect(() => { setSaveList(saves?.list() ?? []); }, [saves]);
 
@@ -239,6 +246,7 @@ export const PlayerApp: React.FC = () => {
                     <Menu title={manifest.name}>
                         <Button onClick={startGame} disabled={!startupLevelId}>Play</Button>
                         {saveList.length > 0 && <Button onClick={() => loadGame(saveList[0].slot)}>Continue</Button>}
+                        <Button onClick={() => setOptionsOpen(true)} disabled={!optionsStore}>Options</Button>
                         {!startupLevelId && <p className="text-xs text-red-300">This build has no playable level.</p>}
                     </Menu>
                 )}
@@ -248,9 +256,12 @@ export const PlayerApp: React.FC = () => {
                         <Button onClick={() => setPaused(false)}>Resume</Button>
                         <Button onClick={() => saveGame()}>Save</Button>
                         <Button onClick={() => loadGame()} disabled={saveList.length === 0}>Load</Button>
+                        <Button onClick={() => setOptionsOpen(true)} disabled={!optionsStore}>Options</Button>
                         <Button onClick={quitToTitle}>Quit to Title</Button>
                     </Menu>
                 )}
+
+                {optionsOpen && optionsStore && <OptionsMenu store={optionsStore} onClose={() => setOptionsOpen(false)} />}
 
                 {gameOver && (
                     <Menu title="Game Over">

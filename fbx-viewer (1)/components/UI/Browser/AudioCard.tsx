@@ -6,9 +6,12 @@ import { AudioData } from '../../../types';
 interface AudioCardProps {
     audio: AudioData;
     onDelete: () => void;
+    /** Replaces the name label while the asset is being renamed. */
+    nameEditor?: React.ReactNode;
+    onRenameRequest?: () => void;
 }
 
-export const AudioCard: React.FC<AudioCardProps> = ({ audio, onDelete }) => {
+export const AudioCard: React.FC<AudioCardProps> = ({ audio, onDelete, nameEditor, onRenameRequest }) => {
     const audioRef = useRef<HTMLAudioElement | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
 
@@ -65,9 +68,11 @@ export const AudioCard: React.FC<AudioCardProps> = ({ audio, onDelete }) => {
                     </button>
                 </div>
             </div>
-            <span className="text-[11px] truncate px-0.5 text-center text-gray-400 group-hover:text-white">
-                {audio.name}
-            </span>
+            {nameEditor ?? (
+                <span onDoubleClick={onRenameRequest} title={audio.name} className="text-[11px] truncate px-0.5 text-center text-gray-400 group-hover:text-white">
+                    {audio.name}
+                </span>
+            )}
         </div>
     );
 };

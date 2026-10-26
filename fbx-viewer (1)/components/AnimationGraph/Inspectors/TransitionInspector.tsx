@@ -81,8 +81,7 @@ export const TransitionInspector: React.FC<TransitionInspectorProps> = ({
                                      <Select
                                         value={cond.variableId}
                                         onChange={(val) => {
-                                            const newConds = [...transition.conditions];
-                                            newConds[idx].variableId = val;
+                                            const newConds = transition.conditions.map((c, i) => i === idx ? { ...c, variableId: val } : c);
                                             updateTransition({ conditions: newConds });
                                         }}
                                         options={variableOptions}
@@ -93,8 +92,7 @@ export const TransitionInspector: React.FC<TransitionInspectorProps> = ({
                                      <Select
                                         value={cond.operator}
                                         onChange={(val) => {
-                                            const newConds = [...transition.conditions];
-                                            newConds[idx].operator = val as any;
+                                            const newConds = transition.conditions.map((c, i) => i === idx ? { ...c, operator: val as ConditionOperator } : c);
                                             updateTransition({ conditions: newConds });
                                         }}
                                         options={operatorOptions}
@@ -108,8 +106,7 @@ export const TransitionInspector: React.FC<TransitionInspectorProps> = ({
                                         value={cond.value.toString()}
                                         onChange={(e) => {
                                             const val = variable?.type === 'Boolean' ? e.target.checked : parseFloat(e.target.value);
-                                            const newConds = [...transition.conditions];
-                                            newConds[idx].value = val;
+                                            const newConds = transition.conditions.map((c, i) => i === idx ? { ...c, value: val } : c);
                                             updateTransition({ conditions: newConds });
                                         }}
                                         className={variable?.type === 'Boolean' ? "cursor-pointer ml-2" : "bg-gray-900 border border-gray-600 rounded text-[10px] text-gray-200 w-16 px-1.5 py-1 focus:outline-none"}

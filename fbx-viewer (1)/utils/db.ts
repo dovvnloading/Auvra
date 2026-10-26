@@ -1,9 +1,10 @@
 
-import { AssetCategory, AttachmentData, Blueprint, SocketData, TextureData, LevelObject, LevelData, AudioData, TerrainData } from '../types';
+import { AssetCategory, AssetInfoUpdate, AttachmentData, Blueprint, SocketData, TextureData, LevelObject, LevelData, AudioData, TerrainData, PrefabData } from '../types';
 import { AssetTransferOptions, projectService } from './projectService';
 import { externalizeTerrainData } from './terrainHeightfieldEditor';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { editorSession, type EditorSessionLease } from './editorSession';
+import { sortByHierarchy } from './sceneGraph';
 
 const DB_NAME = 'OmniRenderDB';
 
@@ -139,7 +140,11 @@ class DBOperations {
    * open. IndexedDB remains a read-only migration source; binary uploads are
    * handled by the host asset transport and are therefore not sent here. */
   private async canonicalChange(domain: string, operation: 'upsert' | 'remove', value: unknown, id?: string, lease?: EditorSessionLease, prepare?: DocumentPreparation): Promise<boolean> {
-    const run = () => this.performCanonicalChange(domain, operation, value, id, lease, prepare);
+    return this.enqueueMutation(() => this.performCanonicalChange(domain, operation, value, id, lease, prepare));
+  }
+
+  /** Run `run` after every earlier queued mutation has settled. */
+  private enqueueMutation<T>(run: () => Promise<T>): Promise<T> {
     const result = this.mutationQueue.then(run, run);
     this.mutationQueue = result.catch(() => undefined);
     return result;
@@ -295,6 +300,11 @@ class DBOperations {
       await this.canonicalChange('models', 'upsert', { id, textureOverrides: overrides }, id);
   }
 
+  /** Rename and/or move a model in the content browser; folder '' is the library root. */
+  async updateModelInfo(id: string, updates: AssetInfoUpdate): Promise<void> {
+      await this.canonicalChange('models', 'upsert', assetInfoDocument(id, updates), id);
+  }
+
   async addModelTextureOverride(modelId: string, materialNames: string[], file: File, dimensions: { width: number; height: number }): Promise<string> {
     this.requireNativeProject();
     const assetId = await projectService.uploadAsset(file);
@@ -317,10 +327,17 @@ class DBOperations {
     const changes: Array<{ domain: string; operation: 'remove' | 'upsert'; id: string; value?: unknown }> = [
       { domain: 'models', operation: 'remove', id },
     ];
-    for (const domain of ['animations', 'attachments', 'sockets', 'graphs', 'objects']) {
+    for (const domain of ['animations', 'attachments', 'sockets', 'graphs']) {
       for (const record of nativeDomainRecords(snapshot, domain)) {
         if (record.modelId === id || record.parentModelId === id) changes.push({ domain, operation: 'remove', id: record.id });
       }
+    }
+    // An object's children go with it: the project rejects an object whose parent is missing.
+    const removedObjects = new Set<string>();
+    for (const record of sortByHierarchy(nativeDomainRecords(snapshot, 'objects') as LevelObject[])) {
+      if (record.modelId !== id && !(record.parentId && removedObjects.has(record.parentId))) continue;
+      removedObjects.add(record.id);
+      changes.push({ domain: 'objects', operation: 'remove', id: record.id });
     }
     for (const record of nativeDomainRecords(snapshot, 'blueprints')) {
       if (record.linkedModelId === id) changes.push({ domain: 'blueprints', operation: 'upsert', id: record.id, value: { ...record, linkedModelId: null } });
@@ -482,6 +499,40 @@ class DBOperations {
     await this.canonicalChange('objects', 'remove', undefined, id, lease);
   }
 
+  // --- PREFABS ---
+
+  /** Every prefab in the open native project ([] when no project is open). */
+  async getAllPrefabs(): Promise<PrefabData[]> {
+    if (!projectService.getStatus().projectId) return [];
+    const snapshot = await projectService.getSnapshotAll('prefabs');
+    return nativeDomainRecords(snapshot, 'prefabs') as PrefabData[];
+  }
+
+  async upsertPrefab(prefab: PrefabData, lease?: EditorSessionLease): Promise<void> {
+    await this.canonicalChange('prefabs', 'upsert', prefab, prefab.id, lease);
+  }
+
+  /** Instances are copies, not links: they stay in their levels, but their
+   * prefabId must resolve, so it is cleared in the same transaction. Queued
+   * behind earlier writes so a pending instance write cannot re-add it. */
+  async deletePrefab(id: string, lease?: EditorSessionLease): Promise<void> {
+    await this.enqueueMutation(async () => {
+      this.requireEditorLease(lease);
+      this.requireNativeProject();
+      const snapshot = await projectService.getSnapshotAll('objects');
+      this.requireEditorLease(lease);
+      const changes: Array<{ domain: string; operation: 'remove' | 'upsert'; id: string; value?: unknown }> = [
+        { domain: 'prefabs', operation: 'remove', id },
+      ];
+      for (const record of nativeDomainRecords(snapshot, 'objects')) {
+        if (record.prefabId !== id) continue;
+        const { prefabId: _unlinked, ...object } = record;
+        changes.push({ domain: 'objects', operation: 'upsert', id: record.id, value: object });
+      }
+      await projectService.applyChanges(changes);
+    });
+  }
+
   // --- TEXTURES ---
 
   async addTexture(texture: DBTexture, transfer: AssetTransferOptions = {}): Promise<void> {
@@ -496,6 +547,11 @@ class DBOperations {
 
   async getAllTextures(): Promise<DBTexture[]> {
       return this.readOnlyStoreAll<DBTexture>('textures');
+  }
+
+  /** Rename and/or move a texture in the content browser; folder '' is the library root. */
+  async updateTextureInfo(id: string, updates: AssetInfoUpdate): Promise<void> {
+      await this.canonicalChange('textures', 'upsert', assetInfoDocument(id, updates), id);
   }
 
   async deleteTexture(id: string): Promise<void> {
@@ -543,6 +599,11 @@ class DBOperations {
 
   async getAllAudio(): Promise<DBAudio[]> {
       return this.readOnlyStoreAll<DBAudio>('audios');
+  }
+
+  /** Rename and/or move an audio asset in the content browser; folder '' is the library root. */
+  async updateAudioInfo(id: string, updates: AssetInfoUpdate): Promise<void> {
+      await this.canonicalChange('audio', 'upsert', assetInfoDocument(id, updates), id);
   }
 
   async deleteAudio(id: string): Promise<void> {
@@ -690,11 +751,12 @@ class DBOperations {
 
 frontendDiagnostics.instrumentClass(DBOperations, 'project_documents', [
   'addLevel', 'deleteLevel', 'addModel', 'updateModelPlacement',
-  'updateModelTextureOverrides', 'addModelTextureOverride', 'deleteModel',
+  'updateModelTextureOverrides', 'updateModelInfo', 'addModelTextureOverride', 'deleteModel',
   'addAnimations', 'addAttachment', 'updateAttachment', 'deleteAttachment',
   'addSocket', 'updateSocket', 'deleteSocket', 'addLevelObject',
-  'updateLevelObject', 'deleteLevelObject', 'getAllNativeLevelObjects', 'addTexture', 'deleteTexture',
-  'addAudio', 'deleteAudio', 'saveBlueprint', 'deleteBlueprint',
+  'updateLevelObject', 'deleteLevelObject', 'getAllNativeLevelObjects', 'addTexture', 'updateTextureInfo', 'deleteTexture',
+  'addAudio', 'updateAudioInfo', 'deleteAudio', 'saveBlueprint', 'deleteBlueprint',
+  'getAllPrefabs', 'upsertPrefab', 'deletePrefab',
   'migrateLegacyDatabase', 'clearDatabase', 'deleteEntireDatabase',
 ]);
 export const dbOperations = new DBOperations();
@@ -725,6 +787,29 @@ async function prepareLevelObjectDocument(value: unknown, readStored?: () => Pro
     value: { ...(value as Record<string, unknown>), terrainData: prepared.terrainData },
     afterCommit: prepared.remember,
   };
+}
+
+const ASSET_INFO_MAX_LENGTH = 256;
+
+/** The rename/move fields as stored: a trimmed, non-empty name; folder '' is the library root. Throws when invalid. */
+export function normalizeAssetInfoUpdate(updates: AssetInfoUpdate): AssetInfoUpdate {
+  const normalized: AssetInfoUpdate = {};
+  if (updates.name !== undefined) {
+    const name = updates.name.trim();
+    if (!name) throw new Error('An asset name is required.');
+    if (name.length > ASSET_INFO_MAX_LENGTH) throw new Error(`Asset names are limited to ${ASSET_INFO_MAX_LENGTH} characters.`);
+    normalized.name = name;
+  }
+  if (updates.folder !== undefined) {
+    if (updates.folder.length > ASSET_INFO_MAX_LENGTH) throw new Error(`Folder paths are limited to ${ASSET_INFO_MAX_LENGTH} characters.`);
+    normalized.folder = updates.folder;
+  }
+  return normalized;
+}
+
+/** The partial asset document a rename/move merges into the stored one; only the given fields change. */
+function assetInfoDocument(id: string, updates: AssetInfoUpdate): Record<string, unknown> {
+  return { id, ...normalizeAssetInfoUpdate(updates) };
 }
 
 function pickDefined(source: Record<string, unknown>, keys: string[], extra: Record<string, unknown> = {}): Record<string, unknown> {

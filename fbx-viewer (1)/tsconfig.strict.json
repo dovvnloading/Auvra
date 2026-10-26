@@ -20,11 +20,15 @@
   ],
   "exclude": [
     "tests/frontend/attachmentController.test.tsx",
+    "tests/frontend/contentBrowser.test.tsx",
     "tests/frontend/environmentScene.test.tsx",
     "tests/frontend/hudRenderer.test.tsx",
     "tests/frontend/hudSandbox.test.tsx",
     "tests/frontend/levelBlueprintRuntime.test.tsx",
+    "tests/frontend/levelClipboard.test.ts",
+    "tests/frontend/levelHierarchyEdits.test.tsx",
     "tests/frontend/levelPersistence.test.tsx",
+    "tests/frontend/modelTransforms.test.ts",
     "tests/frontend/playRuntimeWorld.test.ts",
     "tests/frontend/projectHydration.test.ts",
     "tests/frontend/saveGame.test.ts"

@@ -1,13 +1,43 @@
-
 import * as THREE from 'three';
+import { DEFAULT_MODEL_IMPORT_SETTINGS, type LoadedModelData, type ModelImportSettings } from '../../types';
 import { disposeMaterial } from './ModelLifecycle'; // Reuse internal helper if needed, or duplicate strictly local logic
 
-const TARGET_MODEL_SIZE = 5;
+/** Upper bound accepted by the project models schema for importSettings.targetSize. */
+export const MAX_MODEL_TARGET_SIZE = 1000000;
 
 /**
- * Normalizes the scale and position of the model to fit within the scene.
+ * Coerces stored or user-entered import settings into a valid value. Missing or
+ * malformed fields fall back to DEFAULT_MODEL_IMPORT_SETTINGS (the old behaviour).
  */
-export const normalizeModel = (group: THREE.Group) => {
+export const resolveImportSettings = (settings?: Partial<ModelImportSettings> | null): ModelImportSettings => {
+  const normalize = typeof settings?.normalize === 'boolean' ? settings.normalize : DEFAULT_MODEL_IMPORT_SETTINGS.normalize;
+  const size = Number(settings?.targetSize);
+  const targetSize = Number.isFinite(size) && size > 0
+    ? Math.min(MAX_MODEL_TARGET_SIZE, size)
+    : DEFAULT_MODEL_IMPORT_SETTINGS.targetSize;
+  return { normalize, targetSize };
+};
+
+/** True when the settings produce the same result as the default import. */
+export const isDefaultImportSettings = (settings?: Partial<ModelImportSettings> | null): boolean => {
+  const resolved = resolveImportSettings(settings);
+  return resolved.normalize === DEFAULT_MODEL_IMPORT_SETTINGS.normalize
+    && resolved.targetSize === DEFAULT_MODEL_IMPORT_SETTINGS.targetSize;
+};
+
+/**
+ * Applies import settings to the model root and returns the root scale.
+ * - normalize: scale so the largest dimension equals targetSize, centre on X/Z
+ *   and sit the bounds on the floor (y = 0).
+ * - otherwise: keep the authored scale and pivot (identity root transform).
+ * The root transform is reset first, so re-applying different settings to an
+ * already-normalized model is safe.
+ */
+export const normalizeModel = (
+  group: THREE.Group,
+  settings: ModelImportSettings = DEFAULT_MODEL_IMPORT_SETTINGS,
+): [number, number, number] => {
+  const { normalize, targetSize } = resolveImportSettings(settings);
   // 1. Reset Root Transform to Identity before measurement
   // This ensures we measure the true local bounds of the children content
   group.position.set(0, 0, 0);
@@ -15,6 +45,10 @@ export const normalizeModel = (group: THREE.Group) => {
   group.scale.set(1, 1, 1);
   group.updateMatrix();
   group.updateMatrixWorld(true); 
+
+  if (!normalize) {
+      return [1, 1, 1];
+  }
 
   const box = new THREE.Box3().setFromObject(group);
   
@@ -31,7 +65,7 @@ export const normalizeModel = (group: THREE.Group) => {
 
   // 2. Calculate Scale to fit target size
   const maxAxis = Math.max(size.x, size.y, size.z);
-  const scaleFactor = maxAxis > 0 ? TARGET_MODEL_SIZE / maxAxis : 1;
+  const scaleFactor = maxAxis > 0 ? targetSize / maxAxis : 1;
   group.scale.setScalar(scaleFactor);
 
   // 3. Center logic
@@ -50,6 +84,23 @@ export const normalizeModel = (group: THREE.Group) => {
   group.updateMatrix();
 
   return group.scale.toArray() as [number, number, number];
+};
+
+/**
+ * Applies a model's stored import settings after loading and records them on
+ * the model. The loader already applied the default normalization, so only
+ * non-default settings re-run it. Animation assets keep the loader transform.
+ */
+export const applyModelImportSettings = (
+  model: LoadedModelData,
+  settings?: Partial<ModelImportSettings> | null,
+): ModelImportSettings => {
+  const resolved = resolveImportSettings(settings);
+  if (model.category !== 'Animation' && !isDefaultImportSettings(resolved)) {
+    model.initialScale = normalizeModel(model.object, resolved);
+  }
+  model.importSettings = resolved;
+  return resolved;
 };
 
 /**

@@ -1,6 +1,8 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo, useRef } from 'react';
 import { FileCode } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
+import { Blueprint } from '../../types';
+import { useEditorHistory } from '../../utils/history';
 import { BlueprintListPanel } from './BlueprintListPanel';
 import { BlueprintViewport } from './BlueprintViewport';
 import { BlueprintInspectorPanel } from './BlueprintInspectorPanel';
@@ -8,6 +10,9 @@ import { BlueprintInspectorPanel } from './BlueprintInspectorPanel';
 interface BlueprintEditorProps {
     visible: boolean;
 }
+
+/** Continuous edits (typing, scrubbing) sharing a coalesce key within this window form one undo step. */
+const COALESCE_WINDOW_MS = 800;
 
 export const BlueprintEditor: React.FC<BlueprintEditorProps> = ({ visible }) => {
     const { 
@@ -22,7 +27,48 @@ export const BlueprintEditor: React.FC<BlueprintEditorProps> = ({ visible }) => 
     } = useScene();
     
     const selectedBlueprint = blueprints.find(bp => bp.id === selectedBlueprintId);
-    
+
+    // Undo/redo over the selected blueprint. Snapshots are whole blueprints; restoring one goes
+    // through the normal update path so it is persisted like any other edit.
+    const lastEditRef = useRef<{ key: string; at: number } | null>(null);
+
+    const restoreBlueprint = useCallback((restored: Blueprint | undefined) => {
+        if (!restored) return;
+        const current = blueprints.find(bp => bp.id === restored.id);
+        if (!current) return;
+        // updateBlueprint merges, so optional fields absent from the snapshot must be cleared explicitly.
+        const patch: Record<string, unknown> = { ...restored };
+        Object.keys(current).forEach(key => {
+            if (!(key in restored)) patch[key] = undefined;
+        });
+        lastEditRef.current = null;
+        updateBlueprint(restored.id, patch as Partial<Blueprint>);
+    }, [blueprints, updateBlueprint]);
+
+    const history = useEditorHistory<Blueprint | undefined>({
+        value: selectedBlueprint,
+        apply: restoreBlueprint,
+        active: visible && !!selectedBlueprint,
+        resetKey: selectedBlueprintId,
+    });
+    const { record } = history;
+
+    const handleUpdate = useCallback((id: string, updates: Partial<Blueprint>, options?: { coalesce?: string }) => {
+        const before = blueprints.find(bp => bp.id === id);
+        if (before && id === selectedBlueprintId) {
+            const changed = (Object.keys(updates) as (keyof Blueprint)[]).some(key => updates[key] !== before[key]);
+            if (changed) {
+                const now = Date.now();
+                const key = options?.coalesce ? `${id}:${options.coalesce}` : null;
+                const last = lastEditRef.current;
+                const continuesBurst = key !== null && last !== null && last.key === key && now - last.at < COALESCE_WINDOW_MS;
+                if (!continuesBurst) record(before);
+                lastEditRef.current = key ? { key, at: now } : null;
+            }
+        }
+        updateBlueprint(id, updates);
+    }, [blueprints, selectedBlueprintId, record, updateBlueprint]);
+
     // Derived state for linked model
     const linkedModel = useMemo(() => 
         models.find(m => m.id === selectedBlueprint?.linkedModelId), 
@@ -65,15 +111,16 @@ export const BlueprintEditor: React.FC<BlueprintEditorProps> = ({ visible }) => 
                         linkedModel={linkedModel}
                         models={models}
                         allClips={rawClips}
-                        onUpdate={updateBlueprint}
+                        onUpdate={handleUpdate}
                         onRemove={removeBlueprint}
                         visible={visible}
+                        history={history}
                     />
 
                     {/* RIGHT: Properties */}
-                    <BlueprintInspectorPanel 
+                    <BlueprintInspectorPanel
                         blueprint={selectedBlueprint}
-                        onUpdate={updateBlueprint}
+                        onUpdate={handleUpdate}
                     />
                 </div>
             ) : (

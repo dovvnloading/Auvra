@@ -32,6 +32,7 @@ from Auvra.project.schemas import DOMAIN_NAMES
 
 from .assets import AssetResourceRequest, AssetTransferRegistry, AssetUpload
 from .dialogs import DialogSelection, WinFormsProjectDialogs, _validated_name
+from .native_engine import NativeEngineState, NativeEngineUnavailableHost
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -93,6 +94,12 @@ class NativeProjectHost:
         # authoritative, the same failure must fail the project closed.
         self._native_authoritative = native_authoritative
         self._native_staged_assets: set[str] = set()
+        # Hydration skipped while a native child was stopped; the next tick
+        # after it is READY again mirrors the current revision.
+        self._native_resync = False
+        # Project the native host last received, so a skipped hydration for
+        # another project can drop it instead of re-presenting it on restart.
+        self._native_project: str | None = None
         self._pending_assets: dict[str, set[str]] = defaultdict(set)
         self._operation_lock = threading.RLock()
         self._event_lock = threading.Lock()
@@ -117,6 +124,8 @@ class NativeProjectHost:
     def set_native_engine_host(self, native_engine: Any) -> None:
         """Bind the runtime owner without making it a second project authority."""
         self._native_engine = native_engine
+        self._native_resync = False
+        self._native_project = None
         active = self.service.active
         if active is not None:
             self._hydrate_native(active)
@@ -183,6 +192,16 @@ class NativeProjectHost:
             active = self.service.active
             if active is None:
                 return
+            if self._native_resync and self._native_running():
+                try:
+                    self._hydrate_native(active)
+                except HostOperationError:
+                    # Authoritative hydration failure already closed the
+                    # session and published project.closed.
+                    return
+                active = self.service.active
+                if active is None:
+                    return
             now = self._now()
             if now < self._autosave_retry_at:
                 return
@@ -271,13 +290,39 @@ class NativeProjectHost:
         if active is not None:
             self._discard_pending_assets(active.project_id, active)
 
-    def _native_domains(self, active: Any) -> dict[str, Any]:
+    def _native_running(self) -> bool:
+        """Whether a native world exists that hydration would reach."""
+        native = self._native_engine
+        if native is None or isinstance(native, NativeEngineUnavailableHost):
+            return False
+        state = getattr(getattr(native, "engine", None), "state", None)
+        return state is None or state == NativeEngineState.READY
+
+    def _defer_native(self, active: Any) -> None:
+        """Record a hydration skipped because the native child is stopped."""
+        native = self._native_engine
+        if native is None or isinstance(native, NativeEngineUnavailableHost):
+            # The web fallback never hosts a native world.
+            return
+        self._native_resync = True
+        previous = self._native_project
+        if previous is not None and previous != active.project_id:
+            # A native restart re-hydrates its retained payload; do not let
+            # it re-present the project that is no longer open.
+            try:
+                native.close_project(previous)
+            except Exception:
+                pass
+            self._native_project = None
+
+    def _native_domains(self, active: Any, reuse: dict[str, Any] | None = None) -> dict[str, Any]:
         # Only renderer-authority fields cross the private native boundary.
         # Large HUD/graph/terrain/provider documents remain solely in the
         # project repository and cannot inflate a native protocol frame.
+        # ``reuse`` carries domain documents already read for this revision.
         fields = self._native_fields()
         authored = {
-            domain: active.get_domain(domain)
+            domain: reuse[domain] if reuse is not None and domain in reuse else active.get_domain(domain)
             for domain in fields
         }
         return self._native_domains_from_documents(authored, fields)
@@ -354,14 +399,24 @@ class NativeProjectHost:
             }
         return result
 
-    def _hydrate_native(self, active: Any, progress: Callable[[float], None] | None = None) -> None:
+    def _hydrate_native(
+        self,
+        active: Any,
+        progress: Callable[[float], None] | None = None,
+        *,
+        reuse: dict[str, Any] | None = None,
+    ) -> None:
         native = self._native_engine
-        if native is None:
+        if not self._native_running():
+            # No running native world: skip reading, converting and staging
+            # the project entirely.  A stopped child catches up on a tick.
+            self._defer_native(active)
             if progress is not None:
                 progress(1.0)
             return
+        self._native_resync = False
         try:
-            domains = self._native_domains(active)
+            domains = self._native_domains(active, reuse)
             asset_ids = self._cook_asset_ids(domains)
             pending = sorted(asset_ids - self._native_staged_assets)
             total_steps = len(pending) + 1
@@ -372,6 +427,7 @@ class NativeProjectHost:
                 if progress is not None:
                     progress(index / total_steps)
             native.hydrate_project(active.project_id, active.revision, domains, asset_ids=sorted(asset_ids))
+            self._native_project = active.project_id
             if progress is not None:
                 progress(1.0)
         except Exception as exc:
@@ -431,6 +487,8 @@ class NativeProjectHost:
                 # expose the canonical closed state.
                 pass
         self._native_staged_assets.clear()
+        self._native_resync = False
+        self._native_project = None
         self._discard_pending_assets(active.project_id, active)
         if self.service.active is active:
             self.service.close()
@@ -442,9 +500,12 @@ class NativeProjectHost:
         self._dirty_since = self._last_mutation = None
         self._queue("project.closed", self._status_value())
 
+    def _native_validates(self) -> bool:
+        return self._native_running() and callable(getattr(self._native_engine, "validate_project", None))
+
     def _validate_native_candidate(self, active: Any, revision: int, domains: dict[str, Any]) -> None:
         native = self._native_engine
-        if native is None or not callable(getattr(native, "validate_project", None)):
+        if not self._native_validates():
             return
         try:
             native.validate_project(
@@ -659,6 +720,8 @@ class NativeProjectHost:
         self._discard_pending_assets(project_id, active)
         self.service.close()
         self._native_staged_assets.clear()
+        self._native_resync = False
+        self._native_project = None
         self._dirty_since = self._last_mutation = None
         # ``_status_value`` accepts a ProjectStatus as its positional value;
         # after close the service has no active status, so start from the
@@ -734,6 +797,7 @@ class NativeProjectHost:
 
     def _apply(self, payload: dict[str, Any]) -> dict[str, Any]:
         active = self.service.active
+        unchanged_native: dict[str, Any] | None = None
         try:
             active = self._require(payload, expected=True)
             self._require_loadable_documents(payload["changes"])
@@ -756,12 +820,19 @@ class NativeProjectHost:
                             raise HostOperationError("invalid_request", "Project document identity does not match")
                         documents[document_id] = document
                 changed[domain] = [documents[key] for key in sorted(documents)]
-            candidate = {
-                domain: {"schemaVersion": 1, "documents":
-                         (changed[domain] if domain in changed else active.get_domain(domain)["documents"])}
-                for domain in DOMAIN_NAMES
-            }
-            self._validate_native_candidate(active, active.revision + 1, candidate)
+            if self._native_validates():
+                # Native rules see only renderer-authority domains, so read
+                # just the unchanged ones of those; hydration reuses them.
+                unchanged_native = {
+                    domain: active.get_domain(domain)
+                    for domain in self._native_fields() if domain not in changed
+                }
+                candidate = {
+                    **unchanged_native,
+                    **{domain: {"schemaVersion": 1, "documents": documents}
+                       for domain, documents in changed.items()},
+                }
+                self._validate_native_candidate(active, active.revision + 1, candidate)
             status = self.service.apply_changes(
                 changed,
                 project_id=active.project_id,
@@ -775,7 +846,9 @@ class NativeProjectHost:
         now = self._now()
         self._dirty_since = self._dirty_since or now
         self._last_mutation = now
-        self._hydrate_native(self.service.active)
+        # The commit wrote only the changed domains, so the unchanged native
+        # domains read for validation are still this revision's content.
+        self._hydrate_native(self.service.active, reuse=unchanged_native)
         result = self._status_value(status)
         self._queue("project.revision", result)
         self._queue("project.dirty", result)

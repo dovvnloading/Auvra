@@ -10,9 +10,13 @@ interface HUDCanvasProps {
     onUpdate: (id: string, updates: Partial<HUDElement>) => void;
     layout?: HUDLayout;
     onScaleChange?: (scale: number) => void;
+    /** Fired once when an element drag begins, before any `onUpdate` from that drag. */
+    onDragStart?: (id: string) => void;
+    /** Fired once when an element drag ends (pointer released). */
+    onDragEnd?: (id: string) => void;
 }
 
-export const HUDCanvas: React.FC<HUDCanvasProps> = ({ elements, selectedId, onSelect, onUpdate, layout, onScaleChange }) => {
+export const HUDCanvas: React.FC<HUDCanvasProps> = ({ elements, selectedId, onSelect, onUpdate, layout, onScaleChange, onDragStart, onDragEnd }) => {
     const canvasRef = useRef<HTMLDivElement>(null);
     const stageRef = useRef<HTMLDivElement>(null);
     const normalizedLayout = useMemo(() => normalizeHUDLayout(layout || HUD_REFERENCE_SIZE), [layout]);
@@ -56,6 +60,7 @@ export const HUDCanvas: React.FC<HUDCanvasProps> = ({ elements, selectedId, onSe
         setDragId(element.id);
         setIsDragging(true);
         (e.currentTarget as Element).setPointerCapture(e.pointerId);
+        onDragStart?.(element.id);
     };
 
     const handlePointerMove = (e: React.PointerEvent) => {
@@ -79,10 +84,12 @@ export const HUDCanvas: React.FC<HUDCanvasProps> = ({ elements, selectedId, onSe
 
     const handlePointerUp = (e: React.PointerEvent) => {
         if (isDragging) {
+            const endedId = dragId;
             setIsDragging(false);
             setDragId(null);
             const target = e.currentTarget as Element;
             if (target.hasPointerCapture?.(e.pointerId)) target.releasePointerCapture(e.pointerId);
+            if (endedId) onDragEnd?.(endedId);
         }
     };
 

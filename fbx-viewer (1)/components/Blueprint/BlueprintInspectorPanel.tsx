@@ -1,14 +1,15 @@
 
 import React, { useState, useMemo, useRef } from 'react';
 import { FileText, Database, Tag, Plus, Trash2, Zap, Scaling, Camera, Crosshair, Palette, Check, Box, Music, Play } from 'lucide-react';
-import { Blueprint } from '../../types';
+import { Blueprint, BlueprintStat } from '../../types';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
 import { TransformInputGroup } from '../UI/Properties/TransformInputGroup';
 import { useScene } from '../../context/SceneContext';
 
 interface BlueprintInspectorPanelProps {
     blueprint: Blueprint;
-    onUpdate: (id: string, updates: Partial<Blueprint>) => void;
+    /** `coalesce` groups a continuous edit (typing, scrubbing) of the same field into one undo step. */
+    onUpdate: (id: string, updates: Partial<Blueprint>, options?: { coalesce?: string }) => void;
 }
 
 export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = ({
@@ -29,10 +30,10 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
         onUpdate(blueprint.id, { stats: blueprint.stats.filter(s => s.id !== statId) });
     };
 
-    const updateStat = (statId: string, updates: any) => {
-        onUpdate(blueprint.id, { 
-            stats: blueprint.stats.map(s => s.id === statId ? { ...s, ...updates } : s)
-        });
+    const updateStat = <K extends 'name' | 'value'>(statId: string, field: K, value: BlueprintStat[K]) => {
+        onUpdate(blueprint.id, {
+            stats: blueprint.stats.map(s => s.id === statId ? { ...s, [field]: value } : s)
+        }, { coalesce: `stat:${statId}:${field}` });
     };
 
     const addWeaponSound = (audioId: string) => {
@@ -115,7 +116,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                 <label className="text-[10px] uppercase font-bold text-gray-500">Description</label>
                                 <textarea 
                                     value={blueprint.description}
-                                    onChange={(e) => onUpdate(blueprint.id, { description: e.target.value })}
+                                    onChange={(e) => onUpdate(blueprint.id, { description: e.target.value }, { coalesce: 'description' })}
                                     className="w-full bg-gray-950 border border-gray-700 rounded p-3 text-xs text-gray-300 resize-none h-24 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20"
                                     placeholder="Enter blueprint description..."
                                 />
@@ -132,7 +133,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                             <ScrubbableInput 
                                                 label="Scale"
                                                 value={blueprint.meshScale || 1.0}
-                                                onChange={(val) => onUpdate(blueprint.id, { meshScale: Math.max(0.1, val) })}
+                                                onChange={(val) => onUpdate(blueprint.id, { meshScale: Math.max(0.1, val) }, { coalesce: 'meshScale' })}
                                                 step={0.1}
                                                 labelColor="text-blue-400"
                                                 labelWidth="w-10"
@@ -158,7 +159,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                             <TransformInputGroup 
                                                 label="Offset (X/Y/Z)"
                                                 values={aimOffset}
-                                                onChange={(val) => onUpdate(blueprint.id, { aimOffset: val })}
+                                                onChange={(val) => onUpdate(blueprint.id, { aimOffset: val }, { coalesce: 'aimOffset' })}
                                                 step={0.1}
                                             />
                                         </div>
@@ -295,7 +296,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                             <ScrubbableInput 
                                                 label=""
                                                 value={blueprint.weaponVolume ?? 1.0}
-                                                onChange={(v) => onUpdate(blueprint.id, { weaponVolume: Math.max(0, Math.min(2, v)) })}
+                                                onChange={(v) => onUpdate(blueprint.id, { weaponVolume: Math.max(0, Math.min(2, v)) }, { coalesce: 'weaponVolume' })}
                                                 step={0.1}
                                                 labelWidth="w-0"
                                             />
@@ -400,7 +401,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                         <div className="flex items-center justify-between mb-2">
                                             <input 
                                                 value={stat.name}
-                                                onChange={(e) => updateStat(stat.id, { name: e.target.value })}
+                                                onChange={(e) => updateStat(stat.id, 'name', e.target.value)}
                                                 className="bg-transparent text-xs font-bold text-gray-300 focus:outline-none border-b border-transparent focus:border-gray-500 w-24"
                                             />
                                             <button onClick={() => removeStat(stat.id)} className="text-gray-500 hover:text-red-400">
@@ -413,7 +414,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                                 <ScrubbableInput 
                                                     label=""
                                                     value={stat.value}
-                                                    onChange={(v) => updateStat(stat.id, { value: v })}
+                                                    onChange={(v) => updateStat(stat.id, 'value', v)}
                                                     step={1}
                                                     labelWidth="w-0"
                                                 />

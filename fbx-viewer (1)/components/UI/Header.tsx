@@ -36,8 +36,8 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
   };
 
   return (
-    <div className="h-10 bg-gray-950 border-b border-gray-800 flex items-center px-4 justify-between shrink-0 z-50">
-       <div className="flex items-center gap-4">
+    <div className="h-10 bg-gray-950 border-b border-gray-800 flex items-center gap-4 px-4 justify-between shrink-0 z-50 min-w-0">
+       <div className="flex items-center gap-4 shrink-0">
            {/* Navigation Tabs */}
            <div className="flex items-center bg-gray-900 p-0.5 rounded-lg border border-gray-800">
               <button 
@@ -85,8 +85,9 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
            </div>
        </div>
        
-       <div className="flex items-center gap-2">
-           <div className="text-[11px] text-gray-500 max-w-40 truncate" title={projectStatus.name || 'No project open'}>
+       {/* Project actions scroll within the header on narrow windows instead of widening the page. */}
+       <div className="flex items-center gap-2 min-w-0 overflow-x-auto whitespace-nowrap">
+           <div className="text-[11px] text-gray-500 max-w-40 truncate shrink-0" title={projectStatus.name || 'No project open'}>
              {projectStatus.name || 'No project'}{projectStatus.dirty ? ' •' : ''}{projectStatus.readOnly ? ' (Read-only)' : ''}
            </div>
            {projectStatus.recentProjects.length > 0 && <select
