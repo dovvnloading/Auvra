@@ -348,6 +348,87 @@ impl ProductionPipelines {
     }
 }
 
+/// Interleaved vertex consumed by the shadow, depth, PBR, and gizmo passes.
+/// This struct is the single definition of that layout: the CPU packers emit
+/// it, every pipeline derives its stride and attribute offsets from it, and
+/// every draw counts whole vertices of it.  The WGSL vertex inputs mirror
+/// `ATTRIBUTES` (see the shader input tests below).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SceneVertex {
+    position: [f32; 3],
+    color: [f32; 4],
+    /// Metallic and roughness factors.
+    material: [f32; 2],
+}
+
+impl SceneVertex {
+    const STRIDE: wgpu::BufferAddress = size_of::<Self>() as wgpu::BufferAddress;
+    const ATTRIBUTES: [wgpu::VertexAttribute; 3] = [
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x3,
+            offset: std::mem::offset_of!(SceneVertex, position) as wgpu::BufferAddress,
+            shader_location: 0,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x4,
+            offset: std::mem::offset_of!(SceneVertex, color) as wgpu::BufferAddress,
+            shader_location: 1,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x2,
+            offset: std::mem::offset_of!(SceneVertex, material) as wgpu::BufferAddress,
+            shader_location: 2,
+        },
+    ];
+    /// Depth-only passes read the position alone but step through the same
+    /// interleaved buffer, so they share the stride.
+    const POSITION_ATTRIBUTES: [wgpu::VertexAttribute; 1] = [Self::ATTRIBUTES[0]];
+    const BUFFERS: [Option<wgpu::VertexBufferLayout<'static>>; 1] =
+        [Some(wgpu::VertexBufferLayout {
+            array_stride: Self::STRIDE,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBUTES,
+        })];
+    const POSITION_BUFFERS: [Option<wgpu::VertexBufferLayout<'static>>; 1] =
+        [Some(wgpu::VertexBufferLayout {
+            array_stride: Self::STRIDE,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::POSITION_ATTRIBUTES,
+        })];
+
+    fn new(position: (f32, f32, f32), color: [f32; 4], metallic: f32, roughness: f32) -> Self {
+        Self {
+            position: [position.0, position.1, position.2],
+            color,
+            material: [metallic, roughness],
+        }
+    }
+}
+
+/// Serialize vertices in `SceneVertex` field order, which `#[repr(C)]` makes
+/// identical to the attribute offsets declared above.
+fn vertex_bytes(vertices: &[SceneVertex]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(vertices.len() * SceneVertex::STRIDE as usize);
+    for vertex in vertices {
+        for value in vertex
+            .position
+            .iter()
+            .chain(&vertex.color)
+            .chain(&vertex.material)
+        {
+            out.extend_from_slice(&value.to_ne_bytes());
+        }
+    }
+    out
+}
+
+/// Draw range covering every packed vertex.  Packers emit whole triangles
+/// only, so an empty scene draws nothing instead of a partial primitive.
+fn vertex_range(vertices: &[SceneVertex]) -> std::ops::Range<u32> {
+    0..u32::try_from(vertices.len()).unwrap_or(u32::MAX)
+}
+
 pub fn render_offscreen(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -515,9 +596,9 @@ fn render_production_to_view(
     let (sample_pipelines, pipeline_cache_hit) = pipelines.sample_pipelines(device, sample_count);
     let entity_indices = entity_indices(extraction);
     let vertices = scene_vertices(extraction, &entity_indices);
-    let bytes = f32_bytes(&vertices);
+    let bytes = vertex_bytes(&vertices);
     let gizmo = gizmo_vertices(extraction, &entity_indices);
-    let gizmo_bytes = f32_bytes(&gizmo);
+    let gizmo_bytes = vertex_bytes(&gizmo);
     let pick_bytes = pick_vertices(extraction);
     let uniforms_bytes = uniform_bytes(extraction);
     let post_uniform_bytes = post_uniform_bytes(extraction);
@@ -714,7 +795,7 @@ fn render_production_to_view(
         });
         pass.set_pipeline(&sample_pipelines.shadow_depth);
         pass.set_vertex_buffer(0, buffer.slice(..));
-        pass.draw(0..(vertices.len() as u32 / 9), 0..1);
+        pass.draw(vertex_range(&vertices), 0..1);
     }
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -734,7 +815,7 @@ fn render_production_to_view(
         });
         pass.set_pipeline(&sample_pipelines.depth);
         pass.set_vertex_buffer(0, buffer.slice(..));
-        pass.draw(0..(vertices.len() as u32 / 9), 0..1);
+        pass.draw(vertex_range(&vertices), 0..1);
     }
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -763,7 +844,7 @@ fn render_production_to_view(
         pass.set_pipeline(&sample_pipelines.pbr);
         pass.set_bind_group(0, &bind, &[]);
         pass.set_vertex_buffer(0, buffer.slice(..));
-        pass.draw(0..(vertices.len() as u32 / 9), 0..1);
+        pass.draw(vertex_range(&vertices), 0..1);
     }
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -820,7 +901,7 @@ fn render_production_to_view(
         pass.set_pipeline(&sample_pipelines.pbr);
         pass.set_bind_group(0, &bind, &[]);
         pass.set_vertex_buffer(0, gizmo_buffer.slice(..));
-        pass.draw(0..(gizmo.len() as u32 / 9), 0..1);
+        pass.draw(vertex_range(&gizmo), 0..1);
     }
     if let Some(resolve_view) = hdr_resolve_view.as_ref() {
         let _resolve_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -935,8 +1016,11 @@ fn entity_indices(extraction: &RenderExtraction) -> HashMap<u64, usize> {
         .collect()
 }
 
-fn scene_vertices(extraction: &RenderExtraction, indices: &HashMap<u64, usize>) -> Vec<f32> {
-    let mut out = Vec::with_capacity(extraction.snapshot.entities.len() * 27);
+fn scene_vertices(
+    extraction: &RenderExtraction,
+    indices: &HashMap<u64, usize>,
+) -> Vec<SceneVertex> {
+    let mut out = Vec::with_capacity(extraction.snapshot.entities.len() * 3);
     // Batch order is part of immutable extraction. Material/mesh/LOD peers are
     // submitted contiguously in one bounded GPU buffer publication.
     for batch in extraction.snapshot.batches.iter() {
@@ -947,53 +1031,34 @@ fn scene_vertices(extraction: &RenderExtraction, indices: &HashMap<u64, usize>) 
             else {
                 continue;
             };
-            let color = entity.material.base_color_factor;
-            for (px, py, pz) in projected_triangle(entity) {
-                out.extend_from_slice(&[
-                    px,
-                    py,
-                    pz,
-                    color[0],
-                    color[1],
-                    color[2],
-                    color[3],
+            for position in projected_triangle(entity) {
+                out.push(SceneVertex::new(
+                    position,
+                    entity.material.base_color_factor,
                     entity.material.metallic,
                     entity.material.roughness,
-                    0.0,
-                ]);
+                ));
             }
         }
     }
-    if out.is_empty() {
-        out.extend_from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0]);
-    }
     out
 }
-fn gizmo_vertices(extraction: &RenderExtraction, indices: &HashMap<u64, usize>) -> Vec<f32> {
-    let mut out = Vec::with_capacity(extraction.snapshot.gizmos.len() * 27);
+fn gizmo_vertices(
+    extraction: &RenderExtraction,
+    indices: &HashMap<u64, usize>,
+) -> Vec<SceneVertex> {
+    let mut out = Vec::with_capacity(extraction.snapshot.gizmos.len() * 3);
     for gizmo in extraction.snapshot.gizmos.iter() {
         if let Some(entity) = indices
             .get(&gizmo.entity_id)
             .and_then(|index| extraction.snapshot.entities.get(*index))
         {
-            for (px, py, pz) in projected_triangle(entity) {
-                out.extend_from_slice(&[
-                    px,
-                    py,
-                    pz,
-                    1.0,
-                    0.72,
-                    0.1,
-                    1.0,
-                    0.0,
-                    0.45,
-                    gizmo.pick_id as f32,
-                ]);
+            // Gizmo identity is resolved by the integer pick pass; this
+            // overlay only carries the highlight color and material.
+            for position in projected_triangle(entity) {
+                out.push(SceneVertex::new(position, [1.0, 0.72, 0.1, 1.0], 0.0, 0.45));
             }
         }
-    }
-    if out.is_empty() {
-        out.extend_from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
     }
     out
 }
@@ -1100,15 +1165,7 @@ fn post_effect_mask(effects: &[PostEffect]) -> u32 {
 fn post_chain_uses_fxaa(fxaa: bool, effects: &[PostEffect]) -> bool {
     fxaa || post_effect_mask(effects) & (1 << 4) != 0
 }
-fn pbr_pipeline(
-    device: &wgpu::Device,
-    format: wgpu::TextureFormat,
-    sample_count: u32,
-) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("auvra-pbr"),
-        source: wgpu::ShaderSource::Wgsl(
-            r#"
+const PBR_SHADER: &str = r#"
 struct Parameters {
     counts: vec4<u32>,
     ambient: vec4<f32>,
@@ -1151,9 +1208,18 @@ struct VertexOutput {
     let specular = mix(vec3(0.04), input.color.rgb, metallic) * (1.0 - roughness);
     return vec4(input.color.rgb * (ambient + direct) * (1.0 - metallic) + specular, 1.0);
 }
-"#
-            .into(),
-        ),
+"#;
+const DEPTH_SHADER: &str =
+    r#"@vertex fn vs(@location(0)p:vec3<f32>)->@builtin(position)vec4<f32>{return vec4(p,1.);}"#;
+
+fn pbr_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    sample_count: u32,
+) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("auvra-pbr"),
+        source: wgpu::ShaderSource::Wgsl(PBR_SHADER.into()),
     });
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("auvra-pbr-layout"),
@@ -1227,47 +1293,22 @@ fn vertex_state<'a>(shader: &'a wgpu::ShaderModule, entry: &'a str) -> wgpu::Ver
     wgpu::VertexState {
         module: shader,
         entry_point: Some(entry),
-        buffers: &[Some(wgpu::VertexBufferLayout {
-            array_stride: 36,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x3,
-                    offset: 0,
-                    shader_location: 0,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: 12,
-                    shader_location: 1,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x2,
-                    offset: 28,
-                    shader_location: 2,
-                },
-            ],
-        })],
+        buffers: &SceneVertex::BUFFERS,
         compilation_options: Default::default(),
     }
 }
 fn depth_pipeline(device: &wgpu::Device, sample_count: u32) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("auvra-depth"), source: wgpu::ShaderSource::Wgsl(r#"@vertex fn vs(@location(0)p:vec3<f32>)->@builtin(position)vec4<f32>{return vec4(p,1.);}"#.into()) });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("auvra-depth"),
+        source: wgpu::ShaderSource::Wgsl(DEPTH_SHADER.into()),
+    });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("auvra-depth-pipeline"),
         layout: None,
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs"),
-            buffers: &[Some(wgpu::VertexBufferLayout {
-                array_stride: 36,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &[wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x3,
-                    offset: 0,
-                    shader_location: 0,
-                }],
-            })],
+            buffers: &SceneVertex::POSITION_BUFFERS,
             compilation_options: Default::default(),
         },
         fragment: None,
@@ -1471,12 +1512,6 @@ fn pass_name(kind: auvra_native::render_world::RenderPassKind) -> String {
         .trim_matches('"')
         .to_owned()
 }
-fn f32_bytes(values: &[f32]) -> Vec<u8> {
-    values
-        .iter()
-        .flat_map(|value| value.to_ne_bytes())
-        .collect()
-}
 fn fnv1a(bytes: &[u8]) -> u64 {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in bytes {
@@ -1502,5 +1537,209 @@ mod tests {
         assert!(!post_chain_uses_fxaa(false, &[PostEffect::Bloom]));
         assert!(post_chain_uses_fxaa(true, &[]));
         assert!(post_chain_uses_fxaa(false, &[PostEffect::Fxaa]));
+    }
+
+    fn test_extraction(count: u64) -> RenderExtraction {
+        use auvra_native::render_world::{
+            Frustum, LodLevel, MaterialReference, Plane, WorldRenderEntity, WorldRenderInput,
+            extract_render_world,
+        };
+        let entities = (1..=count)
+            .map(|id| WorldRenderEntity {
+                id,
+                mesh_id: 7,
+                position: [id as f32 * 0.1 - 0.5, 0.0, 0.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0, 1.0, 1.0],
+                radius: 1.0,
+                material: MaterialReference {
+                    material_id: id,
+                    base_color_factor: [id as f32 / count as f32, 0.2, 0.3, 1.0],
+                    metallic: 0.25,
+                    roughness: 0.75,
+                    base_color_texture: None,
+                    normal_texture: None,
+                    metallic_roughness_texture: None,
+                },
+                lods: vec![LodLevel {
+                    level: 0,
+                    max_distance: f32::MAX,
+                }],
+                animation: None,
+                selected: id == 1,
+            })
+            .collect();
+        extract_render_world(
+            &WorldRenderInput {
+                world_revision: 1,
+                fixed_tick: 0,
+                camera_position: [0.0, 0.0, 2.0],
+                frustum: Frustum {
+                    planes: [Plane {
+                        normal: [1.0, 0.0, 0.0],
+                        distance: 1_000.0,
+                    }; 6],
+                },
+                entities,
+                lights: Vec::new(),
+                ibl: None,
+                post_effects: Vec::new(),
+                msaa_samples: 0,
+                fxaa: false,
+            },
+            capabilities(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn scene_vertex_layout_is_one_consistent_definition() {
+        let stride = SceneVertex::STRIDE;
+        assert_eq!(stride as usize, size_of::<SceneVertex>());
+        let vertex = SceneVertex::new((1.0, 2.0, 3.0), [0.1, 0.2, 0.3, 0.4], 0.5, 0.6);
+        assert_eq!(vertex_bytes(&[vertex]).len() as u64, stride);
+        // Attributes tile the stride exactly: in bounds, ordered, no gaps.
+        let mut next_offset = 0;
+        for attribute in SceneVertex::ATTRIBUTES {
+            assert_eq!(attribute.offset, next_offset);
+            next_offset += attribute.format.size();
+            assert!(next_offset <= stride);
+        }
+        assert_eq!(next_offset, stride);
+        for buffers in [&SceneVertex::BUFFERS, &SceneVertex::POSITION_BUFFERS] {
+            let layout = buffers[0].as_ref().unwrap();
+            assert_eq!(layout.array_stride, stride);
+            assert!(
+                layout
+                    .attributes
+                    .iter()
+                    .all(|attribute| attribute.offset + attribute.format.size() <= stride)
+            );
+        }
+    }
+
+    #[test]
+    fn packers_emit_whole_triangles_readable_through_the_pipeline_layout() {
+        let extraction = test_extraction(3);
+        let indices = entity_indices(&extraction);
+        let scene = scene_vertices(&extraction, &indices);
+        let gizmo = gizmo_vertices(&extraction, &indices);
+        let entity_count = extraction.snapshot.entities.len();
+        assert_eq!(entity_count, 3);
+        assert_eq!(scene.len(), entity_count * 3);
+        assert_eq!(vertex_range(&scene), 0..(entity_count as u32 * 3));
+        assert_eq!(extraction.snapshot.gizmos.len(), 1);
+        assert_eq!(gizmo.len(), 3);
+        assert_eq!(vertex_range(&gizmo), 0..3);
+
+        let stride = SceneVertex::STRIDE as usize;
+        for vertices in [&scene, &gizmo] {
+            let bytes = vertex_bytes(vertices);
+            assert_eq!(bytes.len(), vertices.len() * stride);
+            // Decode each vertex exactly as the GPU does: vertex index times
+            // the pipeline stride plus the attribute offset.
+            let read = |index: usize, attribute: &wgpu::VertexAttribute| -> Vec<f32> {
+                let start = index * stride + attribute.offset as usize;
+                bytes[start..start + attribute.format.size() as usize]
+                    .chunks_exact(4)
+                    .map(|chunk| f32::from_ne_bytes(chunk.try_into().unwrap()))
+                    .collect()
+            };
+            for (index, vertex) in vertices.iter().enumerate() {
+                let [position, color, material] = &SceneVertex::ATTRIBUTES;
+                assert_eq!(read(index, position), vertex.position);
+                assert_eq!(read(index, color), vertex.color);
+                assert_eq!(read(index, material), vertex.material);
+            }
+        }
+
+        // Every scene triangle carries its own entity's material, in batch order.
+        let batch_order = extraction
+            .snapshot
+            .batches
+            .iter()
+            .flat_map(|batch| batch.entity_ids.iter())
+            .map(|id| &extraction.snapshot.entities[indices[id]])
+            .collect::<Vec<_>>();
+        for (triangle, entity) in scene.chunks_exact(3).zip(batch_order) {
+            for vertex in triangle {
+                assert_eq!(vertex.color, entity.material.base_color_factor);
+                assert_eq!(
+                    vertex.material,
+                    [entity.material.metallic, entity.material.roughness]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn empty_scene_draws_no_partial_primitive() {
+        let extraction = test_extraction(0);
+        let indices = entity_indices(&extraction);
+        let scene = scene_vertices(&extraction, &indices);
+        let gizmo = gizmo_vertices(&extraction, &indices);
+        assert!(scene.is_empty() && gizmo.is_empty());
+        assert_eq!(vertex_range(&scene), 0..0);
+        assert!(vertex_bytes(&scene).is_empty());
+    }
+
+    /// Vertex-stage input locations and formats declared by a WGSL shader,
+    /// read with the same naga front end wgpu compiles it with.
+    fn wgsl_vertex_inputs(source: &str) -> BTreeMap<u32, wgpu::VertexFormat> {
+        use wgpu::naga::{Binding, ScalarKind, ShaderStage, TypeInner, VectorSize};
+        let module = wgpu::naga::front::wgsl::parse_str(source).unwrap();
+        let entry = module
+            .entry_points
+            .iter()
+            .find(|entry| entry.stage == ShaderStage::Vertex)
+            .unwrap();
+        let mut inputs = BTreeMap::new();
+        let mut record = |binding: &Option<Binding>, ty| {
+            let Some(Binding::Location { location, .. }) = binding else {
+                return;
+            };
+            let format = match module.types[ty].inner {
+                TypeInner::Vector { size, scalar }
+                    if scalar.kind == ScalarKind::Float && scalar.width == 4 =>
+                {
+                    match size {
+                        VectorSize::Bi => wgpu::VertexFormat::Float32x2,
+                        VectorSize::Tri => wgpu::VertexFormat::Float32x3,
+                        VectorSize::Quad => wgpu::VertexFormat::Float32x4,
+                    }
+                }
+                ref other => panic!("unexpected vertex input type {other:?}"),
+            };
+            inputs.insert(*location, format);
+        };
+        for argument in &entry.function.arguments {
+            match &module.types[argument.ty].inner {
+                TypeInner::Struct { members, .. } => {
+                    for member in members {
+                        record(&member.binding, member.ty);
+                    }
+                }
+                _ => record(&argument.binding, argument.ty),
+            }
+        }
+        inputs
+    }
+
+    #[test]
+    fn shader_vertex_inputs_match_the_scene_vertex_layout() {
+        let declared = |attributes: &[wgpu::VertexAttribute]| {
+            attributes
+                .iter()
+                .map(|attribute| (attribute.shader_location, attribute.format))
+                .collect::<BTreeMap<_, _>>()
+        };
+        assert_eq!(
+            wgsl_vertex_inputs(PBR_SHADER),
+            declared(&SceneVertex::ATTRIBUTES)
+        );
+        assert_eq!(
+            wgsl_vertex_inputs(DEPTH_SHADER),
+            declared(&SceneVertex::POSITION_ATTRIBUTES)
+        );
     }
 }

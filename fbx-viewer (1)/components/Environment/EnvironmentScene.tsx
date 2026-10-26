@@ -418,7 +418,8 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                     receiveShadow
                     castShadow
                     onClick={(e) => { 
-                        if (isActiveView && interactionMode === 'select' || interactionMode === 'sculpt') {
+                        // Like every other selection in this scene, only the active view selects.
+                        if (isActiveView && (interactionMode === 'select' || interactionMode === 'sculpt')) {
                             e.stopPropagation(); 
                             onSelectObject(terrain.id);
                         }

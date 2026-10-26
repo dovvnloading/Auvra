@@ -39,6 +39,7 @@ from .native_engine import (
     NativeEngineError,
     NativeEngineHost,
     NativeEngineUnavailableHost,
+    startup_failure_code,
 )
 from .sdk import SdkLayout, acquire_sdk
 from .webview2 import WebView2Frame
@@ -79,6 +80,25 @@ def _is_link_or_reparse(path: Path) -> bool:
         return bool(attributes & 0x400)
     except (AttributeError, OSError, RuntimeError):
         return True
+
+
+def _native_startup_fallback(candidate: Any, error: NativeEngineError) -> NativeEngineUnavailableHost:
+    """Close a failed native child and keep why it failed observable."""
+    candidate.close(timeout=1)
+    code = startup_failure_code(error)
+    return_code = getattr(error, "returncode", None)
+    diagnostics = active_diagnostics()
+    if diagnostics is not None:
+        attributes: dict[str, Any] = {"state": "unavailable", "code": code,
+                                      "errorType": type(error).__name__}
+        if isinstance(return_code, int):
+            attributes["returnCode"] = return_code
+        diagnostics.emit("native", "native.lifecycle", attributes=attributes)
+    cause = code if not isinstance(return_code, int) else f"{code}, exit status {return_code}"
+    return NativeEngineUnavailableHost(
+        f"Native engine startup failed ({cause}); using the web compatibility renderer",
+        code=code,
+    )
 
 
 def _assert_profile_parent_is_safe(parent: Path) -> None:
@@ -199,9 +219,8 @@ class FrameController:
                 try:
                     candidate.start(editor_session=active_dispatcher.session.session_id)
                     native_engine_host = candidate
-                except NativeEngineError:
-                    candidate.close(timeout=1)
-                    native_engine_host = NativeEngineUnavailableHost("Native engine startup failed; using the web compatibility renderer")
+                except NativeEngineError as error:
+                    native_engine_host = _native_startup_fallback(candidate, error)
             project_host.set_native_engine_host(native_engine_host)
             active_dispatcher.bind_services(
                 project_service=project_host, asset_service=project_host,
@@ -308,11 +327,8 @@ class FrameController:
                 try:
                     candidate.start(editor_session=active_dispatcher.session.session_id)
                     native_engine_host = candidate
-                except NativeEngineError:
-                    candidate.close(timeout=1)
-                    native_engine_host = NativeEngineUnavailableHost(
-                        "Native engine startup failed; using the web compatibility renderer"
-                    )
+                except NativeEngineError as error:
+                    native_engine_host = _native_startup_fallback(candidate, error)
             project_host.set_native_engine_host(native_engine_host)
             active_dispatcher.bind_services(
                 project_service=project_host, asset_service=project_host,

@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { ThreeEvent } from '@react-three/fiber';
 import { LevelObject } from '../../../types';
 import { SculptSettings } from '../types';
+import { isTerrainHeightfieldPending } from '../../../utils/terrainHeightfieldCodec';
 
 interface TerrainObjectProps {
     data: LevelObject;
@@ -25,10 +26,14 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
     receiveShadow,
     castShadow,
     onClick,
-    sculptingEnabled,
+    sculptingEnabled: sculptingRequested,
     sculptSettings,
     onHeightUpdate
 }, ref) => {
+    // Heights stored in a heightfield asset are loaded after the level opens.
+    // Until then the flat placeholder must not be sculpted and committed.
+    const heightsPending = isTerrainHeightfieldPending(data.terrainData);
+    const sculptingEnabled = Boolean(sculptingRequested) && !heightsPending;
     const meshRef = useRef<THREE.Mesh>(null);
     const groupRef = useRef<THREE.Group>(null);
     const geometryRef = useRef<THREE.PlaneGeometry>(null);
@@ -240,7 +245,7 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
                 onPointerDown={handlePointerDown}
                 onPointerUp={handlePointerUp}
                 onPointerOut={handlePointerOut}
-                userData={{ levelObjectId: data.id, isTerrain: true }}
+                userData={{ levelObjectId: data.id, isTerrain: true, heightsPending }}
             >
                 <planeGeometry 
                     ref={geometryRef} 

@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { LevelBlueprintData, LevelObject } from '../types';
 import { SandboxEntityHandle } from '../components/Sandbox/SandboxEntity';
 import { GraphRuntimeAPI } from '../components/AnimationGraph/GraphRuntime';
+import { isOverlapEvent, overlapEventTargets } from '../components/LevelBlueprint/overlapTargets';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 
 const MAX_BLUEPRINT_EVALUATION_DEPTH = 128;
@@ -365,11 +366,9 @@ export const useLevelBlueprintRuntime = ({
                     
                     // Trigger 'Begin Overlap' only on entry
                     if (!overlappingIds.current.has(obj.id)) {
-                        // Find matching event nodes
-                        const eventNodes = blueprint.nodes.filter(n => 
-                            n.type === 'Event' && 
-                            n.name.includes('Overlap') &&
-                            n.data?.targetActorName === obj.name 
+                        // Find matching event nodes (by actor id; legacy name-only events by name)
+                        const eventNodes = blueprint.nodes.filter(n =>
+                            isOverlapEvent(n) && overlapEventTargets(n, obj)
                         );
 
                         eventNodes.forEach(node => {

@@ -92,11 +92,23 @@ export interface AudioConfig {
     loopEnd?: number; // End time in seconds (Reset point)
 }
 
+/** Project reference to a terrain heightfield stored as a binary content-addressed asset. */
+export interface TerrainHeightfieldReference {
+    assetId: string;       // SHA-256 of the encoded heightfield asset
+    encoding: 'float32le'; // 16-byte header, then row-major little-endian Float32 samples
+    columns: number;       // resolution + 1
+    rows: number;          // resolution + 1
+}
+
 export interface TerrainData {
     resolution: number; // e.g., 64, 128
     width: number;      // World units width
     depth: number;      // World units depth
-    heights: number[];  // Flattened array of height values
+    // Flattened (resolution + 1)^2 height values. In memory these are resolved
+    // from `heightfield`; persisted documents carry them inline only in the
+    // legacy form, which is migrated on the next terrain commit.
+    heights?: number[];
+    heightfield?: TerrainHeightfieldReference;
     textureId?: string; // Optional texture override
 }
 

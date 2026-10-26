@@ -30,6 +30,8 @@ Copy-StagedTree $PythonEmbed 'python-embed'
 Copy-StagedTree $PythonSitePackages 'python-site-packages'
 Copy-StagedTree $WebView2Sdk 'webview2-sdk'
 Copy-StagedTree $WebView2Fixed 'webview2-fixed'
+# HostInput holds the importable Auvra package plus protocol\v1 and project\v1
+# *.schema.json beside it; the inventory step below rejects a host without them.
 Copy-StagedTree $HostInput 'host'
 Copy-StagedTree $Licenses 'licenses'
 $native = (Resolve-Path -LiteralPath $NativeBinary -ErrorAction Stop).Path

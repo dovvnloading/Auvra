@@ -31,6 +31,27 @@ export const LevelObjectRenderer = forwardRef<THREE.Group, LevelObjectRendererPr
     // Expose internal ref to parent
     useImperativeHandle(ref, () => internalRef.current!, []);
 
+    const isGizmo = data.type === 'spawn_point' || data.type === 'audio_emitter' || data.type === 'sky_sphere';
+
+    // Clone ONLY when the model definition changes.
+    // This prevents re-cloning on every render frame.
+    // Hooks run before any early return, so a model that loads later (or a type change)
+    // never changes the hook order.
+    const clone = useMemo(() => {
+        if (isGizmo || !model) return null;
+        const c = model.object.clone();
+        // Ensure userData carries the ID for raycasting identification
+        c.userData = { ...c.userData, levelObjectId: data.id };
+        c.traverse((child) => {
+            child.userData = { ...child.userData, levelObjectId: data.id };
+            if ((child as THREE.Mesh).isMesh) {
+                child.castShadow = castShadow;
+                child.receiveShadow = receiveShadow;
+            }
+        });
+        return c;
+    }, [isGizmo, model, data.id, castShadow, receiveShadow]);
+
     // --- SHARED GIZMO RENDERER ---
     const renderGizmo = (color: string, icon: React.ReactNode, label: string) => (
         <group 
@@ -132,23 +153,7 @@ export const LevelObjectRenderer = forwardRef<THREE.Group, LevelObjectRendererPr
     }
 
     // --- CASE 4: Standard Mesh (Prop/Foliage) ---
-    if (!model) return null;
-
-    // Clone ONLY when the model definition changes.
-    // This prevents re-cloning on every render frame.
-    const clone = useMemo(() => {
-        const c = model.object.clone();
-        // Ensure userData carries the ID for raycasting identification
-        c.userData = { ...c.userData, levelObjectId: data.id };
-        c.traverse((child) => {
-            child.userData = { ...child.userData, levelObjectId: data.id };
-            if ((child as THREE.Mesh).isMesh) {
-                child.castShadow = castShadow;
-                child.receiveShadow = receiveShadow;
-            }
-        });
-        return c;
-    }, [model, data.id, castShadow, receiveShadow]);
+    if (!clone) return null;
 
     return (
         <group 

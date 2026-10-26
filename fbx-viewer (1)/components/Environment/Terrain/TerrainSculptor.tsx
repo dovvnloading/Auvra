@@ -33,8 +33,9 @@ export const TerrainSculptor: React.FC<TerrainSculptorProps> = ({
         if (state.clock.elapsedTime % 1 < 0.05 || terrainMeshesRef.current.length === 0) {
             const meshes: THREE.Mesh[] = [];
             scene.traverse((child) => {
-                // Check specifically for the flag we set in TerrainObject
-                if ((child as THREE.Mesh).isMesh && child.userData.isTerrain) {
+                // Check specifically for the flag we set in TerrainObject.
+                // A terrain whose heightfield is still loading is not sculptable.
+                if ((child as THREE.Mesh).isMesh && child.userData.isTerrain && !child.userData.heightsPending) {
                     meshes.push(child as THREE.Mesh);
                 }
             });
@@ -156,7 +157,7 @@ export const TerrainSculptor: React.FC<TerrainSculptorProps> = ({
                 (cursorRef.current.material as THREE.MeshBasicMaterial).color.set(isSculpting.current ? '#ffff00' : '#4ade80');
             }
 
-            if (isSculpting.current) {
+            if (isSculpting.current && !hitMesh.userData.heightsPending) {
                 applySculpt(hit.point, hitMesh);
             }
         } else {
@@ -194,7 +195,7 @@ export const TerrainSculptor: React.FC<TerrainSculptorProps> = ({
                 
                 // Commit changes if we have a valid mesh
                 const mesh = activeMeshRef.current;
-                if (mesh) {
+                if (mesh && !mesh.userData.heightsPending) {
                     const geom = mesh.geometry as THREE.PlaneGeometry;
                     const objectId = mesh.userData.levelObjectId;
                     

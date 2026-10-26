@@ -1,18 +1,30 @@
 """Bounded, content-addressed binary storage."""
 from __future__ import annotations
 import hashlib
+import math
 import os
 import re
 import shutil, uuid, stat
 import json
+import struct
+import sys
 import threading
+from array import array
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Iterable
+from typing import BinaryIO, Iterable, Sequence
 from Auvra.diagnostics import trace_public_class
 
 _HASH = re.compile(r"^[0-9a-f]{64}$")
 _MANIFEST_LOCK = threading.RLock()
+
+# Terrain heightfields: a 16-byte header (magic, uint32 columns, uint32 rows)
+# followed by columns * rows row-major Float32 samples, all little-endian.
+HEIGHTFIELD_MIME = "application/vnd.auvra.heightfield"
+HEIGHTFIELD_MAGIC = b"AUVRAHF1"
+HEIGHTFIELD_ENCODING = "float32le"
+MAX_HEIGHTFIELD_SAMPLES_PER_SIDE = 4097
+_HEIGHTFIELD_HEADER = struct.Struct("<8sII")
 
 @dataclass(frozen=True)
 class AssetReference:
@@ -64,10 +76,12 @@ class AssetStore:
             if size is not None and total != size:
                 raise ValueError("asset size does not match declared size")
             detected = sniff_mime(bytes(prefix))
-            known_media = {"image/png", "image/jpeg", "image/webp", "audio/wav", "audio/ogg", "model/gltf-binary"}
+            known_media = {"image/png", "image/jpeg", "image/webp", "audio/wav", "audio/ogg", "model/gltf-binary", HEIGHTFIELD_MIME}
             if mime in known_media and detected != mime:
                 raise ValueError("asset MIME does not match its content")
             mime = mime or detected or "application/octet-stream"
+            if mime == HEIGHTFIELD_MIME:
+                validate_heightfield_file(tmp)
             asset_id = digest.hexdigest(); target = self.path_for(asset_id)
             target.parent.mkdir(parents=True, exist_ok=True)
             # Serialize same-digest ingestion with manifest publication.  An
@@ -217,7 +231,68 @@ def sniff_mime(prefix: bytes) -> str | None:
     if prefix.startswith(b"RIFF") and prefix[8:12] == b"WAVE": return "audio/wav"
     if prefix.startswith(b"OggS"): return "audio/ogg"
     if prefix.startswith(b"glTF"): return "model/gltf-binary"
+    if prefix.startswith(HEIGHTFIELD_MAGIC): return HEIGHTFIELD_MIME
     return None
+
+def _check_heightfield_dimensions(columns: int, rows: int) -> None:
+    for value in (columns, rows):
+        if (not isinstance(value, int) or isinstance(value, bool)
+                or not 2 <= value <= MAX_HEIGHTFIELD_SAMPLES_PER_SIDE):
+            raise ValueError("terrain heightfield dimensions are out of range")
+
+def _float32_samples(data: bytes) -> array:
+    values = array("f")
+    values.frombytes(data)
+    if sys.byteorder != "little":
+        values.byteswap()
+    return values
+
+def encode_heightfield(samples: Sequence[float], columns: int, rows: int) -> bytes:
+    """Encode row-major terrain heights as a heightfield asset."""
+
+    _check_heightfield_dimensions(columns, rows)
+    if len(samples) != columns * rows:
+        raise ValueError("terrain heightfield sample count does not match its dimensions")
+    values = array("f", samples)
+    if not all(map(math.isfinite, values)):
+        raise ValueError("terrain heightfield samples must be finite Float32 values")
+    if sys.byteorder != "little":
+        values.byteswap()
+    return _HEIGHTFIELD_HEADER.pack(HEIGHTFIELD_MAGIC, columns, rows) + values.tobytes()
+
+def decode_heightfield(data: bytes) -> tuple[int, int, list[float]]:
+    """Return (columns, rows, samples) of a valid heightfield asset."""
+
+    if len(data) < _HEIGHTFIELD_HEADER.size:
+        raise ValueError("terrain heightfield asset is truncated")
+    magic, columns, rows = _HEIGHTFIELD_HEADER.unpack_from(data)
+    if magic != HEIGHTFIELD_MAGIC:
+        raise ValueError("terrain heightfield asset has an unknown format")
+    _check_heightfield_dimensions(columns, rows)
+    if len(data) != _HEIGHTFIELD_HEADER.size + 4 * columns * rows:
+        raise ValueError("terrain heightfield asset size does not match its dimensions")
+    values = _float32_samples(data[_HEIGHTFIELD_HEADER.size:])
+    if not all(map(math.isfinite, values)):
+        raise ValueError("terrain heightfield samples must be finite")
+    return columns, rows, values.tolist()
+
+def validate_heightfield_file(path: Path, *, chunk_size: int = 1024 * 1024) -> None:
+    """Structurally validate a heightfield without loading it all at once."""
+
+    with path.open("rb") as stream:
+        header = stream.read(_HEIGHTFIELD_HEADER.size)
+        if len(header) != _HEIGHTFIELD_HEADER.size:
+            raise ValueError("terrain heightfield asset is truncated")
+        magic, columns, rows = _HEIGHTFIELD_HEADER.unpack(header)
+        if magic != HEIGHTFIELD_MAGIC:
+            raise ValueError("terrain heightfield asset has an unknown format")
+        _check_heightfield_dimensions(columns, rows)
+        if os.fstat(stream.fileno()).st_size != _HEIGHTFIELD_HEADER.size + 4 * columns * rows:
+            raise ValueError("terrain heightfield asset size does not match its dimensions")
+        chunk_size -= chunk_size % 4
+        for block in iter(lambda: stream.read(chunk_size), b""):
+            if not all(map(math.isfinite, _float32_samples(block))):
+                raise ValueError("terrain heightfield samples must be finite")
 
 def _is_reparse(path: Path) -> bool:
     try: return bool(getattr(path.stat(), "st_file_attributes", 0) & 0x400)

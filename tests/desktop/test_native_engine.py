@@ -17,17 +17,21 @@ from Auvra.host.validation import validate_message
 from Auvra.desktop.native_engine import (
     MAX_FRAME_BYTES,
     NativeEngine,
+    NativeEngineAuthenticationError,
     NativeEngineChildExitedError,
     NativeEngineConfigurationError,
     NativeEngineFrameTooLargeError,
     NativeEngineHost,
+    NativeEngineResponseError,
     NativeEngineRevisionConflictError,
+    NativeEngineStartupError,
     NativeEngineTimeoutError,
     NativeEngineClosedError,
     NativeEngineState,
     PROTOCOL_VERSION,
     _encode_frame,
     _read_frame,
+    startup_failure_code,
 )
 
 
@@ -301,6 +305,28 @@ class NativeEngineTests(unittest.TestCase):
         self.assertNotIn("do-not-print-this-token", encoded)
         self.assertNotIn("x" * 9000, encoded)
 
+    def test_native_renderer_degradation_diagnostics_are_forwarded(self) -> None:
+        engine = self.make_engine()
+        for level, event, code in (
+            ("warning", "native.renderer_unavailable", "renderer_initialization_failed"),
+            ("warning", "native.render_budget_exceeded", "render_budget_exceeded"),
+            ("error", "native.viewport_frame_degraded", "render_extraction_failed"),
+        ):
+            accepted = engine._diagnostics_append({
+                "schema": "auvra.native-diagnostic/1",
+                "level": level,
+                "event": event,
+                "code": code,
+            })
+            self.assertTrue(accepted, event)
+            record = next(
+                item for item in reversed(self.diagnostic_session.snapshot())
+                if item.get("attributes", {}).get("state") == event
+            )
+            self.assertEqual(record["attributes"]["code"], code)
+        encoded = json.dumps(self.diagnostic_session.snapshot())
+        self.assertNotIn("native.diagnostic_invalid", encoded)
+
     def test_native_operation_diagnostic_preserves_only_safe_correlation(self) -> None:
         engine = self.make_engine()
         accepted = engine._diagnostics_append({
@@ -537,6 +563,75 @@ class NativeEngineTests(unittest.TestCase):
         methods = [method for method, _params in engine.calls]
         self.assertIn("world.abortHydration", methods)
         self.assertNotIn("world.commitHydration", methods)
+
+    def test_stale_native_view_degrades_status_until_the_next_hydration(self) -> None:
+        engine = _HydrationRecorder()
+        host = NativeEngineHost(engine)
+        reason = "Native project hydration failed; the native view is stale"
+        host.mark_stale(reason)
+        stale = host._canonical("engine.status")
+        self.assertEqual(stale["status"], "degraded")
+        self.assertEqual(stale["fallbackReason"], reason)
+        validate_message({
+            "protocol": "auvra.host/1", "type": "response", "id": "engine-status",
+            "session": "session-1", "revision": 0, "ok": True, "result": stale,
+        })
+        name, payload = host.drain_events()[-1]
+        self.assertEqual((name, payload["status"], payload["fallbackReason"]), ("engine.status", "degraded", reason))
+        validate_message({
+            "protocol": "auvra.host/1", "type": "event", "event": name,
+            "session": "session-1", "revision": 1, "payload": payload,
+        })
+
+        host.hydrate_project("project-stale", 2, {"scenes": {"schemaVersion": 1, "documents": [{"id": "scene"}]}})
+        recovered = host._canonical("engine.status")
+        self.assertEqual(recovered["status"], "ready")
+        self.assertNotIn("fallbackReason", recovered)
+        self.assertEqual(host.drain_events()[-1][1]["status"], "ready")
+
+        host.mark_stale(reason)
+        host.close_project("project-stale")
+        self.assertEqual(host._canonical("engine.status")["status"], "ready")
+
+    def test_stale_mark_keeps_a_matching_payload_and_drops_a_mismatched_world(self) -> None:
+        engine = _HydrationRecorder(fail_append=True)
+        host = NativeEngineHost(engine)
+        with self.assertRaises(RuntimeError):
+            host.hydrate_project("project-a", 3, {"scenes": {"schemaVersion": 1, "documents": [{"id": "scene"}]}})
+        reason = "Native project hydration failed; the native view is stale"
+        host.mark_stale(reason, project_id="project-a", project_revision=3)
+        self.assertNotIn("world.closeProject", [method for method, _ in engine.calls])
+        self.assertEqual(host._canonical("engine.status")["projectId"], "project-a")
+
+        host.mark_stale(reason, project_id="project-b", project_revision=0)
+        self.assertIn("world.closeProject", [method for method, _ in engine.calls])
+        status = host._canonical("engine.status")
+        self.assertEqual((status["status"], status["fallbackReason"]), ("degraded", reason))
+        self.assertNotIn("projectId", status)
+
+    def test_startup_failures_carry_stable_cause_codes(self) -> None:
+        silent = Path(self.temp.name) / "silent_native.py"
+        silent.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+        timed_out = NativeEngine([sys.executable, "-u", str(silent)], startup_timeout=0.3,
+                                 shutdown_timeout=1, diagnostics=self.diagnostic_session)
+        with self.assertRaises(NativeEngineStartupError) as raised:
+            timed_out.start(editor_session="never-ready")
+        self.assertEqual(startup_failure_code(raised.exception), "startup_timeout")
+        missing = NativeEngine([str(Path(self.temp.name) / "missing-native.exe")],
+                               diagnostics=self.diagnostic_session)
+        with self.assertRaises(NativeEngineStartupError) as raised:
+            missing.start(editor_session="missing")
+        self.assertEqual(startup_failure_code(raised.exception), "process_start_failed")
+        for error, code in (
+            (NativeEngineChildExitedError(101), "child_exited"),
+            (NativeEngineTimeoutError("hello timed out"), "handshake_timeout"),
+            (NativeEngineAuthenticationError("session proof is invalid"), "authentication_failed"),
+            (NativeEngineFrameTooLargeError("frame"), "protocol_failed"),
+            (NativeEngineResponseError("internal_error", "rejected"), "handshake_rejected"),
+            (NativeEngineConfigurationError("bad session"), "configuration_failed"),
+            (NativeEngineClosedError("closed"), "engine_closed"),
+        ):
+            self.assertEqual(startup_failure_code(error), code)
 
     def test_dangling_source_symlink_is_rejected(self) -> None:
         source = Path(self.temp.name) / "native-source"

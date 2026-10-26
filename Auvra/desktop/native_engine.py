@@ -44,11 +44,15 @@ _NATIVE_DIAGNOSTIC_EVENTS = frozenset({
     "native.configuration_failed", "native.fatal", "native.diagnostic_failure",
     "native.operation_started", "native.operation_phase",
     "native.operation_completed", "native.operation_failed",
+    "native.renderer_unavailable", "native.render_budget_exceeded",
+    "native.viewport_frame_degraded",
 })
 _NATIVE_DIAGNOSTIC_CODES = frozenset({
     "fatal_protocol_error", "invalid_session_token", "fatal_error",
     "serialization_failed",
     "operation_failed",
+    "renderer_initialization_failed", "render_budget_exceeded",
+    "render_extraction_failed",
 })
 _NATIVE_DIAGNOSTIC_PHASES = frozenset({
     "dispatch", "complete", "world_validate", "world_commit", "world_advance",
@@ -96,6 +100,10 @@ class NativeEngineClosedError(NativeEngineError):
 class NativeEngineStartupError(NativeEngineError):
     """The child did not reach its ready lifecycle state."""
 
+    def __init__(self, message: str, *, code: str = "startup_failed") -> None:
+        self.code = code
+        super().__init__(message)
+
 
 class NativeEngineTimeoutError(NativeEngineError):
     """A bounded native operation exceeded its timeout."""
@@ -138,6 +146,27 @@ class NativeEngineResponseError(NativeEngineError):
         self.code = code
         self.details = details
         super().__init__(message)
+
+
+def startup_failure_code(error: NativeEngineError) -> str:
+    """Name why native startup failed with a stable, path-free code."""
+    if isinstance(error, NativeEngineStartupError):
+        return error.code
+    if isinstance(error, NativeEngineChildExitedError):
+        return "child_exited"
+    if isinstance(error, NativeEngineTimeoutError):
+        return "handshake_timeout"
+    if isinstance(error, NativeEngineAuthenticationError):
+        return "authentication_failed"
+    if isinstance(error, NativeEngineProtocolError):
+        return "protocol_failed"
+    if isinstance(error, NativeEngineResponseError):
+        return "handshake_rejected"
+    if isinstance(error, NativeEngineConfigurationError):
+        return "configuration_failed"
+    if isinstance(error, NativeEngineClosedError):
+        return "engine_closed"
+    return "startup_failed"
 
 
 class NativeEngineState(str, Enum):
@@ -353,7 +382,8 @@ class NativeEngine:
                 self._runtime_diagnostics.emit("native", "native.lifecycle",
                                                attributes={"state": "failed", "code": "process_start_failed",
                                                            "errorType": type(exc).__name__})
-            raise NativeEngineStartupError("native process could not be started") from exc
+            raise NativeEngineStartupError("native process could not be started",
+                                           code="process_start_failed") from exc
         assert self._process.stderr is not None
         assert self._process.stdout is not None
         threading.Thread(target=self._read_stderr,
@@ -368,7 +398,8 @@ class NativeEngine:
                                                attributes={"state": "failed", "code": "startup_timeout",
                                                            "timeoutMs": round(self.startup_timeout * 1000, 3)})
             self.close(timeout=min(self.shutdown_timeout, 1.0))
-            raise NativeEngineStartupError("native process did not report ready before timeout")
+            raise NativeEngineStartupError("native process did not report ready before timeout",
+                                           code="startup_timeout")
         if self._process.poll() is not None:
             self._state = NativeEngineState.FAILED
             if self._runtime_diagnostics is not None:
@@ -858,6 +889,9 @@ class NativeEngineHost:
         self._adapter: str | None = None
         self._device_type: str | None = None
         self._fallback_reason: str | None = None
+        # Set when the native world stopped mirroring the durable project; it
+        # degrades only the native view and clears on the next hydration.
+        self._stale_reason: str | None = None
         self._metrics: dict[str, Any] | None = None
         self._native_fields: dict[str, Any] = {}
         self._recovery_count = 0
@@ -980,7 +1014,34 @@ class NativeEngineHost:
                 return None
             raise
         self._ingest_native_result(result)
+        if self._stale_reason is not None:
+            self._stale_reason = None
+            self._publish_status()
         return result
+
+    def mark_stale(self, reason: str, *, project_id: str | None = None,
+                   project_revision: int | None = None) -> None:
+        """Degrade the native view after the project could not be mirrored.
+
+        The durable project stays authoritative and open.  A retained payload
+        for ``project_id``/``project_revision`` re-synchronizes on the next
+        hydration or native restart.  When hydration failed before that
+        payload was retained, the native world still holds another project or
+        an older revision; it is dropped so neither the view nor a restart
+        presents it as current.
+        """
+        try:
+            if project_id is not None and self._project_id is not None and (
+                    self._project_id != project_id or self._project_revision != project_revision):
+                self._stale_reason = None
+                self.close_project()
+        finally:
+            self._stale_reason = reason[:256]
+            self._publish_status()
+
+    def _publish_status(self) -> None:
+        self._event("engine.status", {key: value for key, value in self._canonical("engine.status").items()
+                                       if key in {"status", "worldRevision", "viewport", "backend", "adapter", "deviceType", "fallbackReason"}})
 
     @staticmethod
     def _hydration_pages(documents: Sequence[Mapping[str, Any]], *, limit: int = 48 * 1024) -> list[list[Mapping[str, Any]]]:
@@ -1163,6 +1224,9 @@ class NativeEngineHost:
                         "replayHash", "extractionHash", "referenceScene",
                         "referenceVersion"):
                 self._native_fields.pop(key, None)
+            if self._stale_reason is not None:
+                self._stale_reason = None
+                self._publish_status()
 
     @staticmethod
     def _state_name(state: NativeEngineState) -> str:
@@ -1176,10 +1240,13 @@ class NativeEngineHost:
         }[state]
 
     def _canonical(self, kind: str, *, values: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        status = self._state_name(self.engine.state)
+        if self._stale_reason is not None and status == "ready":
+            status = "degraded"
         result: dict[str, Any] = {
             "kind": kind,
             "protocol": PROTOCOL_VERSION,
-            "status": self._state_name(self.engine.state),
+            "status": status,
             "worldRevision": self._world_revision,
             "viewport": self._viewport,
             "dockSupport": self._dock_support,
@@ -1199,7 +1266,9 @@ class NativeEngineHost:
             result["adapter"] = self._adapter
         if self._device_type is not None:
             result["deviceType"] = self._device_type
-        if self._fallback_reason is not None:
+        if self._stale_reason is not None:
+            result["fallbackReason"] = self._stale_reason
+        elif self._fallback_reason is not None:
             result["fallbackReason"] = self._fallback_reason
         if self._metrics is not None:
             result["metrics"] = dict(self._metrics)
@@ -1424,8 +1493,11 @@ class NativeEngineHost:
 class NativeEngineUnavailableHost:
     """Declared web fallback when the development native binary is unavailable."""
 
-    def __init__(self, reason: str = "Native engine executable is unavailable") -> None:
+    def __init__(self, reason: str = "Native engine executable is unavailable", *,
+                 code: str | None = None) -> None:
         self.reason = reason[:256]
+        # Stable cause (``startup_failure_code``) when a launched child failed.
+        self.code = code
 
     def start(self, *, editor_session: str = "editor") -> None:
         return None

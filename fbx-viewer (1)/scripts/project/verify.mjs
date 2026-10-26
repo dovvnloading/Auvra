@@ -60,7 +60,10 @@ const strictExcludes = strictConfig.exclude ?? [];
 // Exact test files only (never globs). They import modules that are not yet noUnused-clean and
 // are still type-checked by the base strict tsconfig.
 const STRICT_EXCLUDE_ALLOWLIST = new Set([
+  'tests/frontend/environmentScene.test.tsx',
+  'tests/frontend/hudSandbox.test.tsx',
   'tests/frontend/levelBlueprintRuntime.test.tsx',
+  'tests/frontend/levelPersistence.test.tsx',
   'tests/frontend/playRuntimeWorld.test.ts',
 ]);
 
@@ -101,6 +104,27 @@ for (const domain of ['metadata', 'worlds', 'scenes', 'levels', 'objects', 'envi
 }
 if (!/!projectService\.getStatus\(\)\.projectId/.test(levels)) failures.push('level manager can still replace native state from legacy storage');
 if (!/await projectService\.close\(contextFor\(handle\)\);\s*await resetScene\(\)/.test(projectManager)) failures.push('project close does not reset editor contexts in place');
+// Debounced level edits are retryable rather than rolled back: a failed write
+// stays pending and is reported, and every session-ending flow flushes first.
+if (!/restorePendingEdits\(new Map\(\[\[id, edit\]\]\)\)/.test(levels)
+  || !/level_batch_persist_failed/.test(levels)
+  || !/if \(notify\) addNotification/.test(levels)
+  || !/await flushPendingLevelEdits\(\);[\s\S]*?session\.beginTransition\(\)/.test(levels)
+  || !/await flushPendingLevelEdits\(\{ notify: false \}\);[\s\S]*?transition = transitionKind \? editorSession\.beginTransition\(\) : null;/.test(projectManager)) {
+  failures.push('debounced level edits are not flushed before session-ending operations or are silently reverted on failure');
+}
+// An edit the project rejects (validation, a removed object) cannot succeed on
+// retry: its object is reverted and reported so later saves are not blocked.
+if (!/isRejectedLevelEdit\(error\)[\s\S]*?revertRejectedEdit\(id, edit, error\)/.test(levels)
+  || !/new ProjectHostError\(message, error\.code\)/.test(service)) {
+  failures.push('a level edit the project rejects is retried forever and blocks every later save');
+}
+// Terrain heights are a binary heightfield asset; object documents carry only its reference.
+if (!/canonicalChange\('objects', 'upsert', obj, obj\.id, lease, prepareLevelObjectDocument\)/.test(db)
+  || !/canonicalChange\('objects', 'upsert', \{ id, \.\.\.updates \}, id, lease, prepareLevelObjectDocument\)/.test(db)
+  || !/externalizeTerrainData\(/.test(db)) {
+  failures.push('level object writes can still persist inline terrain heights');
+}
 if (!/category === 'Animation'[\s\S]*selectAnimationTarget\(models, selectedModelId\)[\s\S]*addAnimations\(files, target\.id\)/.test(contentBrowser)) failures.push('Library animation import is not routed to the selected skeletal model');
 if (!/prepareAnimationClips\(targetModel\.object, loaded\.object, loaded\.animations\)/.test(modelManager)) failures.push('animation import bypasses target skeleton binding');
 if (!/prepareAnimationClips\(loaded\.object, animationModel\.object, animationModel\.animations\)/.test(persistence)) failures.push('native project hydration bypasses target skeleton binding');
@@ -137,8 +161,6 @@ if (/setGraphData\(prev => \{[\s\S]*?applyChanges/.test(graphManager)
   || !/blueprint_save_failed/.test(blueprintManager)
   || !/previous: SocketData/.test(socketManager)
   || !/pending\.previous/.test(socketManager)
-  || !/previous: LevelObject/.test(levels)
-  || !/levelObjects: current\.levelObjects\.map/.test(levels)
   || !/await dbOperations\.updateModelPlacement\(id, true\)[\s\S]*?setModels/.test(modelManager)
   || !/await dbOperations\.updateModelPlacement\(id, false\)[\s\S]*?setModels/.test(modelManager)) {
   failures.push('optimistic domain mutations lack failure rollback or persist-before-publish ordering');
@@ -161,7 +183,8 @@ if (!/emitDomainCascade/.test(assetContext)
   || !/removeTextureReference/.test(socketManager)
   || !/subscribeDomainCascade/.test(levels)
   || !/applyDomainCascade/.test(levels)
-  || !/invalidatedIdsRef/.test(levels)
+  || !/withoutDomainReference/.test(levels)
+  || !/inFlightUpdatesRef/.test(levels)
   || !/projectId: string/.test(domainCascade)) {
   failures.push('host asset-delete cascades are not reconciled across live editor domains');
 }

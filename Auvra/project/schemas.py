@@ -26,7 +26,10 @@ SCHEMA_DIR = Path(__file__).resolve().parents[2] / "project" / "v1"
 _NESTED_KEYS = {
     "spawnConfig": {"blueprintId", "interval", "maxSpawns", "team"},
     "audioConfig": {"audioId", "volume", "loop", "autoplay", "muted", "isSpatial", "refDistance", "maxDistance", "rolloffFactor", "loopStart", "loopEnd"},
-    "terrainData": {"resolution", "width", "depth", "heights", "textureId"},
+    # ``heights`` is the legacy inline form; current documents reference a
+    # binary heightfield asset instead (see ``_validate_terrain_heightfields``).
+    "terrainData": {"resolution", "width", "depth", "heights", "heightfield", "textureId"},
+    "heightfield": {"assetId", "encoding", "columns", "rows"},
     "skyConfig": {"timeOfDay", "sunIntensity", "ambienceIntensity", "sunColor", "fogColor", "fogDensity", "turbidity", "rayleigh", "mieCoefficient", "mieDirectionalG", "inclination", "azimuth"},
     "dimensions": {"width", "height"},
     "size": {"width", "height"},
@@ -91,6 +94,7 @@ def validate_domain(domain: str, value: Any) -> dict[str, Any]:
     candidate = copy.deepcopy(value)
     if domain == "objects":
         _normalize_object_transforms(candidate)
+        _validate_terrain_heightfields(candidate)
     elif domain == "sockets":
         _normalize_socket_transforms(candidate)
     _assert_finite(candidate)
@@ -223,6 +227,28 @@ def _normalize_object_transforms(value: Any) -> None:
         object_value["position"] = _canonical_vector(location, "position", index, minimum=-_MAX_ABS_POSITION, maximum=_MAX_ABS_POSITION)
         object_value["rotation"] = _canonical_rotation(rotation, index)
         object_value["scale"] = _canonical_vector(scale, "scale", index, minimum=_MIN_SCALE, maximum=_MAX_SCALE)
+
+def _validate_terrain_heightfields(value: Any) -> None:
+    """A heightfield reference must describe the terrain grid it belongs to.
+
+    The reference shape is enforced by the objects JSON Schema; this checks
+    the cross-field rule a schema cannot express. Legacy documents with inline
+    ``heights`` are still accepted and are migrated by the editor on the next
+    terrain commit.
+    """
+    if not isinstance(value, dict) or not isinstance(value.get("documents"), list):
+        return
+    for index, object_value in enumerate(value["documents"]):
+        terrain = object_value.get("terrainData") if isinstance(object_value, dict) else None
+        if not isinstance(terrain, dict) or not isinstance(terrain.get("heightfield"), dict):
+            continue
+        resolution = terrain.get("resolution")
+        if not _is_number(resolution) or not float(resolution).is_integer():
+            raise ValueError(f"objects document {index} terrain heightfield requires an integer resolution")
+        samples = int(resolution) + 1
+        heightfield = terrain["heightfield"]
+        if heightfield.get("columns") != samples or heightfield.get("rows") != samples:
+            raise ValueError(f"objects document {index} terrain heightfield does not match its resolution")
 
 def _normalize_socket_transforms(value: Any) -> None:
     if not isinstance(value, dict) or not isinstance(value.get("documents"), list):
