@@ -9,13 +9,15 @@ import { usePlayerControls } from './hooks/usePlayerControls';
 import { usePlayerPhysics } from './hooks/usePlayerPhysics';
 import { usePlayerCombat } from './hooks/usePlayerCombat';
 import { useScene } from '../../context/SceneContext';
+import { LevelObject } from '../../types';
 
-interface PlayerControllerProps { 
+interface PlayerControllerProps {
     apiRef: React.MutableRefObject<GraphRuntimeAPI | undefined>;
     entityRef: React.MutableRefObject<SandboxEntityHandle | null>;
     projectileManager: React.MutableRefObject<ProjectileManagerHandle | null>;
     modelObject: THREE.Object3D;
     enabled: boolean;
+    levelObjects?: LevelObject[]; // Collision source; defaults to the editor's level objects
     onStaminaChange?: (val: number) => void;
     onAimChange?: (isAiming: boolean) => void;
     weaponSounds?: string[]; // Array of Audio URLs
@@ -28,15 +30,17 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
     projectileManager,
     modelObject,
     enabled,
+    levelObjects: levelObjectsOverride,
     onStaminaChange,
     onAimChange,
     weaponSounds,
     weaponVolume = 1.0
 }) => {
     const { camera } = useThree();
-    
-    // Access scene level objects for collision
-    const { levelObjects } = useScene(); 
+
+    // Access scene level objects for collision (level play passes its runtime copy instead)
+    const { levelObjects: sceneLevelObjects } = useScene();
+    const levelObjects = levelObjectsOverride ?? sceneLevelObjects;
 
     // --- AUDIO LISTENER INIT ---
     // Critical: Ensure the camera has "ears" so we can hear the gunshots.

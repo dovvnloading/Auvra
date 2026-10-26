@@ -1,5 +1,5 @@
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { AuvraCanvas } from '../../renderer/AuvraCanvas';
 import { AlertTriangle, User, Skull } from 'lucide-react';
@@ -37,6 +37,15 @@ export const SandboxScene: React.FC<SandboxSceneProps> = ({ visible }) => {
     // 4. HUD State
     const [playerStats, setPlayerStats] = useState({ health: 100, maxHealth: 100, stamina: 100 });
     const BOUNDARY_SIZE = 10;
+
+    // Stable callbacks that skip unchanged values, so stat reports do not re-render the scene.
+    const handlePlayerHealthChange = useCallback((current: number, max: number) => {
+        setPlayerStats(prev => (prev.health === current && prev.maxHealth === max ? prev : { ...prev, health: current, maxHealth: max }));
+    }, []);
+
+    const handleStaminaChange = useCallback((stamina: number) => {
+        setPlayerStats(prev => (prev.stamina === stamina ? prev : { ...prev, stamina }));
+    }, []);
 
     // 5. Calibration State (Aim Offset) - Now derived from Blueprint
     const aimOffset = playerBlueprint?.aimOffset || [0.5, 4.5, 1.0] as [number, number, number];
@@ -107,8 +116,8 @@ export const SandboxScene: React.FC<SandboxSceneProps> = ({ visible }) => {
                         playerEntityRef={playerEntityRef}
                         enemyEntityRef={enemyEntityRef}
                         projectileManagerRef={projectileManagerRef}
-                        onPlayerHealthChange={(current, max) => setPlayerStats(prev => ({ ...prev, health: current, maxHealth: max }))}
-                        onStaminaChange={(val) => setPlayerStats(prev => ({ ...prev, stamina: val }))}
+                        onPlayerHealthChange={handlePlayerHealthChange}
+                        onStaminaChange={handleStaminaChange}
                         aimOffset={aimOffset}
                         onAimStateChange={setIsAiming}
                     />

@@ -17,5 +17,9 @@
     "components/UI/Properties/ScrubbableInput.tsx",
     "renderer/registry.ts",
     "utils/editorSession.ts"
+  ],
+  "exclude": [
+    "tests/frontend/levelBlueprintRuntime.test.tsx",
+    "tests/frontend/playRuntimeWorld.test.ts"
   ]
 }

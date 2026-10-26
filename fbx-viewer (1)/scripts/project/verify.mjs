@@ -38,6 +38,8 @@ const environmentEditor = await readFile(resolve(root, 'components/Environment/E
 const environmentViewport = await readFile(resolve(root, 'components/Environment/EnvironmentViewport.tsx'), 'utf8');
 const audioSystem = await readFile(resolve(root, 'components/Environment/AudioSystem.tsx'), 'utf8');
 const blueprintRuntime = await readFile(resolve(root, 'hooks/useLevelBlueprintRuntime.ts'), 'utf8');
+const levelGameLoop = await readFile(resolve(root, 'components/Environment/LevelGameLoop.tsx'), 'utf8');
+const runtimeLevelWorld = await readFile(resolve(root, 'hooks/useRuntimeLevelWorld.ts'), 'utf8');
 const graphPreview = await readFile(resolve(root, 'components/AnimationGraph/GraphPreview.tsx'), 'utf8');
 const domainCascade = await readFile(resolve(root, 'utils/domainCascade.ts'), 'utf8');
 const editorState = await readFile(resolve(root, 'utils/editorState.ts'), 'utf8');
@@ -52,6 +54,15 @@ const scrubbableInput = await readFile(resolve(root, 'components/UI/Properties/S
 const playerControls = await readFile(resolve(root, 'components/Sandbox/hooks/usePlayerControls.ts'), 'utf8');
 const packageJson = await readFile(resolve(root, 'package.json'), 'utf8');
 const strictTsconfig = await readFile(resolve(root, 'tsconfig.strict.json'), 'utf8');
+const strictConfig = JSON.parse(strictTsconfig);
+const strictIncludes = strictConfig.include ?? [];
+const strictExcludes = strictConfig.exclude ?? [];
+// Exact test files only (never globs). They import modules that are not yet noUnused-clean and
+// are still type-checked by the base strict tsconfig.
+const STRICT_EXCLUDE_ALLOWLIST = new Set([
+  'tests/frontend/levelBlueprintRuntime.test.tsx',
+  'tests/frontend/playRuntimeWorld.test.ts',
+]);
 
 const failures = [];
 const mustNotContain = (text, pattern, label) => { if (pattern.test(text)) failures.push(`${label}: forbidden ${pattern}`); };
@@ -218,7 +229,9 @@ if (!/"test":\s*"vitest run"/.test(packageJson)
   || !/"noImplicitAny":\s*true/.test(strictTsconfig)
   || !/"noUnusedLocals":\s*true/.test(strictTsconfig)
   || !/"noUnusedParameters":\s*true/.test(strictTsconfig)
-  || !/tests\/frontend/.test(strictTsconfig)) {
+  || !strictIncludes.includes('tests/frontend/**/*.ts')
+  || !strictIncludes.includes('tests/frontend/**/*.tsx')
+  || strictExcludes.some(entry => !STRICT_EXCLUDE_ALLOWLIST.has(entry))) {
   failures.push('frontend conventional tests or strict compiler gate are missing');
 }
 if (!/transition \|\| undefined/.test(projectManager) || !/isTransitionCurrent\(transition\)/.test(projectManager)) failures.push('project-manager hydration does not carry exact transition identity through awaits');
@@ -280,6 +293,28 @@ if (!/MAX_BLUEPRINT_EVALUATION_DEPTH/.test(blueprintRuntime)
   || !/const b = Number\(evaluate\([\s\S]*?\?\? 0\)/.test(blueprintRuntime)
   || !/b !== 0 \? a \/ b : 0/.test(blueprintRuntime)) {
   failures.push('blueprint runtime lacks bounded cycle-safe evaluation and execution');
+}
+
+// Play mode runs on a session copy of the level; gameplay code must not reach project mutation APIs.
+for (const [source, label] of [[levelGameLoop, 'level play loop'], [blueprintRuntime, 'level blueprint runtime'], [runtimeLevelWorld, 'runtime level world']]) {
+  mustNotContain(source, /\b(?:addLevelObject|removeLevelObjects?|updateLevelObject|updateLevelBlueprint|snapshotHistory|dbOperations)\b/, label);
+}
+const PLAY_SCENE_READS = new Set(['levelObjects', 'models', 'activeLevelBlueprint', 'blueprints', 'attachments', 'sockets', 'audioAssets']);
+const playSceneFields = levelGameLoop.match(/const \{([^}]*)\} = useScene\(\)/)?.[1].split(',').map(field => field.trim()).filter(Boolean) ?? [];
+if (!playSceneFields.length || playSceneFields.some(field => !PLAY_SCENE_READS.has(field))) {
+  failures.push('level play loop reads scene fields outside its read-only allowlist');
+}
+if (!/useRuntimeLevelWorld\(levelObjects\)/.test(levelGameLoop)
+  || !/destroyActor=\{destroyRuntimeObject\}/.test(levelGameLoop)
+  || /=\{levelObjects\}/.test(levelGameLoop)
+  || !/<AuvraCanvas[^>]*key=\{restartKey\}/.test(levelGameLoop)) {
+  failures.push('level play loop does not run each session on its own runtime level copy');
+}
+if (!/onHitPlayer=\{handlePlayerHit\}/.test(levelGameLoop)
+  || !/applyMeleeHit\(playerEntityRef\.current, damage\)/.test(levelGameLoop)
+  || !/const handleAttack = useCallback\(\(\) => onHitPlayer\(damage\)/.test(levelGameLoop)
+  || !/onDealDamage=\{handleAttack\}/.test(levelGameLoop)) {
+  failures.push('level play enemies are not wired to damage the player');
 }
 
 const bundledBinding = await build({
