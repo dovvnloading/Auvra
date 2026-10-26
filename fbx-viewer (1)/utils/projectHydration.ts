@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { AttachmentData, AudioData, Blueprint, LevelData, LevelObject, LoadedModelData, SocketData, TextureData } from '../types';
 import { importPhaseLabel, loadFBXFile } from './modelLoader';
-import { stripGeometry } from './processing/ModelTransforms';
+import { applyModelImportSettings, stripGeometry } from './processing/ModelTransforms';
 import { generateThumbnail } from './thumbnailGenerator';
 import { disposeModel, disposeObject } from './processing/ModelLifecycle';
 import { prepareAnimationClips } from './animationBinding';
@@ -131,7 +131,7 @@ export async function loadGameContent(
         const url = await loadProjectAssetUrl(item.assetId, traceAsset(assetAlias));
         assertCurrent();
         textureAssetUrls.set(item.id, url);
-        textures.push({ id: item.id, name: item.name, dimensions: item.dimensions || { width: 0, height: 0 }, url });
+        textures.push({ id: item.id, name: item.name, dimensions: item.dimensions || { width: 0, height: 0 }, url, ...(typeof item.folder === 'string' ? { folder: item.folder } : {}) });
       }
       catch (error) { recordAssetFailure('texture_hydration_failed', error, 'source_read', diagnostic); }
       complete(`Loaded texture — ${item.name}`, diagnostic);
@@ -145,7 +145,7 @@ export async function loadGameContent(
         report(`Loading audio — ${item.name}`, 0.1, 'source_read', diagnostic);
         const url = await loadProjectAssetUrl(item.assetId, traceAsset(assetAlias));
         assertCurrent();
-        audioAssets.push({ id: item.id, name: item.name, type: item.type || 'application/octet-stream', duration: item.duration || 0, url });
+        audioAssets.push({ id: item.id, name: item.name, type: item.type || 'application/octet-stream', duration: item.duration || 0, url, ...(typeof item.folder === 'string' ? { folder: item.folder } : {}) });
       }
       catch (error) { recordAssetFailure('audio_hydration_failed', error, 'source_read', diagnostic); }
       complete(`Loaded audio — ${item.name}`, diagnostic);
@@ -178,6 +178,9 @@ export async function loadGameContent(
         loaded.category = item.category || 'Prop';
         loaded.isPlacedInScene = Boolean(item.isPlacedInScene);
         loaded.textureOverrides = item.textureOverrides;
+        if (typeof item.folder === 'string') loaded.folder = item.folder;
+        // A missing importSettings document field means the default (old) normalization.
+        applyModelImportSettings(loaded, item.importSettings);
         for (const [materialName, textureId] of Object.entries(item.textureOverrides || {}) as Array<[string, string]>) {
           const textureUrl = textureAssetUrls.get(textureId);
           if (!textureUrl) continue;

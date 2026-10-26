@@ -26,6 +26,26 @@ HEIGHTFIELD_ENCODING = "float32le"
 MAX_HEIGHTFIELD_SAMPLES_PER_SIDE = 4097
 _HEIGHTFIELD_HEADER = struct.Struct("<8sII")
 
+# Model formats.  Binary glTF carries the ``glTF`` magic; glTF JSON and
+# Wavefront OBJ are text without a signature, so they are accepted by their
+# declared MIME after a content sanity check (text, and a JSON object for
+# glTF).  FBX keeps its declared MIME unchanged.
+GLB_MIME = "model/gltf-binary"
+GLTF_JSON_MIME = "model/gltf+json"
+OBJ_MIME = "model/obj"
+FBX_MIME = "model/fbx"
+MODEL_MIMES = frozenset({GLB_MIME, GLTF_JSON_MIME, OBJ_MIME, FBX_MIME})
+_TEXT_MODEL_MIMES = frozenset({GLTF_JSON_MIME, OBJ_MIME})
+
+# Verifying a blob is a full SHA-256 pass, and every project edit checks each
+# referenced asset.  A repository builds a fresh AssetStore view per access,
+# so verified blobs are remembered process-wide by absolute path.  A hit needs
+# the exact (size, mtime_ns, inode, device) the digest was computed for, so a
+# rewrite, truncation or replacement of the blob is hashed again.
+_VERIFIED: dict[str, tuple[int, int, int, int]] = {}
+_VERIFIED_LOCK = threading.Lock()
+_VERIFIED_LIMIT = 65536
+
 @dataclass(frozen=True)
 class AssetReference:
     asset_id: str
@@ -76,8 +96,11 @@ class AssetStore:
             if size is not None and total != size:
                 raise ValueError("asset size does not match declared size")
             detected = sniff_mime(bytes(prefix))
-            known_media = {"image/png", "image/jpeg", "image/webp", "audio/wav", "audio/ogg", "model/gltf-binary", HEIGHTFIELD_MIME}
+            known_media = {"image/png", "image/jpeg", "image/webp", "audio/wav", "audio/ogg", GLB_MIME, HEIGHTFIELD_MIME}
             if mime in known_media and detected != mime:
+                raise ValueError("asset MIME does not match its content")
+            declared = mime.lower() if isinstance(mime, str) else None
+            if declared in _TEXT_MODEL_MIMES and not text_model_matches(declared, bytes(prefix)):
                 raise ValueError("asset MIME does not match its content")
             mime = mime or detected or "application/octet-stream"
             if mime == HEIGHTFIELD_MIME:
@@ -91,7 +114,11 @@ class AssetStore:
                 if target.exists() and self.verify(asset_id, expected_size=total):
                     tmp.unlink()
                 else:
+                    _forget_verified(target)
                     os.replace(tmp, target)
+                    # The bytes now at ``target`` were hashed while staging.
+                    try: _remember_verified(target, target.stat())
+                    except OSError: pass
                 self._record(asset_id, total, mime, name)
             return AssetReference(asset_id, total, mime, name)
         finally:
@@ -104,13 +131,29 @@ class AssetStore:
         return path.open("rb")
 
     def verify(self, asset_id: str, *, expected_size: int | None = None) -> bool:
+        """Return whether the blob exists and hashes to its id.
+
+        An unchanged blob that already verified costs one ``stat``; only a
+        new or modified blob is read and hashed.
+        """
         path = self.path_for(asset_id)
-        if not path.is_file() or path.is_symlink() or _is_reparse(path): return False
-        if expected_size is not None and path.stat().st_size != expected_size: return False
-        digest = hashlib.sha256()
-        with path.open("rb") as stream:
-            for block in iter(lambda: stream.read(1024 * 1024), b""): digest.update(block)
-        return digest.hexdigest() == asset_id
+        try: info = path.stat()
+        except OSError: return False
+        if (not stat.S_ISREG(info.st_mode) or path.is_symlink()
+                or getattr(info, "st_file_attributes", 0) & 0x400):
+            return False
+        if expected_size is not None and info.st_size != expected_size: return False
+        fingerprint = _fingerprint(info)
+        with _VERIFIED_LOCK:
+            if _VERIFIED.get(_verified_key(path)) == fingerprint: return True
+        if _file_digest(path) != asset_id:
+            _forget_verified(path)
+            return False
+        # Cache only when the blob did not change while it was being hashed.
+        try: settled = path.stat()
+        except OSError: return True
+        if _fingerprint(settled) == fingerprint: _remember_verified(path, settled)
+        return True
 
     def reference(self, asset_id: str) -> AssetReference:
         """Return validated metadata without exposing the content path."""
@@ -170,6 +213,7 @@ class AssetStore:
                     os.replace(temporary, manifest)
                 finally:
                     temporary.unlink(missing_ok=True)
+            _forget_verified(path)
             path.unlink(missing_ok=True)
             return existed
 
@@ -233,6 +277,42 @@ def sniff_mime(prefix: bytes) -> str | None:
     if prefix.startswith(b"glTF"): return "model/gltf-binary"
     if prefix.startswith(HEIGHTFIELD_MAGIC): return HEIGHTFIELD_MIME
     return None
+
+def text_model_matches(mime: str, prefix: bytes) -> bool:
+    """Sanity-check a signature-less text model (glTF JSON or OBJ) prefix."""
+
+    if sniff_mime(prefix) is not None:
+        return False
+    body = prefix[3:] if prefix.startswith(b"\xef\xbb\xbf") else prefix
+    # Text formats never contain NUL or non-whitespace control bytes.
+    if not body or any(byte < 0x20 and byte not in b"\t\n\r\x0b\x0c" for byte in body):
+        return False
+    if mime == GLTF_JSON_MIME:
+        return body.lstrip(b" \t\r\n").startswith(b"{")
+    return mime == OBJ_MIME
+
+def _fingerprint(info: os.stat_result) -> tuple[int, int, int, int]:
+    return (info.st_size, info.st_mtime_ns, info.st_ino, info.st_dev)
+
+def _verified_key(path: Path) -> str:
+    return os.path.normcase(os.path.abspath(path))
+
+def _remember_verified(path: Path, info: os.stat_result) -> None:
+    key = _verified_key(path)
+    with _VERIFIED_LOCK:
+        if len(_VERIFIED) >= _VERIFIED_LIMIT and key not in _VERIFIED:
+            _VERIFIED.clear()
+        _VERIFIED[key] = _fingerprint(info)
+
+def _forget_verified(path: Path) -> None:
+    with _VERIFIED_LOCK:
+        _VERIFIED.pop(_verified_key(path), None)
+
+def _file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""): digest.update(block)
+    return digest.hexdigest()
 
 def _check_heightfield_dimensions(columns: int, rows: int) -> None:
     for value in (columns, rows):

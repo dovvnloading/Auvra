@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { Search, Plus } from 'lucide-react';
+import { Search, Plus, Undo2, Redo2 } from 'lucide-react';
 import { AnimationGraphData } from '../../types';
 import { GraphNode } from './GraphNode';
 import { GraphConnection } from './GraphConnection';
@@ -15,7 +15,17 @@ interface GraphCanvasProps {
     selectedNodeId: string | null;
     onSelectNode: (id: string | null) => void;
     availableClips: { name: string; clip: any }[];
+    /** Applies node-drag moves without recording each step; defaults to updateGraph. */
+    updateGraphLive?: (modelId: string, data: Partial<AnimationGraphData>) => void;
+    /** Records the pre-drag graph once a node move ends. */
+    onMoveEnd?: (before: AnimationGraphData) => void;
+    onUndo?: () => void;
+    onRedo?: () => void;
+    canUndo?: boolean;
+    canRedo?: boolean;
 }
+
+const stopCanvasPointer = (e: React.PointerEvent) => e.stopPropagation();
 
 export const GraphCanvas: React.FC<GraphCanvasProps> = ({
     graph,
@@ -23,7 +33,13 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
     updateGraph,
     selectedNodeId,
     onSelectNode,
-    availableClips
+    availableClips,
+    updateGraphLive,
+    onMoveEnd,
+    onUndo,
+    onRedo,
+    canUndo = false,
+    canRedo = false
 }) => {
     const canvasRef = useRef<HTMLDivElement>(null);
     
@@ -57,7 +73,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
         startDrag, 
         updateDrag, 
         endDrag 
-    } = useGraphNodeDrag(graph, modelId, updateGraph, viewport, onSelectNode);
+    } = useGraphNodeDrag(graph, modelId, updateGraphLive ?? updateGraph, viewport, onSelectNode, onMoveEnd);
 
     // 4. Data Preparation (Calculations)
     const connectionGroups = useGraphConnections(graph);
@@ -98,7 +114,31 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
         >
             {/* Toolbar */}
             <div className="absolute top-4 right-4 z-30 flex gap-2">
-                <button 
+                {onUndo && onRedo && (
+                    <>
+                        <button
+                            onPointerDown={stopCanvasPointer}
+                            onClick={onUndo}
+                            disabled={!canUndo}
+                            className="flex items-center justify-center w-8 h-8 bg-gray-800 hover:bg-gray-700 text-white rounded-lg shadow-lg border border-gray-700 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-gray-800"
+                            title="Undo (Ctrl+Z)"
+                            aria-label="Undo"
+                        >
+                            <Undo2 size={14} />
+                        </button>
+                        <button
+                            onPointerDown={stopCanvasPointer}
+                            onClick={onRedo}
+                            disabled={!canRedo}
+                            className="flex items-center justify-center w-8 h-8 bg-gray-800 hover:bg-gray-700 text-white rounded-lg shadow-lg border border-gray-700 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-gray-800"
+                            title="Redo (Ctrl+Y)"
+                            aria-label="Redo"
+                        >
+                            <Redo2 size={14} />
+                        </button>
+                    </>
+                )}
+                <button
                     onClick={resetViewport}
                     className="flex items-center justify-center w-8 h-8 bg-gray-800 hover:bg-gray-700 text-white rounded-lg shadow-lg border border-gray-700"
                     title="Reset View"
@@ -177,7 +217,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
             </div>
             
             <div className="absolute bottom-4 left-4 z-20 text-[10px] text-gray-600 select-none pointer-events-none font-mono bg-black/50 p-2 rounded backdrop-blur-sm">
-               Pan: Drag BG <br/> Zoom: Wheel <br/> Move Node: Drag Node <br/> Connect: Shift+Click
+               Pan: Drag BG <br/> Zoom: Wheel <br/> Move Node: Drag Node <br/> Connect: Shift+Click{onUndo && <><br/> Undo: Ctrl+Z / Redo: Ctrl+Y</>}
             </div>
         </div>
     );

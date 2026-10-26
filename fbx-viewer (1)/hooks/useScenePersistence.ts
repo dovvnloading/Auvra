@@ -154,7 +154,7 @@ const throwIfAborted = (signal?: AbortSignal): void => {
 };
 
 /** Domains read from a native snapshot. */
-const SNAPSHOT_DOMAINS = ['metadata', 'worlds', 'scenes', 'levels', 'objects', 'environment', 'models', 'animations', 'attachments', 'sockets', 'textures', 'audio', 'materials', 'blueprints', 'graphs', 'hud'];
+const SNAPSHOT_DOMAINS = ['metadata', 'worlds', 'scenes', 'levels', 'objects', 'environment', 'models', 'animations', 'attachments', 'sockets', 'textures', 'audio', 'materials', 'blueprints', 'graphs', 'hud', 'prefabs'];
 
 /** Hydrate authored domains from a bounded native snapshot. Binary assets are
  * resolved only through opaque host tickets and never embedded in JSON. */

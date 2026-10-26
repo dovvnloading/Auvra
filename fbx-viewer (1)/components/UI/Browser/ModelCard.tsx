@@ -9,6 +9,9 @@ interface ModelCardProps {
     onPlaceInScene: () => void;
     onHoverStart: (model: LoadedModelData) => void;
     onHoverEnd: () => void;
+    /** Replaces the name label while the asset is being renamed. */
+    nameEditor?: React.ReactNode;
+    onRenameRequest?: () => void;
 }
 
 export const ModelCard: React.FC<ModelCardProps> = ({
@@ -16,7 +19,9 @@ export const ModelCard: React.FC<ModelCardProps> = ({
     onSelect,
     onPlaceInScene,
     onHoverStart,
-    onHoverEnd
+    onHoverEnd,
+    nameEditor,
+    onRenameRequest
 }) => {
     // Helper to render correct icon
     const getIcon = (category: AssetCategory) => {
@@ -85,9 +90,15 @@ export const ModelCard: React.FC<ModelCardProps> = ({
                     </div>
                 )}
             </div>
-            <span className={`text-[11px] truncate px-0.5 text-center ${model.isPlacedInScene ? 'text-blue-400 font-medium' : 'text-gray-400 group-hover:text-white'}`}>
-                {model.name}
-            </span>
+            {nameEditor ?? (
+                <span
+                    onDoubleClick={onRenameRequest}
+                    title={model.name}
+                    className={`text-[11px] truncate px-0.5 text-center ${model.isPlacedInScene ? 'text-blue-400 font-medium' : 'text-gray-400 group-hover:text-white'}`}
+                >
+                    {model.name}
+                </span>
+            )}
         </div>
     );
 };

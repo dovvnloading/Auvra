@@ -22,7 +22,11 @@ interface LevelContextType {
       type?: LevelObjectType,
       extraData?: any
   ) => Promise<string | undefined>;
+  /** Insert complete documents (ids, parents, components kept) as one undo step; resolves to the inserted ids. */
+  addLevelObjects: (objects: LevelObject[]) => Promise<string[]>;
+  /** Deletes the object and all of its descendants. */
   removeLevelObject: (id: string) => void;
+  /** Deletes the objects and all of their descendants as one undo step. */
   removeLevelObjects: (ids: string[]) => void;
   updateLevelObject: (id: string, updates: Partial<LevelObject>) => void;
   /** Persist debounced level edits now; rejects (after notifying) if any write failed. */

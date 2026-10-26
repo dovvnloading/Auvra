@@ -2,7 +2,7 @@
 import React, { createContext, useContext, ReactNode, useState, useCallback } from 'react';
 import { 
     LoadedModelData, AttachmentData, SocketData, TextureData, AudioData, Blueprint, 
-    AssetCategory, AnimationGraphData, DebugProjectile 
+    AssetCategory, AnimationGraphData, DebugProjectile, ModelImportSettings, AssetInfoUpdate 
 } from '../types';
 import { useModelManager } from '../hooks/useModelManager';
 import { useAttachmentManager } from '../hooks/useAttachmentManager';
@@ -21,6 +21,9 @@ interface AssetContextType {
   // Models
   models: LoadedModelData[];
   addModel: (file: File, category: AssetCategory) => Promise<void>;
+  importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory) => Promise<void>;
+  reimportModel: (modelId: string, file: File) => Promise<void>;
+  updateModel: (id: string, updates: AssetInfoUpdate) => Promise<void>;
   removeModel: (id: string) => void;
   placeInScene: (id: string) => void; 
   removeFromScene: (id: string) => void; 
@@ -52,12 +55,14 @@ interface AssetContextType {
   addTexture: (file: File) => Promise<string | null>;
   saveTextureToLibrary: (base64: string, name: string) => Promise<string | null>;
   removeTexture: (id: string) => void;
+  updateTexture: (id: string, updates: AssetInfoUpdate) => Promise<void>;
   setTextures: (textures: TextureData[]) => void;
 
   // Audio
   audioAssets: AudioData[];
   addAudio: (file: File) => Promise<string | null>;
   removeAudio: (id: string) => void;
+  updateAudio: (id: string, updates: AssetInfoUpdate) => Promise<void>;
   setAudioAssets: (audios: AudioData[]) => void;
 
   // Blueprints
@@ -152,6 +157,9 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     // Models
     models: modelManager.models,
     addModel: modelManager.addModel,
+    importModelWithOptions: modelManager.importModelWithOptions,
+    reimportModel: modelManager.reimportModel,
+    updateModel: modelManager.updateModel,
     removeModel: modelManager.removeModel,
     placeInScene: modelManager.placeInScene,
     removeFromScene: modelManager.removeFromScene,
@@ -183,12 +191,14 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     addTexture: textureManager.addTexture,
     saveTextureToLibrary: textureManager.saveTextureToLibrary,
     removeTexture,
+    updateTexture: textureManager.updateTexture,
     setTextures: textureManager.setTextures,
 
     // Audio
     audioAssets: audioManager.audioAssets,
     addAudio: audioManager.addAudio,
     removeAudio,
+    updateAudio: audioManager.updateAudio,
     setAudioAssets: audioManager.setAudioAssets,
 
     // Blueprints

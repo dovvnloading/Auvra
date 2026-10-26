@@ -14,6 +14,7 @@ from .errors import (ArchiveValidationError, InvalidProjectError, ReadOnlyError,
                      UnsupportedVersionError)
 from .legacy import LegacyArchive
 from .locking import ProjectLock
+from . import migrations as _migrations
 from .schemas import (DOMAIN_NAMES, domain_document, validate_domain,
                       validate_project_descriptor, validate_project_references)
 from .serialization import atomic_dump_json, canonical_json, dump_json, load_json
@@ -25,6 +26,10 @@ AUTOSAVE_LIMIT = 10
 PROJECT_CAP = 2 * 1024**3
 RECOVERY_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 _RECOVERY_COMPLETE = ".complete"
+# Domains added after recovery points were first written. A point captured
+# before one existed has no file for it, which reads as the empty domain it
+# then was; every other domain must still be present in a complete point.
+_RECOVERY_LATER_DOMAINS = frozenset({"prefabs"})
 
 @dataclass(frozen=True)
 class ProjectStatus:
@@ -71,7 +76,8 @@ class ProjectRepository:
             raise InvalidProjectError("invalid project name")
         descriptor = {"format": FORMAT, "schemaVersion": VERSION,
                       "projectId": str(uuid.uuid4()), "name": name,
-                      "revision": 0, "createdAt": time.time(), "updatedAt": time.time()}
+                      "revision": 0, "createdAt": time.time(), "updatedAt": time.time(),
+                      "engineVersion": _migrations.ENGINE_VERSION}
         staging = Path(tempfile.mkdtemp(prefix=f".{path.name}.create-", dir=path.parent))
         try:
             (staging / "Project").mkdir(exist_ok=True); (staging / "Content" / "sha256").mkdir(parents=True, exist_ok=True)
@@ -98,10 +104,18 @@ class ProjectRepository:
             try: self._descriptor = load_json(self._descriptor_path())
             except Exception as exc:
                 self.close(); raise RecoveryRequiredError("project descriptor requires recovery") from exc
-        if self._descriptor.get("schemaVersion") != VERSION: self.close(); raise UnsupportedVersionError("unsupported project version")
-        try: validate_project_descriptor(self._descriptor)
-        except ValueError as exc: self.close(); raise InvalidProjectError(str(exc)) from exc
+        # Newer, malformed or unreachable format versions are refused here;
+        # an older one yields the ordered steps that upgrade it after recovery.
+        # A refused or unfinished upgrade clears the descriptor before close so
+        # asset pruning never judges references it cannot read.
+        try: pending = _migrations.active_registry().plan(self._descriptor.get("schemaVersion"), VERSION)
+        except UnsupportedVersionError: self._descriptor = {}; self.close(); raise
+        if not pending:
+            try: validate_project_descriptor(self._descriptor)
+            except ValueError as exc: self.close(); raise InvalidProjectError(str(exc)) from exc
         try:
+            if self.read_only and pending:
+                raise UnsupportedVersionError("project must be opened for writing to upgrade its format")
             if self.read_only:
                 txdir = self.path / ".auvra" / "transactions"
                 for journal in txdir.glob("*.json") if txdir.exists() else ():
@@ -113,10 +127,31 @@ class ProjectRepository:
                         raise RecoveryRequiredError("project recovery requires the writer lock")
             else:
                 self._recover()
+                if pending: self._migrate()
             _validate_project_tree(self.path, allow_internal=True)
         except Exception:
+            if pending: self._descriptor = {}
             self.close()
             raise
+
+    def _migrate(self) -> None:
+        """Upgrade an older project format in one recoverable transaction."""
+        raw = {domain: load_json(self._domain_path(domain)) for domain in DOMAIN_NAMES
+               if self._domain_path(domain).is_file()}
+        result = _migrations.active_registry().migrate(self._descriptor, raw, VERSION)
+        try:
+            descriptor = validate_project_descriptor(result.descriptor)
+            unknown = set(result.domains) - set(DOMAIN_NAMES)
+            if unknown: raise ValueError(f"unknown project domain: {sorted(unknown)[0]}")
+            migrated = {domain: validate_domain(domain, value) for domain, value in result.domains.items()}
+            validate_project_references({domain: migrated.get(domain) or self.get_domain(domain)
+                                         for domain in DOMAIN_NAMES}, asset_exists=self.assets.verify)
+        except ValueError as exc:
+            raise _migrations.ProjectMigrationError(f"migrated project is invalid: {exc}") from exc
+        new_revision = self.revision + 1
+        self._descriptor = descriptor
+        self._transaction({domain: value for domain, value in migrated.items() if raw.get(domain) != value},
+                          new_revision)
 
     def _recover_descriptor(self) -> bool:
         txdir = self.path / ".auvra" / "transactions"
@@ -300,6 +335,7 @@ class ProjectRepository:
             descriptor_staged = staging / "new-descriptor.auvra"
             shutil.copy2(descriptor_target, descriptor_backup); _fsync_file(descriptor_backup)
             descriptor = dict(self._descriptor); descriptor["revision"] = new_revision; descriptor["updatedAt"] = time.time()
+            _migrations.stamp_engine_version(descriptor)
             dump_json(descriptor_staged, descriptor)
             journal = txdir / f"{uuid.uuid4()}.json"
             descriptor_entry = {"target": f"{descriptor_target.name}", "backup": f"staging/{staging.name}/{descriptor_backup.name}", "staged": f"staging/{staging.name}/{descriptor_staged.name}", "existed": True}
@@ -347,7 +383,7 @@ class ProjectRepository:
             if len(descriptor_files) != 1: raise InvalidProjectError("source has no unique descriptor")
             descriptor = load_json(descriptor_files[0]); descriptor.update(
                 projectId=str(uuid.uuid4()), name=new_name, revision=0,
-                createdAt=time.time(), updatedAt=time.time())
+                createdAt=time.time(), updatedAt=time.time(), engineVersion=_migrations.ENGINE_VERSION)
             old = descriptor_files[0]; new = staging / f"{new_name}.auvra"; dump_json(new, descriptor)
             if old.resolve() != new.resolve(): old.unlink()
             try: _validate_project_tree(staging)
@@ -445,7 +481,8 @@ class ProjectRepository:
                 marker = point / _RECOVERY_COMPLETE
                 if not marker.is_file() or _is_reparse(marker):
                     continue
-                if any(not (point / f"{domain}.json").is_file() or _is_reparse(point / f"{domain}.json")
+                if any(not _recovery_domain_absent(point, domain) and
+                       (not (point / f"{domain}.json").is_file() or _is_reparse(point / f"{domain}.json"))
                        for domain in DOMAIN_NAMES):
                     continue
                 snapshot_content = point / "Content" / "sha256"
@@ -499,6 +536,9 @@ class ProjectRepository:
             if path.stem not in DOMAIN_NAMES: raise InvalidProjectError("recovery point contains unknown data")
         for domain in DOMAIN_NAMES:
             path = point / f"{domain}.json"
+            if _recovery_domain_absent(point, domain):
+                docs[domain] = domain_document(domain, [])
+                continue
             if not path.is_file() or _is_reparse(path):
                 raise InvalidProjectError("recovery point domain is incomplete")
             docs[domain] = validate_domain(domain, load_json(path))
@@ -756,6 +796,15 @@ def _validate_project_tree(root: Path, *, allow_internal: bool = False) -> None:
         )
     except ValueError as exc:
         raise InvalidProjectError(str(exc)) from exc
+
+def _recovery_domain_absent(point: Path, domain: str) -> bool:
+    """True when a recovery point predates ``domain`` and so has no file for it.
+
+    Only a domain added after points were first written may be absent, and
+    only truly absent: a dangling link or other entry still fails closed.
+    """
+    return domain in _RECOVERY_LATER_DOMAINS and not os.path.lexists(point / f"{domain}.json")
+
 
 def _is_reparse(path: Path) -> bool:
     try:

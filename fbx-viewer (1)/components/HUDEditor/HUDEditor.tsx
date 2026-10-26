@@ -1,13 +1,15 @@
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { HUDCanvas } from './HUDCanvas';
 import { HUDLibrary } from './HUDLibrary';
 import { AIChatPanel } from './AIChatPanel';
 import { clampHUDPosition, HUD_REFERENCE_SIZE, HUDElement, normalizeHUDLayout } from './types';
 import { AVAILABLE_COMPONENTS } from './componentRegistry';
-import { Code, Settings2, Sliders, Palette, Type, Move, Scaling } from 'lucide-react';
+import { Code, Settings2, Sliders, Palette, Type, Move, Scaling, Undo2, Redo2 } from 'lucide-react';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
 import { useNativeProjectDocument } from '../../utils/useNativeProjectDocument';
+import { useEditorHistory } from '../../utils/history';
+import { editorSession } from '../../utils/editorSession';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 
 interface HUDDocument {
@@ -26,6 +28,10 @@ const createDefaultHUDDocument = (): HUDDocument => ({
     layout: { ...HUD_REFERENCE_SIZE },
     commands: [],
 });
+
+// Continuous edits to the same field (typing, scrubbing) within this window
+// collapse into one undo step.
+const HISTORY_COALESCE_MS = 800;
 
 // Helper to render dynamic inputs based on prop type
 const PropertyInput: React.FC<{ 
@@ -125,6 +131,39 @@ export const HUDEditor: React.FC = () => {
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [rightPanelTab, setRightPanelTab] = useState<'ai' | 'props'>('props');
     const [canvasScale, setCanvasScale] = useState(1);
+    const session = useSyncExternalStore(editorSession.subscribe, editorSession.getSnapshot, editorSession.getSnapshot);
+    // Host-applied transactions (AI approve/undo) refresh the document, so local snapshots are stale.
+    const [historyEpoch, setHistoryEpoch] = useState(0);
+    const lastEditRef = useRef<{ key: string; at: number } | null>(null);
+    const dragStartRef = useRef<HUDDocument | null>(null);
+
+    const history = useEditorHistory<HUDDocument>({
+        value: document,
+        apply: (restored) => {
+            lastEditRef.current = null;
+            void replace(restored).catch((cause) => frontendDiagnostics.failure('hud_history_apply_failed', cause));
+        },
+        active: hydrated,
+        // Revision bumps re-hydrate after every write; only a project/session switch invalidates history.
+        resetKey: `${session.projectId}:${session.generation}:${historyEpoch}`,
+    });
+
+    /** Snapshot the document before a change. Rapid edits sharing `coalesceKey` become one undo step. */
+    const recordChange = (coalesceKey: string | null = null) => {
+        const now = Date.now();
+        const last = lastEditRef.current;
+        if (coalesceKey && last && last.key === coalesceKey && now - last.at < HISTORY_COALESCE_MS) {
+            last.at = now;
+            return;
+        }
+        lastEditRef.current = coalesceKey ? { key: coalesceKey, at: now } : null;
+        history.record(document);
+    };
+
+    const handleRefresh = useCallback(() => {
+        setHistoryEpoch((epoch) => epoch + 1);
+        refresh();
+    }, [refresh]);
 
     const commitElements = useCallback((nextElements: HUDElement[]) => {
         return replace({ ...document, elements: nextElements });
@@ -158,6 +197,7 @@ export const HUDEditor: React.FC = () => {
             isLocked: false
         };
 
+        recordChange();
         void commitElements([...elements, newEl]).catch((cause) => frontendDiagnostics.failure('hud_element_add_failed', cause));
         
         // Only select and switch tabs if triggered manually, OR if AI created it we might want to select it
@@ -173,7 +213,8 @@ export const HUDEditor: React.FC = () => {
         }
     };
 
-    const handleUpdateElement = (id: string, updates: Partial<HUDElement>) => {
+    // Untracked write: canvas drags stream through here and are recorded once at drag end.
+    const applyElementUpdate = (id: string, updates: Partial<HUDElement>) => {
         void commitElements(elements.map(el => {
             if (el.id !== id) return el;
             const next = { ...el, ...updates };
@@ -182,14 +223,25 @@ export const HUDEditor: React.FC = () => {
             .catch((cause) => frontendDiagnostics.failure('hud_element_update_failed', cause));
     };
 
+    // Tracked write. Pass `null` to never coalesce (discrete toggles).
+    const handleUpdateElement = (
+        id: string,
+        updates: Partial<HUDElement>,
+        coalesceKey: string | null = `${id}:${Object.keys(updates).sort().join(',')}`,
+    ) => {
+        recordChange(coalesceKey);
+        applyElementUpdate(id, updates);
+    };
+
     const handlePropChange = (key: string, value: any) => {
         if (!selectedElement) return;
         handleUpdateElement(selectedElement.id, {
             props: { ...selectedElement.props, [key]: value }
-        });
+        }, `${selectedElement.id}:props.${key}`);
     };
 
     const handleDelete = (id: string) => {
+        recordChange();
         void commitElements(elements.filter(el => el.id !== id))
             .catch((cause) => frontendDiagnostics.failure('hud_element_delete_failed', cause));
         if (selectedId === id) setSelectedId(null);
@@ -197,12 +249,27 @@ export const HUDEditor: React.FC = () => {
 
     const handleToggleVisibility = (id: string) => {
         const el = elements.find(e => e.id === id);
-        if (el) handleUpdateElement(id, { isVisible: !el.isVisible });
+        if (el) handleUpdateElement(id, { isVisible: !el.isVisible }, null);
     };
 
     const handleToggleLock = (id: string) => {
         const el = elements.find(e => e.id === id);
-        if (el) handleUpdateElement(id, { isLocked: !el.isLocked });
+        if (el) handleUpdateElement(id, { isLocked: !el.isLocked }, null);
+    };
+
+    const handleDragStart = () => {
+        dragStartRef.current = document;
+    };
+
+    const handleDragEnd = (id: string) => {
+        const before = dragStartRef.current;
+        dragStartRef.current = null;
+        if (!before) return;
+        const start = before.elements.find(el => el.id === id);
+        const end = elements.find(el => el.id === id);
+        if (start && end && start.position.x === end.position.x && start.position.y === end.position.y) return;
+        lastEditRef.current = null;
+        history.record(before);
     };
 
     return (
@@ -231,14 +298,40 @@ export const HUDEditor: React.FC = () => {
             {/* Center: Canvas */}
             <div className="flex-1 flex flex-col min-w-0 bg-[#111111]">
                 <div className="h-8 bg-[#1a1a1a] border-b border-gray-800 flex items-center px-4 justify-between shrink-0">
-                    <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Canvas: {Math.round(layout.width)} x {Math.round(layout.height)}</span>
+                    <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-1">
+                            <button
+                                type="button"
+                                onClick={history.undo}
+                                disabled={!hydrated || !history.canUndo}
+                                title="Undo (Ctrl+Z)"
+                                aria-label="Undo"
+                                className="p-1 rounded text-gray-400 hover:text-white hover:bg-gray-800 disabled:opacity-30 disabled:pointer-events-none"
+                            >
+                                <Undo2 size={12} />
+                            </button>
+                            <button
+                                type="button"
+                                onClick={history.redo}
+                                disabled={!hydrated || !history.canRedo}
+                                title="Redo (Ctrl+Y)"
+                                aria-label="Redo"
+                                className="p-1 rounded text-gray-400 hover:text-white hover:bg-gray-800 disabled:opacity-30 disabled:pointer-events-none"
+                            >
+                                <Redo2 size={12} />
+                            </button>
+                        </div>
+                        <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Canvas: {Math.round(layout.width)} x {Math.round(layout.height)}</span>
+                    </div>
                     <div className="text-[10px] text-gray-600">Zoom: {Math.round(canvasScale * 100)}%</div>
                 </div>
-                <HUDCanvas 
+                <HUDCanvas
                     elements={elements}
                     selectedId={selectedId}
                     onSelect={setSelectedId}
-                    onUpdate={handleUpdateElement}
+                    onUpdate={applyElementUpdate}
+                    onDragStart={handleDragStart}
+                    onDragEnd={handleDragEnd}
                     layout={layout}
                     onScaleChange={setCanvasScale}
                 />
@@ -267,7 +360,7 @@ export const HUDEditor: React.FC = () => {
                             elements={elements}
                             selectedElementId={selectedId}
                             onSelectElement={setSelectedId}
-                            onRefresh={refresh}
+                            onRefresh={handleRefresh}
                             onUpdateElement={handleUpdateElement}
                             onAgentCreate={(type, overrides) => handleAddElement(type, { ...overrides, id: 'ai' })}
                         />

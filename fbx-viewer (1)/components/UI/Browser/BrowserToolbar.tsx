@@ -1,7 +1,16 @@
 
 import React, { useState } from 'react';
-import { Search, Plus, Component, FileCode, User, Image, Swords, Film, Shield, Skull, Palette, Upload, Music } from 'lucide-react';
+import { Search, Plus, Component, FileCode, User, Image, Swords, Film, Shield, Skull, Palette, Music, FolderPlus } from 'lucide-react';
 import { AssetCategory } from '../../../types';
+import { MODEL_FILE_ACCEPT } from './browserFolders';
+
+/** File picker filter per import entry; animation clips are still bound through the FBX path. */
+const acceptFor = (category: AssetCategory): string => {
+    if (category === 'Texture') return 'image/*';
+    if (category === 'Audio') return 'audio/*';
+    if (category === 'Animation') return '.fbx';
+    return MODEL_FILE_ACCEPT;
+};
 
 interface BrowserToolbarProps {
     activeTab: 'models' | 'blueprints';
@@ -14,6 +23,8 @@ interface BrowserToolbarProps {
     onImportTexture: (files: File[]) => void;
     onImportAudio: (files: File[]) => void;
     onAddBlueprint: (type: 'Player Character' | 'Enemy Controller') => void;
+    /** Starts an inline "new folder" entry under the open folder. */
+    onCreateFolder: () => void;
     isLoading: boolean;
     hasPlayerCharacter: boolean;
     isCreatingPlayerBlueprint: boolean;
@@ -31,6 +42,7 @@ export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
     onImportTexture,
     onImportAudio,
     onAddBlueprint,
+    onCreateFolder,
     isLoading,
     hasPlayerCharacter,
     isCreatingPlayerBlueprint,
@@ -118,7 +130,7 @@ export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
                                                 )}
                                                 <input 
                                                     type="file" 
-                                                    accept={cat === 'Texture' ? "image/*" : cat === 'Audio' ? "audio/*" : ".fbx"}
+                                                    accept={acceptFor(cat)}
                                                     multiple 
                                                     className="hidden" 
                                                     onChange={(e) => handleFileSelect(e, cat)} 
@@ -131,7 +143,16 @@ export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
                                 </>
                             )}
                         </div>
-                        
+
+                        <button
+                            type="button"
+                            onClick={onCreateFolder}
+                            title="New folder in the open folder"
+                            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-bold bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white border border-gray-700 transition-colors shrink-0"
+                        >
+                            <FolderPlus size={14} /> Folder
+                        </button>
+
                         <div className="flex bg-gray-900 rounded p-0.5 border border-gray-700 overflow-x-auto custom-scrollbar">
                             {(['All', 'Character', 'Prop', 'Environment', 'Weapon', 'Animation', 'Texture', 'Audio'] as const).map(f => (
                                 <button

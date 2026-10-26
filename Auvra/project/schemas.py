@@ -15,7 +15,7 @@ SCHEMA_VERSION = 1
 DOMAIN_NAMES = (
     "metadata", "worlds", "scenes", "levels", "objects", "environment",
     "models", "animations", "attachments", "sockets", "textures", "audio",
-    "materials", "blueprints", "graphs", "hud",
+    "materials", "blueprints", "graphs", "hud", "prefabs",
 )
 PROJECT_SCHEMA_NAME = "project"
 SCHEMA_DIR = Path(__file__).resolve().parents[2] / "project" / "v1"
@@ -32,6 +32,7 @@ _NESTED_KEYS = {
     "heightfield": {"assetId", "encoding", "columns", "rows"},
     "skyConfig": {"timeOfDay", "sunIntensity", "ambienceIntensity", "sunColor", "fogColor", "fogDensity", "turbidity", "rayleigh", "mieCoefficient", "mieDirectionalG", "inclination", "azimuth"},
     "dimensions": {"width", "height"},
+    "importSettings": {"normalize", "targetSize"},
     "size": {"width", "height"},
     "generation": {"providerId", "modelId", "modelVersion", "jobId", "createdAt", "routeOrigin", "routeConsent", "promptSha256", "settingsSha256", "artifactSha256", "inputAssetIds", "seed", "costMicroUsd"},
     "flashConfig": {"enabled", "textureId", "scale", "color", "duration", "rotationSpeed", "preview"},
@@ -95,6 +96,15 @@ def validate_domain(domain: str, value: Any) -> dict[str, Any]:
     if domain == "objects":
         _normalize_object_transforms(candidate)
         _validate_terrain_heightfields(candidate)
+        _validate_component_ids(candidate)
+    elif domain == "prefabs":
+        # A prefab carries object documents (without a level); hold them to
+        # the same cross-field rules as the objects domain.
+        for prefab in _documents(candidate):
+            if isinstance(prefab, dict) and isinstance(prefab.get("objects"), list):
+                members = {"documents": prefab["objects"]}
+                _validate_terrain_heightfields(members)
+                _validate_component_ids(members)
     elif domain == "sockets":
         _normalize_socket_transforms(candidate)
     _assert_finite(candidate)
@@ -141,6 +151,36 @@ def validate_project_references(
         require("blueprints", (value.get("spawnConfig") or {}).get("blueprintId"), "spawn blueprint", optional=True)
         require("audio", (value.get("audioConfig") or {}).get("audioId"), "object audio", optional=True)
         require("textures", (value.get("terrainData") or {}).get("textureId"), "terrain texture", optional=True)
+        require("prefabs", value.get("prefabId"), "object prefab", optional=True)
+    # Transform parents live in the same level, so a hierarchy never spans
+    # levels and a level can be loaded (or deleted) as one tree.
+    for value in records["objects"].values():
+        parent = value.get("parentId")
+        if parent is None or parent == "":
+            continue
+        parent_value = records["objects"].get(parent)
+        if parent_value is None or parent_value.get("levelId") != value.get("levelId"):
+            raise ValueError("invalid object parent reference")
+    _assert_acyclic(records["objects"], "object hierarchy")
+    # A prefab is one tree: its root has no parent and every other member's
+    # parent is another member. Member ``prefabId`` values are informational
+    # (instantiation stamps the instantiated prefab) and are not resolved.
+    for prefab in records["prefabs"].values():
+        members: dict[str, dict[str, Any]] = {}
+        for value in prefab["objects"]:
+            if value["id"] in members:
+                raise ValueError("duplicate prefab object id")
+            members[value["id"]] = value
+        if prefab["rootId"] not in members:
+            raise ValueError("invalid prefab root reference")
+        for identity, value in members.items():
+            parent = value.get("parentId")
+            if identity == prefab["rootId"]:
+                if parent is not None and parent != "":
+                    raise ValueError("prefab root must not have a parent")
+            elif parent not in members:
+                raise ValueError("invalid prefab object parent reference")
+        _assert_acyclic(members, "prefab hierarchy")
     for value in records["animations"].values():
         require("models", value.get("modelId"), "animation model", optional=True)
     for value in records["models"].values():
@@ -249,6 +289,42 @@ def _validate_terrain_heightfields(value: Any) -> None:
         heightfield = terrain["heightfield"]
         if heightfield.get("columns") != samples or heightfield.get("rows") != samples:
             raise ValueError(f"objects document {index} terrain heightfield does not match its resolution")
+
+def _documents(value: Any) -> list[Any]:
+    documents = value.get("documents") if isinstance(value, dict) else None
+    return documents if isinstance(documents, list) else []
+
+def _validate_component_ids(value: Any) -> None:
+    """Component ids identify one behaviour on its object, so they are unique per object."""
+    for index, object_value in enumerate(_documents(value)):
+        components = object_value.get("components") if isinstance(object_value, dict) else None
+        if not isinstance(components, list):
+            continue
+        seen: set[str] = set()
+        for component in components:
+            identity = component.get("id") if isinstance(component, dict) else None
+            if isinstance(identity, str):
+                if identity in seen:
+                    raise ValueError(f"objects document {index} has duplicate component ids")
+                seen.add(identity)
+
+def _assert_acyclic(nodes: dict[str, dict[str, Any]], label: str) -> None:
+    """Reject ``parentId`` chains that loop; dangling parents are checked by the caller."""
+    settled: set[str] = set()
+    for start in nodes:
+        path: list[str] = []
+        on_path: set[str] = set()
+        current = start
+        while current not in settled:
+            if current in on_path:
+                raise ValueError(f"{label} contains a cycle")
+            on_path.add(current)
+            path.append(current)
+            parent = nodes[current].get("parentId")
+            if not isinstance(parent, str) or parent not in nodes:
+                break
+            current = parent
+        settled.update(path)
 
 def _normalize_socket_transforms(value: Any) -> None:
     if not isinstance(value, dict) or not isinstance(value.get("documents"), list):

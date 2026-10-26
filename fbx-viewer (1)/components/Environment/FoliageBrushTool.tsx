@@ -1,13 +1,15 @@
-
 import React, { useRef, useState, useMemo, useEffect } from 'react';
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { LoadedModelData, LevelObject } from '../../types';
+import { createPlacementQuery } from '../../utils/surfacePlacement';
 
 interface FoliageBrushToolProps {
     activeModel: LoadedModelData | null;
     mode: 'add' | 'erase';
     existingObjects: LevelObject[];
+    /** Every object in the level; lets the brush skip marker objects and sample unrendered terrain. Defaults to existingObjects. */
+    levelObjects?: LevelObject[];
     settings: {
         radius: number;
         density: number;
@@ -21,94 +23,103 @@ interface FoliageBrushToolProps {
     onStrokeStart?: () => void;
 }
 
-export const FoliageBrushTool: React.FC<FoliageBrushToolProps> = ({ 
-    activeModel, 
+// Lift the cursor ring off the surface so it does not z-fight with it.
+const CURSOR_LIFT = 0.05;
+
+export const FoliageBrushTool: React.FC<FoliageBrushToolProps> = ({
+    activeModel,
     mode,
     existingObjects,
+    levelObjects,
     settings,
     onPaint,
     onErase,
     onStrokeStart
 }) => {
-    const { camera, raycaster, pointer, gl } = useThree();
-    const brushMeshRef = useRef<THREE.Mesh>(null);
+    const { camera, raycaster, pointer, gl, scene } = useThree();
+    const cursorRef = useRef<THREE.Group>(null);
     const [isPainting, setIsPainting] = useState(false);
-    
-    // Raycasting Plane (Ground)
-    const plane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), []);
-    const planeIntersect = new THREE.Vector3();
+
     const cursorPosition = useRef(new THREE.Vector3());
+    const cursorNormal = useRef(new THREE.Vector3(0, 1, 0));
     const isCursorValid = useRef(false);
 
     // Reusable math
     const _up = useMemo(() => new THREE.Vector3(0, 1, 0), []);
-    const _dummyQ = useMemo(() => new THREE.Quaternion(), []);
+    const _cursorQ = useMemo(() => new THREE.Quaternion(), []);
+    const _yawQ = useMemo(() => new THREE.Quaternion(), []);
     const _alignQ = useMemo(() => new THREE.Quaternion(), []);
     const _euler = useMemo(() => new THREE.Euler(), []);
+    const _offset = useMemo(() => new THREE.Vector3(), []);
+    const _sampleOrigin = useMemo(() => new THREE.Vector3(), []);
+    const _sampleDirection = useMemo(() => new THREE.Vector3(), []);
+    const sampleRaycaster = useMemo(() => new THREE.Raycaster(), []);
 
     // Color logic
     const brushColor = mode === 'add' ? '#4ade80' : '#ef4444';
 
     // Painting Loop
     useFrame(() => {
-        // 1. Update Cursor Position
+        // 1. Update Cursor Position on the surface under the pointer
         raycaster.setFromCamera(pointer, camera);
-        
-        // Raycast against infinite plane for cursor
-        if (raycaster.ray.intersectPlane(plane, planeIntersect)) {
-            cursorPosition.current.copy(planeIntersect);
+        const surface = createPlacementQuery(scene, levelObjects ?? existingObjects, {
+            ignore: cursorRef.current ? [cursorRef.current] : [],
+        });
+        const hit = surface(raycaster);
+
+        if (hit) {
+            cursorPosition.current.copy(hit.point);
+            cursorNormal.current.copy(hit.normal);
+            _cursorQ.setFromUnitVectors(_up, hit.normal);
             isCursorValid.current = true;
-            
-            if (brushMeshRef.current) {
-                brushMeshRef.current.position.copy(planeIntersect);
-                brushMeshRef.current.visible = true;
-                brushMeshRef.current.position.y += 0.05;
-                
-                // Update radius visually if it changed
-                brushMeshRef.current.scale.setScalar(1); // Reset scale
+
+            if (cursorRef.current) {
+                cursorRef.current.position.copy(hit.point).addScaledVector(hit.normal, CURSOR_LIFT);
+                cursorRef.current.quaternion.copy(_cursorQ);
+                cursorRef.current.visible = true;
             }
         } else {
             isCursorValid.current = false;
-            if (brushMeshRef.current) brushMeshRef.current.visible = false;
+            if (cursorRef.current) cursorRef.current.visible = false;
         }
 
         // 2. Action Logic
         if (isPainting && isCursorValid.current) {
-            
+
             if (mode === 'add' && activeModel) {
                 // --- ADD MODE ---
-                const attempts = Math.ceil(settings.density * 5); 
-                
+                const attempts = Math.ceil(settings.density * 5);
+                // Scatter samples are projected onto the surface along the brush normal,
+                // within a sphere of the brush radius around the cursor.
+                const reach = Math.max(settings.radius, 0.5);
+                sampleRaycaster.layers.mask = raycaster.layers.mask;
+                sampleRaycaster.near = 0;
+                sampleRaycaster.far = reach * 2;
+                _sampleDirection.copy(cursorNormal.current).negate();
+
                 for (let i = 0; i < attempts; i++) {
                     if (Math.random() > 0.5) continue;
 
-                    // Generate Random Point in Circle
+                    // Generate Random Point in the brush disc (tangent to the surface)
                     const r = settings.radius * Math.sqrt(Math.random());
                     const theta = Math.random() * 2 * Math.PI;
-                    
-                    const offsetX = r * Math.cos(theta);
-                    const offsetZ = r * Math.sin(theta);
-                    
-                    const spawnPos = new THREE.Vector3(
-                        cursorPosition.current.x + offsetX,
-                        cursorPosition.current.y,
-                        cursorPosition.current.z + offsetZ
-                    );
+                    _offset.set(r * Math.cos(theta), 0, r * Math.sin(theta)).applyQuaternion(_cursorQ);
+
+                    _sampleOrigin.copy(cursorPosition.current).add(_offset).addScaledVector(cursorNormal.current, reach);
+                    sampleRaycaster.set(_sampleOrigin, _sampleDirection);
+                    const sample = surface(sampleRaycaster);
+                    if (!sample) continue; // Brush overhangs a drop deeper than its radius
 
                     // --- ROTATION LOGIC ---
-                    const normal = _up; // Assuming flat plane for now
-                    
-                    if (settings.alignToNormal) {
-                        _alignQ.setFromUnitVectors(_up, normal);
-                    } else {
-                        _alignQ.identity();
-                    }
+                    // Random yaw about the model's up axis, then tilt that up axis onto the surface.
+                    const normal = settings.alignToNormal ? sample.normal : _up;
+                    _alignQ.setFromUnitVectors(_up, normal);
 
                     // Calculate random rotation based on variation range (0 to 360)
                     const randomYaw = Math.random() * settings.rotationVariation * (Math.PI / 180);
-                    _dummyQ.setFromAxisAngle(normal, randomYaw);
+                    _yawQ.setFromAxisAngle(_up, randomYaw);
 
-                    _alignQ.multiply(_dummyQ);
+                    _alignQ.multiply(_yawQ);
                     _euler.setFromQuaternion(_alignQ);
 
                     // --- SCALE LOGIC ---
@@ -116,12 +127,14 @@ export const FoliageBrushTool: React.FC<FoliageBrushToolProps> = ({
                     const s = settings.scaleMin + Math.random() * (settings.scaleMax - settings.scaleMin);
                     const scale = new THREE.Vector3(s, s, s);
 
-                    onPaint(spawnPos, _euler.clone(), scale);
+                    onPaint(sample.point.clone(), _euler.clone(), scale);
                 }
             } else if (mode === 'erase') {
                 // --- ERASE MODE ---
                 const radiusSq = settings.radius * settings.radius;
                 const idsToRemove: string[] = [];
+                const center = cursorPosition.current;
+                const normal = cursorNormal.current;
 
                 // Iterate through existing objects to find candidates
                 // If activeModel is selected, ONLY erase that type. Otherwise erase nothing (safe default).
@@ -130,11 +143,12 @@ export const FoliageBrushTool: React.FC<FoliageBrushToolProps> = ({
                         // Filter by type
                         if (obj.modelId !== activeModel.id) return;
 
-                        // Distance check (2D XZ plane)
-                        const dx = obj.position[0] - cursorPosition.current.x;
-                        const dz = obj.position[2] - cursorPosition.current.z;
-                        
-                        if ((dx * dx + dz * dz) < radiusSq) {
+                        // Distance check: a cylinder of the brush radius along the surface normal
+                        _offset.set(obj.position[0] - center.x, obj.position[1] - center.y, obj.position[2] - center.z);
+                        const along = _offset.dot(normal);
+                        if (Math.abs(along) > settings.radius) return;
+
+                        if ((_offset.lengthSq() - along * along) < radiusSq) {
                             idsToRemove.push(obj.id);
                         }
                     });
@@ -163,7 +177,7 @@ export const FoliageBrushTool: React.FC<FoliageBrushToolProps> = ({
         domElement.addEventListener('mousedown', handleDown);
         window.addEventListener('mouseup', handleUp); // Listen on window for mouseup to catch drags outside
         domElement.addEventListener('mouseleave', handleLeave);
-        
+
         return () => {
             domElement.removeEventListener('mousedown', handleDown);
             window.removeEventListener('mouseup', handleUp);
@@ -172,20 +186,19 @@ export const FoliageBrushTool: React.FC<FoliageBrushToolProps> = ({
     }, [onStrokeStart, gl]);
 
     return (
-        <group>
+        // The cursor sits on the surface, tilted to its normal; it is ignored by the surface raycast.
+        <group ref={cursorRef} visible={false}>
             {/* The Visual Ring */}
-            <mesh ref={brushMeshRef} rotation={[-Math.PI / 2, 0, 0]} visible={false}>
-                <ringGeometry args={[settings.radius - 0.1, settings.radius, 64]} />
+            <mesh rotation={[-Math.PI / 2, 0, 0]}>
+                <ringGeometry args={[Math.max(settings.radius - 0.1, 0), settings.radius, 64]} />
                 <meshBasicMaterial color={brushColor} transparent opacity={0.5} side={THREE.DoubleSide} />
             </mesh>
-            
+
             {/* Center Dot */}
-            {brushMeshRef.current?.visible && (
-                <mesh position={cursorPosition.current}>
-                    <sphereGeometry args={[0.1]} />
-                    <meshBasicMaterial color={brushColor} />
-                </mesh>
-            )}
+            <mesh>
+                <sphereGeometry args={[0.1]} />
+                <meshBasicMaterial color={brushColor} />
+            </mesh>
         </group>
     );
 };

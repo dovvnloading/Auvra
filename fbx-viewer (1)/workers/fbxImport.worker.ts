@@ -2,10 +2,14 @@
 
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 
-type ImportRequest = { type: 'parse'; buffer: ArrayBuffer };
-type ImportPhase = 'fbx_structure_parse' | 'embedded_texture_decode' | 'runtime_asset_construction' | 'runtime_asset_transfer';
+// Despite the file name this worker converts every format whose loader parses
+// synchronously (FBX and OBJ) into a GLB handoff for the renderer thread.
+type ImportFormat = 'fbx' | 'obj';
+type ImportRequest = { type: 'parse'; buffer: ArrayBuffer; format?: ImportFormat };
+type ImportPhase = 'fbx_structure_parse' | 'model_structure_parse' | 'embedded_texture_decode' | 'runtime_asset_construction' | 'runtime_asset_transfer';
 type ImportProgress = { type: 'progress'; progress: number; phase: ImportPhase; workerState: 'parsing' | 'decoding' | 'constructing' | 'transferring' };
 type ImportComplete = { type: 'complete'; glb: ArrayBuffer; itemCount: number; clipCount: number };
 type ImportFailure = { type: 'error'; message: string };
@@ -111,15 +115,55 @@ const replaceWorkerImages = (object: THREE.Object3D): ImageBitmap[] => {
   return bitmaps;
 };
 
+/**
+ * OBJ carries no PBR data (its .mtl sidecar is not part of a single-file
+ * import), and GLTFExporter would write OBJLoader's Phong defaults as
+ * half-metallic. Hand over matte Standard materials with smooth normals
+ * instead, so faces without authored normals still shade.
+ */
+const prepareObjMeshes = (object: THREE.Object3D): number => {
+  let meshCount = 0;
+  const toStandard = (material: THREE.Material): THREE.Material => {
+    const phong = material as THREE.MeshPhongMaterial;
+    if (!phong.isMeshPhongMaterial) return material;
+    const standard = new THREE.MeshStandardMaterial({
+      name: phong.name,
+      color: phong.color,
+      vertexColors: phong.vertexColors,
+      flatShading: phong.flatShading,
+      roughness: 0.8,
+      metalness: 0,
+    });
+    phong.dispose();
+    return standard;
+  };
+  object.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    meshCount += 1;
+    if (!mesh.geometry.getAttribute('normal')) mesh.geometry.computeVertexNormals();
+    mesh.material = Array.isArray(mesh.material) ? mesh.material.map(toStandard) : toStandard(mesh.material);
+  });
+  return meshCount;
+};
+
 scope.onmessage = async (event: MessageEvent<ImportRequest>) => {
   if (event.data?.type !== 'parse' || !(event.data.buffer instanceof ArrayBuffer)) return;
+  const format: ImportFormat = event.data.format === 'obj' ? 'obj' : 'fbx';
   let bitmaps: ImageBitmap[] = [];
   try {
-    report(0.12, 'fbx_structure_parse', 'parsing');
-    const object = new FBXLoader().parse(event.data.buffer, '');
-    report(0.48, 'embedded_texture_decode', 'decoding');
-    await Promise.all(pendingImages);
-    bitmaps = replaceWorkerImages(object);
+    let object: THREE.Group;
+    if (format === 'obj') {
+      report(0.12, 'model_structure_parse', 'parsing');
+      object = new OBJLoader().parse(new TextDecoder().decode(event.data.buffer));
+      if (prepareObjMeshes(object) === 0) throw new Error('The OBJ file contains no mesh geometry.');
+    } else {
+      report(0.12, 'fbx_structure_parse', 'parsing');
+      object = new FBXLoader().parse(event.data.buffer, '');
+      report(0.48, 'embedded_texture_decode', 'decoding');
+      await Promise.all(pendingImages);
+      bitmaps = replaceWorkerImages(object);
+    }
     report(0.64, 'runtime_asset_construction', 'constructing');
     const exported = await new GLTFExporter().parseAsync(object, {
       binary: true,
@@ -127,13 +171,13 @@ scope.onmessage = async (event: MessageEvent<ImportRequest>) => {
       onlyVisible: false,
       trs: false,
     });
-    if (!(exported instanceof ArrayBuffer)) throw new Error('FBX worker did not produce a binary runtime asset');
+    if (!(exported instanceof ArrayBuffer)) throw new Error(`${format.toUpperCase()} worker did not produce a binary runtime asset`);
     let itemCount = 0;
     object.traverse(() => { itemCount += 1; });
     report(0.82, 'runtime_asset_transfer', 'transferring');
     scope.postMessage({ type: 'complete', glb: exported, itemCount, clipCount: object.animations?.length ?? 0 } satisfies ImportComplete, [exported]);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Background FBX processing failed';
+    const message = error instanceof Error ? error.message : `Background ${format.toUpperCase()} processing failed`;
     scope.postMessage({ type: 'error', message } satisfies ImportFailure);
   } finally {
     for (const bitmap of bitmaps) bitmap.close();

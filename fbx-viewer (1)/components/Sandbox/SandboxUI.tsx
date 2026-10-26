@@ -61,7 +61,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
         onStart();
         setTimeout(() => {
             const canvas = document.querySelector('canvas');
-            if (canvas) canvas.requestPointerLock();
+            if (canvas) Promise.resolve(canvas.requestPointerLock()).catch(() => undefined);
         }, 100);
     }, [onStart]);
 

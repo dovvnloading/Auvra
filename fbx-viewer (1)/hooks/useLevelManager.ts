@@ -9,6 +9,7 @@ import { editorSession, selectObjectsForLevel, type EditorSessionLease } from '.
 import { subscribeDomainCascade, type DomainCascadeEvent } from '../utils/domainCascade';
 import { resolveTerrainHeightfield } from '../utils/terrainHeightfieldEditor';
 import { isTerrainHeightfieldPending, TerrainHeightfieldEncodingError } from '../utils/terrainHeightfieldCodec';
+import { collectSubtree, sortByHierarchy } from '../utils/sceneGraph';
 
 const DEFAULT_LEVEL_ID = 'default_level';
 const EMPTY_BLUEPRINT: LevelBlueprintData = { nodes: [], connections: [], variables: [] };
@@ -34,9 +35,24 @@ interface PendingLevelEdit {
     lease: EditorSessionLease;
 }
 
+/** Ids of the objects matching `isRoot` and all of their descendants. */
+const withDescendants = (objects: readonly LevelObject[], isRoot: (object: LevelObject) => boolean): Set<string> => {
+    const ids = new Set<string>();
+    // Parents come first, so a descendant always sees its removed ancestor.
+    for (const object of sortByHierarchy(objects)) {
+        if (isRoot(object) || (object.parentId && ids.has(object.parentId))) ids.add(object.id);
+    }
+    return ids;
+};
+
+/** A deleted model removes its objects together with their descendants, as the host does. */
+const modelCascadeIds = (objects: readonly LevelObject[], modelId: string): Set<string> =>
+    withDescendants(objects, (object) => object.modelId === modelId);
+
 const applyDomainCascade = (objects: LevelObject[], event: DomainCascadeEvent): LevelObject[] => {
     if (event.kind === 'model') {
-        return objects.filter((object) => object.modelId !== event.id);
+        const removed = modelCascadeIds(objects, event.id);
+        return removed.size === 0 ? objects : objects.filter((object) => !removed.has(object.id));
     }
     return objects.map((object) => {
         if (event.kind === 'texture' && object.terrainData?.textureId === event.id) {
@@ -89,6 +105,17 @@ const diffLevelObjects = (currentState: LevelObject[], nextState: LevelObject[])
             }
         }
     }
+    // The project rejects an object whose parent is missing: parents are
+    // written before their children and deleted after them.
+    if (toAdd.length > 1) {
+        const added = new Set(toAdd.map((object) => object.id));
+        toAdd.splice(0, toAdd.length, ...sortByHierarchy(nextState).filter((object) => added.has(object.id)));
+    }
+    if (toDelete.length > 1) {
+        const deleted = new Set(toDelete);
+        toDelete.splice(0, toDelete.length, ...sortByHierarchy(currentState)
+            .filter((object) => deleted.has(object.id)).map((object) => object.id).reverse());
+    }
     return { toDelete, toAdd, toUpdate };
 };
 
@@ -119,12 +146,8 @@ const syncStateToDB = async (
     const { toDelete, toAdd, toUpdate } = diffLevelObjects(currentState, nextState);
 
     try {
-        for (const id of toDelete) {
-            if (activeLease && !editorSession.isCurrent(activeLease)) return false;
-            await dbOperations.deleteLevelObject(id, activeLease);
-            if (lease && !editorSession.isSameSession(lease)) return false;
-            activeLease = editorSession.captureReady() || undefined;
-        }
+        // Adds and updates first, deletes last: every intermediate project
+        // state then only names parents that still exist.
         for (const object of toAdd) {
             if (activeLease && !editorSession.isCurrent(activeLease)) return false;
             await dbOperations.addLevelObject(object, activeLease);
@@ -134,6 +157,12 @@ const syncStateToDB = async (
         for (const object of toUpdate) {
             if (activeLease && !editorSession.isCurrent(activeLease)) return false;
             await dbOperations.updateLevelObject(object.id, object, activeLease);
+            if (lease && !editorSession.isSameSession(lease)) return false;
+            activeLease = editorSession.captureReady() || undefined;
+        }
+        for (const id of toDelete) {
+            if (activeLease && !editorSession.isCurrent(activeLease)) return false;
+            await dbOperations.deleteLevelObject(id, activeLease);
             if (lease && !editorSession.isSameSession(lease)) return false;
             activeLease = editorSession.captureReady() || undefined;
         }
@@ -292,13 +321,13 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       const status = projectService.getStatus();
       if (session.getSnapshot().phase !== 'ready' || status.projectId !== event.projectId) return;
       const currentObjects = workingState.levelObjects;
-      const affectedIds = new Set(currentObjects
-          .filter((object) => event.kind === 'model'
-              ? object.modelId === event.id
-              : event.kind === 'texture'
+      const affectedIds = event.kind === 'model'
+          ? modelCascadeIds(currentObjects, event.id)
+          : new Set(currentObjects
+              .filter((object) => event.kind === 'texture'
                   ? object.terrainData?.textureId === event.id
                   : object.audioConfig?.audioId === event.id)
-          .map((object) => object.id));
+              .map((object) => object.id));
       if (affectedIds.size === 0) return;
       // The host already rewrote the stored documents. Unwritten edits of the
       // affected objects are re-queued without the deleted reference (or
@@ -715,27 +744,71 @@ export const useLevelManager = (models: LoadedModelData[]) => {
     }
   }, [models, currentLevelId, snapshotHistory, session]);
 
-  const removeLevelObject = useCallback(async (id: string) => {
+  /**
+   * Insert complete documents (ids, parentId, components and configs kept)
+   * into the current level as one undo step, parents before children. A
+   * parent that is neither in the batch nor in the level, or that would close
+   * a cycle, makes the object a root. Resolves to the inserted ids in write
+   * order; rejects (after notifying) when the documents cannot be saved, in
+   * which case the ones already written are removed again.
+   */
+  const addLevelObjects = useCallback(async (objects: LevelObject[]): Promise<string[]> => {
+      const lease = session.requireCurrent(session.captureReady());
+      const activeLevelId = currentLevelIdRef.current;
+      if (!activeLevelId || lease.levelId !== activeLevelId || objects.length === 0) return [];
+      projectService.assertWritable();
+      const existing = new Set(levelObjects.map((object) => object.id));
+      const incoming = new Set<string>();
+      for (const object of objects) {
+          // An upsert under a used id would overwrite that object.
+          if (!object.id || existing.has(object.id) || incoming.has(object.id)) {
+              throw new Error(`Cannot add "${object.name || object.id}": its id is already used in this level.`);
+          }
+          if (object.modelId && !models.some((model) => model.id === object.modelId)) {
+              throw new Error(`Cannot add "${object.name || object.id}": its model is not in the library.`);
+          }
+          incoming.add(object.id);
+      }
+      const placed = new Set(existing);
+      const documents = sortByHierarchy(objects).map((object): LevelObject => {
+          const document: LevelObject = { ...object, levelId: activeLevelId };
+          if (document.parentId && !placed.has(document.parentId)) document.parentId = null;
+          placed.add(document.id);
+          return document;
+      });
+      snapshotHistory();
+      try {
+          if (!await syncStateToDB([], documents, lease) || !session.isSameSession(lease)) return [];
+      } catch (error) {
+          frontendDiagnostics.failure('level_objects_add_failed', error);
+          addNotification({
+              message: `${documents.length === 1 ? 'The object' : `${documents.length} objects`} could not be added (${describeError(error)}).`,
+              type: 'error',
+          });
+          throw error;
+      }
+      setWorkingState(prev => ({ ...prev, levelObjects: [...prev.levelObjects, ...documents] }));
+      return documents.map((object) => object.id);
+  }, [addNotification, levelObjects, models, snapshotHistory, session]);
+
+  /**
+   * Delete the objects and all of their descendants as one undo step. The
+   * project rejects an object whose parent is missing, so children are
+   * deleted before their parents and no child is ever left orphaned.
+   */
+  const removeLevelObjects = useCallback(async (rootIds: string[]) => {
       const lease = session.requireCurrent(session.captureReady());
       projectService.assertWritable();
+      const doomed = new Set<string>();
+      for (const id of rootIds) {
+          for (const object of collectSubtree(levelObjects, id)) doomed.add(object.id);
+      }
+      if (doomed.size === 0) return;
+      const ids = sortByHierarchy(levelObjects.filter((object) => doomed.has(object.id)))
+          .map((object) => object.id)
+          .reverse();
       snapshotHistory();
       // A partial edit written after the delete would recreate a broken document.
-      const superseded = supersedePendingEdits([id]);
-      try {
-          await dbOperations.deleteLevelObject(id, lease);
-          if (!session.isSameSession(lease)) return;
-          setWorkingState(prev => ({ ...prev, levelObjects: prev.levelObjects.filter(o => o.id !== id) }));
-      } catch(e) {
-          restorePendingEdits(superseded);
-          frontendDiagnostics.failure('level_object_delete_failed', e);
-      }
-  }, [restorePendingEdits, snapshotHistory, session, supersedePendingEdits]);
-
-  const removeLevelObjects = useCallback(async (ids: string[]) => {
-      const lease = session.requireCurrent(session.captureReady());
-      projectService.assertWritable();
-      if (ids.length === 0) return;
-      snapshotHistory();
       const superseded = supersedePendingEdits(ids);
       const deleted = new Set<string>();
       try {
@@ -747,13 +820,18 @@ export const useLevelManager = (models: LoadedModelData[]) => {
               if (!session.isSameSession(lease)) return;
               activeLease = session.captureReady()!;
           }
-          if (!session.isSameSession(lease)) return;
-          setWorkingState(prev => ({ ...prev, levelObjects: prev.levelObjects.filter(o => !ids.includes(o.id)) }));
       } catch(e) {
           restorePendingEdits(new Map([...superseded].filter(([id]) => !deleted.has(id))));
           frontendDiagnostics.failure('level_object_batch_delete_failed', e);
+          addNotification({ message: `Delete failed (${describeError(e)}); ${ids.length - deleted.size} of ${ids.length} objects were kept.`, type: 'error' });
       }
-  }, [restorePendingEdits, snapshotHistory, session, supersedePendingEdits]);
+      // Objects already deleted (children first) are gone even when a later delete failed.
+      if (deleted.size === 0 || !session.isSameSession(lease)) return;
+      setWorkingState(prev => ({ ...prev, levelObjects: prev.levelObjects.filter(o => !deleted.has(o.id)) }));
+  }, [addNotification, levelObjects, restorePendingEdits, snapshotHistory, session, supersedePendingEdits]);
+
+  /** Delete one object together with its descendants. */
+  const removeLevelObject = useCallback((id: string) => removeLevelObjects([id]), [removeLevelObjects]);
 
   const updateLevelObject = useCallback((id: string, updates: Partial<LevelObject>) => {
       const lease = session.requireCurrent(session.captureReady());
@@ -837,6 +915,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       deleteLevel,
       levelObjects,
       addLevelObject,
+      addLevelObjects,
       removeLevelObject,
       removeLevelObjects,
       updateLevelObject,

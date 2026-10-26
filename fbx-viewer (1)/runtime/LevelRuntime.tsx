@@ -22,10 +22,13 @@ import { GraphRuntimeAPI } from '../components/AnimationGraph/GraphRuntime';
 import { useLevelBlueprintRuntime, UseLevelBlueprintRuntimeProps } from '../hooks/useLevelBlueprintRuntime';
 import { useRuntimeLevelWorld } from '../hooks/useRuntimeLevelWorld';
 import { frontendDiagnostics } from '../diagnostics/runtime';
-import { AttachmentData, Blueprint, LevelObject, LoadedModelData, SocketData } from '../types';
+import { AttachmentData, Blueprint, LevelComponent, LevelObject, LoadedModelData, SocketData } from '../types';
 import { useGameContent } from './GameContentContext';
 import { gameState, useGameState } from './gameState';
 import { PauseController } from './PauseController';
+import { ComponentHostContext } from './components/builtins';
+import { getComponentDefinition } from './components/registry';
+import type { ComponentDefinition } from './components/types';
 import type { GameContent, LevelRuntimeProps, PlayerStart, RuntimeHost, RuntimeLevel, SaveGameData } from './types';
 
 type Vec3 = [number, number, number];
@@ -143,6 +146,159 @@ const CameraSettings: React.FC<{ fov: number }> = ({ fov }) => {
         camera.updateProjectionMatrix();
     }, [camera, fov]);
     return null;
+};
+
+// --- LEVEL HIERARCHY ---
+
+/** How a session draws its objects: transform groups where the hierarchy or components need them, instancing elsewhere. */
+interface LevelRenderPlan {
+    /** Every object with its world transform (and no parent), for systems that read positions as world space. */
+    worldObjects: LevelObject[];
+    /** Roots of the objects drawn as their own transform groups; nested groups are listed in groupChildren. */
+    groupRoots: LevelObject[];
+    groupChildren: Map<string, LevelObject[]>;
+    /** Static leaf props and foliage, in world space, drawn through the instanced layers. */
+    instancedFoliage: LevelObject[];
+    instancedProps: LevelObject[];
+    terrains: LevelObject[];
+}
+
+interface MountedComponent {
+    Render: NonNullable<ComponentDefinition['Render']>;
+    component: LevelComponent;
+}
+
+const mountedComponents = (obj: LevelObject): MountedComponent[] => (obj.components ?? []).flatMap(component => {
+    if (!component.enabled) return [];
+    const Render = getComponentDefinition(component.type)?.Render;
+    return Render ? [{ Render, component }] : [];
+});
+
+const localMatrix = (obj: LevelObject): THREE.Matrix4 => new THREE.Matrix4().compose(
+    new THREE.Vector3(...obj.position),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(obj.rotation[0], obj.rotation[1], obj.rotation[2])),
+    new THREE.Vector3(...obj.scale)
+);
+
+const toWorldObject = (obj: LevelObject, world: THREE.Matrix4): LevelObject => {
+    const position = new THREE.Vector3();
+    const quaternion = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    world.decompose(position, quaternion, scale);
+    const rotation = new THREE.Euler().setFromQuaternion(quaternion);
+    return {
+        ...obj,
+        parentId: null,
+        position: [position.x, position.y, position.z],
+        rotation: [rotation.x, rotation.y, rotation.z],
+        scale: [scale.x, scale.y, scale.z]
+    };
+};
+
+/**
+ * Splits the session's objects by how they render. Parent links follow utils/sceneGraph (a missing or
+ * self parent makes a root); a corrupt cycle is broken where it is first reached. An object gets its own
+ * transform group when it has components or children, or sits under an object with components (which
+ * may move it); static leaves keep instancing at their world transform. World matrices are composed
+ * top-down in one pass, matching sceneGraph.getWorldMatrix without its per-object walk.
+ */
+const planLevelRender = (objects: LevelObject[]): LevelRenderPlan => {
+    const index = new Map(objects.map(obj => [obj.id, obj]));
+    const childMap = new Map<string | null, LevelObject[]>();
+    objects.forEach(obj => {
+        const parentId = obj.parentId && obj.parentId !== obj.id && index.has(obj.parentId) ? obj.parentId : null;
+        const siblings = childMap.get(parentId);
+        if (siblings) siblings.push(obj);
+        else childMap.set(parentId, [obj]);
+    });
+
+    const worldMatrices = new Map<string, THREE.Matrix4>();
+    const treeParent = new Map<string, string | null>();
+    const parents = new Set<string>();
+    const dynamic = new Set<string>();
+    const visit = (root: LevelObject) => {
+        const stack: [LevelObject, string | null][] = [[root, null]];
+        while (stack.length) {
+            const [obj, parentId] = stack.pop()!;
+            if (worldMatrices.has(obj.id)) continue;
+            const world = localMatrix(obj);
+            if (parentId) {
+                world.premultiply(worldMatrices.get(parentId)!);
+                parents.add(parentId);
+            }
+            worldMatrices.set(obj.id, world);
+            treeParent.set(obj.id, parentId);
+            if (mountedComponents(obj).length || (parentId && dynamic.has(parentId))) dynamic.add(obj.id);
+            const children = childMap.get(obj.id);
+            if (children) for (let i = children.length - 1; i >= 0; i--) stack.push([children[i], obj.id]);
+        }
+    };
+    (childMap.get(null) ?? []).forEach(visit);
+    objects.forEach(visit);
+
+    const hasHierarchy = objects.some(obj => treeParent.get(obj.id));
+    const worldObjects = hasHierarchy
+        ? objects.map(obj => (treeParent.get(obj.id) ? toWorldObject(obj, worldMatrices.get(obj.id)!) : obj))
+        : objects;
+
+    const plan: LevelRenderPlan = { worldObjects, groupRoots: [], groupChildren: new Map(), instancedFoliage: [], instancedProps: [], terrains: [] };
+    objects.forEach((obj, i) => {
+        const worldObject = worldObjects[i];
+        if (obj.type === 'terrain') plan.terrains.push(worldObject);
+        if (dynamic.has(obj.id) || parents.has(obj.id)) {
+            const parentId = treeParent.get(obj.id);
+            if (!parentId) plan.groupRoots.push(obj);
+            else {
+                const siblings = plan.groupChildren.get(parentId);
+                if (siblings) siblings.push(obj);
+                else plan.groupChildren.set(parentId, [obj]);
+            }
+        } else if (obj.type === 'foliage') plan.instancedFoliage.push(worldObject);
+        else if (obj.type === 'prop') plan.instancedProps.push(worldObject);
+    });
+    return plan;
+};
+
+/**
+ * One object drawn as its own transform group (local to its parent's group): a clone of its model,
+ * its enabled components in runtime mode, and its group-drawn children.
+ */
+const LevelObjectNode: React.FC<{ object: LevelObject; plan: LevelRenderPlan; models: LoadedModelData[] }> = ({ object, plan, models }) => {
+    const groupRef = useRef<THREE.Group>(null);
+    const model = object.type === 'prop' || object.type === 'foliage' ? models.find(m => m.id === object.modelId) : undefined;
+    const meshes = useMemo(() => {
+        if (!model) return null;
+        try {
+            // Keeps the model root's own (import normalisation) transform, like the instanced layers.
+            const clone = SkeletonUtils.clone(model.object);
+            clone.traverse(child => {
+                if ((child as THREE.Mesh).isMesh) {
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                }
+            });
+            return clone;
+        } catch (e) {
+            frontendDiagnostics.failure('level_object_clone_failed', e);
+            return null;
+        }
+    }, [model]);
+    const components = useMemo(() => mountedComponents(object), [object]);
+    const children = plan.groupChildren.get(object.id);
+
+    return (
+        <group ref={groupRef} position={object.position} rotation={object.rotation} scale={object.scale} userData={{ levelObjectId: object.id }}>
+            {meshes && <primitive object={meshes} />}
+            <ComponentHostContext.Provider value={groupRef}>
+                {components.map(({ Render, component }) => (
+                    <Render key={component.id} object={object} component={component} mode="runtime" />
+                ))}
+            </ComponentHostContext.Provider>
+            {children?.map(child => (
+                <LevelObjectNode key={child.id} object={child} plan={plan} models={models} />
+            ))}
+        </group>
+    );
 };
 
 /** SandboxUI's built-in HUD, used when the host gives no overlay. Subscribes on its own so stat changes do not re-render the world. */
@@ -299,17 +455,9 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
         resolveActorAssets(content, content.blueprints.find(b => b.id === blueprintId))
     ), [content]);
 
-    const { foliageObjects, propObjects, terrainObjects } = useMemo(() => {
-        const foliage: LevelObject[] = [];
-        const props: LevelObject[] = [];
-        const terrains: LevelObject[] = [];
-        runtimeLevelObjects.forEach(obj => {
-            if (obj.type === 'foliage') foliage.push(obj);
-            else if (obj.type === 'prop') props.push(obj);
-            else if (obj.type === 'terrain') terrains.push(obj);
-        });
-        return { foliageObjects: foliage, propObjects: props, terrainObjects: terrains };
-    }, [runtimeLevelObjects]);
+    // Hierarchy and components render as transform groups; gameplay systems read world-space copies.
+    const renderPlan = useMemo(() => planLevelRender(runtimeLevelObjects), [runtimeLevelObjects]);
+    const worldLevelObjects = renderPlan.worldObjects;
 
     if (!runtimePlayerModel) return null;
 
@@ -322,7 +470,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
 
             <group>
                 {/* Render Terrain */}
-                {terrainObjects.map(terrain => (
+                {renderPlan.terrains.map(terrain => (
                     <TerrainObject
                         key={terrain.id}
                         data={terrain}
@@ -334,12 +482,16 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                     />
                 ))}
 
-                <InstancedLevelLayer models={models} levelObjects={foliageObjects} interactive={false} />
-                <InstancedLevelLayer models={models} levelObjects={propObjects} interactive={false} />
+                <InstancedLevelLayer models={models} levelObjects={renderPlan.instancedFoliage} interactive={false} />
+                <InstancedLevelLayer models={models} levelObjects={renderPlan.instancedProps} interactive={false} />
+
+                {renderPlan.groupRoots.map(obj => (
+                    <LevelObjectNode key={obj.id} object={obj} plan={renderPlan} models={models} />
+                ))}
             </group>
 
             <AudioSystem
-                levelObjects={runtimeLevelObjects}
+                levelObjects={worldLevelObjects}
                 audioAssets={audioAssets}
                 isMuted={false}
             />
@@ -393,7 +545,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                 projectileManager={projectileManagerRef}
                 modelObject={runtimePlayerModel.object}
                 enabled={controlsEnabled}
-                levelObjects={runtimeLevelObjects}
+                levelObjects={worldLevelObjects}
                 onStaminaChange={handleStaminaChange}
                 onAimChange={handleAimChange}
                 weaponSounds={weaponSoundUrls}
@@ -402,7 +554,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
 
             <LevelLogicSystem
                 blueprint={level.blueprint}
-                levelObjects={runtimeLevelObjects}
+                levelObjects={worldLevelObjects}
                 playerEntityRef={playerEntityRef}
                 playerApiRef={playerApiRef}
                 enemyApiRef={enemyApiRef}
@@ -414,7 +566,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
             />
 
             <SpawnerSystem
-                levelObjects={runtimeLevelObjects}
+                levelObjects={worldLevelObjects}
                 isGameOver={isGameOver}
                 onSpawn={handleSpawn}
             />

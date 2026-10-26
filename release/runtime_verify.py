@@ -27,7 +27,7 @@ PROJECT_SCHEMA_DIR = "host/project/v1"
 PROJECT_SCHEMA_NAMES = (
     "metadata", "worlds", "scenes", "levels", "objects", "environment",
     "models", "animations", "attachments", "sockets", "textures", "audio",
-    "materials", "blueprints", "graphs", "hud", "project",
+    "materials", "blueprints", "graphs", "hud", "prefabs", "project",
 )
 HOST_SCHEMA_FILES = (PROTOCOL_SCHEMA, *(f"{PROJECT_SCHEMA_DIR}/{name}.schema.json" for name in PROJECT_SCHEMA_NAMES))
 

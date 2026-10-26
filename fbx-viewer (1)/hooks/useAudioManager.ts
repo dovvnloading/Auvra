@@ -1,7 +1,7 @@
 
 import { useState, useCallback } from 'react';
-import { AudioData } from '../types';
-import { dbOperations } from '../utils/db';
+import { AssetInfoUpdate, AudioData } from '../types';
+import { dbOperations, normalizeAssetInfoUpdate } from '../utils/db';
 import { projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
 import { isAbortError, useOperationActions } from '../context/OperationContext';
@@ -123,10 +123,25 @@ export const useAudioManager = (setIsLoading: (loading: boolean) => void) => {
       }
   }, [addNotification]);
 
+  /** Rename and/or move an audio asset (folder '' is the library root); rejects when the change cannot be saved. */
+  const updateAudio = useCallback(async (id: string, updates: AssetInfoUpdate): Promise<void> => {
+      projectService.assertWritable();
+      const info = normalizeAssetInfoUpdate(updates);
+      if (info.name === undefined && info.folder === undefined) return;
+      try {
+          await dbOperations.updateAudioInfo(id, info);
+      } catch (e) {
+          frontendDiagnostics.failure('audio_info_update_failed', e);
+          throw e;
+      }
+      setAudioAssets(prev => prev.map(a => (a.id === id ? { ...a, ...info } : a)));
+  }, []);
+
   return frontendDiagnostics.traceActions('audio_manager', {
       audioAssets,
       setAudioAssets, // Exposed for persistence loading
       addAudio,
-      removeAudio
+      removeAudio,
+      updateAudio
   });
 };

@@ -43,7 +43,7 @@ const FreeCameraControls: React.FC<{
       if (e.button === 2) { // Right Click
         isDragging.current = true;
         setIsRightMouseDown(true);
-        gl.domElement.requestPointerLock();
+        Promise.resolve(gl.domElement.requestPointerLock()).catch(() => undefined);
       }
     };
 

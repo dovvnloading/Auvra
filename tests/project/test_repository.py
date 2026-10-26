@@ -461,6 +461,7 @@ class SchemaTests(unittest.TestCase):
             if domain in ("attachments", "sockets"): fixture["documents"][0]["parentModelId"] = "model"
             if domain == "objects": fixture["documents"][0].update(levelId="level", name="Object", type="prop")
             if domain == "blueprints": fixture["documents"][0].update(name="B", type="Enemy Controller")
+            if domain == "prefabs": fixture["documents"][0].update(name="Prefab", rootId="root", objects=[{"id": "root", "name": "Root", "type": "prop", "position": [0, 0, 0], "rotation": [0, 0, 0], "scale": [1, 1, 1]}])
             validate_domain(domain, fixture)
             fixture["documents"][0]["unexpected"] = True
             with self.assertRaises(ValueError): validate_domain(domain, fixture)

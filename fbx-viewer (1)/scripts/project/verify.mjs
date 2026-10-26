@@ -44,6 +44,7 @@ const levelGameLoop = await readFile(resolve(root, 'components/Environment/Level
 const levelRuntime = await readFile(resolve(root, 'runtime/LevelRuntime.tsx'), 'utf8');
 const pauseController = await readFile(resolve(root, 'runtime/PauseController.tsx'), 'utf8');
 const runtimeLevelWorld = await readFile(resolve(root, 'hooks/useRuntimeLevelWorld.ts'), 'utf8');
+const sceneGraph = await readFile(resolve(root, 'utils/sceneGraph.ts'), 'utf8');
 const graphPreview = await readFile(resolve(root, 'components/AnimationGraph/GraphPreview.tsx'), 'utf8');
 const domainCascade = await readFile(resolve(root, 'utils/domainCascade.ts'), 'utf8');
 const editorState = await readFile(resolve(root, 'utils/editorState.ts'), 'utf8');
@@ -65,6 +66,10 @@ const strictExcludes = strictConfig.exclude ?? [];
 // Exact test files only (never globs). They import modules that are not yet noUnused-clean and
 // are still type-checked by the base strict tsconfig.
 const STRICT_EXCLUDE_ALLOWLIST = new Set([
+  'tests/frontend/contentBrowser.test.tsx',
+  'tests/frontend/levelClipboard.test.ts',
+  'tests/frontend/levelHierarchyEdits.test.tsx',
+  'tests/frontend/modelTransforms.test.ts',
   'tests/frontend/attachmentController.test.tsx',
   'tests/frontend/hudRenderer.test.tsx',
   'tests/frontend/projectHydration.test.ts',
@@ -108,7 +113,7 @@ if (!/textureAssetUrls/.test(projectHydration) || !/loadProjectAssetUrl/.test(pr
 if (!/getSnapshotAll\(\)/.test(db) || !/record\.levelId === id/.test(db)) failures.push('referential delete cascades are missing');
 if (!/migrateLegacyDatabase/.test(db) || !/readOnlyStorePages/.test(db) || !/requires an empty native project/.test(db)) failures.push('read-only paged browser migration bridge is missing');
 if (!/Browser data/.test(header) || !/migrateLegacyBrowserProject/.test(header)) failures.push('browser migration is not exposed through native project controls');
-for (const domain of ['metadata', 'worlds', 'scenes', 'levels', 'objects', 'environment', 'models', 'animations', 'attachments', 'sockets', 'textures', 'audio', 'materials', 'blueprints', 'graphs', 'hud']) {
+for (const domain of ['metadata', 'worlds', 'scenes', 'levels', 'objects', 'environment', 'models', 'animations', 'attachments', 'sockets', 'textures', 'audio', 'materials', 'blueprints', 'graphs', 'hud', 'prefabs']) {
   if (!persistence.includes(`'${domain}'`)) failures.push(`native hydration inventory is missing ${domain}`);
 }
 if (!/!projectService\.getStatus\(\)\.projectId/.test(levels)) failures.push('level manager can still replace native state from legacy storage');
@@ -283,7 +288,10 @@ if (!/diagnostics:\s*traceAsset/.test(projectHydration) || !/animation_hydration
 if (!/`\$\{traceId\}\.req-\$\{requestNumber\}`/.test(service)) failures.push('host request IDs are not correlated to the browser trace');
 if (!/MAX_RECORDS\s*=\s*256/.test(diagnosticsRuntime) || !/MAX_BUFFER_BYTES\s*=\s*512\s*\*\s*1024/.test(diagnosticsRuntime) || !/MAX_BATCH_RECORDS\s*=\s*16/.test(diagnosticsRuntime)) failures.push('browser diagnostics bounds are missing');
 if (!/HEARTBEAT_MS\s*=\s*1_000/.test(diagnosticsRuntime) || !/EVENT_LOOP_STALL_MS/.test(diagnosticsRuntime)) failures.push('browser heartbeat or event-loop stall detection is missing');
-if (!/rotation:\s*\[o\.rotation\.x,\s*o\.rotation\.y,\s*o\.rotation\.z\]/.test(environmentScene)) failures.push('authored level rotation must persist as an exact Three.js XYZ Euler-radian tuple');
+// Gizmo edits write local transforms through utils/sceneGraph.toLocalTransform.
+if (!/toLocalTransform\(/.test(environmentScene)
+  || !/EULER_ORDER(?::\s*THREE\.EulerOrder)?\s*=\s*'XYZ'/.test(sceneGraph)
+  || !/rotation:\s*\[rotation\.x,\s*rotation\.y,\s*rotation\.z\]/.test(sceneGraph)) failures.push('authored level rotation must persist as an exact Three.js XYZ Euler-radian tuple');
 if (/rotation:\s*o\.rotation\.toArray\(\)/.test(environmentScene)) failures.push('Euler.toArray includes the order token and cannot be persisted as an exact-three rotation');
 if (/rotation:\s*\[[\s\S]*?MathUtils\.radToDeg/.test(environmentScene)) failures.push('authored level rotation must not persist presentation degrees');
 if (!/editorSession\.beginTransition\(\)/.test(projectManager) || !/editorSession\.(?:complete|close|fail)\(/.test(projectManager)) failures.push('project lifecycle is not fenced by the editor session transition');

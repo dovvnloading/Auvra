@@ -4,6 +4,25 @@ import * as THREE from 'three';
 import { Billboard, Html } from '@react-three/drei';
 import { Skull, Music, Sun } from 'lucide-react';
 import { LoadedModelData, LevelObject } from '../../types';
+import { getComponentDefinition } from '../../runtime/components/registry';
+
+/**
+ * Mounts the Render of every enabled component on `object`. Place it inside the object's
+ * transform group: component renders work in the owner's local space.
+ */
+export const LevelComponentPreviews: React.FC<{ object: LevelObject; mode?: 'editor' | 'runtime' }> = ({ object, mode = 'editor' }) => {
+    const components = object.components;
+    if (!components || components.length === 0) return null;
+    return (
+        <>
+            {components.map(component => {
+                if (!component.enabled) return null;
+                const Render = getComponentDefinition(component.type)?.Render;
+                return Render ? <Render key={component.id} object={object} component={component} mode={mode} /> : null;
+            })}
+        </>
+    );
+};
 
 interface LevelObjectRendererProps {
     model?: LoadedModelData; // Optional for Spawners
@@ -13,6 +32,11 @@ interface LevelObjectRendererProps {
     castShadow?: boolean;
     receiveShadow?: boolean;
     visible?: boolean; // For runtime hiding
+    /**
+     * When false the object renders at its parent's origin and the caller owns the transform
+     * (the editor wraps it in a group placed at the object's world transform).
+     */
+    applyTransform?: boolean;
 }
 
 export const LevelObjectRenderer = forwardRef<THREE.Group, LevelObjectRendererProps>(({ 
@@ -22,7 +46,8 @@ export const LevelObjectRenderer = forwardRef<THREE.Group, LevelObjectRendererPr
     onClick,
     castShadow = true,
     receiveShadow = true,
-    visible = true
+    visible = true,
+    applyTransform = true
 }, ref) => {
     
     const internalRef = useRef<THREE.Group>(null);
@@ -30,6 +55,10 @@ export const LevelObjectRenderer = forwardRef<THREE.Group, LevelObjectRendererPr
 
     // Expose internal ref to parent
     useImperativeHandle(ref, () => internalRef.current!, []);
+
+    const transform = applyTransform
+        ? { position: data.position, rotation: data.rotation, scale: data.scale }
+        : {};
 
     const isGizmo = data.type === 'spawn_point' || data.type === 'audio_emitter' || data.type === 'sky_sphere' || data.type === 'player_start';
 
@@ -56,9 +85,7 @@ export const LevelObjectRenderer = forwardRef<THREE.Group, LevelObjectRendererPr
     const renderGizmo = (color: string, icon: React.ReactNode, label: string) => (
         <group 
             ref={internalRef}
-            position={data.position}
-            rotation={data.rotation}
-            scale={data.scale}
+            {...transform}
             onClick={onClick}
             onPointerOver={(e) => { e.stopPropagation(); setHovered(true); }}
             onPointerOut={(e) => { e.stopPropagation(); setHovered(false); }}
@@ -146,9 +173,7 @@ export const LevelObjectRenderer = forwardRef<THREE.Group, LevelObjectRendererPr
         return (
             <group
                 ref={internalRef}
-                position={data.position}
-                rotation={data.rotation}
-                scale={data.scale}
+                {...transform}
                 onClick={onClick}
                 onPointerOver={(e) => { e.stopPropagation(); setHovered(true); }}
                 onPointerOut={(e) => { e.stopPropagation(); setHovered(false); }}
@@ -221,9 +246,7 @@ export const LevelObjectRenderer = forwardRef<THREE.Group, LevelObjectRendererPr
     return (
         <group 
             ref={internalRef}
-            position={data.position}
-            rotation={data.rotation}
-            scale={data.scale}
+            {...transform}
             onClick={onClick}
             visible={visible}
         >

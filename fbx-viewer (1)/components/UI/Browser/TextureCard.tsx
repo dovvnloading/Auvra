@@ -6,9 +6,12 @@ import { TextureData } from '../../../types';
 interface TextureCardProps {
     texture: TextureData;
     onDelete: () => void;
+    /** Replaces the name label while the asset is being renamed. */
+    nameEditor?: React.ReactNode;
+    onRenameRequest?: () => void;
 }
 
-export const TextureCard: React.FC<TextureCardProps> = ({ texture, onDelete }) => {
+export const TextureCard: React.FC<TextureCardProps> = ({ texture, onDelete, nameEditor, onRenameRequest }) => {
     const [showPreview, setShowPreview] = useState(false);
     return (
         <div className="group relative flex flex-col gap-1 cursor-pointer">
@@ -53,9 +56,11 @@ export const TextureCard: React.FC<TextureCardProps> = ({ texture, onDelete }) =
                     </button>
                 </div>
             </div>
-            <span className="text-[11px] truncate px-0.5 text-center text-gray-400 group-hover:text-white">
-                {texture.name}
-            </span>
+            {nameEditor ?? (
+                <span onDoubleClick={onRenameRequest} title={texture.name} className="text-[11px] truncate px-0.5 text-center text-gray-400 group-hover:text-white">
+                    {texture.name}
+                </span>
+            )}
             {showPreview && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-8" role="dialog" aria-label={`${texture.name} preview`} onClick={() => setShowPreview(false)}>
                     <div className="texture-preview-surface relative max-w-3xl max-h-full rounded border border-gray-600 p-3 shadow-2xl" onClick={(e) => e.stopPropagation()}>

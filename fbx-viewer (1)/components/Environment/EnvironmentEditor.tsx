@@ -28,11 +28,6 @@ export const EnvironmentEditor: React.FC = () => {
         state,
         actions: {
             ...actions,
-            deleteSelected: () => {
-                if (!isReadyNow()) return;
-                if(state.selectedObjectId) removeLevelObject(state.selectedObjectId);
-                actions.setSelectedObjectId(null);
-            },
             clearSelection: () => {
                 if (!isReadyNow()) return;
                 actions.setSelectedBrushId(null);
@@ -90,6 +85,18 @@ export const EnvironmentEditor: React.FC = () => {
                     actions.setSelectedBrushId(null);
                     actions.setInteractionMode('select');
                 }}
+                selectedObjectIds={state.selectedObjectIds}
+                onSetSelection={(ids, primary) => {
+                    actions.setSelection(ids, primary);
+                    actions.setSelectedBrushId(null);
+                    actions.setInteractionMode('select');
+                }}
+                onToggleSelection={(id) => {
+                    actions.toggleSelection(id);
+                    actions.setSelectedBrushId(null);
+                    actions.setInteractionMode('select');
+                }}
+                onRequestFocus={actions.requestFocus}
             />
 
             <div className="flex-1 flex flex-col min-w-0 bg-[#111]">
@@ -103,6 +110,10 @@ export const EnvironmentEditor: React.FC = () => {
                 <EnvironmentViewport 
                     activeModelId={state.selectedBrushId}
                     onSelectObject={actions.handleViewportSelect}
+                    onToggleSelect={actions.toggleSelection}
+                    selectedObjectId={state.selectedObjectId}
+                    selectedObjectIds={state.selectedObjectIds}
+                    focusRequest={state.focusRequest}
                     interactionMode={state.interactionMode === 'mask' ? 'select' : state.interactionMode} 
                     paintMode={state.paintMode}
                     transformSettings={state.transformSettings}

@@ -68,8 +68,7 @@ export const BlendStateConfig: React.FC<BlendStateConfigProps> = ({
                                     <Select
                                         value={sample.clipName}
                                         onChange={(val) => {
-                                            const updatedSamples = [...node.blendSamples];
-                                            updatedSamples[idx].clipName = val;
+                                            const updatedSamples = node.blendSamples.map((s, i) => i === idx ? { ...s, clipName: val } : s);
                                             updateState({ blendSamples: updatedSamples });
                                         }}
                                         options={clipOptions}
@@ -93,8 +92,8 @@ export const BlendStateConfig: React.FC<BlendStateConfigProps> = ({
                                         type="number" step="0.1"
                                         value={sample.position[0]}
                                         onChange={(e) => {
-                                            const updatedSamples = [...node.blendSamples];
-                                            updatedSamples[idx].position[0] = parseFloat(e.target.value);
+                                            const x = parseFloat(e.target.value);
+                                            const updatedSamples = node.blendSamples.map((s, i) => i === idx ? { ...s, position: [x, s.position[1]] as typeof s.position } : s);
                                             updateState({ blendSamples: updatedSamples });
                                         }}
                                         className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-[10px] text-white focus:border-gray-500 focus:outline-none"
@@ -106,8 +105,8 @@ export const BlendStateConfig: React.FC<BlendStateConfigProps> = ({
                                         type="number" step="0.1"
                                         value={sample.position[1]}
                                         onChange={(e) => {
-                                            const updatedSamples = [...node.blendSamples];
-                                            updatedSamples[idx].position[1] = parseFloat(e.target.value);
+                                            const y = parseFloat(e.target.value);
+                                            const updatedSamples = node.blendSamples.map((s, i) => i === idx ? { ...s, position: [s.position[0], y] as typeof s.position } : s);
                                             updateState({ blendSamples: updatedSamples });
                                         }}
                                         className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-[10px] text-white focus:border-gray-500 focus:outline-none"

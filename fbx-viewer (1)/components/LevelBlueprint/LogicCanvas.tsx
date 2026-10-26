@@ -6,12 +6,20 @@ import { LogicNodeComponent, PIN_COLORS } from './LogicNode';
 import { LogicConnection as LogicConnectionComponent } from './LogicConnection';
 import { useGraphViewport } from '../AnimationGraph/hooks/useGraphViewport';
 
+/** The part of a level blueprint that undo/redo snapshots. */
+export type LogicGraphSnapshot = Pick<LevelBlueprintData, 'nodes' | 'connections'>;
+
 interface LogicCanvasProps {
     blueprint: LevelBlueprintData;
     updateBlueprint: (data: Partial<LevelBlueprintData>) => void;
     onSelectNode: (id: string | null) => void;
     selectedNodeId: string | null;
     levelObjects: LevelObject[];
+    /**
+     * Called before an edit is applied so it can be undone. `before` defaults to the current graph;
+     * edits sharing a `coalesceKey` in quick succession (typing in a field) may merge into one step.
+     */
+    recordHistory?: (before?: LogicGraphSnapshot, coalesceKey?: string) => void;
 }
 
 export const LogicCanvas: React.FC<LogicCanvasProps> = ({
@@ -19,13 +27,16 @@ export const LogicCanvas: React.FC<LogicCanvasProps> = ({
     updateBlueprint,
     onSelectNode,
     selectedNodeId,
-    levelObjects
+    levelObjects,
+    recordHistory
 }) => {
     const canvasRef = useRef<HTMLDivElement>(null);
     const { viewport, isPanning, handleWheel, beginPan, endPan, updatePan, resetViewport } = useGraphViewport();
     
     const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
     const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+    // Graph as it was when the current node drag began; recorded once on release if the node moved.
+    const dragStartGraph = useRef<{ snapshot: LogicGraphSnapshot; moved: boolean } | null>(null);
 
     const [connectingPin, setConnectingPin] = useState<{ nodeId: string, pin: LogicPin, x: number, y: number } | null>(null);
     const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
@@ -76,6 +87,7 @@ export const LogicCanvas: React.FC<LogicCanvasProps> = ({
         const coords = getCanvasCoords(e.clientX, e.clientY);
         setDraggingNodeId(nodeId);
         setDragOffset({ x: coords.x - nodeX, y: coords.y - nodeY });
+        dragStartGraph.current = { snapshot: { nodes: blueprint.nodes, connections: blueprint.connections }, moved: false };
         (e.target as Element).setPointerCapture(e.pointerId);
     };
 
@@ -148,6 +160,7 @@ export const LogicCanvas: React.FC<LogicCanvasProps> = ({
                     toPinId: sourceIsFrom ? targetPin.id : connectingPin.pin.id
                 };
                 
+                recordHistory?.();
                 updateBlueprint({ connections: [...newConnections, newConn] });
             }
             setConnectingPin(null);
@@ -155,6 +168,7 @@ export const LogicCanvas: React.FC<LogicCanvasProps> = ({
     };
 
     const handleNodeUpdate = (id: string, data: any) => {
+        recordHistory?.(undefined, `canvas:${id}:${Object.keys(data).sort().join(',')}`);
         const updatedNodes = blueprint.nodes.map(n => {
             if (n.id === id) {
                 const { name, ...restData } = data;
@@ -182,6 +196,9 @@ export const LogicCanvas: React.FC<LogicCanvasProps> = ({
             const newX = Math.round(rawX / 20) * 20;
             const newY = Math.round(rawY / 20) * 20;
             
+            const dragged = blueprint.nodes.find(n => n.id === draggingNodeId);
+            if (!dragged || (dragged.position.x === newX && dragged.position.y === newY)) return;
+            if (dragStartGraph.current) dragStartGraph.current.moved = true;
             const updatedNodes = blueprint.nodes.map(n => 
                 n.id === draggingNodeId ? { ...n, position: { x: newX, y: newY } } : n
             );
@@ -190,6 +207,9 @@ export const LogicCanvas: React.FC<LogicCanvasProps> = ({
     };
 
     const handlePointerUp = (e: React.PointerEvent) => {
+        const drag = dragStartGraph.current;
+        dragStartGraph.current = null;
+        if (drag?.moved) recordHistory?.(drag.snapshot);
         endPan();
         setDraggingNodeId(null);
         setConnectingPin(null);

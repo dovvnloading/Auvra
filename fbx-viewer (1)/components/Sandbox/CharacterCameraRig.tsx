@@ -67,7 +67,7 @@ export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({
         };
 
         const onClick = () => {
-            if (active) domElement.requestPointerLock();
+            if (active) Promise.resolve(domElement.requestPointerLock()).catch(() => undefined);
         };
 
         const onWheel = (e: WheelEvent) => {

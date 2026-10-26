@@ -1,17 +1,75 @@
 
 import { useState, useCallback } from 'react';
 import * as THREE from 'three';
-import { LoadedModelData, AssetCategory } from '../types';
+import { LoadedModelData, AssetCategory, AssetInfoUpdate, ModelImportSettings } from '../types';
 import { importPhaseLabel, loadFBXFile } from '../utils/modelLoader';
 import { disposeModel, disposeObject } from '../utils/processing/ModelLifecycle';
-import { stripGeometry } from '../utils/processing/ModelTransforms';
+import { applyModelImportSettings, resolveImportSettings, stripGeometry } from '../utils/processing/ModelTransforms';
 import { prepareAnimationClips } from '../utils/animationBinding';
 import { generateThumbnail } from '../utils/thumbnailGenerator';
-import { dbOperations } from '../utils/db';
+import { dbOperations, normalizeAssetInfoUpdate } from '../utils/db';
 import { projectService } from '../utils/projectService';
 import { isAbortError, useOperationActions } from '../context/OperationContext';
 import { useNotification } from '../context/NotificationContext';
 import { assetDiagnosticAttributes, frontendDiagnostics, type DiagnosticAttributes } from '../diagnostics/runtime';
+
+const MODEL_MIME_TYPES: Record<string, string> = {
+  glb: 'model/gltf-binary', gltf: 'model/gltf+json', obj: 'model/obj', fbx: 'model/fbx',
+};
+
+const extensionOf = (name: string): string => /\.[^./\\]+$/.exec(name)?.[0] ?? '';
+
+/** The source file as uploaded: named `name` and typed by its extension so the host records the format. */
+const modelSourceFile = (file: Blob, name: string): File => {
+  const mime = MODEL_MIME_TYPES[extensionOf(name).slice(1).toLowerCase()] || file.type || 'application/octet-stream';
+  return file instanceof File && file.name === name && file.type === mime ? file : new File([file], name, { type: mime });
+};
+
+/** A reimported model keeps its library name; only the extension follows the new source format. */
+const reimportedModelName = (current: string, source: string): string => {
+  const next = extensionOf(source);
+  const previous = extensionOf(current);
+  if (!next || next.toLowerCase() === previous.toLowerCase()) return current;
+  return `${previous ? current.slice(0, -previous.length) : current}${next}`;
+};
+
+const nativeDocuments = (snapshot: Awaited<ReturnType<typeof projectService.getSnapshotAll>>, domain: string): Array<Record<string, any>> => {
+  const raw = snapshot?.domains?.[domain];
+  const values = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === 'object' && Array.isArray((raw as { documents?: unknown[] }).documents)
+      ? (raw as { documents: unknown[] }).documents : [];
+  return values.filter((value): value is Record<string, any> => Boolean(value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string'));
+};
+
+/** Move material-override textures from a replaced model onto same-named materials of its replacement. */
+const adoptOverrideTextures = (from: THREE.Object3D, to: THREE.Object3D, materialNames: string[]): void => {
+  if (!materialNames.length) return;
+  const names = new Set(materialNames);
+  const eachMaterial = (root: THREE.Object3D, visit: (material: any) => void) => root.traverse((child) => {
+    if (!(child as THREE.Mesh).isMesh) return;
+    const material = (child as THREE.Mesh).material;
+    for (const candidate of (Array.isArray(material) ? material : [material]) as any[]) {
+      if (candidate && names.has(candidate.name)) visit(candidate);
+    }
+  });
+  const textures = new Map<string, THREE.Texture>();
+  eachMaterial(from, (material) => { if (material.map && !textures.has(material.name)) textures.set(material.name, material.map); });
+  const adopted = new Set<THREE.Texture>();
+  eachMaterial(to, (material) => {
+    const texture = textures.get(material.name);
+    if (!texture) return;
+    if (material.map && material.map !== texture) material.map.dispose();
+    material.map = texture;
+    material.transparent = true;
+    material.alphaTest = 0.5;
+    material.side = THREE.DoubleSide;
+    material.needsUpdate = true;
+    adopted.add(texture);
+  });
+  // Adopted textures now belong to the replacement and must survive disposal of the old model.
+  eachMaterial(from, (material) => { if (adopted.has(material.map)) material.map = null; });
+};
 
 export const useModelManager = (
   setIsLoading: (loading: boolean) => void,
@@ -24,8 +82,10 @@ export const useModelManager = (
   const { startOperation } = useOperationActions();
   const { addNotification } = useNotification();
 
-  const addModel = useCallback(async (file: File, category: AssetCategory) => {
+  /** Import a model. With `requestedSettings` the import settings are applied and stored on the model document. */
+  const importModel = useCallback(async (file: File, category: AssetCategory, requestedSettings?: ModelImportSettings) => {
     projectService.assertWritable();
+    const importSettings = requestedSettings && category !== 'Animation' ? resolveImportSettings(requestedSettings) : undefined;
     // Prevent duplicate imports
     if (models.some(m => m.name === file.name)) {
         alert(`A model named "${file.name}" is already loaded in the library.`);
@@ -58,6 +118,7 @@ export const useModelManager = (
       newModel.category = category;
       newModel.thumbnail = undefined;
       newModel.isPlacedInScene = false;
+      if (importSettings) applyModelImportSettings(newModel, importSettings);
 
       if (category === 'Animation') {
         stripGeometry(newModel.object);
@@ -71,24 +132,34 @@ export const useModelManager = (
       }
 
       operation.update({ phase: 'project_upload', progress: 0.72, detail: 'Saving source asset', diagnostic });
-      await dbOperations.addModel({
-        id: newModel.id,
-        name: newModel.name,
-        file,
-        animationFiles: [],
-        category: newModel.category,
-        thumbnail: newModel.thumbnail,
-        isPlacedInScene: false,
-        textureOverrides: {},
-      }, {
+      const transfer = {
         signal: operation.signal,
         diagnostics: { operationId: operation.id, traceId: operation.traceId, spanId: operation.spanId, assetAlias },
-        onPhase: (phase) => operation.update({ phase, detail: phase === 'project_upload' ? 'Saving source asset' : 'Finalizing project record', diagnostic }),
-        onProgress: (progress) => {
+        onPhase: (phase: 'project_upload' | 'project_record_commit') => operation.update({ phase, detail: phase === 'project_upload' ? 'Saving source asset' : 'Finalizing project record', diagnostic }),
+        onProgress: (progress: number) => {
           if (progress >= 1) operation.lockCancellation();
           operation.update({ progress: 0.72 + progress * 0.24, detail: progress >= 1 ? 'Finalizing project record' : 'Saving source asset' });
         },
-      });
+      };
+      if (importSettings) {
+        const assetId = await projectService.uploadAsset(modelSourceFile(file, newModel.name), transfer);
+        if (operation.signal.aborted) throw new DOMException('Asset import was cancelled.', 'AbortError');
+        transfer.onPhase('project_record_commit');
+        await projectService.applyChanges([{ domain: 'models', operation: 'upsert', id: newModel.id, value: {
+          id: newModel.id, name: newModel.name, assetId, category: newModel.category, isPlacedInScene: false, importSettings,
+        } }], transfer.diagnostics);
+      } else {
+        await dbOperations.addModel({
+          id: newModel.id,
+          name: newModel.name,
+          file,
+          animationFiles: [],
+          category: newModel.category,
+          thumbnail: newModel.thumbnail,
+          isPlacedInScene: false,
+          textureOverrides: {},
+        }, transfer);
+      }
 
       if (operation.signal.aborted) throw new DOMException('Asset import was cancelled.', 'AbortError');
       operation.update({ phase: 'library_publication', progress: 0.98, detail: 'Publishing to library', diagnostic });
@@ -117,6 +188,143 @@ export const useModelManager = (
     }
   }, [models, setIsLoading, startOperation, addNotification]);
 
+  const addModel = useCallback((file: File, category: AssetCategory) => importModel(file, category), [importModel]);
+
+  /** Import with explicit options (normalize toggle, target size); the settings are stored on the model document. */
+  const importModelWithOptions = useCallback(
+    (file: File, settings: ModelImportSettings, category: AssetCategory = 'Prop') => importModel(file, category, settings),
+    [importModel],
+  );
+
+  /**
+   * Replace a model's source file in place. The model keeps its id, name, category,
+   * placement, overrides and import settings, so placed objects and blueprints that
+   * reference it keep working; clips from its animation documents are rebound to the
+   * new skeleton. Nothing is committed unless the new source loads and binds.
+   */
+  const reimportModel = useCallback(async (modelId: string, file: File) => {
+    projectService.assertWritable();
+    const existing = models.find((model) => model.id === modelId);
+    if (!existing) {
+      addNotification({ message: 'The model to reimport is no longer loaded.', type: 'error' });
+      return;
+    }
+    const name = reimportedModelName(existing.name, file.name);
+    if (models.some((model) => model.id !== modelId && model.name === name)) {
+      alert(`A model named "${name}" is already loaded in the library.`);
+      return;
+    }
+    const category = existing.category;
+    const source = modelSourceFile(file, name);
+    const assetAlias = frontendDiagnostics.nextAssetAlias();
+    const diagnostic = assetDiagnosticAttributes(source, category === 'Animation' ? 'animation' : 'model', assetAlias);
+    const operation = startOperation({
+      kind: 'asset.model.reimport',
+      phase: 'source_read',
+      label: `Reimporting ${existing.name}`,
+      detail: 'Reading source',
+      progress: 0,
+      cancellable: true,
+      diagnostic,
+    });
+    const trace = { operationId: operation.id, traceId: operation.traceId, spanId: operation.spanId, assetAlias };
+    const throwIfCancelled = () => {
+      if (operation.signal.aborted) throw new DOMException('Asset reimport was cancelled.', 'AbortError');
+    };
+    let replacement: LoadedModelData | null = null;
+    let outcome: 'success' | 'failure' | 'cancelled' = 'success';
+    let failure: unknown;
+    setIsLoading(true);
+    try {
+      replacement = await loadFBXFile(source, {
+        normalize: category !== 'Animation',
+        manualId: modelId,
+        signal: operation.signal,
+        diagnostics: trace,
+        onProgress: (progress, phase) => operation.update({
+          phase, progress: progress * 0.55, detail: importPhaseLabel(phase), diagnostic,
+        }),
+      });
+      replacement.category = category;
+      replacement.isPlacedInScene = existing.isPlacedInScene;
+      replacement.textureOverrides = existing.textureOverrides;
+      replacement.folder = existing.folder;
+      const importSettings = category === 'Animation' ? undefined : applyModelImportSettings(replacement, existing.importSettings);
+      if (category === 'Animation') {
+        stripGeometry(replacement.object);
+      } else {
+        operation.update({ phase: 'thumbnail_generation', progress: 0.56, detail: 'Generating thumbnail', diagnostic });
+        replacement.thumbnail = generateThumbnail(replacement.object);
+      }
+
+      const animationDocuments = nativeDocuments(await projectService.getSnapshotAll('animations', trace), 'animations')
+        .filter((animation) => animation.modelId === modelId && typeof animation.assetId === 'string');
+      for (const [index, animation] of animationDocuments.entries()) {
+        throwIfCancelled();
+        const animationName = typeof animation.name === 'string' && animation.name ? animation.name : 'animation.fbx';
+        operation.update({
+          phase: 'animation_binding',
+          progress: 0.58 + (index / animationDocuments.length) * 0.12,
+          detail: `Binding animation — ${animationName}`,
+          diagnostic,
+        });
+        const response = await fetch(await projectService.resolveAsset(animation.assetId, trace), { method: 'GET', signal: operation.signal });
+        if (!response.ok) throw new Error(`Animation download failed (${response.status})`);
+        const animationFile = new File([await response.blob()], animationName, { type: response.headers.get('Content-Type') || 'application/octet-stream' });
+        const animationModel = await loadFBXFile(animationFile, { normalize: false, signal: operation.signal, diagnostics: trace });
+        try {
+          const prepared = prepareAnimationClips(replacement.object, animationModel.object, animationModel.animations);
+          replacement.animations.push(...prepared.clips);
+        } finally {
+          disposeModel(animationModel);
+        }
+      }
+
+      throwIfCancelled();
+      operation.update({ phase: 'project_upload', progress: 0.72, detail: 'Saving source asset', diagnostic });
+      const assetId = await projectService.uploadAsset(source, {
+        signal: operation.signal,
+        diagnostics: trace,
+        onProgress: (progress) => {
+          if (progress >= 1) operation.lockCancellation();
+          operation.update({ progress: 0.72 + progress * 0.2, detail: progress >= 1 ? 'Finalizing project record' : 'Saving source asset' });
+        },
+      });
+      throwIfCancelled();
+      operation.update({ phase: 'project_record_commit', progress: 0.94, detail: 'Finalizing project record', diagnostic });
+      const stored = nativeDocuments(await projectService.getSnapshotAll('models', trace), 'models').find((model) => model.id === modelId);
+      const document: Record<string, unknown> = {
+        ...(stored ?? { category, isPlacedInScene: existing.isPlacedInScene }),
+        id: modelId,
+        name,
+        assetId,
+      };
+      if (importSettings) document.importSettings = importSettings;
+      await projectService.applyChanges([{ domain: 'models', operation: 'upsert', id: modelId, value: document }], trace);
+
+      operation.update({ phase: 'library_publication', progress: 0.98, detail: 'Publishing to library', diagnostic });
+      adoptOverrideTextures(existing.object, replacement.object, Object.keys(existing.textureOverrides || {}));
+      const published = replacement;
+      replacement = null;
+      setModels((previous) => previous.map((model) => (model.id === modelId ? published : model)));
+      disposeModel(existing);
+      addNotification({ message: `Reimported "${existing.name}".`, type: 'success' });
+    } catch (error) {
+      outcome = isAbortError(error) ? 'cancelled' : 'failure';
+      failure = error;
+      if (replacement) disposeModel(replacement);
+      addNotification({
+        message: isAbortError(error)
+          ? `Cancelled reimport of "${existing.name}".`
+          : `Failed to reimport "${existing.name}"${error instanceof Error && error.message ? `: ${error.message}` : '.'}`,
+        type: isAbortError(error) ? 'info' : 'error',
+      });
+    } finally {
+      operation.finish(outcome, failure);
+      setIsLoading(false);
+    }
+  }, [models, setIsLoading, startOperation, addNotification]);
+
   const placeInScene = useCallback(async (id: string) => {
       projectService.assertWritable();
       try {
@@ -134,6 +342,25 @@ export const useModelManager = (
           clearSelectedModel(id);
       } catch(e) { frontendDiagnostics.failure('model_placement_remove_failed', e); }
   }, [clearSelectedModel]);
+
+  /** Rename and/or move a model (folder '' is the library root); rejects when the change cannot be saved. */
+  const updateModel = useCallback(async (id: string, updates: AssetInfoUpdate): Promise<void> => {
+    projectService.assertWritable();
+    const info = normalizeAssetInfoUpdate(updates);
+    if (info.name === undefined && info.folder === undefined) return;
+    if (!models.some((model) => model.id === id)) throw new Error('The model is no longer loaded.');
+    // Imports and reimports keep model names unique across the library.
+    if (info.name !== undefined && models.some((model) => model.id !== id && model.name === info.name)) {
+      throw new Error(`A model named "${info.name}" is already in the library.`);
+    }
+    try {
+      await dbOperations.updateModelInfo(id, info);
+    } catch (error) {
+      frontendDiagnostics.failure('model_info_update_failed', error);
+      throw error;
+    }
+    setModels((previous) => previous.map((model) => (model.id === id ? { ...model, ...info } : model)));
+  }, [models]);
 
   const removeModel = useCallback(async (id: string) => {
     projectService.assertWritable();
@@ -368,9 +595,11 @@ export const useModelManager = (
         const blob = await response.blob();
         const file = new File([blob], model.name, { type: 'application/octet-stream' });
         
-        const newModelData = await loadFBXFile(file, { normalize: true, manualId: modelId });
+        const newModelData = await loadFBXFile(file, { normalize: model.category !== 'Animation', manualId: modelId });
         
         newModelData.category = model.category;
+        newModelData.folder = model.folder;
+        applyModelImportSettings(newModelData, model.importSettings);
         newModelData.animations = model.animations;
         newModelData.isPlacedInScene = model.isPlacedInScene;
         newModelData.textureOverrides = {}; // Clear overrides
@@ -401,6 +630,9 @@ export const useModelManager = (
     setSelectedModelId: selectModel, // Exposed for useScenePersistence
     selectModel,
     addModel,
+    importModelWithOptions,
+    reimportModel,
+    updateModel,
     removeModel,
     removeTextureReference,
     placeInScene,

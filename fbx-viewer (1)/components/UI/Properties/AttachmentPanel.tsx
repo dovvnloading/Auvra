@@ -4,6 +4,7 @@ import { useScene } from '../../../context/SceneContext';
 import { LoadedModelData } from '../../../types';
 import { Select } from '../Select';
 import { TransformInputGroup } from './TransformInputGroup';
+import { MODEL_FILE_ACCEPT } from '../../../utils/modelLoader';
 
 interface AttachmentPanelProps {
   selectedModel: LoadedModelData | null;
@@ -78,7 +79,7 @@ export const AttachmentPanel: React.FC<AttachmentPanelProps> = ({ selectedModel 
                 <span className="text-[10px] font-medium text-gray-400 group-hover:text-white">Upload File</span>
                 <input 
                     type="file" 
-                    accept=".fbx" 
+                    accept={MODEL_FILE_ACCEPT} 
                     className="hidden" 
                     onChange={handleFileUpload} 
                     disabled={isLoading}

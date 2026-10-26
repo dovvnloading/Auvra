@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo } from 'react';
 import * as THREE from 'three';
-import { Shield, Skull, Box, Trash2, Eye, ChevronUp, Search, Check } from 'lucide-react';
+import { Shield, Skull, Box, Trash2, Eye, ChevronUp, Search, Check, Undo2, Redo2 } from 'lucide-react';
 import { Blueprint, LoadedModelData } from '../../types';
 import { GraphPreview } from '../AnimationGraph/GraphPreview';
 import { useScene } from '../../context/SceneContext';
@@ -11,9 +11,10 @@ interface BlueprintViewportProps {
     linkedModel: LoadedModelData | undefined;
     models: LoadedModelData[];
     allClips: THREE.AnimationClip[];
-    onUpdate: (id: string, updates: Partial<Blueprint>) => void;
+    onUpdate: (id: string, updates: Partial<Blueprint>, options?: { coalesce?: string }) => void;
     onRemove: (id: string) => void;
     visible: boolean;
+    history: { undo: () => void; redo: () => void; canUndo: boolean; canRedo: boolean };
 }
 
 export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
@@ -23,7 +24,8 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
     allClips,
     onUpdate,
     onRemove,
-    visible
+    visible,
+    history
 }) => {
     const { textures } = useScene();
     const [isMeshSelectorOpen, setIsMeshSelectorOpen] = useState(false);
@@ -48,7 +50,7 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
                         {blueprint.type === 'Player Character' ? <Shield size={18} className="text-blue-400" /> : <Skull size={18} className="text-red-400" />}
                         <input 
                             value={blueprint.name}
-                            onChange={(e) => onUpdate(blueprint.id, { name: e.target.value })}
+                            onChange={(e) => onUpdate(blueprint.id, { name: e.target.value }, { coalesce: 'name' })}
                             className="bg-transparent text-sm font-bold text-white focus:outline-none focus:border-b border-gray-600 w-48"
                         />
                     </div>
@@ -58,18 +60,42 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
                         <span>Setup Mode</span>
                     </div>
                 </div>
-                
-                <button 
-                    type="button"
-                    onClick={(e) => { 
-                        e.preventDefault();
-                        e.stopPropagation();
-                        onRemove(blueprint.id); 
-                    }}
-                    className="flex items-center gap-2 text-xs font-bold bg-red-900/20 hover:bg-red-900/50 text-red-400 hover:text-red-200 px-3 py-1.5 rounded border border-red-900/50 transition-colors"
-                >
-                    <Trash2 size={12} /> Delete Blueprint
-                </button>
+
+                <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-1">
+                        <button
+                            type="button"
+                            onClick={history.undo}
+                            disabled={!history.canUndo}
+                            title="Undo (Ctrl+Z)"
+                            aria-label="Undo"
+                            className="p-1.5 rounded hover:bg-gray-800 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 transition-colors"
+                        >
+                            <Undo2 size={14} />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={history.redo}
+                            disabled={!history.canRedo}
+                            title="Redo (Ctrl+Y)"
+                            aria-label="Redo"
+                            className="p-1.5 rounded hover:bg-gray-800 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 transition-colors"
+                        >
+                            <Redo2 size={14} />
+                        </button>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onRemove(blueprint.id);
+                        }}
+                        className="flex items-center gap-2 text-xs font-bold bg-red-900/20 hover:bg-red-900/50 text-red-400 hover:text-red-200 px-3 py-1.5 rounded border border-red-900/50 transition-colors"
+                    >
+                        <Trash2 size={12} /> Delete Blueprint
+                    </button>
+                </div>
             </div>
 
             {/* 3D Viewport with Overlays */}

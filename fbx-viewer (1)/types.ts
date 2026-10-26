@@ -2,7 +2,7 @@
 // ... existing imports ...
 import * as THREE from 'three';
 import React from 'react';
-import type { ProjectStatus } from './utils/projectService';
+import type { ProjectStatus } from './utils/projectStatus';
 
 export type AssetCategory = 'Character' | 'Prop' | 'Environment' | 'Weapon' | 'Animation' | 'Audio' | 'Texture';
 
@@ -14,6 +14,7 @@ export interface AudioData {
   url: string; // Blob URL
   type: string; // mime type
   duration: number;
+  folder?: string; // Content browser folder path ('' or missing = root)
 }
 
 export interface AttachmentData {
@@ -54,6 +55,7 @@ export interface TextureData {
   name: string;
   url: string;
   dimensions: { width: number; height: number };
+  folder?: string; // Content browser folder path ('' or missing = root)
 }
 
 export interface LoadedModelData {
@@ -67,6 +69,8 @@ export interface LoadedModelData {
   isPlacedInScene: boolean; // Determines if visible in Scene/Hierarchy
   initialScale?: [number, number, number]; // Scale applied during normalization
   textureOverrides?: Record<string, string>; // Map<MaterialName, logical texture id>
+  folder?: string; // Content browser folder path, e.g. 'Characters/Enemies'
+  importSettings?: ModelImportSettings;
 }
 
 export type LevelObjectType = 'prop' | 'foliage' | 'spawn_point' | 'audio_emitter' | 'terrain' | 'sky_sphere' | 'player_start';
@@ -147,6 +151,43 @@ export interface LevelObject {
   audioConfig?: AudioConfig; // Only if type === 'audio_emitter'
   terrainData?: TerrainData; // Only if type === 'terrain'
   skyConfig?: SkyConfig;     // Only if type === 'sky_sphere'
+  /** Transform parent in the same level; position/rotation/scale are local to it. */
+  parentId?: string | null;
+  /** Behaviour attached to the object (lights, movers, ...); see runtime/components. */
+  components?: LevelComponent[];
+  /** Prefab this object was instantiated from (instances are copies, not live links). */
+  prefabId?: string;
+}
+
+export interface LevelComponent {
+  id: string;
+  type: string;
+  enabled: boolean;
+  props: Record<string, unknown>;
+}
+
+/** A reusable object tree stored in the project 'prefabs' domain. Transforms are local; the root's are relative to the placement point. */
+export interface PrefabData {
+  id: string;
+  name: string;
+  rootId: string;
+  objects: Omit<LevelObject, 'levelId'>[];
+  createdAt?: number;
+}
+
+/** Per-model import options stored on the model document. */
+export interface ModelImportSettings {
+  /** Scale the model so its largest dimension equals targetSize (the old behaviour forced 5). */
+  normalize: boolean;
+  targetSize: number;
+}
+
+export const DEFAULT_MODEL_IMPORT_SETTINGS: ModelImportSettings = { normalize: true, targetSize: 5 };
+
+/** Content browser rename/move of a model, texture or audio asset; folder '' is the library root. */
+export interface AssetInfoUpdate {
+  name?: string;
+  folder?: string;
 }
 
 // ... (keep remaining types unchanged) ...
@@ -342,6 +383,12 @@ export interface SceneContextType {
 
   // Model Actions
   addModel: (file: File, category: AssetCategory) => Promise<void>;
+  /** Import with explicit options; the settings are stored on the model document. */
+  importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory) => Promise<void>;
+  /** Replace a model's source file in place (id, references and settings are kept). */
+  reimportModel: (modelId: string, file: File) => Promise<void>;
+  /** Rename and/or move a model; rejects when the change cannot be saved. */
+  updateModel: (id: string, updates: AssetInfoUpdate) => Promise<void>;
   removeModel: (id: string) => void;
   placeInScene: (id: string) => void; 
   removeFromScene: (id: string) => void; 
@@ -356,11 +403,13 @@ export interface SceneContextType {
   addTexture: (file: File) => Promise<string | null>;
   saveTextureToLibrary: (base64: string, name: string) => Promise<string | null>;
   removeTexture: (id: string) => void;
+  updateTexture: (id: string, updates: AssetInfoUpdate) => Promise<void>;
 
   // Audio Actions
   audioAssets: AudioData[];
   addAudio: (file: File) => Promise<string | null>;
   removeAudio: (id: string) => void;
+  updateAudio: (id: string, updates: AssetInfoUpdate) => Promise<void>;
 
   // Attachment Actions
   addAttachment: (file: File, parentModelId: string) => Promise<void>;
@@ -392,8 +441,12 @@ export interface SceneContextType {
       type?: LevelObjectType,
       extraData?: any // Terrain data or other configs
   ) => Promise<string | undefined>; // Updated return type
+  /** Insert complete documents (ids, parents, components kept) as one undo step; resolves to the inserted ids. */
+  addLevelObjects: (objects: LevelObject[]) => Promise<string[]>;
   
+  /** Deletes the object and all of its descendants. */
   removeLevelObject: (id: string) => void;
+  /** Deletes the objects and all of their descendants as one undo step. */
   removeLevelObjects: (ids: string[]) => void;
   updateLevelObject: (id: string, updates: Partial<LevelObject>) => void;
   
