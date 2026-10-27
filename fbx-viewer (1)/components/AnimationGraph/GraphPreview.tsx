@@ -14,6 +14,7 @@ import { AttachmentController } from '../Scene/AttachmentController';
 import { SocketController, resolveSocketFlashTextureUrl } from '../Scene/SocketController';
 import { LocalEnvironment } from '../Scene/LocalEnvironment';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { flattenStateMachines } from './utils/stateMachines';
 
 /** What the preview can show: no model, a model without clips, or a running graph (paused or live). */
 export type PreviewStatus = 'no-mesh' | 'no-clips' | 'paused' | 'live';
@@ -531,7 +532,11 @@ export const GraphPreview: React.FC<GraphPreviewProps> = ({
 
     // Every run starts in the entry state, whatever activeStateId was persisted with the graph.
     const runtimeGraph = useMemo(
-        () => graph ? { ...graph, activeStateId: entryStateId(graph) } : undefined,
+        () => {
+            if (!graph) return undefined;
+            const flat = flattenStateMachines(graph);
+            return { ...flat, activeStateId: entryStateId(flat) };
+        },
         [graph],
     );
 
@@ -555,8 +560,9 @@ export const GraphPreview: React.FC<GraphPreviewProps> = ({
     // --- Live state reporting ---
     const ownApiRef = useRef<GraphRuntimeAPI | undefined>(undefined);
     const runtimeApiRef = apiRef ?? ownApiRef;
-    const graphRef = useRef(graph);
-    graphRef.current = graph;
+    // The flat graph the runtime plays, whose state and transition ids it reports.
+    const graphRef = useRef(runtimeGraph);
+    graphRef.current = runtimeGraph;
     const callbacksRef = useRef({ onActiveStateChange, onTransitionFired, onStatusChange });
     callbacksRef.current = { onActiveStateChange, onTransitionFired, onStatusChange };
     const activeRef = useRef<string | null>(null);

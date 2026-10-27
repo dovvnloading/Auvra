@@ -81,7 +81,13 @@ export const matchGraphClips = (
     const needs = (clip: string | null | undefined) => !clip || !own.has(clip);
     const assigned: ClipAssignment[] = [];
 
-    const states = graph.states.map((state): GraphState => {
+    const matchState = (state: GraphState): GraphState => {
+        if (state.stateType === 'StateMachine') {
+            const sub = state.subGraph;
+            if (!sub) return state;
+            const inner = sub.states.map(matchState);
+            return inner.some((next, index) => next !== sub.states[index]) ? { ...state, subGraph: { ...sub, states: inner } } : state;
+        }
         if (state.stateType === 'Single' || !state.stateType) {
             if (!needs(state.clipName)) return state;
             const role = stateRole(state.name);
@@ -103,7 +109,8 @@ export const matchGraphClips = (
             return { ...sample, clipName: clip };
         });
         return blendSamples.some((sample, index) => sample !== state.blendSamples[index]) ? { ...state, blendSamples } : state;
-    });
+    };
+    const states = graph.states.map(matchState);
 
     return { graph: assigned.length ? { ...graph, states } : graph, assigned };
 };

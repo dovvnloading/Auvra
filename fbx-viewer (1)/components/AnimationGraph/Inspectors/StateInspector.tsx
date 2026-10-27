@@ -1,14 +1,16 @@
 import React from 'react';
-import { Layers, Settings, Activity, Crown, Trash2 } from 'lucide-react';
+import { Layers, Settings, Activity, Crown, Trash2, Link2, Network } from 'lucide-react';
 import { GraphState, AnimationGraphData, StateType } from '../../../types';
 import { SingleStateConfig } from './SingleStateConfig';
 import { BlendStateConfig } from './BlendStateConfig';
+import { innerStateCount, newSubStateMachine } from '../utils/stateMachines';
 
 /** State kinds offered by the type switch, in display order. */
 const STATE_TYPES: { type: StateType; label: string }[] = [
     { type: 'Single', label: 'Single Clip' },
     { type: 'Blend1D', label: 'Blend 1D' },
     { type: 'Blend2D', label: 'Blend 2D' },
+    { type: 'StateMachine', label: 'Machine' },
 ];
 
 interface StateInspectorProps {
@@ -18,15 +20,27 @@ interface StateInspectorProps {
     onDelete: (id: string) => void;
     clipOptions: { label: string; value: string }[];
     blendParamOptions: { label: string; value: string }[];
+    /** Shows a State Machine state's own states on the canvas. */
+    onOpenStateMachine?: (id: string) => void;
+    /** Length in seconds of the clip a Single state plays, when it is loaded. */
+    clipDuration?: number;
 }
 
 export const StateInspector: React.FC<StateInspectorProps> = ({
     node,
+    graph,
     updateState,
     onDelete,
     clipOptions,
-    blendParamOptions
+    blendParamOptions,
+    onOpenStateMachine,
+    clipDuration
 }) => {
+    const machine = node.stateType === 'StateMachine';
+    const curveVariableOptions = [
+        { label: '-- None --', value: '' },
+        ...graph.variables.map(variable => ({ label: `${variable.name} (${variable.type})`, value: variable.id })),
+    ];
     return (
         <div className="flex flex-col h-full bg-gray-900">
              {/* Context Header */}
@@ -75,7 +89,9 @@ export const StateInspector: React.FC<StateInspectorProps> = ({
                         {STATE_TYPES.map(({ type, label }) => (
                             <button
                                 key={type}
-                                onClick={() => updateState({ stateType: type })}
+                                onClick={() => updateState(type === 'StateMachine' && !node.subGraph
+                                    ? { stateType: type, subGraph: newSubStateMachine(node.clipName) }
+                                    : { stateType: type })}
                                 aria-pressed={node.stateType === type}
                                 className={`flex-1 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded transition-all ${node.stateType === type ? 'bg-gray-700 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
                             >
@@ -85,13 +101,48 @@ export const StateInspector: React.FC<StateInspectorProps> = ({
                     </div>
                 </div>
 
+                {/* Sync Group */}
+                {!machine && <div className="space-y-1.5">
+                    <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider flex items-center gap-1.5">
+                        <Link2 size={10} /> Sync Group
+                    </label>
+                    <input
+                        value={node.syncGroup ?? ''}
+                        onChange={(e) => updateState({ syncGroup: e.target.value.trim() === '' ? undefined : e.target.value })}
+                        placeholder="None"
+                        aria-label="Sync group"
+                        className="w-full bg-gray-900 border border-gray-700 rounded text-xs text-gray-300 p-2 focus:outline-none focus:border-gray-500 transition-colors"
+                    />
+                    <p className="text-[10px] text-gray-600">States in one group carry their phase across transitions, so a run picks up the walk's stride.</p>
+                </div>}
+
                 {/* Configuration based on Type */}
-                {node.stateType === 'Single' ? (
+                {machine ? (
+                    <div className="bg-gray-800 rounded-lg border border-gray-700 p-3 space-y-3">
+                        <span className="text-xs font-medium text-gray-200 flex items-center gap-2">
+                            <Network size={12} className="text-gray-400" /> {innerStateCount(node)} {innerStateCount(node) === 1 ? 'state' : 'states'} inside
+                        </span>
+                        <p className="text-[10px] text-gray-500 leading-relaxed">
+                            Entering this state starts its entry state; its own transitions run while any state inside plays,
+                            and transitions from this state leave from wherever it is.
+                        </p>
+                        <button
+                            type="button"
+                            onClick={() => onOpenStateMachine?.(node.id)}
+                            disabled={!onOpenStateMachine}
+                            className="w-full py-2 rounded text-xs font-bold border border-gray-600 bg-gray-900 hover:bg-gray-700 text-gray-200 transition-colors"
+                        >
+                            Open State Machine
+                        </button>
+                    </div>
+                ) : node.stateType === 'Single' ? (
                     <SingleStateConfig 
                         node={node} 
                         updateState={updateState} 
-                        clipOptions={clipOptions} 
+                        clipOptions={clipOptions}
                         playRateParamOptions={blendParamOptions}
+                        curveVariableOptions={curveVariableOptions}
+                        clipDuration={clipDuration}
                     />
                 ) : (
                     <BlendStateConfig 

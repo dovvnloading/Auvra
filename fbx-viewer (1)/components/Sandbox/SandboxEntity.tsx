@@ -196,7 +196,8 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
     const { currentHealth, isDead, takeDamage: applyHealthDamage } = useEntityHealth({
         maxHealth,
         onHealthChange,
-        graphApiRef: internalApiRef
+        graphApiRef: internalApiRef,
+        hitReactClip: blueprint.hitReactClip
     });
 
     // --- Stats to Runtime Sync ---

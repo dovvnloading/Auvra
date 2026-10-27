@@ -1,6 +1,7 @@
 import React from 'react';
-import { Crown, Play } from 'lucide-react';
+import { Crown, Network, Play } from 'lucide-react';
 import { GraphState } from '../../types';
+import { innerStateCount } from './utils/stateMachines';
 
 interface GraphNodeProps {
     state: GraphState;
@@ -9,6 +10,8 @@ interface GraphNodeProps {
     isActive: boolean;
     onPointerDown: (e: React.PointerEvent) => void;
     onClick: (e: React.MouseEvent) => void;
+    /** Set on State Machine states: opens them. */
+    onDoubleClick?: (e: React.MouseEvent) => void;
 }
 
 export const GraphNode: React.FC<GraphNodeProps> = ({
@@ -16,8 +19,10 @@ export const GraphNode: React.FC<GraphNodeProps> = ({
     isSelected,
     isActive,
     onPointerDown,
-    onClick
+    onClick,
+    onDoubleClick
 }) => {
+    const machine = state.stateType === 'StateMachine';
     return (
         <div 
             className={`
@@ -29,6 +34,8 @@ export const GraphNode: React.FC<GraphNodeProps> = ({
             style={{ left: state.position.x, top: state.position.y }}
             onPointerDown={onPointerDown}
             onClick={onClick}
+            onDoubleClick={onDoubleClick}
+            title={machine ? 'Double-click to edit the states inside' : undefined}
             data-state-id={state.id}
             data-active={isActive ? 'true' : undefined}
         >
@@ -48,7 +55,12 @@ export const GraphNode: React.FC<GraphNodeProps> = ({
             
             {/* Body */}
             <div className="p-3 text-[10px] text-gray-400 space-y-2">
-                {state.clipName ? (
+                {machine ? (
+                    <div className="flex items-center gap-1.5 text-violet-300 bg-violet-950/30 px-2 py-1 rounded border border-violet-900/30">
+                        <Network size={8} />
+                        <span className="truncate">State machine &middot; {innerStateCount(state)} {innerStateCount(state) === 1 ? 'state' : 'states'}</span>
+                    </div>
+                ) : state.stateType === 'Single' && state.clipName ? (
                     <div className="flex items-center gap-1.5 text-blue-300 bg-blue-950/30 px-2 py-1 rounded border border-blue-900/30">
                         <Play size={8} /> 
                         <span className="truncate">{state.clipName}</span>

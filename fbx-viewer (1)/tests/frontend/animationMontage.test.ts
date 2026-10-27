@@ -345,3 +345,23 @@ describe('montage player', () => {
     expect(onEnd).not.toHaveBeenCalled();
   });
 });
+
+describe('additive montages', () => {
+  it('adds a clip\'s motion from its first frame on top of a montage that keeps playing', () => {
+    const { hips, player, frame } = makeScene();
+    // An upper-body loop holds every bone at x = 2.
+    player.play(poseClip('Aim', [2, 0, 0]), { loop: true, blendIn: 0 });
+    // A flinch moves from y = 5 to y = 6 over its second: as additive motion that is +0 to +1 in y.
+    const flinch = new THREE.AnimationClip('Flinch', 1, BONES.map(bone => new THREE.VectorKeyframeTrack(`${bone}.position`, [0, 1], [0, 5, 0, 0, 6, 0])));
+    player.play(flinch, { additive: true, blendIn: 0, blendOut: 0 });
+    frame(16);
+    expect(player.isPlaying()).toBe(true);
+    expect(hips.position.x).toBeCloseTo(2, 3);
+    expect(hips.position.y).toBeCloseTo(0.5, 3);
+    // The flinch ends; the loop it played over is still at full weight.
+    frame(24);
+    expect(hips.position.x).toBeCloseTo(2, 3);
+    expect(hips.position.y).toBeCloseTo(0, 3);
+    expect(flinch.blendMode).toBe(THREE.NormalAnimationBlendMode);
+  });
+});

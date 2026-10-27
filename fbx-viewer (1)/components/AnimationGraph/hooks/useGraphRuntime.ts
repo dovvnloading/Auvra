@@ -8,6 +8,7 @@ import { useInputHandler } from './useInputHandler';
 import { useGraphStateMachine } from './useGraphStateMachine';
 import { useGraphLocomotion } from './useGraphLocomotion';
 import { useGraphAnimator } from './useGraphAnimator';
+import { flattenStateMachines } from '../utils/stateMachines';
 
 /**
  * Returns a reader for a Single state's normalized clip time (0..1), or null when the state has no
@@ -62,7 +63,7 @@ export type PlayMontageOptions = MontageOptions;
 
 export const useGraphRuntime = (
     modelObject: THREE.Group,
-    graph: AnimationGraphData,
+    authoredGraph: AnimationGraphData,
     allClips: THREE.AnimationClip[],
     enableInputs: boolean,
     onActiveStateChange?: (id: string) => void,
@@ -71,6 +72,8 @@ export const useGraphRuntime = (
     /** Pose less often when far from the camera or out of view (characters other than the player). */
     lod: boolean = false
 ) => {
+    // State machines nested in states play as one flat graph of their states.
+    const graph = useMemo(() => flattenStateMachines(authoredGraph), [authoredGraph]);
 
     // 1. Central Data Store for Variables, keyed by variable id.
     const variablesRef = useRef<Record<string, number | boolean>>({});

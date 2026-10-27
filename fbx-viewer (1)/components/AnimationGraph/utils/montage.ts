@@ -27,6 +27,11 @@ export interface MontageOptions {
     /** Repeat until stopped or interrupted instead of playing once. */
     loop?: boolean;
     /**
+     * Add the clip's motion (relative to its first frame) on top of the pose instead of replacing
+     * it: a flinch over a run keeps the legs running. Additive montages interrupt only each other.
+     */
+    additive?: boolean;
+    /**
      * Called once when the montage no longer affects the pose and its actions are gone, with
      * `interrupted` true when stop() or another play() ended it before the clip finished.
      */
@@ -55,6 +60,7 @@ interface MontageLayer {
     blendOut: number;
     rate: number;
     loop: boolean;
+    additive: boolean;
     onEnd?: (interrupted: boolean) => void;
     /** Fade-in progress, 0 to 1. */
     rise: number;
@@ -117,6 +123,7 @@ export class MontagePlayer {
     private layers: MontageLayer[] = [];
     private current: MontageLayer | null = null;
     private maskedClips = new WeakMap<THREE.AnimationClip, Map<string, THREE.AnimationClip>>();
+    private additiveClips = new WeakMap<THREE.AnimationClip, THREE.AnimationClip>();
 
     /** `root` is where mask bones are looked up; actions bind to the mixer's root, like the base actions. */
     constructor(mixer: THREE.AnimationMixer, root: THREE.Object3D) {
@@ -125,15 +132,18 @@ export class MontagePlayer {
     }
 
     /**
-     * Plays `clip` once (or looping) over the base pose, fading in over `blendIn`. Montages still
-     * playing or fading out crossfade out over the same time and end as interrupted. A mask bone
-     * that matches nothing leaves the pose untouched, though the montage still runs and ends.
+     * Plays `clip` once (or looping) over the base pose, fading in over `blendIn`. Montages of the
+     * same kind (additive or not) still playing or fading out crossfade out over the same time and
+     * end as interrupted. A mask bone that matches nothing leaves the pose untouched, though the
+     * montage still runs and ends.
      */
     play(clip: THREE.AnimationClip, options: MontageOptions = {}): void {
         const blendIn = seconds(options.blendIn, DEFAULT_MONTAGE_BLEND_IN);
-        this.layers.forEach(layer => this.fadeOut(layer, blendIn));
+        const additive = !!options.additive;
+        this.layers.filter(layer => layer.additive === additive).forEach(layer => this.fadeOut(layer, blendIn));
 
-        const source = options.maskBone ? this.maskedClip(clip, options.maskBone) : clip;
+        const played = additive ? this.additiveClip(clip) : clip;
+        const source = options.maskBone ? this.maskedClip(played, options.maskBone) : played;
         const rate = typeof options.rate === 'number' && Number.isFinite(options.rate) ? options.rate : 1;
         const layer: MontageLayer = {
             clip: source,
@@ -143,6 +153,7 @@ export class MontagePlayer {
             blendOut: seconds(options.blendOut, DEFAULT_MONTAGE_BLEND_OUT),
             rate,
             loop: !!options.loop && source.duration > 0,
+            additive,
             onEnd: options.onEnd,
             rise: blendIn > 0 ? 0 : 1,
             release: 1,
@@ -164,7 +175,7 @@ export class MontagePlayer {
         fading.forEach(other => this.splitLayer(other, layer));
 
         this.layers.push(layer);
-        this.current = layer;
+        if (!additive) this.current = layer;
         this.applyWeights();
     }
 
@@ -175,7 +186,10 @@ export class MontagePlayer {
         this.applyWeights();
     }
 
-    /** True from play() until that montage finishes or is stopped; a stopped one may still be fading out. */
+    /**
+     * True from play() until that montage finishes or is stopped; a stopped one may still be fading
+     * out. Additive montages play alongside and do not count.
+     */
     isPlaying(): boolean {
         return this.current !== null;
     }
@@ -234,6 +248,18 @@ export class MontagePlayer {
         this.layers = [];
         this.current = null;
         this.maskedClips = new WeakMap();
+        this.additiveClips = new WeakMap();
+    }
+
+    /** The clip as motion relative to its first frame, which adds to the pose under it; built once per clip. */
+    private additiveClip(clip: THREE.AnimationClip): THREE.AnimationClip {
+        if (clip.blendMode === THREE.AdditiveAnimationBlendMode) return clip;
+        let additive = this.additiveClips.get(clip);
+        if (!additive) {
+            additive = THREE.AnimationUtils.makeClipAdditive(clip.clone());
+            this.additiveClips.set(clip, additive);
+        }
+        return additive;
     }
 
     /** The clip limited to the mask bone's subtree, built once per (clip, mask bone). */

@@ -243,7 +243,13 @@ export interface InputBinding {
   targetValue: number | boolean;
 }
 
-export type StateType = 'Single' | 'Blend1D' | 'Blend2D';
+export type StateType = 'Single' | 'Blend1D' | 'Blend2D' | 'StateMachine';
+
+/** The states and transitions inside a State Machine state; its root state is where it is entered. */
+export interface SubStateMachine {
+  states: GraphState[];
+  transitions: GraphTransition[];
+}
 
 export interface BlendSample {
     id: string;
@@ -257,6 +263,20 @@ export interface AnimNotify {
     name: string;
     /** Seconds from the start of the clip. */
     time: number;
+}
+
+/** A point on an animation curve: a value at a time in the state's clip. */
+export interface AnimCurveKey {
+    /** Seconds from the start of the clip. */
+    time: number;
+    value: number;
+}
+
+/** A value keyed over a state's clip that drives a graph variable while the state plays. */
+export interface AnimCurve {
+    id: string;
+    variableId: string;
+    keys: AnimCurveKey[];
 }
 
 export interface GraphState {
@@ -285,6 +305,12 @@ export interface GraphState {
   notifies?: AnimNotify[];
   /** Move the character by the clip's root-bone travel instead of leaving it in the pose. */
   rootMotion?: boolean;
+  /** States with the same group keep their phase across a transition (a run starts mid-stride where the walk was). */
+  syncGroup?: string;
+  /** A State Machine state's own states and transitions. */
+  subGraph?: SubStateMachine;
+  /** Values keyed over the clip, written into graph variables each frame the state plays (Single states). */
+  curves?: AnimCurve[];
 }
 
 export type ConditionOperator = '>' | '<' | '==' | '!=' | '>=' | '<=';
@@ -408,6 +434,8 @@ export interface Blueprint {
   ik?: CharacterIKSettings;
   /** A player's fire and aim clips, layered over its locomotion. */
   upperBody?: UpperBodySettings;
+  /** Added on top of whatever the character is doing each time it is hurt (not by the hit that kills it). */
+  hitReactClip?: string | null;
   /** An enemy's authored behavior (runtime/behaviorTree.ts); without one it uses the built-in AI. */
   behaviorTree?: BehaviorTreeData;
 }
