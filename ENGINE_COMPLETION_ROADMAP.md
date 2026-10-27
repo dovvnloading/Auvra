@@ -4,7 +4,7 @@
 > **Date:** 2026-10-26. **Revision:** `48d7d7c` (branch `codex/fix-stage9-foundation-blockers`).
 > **Method:** five independent static audits (native runtime, editor core and rendering, gameplay framework, platform and shipping, and a repo-wide capability sweep). Each was paired with an adversarial verifier that tried to refute every blocker, major, missing and claim-mismatch gap, corrected its severity and added gaps the auditor missed. A sixth agent re-checked the status of every finding in `findings.md` and the ranked gaps in `CHARACTER_ANIMATION_UNREAL_GAP_AUDIT.md`. The headline claims were then spot-checked by hand (see §1).
 
-## Progress (updated 2026-10-26)
+## Progress (updated 2026-10-27)
 
 | Phase | Status | Merged in |
 |---|---|---|
@@ -12,7 +12,8 @@
 | 1 — Make a game shippable | Done: standalone web player, Windows exe player, Build Game, game settings, title/pause/save/load | #21, #22 |
 | 2 — Core engine model | Done: hierarchy, components, prefabs, gizmo for all objects, outliner tree, multi-select, copy/paste/duplicate, fly camera, surface placement, glTF/GLB/OBJ import, import options, reimport, folders, undo in all editors, migrations, faster edits | #23 |
 | 3 — Game framework | Done: Rapier physics (collider/rigidBody components, raycasts), character controller, triggers and On Overlap, input actions + gamepad + rebinding, audio buses and audioSource component, particles, flow and world visual-scripting nodes, level variables, grid navigation for enemies, blueprint-driven AI and player stats, animation crossfades and exit time, material overrides, terrain paint layers, lighting panel, authored title/pause menus with button actions, localization | #24 |
-| 4 — Release quality | In progress. Done: F3 performance overlay, third-party notices in builds, user docs (docs/), Starter project template. Left: gameplay test coverage, sample games, signed releases (needs the publisher's code-signing certificate) | #24 (partial) |
+| 4 — Release quality | In progress. Done: F3 performance overlay, third-party notices in builds, user docs (docs/), Starter, Arena and Courtyard samples with a template picker, first gameplay tests, and the fixes from play-testing them in the editor and in built games. Left: repeatable gameplay playthrough tests, smoke runs of the web, Linux and macOS players, signed releases (needs the publisher's code-signing certificate) | #24, #26–#29, #37–#39 |
+| Beyond the bar | Done: animation, scripting, timeline and rendering components; play tools (pause, step, inspect); live prefabs; ragdolls; water; reflection probes; terrain LOD; level cameras and camera cuts; behavior trees; level streaming; NPC dialogue; online multiplayer through a relay server | #30–#36 |
 
 ## 0. TL;DR
 
@@ -256,7 +257,30 @@ Smaller residuals on findings marked fixed:
 
 ### 6.2 `CHARACTER_ANIMATION_UNREAL_GAP_AUDIT.md`
 
-None of the feature gaps ranked in its §6 has been started: montages and slots, IK and root motion, the skeleton asset and retargeter, native pose evaluation, curves and notifies, state-machine and blending semantics, the locomotion movement component, animation performance, and physics/replication. Only small editor-defect parts of gaps 8 and 9 were fixed: `a6b6bb5` (graph preview clones and disposes its materials), `6af276b` (graph persist rollback) and `fac3a51` (sandbox input guard).
+*Updated 2026-10-27.* Most of the ranked gaps are now closed in the Three.js runtime:
+
+- **Done:**
+  - one-shot montages with bone masks;
+  - notifies;
+  - root motion;
+  - foot-planting and look-at IK;
+  - enemy ragdolls;
+  - triangulated 1D/2D blend spaces;
+  - any-state transitions with priorities, AND/OR conditions, exit time and honoured crossfade durations;
+  - the Rapier character controller;
+  - player replication through the relay server.
+- **Also fixed while play-testing real Mixamo characters (#39):**
+  - animation import;
+  - a character's own clips winning over another model's clip of the same name.
+- **Still open:**
+  - a skeleton asset and retargeter for rigs that are not Mixamo-like;
+  - stable clip references instead of names;
+  - sync groups;
+  - additive layers;
+  - nested state machines;
+  - animation curves;
+  - animation LOD and update budgets;
+  - native pose evaluation (native route only).
 
 ## 7. Verified gap list
 
