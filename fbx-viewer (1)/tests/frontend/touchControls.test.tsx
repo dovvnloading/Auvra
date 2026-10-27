@@ -254,6 +254,14 @@ describe('TouchControls', () => {
     expect(screen.getByRole('button', { name: 'Jump' })).toBeInTheDocument();
   });
 
+  it('gives a player with weapons Reload and Next weapon buttons', () => {
+    const input = new InputState(DEFAULT_INPUT_MAP);
+    render(<TouchControls input={input} enabled weapons />);
+    expect(screen.getByRole('button', { name: 'Next weapon' })).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Reload' }), { pointerId: 5 });
+    expect(input.isDown('Reload')).toBe(true);
+  });
+
   it('renders the action buttons the map has and drives setVirtualButton on press and release', () => {
     const input = new InputState(DEFAULT_INPUT_MAP);
     const setVirtualButton = vi.spyOn(input, 'setVirtualButton');
@@ -261,6 +269,8 @@ describe('TouchControls', () => {
     for (const name of ['Fire', 'Jump', 'Aim', 'Interact', 'Pause']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument();
     }
+    // Weapon buttons only for a player that carries weapons.
+    expect(screen.queryByRole('button', { name: 'Reload' })).toBeNull();
 
     const jump = screen.getByRole('button', { name: 'Jump' });
     fireEvent.pointerDown(jump, { pointerId: 3 });

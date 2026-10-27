@@ -45,6 +45,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/scripting/scriptApi.ts': 'sandbox-proxy',
   'runtime/timeline/evaluate.ts': 'pure-utility',
   'runtime/spawning.ts': 'pure-utility',
+  'runtime/weapons.ts': 'pure-utility',
   'utils/appDialogs.ts': 'pure-utility',
   'utils/retargeting.ts': 'pure-utility',
   'utils/latestWriter.ts': 'pure-utility',

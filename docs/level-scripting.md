@@ -84,7 +84,7 @@ Pending delays are dropped when the level restarts or play stops.
 | Random Float / Random Integer | A random value from **Min** to **Max** (defaults 0 to 1 and 0 to 10; Random Integer can return Max). Pure |
 | Print (Format) | Shows **Format** with `{0}`, `{1}` and `{2}` replaced by **Arg 0** to **Arg 2**. `{{` and `}}` print braces; decimals are rounded to 3 places |
 
-**Input Action** compares the action with its state on the node's previous run, so drive it from **Event Tick** to catch every press. The actions are MoveForward, MoveBack, MoveLeft, MoveRight, Jump, Sprint, Fire, Aim, Interact and Pause; see [Controls](building-games.md#controls) for their keys.
+**Input Action** compares the action with its state on the node's previous run, so drive it from **Event Tick** to catch every press. The actions are MoveForward, MoveBack, MoveLeft, MoveRight, Jump, Sprint, Fire, Aim, Interact, Reload, NextWeapon and Pause; see [Controls](building-games.md#controls) for their keys.
 
 ## Level variables
 

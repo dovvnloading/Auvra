@@ -27,6 +27,8 @@ export interface TouchButtonSpec {
     actions: readonly string[];
     /** Tailwind position, size and text classes. */
     className: string;
+    /** Shown only when the player carries weapons of its own (Reload, Next weapon). */
+    weaponsOnly?: boolean;
 }
 
 /** The right-thumb buttons, each shown only when the input map has one of its actions. They hold the action while touched. */
@@ -35,6 +37,8 @@ export const TOUCH_BUTTONS: readonly TouchButtonSpec[] = [
     { actions: ['Jump'], className: 'bottom-6 right-32 h-16 w-16 text-xs' },
     { actions: ['Aim'], className: 'bottom-32 right-8 h-14 w-14 text-[11px]' },
     { actions: ['Interact', 'Use'], className: 'bottom-28 right-28 h-14 w-14 text-[11px]' },
+    { actions: ['Reload'], className: 'bottom-52 right-8 h-12 w-12 text-[10px]', weaponsOnly: true },
+    { actions: ['NextWeapon'], className: 'bottom-48 right-24 h-12 w-12 text-[10px] leading-tight', weaponsOnly: true },
 ];
 
 /** A stick reading: x right and y down the screen, length 0..1. */
@@ -295,7 +299,7 @@ const SAFE_AREA: React.CSSProperties = {
 
 const preventContextMenu = (event: React.MouseEvent) => event.preventDefault();
 
-const TouchOverlay: React.FC<{ input: InputState }> = ({ input }) => {
+const TouchOverlay: React.FC<{ input: InputState; weapons: boolean }> = ({ input, weapons }) => {
     const translate = useTranslation();
     // Hiding or removing the overlay lets go of everything it holds.
     useEffect(() => () => input.clearVirtual(), [input]);
@@ -304,6 +308,7 @@ const TouchOverlay: React.FC<{ input: InputState }> = ({ input }) => {
     const hasMove = Object.values(TOUCH_MOVE_ACTIONS).some(name => input.hasAction(name));
     const sprintAction = input.hasAction(TOUCH_SPRINT_ACTION) ? TOUCH_SPRINT_ACTION : null;
     const buttons = TOUCH_BUTTONS.flatMap(spec => {
+        if (spec.weaponsOnly && !weapons) return [];
         const action = spec.actions.find(name => input.hasAction(name));
         return action ? [{ action, className: spec.className }] : [];
     });
@@ -329,16 +334,19 @@ interface TouchControlsProps {
     input: InputState;
     /** true always shows the controls and false never does; left out, they show on touch devices until a mouse is used. */
     enabled?: boolean;
+    /** The player carries weapons of its own, so Reload and Next weapon get buttons. */
+    weapons?: boolean;
 }
 
 /**
  * On-screen controls for phones and tablets: a left joystick for the move actions (pushed far, it also holds Sprint),
- * a right-side look drag area, and buttons for Fire/Attack, Jump, Aim, Interact and Pause when the map has them.
+ * a right-side look drag area, and buttons for Fire/Attack, Jump, Aim, Interact and Pause when the map has them
+ * (and Reload and Next weapon for a player with weapons).
  * Render it as HTML over the canvas (inside a positioned container), not inside the three Canvas. Unmounting releases its input.
  */
-export const TouchControls: React.FC<TouchControlsProps> = ({ input, enabled }) => {
+export const TouchControls: React.FC<TouchControlsProps> = ({ input, enabled, weapons = false }) => {
     const touchDevice = useSyncExternalStore(subscribeTouchDevice, isTouchDevice, noTouchOnServer);
     const pointerKind = useLastPointerKind(enabled === undefined && touchDevice);
     const visible = enabled ?? (touchDevice && pointerKind !== 'mouse');
-    return visible ? <TouchOverlay input={input} /> : null;
+    return visible ? <TouchOverlay input={input} weapons={weapons} /> : null;
 };

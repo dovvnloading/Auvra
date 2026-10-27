@@ -12,9 +12,17 @@ export interface PlayerInputState {
     jumpPressed: boolean;
     isFiring: boolean;
     isAiming: boolean;
+    isReloading: boolean;
+    isSwitchingWeapon: boolean;
+    /** True only on the frame Fire goes down. */
+    firePressed: boolean;
+    /** True only on the frame Reload goes down. */
+    reloadPressed: boolean;
+    /** True only on the frame Next Weapon goes down. */
+    nextWeaponPressed: boolean;
 }
 
-type HeldInput = Omit<PlayerInputState, 'jumpPressed'>;
+type HeldInput = Omit<PlayerInputState, 'jumpPressed' | 'firePressed' | 'reloadPressed' | 'nextWeaponPressed'>;
 
 const isEditableTarget = (target: EventTarget | null): boolean => {
     if (!(target instanceof HTMLElement)) return false;
@@ -29,6 +37,8 @@ export const readActionInput = (input: InputState): HeldInput => ({
     isJumping: input.isDown('Jump'),
     isFiring: input.isDown('Fire'),
     isAiming: input.isDown('Aim'),
+    isReloading: input.isDown('Reload'),
+    isSwitchingWeapon: input.isDown('NextWeapon'),
 });
 
 /** Fixed keyboard layout used where no game runtime supplies input actions (the Sandbox tab). */
@@ -44,7 +54,9 @@ const readKeyboardInput = (keys: Set<string>, mouseButtons: Set<number>): HeldIn
         isSprinting: keys.has('ShiftLeft'),
         isJumping: keys.has('Space'),
         isAiming: keys.has('KeyF'),
-        isFiring: mouseButtons.has(0) // Left Mouse Button
+        isFiring: mouseButtons.has(0), // Left Mouse Button
+        isReloading: keys.has('KeyR'),
+        isSwitchingWeapon: keys.has('KeyQ'),
     };
 };
 
@@ -60,6 +72,7 @@ export const usePlayerControls = (enabled: boolean) => {
     const keys = useRef(new Set<string>());
     const mouseButtons = useRef(new Set<number>());
     const jumpHeld = useRef(false);
+    const held = useRef({ fire: false, reload: false, next: false });
 
     useEffect(() => {
         if (!listenToKeyboard) return;
@@ -102,12 +115,19 @@ export const usePlayerControls = (enabled: boolean) => {
         };
     }, [listenToKeyboard]);
 
-    // Call once per frame: the Jump edge is tracked here, independent of when the runtime advances its own edges.
+    // Call once per frame: the press edges are tracked here, independent of when the runtime advances its own edges.
     const getInputState = (): PlayerInputState => {
-        const held = actions ? readActionInput(actions) : readKeyboardInput(keys.current, mouseButtons.current);
-        const jumpPressed = held.isJumping && !jumpHeld.current;
-        jumpHeld.current = held.isJumping;
-        return { ...held, jumpPressed };
+        const now = actions ? readActionInput(actions) : readKeyboardInput(keys.current, mouseButtons.current);
+        const jumpPressed = now.isJumping && !jumpHeld.current;
+        jumpHeld.current = now.isJumping;
+        const previous = held.current;
+        const pressed = {
+            firePressed: now.isFiring && !previous.fire,
+            reloadPressed: now.isReloading && !previous.reload,
+            nextWeaponPressed: now.isSwitchingWeapon && !previous.next,
+        };
+        held.current = { fire: now.isFiring, reload: now.isReloading, next: now.isSwitchingWeapon };
+        return { ...now, jumpPressed, ...pressed };
     };
 
     return { getInputState };

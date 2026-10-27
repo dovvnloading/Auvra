@@ -16,7 +16,8 @@ MENU_ACTIONS = frozenset({"play", "continue", "options", "quit", "resume", "save
 OPEN_LEVEL_PREFIX = "openLevel:"
 BUTTON_VARIANTS = frozenset({"primary", "secondary", "outline", "ghost"})
 TEXT_ALIGN = frozenset({"left", "center", "right"})
-BINDING_SOURCES = frozenset({"player.health", "player.maxHealth", "player.stamina", "player.isAiming", "level.id"})
+BINDING_SOURCES = frozenset({"player.health", "player.maxHealth", "player.stamina", "player.isAiming", "player.weapon",
+                             "player.ammo", "player.magazine", "player.reserve", "player.reloading", "level.id"})
 VARIABLE_BINDING_PREFIX = "vars."
 # Props each element type may bind to a live game-state value while the game runs.
 BINDABLE_PROPS = {

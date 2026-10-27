@@ -3,7 +3,7 @@ import { readGameStateBinding, type GameStateSnapshot } from '../../runtime/game
 
 const state: GameStateSnapshot = {
   levelId: 'level-1',
-  player: { health: 80, maxHealth: 100, stamina: 50, isAiming: true },
+  player: { health: 80, maxHealth: 100, stamina: 50, isAiming: true, weapon: 'Pistol', ammo: 7, magazine: 12, reserve: -1, reloading: false },
   vars: { score: 3, open: false, label: 'Gate' },
 };
 
@@ -12,6 +12,8 @@ describe('game state bindings', () => {
     expect(readGameStateBinding(state, 'level.id')).toBe('level-1');
     expect(readGameStateBinding(state, 'player.health')).toBe(80);
     expect(readGameStateBinding(state, 'player.isAiming')).toBe(true);
+    expect(readGameStateBinding(state, 'player.weapon')).toBe('Pistol');
+    expect(readGameStateBinding(state, 'player.ammo')).toBe(7);
     expect(readGameStateBinding(state, 'vars.score')).toBe(3);
     expect(readGameStateBinding(state, 'vars.open')).toBe(false);
     expect(readGameStateBinding(state, 'vars.label')).toBe('Gate');

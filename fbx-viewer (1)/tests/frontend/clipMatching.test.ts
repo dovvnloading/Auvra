@@ -87,4 +87,15 @@ describe('upperBodyClip', () => {
     expect(upperBodyClip({ aimClip: 'Aim' }, true, false)).toBeNull();
     expect(upperBodyClip(undefined, true, true)).toBeNull();
   });
+
+  it('prefers the held weapon’s clips and plays its reload clip while reloading', () => {
+    const settings = { fireClip: 'Shooting', aimClip: 'Aim' };
+    const rifle = { fireClip: 'Rifle Fire', aimClip: null, reloadClip: 'Rifle Reload' };
+    expect(upperBodyClip(settings, true, true, rifle)).toBe('Rifle Fire');
+    expect(upperBodyClip(settings, false, true, rifle)).toBe('Aim');
+    expect(upperBodyClip(settings, true, true, rifle, true)).toBe('Rifle Reload');
+    // Without a reload clip, a reload holds the aim pose and never the fire clip.
+    expect(upperBodyClip(settings, true, true, { ...rifle, reloadClip: null }, true)).toBe('Aim');
+    expect(upperBodyClip(settings, true, false, { ...rifle, reloadClip: null }, true)).toBeNull();
+  });
 });

@@ -124,5 +124,7 @@ Mouse sensitivity, invert Y and master volume start from **Game Settings**; musi
 | Fire | Left mouse | Button 7 (right trigger) |
 | Aim | Right mouse | Button 6 (left trigger) |
 | Interact | F | Button 2 (X) |
+| Reload | R | Button 1 (B) |
+| Next weapon | Q | Button 3 (Y) |
 
 The **Pause** action (Esc or gamepad Start, rebindable in Options) pauses the game. The **Input Action** node in the level blueprint can read every action above, plus **Pause** (Esc, gamepad button 9). **Interact** has no built-in use, so it is free for your own scripting.

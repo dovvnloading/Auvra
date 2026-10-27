@@ -441,6 +441,8 @@ export interface Blueprint {
   upperBody?: UpperBodySettings;
   /** Added on top of whatever the character is doing each time it is hurt (not by the hit that kills it). */
   hitReactClip?: string | null;
+  /** A player's weapons, held one at a time (runtime/weapons.ts); without any it fires a default weapon. */
+  weapons?: WeaponSettings[];
   /** An enemy's authored behavior (runtime/behaviorTree.ts); without one it uses the built-in AI. */
   behaviorTree?: BehaviorTreeData;
 }
@@ -483,6 +485,37 @@ export interface CharacterIKSettings {
   lookAtMaxAngle?: number;
   /** While aiming, the spine leans up and down with the camera, so the arms follow the aim. */
   aimPitch?: boolean;
+}
+
+/** One of a player's weapons. Missing numbers take runtime/weapons.ts DEFAULT_WEAPON's. */
+export interface WeaponSettings {
+  id: string;
+  name: string;
+  /** The model attachment shown while this weapon is held; the other weapons' are hidden. */
+  attachmentId?: string | null;
+  /** Name of the socket its shots leave from (and flash at); the first Muzzle socket when unset. */
+  muzzleSocket?: string | null;
+  /** 'auto' fires while Fire is held, 'semi' once per press. */
+  fireMode?: 'auto' | 'semi';
+  /** Shots per second. */
+  fireRate?: number;
+  /** Damage per projectile. */
+  damage?: number;
+  /** Rounds per magazine; 0 never needs reloading. */
+  magazine?: number;
+  /** Rounds carried besides the magazine; -1 is unlimited. */
+  reserve?: number;
+  reloadSeconds?: number;
+  /** Largest random angle a shot strays from the aim, in degrees (a quarter of it while aiming). */
+  spread?: number;
+  /** Projectiles per shot, as from a shotgun. */
+  pellets?: number;
+  /** World units per second. */
+  projectileSpeed?: number;
+  /** Upper-body clips while firing, aiming and reloading this weapon; the blueprint's Upper Body clips when unset. */
+  fireClip?: string | null;
+  aimClip?: string | null;
+  reloadClip?: string | null;
 }
 
 /** Where the camera aims from: the character's eyes, hiding it (`scope`), or over its shoulder with it in view. */

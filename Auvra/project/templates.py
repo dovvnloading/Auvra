@@ -1257,6 +1257,10 @@ def _outpost_player() -> dict[str, Any]:
         # Over the shoulder, so the aim and fire clips show, with the spine leaning up and down with the aim.
         aimView="shoulder",
         ik={"footIK": True, "footMaxStep": 0.4, "aimPitch": True},
+        # One semi-automatic pistol: twelve rounds a magazine, four magazines carried, R reloads.
+        weapons=[{"id": "outpost-weapon-pistol", "name": "Pistol", "attachmentId": "outpost-pistol", "muzzleSocket": "Muzzle",
+                  "fireMode": "semi", "fireRate": 5, "damage": 25, "magazine": 12, "reserve": 48, "reloadSeconds": 1.4,
+                  "spread": 1.5, "pellets": 1, "projectileSpeed": 80}],
     )
     player["variables"] = graph["variables"]
     return player
@@ -1296,8 +1300,19 @@ def _outpost_hud() -> list[dict[str, Any]]:
                      48, 116, 380, 52, 2),
         # Along the top, clear of the dialogue box at the bottom.
         _hud_text("hud-main-hint", "Hint",
-                  "Talk to the Scout, recover three supply caches, reach the beacon. Right mouse aims, left mouse fires.",
-                  500, 40, 1180, 40, size=24, color="rgba(255,255,255,0.85)", weight="normal", align="center"),
+                  "Talk to the Scout, recover three supply caches, reach the beacon. Right mouse aims, left mouse fires, R reloads.",
+                  470, 40, 1420, 40, size=24, color="rgba(255,255,255,0.85)", weight="normal", align="center"),
+        # The pistol's rounds, bottom left: in the magazine, then carried.
+        _hud_element("hud-main-ammo-panel", "Ammo Panel", "Container",
+                     {"backgroundColor": "rgba(0,0,0,0.45)", "borderColor": "rgba(159,212,255,0.7)", "borderWidth": 2,
+                      "borderRadius": 12}, 32, 928, 300, 120, 1),
+        _hud_text("hud-main-weapon", "Weapon", "Pistol", 56, 940, 250, 36, size=24, color="#9fd4ff",
+                  bind={"text": "player.weapon"}),
+        _hud_text("hud-main-ammo", "Ammo", "12", 56, 978, 90, 60, size=48, bind={"text": "player.ammo"}),
+        # A divider, not "/": a lone slash reads as an absolute path to the protocol, which refuses the project.
+        _hud_text("hud-main-ammo-divider", "Ammo Divider", "|", 146, 992, 24, 40, size=30, color="rgba(255,255,255,0.7)"),
+        _hud_text("hud-main-reserve", "Reserve", "48", 172, 992, 120, 40, size=30, color="rgba(255,255,255,0.7)",
+                  bind={"text": "player.reserve"}),
     ])
     title = _menu("menu-title", "Title Menu", "OUTPOST", "Recover the supplies. Light the beacon.", 480, [
         ("play", "Play", "primary"), ("continue", "Continue", "secondary"), ("options", "Options", "secondary"),
