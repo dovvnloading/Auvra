@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { stepActionWeights } from '../../components/AnimationGraph/hooks/useGraphAnimator';
+import { animationUpdateInterval, stepActionWeights } from '../../components/AnimationGraph/hooks/useGraphAnimator';
 import { createNormalizedTimeReader } from '../../components/AnimationGraph/hooks/useGraphRuntime';
 import { selectTransition } from '../../components/AnimationGraph/utils/transitions';
 import type { GraphState, GraphTransition } from '../../types';
@@ -139,5 +139,12 @@ describe('animation graph normalized time', () => {
     mixer.update(0.7);
     expect(read('attack')).toBe(1);
     expect(read('blend')).toBeNull();
+  });
+});
+
+describe('animation LOD', () => {
+  it('poses every frame up close, less often with distance, and rarely off screen', () => {
+    expect([10, 45, 90, 300].map(distance => animationUpdateInterval(distance, true))).toEqual([1, 2, 3, 4]);
+    expect(animationUpdateInterval(10, false)).toBe(8);
   });
 });

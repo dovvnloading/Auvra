@@ -380,6 +380,7 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
                 driveLocomotion={false}
                 apiRef={internalApiRef}
                 eventSource={remote ? `remote:${entityId}` : team === 'Player' ? 'player' : entityId}
+                lod={remote || team !== 'Player'}
             />
             <CharacterIK model={model.object} settings={blueprint.ik} physicsId={team === 'Player' && !remote ? PLAYER_PHYSICS_ID : undefined} />
             {/* Enemies fall as ragdolls; the player's death ends the game, and its capsule would fight the bodies. */}

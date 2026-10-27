@@ -30,6 +30,8 @@ interface GraphRuntimeProps {
     driveLocomotion?: boolean;
     /** Reported as the source of this character's animation notifies (e.g. 'player' or an object id). */
     eventSource?: string | null;
+    /** Pose less often when far from the camera or out of view; for characters other than the player. */
+    lod?: boolean;
 }
 
 export const GraphRuntime: React.FC<GraphRuntimeProps> = ({
@@ -40,7 +42,8 @@ export const GraphRuntime: React.FC<GraphRuntimeProps> = ({
     onActiveStateChange,
     apiRef,
     driveLocomotion = true,
-    eventSource = null
+    eventSource = null,
+    lod = false
 }) => {
 
     const runtime = useGraphRuntime(
@@ -50,7 +53,8 @@ export const GraphRuntime: React.FC<GraphRuntimeProps> = ({
         enableInputs,
         onActiveStateChange,
         driveLocomotion,
-        eventSource
+        eventSource,
+        lod
     );
     const { setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, getActiveState } = runtime;
 
