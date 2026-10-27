@@ -54,7 +54,9 @@ export const FoliageBrushTool: React.FC<FoliageBrushToolProps> = ({
 }) => {
     const { camera, raycaster, pointer, gl, scene, events } = useThree();
     const cursorRef = useRef<THREE.Group>(null);
-    const [isPainting, setIsPainting] = useState(false);
+    // A ref, not state: the frame loop must stop the moment the button is released, or the frames
+    // before a re-render would start collecting the next stroke's edits.
+    const isPainting = useRef(false);
     // A stroke's edits are collected and saved together when it ends: every save moves the project
     // to a new revision, so saving each instance as it was placed made the next ones fail.
     const [placements, setPlacements] = useState<FoliagePlacement[]>([]);
@@ -136,7 +138,7 @@ export const FoliageBrushTool: React.FC<FoliageBrushToolProps> = ({
         }
 
         // 2. Action Logic
-        if (isPainting && isCursorValid.current) {
+        if (isPainting.current && isCursorValid.current) {
 
             if (mode === 'add' && activeModel) {
                 // --- ADD MODE ---
@@ -224,11 +226,12 @@ export const FoliageBrushTool: React.FC<FoliageBrushToolProps> = ({
         const domElement: HTMLElement = events.connected ?? gl.domElement;
 
         const handleDown = (e: MouseEvent) => {
-            if (e.button === 0 && !e.shiftKey && !e.ctrlKey && !e.altKey) setIsPainting(true);
+            if (e.button === 0 && !e.shiftKey && !e.ctrlKey && !e.altKey) isPainting.current = true;
         };
         // Leaving the viewport ends the stroke like releasing the button; either saves its edits.
         const endStroke = () => {
-            setIsPainting(false);
+            if (!isPainting.current) return;
+            isPainting.current = false;
             const placed = placementsRef.current;
             const erased = [...erasedRef.current];
             placementsRef.current = [];
