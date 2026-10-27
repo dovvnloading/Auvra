@@ -9,7 +9,7 @@ Open **Game Settings** in the header. The settings are stored in the project and
 - **Player blueprint**: the character the player controls.
 - **Window, quality and input defaults**: fullscreen, shadows, post-processing, maximum resolution scale, field of view, mouse sensitivity, invert Y and master volume. Players can change the input and volume settings in Options.
 
-Each level should have a **Player Start**; without one the player spawns at the origin.
+Each level should have a **Player Start**; without one the player spawns at the origin (in the editor, under the camera).
 
 ## Building
 

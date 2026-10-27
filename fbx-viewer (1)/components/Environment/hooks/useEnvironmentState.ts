@@ -33,6 +33,7 @@ export const useEnvironmentState = () => {
     const selectedObjectId = selection.primary;
     const selectedObjectIds = selection.ids;
     const [isPlaying, setIsPlaying] = useState(false);
+    const [playFromCamera, setPlayFromCamera] = useState(false);
     const [layout, setLayout] = useState<ViewportLayout>('single');
     const [cameraSpeed, setCameraSpeed] = useState<number>(1);
     const [isMuted, setIsMuted] = useState(false);
@@ -158,8 +159,10 @@ export const useEnvironmentState = () => {
         }
     };
 
-    const handlePlayStart = () => {
+    /** Plays from the level's Player Start, or with `fromCamera` from under the editor camera. */
+    const handlePlayStart = (fromCamera = false) => {
         editorCameraPos.current = new THREE.Vector3(...cameraState.position);
+        setPlayFromCamera(fromCamera);
         setIsPlaying(true);
     };
 
@@ -185,6 +188,7 @@ export const useEnvironmentState = () => {
             paintSettings,
             sculptSettings,
             isPlaying,
+            playFromCamera,
             layout,
             editorCameraPos,
             cameraSpeed,

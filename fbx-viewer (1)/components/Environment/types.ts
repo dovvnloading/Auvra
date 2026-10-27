@@ -42,6 +42,8 @@ export interface EditorState {
     selectedBrushId: string | null;
     selectedObjectId: string | null;
     isPlaying: boolean;
+    /** Play started with "Play from here": the player starts under the editor camera, not at the Player Start. */
+    playFromCamera: boolean;
     layout: ViewportLayout;
     cameraSpeed: number;
     isMuted: boolean;

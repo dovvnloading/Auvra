@@ -29,6 +29,8 @@ import {
 interface LevelGameLoopProps {
     onExit: () => void;
     spawnPosition?: THREE.Vector3;
+    /** Start at `spawnPosition` even when the level has a Player Start ("Play from here"). */
+    fromCamera?: boolean;
 }
 
 interface GameSettingsDocument {
@@ -51,7 +53,7 @@ const createEmptyHud = (): HUDDocumentData => ({ id: HUD_DOCUMENT_ID, elements: 
  * game settings. Escape pauses; while paused the play toolbar resumes, steps one frame, restarts,
  * inspects the running objects or stops and returns to the editor (Escape again).
  */
-export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosition }) => {
+export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosition, fromCamera = false }) => {
     const { levelObjects, activeLevelBlueprint, levels, currentLevelId } = useScene();
     const { addNotification } = useNotification();
     const { document: settingsDocument, hydrated: settingsHydrated } = useNativeProjectDocument<GameSettingsDocument>(
@@ -127,10 +129,14 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
         blueprint: activeLevelBlueprint,
     }), [activeLevelBlueprint, currentLevelId, levelObjects, levels]);
 
-    // Play starts where the editor camera is, on the ground.
+    // Play starts at the level's Player Start (null lets the runtime use it). "Play from here", or a
+    // level without one, starts under the editor camera, on the ground.
+    const hasPlayerStart = levelObjects.some(object => object.type === 'player_start');
     const playerStart = useMemo<PlayerStart | null>(() => (
-        spawnPosition ? { position: [spawnPosition.x, 0.5, spawnPosition.z], rotation: [0, 0, 0] } : null
-    ), [spawnPosition]);
+        spawnPosition && (fromCamera || !hasPlayerStart)
+            ? { position: [spawnPosition.x, 0.5, spawnPosition.z], rotation: [0, 0, 0] }
+            : null
+    ), [spawnPosition, fromCamera, hasPlayerStart]);
 
     const exitRef = useRef(onExit);
     const notifyRef = useRef(addNotification);

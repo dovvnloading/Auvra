@@ -36,7 +36,7 @@ For an empty project:
 
 ## Play
 
-Click **PLAY LEVEL** in the World Editor toolbar to play the current level inside the editor. **F3** shows a performance overlay.
+Click **PLAY LEVEL** in the World Editor toolbar to play the current level inside the editor, starting at its Player Start (or under the editor camera when the level has none). The camera button beside it, **Play from here**, starts the player under the editor camera instead, to try a spot without walking there. **F3** shows a performance overlay.
 
 **Esc** pauses play and shows the play toolbar:
 
