@@ -239,12 +239,20 @@ export interface InputBinding {
   targetValue: number | boolean;
 }
 
-export type StateType = 'Single' | 'Blend2D';
+export type StateType = 'Single' | 'Blend1D' | 'Blend2D';
 
 export interface BlendSample {
     id: string;
     clipName: string;
-    position: [number, number]; // [x, y]
+    position: [number, number]; // [x, y]; a Blend1D state reads only x
+}
+
+/** A named event at a point in a state's clip, raised each time playback crosses it. */
+export interface AnimNotify {
+    id: string;
+    name: string;
+    /** Seconds from the start of the clip. */
+    time: number;
 }
 
 export interface GraphState {
@@ -263,7 +271,16 @@ export interface GraphState {
   // Blend Data
   blendSamples: BlendSample[];
   blendParamX: string; // Variable ID
-  blendParamY: string; // Variable ID
+  blendParamY: string; // Variable ID (unused by Blend1D)
+
+  /** Playback speed multiplier; default 1. Negative plays the clip backwards. */
+  playRate?: number;
+  /** Variable ID whose value multiplies playRate each frame (e.g. a signed forward speed); unset leaves playRate alone. */
+  playRateParam?: string;
+  /** Events raised when playback crosses a time in the state's clip (Single states). */
+  notifies?: AnimNotify[];
+  /** Move the character by the clip's root-bone travel instead of leaving it in the pose. */
+  rootMotion?: boolean;
 }
 
 export type ConditionOperator = '>' | '<' | '==' | '!=' | '>=' | '<=';
@@ -282,6 +299,12 @@ export interface GraphTransition {
   conditions: GraphCondition[];
   /** Fraction (0..1) of the source state's clip after which the transition may fire. */
   exitTime?: number;
+  /** 'all' (default): every condition must hold; 'any': one is enough. */
+  conditionMode?: 'all' | 'any';
+  /** Fires from every state except its target (fromStateId is ignored). */
+  anyState?: boolean;
+  /** Higher fires first when several transitions are ready; default 0, ties keep list order. */
+  priority?: number;
 }
 
 export interface AnimationGraphData {
@@ -314,7 +337,9 @@ export interface LogicNode {
           'Sequence' | 'ForLoop' | 'Delay' | 'DoOnce' | 'FlipFlop' | 'Gate' |
           // World (hooks/levelBlueprintNodes/world.ts)
           'SpawnPrefab' | 'GetActorTransform' | 'SetActorTransform' | 'PlaySound' | 'ApplyImpulse' | 'Raycast' |
-          'GetLevelVariable' | 'SetLevelVariable' | 'InputActionPressed' | 'RandomFloat' | 'RandomInt' | 'Print';
+          'GetLevelVariable' | 'SetLevelVariable' | 'InputActionPressed' | 'RandomFloat' | 'RandomInt' | 'Print' |
+          // Animation (hooks/levelBlueprintNodes/world.ts)
+          'PlayPlayerAnimation' | 'SetMorphTarget';
     name: string;
     position: { x: number; y: number };
     inputs: LogicPin[];
@@ -369,6 +394,21 @@ export interface Blueprint {
   aimOffset?: [number, number, number]; // Scope camera offset calibration
   weaponSounds?: string[]; // Array of AudioAsset IDs
   weaponVolume?: number; // Base volume for weapon sounds
+  /** Pose fixes applied after the animation graph each frame (runtime/ik.ts). */
+  ik?: CharacterIKSettings;
+}
+
+export interface CharacterIKSettings {
+  /** Plant each foot on the ground under it (needs colliders or terrain). */
+  footIK?: boolean;
+  /** Highest ground step a foot reaches for, in metres (default 0.5). */
+  footMaxStep?: number;
+  /** Turn a bone toward a target: the camera (players) or the player (enemies). */
+  lookAt?: 'none' | 'camera' | 'player';
+  /** Bone that looks (default 'Head'). */
+  lookAtBone?: string;
+  /** Largest turn away from the animated pose, in degrees (default 70). */
+  lookAtMaxAngle?: number;
 }
 
 export interface CameraState {

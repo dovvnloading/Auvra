@@ -1,11 +1,12 @@
-import React, { useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Search, Plus, Undo2, Redo2 } from 'lucide-react';
 import { AnimationGraphData } from '../../types';
 import { GraphNode } from './GraphNode';
 import { GraphConnection } from './GraphConnection';
+import { calculateConnectionPath } from './utils/graphMath';
 import { useGraphViewport } from './hooks/useGraphViewport';
 import { useGraphNodeDrag } from './hooks/useGraphNodeDrag';
-import { useGraphConnections } from './hooks/useGraphConnections';
+import { anyStateTransitionsByTarget, useGraphConnections } from './hooks/useGraphConnections';
 import { useGraphActions } from './hooks/useGraphActions';
 
 interface GraphCanvasProps {
@@ -23,7 +24,20 @@ interface GraphCanvasProps {
     onRedo?: () => void;
     canUndo?: boolean;
     canRedo?: boolean;
+    /** The state the preview runtime is in; highlighted on the canvas. Null when nothing runs. */
+    activeStateId?: string | null;
+    /** The transition the preview runtime took last; highlighted briefly each time it fires. */
+    firedTransition?: FiredTransition | null;
 }
+
+/** A transition the preview runtime just took; `seq` grows with every firing, so a repeat flashes again. */
+export interface FiredTransition {
+    id: string;
+    seq: number;
+}
+
+/** How long a fired transition stays highlighted on the canvas. */
+export const FIRED_TRANSITION_HIGHLIGHT_MS = 1200;
 
 const stopCanvasPointer = (e: React.PointerEvent) => e.stopPropagation();
 
@@ -39,7 +53,9 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
     onUndo,
     onRedo,
     canUndo = false,
-    canRedo = false
+    canRedo = false,
+    activeStateId = null,
+    firedTransition = null
 }) => {
     const canvasRef = useRef<HTMLDivElement>(null);
     
@@ -77,6 +93,17 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
 
     // 4. Data Preparation (Calculations)
     const connectionGroups = useGraphConnections(graph);
+    const anyStateTransitions = useMemo(() => anyStateTransitionsByTarget(graph), [graph]);
+
+    // 5. Live debug: the last fired transition glows for a moment.
+    const [flash, setFlash] = useState<FiredTransition | null>(null);
+    useEffect(() => {
+        setFlash(firedTransition);
+        if (!firedTransition) return;
+        const timer = window.setTimeout(() => setFlash(null), FIRED_TRANSITION_HIGHLIGHT_MS);
+        return () => window.clearTimeout(timer);
+    }, [firedTransition]);
+    const flashGroup = flash ? connectionGroups.find(group => group.transitions.some(t => t.id === flash.id)) : undefined;
 
     // --- Input Handlers ---
 
@@ -195,7 +222,45 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
                             onSelect={onSelectNode}
                         />
                     ))}
+
+                    {flash && flashGroup && (
+                        <path
+                            key={flash.seq}
+                            d={calculateConnectionPath(flashGroup.nodeA, flashGroup.nodeB)}
+                            stroke="#22c55e"
+                            strokeWidth={6}
+                            strokeLinecap="round"
+                            fill="none"
+                            className="pointer-events-none"
+                            style={{ filter: 'drop-shadow(0 0 6px rgba(34,197,94,0.8))' }}
+                            data-fired-transition={flash.id}
+                        >
+                            <animate attributeName="stroke-opacity" from="1" to="0" dur={`${FIRED_TRANSITION_HIGHLIGHT_MS}ms`} fill="freeze" />
+                        </path>
+                    )}
                 </svg>
+
+                {/* Any-state transitions: a tag above each target, one button per transition */}
+                {graph.states.filter(state => anyStateTransitions.has(state.id)).map(state => (
+                    <div
+                        key={`any-${state.id}`}
+                        className="absolute flex gap-1 z-10"
+                        style={{ left: state.position.x, top: state.position.y - 22 }}
+                    >
+                        {anyStateTransitions.get(state.id)!.map(transition => (
+                            <button
+                                key={transition.id}
+                                type="button"
+                                onPointerDown={(e) => e.stopPropagation()}
+                                onClick={(e) => { e.stopPropagation(); onSelectNode(transition.id); }}
+                                className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider border transition-colors ${selectedNodeId === transition.id ? 'bg-blue-600 border-blue-400 text-white' : flash?.id === transition.id ? 'bg-green-700 border-green-400 text-white' : 'bg-gray-800 border-gray-600 text-gray-300 hover:border-blue-500'}`}
+                                title="Any State transition: fires from every other state"
+                            >
+                                Any &rarr;
+                            </button>
+                        ))}
+                    </div>
+                ))}
 
                 {/* Nodes Layer */}
                 {graph.states.map(state => (
@@ -203,7 +268,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
                         key={state.id}
                         state={state}
                         isSelected={selectedNodeId === state.id}
-                        isActive={state.id === graph.activeStateId}
+                        isActive={state.id === activeStateId}
                         onPointerDown={(e) => startDrag(e, state.id, state.position.x, state.position.y, canvasRef.current)}
                         onClick={(e) => {
                             e.stopPropagation();

@@ -1,25 +1,27 @@
 """Third-party license notices for the Windows editor package and exported games.
 
 The editor package bundles the frontend build, the Python host with its
-site-packages, the native engine, the Windows game player, an embeddable
-CPython and the Microsoft WebView2 runtime and SDK.  This module renders the
-package-root ``THIRD_PARTY_NOTICES.txt`` that covers all of it:
+site-packages, the native engine, the desktop game players (Windows, and
+optionally Linux and macOS), an embeddable CPython and the Microsoft WebView2
+runtime and SDK.  This module renders the package-root
+``THIRD_PARTY_NOTICES.txt`` that covers all of it:
 
 * frontend npm packages: the ``THIRD_PARTY_NOTICES.txt`` that
   ``fbx-viewer (1)/scripts/licenses/notices.mjs`` emits into every Vite build;
 * Python packages: the license files recorded in each ``*.dist-info``;
-* Rust crates of ``native`` and ``player-desktop``: resolved for the Windows
-  target with ``cargo metadata --offline`` (falling back to ``Cargo.lock``),
-  with the license files of each crate's source taken from the local cargo
-  registry, its download cache or a vendor directory.  A crate whose source is
-  not available offline is listed with its declared license and crates.io URL
-  and says so;
+* Rust crates of ``native`` and ``player-desktop``: resolved for the binary's
+  target (or targets, for the universal macOS player) with
+  ``cargo metadata --offline`` (falling back to ``Cargo.lock``), with the
+  license files of each crate's source taken from the local cargo registry, its
+  download cache or a vendor directory.  A crate whose source is not available
+  offline is listed with its declared license and crates.io URL and says so;
 * CPython and WebView2: license references plus the license files the staged
   runtimes ship.
 
-The Rust notices are written next to each binary at staging time (see
-``stage_inputs.ps1``); the editor file is composed from staged inputs only, so
-assembly stays deterministic.  Stdlib only; nothing here uses the network.
+The Rust notices are written next to each binary when it is built (the Windows
+ones by ``stage_inputs.ps1``, the Linux and macOS players' by their CI jobs);
+the editor file is composed from staged inputs only, so assembly stays
+deterministic.  Stdlib only; nothing here uses the network.
 """
 
 from __future__ import annotations
@@ -38,11 +40,13 @@ import sys
 import tarfile
 import textwrap
 import tomllib
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 
 NOTICES_FILE = "THIRD_PARTY_NOTICES.txt"
 WINDOWS_TARGET = "x86_64-pc-windows-msvc"
+LINUX_TARGET = "x86_64-unknown-linux-gnu"
+MACOS_TARGETS = ("x86_64-apple-darwin", "aarch64-apple-darwin")
 CRATES_IO_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
 RULE = "=" * 78
 PART_RULE = "#" * 78
@@ -54,14 +58,23 @@ FRONTEND_COLLECTOR = FRONTEND_ROOT / "scripts" / "licenses" / "notices.mjs"
 NATIVE_LABEL = "the Auvra native engine (native/auvra-native.exe)"
 PLAYER_LABEL = ("the Auvra Windows game player (game-player/auvra-player.exe, "
                 "shipped in exported Windows games as <Game Name>.exe)")
+LINUX_PLAYER_LABEL = ("the Auvra Linux game player (game-player/linux-x64/auvra-player, "
+                      "shipped as the executable of exported Linux games)")
+MACOS_PLAYER_LABEL = ("the Auvra macOS game player (game-player/macos/auvra-player, a universal "
+                      "x86_64 and arm64 binary shipped as the executable of exported macOS apps)")
 DEFAULT_LABELS = {"native": NATIVE_LABEL, "player-desktop": PLAYER_LABEL}
+# The player-desktop label for each target operating system (see _target_system).
+PLAYER_LABELS = {"windows": PLAYER_LABEL, "linux": LINUX_PLAYER_LABEL, "macos": MACOS_PLAYER_LABEL}
+# Optional players for exporting Linux and macOS games, each in its own folder
+# under game-player/ with its own notices file; the Windows player is required.
+PLATFORM_PLAYER_DIRECTORIES = ("linux-x64", "macos")
 
 # The package-root notices file has these parts, in this order.
 EDITOR_PARTS: tuple[tuple[str, str], ...] = (
     ("frontend", "Frontend npm production packages (frontend/)"),
     ("python", "Python packages bundled with the host (runtime/python/Lib/site-packages/)"),
     ("native", "Rust crates in the native engine (native/auvra-native.exe)"),
-    ("player", "Rust crates in the Windows game player (game-player/auvra-player.exe)"),
+    ("player", "Rust crates in the desktop game players (game-player/)"),
     ("runtimes", "Bundled runtimes: CPython and Microsoft WebView2 (runtime/)"),
 )
 
@@ -340,11 +353,13 @@ def _cargo_home(explicit: Path | None) -> Path:
     return Path(configured) if configured else Path.home() / ".cargo"
 
 
-def _cargo_metadata(manifest_dir: Path, target: str, cargo: str | None) -> dict[str, Any] | None:
+def _cargo_metadata(manifest_dir: Path, targets: Sequence[str], cargo: str | None) -> dict[str, Any] | None:
     executable = cargo or os.environ.get("AUVRA_CARGO") or shutil.which("cargo")
     if not executable:
         return None
-    command = [executable, "metadata", "--format-version", "1", "--filter-platform", target,
+    # Repeated --filter-platform flags resolve the union of the targets' dependencies.
+    platforms = [flag for target in targets for flag in ("--filter-platform", target)]
+    command = [executable, "metadata", "--format-version", "1", *platforms,
                "--locked", "--offline", "--manifest-path", str(manifest_dir / "Cargo.toml")]
     try:
         result = subprocess.run(command, cwd=manifest_dir, capture_output=True, check=False, timeout=300)
@@ -567,14 +582,49 @@ def _crate_notice(crate: _Crate, manifest_dir: Path, cargo_home: Path) -> tuple[
     return notice, available
 
 
-def rust_notices(manifest_dir: Path, *, target: str = WINDOWS_TARGET, cargo: str | None = None,
+def _targets(target: str | Sequence[str]) -> tuple[str, ...]:
+    targets = (target,) if isinstance(target, str) else tuple(dict.fromkeys(target))
+    if not targets or not all(isinstance(item, str) and item for item in targets):
+        raise NoticesError("at least one cargo target triple is required")
+    return targets
+
+
+def _target_system(target: str) -> str | None:
+    """``windows``, ``linux`` or ``macos`` for a target triple, else None."""
+
+    if "-windows-" in target:
+        return "windows"
+    if "-linux-" in target:
+        return "linux"
+    if target.endswith("-apple-darwin"):
+        return "macos"
+    return None
+
+
+def default_label(manifest_dir: Path, target: str | Sequence[str] = WINDOWS_TARGET) -> str | None:
+    """What the binary of ``native`` or ``player-desktop`` built for ``target`` is."""
+
+    name = Path(manifest_dir).resolve().name
+    if name != "player-desktop":
+        return DEFAULT_LABELS.get(name)
+    systems = {_target_system(item) for item in _targets(target)}
+    system = systems.pop() if len(systems) == 1 else None
+    return PLAYER_LABELS.get(system) if system is not None else None
+
+
+def rust_notices(manifest_dir: Path, *, target: str | Sequence[str] = WINDOWS_TARGET, cargo: str | None = None,
                  cargo_home: Path | None = None) -> RustNotices:
-    """Notices for the third-party crates one cargo project ships for ``target``."""
+    """Notices for the third-party crates one cargo project ships for ``target``.
+
+    ``target`` is one target triple, or several for a binary that combines them
+    (the universal macOS player); the crates of all of them are listed.
+    """
 
     manifest_dir = Path(manifest_dir).resolve()
     if not (manifest_dir / "Cargo.toml").is_file():
         raise NoticesError(f"{manifest_dir.name} has no Cargo.toml")
-    metadata = _cargo_metadata(manifest_dir, target, cargo)
+    targets = _targets(target)
+    metadata = _cargo_metadata(manifest_dir, targets, cargo)
     if metadata is not None:
         crates, resolver = _metadata_crates(metadata), "cargo metadata"
     else:
@@ -591,7 +641,7 @@ def rust_notices(manifest_dir: Path, *, target: str = WINDOWS_TARGET, cargo: str
         notices.append(notice)
         if not available:
             unavailable.append(f"{crate.name}@{crate.version}")
-    return RustNotices(tuple(notices), resolver, target, tuple(unavailable))
+    return RustNotices(tuple(notices), resolver, " and ".join(targets), tuple(unavailable))
 
 
 def render_rust_document(label: str, result: RustNotices) -> str:
@@ -754,17 +804,26 @@ def _required_notices(path: Path, label: str) -> str:
 
 
 def editor_notices_from_inputs(input_root: Path, pins: Mapping[str, Any]) -> str:
-    """Compose the package-root notices from a staged release input root."""
+    """Compose the package-root notices from a staged release input root.
+
+    The game players part holds the Windows player's notices, followed by those
+    of each optional Linux or macOS player staged under ``game-player/``.
+    """
 
     input_root = Path(input_root)
     python = python_notices(input_root / "python-site-packages")
     if not python:
         raise NoticesError("python-site-packages input has no *.dist-info metadata to take license notices from")
+    players = [_required_notices(input_root / "game-player" / NOTICES_FILE, "game-player")]
+    for directory in PLATFORM_PLAYER_DIRECTORIES:
+        if (input_root / "game-player" / directory).is_dir():
+            players.append(_required_notices(input_root / "game-player" / directory / NOTICES_FILE,
+                                             f"game-player/{directory}"))
     return compose_editor_notices({
         "frontend": _required_notices(input_root / "frontend" / NOTICES_FILE, "frontend"),
         "python": render_python_document(python),
         "native": _required_notices(input_root / "native" / NOTICES_FILE, "native"),
-        "player": _required_notices(input_root / "game-player" / NOTICES_FILE, "game-player"),
+        "player": "\n".join(text.strip() + "\n" for text in players),
         "runtimes": render_runtime_document(runtime_notices(
             pins,
             python_embed=input_root / "python-embed",
@@ -817,7 +876,8 @@ def main(argv: list[str] | None = None) -> int:
     rust.add_argument("--manifest-dir", type=Path, required=True)
     rust.add_argument("--label", help="what the binary is; defaults to the label of native/ or player-desktop/")
     rust.add_argument("--output", type=Path, required=True)
-    rust.add_argument("--target", default=WINDOWS_TARGET)
+    rust.add_argument("--target", action="append",
+                      help=f"cargo target triple (default {WINDOWS_TARGET}); repeat it for a universal binary")
     rust.add_argument("--cargo")
     rust.add_argument("--cargo-home", type=Path)
     rust.add_argument("--strict", action="store_true",
@@ -836,10 +896,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "rust":
-            label = args.label or DEFAULT_LABELS.get(Path(args.manifest_dir).resolve().name)
+            targets = tuple(args.target or (WINDOWS_TARGET,))
+            label = args.label or default_label(args.manifest_dir, targets)
             if not label:
                 raise NoticesError("--label is required for a cargo project other than native or player-desktop")
-            result = rust_notices(args.manifest_dir, target=args.target, cargo=args.cargo, cargo_home=args.cargo_home)
+            result = rust_notices(args.manifest_dir, target=targets, cargo=args.cargo, cargo_home=args.cargo_home)
             if args.strict and result.unavailable:
                 listed = ", ".join(result.unavailable[:20])
                 raise NoticesError(f"{len(result.unavailable)} crate(s) have no license text available offline "

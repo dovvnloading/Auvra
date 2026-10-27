@@ -10,8 +10,9 @@ import type { FlowExecutionContext, FlowNode, FlowNodeDefinition, FlowPinDefinit
  *
  * Executors for the Level Blueprint nodes that touch the running world: spawning prefabs,
  * reading and writing actor transforms, sound, impulses, raycasts, level variables, input,
- * random numbers and formatted printing. They share the flow nodes' executor contract and reach
- * the world only through `ctx.services`, so play mode and tests swap in their own services.
+ * random numbers, formatted printing, player animation and morph targets. They share the flow
+ * nodes' executor contract and reach the world only through `ctx.services`, so play mode and
+ * tests swap in their own services.
  *
  * Vectors travel as separate X/Y/Z Float pins (PinDataType has no vector type). Rotation pins
  * are degrees, matching the inspector; LevelObject stores radians. Transforms are the actor's
@@ -35,7 +36,9 @@ export type WorldNodeType =
     | 'InputActionPressed'
     | 'RandomFloat'
     | 'RandomInt'
-    | 'Print';
+    | 'Print'
+    | 'PlayPlayerAnimation'
+    | 'SetMorphTarget';
 
 export type Vec3 = [number, number, number];
 
@@ -85,6 +88,22 @@ export interface WorldRaycastHit {
     normal: THREE.Vector3;
 }
 
+/** The id the player character goes by in Object pins, as in its trigger events and raycast hits. */
+export const PLAYER_ACTOR_ID = 'player';
+
+/** Play Player Animation's cross-fade into its clip when Blend In is blank, in seconds. */
+export const DEFAULT_ANIMATION_BLEND_IN = 0.15;
+
+/** How Play Player Animation plays a clip; a subset of the animation graph's montage options. */
+export interface PlayAnimationOptions {
+    /** Cross-fade into the clip, in seconds. */
+    blendIn: number;
+    /** Playback speed, above 0; 1 is the clip's own. */
+    rate: number;
+    /** Only this bone and its children play the clip; omitted plays it on the full body. */
+    maskBone?: string;
+}
+
 /** What world nodes may do to the play session. Implementations must never write to the project. */
 export interface WorldNodeServices {
     /** Instantiates a prefab in the session; returns the new object ids, root first. */
@@ -99,6 +118,10 @@ export interface WorldNodeServices {
     vars: Pick<LevelVariablesStore, 'get' | 'set'>;
     /** Shows a Print node's message (play mode: a notification). */
     print(message: string): void;
+    /** Plays a clip once over the player's animation graph; false when it cannot (unknown clip, no player). Absent: nothing plays. */
+    playPlayerAnimation?(clipName: string, options: PlayAnimationOptions): boolean;
+    /** Sets the weight of a named morph target on an actor's meshes; returns how many meshes have it. Absent: nothing changes. */
+    setMorphTarget?(objectId: string, morph: string, weight: number): number;
 }
 
 export interface WorldExecutionContext extends FlowExecutionContext {
@@ -264,6 +287,22 @@ export const WORLD_NODE_DEFINITIONS: readonly WorldNodeDefinition[] = [
         outputs: [exec('Out', 'Output'), output('Message', 'String')],
         data: { default_Format: 'Hello {0}' },
     },
+    {
+        type: 'PlayPlayerAnimation',
+        title: 'Play Player Animation',
+        description: "Plays a clip once over the player's animation graph, then blends back. Mask Bone limits it to that bone and its children (e.g. Spine); empty plays it on the full body. Played is false when the clip cannot play.",
+        inputs: [exec('Exec', 'Input'), input('Clip', 'String'), input('Mask Bone', 'String'), input('Blend In', 'Float'), input('Rate', 'Float')],
+        outputs: [exec('Out', 'Output'), output('Played', 'Boolean')],
+        data: { default_Clip: '', 'default_Mask Bone': '', 'default_Blend In': DEFAULT_ANIMATION_BLEND_IN, default_Rate: 1 },
+    },
+    {
+        type: 'SetMorphTarget',
+        title: 'Set Morph Target',
+        description: 'Sets a morph target (blend shape) to a weight from 0 to 1 on every mesh of the actor that has one by that name. Meshes Changed is 0 when none has it.',
+        inputs: [exec('Exec', 'Input'), input('Actor', 'Object'), input('Morph', 'String'), input('Weight', 'Float')],
+        outputs: [exec('Out', 'Output'), output('Meshes Changed', 'Integer')],
+        data: { default_Actor: '', default_Morph: '', default_Weight: 1 },
+    },
 ];
 
 export const isWorldNodeType = (type: string): type is WorldNodeType =>
@@ -344,6 +383,47 @@ export const formatPrintMessage = (format: string, args: readonly unknown[]): st
         const i = Number(index);
         return i < args.length ? formatPrintValue(args[i]) : match;
     });
+
+// --- Live objects ---------------------------------------------------------------------------
+
+/**
+ * The live object a play session draws an actor as: the first object under `root`, depth first, whose
+ * `userData.levelObjectId` is `id`. Null when there is none (e.g. a static prop drawn through instancing).
+ */
+export const findActorObject3D = (root: THREE.Object3D, id: string): THREE.Object3D | null => {
+    const stack = [root];
+    while (stack.length > 0) {
+        const node = stack.pop()!;
+        if (node.userData?.levelObjectId === id) return node;
+        for (let i = node.children.length - 1; i >= 0; i--) stack.push(node.children[i]);
+    }
+    return null;
+};
+
+/**
+ * Sets the morph target named `morph` to `weight` on every mesh under `object` that has one (by its
+ * morphTargetDictionary). Meshes of nested actors, tagged with another `levelObjectId`, are left alone.
+ * Returns how many meshes were set.
+ */
+export const setActorMorphTarget = (object: THREE.Object3D, morph: string, weight: number): number => {
+    const ownId = object.userData?.levelObjectId;
+    let changed = 0;
+    const stack = [object];
+    while (stack.length > 0) {
+        const node = stack.pop()!;
+        const nodeId = node.userData?.levelObjectId;
+        if (node !== object && typeof nodeId === 'string' && nodeId !== ownId) continue;
+        const mesh = node as THREE.Mesh;
+        const index = mesh.isMesh && mesh.morphTargetDictionary ? mesh.morphTargetDictionary[morph] : undefined;
+        const influences = mesh.morphTargetInfluences;
+        if (index !== undefined && influences && index < influences.length) {
+            influences[index] = weight;
+            changed += 1;
+        }
+        stack.push(...node.children);
+    }
+    return changed;
+};
 
 /** Latches data outputs so reads after the fired chain still see them (same shape as flow nodes). */
 const publish = (ctx: WorldExecutionContext, outputs: Record<string, unknown>) => {
@@ -469,6 +549,28 @@ const runPrint: WorldNodeExecutor = (_node, ctx) => {
     finish(ctx, { Message: message });
 };
 
+// Without a clip or a usable rate (blank means 1) nothing plays; a negative Blend In snaps.
+const runPlayPlayerAnimation: WorldNodeExecutor = (_node, ctx) => {
+    const clip = toText(ctx.evaluate('Clip'));
+    const maskBone = toText(ctx.evaluate('Mask Bone'));
+    const blendIn = Math.max(0, toNumber(ctx.evaluate('Blend In'), DEFAULT_ANIMATION_BLEND_IN));
+    const rate = toNumber(ctx.evaluate('Rate'), 1);
+    const options: PlayAnimationOptions = maskBone ? { blendIn, rate, maskBone } : { blendIn, rate };
+    const played = clip !== '' && rate > 0 && ctx.services.playPlayerAnimation?.(clip, options) === true;
+    finish(ctx, { Played: played });
+};
+
+// A blank or non-numeric Weight changes nothing; other weights are clamped to [0, 1].
+const runSetMorphTarget: WorldNodeExecutor = (_node, ctx) => {
+    const id = toActorId(ctx.evaluate('Actor'));
+    const morph = toText(ctx.evaluate('Morph'));
+    const weight = toNumber(ctx.evaluate('Weight'), null);
+    const changed = id && morph && weight !== null && ctx.services.setMorphTarget
+        ? ctx.services.setMorphTarget(id, morph, THREE.MathUtils.clamp(weight, 0, 1))
+        : 0;
+    finish(ctx, { 'Meshes Changed': changed });
+};
+
 const executors = {
     SpawnPrefab: runSpawnPrefab,
     GetActorTransform: runGetActorTransform,
@@ -482,6 +584,8 @@ const executors = {
     RandomFloat: runRandomFloat,
     RandomInt: runRandomInt,
     Print: runPrint,
+    PlayPlayerAnimation: runPlayPlayerAnimation,
+    SetMorphTarget: runSetMorphTarget,
 } satisfies Record<WorldNodeType, WorldNodeExecutor>;
 
 /** Executor per world node type; look up by `node.type` and treat a miss as "not a world node". */

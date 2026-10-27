@@ -5,6 +5,7 @@ import { AnimationGraphData } from '../../../types';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { blendSeconds, DEFAULT_BLEND_SECONDS } from '../utils/blending';
 import { selectTransition } from '../utils/transitions';
+import { ANIMATION_FRAME_PRIORITY } from './useGraphAnimator';
 
 export const useGraphStateMachine = (
     graph: AnimationGraphData,
@@ -48,7 +49,7 @@ export const useGraphStateMachine = (
             if (onActiveStateChange) onActiveStateChange(transition.toStateId);
             span.finish('success');
         }
-    });
+    }, ANIMATION_FRAME_PRIORITY);
 
     return {
         activeStateRef,

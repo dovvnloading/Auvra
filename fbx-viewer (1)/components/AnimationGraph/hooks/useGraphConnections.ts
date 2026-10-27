@@ -9,6 +9,19 @@ export interface ConnectionGroup {
     transitions: GraphTransition[];
 }
 
+/** Any-state transitions grouped by the state they lead to (only states that exist). */
+export const anyStateTransitionsByTarget = (graph: AnimationGraphData): Map<string, GraphTransition[]> => {
+    const byTarget = new Map<string, GraphTransition[]>();
+    const stateIds = new Set(graph.states.map(state => state.id));
+    for (const transition of graph.transitions ?? []) {
+        if (!transition.anyState || !stateIds.has(transition.toStateId)) continue;
+        const list = byTarget.get(transition.toStateId);
+        if (list) list.push(transition);
+        else byTarget.set(transition.toStateId, [transition]);
+    }
+    return byTarget;
+};
+
 export const useGraphConnections = (graph: AnimationGraphData) => {
     
     const connectionGroups = useMemo(() => {
@@ -16,6 +29,8 @@ export const useGraphConnections = (graph: AnimationGraphData) => {
 
         if (graph.transitions) {
             graph.transitions.forEach(t => {
+                // Any-state transitions have no source node; the canvas tags their target instead.
+                if (t.anyState) return;
                 const s1 = graph.states.find(s => s.id === t.fromStateId);
                 const s2 = graph.states.find(s => s.id === t.toStateId);
                 if (!s1 || !s2) return;

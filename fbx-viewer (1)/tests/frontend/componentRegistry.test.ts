@@ -1,10 +1,24 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { COMPONENT_DEFINITIONS, createComponent, getComponentDefinition } from '../../runtime/components/registry';
 
+vi.mock('../../components/Scripting/ScriptInspector', () => ({ ScriptInspector: () => null }));
+vi.mock('../../components/Timeline/TimelineInspector', () => ({ TimelineInspector: () => null }));
+
 describe('component registry', () => {
+  it('leaves editor inspectors out until the editor registers them', async () => {
+    expect(getComponentDefinition('script')?.Inspector).toBeUndefined();
+    await import('../../components/Environment/componentInspectors');
+    expect(getComponentDefinition('script')?.Inspector).toBeTypeOf('function');
+    expect(getComponentDefinition('timeline')?.Inspector).toBeTypeOf('function');
+  });
+
   it('registers the built-in components once each, with a renderer and editable props', () => {
     const types = COMPONENT_DEFINITIONS.map(definition => definition.type);
-    expect(types).toEqual(['rotator', 'mover', 'pointLight', 'spotLight', 'collider', 'rigidBody', 'particles', 'audioSource']);
+    expect(types).toEqual([
+      'rotator', 'mover', 'pointLight', 'spotLight', 'collider', 'rigidBody', 'joint', 'particles', 'decal', 'audioSource',
+      'reverbZone', 'musicPlayer',
+      'postProcess', 'lodGroup', 'distanceCull', 'lookAtIK', 'footIK', 'script', 'timeline',
+    ]);
     for (const definition of COMPONENT_DEFINITIONS) {
       expect(getComponentDefinition(definition.type)).toBe(definition);
       expect(definition.label).not.toBe('');

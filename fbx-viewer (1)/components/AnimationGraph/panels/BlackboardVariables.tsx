@@ -1,15 +1,147 @@
-
-import React from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Trash2, Database } from 'lucide-react';
 import { AnimationGraphData, GraphVariable } from '../../../types';
+import type { GraphRuntimeAPI } from '../GraphRuntime';
+
+/** How often the live watch reads the preview runtime's variables. */
+export const LIVE_VARIABLE_POLL_MS = 250;
+
+type VariableValues = Record<string, number | boolean>;
+
+const sameValues = (a: VariableValues | null, b: VariableValues | null): boolean => {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    const keys = Object.keys(a);
+    return keys.length === Object.keys(b).length && keys.every(key => Object.is(a[key], b[key]));
+};
+
+/**
+ * The preview runtime's variable values keyed by variable id, read every LIVE_VARIABLE_POLL_MS
+ * while `active` (React state only changes when a value does), and `poke`, which writes one
+ * value into the running preview. `values` is null while there is no runtime to read.
+ */
+export const useLiveVariables = (
+    runtime: React.MutableRefObject<GraphRuntimeAPI | undefined> | undefined,
+    active: boolean
+) => {
+    const [values, setValues] = useState<VariableValues | null>(null);
+
+    useEffect(() => {
+        if (!runtime || !active) {
+            setValues(null);
+            return;
+        }
+        const read = () => {
+            const next = runtime.current ? runtime.current.getVariables() : null;
+            setValues(previous => (sameValues(previous, next) ? previous : next));
+        };
+        read();
+        const timer = window.setInterval(read, LIVE_VARIABLE_POLL_MS);
+        return () => window.clearInterval(timer);
+    }, [runtime, active]);
+
+    const poke = useCallback((variableId: string, value: number | boolean) => {
+        const api = runtime?.current;
+        if (!api) return;
+        api.setVariable(variableId, value);
+        setValues(previous => (previous ? { ...previous, [variableId]: value } : previous));
+    }, [runtime]);
+
+    return { values, poke };
+};
+
+const formatLiveNumber = (value: number): string => (Number.isInteger(value) ? String(value) : value.toFixed(3));
+
+interface LiveValueRowProps {
+    variable: GraphVariable;
+    value: number | boolean | undefined;
+    onPoke: (value: number | boolean) => void;
+}
+
+/** One variable's value in the running preview; editing it writes straight into the runtime. */
+const LiveValueRow: React.FC<LiveValueRowProps> = ({ variable, value, onPoke }) => {
+    // While the field is being edited the poll must not overwrite what the user is typing.
+    const [draft, setDraft] = useState<string | null>(null);
+    const focusTextRef = useRef('');
+    const cancelRef = useRef(false);
+    const label = `Live value of ${variable.name}`;
+    const changed = value !== undefined && value !== variable.value;
+
+    const commit = () => {
+        const text = draft;
+        setDraft(null);
+        if (cancelRef.current) {
+            cancelRef.current = false;
+            return;
+        }
+        // Focusing and leaving without an edit must not write back the rounded display value.
+        if (text === null || text === focusTextRef.current) return;
+        const parsed = parseFloat(text);
+        if (Number.isFinite(parsed)) onPoke(parsed);
+    };
+
+    let field: React.ReactNode;
+    if (value === undefined) {
+        field = <span className="font-mono text-gray-600" aria-label={label}>-</span>;
+    } else if (variable.type === 'Boolean') {
+        field = (
+            <input
+                type="checkbox"
+                checked={value === true}
+                onChange={(e) => onPoke(e.target.checked)}
+                className="cursor-pointer"
+                aria-label={label}
+            />
+        );
+    } else {
+        field = (
+            <input
+                type="number"
+                step="0.1"
+                value={draft ?? (typeof value === 'number' ? formatLiveNumber(value) : String(value))}
+                onFocus={(e) => {
+                    focusTextRef.current = e.target.value;
+                    setDraft(e.target.value);
+                }}
+                onChange={(e) => setDraft(e.target.value)}
+                onBlur={commit}
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.currentTarget.blur();
+                    if (e.key === 'Escape') {
+                        cancelRef.current = true;
+                        e.currentTarget.blur();
+                    }
+                }}
+                className="bg-transparent text-right font-mono w-16 focus:outline-none focus:text-white focus:border-b border-gray-600"
+                aria-label={label}
+                title="Writes into the running preview (Enter to apply, Escape to cancel)"
+            />
+        );
+    }
+
+    return (
+        <div className={`flex items-center justify-between text-[10px] px-2 py-1 rounded border ${changed ? 'bg-green-950/30 border-green-900/60 text-green-300' : 'bg-gray-900 border-gray-800 text-gray-500'}`}>
+            <span className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>
+                Live Value
+            </span>
+            {field}
+        </div>
+    );
+};
 
 interface BlackboardVariablesProps {
     graph: AnimationGraphData;
     modelId: string;
     updateGraph: (modelId: string, data: Partial<AnimationGraphData>) => void;
+    /** The preview's runtime API; its values are shown beside the initial values while `live`. */
+    runtime?: React.MutableRefObject<GraphRuntimeAPI | undefined>;
+    /** The preview is running, so live values are watched. */
+    live?: boolean;
 }
 
-export const BlackboardVariables: React.FC<BlackboardVariablesProps> = ({ graph, modelId, updateGraph }) => {
+export const BlackboardVariables: React.FC<BlackboardVariablesProps> = ({ graph, modelId, updateGraph, runtime, live = false }) => {
+    const { values: liveValues, poke } = useLiveVariables(runtime, live);
 
     const addVariable = (type: 'Float' | 'Boolean') => {
         const newVar: GraphVariable = {
@@ -26,6 +158,11 @@ export const BlackboardVariables: React.FC<BlackboardVariablesProps> = ({ graph,
             <div className="flex items-center justify-between mb-2 pb-1 border-b border-gray-800">
                 <span className="text-xs font-bold text-gray-200 flex items-center gap-2">
                     <Database size={12} className="text-gray-400" /> Graph Variables
+                    {liveValues && (
+                        <span className="px-1.5 py-0.5 rounded bg-green-950/50 border border-green-900/60 text-[8px] font-bold uppercase tracking-wider text-green-400" title="Live values from the running preview">
+                            Watching
+                        </span>
+                    )}
                 </span>
                 <div className="flex gap-1">
                     <button onClick={() => addVariable('Float')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-[9px] text-gray-400 hover:text-white transition-colors">
@@ -69,6 +206,7 @@ export const BlackboardVariables: React.FC<BlackboardVariablesProps> = ({ graph,
                                     updateGraph(modelId, { variables: updated });
                                 }}
                                 className="cursor-pointer"
+                                aria-label={`Initial value of ${v.name}`}
                             />
                         ) : (
                             <input 
@@ -83,9 +221,13 @@ export const BlackboardVariables: React.FC<BlackboardVariablesProps> = ({ graph,
                                     }
                                 }}
                                 className="bg-transparent text-right font-mono text-gray-300 w-16 focus:outline-none focus:text-white focus:border-b border-gray-600"
+                                aria-label={`Initial value of ${v.name}`}
                             />
                         )}
                     </div>
+                    {liveValues && (
+                        <LiveValueRow variable={v} value={liveValues[v.id]} onPoke={(value) => poke(v.id, value)} />
+                    )}
                 </div>
                 ))}
             </div>

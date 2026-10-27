@@ -4,6 +4,8 @@ import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import { LoadedModelData, Blueprint, AttachmentData, SocketData, Hittable, Hitbox } from '../../types';
 import { GraphRuntime, GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
+import { PLAYER_PHYSICS_ID } from '../../runtime/physics';
+import { CharacterIK } from './CharacterIK';
 import { AttachmentController } from '../Scene/AttachmentController';
 import { SocketController, resolveSocketFlashTextureUrl } from '../Scene/SocketController'; // Using Visual Controller now
 import { useEntityHealth } from './hooks/useEntityHealth';
@@ -345,7 +347,9 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
                 enableInputs={false}
                 driveLocomotion={false}
                 apiRef={internalApiRef}
+                eventSource={team === 'Player' ? 'player' : entityId}
             />
+            <CharacterIK model={model.object} settings={blueprint.ik} physicsId={team === 'Player' ? PLAYER_PHYSICS_ID : undefined} />
         </group>
     );
 });

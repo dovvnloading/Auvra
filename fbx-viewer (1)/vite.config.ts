@@ -59,10 +59,12 @@ export default defineConfig(({ command, mode }) => {
   const editorInput: Record<string, string> = {
     editor: path.resolve(__dirname, 'index.html'),
     hud: path.resolve(__dirname, 'hud-frame.html'),
+    script: path.resolve(__dirname, 'script-frame.html'),
   };
   const playerInput: Record<string, string> = {
     index: path.resolve(__dirname, 'player.html'),
     hud: path.resolve(__dirname, 'hud-frame.html'),
+    script: path.resolve(__dirname, 'script-frame.html'),
   };
   // Vite's development preamble is inline and receives a per-server nonce.
   // Production contains external scripts only, so it needs no static nonce and
@@ -95,10 +97,12 @@ export default defineConfig(({ command, mode }) => {
           editorCsp = editorDevCsp(address.port, developmentNonce);
           playerCsp = playerDevCsp(address.port, developmentNonce);
         }
+        // The gameplay script sandbox shares the HUD sandbox's policy: evaluation, but no network.
         return html
           .replace('__AUVRA_EDITOR_CSP__', editorCsp)
           .replace('__AUVRA_PLAYER_CSP__', playerCsp)
-          .replace('__AUVRA_HUD_CSP__', hudCsp);
+          .replace('__AUVRA_HUD_CSP__', hudCsp)
+          .replace('__AUVRA_SCRIPT_CSP__', hudCsp);
       },
     },
     {

@@ -193,6 +193,7 @@ const disposeCharacterRig = (rig: CharacterRig) => {
 
 // Reusable math objects
 const _desired = new THREE.Vector3();
+const _rootMove = new THREE.Vector3();
 
 const hasPhysicsComponent = (obj: LevelObject) =>
     !!obj.components?.some(component => component.enabled !== false && (component.type === 'collider' || component.type === 'rigidBody'));
@@ -365,7 +366,12 @@ export const usePlayerPhysics = (
         modelObject.position.copy(nextPos);
     };
 
-    const updatePhysics = (input: PlayerInputState, delta: number) => {
+    /**
+     * `rootTravel` is this frame's world-space root-motion travel from the animation graph; when
+     * given, it moves the character instead of the input direction and speed (rotation, stamina
+     * and animation inputs still follow the input).
+     */
+    const updatePhysics = (input: PlayerInputState, delta: number, rootTravel?: { readonly x: number; readonly z: number } | null) => {
         const {
             ROTATION_SPEED, STAMINA_DRAIN, STAMINA_REGEN, MAX_STAMINA, EXHAUSTION_RECOVERY
         } = DEFAULT_CONFIG;
@@ -437,10 +443,17 @@ export const usePlayerPhysics = (
         let currentSpeed = effectiveSprint ? speeds.run : speeds.walk;
         if (input.isAiming) currentSpeed *= 0.5;
 
+        // Root motion travels exactly its distance over the step, as a unit direction at length / step.
+        const rootStep = physics ? Math.min(delta, CHARACTER.MAX_STEP) : delta;
+        const rootLength = rootTravel && rootStep > 0 ? Math.hypot(rootTravel.x, rootTravel.z) : 0;
+        const moveVec = rootTravel && rootStep > 0
+            ? (rootLength > 0 ? _rootMove.set(rootTravel.x / rootLength, 0, rootTravel.z / rootLength) : _rootMove.set(0, 0, 0))
+            : worldMoveVec;
+        const moveSpeed = rootTravel && rootStep > 0 ? rootLength / rootStep : currentSpeed;
         if (physics) {
-            stepCharacterPhysics(physics, getRig(physics), input, worldMoveVec, currentSpeed, delta, obstacles, activeTerrain.current);
+            stepCharacterPhysics(physics, getRig(physics), input, moveVec, moveSpeed, delta, obstacles, activeTerrain.current);
         } else {
-            moveWithoutPhysics(worldMoveVec, currentSpeed, delta);
+            moveWithoutPhysics(moveVec, moveSpeed, delta);
         }
 
         // --- 6. Calculate Animation Inputs ---

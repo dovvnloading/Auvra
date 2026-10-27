@@ -11,6 +11,9 @@ const files = {
   player: resolve(root, "player.html"),
   hud: resolve(root, "hud-frame.html"),
   hudScript: resolve(root, "hud-frame.tsx"),
+  script: resolve(root, "script-frame.html"),
+  scriptFrame: resolve(root, "script-frame.ts"),
+  scriptApi: resolve(root, "runtime/scripting/scriptApi.ts"),
   dynamic: resolve(root, "components/HUDEditor/DynamicHUDComponent.tsx"),
   transport: resolve(root, "host/nativeTransport.ts"),
   protocol: resolve(root, "host/protocol.ts"),
@@ -50,12 +53,20 @@ for (const [name, text] of Object.entries(source)) {
 check(!source.index.includes("cdn.tailwindcss.com"), "editor still references Tailwind CDN");
 check(source.index.includes("__AUVRA_EDITOR_CSP__"), "editor CSP placeholder missing");
 check(source.hud.includes("__AUVRA_HUD_CSP__"), "HUD CSP placeholder missing");
+check(source.script.includes("__AUVRA_SCRIPT_CSP__"), "script CSP placeholder missing");
 check(source.player.includes("__AUVRA_PLAYER_CSP__") && !source.player.includes("cdn.tailwindcss.com"), "player CSP placeholder missing");
 const playerCsp = source.vite.match(/const playerPackagedCsp\s*=\s*`([^`]+)`;/)?.[1] ?? "";
 // 'wasm-unsafe-eval' only allows compiling WebAssembly (the physics engine), not eval of script text.
 check(/script-src 'self'(?: 'wasm-unsafe-eval')?;/.test(playerCsp) && !/'unsafe-eval'|'nonce-/.test(playerCsp) && /form-action 'none'/.test(playerCsp), "player CSP does not confine script execution");
 check(/connect-src 'self' blob:;/.test(playerCsp) && !playerCsp.includes("assets.auvra.local"), "player CSP grants editor-only network access");
 check(source.vite.includes("'unsafe-eval'") && source.vite.includes("connect-src 'none'"), "HUD CSP does not confine evaluation and network access");
+// The HUD and gameplay script sandboxes share one policy: evaluation is allowed, so nothing else is.
+const sandboxCsp = source.vite.match(/const hudPackagedCsp\s*=\s*`([^`]+)`;/)?.[1] ?? "";
+check(/(?:^|;\s*)default-src 'none';/.test(sandboxCsp) && /(?:^|;\s*)connect-src 'none';/.test(sandboxCsp) &&
+  /(?:^|;\s*)script-src 'self' 'unsafe-eval';/.test(sandboxCsp) && !/(?:frame|child|worker)-src/.test(sandboxCsp), "sandbox frame CSP does not confine evaluation and network access");
+check(/\.replace\('__AUVRA_SCRIPT_CSP__', hudCsp\)/.test(source.vite), "script frame CSP placeholder is not replaced with the sandbox policy");
+const buildInputs = ["editorInput", "playerInput"].map((name) => source.vite.match(new RegExp(`const ${name}[^=]*=\\s*\\{([^}]*)\\}`))?.[1] ?? "");
+check(buildInputs.every((input) => input.includes("'hud-frame.html'") && input.includes("'script-frame.html'")), "sandbox frames are missing from the editor or player build");
 const editorCspDefinitions = {
   development: source.vite.match(/const editorDevCsp[^`]+`([^`]+)`;/)?.[1],
   packaged: source.vite.match(/const editorPackagedCsp\s*=\s*`([^`]+)`;/)?.[1],
@@ -119,6 +130,16 @@ check(source.hudScript.includes("MAX_EXECUTION_STEPS") && source.hudScript.inclu
 check(source.dynamic.includes("try {\n      port.postMessage(message);") && source.dynamic.includes("could not be transferred"), "HUD non-cloneable props are not safely contained");
 check(source.hudScript.includes("event.ports.length !== 1") && source.hudScript.includes("candidate.nonce === nonce"), "HUD port handshake lacks strict port/nonce binding");
 check((source.hudScript.match(/window\.addEventListener\(["']message["']/g) ?? []).length === 1, "HUD bootstrap has a reusable window message listener");
+check(source.scriptFrame.includes("event.source !== window.parent"), "script bootstrap lacks source check");
+check(source.scriptFrame.includes("window.removeEventListener(\"message\", receiveMessage)"), "script bootstrap listener is not torn down");
+check(source.scriptFrame.includes("event.ports.length !== 1") && source.scriptFrame.includes("candidate.nonce === nonce"), "script port handshake lacks strict port/nonce binding");
+check((source.scriptFrame.match(/window\.addEventListener\(["']message["']/g) ?? []).length === 1, "script bootstrap has a reusable window message listener");
+check(source.scriptFrame.includes("createExecutionGuard") && source.scriptFrame.includes("SCRIPT_LIMITS.maxStepsPerCallback") &&
+  source.scriptFrame.includes("SCRIPT_LIMITS.maxMsPerCallback") && source.scriptFrame.includes("[SCRIPT_GUARD_IDENTIFIER]: scriptGuard"), "script sandbox does not enforce a step/deadline budget");
+check(source.scriptApi.includes("plugins: [moduleSyntaxPlugin, boundedExecutionPlugin]") && source.scriptApi.includes("t.identifier(SCRIPT_GUARD_IDENTIFIER)") &&
+  source.scriptFrame.includes("compileScriptSource(source, compiler)"), "script code is not instrumented with an execution budget");
+check(source.scriptFrame.includes("lockDynamicEvaluation();") && source.scriptApi.includes("const NativeFunction = Function;"), "script sandbox leaves uninstrumented evaluation open to scripts");
+check(!/\b(?:window|document)\b/.test(source.scriptApi), "script API reaches into the DOM");
 
 async function runTransportTests() {
   const temporary = await mkdtemp(join(tmpdir(), "auvra-frame-"));

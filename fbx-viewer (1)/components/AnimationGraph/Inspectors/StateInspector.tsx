@@ -1,8 +1,15 @@
 import React from 'react';
 import { Layers, Settings, Activity, Crown, Trash2 } from 'lucide-react';
-import { GraphState, AnimationGraphData } from '../../../types';
+import { GraphState, AnimationGraphData, StateType } from '../../../types';
 import { SingleStateConfig } from './SingleStateConfig';
 import { BlendStateConfig } from './BlendStateConfig';
+
+/** State kinds offered by the type switch, in display order. */
+const STATE_TYPES: { type: StateType; label: string }[] = [
+    { type: 'Single', label: 'Single Clip' },
+    { type: 'Blend1D', label: 'Blend 1D' },
+    { type: 'Blend2D', label: 'Blend 2D' },
+];
 
 interface StateInspectorProps {
     node: GraphState;
@@ -15,7 +22,6 @@ interface StateInspectorProps {
 
 export const StateInspector: React.FC<StateInspectorProps> = ({
     node,
-    graph,
     updateState,
     onDelete,
     clipOptions,
@@ -66,18 +72,16 @@ export const StateInspector: React.FC<StateInspectorProps> = ({
                         <Activity size={10} /> Type
                     </label>
                     <div className="flex bg-gray-900 p-0.5 rounded border border-gray-700">
-                        <button 
-                            onClick={() => updateState({ stateType: 'Single' })}
-                            className={`flex-1 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded transition-all ${node.stateType === 'Single' ? 'bg-gray-700 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
-                        >
-                            Single Clip
-                        </button>
-                        <button 
-                            onClick={() => updateState({ stateType: 'Blend2D' })}
-                            className={`flex-1 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded transition-all ${node.stateType === 'Blend2D' ? 'bg-gray-700 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
-                        >
-                            Blend 2D
-                        </button>
+                        {STATE_TYPES.map(({ type, label }) => (
+                            <button
+                                key={type}
+                                onClick={() => updateState({ stateType: type })}
+                                aria-pressed={node.stateType === type}
+                                className={`flex-1 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded transition-all ${node.stateType === type ? 'bg-gray-700 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
+                            >
+                                {label}
+                            </button>
+                        ))}
                     </div>
                 </div>
 
@@ -87,6 +91,7 @@ export const StateInspector: React.FC<StateInspectorProps> = ({
                         node={node} 
                         updateState={updateState} 
                         clipOptions={clipOptions} 
+                        playRateParamOptions={blendParamOptions}
                     />
                 ) : (
                     <BlendStateConfig 

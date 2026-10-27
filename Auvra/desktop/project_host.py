@@ -10,6 +10,7 @@ import math
 from pathlib import Path
 import re
 import secrets
+import sys
 import threading
 import time
 from typing import Any, Callable, Sequence
@@ -28,6 +29,15 @@ from Auvra.project import (
     UnsupportedVersionError,
 )
 from Auvra.project.errors import RecoveryRequiredError
+from Auvra.project.game_build import (
+    BUILD_TARGETS,
+    DESKTOP_TARGETS,
+    PACKAGED_PLAYER_BINARIES,
+    TARGET_LABELS,
+    TEMPLATE_MANIFEST,
+    GameBuildError,
+    build_game,
+)
 from Auvra.project.schemas import DOMAIN_NAMES
 
 from .assets import AssetResourceRequest, AssetTransferRegistry, AssetUpload
@@ -36,11 +46,23 @@ from .native_engine import NativeEngineState, NativeEngineUnavailableHost
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_CHECKOUT_ROOT = Path(__file__).resolve().parents[2]
 # Development builds copy the Vite player entry; packaged builds pass the
 # immutable ``<frontend root>/player`` tree explicitly.
-_DEV_PLAYER_TEMPLATE_ROOT = Path(__file__).resolve().parents[2] / "fbx-viewer (1)" / "dist" / "player"
-_DEV_PLAYER_EXECUTABLE = Path(__file__).resolve().parents[2] / "player-desktop" / "target" / "release" / "auvra-player.exe"
-_BUILD_TARGET_SUFFIX = {"web": "Web", "windows": "Windows"}
+_DEV_PLAYER_TEMPLATE_ROOT = _CHECKOUT_ROOT / "fbx-viewer (1)" / "dist" / "player"
+_BUILD_TARGET_SUFFIX = {"web": "Web", "windows": "Windows", "linux": "Linux", "macos": "macOS"}
+# The desktop target a checkout's own ``cargo build --release`` produces.
+_HOST_DESKTOP_TARGET = {"win32": "windows", "linux": "linux", "darwin": "macos"}
+_TEMPLATE_MISSING = "The game player template is not installed"
+# Shown in the Build Game picker and returned when a development checkout has
+# no player for a desktop target.  Paths are repository-relative.
+_DEV_PLAYER_HINTS = {
+    "windows": "Build the Windows game player first: run cargo build --release in player-desktop on Windows.",
+    "linux": "Build the Linux game player on Linux (cargo build --release in player-desktop), "
+             "or download its linux-x64 CI artifact to player-desktop/dist/linux-x64.",
+    "macos": "Download the universal macOS game player CI artifact to player-desktop/dist/macos, "
+             "or build it on a Mac (cargo build --release in player-desktop).",
+}
 # GameBuildError codes that are already host protocol error codes.
 _BUILD_ERROR_CODES = frozenset({"invalid_request", "invalid_project", "locking", "unsupported_capability"})
 _SNAPSHOT_SOFT_LIMIT = 192 * 1024
@@ -50,6 +72,36 @@ _SNAPSHOT_SOFT_LIMIT = 192 * 1024
 _SNAPSHOT_ENVELOPE_RESERVE = 32 * 1024
 DOCUMENT_LOAD_LIMIT = _SNAPSHOT_SOFT_LIMIT - _SNAPSHOT_ENVELOPE_RESERVE
 _AUTOSAVE_RETRY_DELAY = 5.0
+
+
+def player_executable_candidates(
+    target: str,
+    *,
+    player_root: Path | None = None,
+    checkout_root: Path | None = None,
+    platform: str | None = None,
+) -> tuple[Path, ...]:
+    """Where the desktop game player for ``target`` may be, best first.
+
+    A packaged editor passes its ``game-player`` folder as ``player_root`` and
+    ships every player there.  A development checkout (this repository unless
+    ``checkout_root`` is given) uses its own cargo release build for the host
+    OS (``platform``, default ``sys.platform``), then the players downloaded
+    from CI into ``player-desktop/dist``.
+    """
+
+    relative = PACKAGED_PLAYER_BINARIES.get(target)
+    if relative is None:
+        return ()
+    if player_root is not None:
+        return (Path(player_root).expanduser().absolute().joinpath(*relative.split("/")),)
+    crate = Path(checkout_root or _CHECKOUT_ROOT) / "player-desktop"
+    if target == "windows":
+        return (crate / "target" / "release" / "auvra-player.exe",)
+    candidates = [crate.joinpath("dist", *relative.split("/"))]
+    if _HOST_DESKTOP_TARGET.get(platform or sys.platform) == target:
+        candidates.insert(0, crate / "target" / "release" / "auvra-player")
+    return tuple(candidates)
 
 
 @trace_public_class("project_host", concise=("handle", "asset_resource", "shutdown"))
@@ -68,12 +120,21 @@ class NativeProjectHost:
         native_authoritative: bool = False,
         player_template_root: Path | None = None,
         player_executable: Path | None = None,
+        player_root: Path | None = None,
     ) -> None:
         state_root = Path(state_root).expanduser().absolute()
         state_root.mkdir(parents=True, exist_ok=True)
         self._state_root = state_root
         self.player_template_root = Path(player_template_root or _DEV_PLAYER_TEMPLATE_ROOT).expanduser().absolute()
-        self.player_executable = Path(player_executable or _DEV_PLAYER_EXECUTABLE).expanduser().absolute()
+        # Desktop players: a packaged editor passes its game-player folder as
+        # ``player_root``, ``player_executable`` pins the Windows player, and
+        # everything else comes from the development checkout.
+        self._packaged_players = player_root is not None
+        self._player_candidates = {
+            target: player_executable_candidates(target, player_root=player_root) for target in DESKTOP_TARGETS
+        }
+        if player_executable is not None:
+            self._player_candidates["windows"] = (Path(player_executable).expanduser().absolute(),)
         # Opaque build handles map to a chosen parent folder for one session;
         # paths never cross the protocol.
         self._build_destinations: dict[str, tuple[str, Path]] = {}
@@ -166,6 +227,31 @@ class NativeProjectHost:
     def build_game(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Build a standalone game from the open project (read-only allowed)."""
         return self.handle("project.buildGame", payload)
+
+    def player_executable_for(self, target: str) -> Path | None:
+        """The desktop player binary a ``target`` build copies, or None when it is missing."""
+        return next((path for path in self._player_candidates.get(target, ()) if path.is_file()), None)
+
+    def build_targets(self) -> list[dict[str, Any]]:
+        """Every build target with whether it can build now and, when not, why."""
+        template_ready = (self.player_template_root / TEMPLATE_MANIFEST).is_file()
+        targets: list[dict[str, Any]] = []
+        for target in BUILD_TARGETS:
+            reason: str | None = None
+            if not template_ready:
+                reason = _TEMPLATE_MISSING + "."
+            elif target in DESKTOP_TARGETS and self.player_executable_for(target) is None:
+                reason = self._missing_player_reason(target)
+            entry: dict[str, Any] = {"target": target, "available": reason is None}
+            if reason is not None:
+                entry["reason"] = reason
+            targets.append(entry)
+        return targets
+
+    def _missing_player_reason(self, target: str) -> str:
+        if self._packaged_players:
+            return f"This Auvra install does not include the {TARGET_LABELS[target]} game player."
+        return _DEV_PLAYER_HINTS[target]
 
     def asset_resource(self, request: AssetResourceRequest):
         with self._operation_lock:
@@ -661,7 +747,9 @@ class NativeProjectHost:
         project_id = payload.get("projectId")
         if project_id is not None:
             self._require(payload)
-        return self._status_value(domains=list(DOMAIN_NAMES))
+        # Build target availability is host-wide, so it is reported with or
+        # without an open project; events never carry it.
+        return self._status_value(domains=list(DOMAIN_NAMES), buildTargets=self.build_targets())
 
     def _create(self, payload: dict[str, Any]) -> dict[str, Any]:
         name = payload["name"]
@@ -892,12 +980,15 @@ class NativeProjectHost:
         suffix = _BUILD_TARGET_SUFFIX.get(target) if isinstance(target, str) else None
         if suffix is None:
             raise HostOperationError("invalid_request", "Build target is not supported")
-        from Auvra.project.game_build import TEMPLATE_MANIFEST, GameBuildError, build_game
-
         template_root = self.player_template_root
         if not (template_root / TEMPLATE_MANIFEST).is_file():
             # Fail before asking for a folder the build could never fill.
-            raise HostOperationError("unsupported_capability", "The game player template is not installed")
+            raise HostOperationError("unsupported_capability", _TEMPLATE_MISSING)
+        player: Path | None = None
+        if target in DESKTOP_TARGETS:
+            player = self.player_executable_for(target)
+            if player is None:
+                raise HostOperationError("unsupported_capability", self._missing_player_reason(target))
         project_id = active.project_id
         domains = {domain: active.get_domain(domain) for domain in DOMAIN_NAMES}
         game_name = self._game_name(domains, active.name)
@@ -934,7 +1025,7 @@ class NativeProjectHost:
                 target=target,
                 build_id=secrets.token_hex(16),
                 game_id=project_id,
-                player_executable=self.player_executable if target == "windows" else None,
+                player_executable=player,
             )
         except GameBuildError as exc:
             raise self._build_error(exc) from None

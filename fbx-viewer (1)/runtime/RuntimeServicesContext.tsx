@@ -113,6 +113,8 @@ interface RuntimeServicesProviderProps {
     playerOptions?: PlayerOptionsStore;
     /** False while paused: held input is released and new input is ignored. */
     inputEnabled: boolean;
+    /** Receives the runtime's input (null on unmount), for overlays outside the canvas such as touch controls. */
+    onInput?: (input: InputState | null) => void;
     children?: React.ReactNode;
 }
 
@@ -120,7 +122,7 @@ interface RuntimeServicesProviderProps {
  * Runtime-lifetime services for the level runtime. Renders inside the runtime canvas; each play session
  * adds its prefab spawner with RuntimeSpawnerProvider.
  */
-export const RuntimeServicesProvider: React.FC<RuntimeServicesProviderProps> = ({ settings, playerOptions, inputEnabled, children }) => {
+export const RuntimeServicesProvider: React.FC<RuntimeServicesProviderProps> = ({ settings, playerOptions, inputEnabled, onInput, children }) => {
     const { audioAssets } = useGameContent();
     const camera = useThree(state => state.camera);
 
@@ -132,6 +134,11 @@ export const RuntimeServicesProvider: React.FC<RuntimeServicesProviderProps> = (
     // --- INPUT ---
     const inputMap = useMemo(() => applyBindingOverrides(DEFAULT_INPUT_MAP, options.bindings), [options.bindings]);
     const input = useInputActions(inputMap, inputEnabled);
+    useEffect(() => {
+        if (!onInput) return;
+        onInput(input);
+        return () => onInput(null);
+    }, [input, onInput]);
 
     // Edges advance at the very end of each rendered frame (after every useFrame, whatever its priority, and the
     // render), so every reader in a frame sees the same presses. A positive useFrame priority would take over rendering.

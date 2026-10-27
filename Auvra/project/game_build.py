@@ -6,6 +6,11 @@ the project repository.  The output layout is the game pack described by
 ``fbx-viewer (1)/runtime/types.ts`` (``GamePackManifest``) next to a verified
 copy of the prebuilt player template, plus an ``auvra-build.json`` marker that
 identifies the folder as something a later build may safely replace.
+
+Desktop targets add the prebuilt player (``player-desktop``) for that OS.  The
+web files sit where the player serves them from: beside ``<Game Name>.exe`` on
+Windows, in a ``game`` folder beside the executable on Linux, and in
+``<Game Name>.app/Contents/Resources/game`` on macOS.
 """
 from __future__ import annotations
 
@@ -14,6 +19,8 @@ import hashlib
 import json
 import math
 import os
+import plistlib
+import re
 import shutil
 import tempfile
 import uuid
@@ -26,9 +33,10 @@ from .serialization import canonical_json
 
 TEMPLATE_MANIFEST = "player-template.json"
 # The player template ships the web player's npm notices under this name; the
-# release package stages the Windows player's Rust crate notices beside
-# auvra-player.exe under the same name (release/notices.py).
+# release package stages each desktop player's Rust crate notices beside its
+# binary under the same name (release/notices.py).
 NOTICES_FILE = "THIRD_PARTY_NOTICES.txt"
+README_FILE = "README.txt"
 BUILD_MARKER = "auvra-build.json"
 BUILD_KIND = "auvra-game-build"
 BUILD_SCHEMA = 1
@@ -36,7 +44,19 @@ GAME_PACK_FORMAT = "auvra.game"
 GAME_PACK_SCHEMA = 1
 GAME_SETTINGS_DOCUMENT_ID = "game-settings"
 EDITOR_STATE_DOCUMENT_ID = "editor-state"
-BUILD_TARGETS = ("web", "windows")
+BUILD_TARGETS = ("web", "windows", "linux", "macos")
+DESKTOP_TARGETS = ("windows", "linux", "macos")
+TARGET_LABELS = {"web": "Web", "windows": "Windows", "linux": "Linux", "macos": "macOS"}
+# Desktop player binaries in a packaged editor, relative to its game-player folder.
+PACKAGED_PLAYER_BINARIES = {
+    "windows": "auvra-player.exe",
+    "linux": "linux-x64/auvra-player",
+    "macos": "macos/auvra-player",
+}
+# Recorded in the marker for Linux and macOS executables, so a build staged on
+# Windows (where the file system has no executable bit) can be zipped with it.
+EXECUTABLE_MODE = 0o755
+MACOS_MINIMUM_SYSTEM_VERSION = "11.0"
 ERROR_CODES = frozenset({"invalid_request", "invalid_project", "locking", "unsupported_capability"})
 
 # Mirrors DEFAULT_GAME_SETTINGS in fbx-viewer (1)/runtime/types.ts.
@@ -68,6 +88,15 @@ _SAFE_ASSET_ID = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ
 _HEX = frozenset("0123456789abcdef")
 _RESERVED_ROOTS = ("game", BUILD_MARKER)
 _CHUNK = 1024 * 1024
+_BUNDLE_VERSION = re.compile(r"^[0-9]{1,9}(?:\.[0-9]{1,9}){0,2}$")
+_MISSING_PLAYER = {
+    "windows": "the Windows game player is not built; run cargo build --release in player-desktop on Windows "
+               "(a packaged editor ships it as game-player/auvra-player.exe)",
+    "linux": "the Linux game player is missing; build player-desktop on Linux or download the linux-x64 CI artifact "
+             "to player-desktop/dist/linux-x64 (a packaged editor ships it in game-player/linux-x64)",
+    "macos": "the macOS game player is missing; download the universal macOS CI artifact to player-desktop/dist/macos "
+             "or build player-desktop on a Mac (a packaged editor ships it in game-player/macos)",
+}
 
 
 class GameBuildError(Exception):
@@ -79,6 +108,18 @@ class GameBuildError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+@dataclass(frozen=True)
+class _Layout:
+    """Where one target puts the web files, the player binary and the notices."""
+
+    web_root: str
+    notices: str
+    executable: str | None = None
+    executable_mode: int | None = None
+    bundle: str | None = None
+    readme: str | None = None
 
 
 @dataclass(frozen=True)
@@ -100,7 +141,7 @@ def build_game(
     read_asset: Callable[[str], tuple[bytes, str]],
     template_root: Path,
     destination: Path,
-    target: Literal["web", "windows"],
+    target: Literal["web", "windows", "linux", "macos"],
     build_id: str,
     game_id: str,
     player_executable: Path | None = None,
@@ -111,10 +152,13 @@ def build_game(
     ``{schemaVersion, documents}`` wrapper).  ``read_asset`` returns the bytes
     and MIME type of one referenced asset id.  ``destination`` is only ever
     replaced when it is absent or already holds a marked Auvra build.
-    A ``windows`` build also needs ``player_executable`` (auvra-player.exe), which
-    is copied in as ``<Game Name>.exe`` next to the web files it serves.  The
-    player's Rust crate notices (``THIRD_PARTY_NOTICES.txt`` beside the exe)
-    are appended to the build's ``THIRD_PARTY_NOTICES.txt``.
+    A desktop build (``windows``, ``linux``, ``macos``) also needs that OS's
+    ``player_executable`` (auvra-player), copied in as ``<Game Name>.exe`` next to
+    the web files on Windows, as ``<game-slug>`` beside a ``game`` folder holding
+    them on Linux, and as ``<Game Name>.app`` with the web files in
+    ``Contents/Resources/game`` on macOS.  The player's Rust crate notices
+    (``THIRD_PARTY_NOTICES.txt`` beside the binary) are appended to the build's
+    ``THIRD_PARTY_NOTICES.txt``.
     """
 
     if target not in BUILD_TARGETS:
@@ -130,27 +174,28 @@ def build_game(
         raise GameBuildError("invalid_request", "the build destination must name a folder")
 
     _require_replaceable(destination)
+    label = TARGET_LABELS[target]
     executable: bytes | None = None
     player_notices: bytes | None = None
-    if target == "windows":
+    player_name = ""
+    if target in DESKTOP_TARGETS:
         if player_executable is None or not Path(player_executable).is_file():
-            raise GameBuildError(
-                "unsupported_capability",
-                "the Windows game player is not built; run cargo build --release in player-desktop",
-            )
+            raise GameBuildError("unsupported_capability", _MISSING_PLAYER[target])
         try:
             executable = Path(player_executable).read_bytes()
         except OSError as error:
-            raise _filesystem_error(error, "could not read the Windows game player") from error
-        player_notices = _read_player_notices(Path(player_executable))
+            raise _filesystem_error(error, f"could not read the {label} game player") from error
+        player_notices = _read_player_notices(Path(player_executable), label)
+        player_name = Path(player_executable).name
     template = _read_template(template_root)
     content = _prepare_domains(domains)
     settings, levels = _resolve_settings(content)
+    layout = _target_layout(target, settings["name"])
     warnings: list[str] = []
     if executable is not None and player_notices is None:
         warnings.append(
-            "the Windows game player's third-party notices were not found beside auvra-player.exe; "
-            f"the build's {NOTICES_FILE} covers only the web player"
+            f"the {label} game player's third-party notices were not found beside "
+            f"{player_name}; the build's {NOTICES_FILE} covers only the web player"
         )
     blueprint_id = settings.get("playerBlueprintId")
     if blueprint_id and blueprint_id not in {item["id"] for item in content["blueprints"]}:
@@ -167,14 +212,17 @@ def build_game(
     except OSError as error:
         raise _filesystem_error(error, "could not prepare the build folder") from error
 
+    web = layout.web_root
     try:
         records: list[dict[str, Any]] = []
         for entry in template:
-            _copy_verified(template_root, staging, entry)
-            records.append(dict(entry))
+            # The web player's notices become the build's combined notices file.
+            relative = layout.notices if entry["path"] == NOTICES_FILE else web + entry["path"]
+            _copy_verified(template_root, staging, entry, relative)
+            records.append({**entry, "path": relative})
         for domain in DOMAIN_NAMES:
             document = {"schemaVersion": SCHEMA_VERSION, "documents": content[domain]}
-            _write(staging, f"game/content/{domain}.json", canonical_json(document).encode("utf-8"), records)
+            _write(staging, f"{web}game/content/{domain}.json", canonical_json(document).encode("utf-8"), records)
         shipped: list[dict[str, Any]] = []
         for asset_id in asset_ids:
             data, mime = _load_asset(read_asset, asset_id)
@@ -182,7 +230,7 @@ def build_game(
             if extension == "bin" and mime != _GENERIC_MIME:
                 warnings.append(f"asset {asset_id} has unrecognised type {mime or 'unknown'}; shipped as .bin")
             file_name = f"{asset_id}.{extension}"
-            _write(staging, f"game/assets/{file_name}", data, records)
+            _write(staging, f"{web}game/assets/{file_name}", data, records)
             shipped.append({"id": asset_id, "file": file_name, "mime": mime or _GENERIC_MIME, "size": len(data)})
         manifest = {
             "format": GAME_PACK_FORMAT,
@@ -196,11 +244,16 @@ def build_game(
             "domains": list(DOMAIN_NAMES),
             "assets": shipped,
         }
-        _write(staging, "game/game.json", canonical_json(manifest).encode("utf-8"), records)
-        if executable is not None:
-            _write(staging, f"{_executable_name(settings['name'])}.exe", executable, records)
+        _write(staging, f"{web}game/game.json", canonical_json(manifest).encode("utf-8"), records)
+        if executable is not None and layout.executable is not None:
+            _write(staging, layout.executable, executable, records, mode=layout.executable_mode)
+            if layout.bundle is not None:
+                plist = _info_plist(settings, game_id, layout.executable.rsplit("/", 1)[-1], warnings)
+                _write(staging, f"{layout.bundle}/Contents/Info.plist", plist, records)
+            if layout.readme is not None:
+                _write(staging, layout.readme, _readme(target, settings["name"], layout.executable), records)
         if player_notices is not None:
-            _append_notices(staging, player_notices, records)
+            _append_notices(staging, player_notices, records, layout.notices)
         records.sort(key=lambda item: item["path"])
         marker = {
             "schema": BUILD_SCHEMA,
@@ -230,12 +283,100 @@ def build_game(
 
 
 def _executable_name(game_name: Any) -> str:
-    """A Windows-safe file stem for the game's exe."""
+    """A Windows-safe file stem for the game's exe and macOS app."""
 
     text = str(game_name or "").strip()
     safe = "".join(character if character.isalnum() or character in " -_" else "_" for character in text)
     safe = safe.strip(" ._")[:64]
     return safe or "Game"
+
+
+def _linux_executable_name(game_name: Any) -> str:
+    """A lower-case ASCII slug for the Linux executable; never the ``game`` folder's name."""
+
+    text = str(game_name or "").strip().lower()
+    words = "".join(character if character.isascii() and character.isalnum() else " " for character in text).split()
+    slug = "-".join(words)[:64].strip("-")
+    return "auvra-game" if slug in ("", "game") else slug
+
+
+def _target_layout(target: str, game_name: Any) -> _Layout:
+    if target == "windows":
+        return _Layout("", NOTICES_FILE, executable=f"{_executable_name(game_name)}.exe")
+    if target == "linux":
+        return _Layout(
+            "game/", NOTICES_FILE, executable=_linux_executable_name(game_name),
+            executable_mode=EXECUTABLE_MODE, readme=README_FILE,
+        )
+    if target == "macos":
+        stem = _executable_name(game_name)
+        bundle = f"{stem}.app"
+        return _Layout(
+            f"{bundle}/Contents/Resources/game/", f"{bundle}/Contents/Resources/{NOTICES_FILE}",
+            executable=f"{bundle}/Contents/MacOS/{stem}", executable_mode=EXECUTABLE_MODE,
+            bundle=bundle, readme=README_FILE,
+        )
+    return _Layout("", NOTICES_FILE)
+
+
+def _bundle_identifier(game_id: str) -> str:
+    """``com.auvra.<game-id>`` limited to the characters macOS allows in a bundle id."""
+
+    safe = "".join(character if character.isascii() and (character.isalnum() or character in "-.") else "-"
+                   for character in game_id.strip())
+    return f"com.auvra.{safe.strip('.-')[:128] or 'game'}"
+
+
+def _info_plist(settings: Mapping[str, Any], game_id: str, executable: str, warnings: list[str]) -> bytes:
+    name = str(settings["name"]).strip()
+    info: dict[str, Any] = {
+        "CFBundleDevelopmentRegion": "en",
+        "CFBundleDisplayName": name,
+        "CFBundleExecutable": executable,
+        "CFBundleIdentifier": _bundle_identifier(game_id),
+        "CFBundleInfoDictionaryVersion": "6.0",
+        "CFBundleName": name,
+        "CFBundlePackageType": "APPL",
+        "LSApplicationCategoryType": "public.app-category.games",
+        "LSMinimumSystemVersion": MACOS_MINIMUM_SYSTEM_VERSION,
+        "NSHighResolutionCapable": True,
+    }
+    version = settings.get("version")
+    if isinstance(version, str) and version.strip():
+        if _BUNDLE_VERSION.match(version.strip()):
+            info["CFBundleShortVersionString"] = info["CFBundleVersion"] = version.strip()
+        else:
+            warnings.append(f"game version {version.strip()[:32]!r} is not like 1.2.3, so Info.plist has no version")
+    return plistlib.dumps(info, fmt=plistlib.FMT_XML, sort_keys=True)
+
+
+def _readme(target: str, game_name: Any, executable: str) -> bytes:
+    """A short launch note for players of a Linux or macOS build (LF line endings)."""
+
+    name = str(game_name).strip()
+    if target == "linux":
+        lines = [
+            name, "",
+            f"Start the game with ./{executable} from this folder, or double-click {executable}.",
+            f"If it does not start, make it executable once: chmod +x {executable}",
+            f"Keep the game folder next to {executable}; the game is served from it.", "",
+            "The game needs the WebKitGTK 4.1 runtime, which most desktop Linux systems include:",
+            "  Debian and Ubuntu: sudo apt install libwebkit2gtk-4.1-0",
+            "  Fedora: sudo dnf install webkit2gtk4.1",
+            "  Arch: sudo pacman -S webkit2gtk-4.1",
+        ]
+    else:
+        app = executable.split("/", 1)[0]
+        lines = [
+            name, "",
+            f"Open {app}. The app is not signed, so the first time right-click it, choose Open,",
+            "then click Open again. On macOS 15 and later, try to open it once, then open",
+            "System Settings > Privacy & Security and click Open Anyway.",
+            "If macOS says the app is damaged, remove the download quarantine in Terminal:",
+            f'  xattr -dr com.apple.quarantine "{app}"',
+            f'If it still does not start, make it executable: chmod +x "{executable}"',
+        ]
+    return ("\n".join(lines) + "\n").encode("utf-8")
 
 
 def is_marked_build(path: Path) -> bool:
@@ -311,7 +452,7 @@ def _is_safe_relative(path: Any) -> bool:
     return all(segment not in ("", ".", "..") for segment in path.split("/"))
 
 
-def _copy_verified(template_root: Path, staging: Path, entry: Mapping[str, Any]) -> None:
+def _copy_verified(template_root: Path, staging: Path, entry: Mapping[str, Any], destination: str) -> None:
     relative = entry["path"]
     source = template_root.joinpath(*relative.split("/"))
     try:
@@ -321,7 +462,7 @@ def _copy_verified(template_root: Path, staging: Path, entry: Mapping[str, Any])
     digest = hashlib.sha256()
     written = 0
     with reader:
-        target = staging.joinpath(*relative.split("/"))
+        target = staging.joinpath(*destination.split("/"))
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("wb") as writer:
             for chunk in iter(lambda: reader.read(_CHUNK), b""):
@@ -332,14 +473,20 @@ def _copy_verified(template_root: Path, staging: Path, entry: Mapping[str, Any])
         raise GameBuildError("unsupported_capability", f"the player template file {relative} is stale or corrupt")
 
 
-def _write(staging: Path, relative: str, data: bytes, records: list[dict[str, Any]]) -> None:
+def _write(staging: Path, relative: str, data: bytes, records: list[dict[str, Any]], *, mode: int | None = None) -> None:
+    """Write and record one build file; ``mode`` marks an executable and is applied where supported."""
+
     target = staging.joinpath(*relative.split("/"))
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(data)
-    records.append({"path": relative, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+    record: dict[str, Any] = {"path": relative, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    if mode is not None:
+        os.chmod(target, mode)
+        record["mode"] = mode
+    records.append(record)
 
 
-def _read_player_notices(player_executable: Path) -> bytes | None:
+def _read_player_notices(player_executable: Path, label: str) -> bytes | None:
     """The player's crate notices staged beside it, or None when absent (dev builds)."""
 
     path = player_executable.with_name(NOTICES_FILE)
@@ -348,19 +495,19 @@ def _read_player_notices(player_executable: Path) -> bytes | None:
     try:
         data = path.read_bytes()
     except OSError as error:
-        raise _filesystem_error(error, "could not read the Windows game player's notices") from error
+        raise _filesystem_error(error, f"could not read the {label} game player's notices") from error
     return data if data.strip() else None
 
 
-def _append_notices(staging: Path, notices: bytes, records: list[dict[str, Any]]) -> None:
-    """Append ``notices`` to the template's notices file (or create it) and re-record it."""
+def _append_notices(staging: Path, notices: bytes, records: list[dict[str, Any]], relative: str) -> None:
+    """Append ``notices`` to the build's notices file at ``relative`` (or create it) and re-record it."""
 
-    existing = next((item for item in records if item["path"] == NOTICES_FILE), None)
+    existing = next((item for item in records if item["path"] == relative), None)
     combined = notices.strip() + b"\n"
     if existing is not None:
         records.remove(existing)
-        combined = staging.joinpath(NOTICES_FILE).read_bytes().rstrip() + b"\n\n" + combined
-    _write(staging, NOTICES_FILE, combined, records)
+        combined = staging.joinpath(*relative.split("/")).read_bytes().rstrip() + b"\n\n" + combined
+    _write(staging, relative, combined, records)
 
 
 def _load_asset(read_asset: Callable[[str], tuple[bytes, str]], asset_id: str) -> tuple[bytes, str]:

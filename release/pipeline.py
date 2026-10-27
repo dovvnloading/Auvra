@@ -66,6 +66,22 @@ RUNTIME_CDN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 MSIX_CONTAINER_METADATA = {"AppxBlockMap.xml"}
+# Players a Windows editor ships so it can export Linux and macOS games, by
+# folder under game-player/ (release.notices.PLATFORM_PLAYER_DIRECTORIES), with
+# the executable format each must have.  They are optional inputs: a package
+# built without one still verifies, and the editor reports that target as
+# unavailable.  Each folder holds exactly the player and its notices.
+GAME_PLAYER_NAME = "auvra-player"
+PLATFORM_PLAYERS = {"linux-x64": "elf-x86_64", "macos": "macho-universal"}
+PLATFORM_PLAYER_FORMATS = {
+    "elf-x86_64": "a 64-bit x86-64 ELF executable",
+    "macho-universal": "a universal Mach-O executable with x86_64 and arm64 slices",
+}
+_PLATFORM_PLAYER_PATHS = {f"game-player/{directory}/{GAME_PLAYER_NAME}": expected
+                          for directory, expected in PLATFORM_PLAYERS.items()}
+_ELF_X86_64 = 0x3E
+_MACHO_FAT_ENTRY_SIZES = {0xCAFEBABE: 20, 0xCAFEBABF: 32}
+_MACHO_UNIVERSAL_CPUS = {0x01000007, 0x0100000C}
 
 
 class ReleaseError(RuntimeError):
@@ -141,6 +157,58 @@ def _assert_no_forbidden(path: str, policy: Mapping[str, Any]) -> None:
         raise ReleaseError(f"forbidden secret file in release: {path}")
 
 
+def executable_format(path: Path) -> str | None:
+    """``elf-x86_64`` or ``macho-universal`` for those native executables, else None.
+
+    Only the headers are read: an ELF must be 64-bit little-endian x86-64, and a
+    Mach-O fat file must carry both an x86_64 and an arm64 slice.
+    """
+
+    try:
+        with path.open("rb") as stream:
+            header = stream.read(4096)
+    except OSError:
+        return None
+    if header[:4] == b"\x7fELF" and len(header) >= 20:
+        machine = struct.unpack_from("<H", header, 18)[0]
+        return "elf-x86_64" if header[4] == 2 and header[5] == 1 and machine == _ELF_X86_64 else None
+    if len(header) < 8:
+        return None
+    magic, count = struct.unpack_from(">II", header, 0)
+    entry = _MACHO_FAT_ENTRY_SIZES.get(magic)
+    if entry is None or not 0 < count <= 16 or len(header) < 8 + count * entry:
+        return None
+    cpus = {struct.unpack_from(">I", header, 8 + index * entry)[0] for index in range(count)}
+    return "macho-universal" if _MACHO_UNIVERSAL_CPUS <= cpus else None
+
+
+def _is_platform_player(relative: str, path: Path) -> bool:
+    expected = _PLATFORM_PLAYER_PATHS.get(relative)
+    return expected is not None and executable_format(path) == expected
+
+
+def _platform_players(input_root: Path) -> list[str]:
+    """Check the optional Linux and macOS players staged under game-player/.
+
+    Returns the folders that are present; each must hold exactly the player
+    binary, in its expected format, and its THIRD_PARTY_NOTICES.txt.
+    """
+
+    present: list[str] = []
+    for directory, expected in PLATFORM_PLAYERS.items():
+        source = input_root / "game-player" / directory
+        if not source.exists() and not source.is_symlink():
+            continue
+        label = f"game-player/{directory}"
+        names = sorted(_relative(path, source) for path in _assert_regular_tree(source, label=label))
+        if names != sorted((GAME_PLAYER_NAME, NOTICES_FILE)):
+            raise ReleaseError(f"{label} input must contain exactly {GAME_PLAYER_NAME} and {NOTICES_FILE}")
+        if executable_format(source / GAME_PLAYER_NAME) != expected:
+            raise ReleaseError(f"{label}/{GAME_PLAYER_NAME} must be {PLATFORM_PLAYER_FORMATS[expected]}")
+        present.append(directory)
+    return present
+
+
 def _scan_release_content(root: Path, policy: Mapping[str, Any], *, include_manifest: bool = False) -> None:
     """Reject accidental developer artifacts and secret-like text."""
 
@@ -164,7 +232,9 @@ def _scan_release_content(root: Path, policy: Mapping[str, Any], *, include_mani
         lower_name = path.name.lower()
         if path.suffix.lower() in FORBIDDEN_CONTENT_SUFFIXES or lower_name in FORBIDDEN_CONTENT_NAMES:
             raise ReleaseError(f"development or diagnostic file is not releasable: {relative}")
-        text_content = path.suffix.lower() not in BINARY_CONTENT_SUFFIXES
+        # The Linux and macOS players have no file suffix; like the .exe they
+        # embed toolchain source paths, so only the credential pattern applies.
+        text_content = path.suffix.lower() not in BINARY_CONTENT_SUFFIXES and not _is_platform_player(relative, path)
         try:
             with path.open("rb") as stream:
                 sample = stream.read(4096)
@@ -312,7 +382,7 @@ def _editor_notices(input_root: Path, policy: Mapping[str, Any]) -> str:
 
 
 def _verify_package_notices(root: Path) -> None:
-    """Require complete notices at the package root and beside the game player."""
+    """Require complete notices at the package root and beside each game player."""
 
     path = root / NOTICES_FILE
     if not path.is_file() or path.is_symlink():
@@ -330,6 +400,16 @@ def _verify_package_notices(root: Path) -> None:
         raise ReleaseError(f"game-player/{NOTICES_FILE} is missing or unreadable") from exc
     if third_party.count_components(player_text) < 1:
         raise ReleaseError(f"game-player/{NOTICES_FILE} lists no crates")
+    for directory in PLATFORM_PLAYERS:
+        folder = root / "game-player" / directory
+        if not folder.exists():
+            continue
+        try:
+            text = (folder / NOTICES_FILE).read_bytes().decode("utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ReleaseError(f"game-player/{directory}/{NOTICES_FILE} is missing or unreadable") from exc
+        if third_party.count_components(text) < 1:
+            raise ReleaseError(f"game-player/{directory}/{NOTICES_FILE} lists no crates")
 
 
 def write_input_inventory(input_root: Path, output: Path) -> dict[str, Any]:
@@ -337,6 +417,7 @@ def write_input_inventory(input_root: Path, output: Path) -> dict[str, Any]:
     inventory = _input_inventory(input_root.resolve(), policy)
     _validate_runtime_pin_markers(input_root.resolve(), policy)
     _require_host_schemas(input_root.resolve() / "host", label="host input")
+    _platform_players(input_root.resolve())
     _editor_notices(input_root.resolve(), policy)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(canonical_json(inventory))
@@ -451,7 +532,8 @@ def _locked_dependency_components(input_root: Path) -> list[dict[str, Any]]:
         return result
 
     npm_licenses = staged_licenses(f"frontend/{NOTICES_FILE}")
-    cargo_licenses = staged_licenses(f"native/{NOTICES_FILE}", f"game-player/{NOTICES_FILE}")
+    cargo_licenses = staged_licenses(f"native/{NOTICES_FILE}", f"game-player/{NOTICES_FILE}",
+                                     *(f"game-player/{directory}/{NOTICES_FILE}" for directory in PLATFORM_PLAYERS))
     components: list[dict[str, Any]] = []
     package_lock = ROOT.parent / "fbx-viewer (1)" / "package-lock.json"
     try:
@@ -681,6 +763,7 @@ def _assemble_into(input_root: Path, output_root: Path, *, channel: str, version
     inventory = _input_inventory(input_root, policy)
     _validate_runtime_pin_markers(input_root, policy)
     _require_host_schemas(input_root / "host", label="host input")
+    platform_players = _platform_players(input_root)
     if output_root.exists() and (output_root.is_symlink() or not output_root.is_dir()):
         raise ReleaseError("package output is not a regular directory")
     output_root.mkdir(parents=True, exist_ok=True)
@@ -694,10 +777,15 @@ def _assemble_into(input_root: Path, output_root: Path, *, channel: str, version
     _copy_tree(input_root / "licenses", output_root / "licenses", policy=policy, label="licenses")
     _copy_required_file(input_root / "native", output_root / "native" / "auvra-native.exe", label="native", suffix="auvra-native.exe")
     _copy_required_file(input_root / "game-player", output_root / "game-player" / "auvra-player.exe", label="game-player", suffix="auvra-player.exe")
-    # One complete notices file at the package root; the player's own crate
-    # notices also sit beside it so exported Windows games can ship them.
+    # One complete notices file at the package root; each player's own crate
+    # notices also sit beside it so exported games can ship them.
     (output_root / NOTICES_FILE).write_bytes(_editor_notices(input_root, policy).encode("utf-8"))
     shutil.copyfile(input_root / "game-player" / NOTICES_FILE, output_root / "game-player" / NOTICES_FILE)
+    for directory in platform_players:
+        (output_root / "game-player" / directory).mkdir(parents=True, exist_ok=True)
+        for name in (GAME_PLAYER_NAME, NOTICES_FILE):
+            shutil.copyfile(input_root / "game-player" / directory / name,
+                            output_root / "game-player" / directory / name)
     if not (output_root / "host" / "Auvra").is_dir():
         raise ReleaseError("host input must contain the importable Auvra application package")
     _write_packaged_startup(output_root, channel)
@@ -821,6 +909,11 @@ def verify_package(package_root: Path, *, expected_channel: str | None = None) -
         raise ReleaseError("native engine is missing from package")
     if not (root / "game-player" / "auvra-player.exe").is_file():
         raise ReleaseError("Windows game player is missing from package")
+    for directory, expected in PLATFORM_PLAYERS.items():
+        folder = root / "game-player" / directory
+        if folder.exists() and executable_format(folder / GAME_PLAYER_NAME) != expected:
+            raise ReleaseError(f"game-player/{directory}/{GAME_PLAYER_NAME} is missing or is not "
+                               f"{PLATFORM_PLAYER_FORMATS[expected]}")
     _require_host_schemas(root / "host", label="package")
     _verify_package_notices(root)
     return manifest

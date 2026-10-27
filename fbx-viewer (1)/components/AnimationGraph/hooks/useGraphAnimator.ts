@@ -1,9 +1,19 @@
-
 import React, { useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { AnimationGraphData } from '../../../types';
-import { blendWeights2D, clampAnimationDelta, DEFAULT_BLEND_SECONDS, stepWeight } from '../utils/blending';
+import { AnimationGraphData, GraphState } from '../../../types';
+import { animationEvents } from '../../../runtime/animationEvents';
+import { blendWeights1D, blendWeights2D, clampAnimationDelta, DEFAULT_BLEND_SECONDS, stepWeight } from '../utils/blending';
+import type { MontagePlayer } from '../utils/montage';
+import { crossedNotifies } from '../utils/notifies';
+import { rootMotionDelta, type RootMotion } from '../utils/rootMotion';
+
+/**
+ * Animation runs before every other frame callback (priority -1), so IK, sockets and attachments
+ * that read bones in the same frame see this frame's pose. A negative priority keeps R3F's own
+ * render loop.
+ */
+export const ANIMATION_FRAME_PRIORITY = -1;
 
 /**
  * Steps every action's weight linearly toward its target, then rescales the results so they add
@@ -34,6 +44,60 @@ export const stepActionWeights = (
     return next;
 };
 
+const finiteNumber = (value: unknown, fallback: number): number =>
+    typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+
+/**
+ * A state's playback speed: its play rate (default 1) times the value of its play-rate variable
+ * when it has one. A boolean variable counts as 1 or 0.
+ */
+export const statePlayRate = (state: Pick<GraphState, 'playRate' | 'playRateParam'>, variables: Record<string, number | boolean>): number => {
+    const base = finiteNumber(state.playRate, 1);
+    if (!state.playRateParam) return base;
+    const value = variables[state.playRateParam];
+    const factor = typeof value === 'boolean' ? (value ? 1 : 0) : finiteNumber(value, 1);
+    return base * factor;
+};
+
+/** Target weight per clip name for a state, given the graph variables. */
+export const stateTargetWeights = (
+    state: GraphState,
+    variables: Record<string, number | boolean>,
+    hasClip: (name: string) => boolean
+): Record<string, number> => {
+    const targets: Record<string, number> = {};
+    if (state.stateType === 'Single') {
+        if (state.clipName && hasClip(state.clipName)) targets[state.clipName] = 1;
+        return targets;
+    }
+    const x = finiteNumber(variables[state.blendParamX], 0);
+    const weights = state.stateType === 'Blend1D'
+        ? blendWeights1D(state.blendSamples, x)
+        : blendWeights2D(state.blendSamples, x, finiteNumber(variables[state.blendParamY], 0));
+    state.blendSamples.forEach((sample, index) => {
+        if (sample.clipName && hasClip(sample.clipName)) targets[sample.clipName] = (targets[sample.clipName] || 0) + (weights[index] || 0);
+    });
+    return targets;
+};
+
+/** Optional per-character systems the animator drives alongside the base state machine. */
+export interface AnimatorExtras {
+    montage?: React.MutableRefObject<MontagePlayer | null>;
+    rootMotions?: Record<string, RootMotion>;
+    /** World-space root travel waiting for the character controller (or the preview) to apply. */
+    rootMotionOut?: React.MutableRefObject<THREE.Vector3>;
+    /** Who raises this character's notifies (a level object id, 'player', or null). */
+    eventSource?: string | null;
+}
+
+const _rootDelta = new THREE.Vector3();
+const _rootBasis = new THREE.Matrix3();
+
+const rootBoneParent = (modelObject: THREE.Object3D, motion: RootMotion): THREE.Object3D | null => {
+    const { nodeName } = THREE.PropertyBinding.parseTrackName(motion.track.name);
+    return modelObject.getObjectByName(nodeName)?.parent ?? null;
+};
+
 export const useGraphAnimator = (
     mixer: THREE.AnimationMixer | null,
     actionsMap: Record<string, THREE.AnimationAction>,
@@ -41,33 +105,27 @@ export const useGraphAnimator = (
     activeStateRef: React.MutableRefObject<string | null>,
     previousStateRef: React.MutableRefObject<string | null>,
     variablesRef: React.MutableRefObject<Record<string, number | boolean>>,
-    blendDurationRef?: React.MutableRefObject<number>
+    blendDurationRef?: React.MutableRefObject<number>,
+    modelObject?: THREE.Object3D | null,
+    extras: AnimatorExtras = {}
 ) => {
-    
+
     // -- LIVE EDIT WATCHER --
-    // This effect ensures that if the user changes the clip or loop setting 
-    // for the CURRENTLY active state in the UI, the animation updates immediately.
+    // When the user changes the clip or loop setting of the state that is playing, restart it so
+    // the change shows immediately.
     const activeStateId = activeStateRef.current;
-    // We must find the state from the latest graph prop
     const activeState = graph.states.find(s => s.id === activeStateId);
-    
-    // Extract stable primitives for dependency array to prevent unnecessary resets
     const activeClipName = activeState?.stateType === 'Single' ? activeState.clipName : null;
     const activeLoop = activeState?.loop;
     const activeStateType = activeState?.stateType;
 
     useEffect(() => {
         if (!activeClipName || !actionsMap[activeClipName]) return;
-
         const action = actionsMap[activeClipName];
-        
-        // Force reset and play because the user explicitly changed the configuration
-        // of the state we are currently looking at.
         action.reset();
-        action.fadeIn(0.2);
+        action.fadeIn(DEFAULT_BLEND_SECONDS);
         action.setLoop(activeLoop ? THREE.LoopRepeat : THREE.LoopOnce, activeLoop ? Infinity : 1);
         action.play();
-        
     }, [activeClipName, activeLoop, activeStateType, actionsMap]);
 
 
@@ -76,8 +134,9 @@ export const useGraphAnimator = (
         if (!mixer) return;
         const delta = clampAnimationDelta(rawDelta);
         const blend = blendDurationRef?.current ?? DEFAULT_BLEND_SECONDS;
+        const variables = variablesRef.current;
 
-        // 1. Handle State Entry (Transition Logic)
+        // 1. State entry: restart the entering state's clips with the transition's crossfade.
         if (activeStateRef.current !== previousStateRef.current) {
             const enteringState = graph.states.find(s => s.id === activeStateRef.current);
             if (enteringState) {
@@ -93,7 +152,7 @@ export const useGraphAnimator = (
 
                 if (enteringState.stateType === 'Single' && enteringState.clipName) {
                     initClip(enteringState.clipName, enteringState.loop);
-                } else if (enteringState.stateType === 'Blend2D') {
+                } else if (enteringState.stateType !== 'Single') {
                     enteringState.blendSamples.forEach(sample => {
                         if (sample.clipName) initClip(sample.clipName, true);
                     });
@@ -102,45 +161,16 @@ export const useGraphAnimator = (
             previousStateRef.current = activeStateRef.current;
         }
 
-        // 2. Calculate Target Weights
+        // 2. Target weights and playback speed of the current state.
         const currentState = graph.states.find(s => s.id === activeStateRef.current);
-        const targetWeights: Record<string, number> = {};
-
+        const targetWeights = currentState ? stateTargetWeights(currentState, variables, name => !!actionsMap[name]) : {};
         if (currentState) {
-            if (currentState.stateType === 'Single' && currentState.clipName) {
-                if (actionsMap[currentState.clipName]) {
-                    targetWeights[currentState.clipName] = 1.0;
-                    
-                    // Timescale Logic (Reverse walk if moving backwards)
-                    const action = actionsMap[currentState.clipName];
-                    const vInputY = graph.variables.find(v => v.name.toLowerCase() === 'inputy');
-                    const inputY = vInputY ? (variablesRef.current[vInputY.id] as number) : 0;
-                    const stateNameLower = currentState.name.toLowerCase();
-
-                    if (inputY < 0 && (stateNameLower.includes('walk') || stateNameLower.includes('run'))) {
-                        action.timeScale = -1;
-                    } else {
-                        action.timeScale = 1;
-                    }
-                }
-            } else if (currentState.stateType === 'Blend2D') {
-                const valX = variablesRef.current[currentState.blendParamX] as number || 0;
-                const valY = variablesRef.current[currentState.blendParamY] as number || 0;
-                
-                const sampleWeights = blendWeights2D(currentState.blendSamples, valX, valY);
-
-                currentState.blendSamples.forEach((sample, idx) => {
-                    if (sample.clipName && actionsMap[sample.clipName]) {
-                        targetWeights[sample.clipName] = sampleWeights[idx];
-                        actionsMap[sample.clipName].timeScale = 1;
-                    }
-                });
-            }
+            const rate = statePlayRate(currentState, variables);
+            Object.keys(targetWeights).forEach(name => { actionsMap[name].timeScale = rate; });
         }
 
-        // 3. Apply Weights & Update Mixer
-        // Linear crossfade over the transition's duration, independent of frame rate, with the
-        // weights kept summing to 1 so the bind pose never bleeds through.
+        // 3. Crossfade the weights (frame-rate independent, summing to 1 so the bind pose never
+        // bleeds through) and run the mixer.
         const currentWeights: Record<string, number> = {};
         Object.keys(actionsMap).forEach((name) => {
             currentWeights[name] = actionsMap[name].getEffectiveWeight();
@@ -152,8 +182,6 @@ export const useGraphAnimator = (
             const target = targetWeights[name] || 0;
             const next = nextWeights[name];
             action.setEffectiveWeight(next);
-            
-            // Optimization & Playback Management
             if (next > 0.001 || target > 0) {
                 action.enabled = true;
                 if (!action.isRunning()) action.play();
@@ -162,6 +190,34 @@ export const useGraphAnimator = (
             }
         });
 
+        // A Single state's clip is followed across the update for notifies and root motion.
+        const tracked = currentState?.stateType === 'Single' && currentState.clipName ? actionsMap[currentState.clipName] : undefined;
+        const before = tracked ? tracked.time : 0;
+
+        extras.montage?.current?.update(delta);
         mixer.update(delta);
-    });
+
+        if (!currentState || !tracked) return;
+        const clipName = currentState.clipName as string;
+        const duration = tracked.getClip().duration;
+        const after = tracked.time;
+
+        if (currentState.notifies?.length && duration > 0) {
+            crossedNotifies(currentState.notifies, before, after, duration, currentState.loop, tracked.timeScale).forEach(notify => {
+                animationEvents.emit({ objectId: extras.eventSource ?? null, stateName: currentState.name, name: notify.name });
+            });
+        }
+
+        const motion = currentState.rootMotion ? extras.rootMotions?.[clipName] : undefined;
+        if (motion && extras.rootMotionOut && modelObject) {
+            rootMotionDelta(motion, before, after, currentState.loop, _rootDelta);
+            const parent = rootBoneParent(modelObject, motion);
+            if (parent) {
+                parent.updateWorldMatrix(true, false);
+                _rootDelta.applyMatrix3(_rootBasis.setFromMatrix4(parent.matrixWorld));
+            }
+            _rootDelta.y = 0;
+            extras.rootMotionOut.current.addScaledVector(_rootDelta, tracked.getEffectiveWeight());
+        }
+    }, ANIMATION_FRAME_PRIORITY);
 };

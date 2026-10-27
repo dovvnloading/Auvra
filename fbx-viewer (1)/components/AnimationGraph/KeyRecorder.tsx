@@ -27,7 +27,7 @@ export const KeyRecorder: React.FC<KeyRecorderProps> = ({ value, onChange }) => 
             setIsListening(false);
         };
 
-        const handleMouseDown = (e: MouseEvent) => {
+        const handleMouseDown = () => {
              setIsListening(false);
         };
 

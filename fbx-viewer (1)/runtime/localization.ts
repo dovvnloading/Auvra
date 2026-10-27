@@ -165,6 +165,8 @@ export const BUILTIN_UI_STRINGS = {
     'ui.options.rebind': 'Rebind',
     'ui.options.pressKey': 'Press a key...',
     'ui.options.resetControls': 'Reset controls',
+    'ui.touch.move': 'Move',
+    'ui.touch.look': 'Look',
 } as const satisfies StringTable;
 
 export type BuiltinUiKey = keyof typeof BUILTIN_UI_STRINGS;

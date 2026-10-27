@@ -636,6 +636,13 @@ const ComponentsSection: React.FC<{
                             ) : (
                                 <div className="text-[10px] text-amber-400">Unknown component type "{component.type}". Its settings are kept but it has no effect.</div>
                             )}
+                            {definition?.Inspector && (
+                                <definition.Inspector
+                                    object={object}
+                                    component={component}
+                                    onChangeProps={(changes) => onCommit(patch(component.id, { props: { ...component.props, ...changes } }))}
+                                />
+                            )}
                         </div>
                     </div>
                 );

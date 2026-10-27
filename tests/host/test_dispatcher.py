@@ -166,7 +166,7 @@ class DispatcherTests(unittest.TestCase):
         self.assertTrue(built["ok"])
         self.assertEqual(built["result"]["handle"], "build-0001")
         self.assertEqual(built["result"]["report"], {"target": "web", "files": 0})
-        invalid = self.dispatcher.dispatch(self.request(id="build2", revision=built["revision"], method="project.buildGame", payload=dict(payload, target="linux")))
+        invalid = self.dispatcher.dispatch(self.request(id="build2", revision=built["revision"], method="project.buildGame", payload=dict(payload, target="android")))
         self.assertEqual(invalid["error"]["code"], "invalid_request")
         calls = []
         class Service:

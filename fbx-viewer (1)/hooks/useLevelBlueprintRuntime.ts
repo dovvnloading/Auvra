@@ -8,11 +8,13 @@ import { GraphRuntimeAPI } from '../components/AnimationGraph/GraphRuntime';
 import { isOverlapEvent, overlapEventTargets } from '../components/LevelBlueprint/overlapTargets';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { TriggerEvent, useTriggerEvents } from '../runtime/triggers';
+import { animationEvents, type AnimationEvent } from '../runtime/animationEvents';
+import { timelineEvents, type TimelineEvent } from '../runtime/timeline/events';
 import type { RuntimeHost } from '../runtime/types';
 import { levelVariables } from '../runtime/levelVariables';
 import { RuntimeServices, useRuntimeServices } from '../runtime/RuntimeServicesContext';
 import { FLOW_NODE_EXECUTORS, flowNodeOutputValue } from './levelBlueprintNodes/flow';
-import { isPureWorldNodeType, WORLD_NODE_EXECUTORS, WorldExecutionContext, WorldNodeServices } from './levelBlueprintNodes/world';
+import { findActorObject3D, isPureWorldNodeType, PLAYER_ACTOR_ID, setActorMorphTarget, WORLD_NODE_EXECUTORS, WorldExecutionContext, WorldNodeServices } from './levelBlueprintNodes/world';
 
 const MAX_BLUEPRINT_EVALUATION_DEPTH = 128;
 const MAX_BLUEPRINT_EXECUTION_DEPTH = 256;
@@ -37,6 +39,13 @@ const readNamedInput = (node: LogicNode, pinName: string, read: (pinId: string) 
     return pin ? read(pin.id) : node.data?.[`default_${pinName}`] ?? null;
 };
 
+/** The topmost ancestor of `object`: the scene, for an object that is drawn. */
+const rootOf = (object: THREE.Object3D | null): THREE.Object3D | null => {
+    let root = object;
+    while (root?.parent) root = root.parent;
+    return root;
+};
+
 /** Per-node state for the play session, created empty on first use. */
 const nodeStateOf = (states: Map<string, Record<string, unknown>>, nodeId: string): Record<string, unknown> => {
     let state = states.get(nodeId);
@@ -53,8 +62,28 @@ interface ScheduledRun {
 }
 
 /**
+ * Whether an Event AnimNotify node handles a notify: its name matches (an empty name takes any)
+ * and it was raised by the node's source ('player' by default, 'enemies' or 'any').
+ */
+export const animNotifyMatches = (node: LogicNode, event: AnimationEvent): boolean => {
+    const name = typeof node.data?.notifyName === 'string' ? node.data.notifyName.trim() : '';
+    if (name && name !== event.name) return false;
+    const source = node.data?.notifySource;
+    if (source === 'any') return true;
+    if (source === 'enemies') return event.objectId !== 'player';
+    return event.objectId === 'player';
+};
+
+/** Whether an Event TimelineEvent node handles an event: its event name matches, or it is empty and takes any. */
+export const timelineEventMatches = (node: LogicNode, event: TimelineEvent): boolean => {
+    const name = typeof node.data?.eventName === 'string' ? node.data.eventName.trim() : '';
+    return !name || name === event.name;
+};
+
+/**
  * Interface for the Level Blueprint Runtime.
  */
+
 export interface UseLevelBlueprintRuntimeProps {
     blueprint: LevelBlueprintData;
     levelObjects: LevelObject[];
@@ -149,8 +178,28 @@ export const useLevelBlueprintRuntime = ({
 
     // World node services. Stable, reading the latest props, so the graph callbacks do not churn with them.
     const runtimeServices: RuntimeServices | undefined = useRuntimeServices();
-    const world = useRef({ runtimeServices, getObject, setObjectTransform, applyImpulse, raycast, addNotification });
-    world.current = { runtimeServices, getObject, setObjectTransform, applyImpulse, raycast, addNotification };
+    const world = useRef({ runtimeServices, getObject, setObjectTransform, applyImpulse, raycast, addNotification, playerApiRef, playerEntityRef });
+    world.current = { runtimeServices, getObject, setObjectTransform, applyImpulse, raycast, addNotification, playerApiRef, playerEntityRef };
+
+    // Live THREE objects of the session, for nodes that change what is drawn (Set Morph Target): the player's
+    // model, or an actor's transform group (tagged with its id) in the scene. The scene comes from the frame
+    // loop; before the first frame (BeginPlay) it is the root above the player's model. A found actor is
+    // remembered while it stays in that scene, so a node run every frame does not search the scene each time.
+    const sceneRoot = useRef<THREE.Object3D | null>(null);
+    const actorObjects = useRef(new Map<string, THREE.Object3D>());
+    const sessionObject3D = useCallback((id: string): THREE.Object3D | null => {
+        const player = world.current.playerEntityRef.current?.object ?? null;
+        if (id === PLAYER_ACTOR_ID) return player;
+        const root = rootOf(sceneRoot.current ?? player);
+        if (!root) return null;
+        const cached = actorObjects.current.get(id);
+        if (cached && cached.userData?.levelObjectId === id && rootOf(cached) === root) return cached;
+        const found = findActorObject3D(root, id);
+        if (found) actorObjects.current.set(id, found);
+        else actorObjects.current.delete(id);
+        return found;
+    }, []);
+
     const services = useMemo<WorldNodeServices>(() => ({
         spawnPrefab: (prefabId, position) => world.current.runtimeServices?.spawnPrefab(prefabId, position) ?? [],
         playSound: (audioId, bus) => world.current.runtimeServices?.playSound(audioId, bus),
@@ -164,7 +213,12 @@ export const useLevelBlueprintRuntime = ({
         },
         vars: levelVariables,
         print: message => world.current.addNotification({ message: `[Output] ${message}`, type: 'info', duration: 3000 }),
-    }), []);
+        playPlayerAnimation: (clipName, options) => world.current.playerApiRef.current?.playMontage?.(clipName, options) ?? false,
+        setMorphTarget: (objectId, morph, weight) => {
+            const object = sessionObject3D(objectId);
+            return object ? setActorMorphTarget(object, morph, weight) : 0;
+        },
+    }), [sessionObject3D]);
 
     // -------------------------------------------------------------------------
     // 1. DATA EVALUATION (Recursive Backwards Trace)
@@ -523,8 +577,30 @@ export const useLevelBlueprintRuntime = ({
     };
     useEffect(() => triggerEvents.subscribe(event => handleTriggerEvent.current(event)), [triggerEvents]);
 
+    // --- Event: Animation notify (a character's clip crossed a named notify) ---
+    const handleAnimationEvent = useRef<(event: AnimationEvent) => void>(() => undefined);
+    handleAnimationEvent.current = (event: AnimationEvent) => {
+        if (!hasBegunPlay.current || sessionEnded.current) return;
+        blueprint.nodes
+            .filter(n => n.type === 'Event' && n.name === 'Event AnimNotify' && animNotifyMatches(n, event))
+            .forEach(node => executeNode(node.id, {}));
+    };
+    useEffect(() => animationEvents.subscribe(event => handleAnimationEvent.current(event)), []);
+
+    // --- Event: Timeline event (a playing timeline crossed an event key) ---
+    const handleTimelineEvent = useRef<(event: TimelineEvent) => void>(() => undefined);
+    handleTimelineEvent.current = (event: TimelineEvent) => {
+        if (!hasBegunPlay.current || sessionEnded.current) return;
+        blueprint.nodes
+            .filter(n => n.type === 'Event' && n.name === 'Event TimelineEvent' && timelineEventMatches(n, event))
+            .forEach(node => executeNode(node.id, {}));
+    };
+    useEffect(() => timelineEvents.subscribe(event => handleTimelineEvent.current(event)), []);
+
     // --- Event: Tick & Overlap Physics ---
-    useFrame((_state, delta) => {
+    useFrame((state, delta) => {
+        // The scene Set Morph Target finds actors in.
+        if (state.scene) sceneRoot.current = state.scene;
         if (sessionEnded.current) {
             timers.current = [];
             return;

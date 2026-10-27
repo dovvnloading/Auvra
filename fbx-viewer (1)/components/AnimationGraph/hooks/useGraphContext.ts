@@ -1,7 +1,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useScene } from '../../../context/SceneContext';
-import { AnimationGraphData, LoadedModelData, Blueprint } from '../../../types';
+import { AnimationGraphData, LoadedModelData } from '../../../types';
 
 export type ContextType = 'model' | 'blueprint';
 

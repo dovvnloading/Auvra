@@ -300,10 +300,12 @@ class FrameController:
                 trusted_origin="https://app.auvra.local",
             )
             # Game builds copy the player entry shipped inside the same
-            # immutable frontend tree; development uses the repo dist default.
+            # immutable frontend tree, and the desktop players from the
+            # game-player folder beside it (auvra-player.exe, linux-x64/ and
+            # macos/); development uses the repo dist and player-desktop defaults.
             project_host = NativeProjectHost(profile.parent, asset_registry=asset_registry,
                                              player_template_root=approved_root / "player",
-                                             player_executable=approved_root.parent / "game-player" / "auvra-player.exe")
+                                             player_root=approved_root.parent / "game-player")
             _assert_state_path_safe(profile.parent / "previews")
             _assert_state_path_safe(profile.parent / "provider-state")
             preview_store = PreviewStore(profile.parent / "previews")

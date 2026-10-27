@@ -170,7 +170,7 @@ class RustNoticesTests(unittest.TestCase):
             }
             with mock.patch.object(notices, "_cargo_metadata", return_value=metadata) as cargo:
                 result = rust_notices(project, cargo_home=root / "empty-cargo-home")
-            self.assertEqual(cargo.call_args.args[1], notices.WINDOWS_TARGET)
+            self.assertEqual(cargo.call_args.args[1], (notices.WINDOWS_TARGET,))
             self.assertEqual(result.resolver, "cargo metadata")
             self.assertEqual(result.unavailable, ())
             by_name = {item.name: item for item in result.notices}
@@ -269,6 +269,59 @@ class RustNoticesTests(unittest.TestCase):
                 self.assertEqual(notices.main(["rust", "--manifest-dir", str(project), "--output", str(output),
                                                "--cargo", MISSING_CARGO]), 2)
 
+    def test_universal_binaries_resolve_every_target_in_one_metadata_call(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            write(project / "Cargo.toml", "[package]\nname = \"app\"\nversion = \"0.1.0\"\n")
+            empty = json.dumps({"packages": [], "workspace_members": [], "resolve": {"nodes": []}}).encode("utf-8")
+            with mock.patch.object(notices.subprocess, "run",
+                                   return_value=notices.subprocess.CompletedProcess([], 0, empty, b"")) as run:
+                self.assertIsNotNone(notices._cargo_metadata(project, notices.MACOS_TARGETS, "cargo"))
+            command = run.call_args.args[0]
+            flags = [command[index + 1] for index, item in enumerate(command) if item == "--filter-platform"]
+            self.assertEqual(flags, list(notices.MACOS_TARGETS))
+            self.assertIn("--offline", command)
+
+            with mock.patch.object(notices, "_cargo_metadata", return_value=json.loads(empty)) as cargo:
+                result = rust_notices(project, target=notices.MACOS_TARGETS, cargo_home=Path(temporary) / "home")
+            self.assertEqual(cargo.call_args.args[1], notices.MACOS_TARGETS)
+            self.assertEqual(result.target, "x86_64-apple-darwin and aarch64-apple-darwin")
+            prose = " ".join(render_rust_document("the test binary", result).split())
+            self.assertIn("for x86_64-apple-darwin and aarch64-apple-darwin", prose)
+            with self.assertRaises(NoticesError):
+                rust_notices(project, target=())
+
+    def test_player_label_follows_the_target_operating_system(self) -> None:
+        player = REPOSITORY / "player-desktop"
+        self.assertEqual(notices.default_label(player), notices.PLAYER_LABEL)
+        self.assertEqual(notices.default_label(player, notices.LINUX_TARGET), notices.LINUX_PLAYER_LABEL)
+        self.assertEqual(notices.default_label(player, notices.MACOS_TARGETS), notices.MACOS_PLAYER_LABEL)
+        self.assertIsNone(notices.default_label(player, (notices.WINDOWS_TARGET, notices.LINUX_TARGET)))
+        self.assertIsNone(notices.default_label(player, "wasm32-unknown-unknown"))
+        self.assertEqual(notices.default_label(REPOSITORY / "native"), notices.NATIVE_LABEL)
+        self.assertIsNone(notices.default_label(REPOSITORY / "release"))
+
+    def test_cli_writes_universal_macos_player_notices(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "player-desktop"
+            write(project / "Cargo.toml", "[package]\nname = \"auvra-player\"\nversion = \"0.1.0\"\n")
+            write(project / "Cargo.lock", "version = 4\n\n[[package]]\nname = \"objc2\"\nversion = \"0.6.3\"\n"
+                  "source = \"registry+https://github.com/rust-lang/crates.io-index\"\n")
+            crate = root / "cargo-home" / "registry" / "src" / "index.crates.io-0000000000000000" / "objc2-0.6.3"
+            write(crate / "Cargo.toml", "[package]\nname = \"objc2\"\nversion = \"0.6.3\"\nlicense = \"MIT\"\n")
+            write(crate / "LICENSE-MIT", "MIT objc2\n")
+            output = root / "dist" / "macos" / NOTICES_FILE
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(notices.main([
+                    "rust", "--strict", "--manifest-dir", str(project), "--output", str(output),
+                    "--target", "x86_64-apple-darwin", "--target", "aarch64-apple-darwin",
+                    "--cargo", MISSING_CARGO, "--cargo-home", str(root / "cargo-home"),
+                ]), 0)
+            text = output.read_text(encoding="utf-8")
+            self.assertTrue(text.startswith(f"Third-party software notices: {notices.MACOS_PLAYER_LABEL}\n"), text[:200])
+            self.assertIn("objc2@0.6.3 (MIT)", text)
+
     def test_repository_player_lists_its_third_party_crates(self) -> None:
         result = rust_notices(REPOSITORY / "player-desktop")
         names = {item.name for item in result.notices}
@@ -312,6 +365,22 @@ class EditorNoticesTests(unittest.TestCase):
             self.assertIn("--- runtime/webview2-sdk/NOTICE.txt ---", text)
             self.assertNotIn(temporary, text)
             self.assertEqual(text, editor_notices_from_inputs(root, PINS))
+
+    def test_platform_player_notices_join_the_player_part(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = staged_editor_inputs(Path(temporary))
+            write(root / "game-player" / "linux-x64" / NOTICES_FILE,
+                  staged_notices("Linux player crates", "webkit2gtk@2.0.2 (MIT)"))
+            write(root / "game-player" / "macos" / NOTICES_FILE,
+                  staged_notices("macOS player crates", "objc2-web-kit@0.3.2 (Zlib OR Apache-2.0 OR MIT)"))
+            text = editor_notices_from_inputs(root, PINS)
+            self.assertEqual(verify_editor_notices(text)["player"], 4)
+            player_part = text[text.index(f"Part 4 of 5: {EDITOR_PARTS[3][1]}"):text.index("Part 5 of 5:")]
+            self.assertLess(player_part.index("tao@0.37.2"), player_part.index("webkit2gtk@2.0.2"))
+            self.assertLess(player_part.index("webkit2gtk@2.0.2"), player_part.index("objc2-web-kit@0.3.2"))
+            (root / "game-player" / "macos" / NOTICES_FILE).unlink()
+            with self.assertRaisesRegex(NoticesError, f"game-player/macos input is missing {NOTICES_FILE}"):
+                editor_notices_from_inputs(root, PINS)
 
     def test_runtime_part_falls_back_to_references_without_staged_license_files(self) -> None:
         text = notices.render_runtime_document(notices.runtime_notices(PINS))

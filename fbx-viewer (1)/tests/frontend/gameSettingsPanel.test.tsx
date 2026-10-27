@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { GameSettingsPanel } from '../../components/Settings/GameSettingsPanel';
+import { GameSettingsPanel, readBuildTargets } from '../../components/Settings/GameSettingsPanel';
 import {
     DEFAULT_GAME_SETTINGS,
     GAME_SETTINGS_DOCUMENT_ID,
@@ -10,7 +10,7 @@ import {
 
 interface GameSettingsDocument { id: string; settings: GameSettings; }
 
-const { project, scene } = vi.hoisted(() => {
+const { project, scene, refreshStatus } = vi.hoisted(() => {
     const project = {
         document: null as unknown,
         hydrated: true,
@@ -26,11 +26,19 @@ const { project, scene } = vi.hoisted(() => {
     };
     return {
         project,
-        scene: { levels: [] as unknown[], blueprints: [] as unknown[], projectStatus: { projectId: 'project-1' as string | null, readOnly: false } },
+        scene: {
+            levels: [] as unknown[],
+            blueprints: [] as unknown[],
+            projectStatus: { projectId: 'project-1', readOnly: false } as { projectId: string | null; readOnly: boolean; buildTargets?: unknown },
+            isLoading: false,
+            buildGame: vi.fn(async (_target?: string): Promise<void> => undefined),
+        },
+        refreshStatus: vi.fn(async () => undefined),
     };
 });
 
 vi.mock('../../context/SceneContext', () => ({ useScene: () => scene }));
+vi.mock('../../utils/projectService', () => ({ projectService: { refreshStatus } }));
 
 // Like the native hook: replace() updates the document optimistically and rolls it back when the write fails.
 vi.mock('../../utils/useNativeProjectDocument', async () => {
@@ -92,6 +100,10 @@ beforeEach(() => {
     project.settle = null;
     project.writes = [];
     scene.projectStatus = { projectId: 'project-1', readOnly: false };
+    scene.isLoading = false;
+    scene.buildGame.mockReset();
+    scene.buildGame.mockResolvedValue(undefined);
+    refreshStatus.mockClear();
 });
 
 describe('Game settings panel draft', () => {
@@ -162,5 +174,112 @@ describe('Game settings panel draft', () => {
         act(() => project.set(defaultDocument(), false));
         act(() => project.set(documentWith({ name: 'Second Project' })));
         expect(nameField()).toHaveValue('Second Project');
+    });
+});
+
+const LINUX_MISSING = 'This Auvra install does not include the Linux game player.';
+const reportedTargets = (overrides: Record<string, { available?: boolean; reason?: string }> = {}) => (
+    ['web', 'windows', 'linux', 'macos'].map(target => ({ target, available: true, ...overrides[target] }))
+);
+const radio = (name: string) => screen.getByRole('radio', { name });
+const buildButton = () => screen.getByRole('button', { name: /^(Build|Building)/ });
+
+describe('Game settings panel build', () => {
+    it('offers every target and disables the ones the host cannot build, saying why', async () => {
+        scene.projectStatus = {
+            projectId: 'project-1', readOnly: false,
+            buildTargets: reportedTargets({ linux: { available: false, reason: LINUX_MISSING }, macos: { available: false } }),
+        };
+        render(<GameSettingsPanel onClose={() => undefined} />);
+
+        expect(radio('Web')).toBeEnabled();
+        expect(radio('Web')).toBeChecked();
+        expect(radio('Windows')).toBeEnabled();
+        expect(radio('Linux')).toBeDisabled();
+        expect(radio('Linux')).toHaveAccessibleDescription(LINUX_MISSING);
+        expect(radio('macOS')).toBeDisabled();
+        expect(radio('macOS')).toHaveAccessibleDescription('Not available in this editor.');
+        expect(refreshStatus).toHaveBeenCalledTimes(1);
+
+        fireEvent.click(radio('Windows'));
+        expect(buildButton()).toHaveTextContent('Build Windows');
+        await act(async () => { fireEvent.click(buildButton()); });
+        expect(scene.buildGame).toHaveBeenCalledWith('windows');
+        expect(screen.getByText('Windows build finished.')).toBeInTheDocument();
+    });
+
+    it('builds the new desktop targets when the host has their players', async () => {
+        scene.projectStatus = { projectId: 'project-1', readOnly: false, buildTargets: reportedTargets() };
+        render(<GameSettingsPanel onClose={() => undefined} />);
+
+        fireEvent.click(radio('macOS'));
+        await act(async () => { fireEvent.click(buildButton()); });
+        fireEvent.click(radio('Linux'));
+        await act(async () => { fireEvent.click(buildButton()); });
+        expect(scene.buildGame.mock.calls).toEqual([['macos'], ['linux']]);
+    });
+
+    it('blocks a build of unsaved settings or an unavailable target and shows a failed build', async () => {
+        project.document = documentWith({ name: 'Arena' });
+        scene.projectStatus = {
+            projectId: 'project-1', readOnly: false,
+            buildTargets: reportedTargets({ web: { available: false, reason: 'The game player template is not installed.' } }),
+        };
+        render(<GameSettingsPanel onClose={() => undefined} />);
+        expect(buildButton()).toBeDisabled();
+        expect(screen.getAllByText('The game player template is not installed.')).toHaveLength(2);
+
+        fireEvent.click(radio('Windows'));
+        expect(buildButton()).toBeEnabled();
+        typeName('Arena Deluxe');
+        expect(buildButton()).toBeDisabled();
+        expect(screen.getByText('Save or revert your changes first; builds use the saved settings.')).toBeInTheDocument();
+        fireEvent.click(revertButton());
+
+        scene.buildGame.mockRejectedValueOnce(new Error('Build destination dialog is unavailable'));
+        await act(async () => { fireEvent.click(buildButton()); });
+        expect(screen.getByText('Build destination dialog is unavailable')).toBeInTheDocument();
+        expect(buildButton()).toBeEnabled();
+    });
+
+    it('needs an open project and an idle editor', () => {
+        scene.projectStatus = { projectId: null, readOnly: false, buildTargets: reportedTargets() };
+        const view = render(<GameSettingsPanel onClose={() => undefined} />);
+        expect(buildButton()).toBeDisabled();
+        expect(screen.getByText('Open a project to build it.')).toBeInTheDocument();
+
+        scene.projectStatus = { projectId: 'project-1', readOnly: true, buildTargets: reportedTargets() };
+        view.rerender(<GameSettingsPanel onClose={() => undefined} />);
+        expect(buildButton()).toBeEnabled();
+        scene.isLoading = true;
+        view.rerender(<GameSettingsPanel onClose={() => undefined} />);
+        expect(buildButton()).toBeDisabled();
+    });
+});
+
+describe('readBuildTargets', () => {
+    it('keeps every target enabled when the host does not report availability', () => {
+        expect(readBuildTargets({ projectId: 'project-1' })).toEqual([
+            { target: 'web', available: true },
+            { target: 'windows', available: true },
+            { target: 'linux', available: true },
+            { target: 'macos', available: true },
+        ]);
+        expect(readBuildTargets(null).every(item => item.available)).toBe(true);
+    });
+
+    it('treats a target missing from the report, or not reported as available, as unavailable', () => {
+        const targets = readBuildTargets({ buildTargets: [
+            { target: 'web', available: true, reason: '' },
+            { target: 'windows', available: 'yes' },
+            { target: 'linux', available: false, reason: LINUX_MISSING },
+            null,
+        ] });
+        expect(targets).toEqual([
+            { target: 'web', available: true },
+            { target: 'windows', available: false },
+            { target: 'linux', available: false, reason: LINUX_MISSING },
+            { target: 'macos', available: false, reason: 'This editor cannot build for this platform.' },
+        ]);
     });
 });

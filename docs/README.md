@@ -6,7 +6,9 @@ Auvra is a game engine and editor for building 3D games and shipping them as web
 - [World Editor](world-editor.md): placing, transforming and organising objects, components, physics, lights, particles, audio, terrain painting, prefabs and shortcuts.
 - [Assets](assets.md): importing models, textures and audio, import options, material overrides, reimport and folders.
 - [Level scripting](level-scripting.md): level blueprints, events, triggers, flow control, world nodes and level variables.
-- [Characters and animation](characters.md): player and enemy stats, enemy navigation and animation transitions.
+- [Gameplay scripting](scripting.md): Script components, the script editor, templates, the ctx API, limits and errors.
+- [Timelines](timelines.md): keyed tracks that move, show and hide objects, write level variables and raise events; the timeline editor and playback settings.
+- [Characters and animation](characters.md): player and enemy stats, enemy navigation, animation transitions, blend spaces, notifies, root motion, one-shot animations, IK and the graph preview.
 - [HUD, menus and localization](hud-and-menus.md): the game HUD, title and pause menus, live values and translated text.
 - [Building and shipping games](building-games.md): game settings, web and Windows builds, saves, player options, controls and the performance overlay.
 

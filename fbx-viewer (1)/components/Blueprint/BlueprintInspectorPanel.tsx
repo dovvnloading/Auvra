@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useRef } from 'react';
-import { FileText, Database, Tag, Plus, Trash2, Zap, Scaling, Camera, Crosshair, Palette, Check, Box, Music, Play } from 'lucide-react';
-import { Blueprint, BlueprintStat } from '../../types';
+import { FileText, Database, Tag, Plus, Trash2, Zap, Scaling, Camera, Crosshair, Palette, Check, Box, Music, Play, Footprints } from 'lucide-react';
+import { Blueprint, BlueprintStat, CharacterIKSettings } from '../../types';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
 import { TransformInputGroup } from '../UI/Properties/TransformInputGroup';
 import { useScene } from '../../context/SceneContext';
@@ -18,6 +18,9 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
 }) => {
     const { textures, audioAssets } = useScene();
     const [activeTab, setActiveTab] = useState<'details' | 'stats' | 'tags' | 'materials' | 'audio'>('details');
+    const ik: CharacterIKSettings = blueprint.ik ?? {};
+    const updateIK = (changes: Partial<CharacterIKSettings>, coalesce?: string) =>
+        onUpdate(blueprint.id, { ik: { ...ik, ...changes } }, coalesce ? { coalesce } : undefined);
     const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
     // Helpers
@@ -169,6 +172,78 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                     </div>
                                 </div>
                             )}
+
+                            <div className="space-y-2">
+                                <label className="text-[10px] uppercase font-bold text-gray-500 flex items-center gap-2">
+                                    <Footprints size={12} /> Pose Adjustment (IK)
+                                </label>
+                                <div className="bg-gray-800/50 rounded p-3 border border-gray-800 space-y-3">
+                                    <label className="flex items-center justify-between gap-4 text-xs text-gray-400">
+                                        <span>Plant feet on the ground</span>
+                                        <input
+                                            type="checkbox"
+                                            checked={!!ik.footIK}
+                                            onChange={(e) => updateIK({ footIK: e.target.checked })}
+                                            className="rounded bg-gray-800 border-gray-600 text-blue-500 focus:ring-0"
+                                        />
+                                    </label>
+                                    {ik.footIK && (
+                                        <div className="flex items-center justify-between gap-4">
+                                            <span className="text-xs text-gray-400 shrink-0">Max step (m)</span>
+                                            <div className="w-28">
+                                                <ScrubbableInput
+                                                    label="Step"
+                                                    value={ik.footMaxStep ?? 0.5}
+                                                    onChange={(val) => updateIK({ footMaxStep: Math.max(0, Math.min(10, val)) }, 'ikFootMaxStep')}
+                                                    step={0.05}
+                                                    labelColor="text-blue-400"
+                                                    labelWidth="w-10"
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
+                                    <div className="flex items-center justify-between gap-4">
+                                        <span className="text-xs text-gray-400 shrink-0">Look at</span>
+                                        <select
+                                            value={ik.lookAt ?? 'none'}
+                                            onChange={(e) => updateIK({ lookAt: e.target.value as CharacterIKSettings['lookAt'] })}
+                                            className="w-28 bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500"
+                                        >
+                                            <option value="none">Nothing</option>
+                                            <option value="camera">Camera</option>
+                                            <option value="player">Player</option>
+                                        </select>
+                                    </div>
+                                    {ik.lookAt && ik.lookAt !== 'none' && (
+                                        <>
+                                            <div className="flex items-center justify-between gap-4">
+                                                <span className="text-xs text-gray-400 shrink-0">Bone</span>
+                                                <input
+                                                    value={ik.lookAtBone ?? 'Head'}
+                                                    onChange={(e) => updateIK({ lookAtBone: e.target.value }, 'ikLookAtBone')}
+                                                    className="w-28 bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500"
+                                                />
+                                            </div>
+                                            <div className="flex items-center justify-between gap-4">
+                                                <span className="text-xs text-gray-400 shrink-0">Max angle</span>
+                                                <div className="w-28">
+                                                    <ScrubbableInput
+                                                        label="Deg"
+                                                        value={ik.lookAtMaxAngle ?? 70}
+                                                        onChange={(val) => updateIK({ lookAtMaxAngle: Math.max(0, Math.min(180, val)) }, 'ikLookAtMaxAngle')}
+                                                        step={1}
+                                                        labelColor="text-blue-400"
+                                                        labelWidth="w-10"
+                                                    />
+                                                </div>
+                                            </div>
+                                        </>
+                                    )}
+                                    <p className="text-[9px] text-gray-500 leading-tight">
+                                        Applied after the animation graph during play. Bone names match with or without a mixamorig prefix.
+                                    </p>
+                                </div>
+                            </div>
 
                             <div className="space-y-2">
                                 <label className="text-[10px] uppercase font-bold text-gray-500">System Info</label>
