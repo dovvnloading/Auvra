@@ -9,6 +9,7 @@ import { useAssets, useLevel } from '../../context/SceneContext';
 import { LevelObject } from '../../types';
 import { InteractionMode, PaintMode, PaintSettings, TransformSettings, ViewportLayout, SculptSettings } from './types';
 import { EnvironmentScene } from './EnvironmentScene';
+import type { FoliagePlacement } from './FoliageBrushTool';
 import { editorSession } from '../../utils/editorSession';
 import { raycastPlacement } from '../../utils/surfacePlacement';
 import { getWorldMatrix } from '../../utils/sceneGraph';
@@ -414,7 +415,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
     isMuted
 }) => {
     const { models } = useAssets();
-    const { levelObjects, addLevelObject, removeLevelObjects, updateLevelObject, snapshotHistory } = useLevel();
+    const { levelObjects, addLevelObject, addLevelObjects, removeLevelObjects, updateLevelObject, snapshotHistory } = useLevel();
     const containerRef = useRef<HTMLDivElement>(null);
 
     // Active View State (the selection itself lives in the editor state)
@@ -459,15 +460,27 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
         addLevelObject(activeModelId, pos.toArray(), [0, rotY, 0], [1, 1, 1], 'prop');
     };
 
-    const handlePaint = (pos: THREE.Vector3, rot: THREE.Euler, scale: THREE.Vector3) => {
-        if (!canEdit()) return;
-        if (!activeModelId) return;
-        addLevelObject(activeModelId, pos.toArray(), [rot.x, rot.y, rot.z], scale.toArray(), 'foliage');
+    // A whole paint or erase stroke is saved at once, as one undo step.
+    const handlePaint = async (placements: FoliagePlacement[]) => {
+        const model = activeModelId ? models.find(m => m.id === activeModelId) : undefined;
+        if (!canEdit() || !model) return;
+        try {
+            await addLevelObjects(placements.map((placement): LevelObject => ({
+                id: crypto.randomUUID(),
+                levelId: '',
+                modelId: model.id,
+                name: `${model.name}_Foliage`,
+                type: 'foliage',
+                ...placement,
+            })));
+        } catch {
+            // addLevelObjects has already reported the failure.
+        }
     };
 
-    const handleErase = (ids: string[]) => {
+    const handleErase = async (ids: string[]) => {
         if (!canEdit()) return;
-        removeLevelObjects(ids);
+        await removeLevelObjects(ids);
     };
 
     // --- Content browser drag & drop ---

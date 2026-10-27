@@ -7,7 +7,7 @@ import { Grid, TransformControls } from '@react-three/drei';
 import { LoadedModelData, LevelObject } from '../../types';
 import { InteractionMode, PaintMode, PaintSettings, TransformSettings, TransformTool, SculptSettings } from './types';
 import { LevelObjectRenderer, LevelComponentPreviews } from './LevelObjectRenderer';
-import { FoliageBrushTool } from './FoliageBrushTool';
+import { FoliageBrushTool, type FoliagePlacement } from './FoliageBrushTool';
 import { TerrainObject } from './Terrain/TerrainObject';
 import { TerrainSculptor } from './Terrain/TerrainSculptor';
 import { InstancedLevelLayer } from './InstancedLevelLayer';
@@ -424,8 +424,8 @@ interface EnvironmentSceneProps {
     interactionMode: InteractionMode;
     paintMode: PaintMode;
     onPlace: (pos: THREE.Vector3, rotY: number) => void;
-    onPaint: (pos: THREE.Vector3, rot: THREE.Euler, scale: THREE.Vector3) => void;
-    onErase: (ids: string[]) => void;
+    onPaint: (placements: FoliagePlacement[]) => Promise<unknown> | void;
+    onErase: (ids: string[]) => Promise<unknown> | void;
     onSelectObject: (id: string | null) => void;
     /** Shift/Ctrl/Cmd-click; without it a modifier click selects like a plain click. */
     onToggleSelect?: (id: string) => void;
@@ -719,9 +719,11 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
     const isActiveView = viewId === activeViewId;
     const objectsInteractive = isActiveView && interactionMode !== 'place' && interactionMode !== 'paint';
     const highlightedIds = isActiveView ? selection : EMPTY_IDS;
+    // Objects a foliage erase stroke has taken, hidden until the stroke is saved.
+    const [erasingIds, setErasingIds] = useState<ReadonlySet<string>>(EMPTY_IDS);
     const layerHiddenIds = useMemo(
-        () => (lodHiddenIds.size ? new Set([...promotedIds, ...lodHiddenIds]) : promotedIds),
-        [promotedIds, lodHiddenIds]
+        () => (lodHiddenIds.size || erasingIds.size ? new Set([...promotedIds, ...lodHiddenIds, ...erasingIds]) : promotedIds),
+        [promotedIds, lodHiddenIds, erasingIds]
     );
 
     const handleInstancedSelect = useCallback((id: string, event: unknown) => {
@@ -785,10 +787,6 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
             {interactionMode === 'sculpt' && sculptSettings && (
                 <TerrainSculptor
                     settings={sculptSettings}
-                    onStrokeEnd={(id, heights) => {
-                        const terr = objectById.get(id);
-                        if(terr) updateLevelObject(id, { terrainData: { ...terr.terrainData!, heights } });
-                    }}
                     onPaintStrokeEnd={(id, splat) => {
                         const terr = objectById.get(id);
                         if (terr) updateLevelObject(id, { terrainData: { ...terr.terrainData!, splat } });
@@ -886,7 +884,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                             settings={paintSettings}
                             onPaint={onPaint}
                             onErase={onErase}
-                            onStrokeStart={onSnapshot}
+                            onPendingEraseChange={setErasingIds}
                         />
                     )}
 
