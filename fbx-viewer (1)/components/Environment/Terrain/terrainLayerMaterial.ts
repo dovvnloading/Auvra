@@ -160,6 +160,56 @@ export function createTerrainLayerMaterial(splat: THREE.DataTexture): TerrainLay
   return material;
 }
 
+const GROUND_PROGRAM_KEY = 'auvra-terrain-ground-v1';
+
+/**
+ * The look of terrain with no texture layers: grass on gentle ground, worn earth on slopes and
+ * rock on steep faces, varied by a soft world-space noise so large areas are not one flat colour.
+ * Like the layer material it patches MeshStandardMaterial, so lighting, shadows and fog are unchanged.
+ */
+export function createTerrainGroundMaterial(): THREE.MeshStandardMaterial {
+  const material = new THREE.MeshStandardMaterial({
+    color: '#ffffff',
+    roughness: 0.95,
+    metalness: 0,
+    side: THREE.DoubleSide,
+  });
+  material.name = 'TerrainGroundMaterial';
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vGroundWorld;\nvarying vec3 vGroundNormal;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\n'
+        + 'vGroundWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;\n'
+        + 'vGroundNormal = normalize(mat3(modelMatrix) * objectNormal);');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+varying vec3 vGroundWorld;
+varying vec3 vGroundNormal;
+float groundHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float groundNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(groundHash(i), groundHash(i + vec2(1.0, 0.0)), u.x),
+             mix(groundHash(i + vec2(0.0, 1.0)), groundHash(i + vec2(1.0, 1.0)), u.x), u.y);
+}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+{
+  float variation = groundNoise(vGroundWorld.xz * 0.08) * 0.65 + groundNoise(vGroundWorld.xz * 0.45) * 0.35;
+  float slope = 1.0 - clamp(abs(normalize(vGroundNormal).y), 0.0, 1.0);
+  // Linear-light colours: two greens, a dry earth and a grey stone.
+  vec3 grass = mix(vec3(0.045, 0.095, 0.022), vec3(0.085, 0.13, 0.035), variation);
+  vec3 earth = mix(vec3(0.11, 0.075, 0.042), vec3(0.15, 0.11, 0.065), variation);
+  vec3 rock = mix(vec3(0.16, 0.15, 0.14), vec3(0.22, 0.21, 0.19), variation);
+  vec3 ground = mix(grass, earth, smoothstep(0.16, 0.32, slope + (variation - 0.5) * 0.12));
+  ground = mix(ground, rock, smoothstep(0.42, 0.62, slope));
+  diffuseColor.rgb *= ground;
+}`);
+  };
+  material.customProgramCacheKey = () => GROUND_PROGRAM_KEY;
+  return material;
+}
+
 /** Bind the layers' textures and tiling; the program is shared by every layer count. */
 export function bindTerrainLayers(material: TerrainLayerMaterial, binding: TerrainLayerBinding): void {
   const uniforms = material.userData.terrainUniforms;

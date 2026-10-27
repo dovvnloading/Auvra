@@ -54,7 +54,8 @@ type BooleanSetting = SettingKey<boolean>;
 export const POST_PROCESS_DEFAULTS: PostProcessSettings = {
     bloom: true,
     bloomIntensity: 0.4,
-    bloomThreshold: 1,
+    // Above the sky's brightness: at 1 the whole sky bloomed into a haze over everything in front of it.
+    bloomThreshold: 3,
     ambientOcclusion: true,
     aoIntensity: 2,
     aoRadius: 1.5,
