@@ -4,12 +4,16 @@ import { AnimationGraphData } from '../types';
 import { PLAYER_GRAPH } from '../data/blueprints';
 import { projectService } from '../utils/projectService';
 import { frontendDiagnostics } from '../diagnostics/runtime';
+import { createLatestWriter } from '../utils/latestWriter';
 
 export const useGraphManager = () => {
   // Stores graph data per model ID (Legacy support for raw mesh editing)
   const [graphData, setGraphData] = useState<Record<string, AnimationGraphData>>({});
   const graphDataRef = useRef(graphData);
   useEffect(() => { graphDataRef.current = graphData; }, [graphData]);
+  // Every edit writes the whole graph; quick edits (typing) are written latest-wins.
+  const [writeGraph] = useState(() => createLatestWriter<AnimationGraphData>((modelId, graph) =>
+    projectService.applyChanges([{ domain: 'graphs', operation: 'upsert', id: modelId, value: { id: modelId, modelId, ...graph } }])));
 
   const updateGraph = useCallback(async (modelId: string, data: Partial<AnimationGraphData>) => {
     projectService.assertWritable();
@@ -19,7 +23,7 @@ export const useGraphManager = () => {
     graphDataRef.current = { ...graphDataRef.current, [modelId]: next };
     setGraphData(prev => ({ ...prev, [modelId]: next }));
     try {
-      await projectService.applyChanges([{ domain: 'graphs', operation: 'upsert', id: modelId, value: { id: modelId, modelId, ...next } }]);
+      await writeGraph(modelId, next);
     } catch (error) {
       if (graphDataRef.current[modelId] === next) {
         const restored = previous === undefined
@@ -30,7 +34,7 @@ export const useGraphManager = () => {
       }
       frontendDiagnostics.failure('animation_graph_persist_failed', error);
     }
-  }, []);
+  }, [writeGraph]);
 
   const removeGraphData = useCallback(async (modelId: string, persist = true) => {
     if (persist) {
