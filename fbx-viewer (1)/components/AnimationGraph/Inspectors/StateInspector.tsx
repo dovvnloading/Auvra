@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layers, Settings, Activity, Crown, Trash2 } from 'lucide-react';
+import { Layers, Settings, Activity, Crown, Trash2, Link2 } from 'lucide-react';
 import { GraphState, AnimationGraphData, StateType } from '../../../types';
 import { SingleStateConfig } from './SingleStateConfig';
 import { BlendStateConfig } from './BlendStateConfig';
@@ -83,6 +83,21 @@ export const StateInspector: React.FC<StateInspectorProps> = ({
                             </button>
                         ))}
                     </div>
+                </div>
+
+                {/* Sync Group */}
+                <div className="space-y-1.5">
+                    <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider flex items-center gap-1.5">
+                        <Link2 size={10} /> Sync Group
+                    </label>
+                    <input
+                        value={node.syncGroup ?? ''}
+                        onChange={(e) => updateState({ syncGroup: e.target.value.trim() === '' ? undefined : e.target.value })}
+                        placeholder="None"
+                        aria-label="Sync group"
+                        className="w-full bg-gray-900 border border-gray-700 rounded text-xs text-gray-300 p-2 focus:outline-none focus:border-gray-500 transition-colors"
+                    />
+                    <p className="text-[10px] text-gray-600">States in one group carry their phase across transitions, so a run picks up the walk's stride.</p>
                 </div>
 
                 {/* Configuration based on Type */}

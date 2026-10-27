@@ -7,6 +7,7 @@ import { blendWeights1D, blendWeights2D, clampAnimationDelta, DEFAULT_BLEND_SECO
 import type { MontagePlayer } from '../utils/montage';
 import { crossedNotifies } from '../utils/notifies';
 import { rootMotionDelta, type RootMotion } from '../utils/rootMotion';
+import { actionPhase, syncBlendActions, syncLeader } from '../utils/syncGroups';
 
 /**
  * Animation runs before every other frame callback (priority -1), so IK, sockets and attachments
@@ -78,6 +79,21 @@ export const stateTargetWeights = (
         if (sample.clipName && hasClip(sample.clipName)) targets[sample.clipName] = (targets[sample.clipName] || 0) + (weights[index] || 0);
     });
     return targets;
+};
+
+/**
+ * Where a state is in its cycle (0..1): its clip's phase, or the heaviest blend sample's. 0 when
+ * none of its clips is loaded.
+ */
+export const statePhase = (
+    state: GraphState,
+    variables: Record<string, number | boolean>,
+    actionsMap: Record<string, THREE.AnimationAction>
+): number => {
+    const lead = state.stateType === 'Single'
+        ? state.clipName
+        : syncLeader(stateTargetWeights(state, variables, name => !!actionsMap[name]));
+    return lead && actionsMap[lead] ? actionPhase(actionsMap[lead]) : 0;
 };
 
 /** Optional per-character systems the animator drives alongside the base state machine. */
@@ -177,14 +193,20 @@ export const useGraphAnimator = (
         const blend = blendDurationRef?.current ?? DEFAULT_BLEND_SECONDS;
         const variables = variablesRef.current;
 
-        // 1. State entry: restart the entering state's clips with the transition's crossfade.
+        // 1. State entry: restart the entering state's clips with the transition's crossfade. A
+        // state in the leaving state's sync group starts at its phase (a run picks up the walk's
+        // stride where it was) instead of at the beginning.
         if (activeStateRef.current !== previousStateRef.current) {
             const enteringState = graph.states.find(s => s.id === activeStateRef.current);
+            const leavingState = graph.states.find(s => s.id === previousStateRef.current);
             if (enteringState) {
+                const synced = !!enteringState.syncGroup && enteringState.syncGroup === leavingState?.syncGroup;
+                const startPhase = synced && leavingState ? statePhase(leavingState, variables, actionsMap) : 0;
                 const initClip = (name: string, loop: boolean) => {
                     const action = actionsMap[name];
                     if (action) {
                         action.reset();
+                        action.time = startPhase * action.getClip().duration;
                         action.fadeIn(blend);
                         action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
                         action.play();
@@ -202,12 +224,16 @@ export const useGraphAnimator = (
             previousStateRef.current = activeStateRef.current;
         }
 
-        // 2. Target weights and playback speed of the current state.
+        // 2. Target weights and playback speed of the current state; a blend's samples run in step.
         const currentState = graph.states.find(s => s.id === activeStateRef.current);
         const targetWeights = currentState ? stateTargetWeights(currentState, variables, name => !!actionsMap[name]) : {};
         if (currentState) {
             const rate = statePlayRate(currentState, variables);
-            Object.keys(targetWeights).forEach(name => { actionsMap[name].timeScale = rate; });
+            if (currentState.stateType === 'Single') {
+                Object.keys(targetWeights).forEach(name => { actionsMap[name].timeScale = rate; });
+            } else {
+                syncBlendActions(actionsMap, targetWeights, rate);
+            }
         }
 
         // 3. Crossfade the weights (frame-rate independent, summing to 1 so the bind pose never

@@ -30,7 +30,7 @@ def _graph(**state_fields):
 
 class AnimationGraphSchemaTests(unittest.TestCase):
     def test_accepts_playback_notify_root_motion_and_transition_fields(self):
-        graph = _graph(playRate=1.5, playRateParam="v1", rootMotion=True,
+        graph = _graph(playRate=1.5, playRateParam="v1", rootMotion=True, syncGroup="Locomotion",
                        notifies=[{"id": "n1", "name": "Footstep", "time": 0.25}])
         validate_domain("graphs", domain_document("graphs", [graph]))
 

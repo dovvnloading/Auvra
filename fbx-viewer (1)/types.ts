@@ -285,6 +285,8 @@ export interface GraphState {
   notifies?: AnimNotify[];
   /** Move the character by the clip's root-bone travel instead of leaving it in the pose. */
   rootMotion?: boolean;
+  /** States with the same group keep their phase across a transition (a run starts mid-stride where the walk was). */
+  syncGroup?: string;
 }
 
 export type ConditionOperator = '>' | '<' | '==' | '!=' | '>=' | '<=';

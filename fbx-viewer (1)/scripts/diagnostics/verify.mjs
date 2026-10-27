@@ -28,6 +28,7 @@ const EXEMPT = new Map(Object.entries({
   'components/AnimationGraph/utils/montage.ts': 'hot-loop',
   'components/AnimationGraph/utils/notifies.ts': 'pure-utility',
   'components/AnimationGraph/utils/rootMotion.ts': 'hot-loop',
+  'components/AnimationGraph/utils/syncGroups.ts': 'hot-loop',
   'components/Environment/componentInspectors.ts': 'data-model',
   'components/Sandbox/CharacterIK.tsx': 'hot-loop-controller',
   'components/Scripting/scriptTemplates.ts': 'data-model',
