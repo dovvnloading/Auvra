@@ -14,6 +14,7 @@
 | 3 — Game framework | Done: Rapier physics (collider/rigidBody components, raycasts), character controller, triggers and On Overlap, input actions + gamepad + rebinding, audio buses and audioSource component, particles, flow and world visual-scripting nodes, level variables, grid navigation for enemies, blueprint-driven AI and player stats, animation crossfades and exit time, material overrides, terrain paint layers, lighting panel, authored title/pause menus with button actions, localization | #24 |
 | 4 — Release quality | In progress. Done: F3 performance overlay, third-party notices in builds, user docs (docs/), Starter, Arena and Courtyard samples with a template picker, first gameplay tests, and the fixes from play-testing them in the editor and in built games. Left: repeatable gameplay playthrough tests, smoke runs of the web, Linux and macOS players, signed releases (needs the publisher's code-signing certificate) | #24, #26–#29, #37–#39 |
 | Beyond the bar | Done: animation, scripting, timeline and rendering components; play tools (pause, step, inspect); live prefabs; ragdolls; water; reflection probes; terrain LOD; level cameras and camera cuts; behavior trees; level streaming; NPC dialogue; online multiplayer through a relay server | #30–#36 |
+| Character and animation depth | Done: Mixamo character pipeline (clip matching, jump/fall/land, upper-body fire and aim); natural-looking levels by default (sky, fog, ground, shadows that follow the view); animation LOD for distant characters; retargeting onto any humanoid rig (Unreal, Rigify, Biped and plain bone names, A-pose or T-pose); blend sync and sync groups; additive montages and hit reactions; nested state machines; animation curves | #39–#42 |
 
 ## 0. TL;DR
 
@@ -257,7 +258,7 @@ Smaller residuals on findings marked fixed:
 
 ### 6.2 `CHARACTER_ANIMATION_UNREAL_GAP_AUDIT.md`
 
-*Updated 2026-10-27.* Most of the ranked gaps are now closed in the Three.js runtime:
+*Updated 2026-10-27.* The ranked gaps are closed in the Three.js runtime except the three below:
 
 - **Done:**
   - one-shot montages with bone masks;
@@ -268,18 +269,19 @@ Smaller residuals on findings marked fixed:
   - triangulated 1D/2D blend spaces;
   - any-state transitions with priorities, AND/OR conditions, exit time and honoured crossfade durations;
   - the Rapier character controller;
-  - player replication through the relay server.
+  - player replication through the relay server;
+  - retargeting onto humanoid rigs that are not Mixamo-like, matched by bone role and lined up with the source rest pose (#42);
+  - sync groups and phase-synced blend samples (#42);
+  - additive layers: additive montages, an Additive pin on Play Player Animation, blueprint hit reactions (#42);
+  - nested state machines, edited level by level on the graph canvas (#42);
+  - animation curves that drive graph variables (#42);
+  - animation LOD: distant and off-screen characters are posed less often (#41).
 - **Also fixed while play-testing real Mixamo characters (#39):**
   - animation import;
   - a character's own clips winning over another model's clip of the same name.
 - **Still open:**
-  - a skeleton asset and retargeter for rigs that are not Mixamo-like;
+  - a stand-alone skeleton asset (retargeting matches each import against the target rig instead);
   - stable clip references instead of names;
-  - sync groups;
-  - additive layers;
-  - nested state machines;
-  - animation curves;
-  - animation LOD and update budgets;
   - native pose evaluation (native route only).
 
 ## 7. Verified gap list
