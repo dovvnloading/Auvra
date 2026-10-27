@@ -154,7 +154,7 @@ A player blueprint's **Weapons** section, under Details, lists the weapons the p
 - **Mag**, **Reserve** and **Reload**: the rounds a magazine holds, the rounds carried besides (-1 is unlimited) and how long a reload takes. Firing with an empty magazine starts a reload; a magazine of 0 never runs out. Each weapon keeps its own rounds when you switch away, and switching cancels a reload.
 - **Fire clip**, **Aim clip** and **Reload clip**: upper-body clips for this weapon, in place of the blueprint's Upper Body clips. The reload clip plays once, from the same bone, when a reload starts.
 
-The graph's **IsReloading** variable is on during a reload, and **IsFiring** is off then. A blueprint without weapons fires an automatic with unlimited rounds from its Muzzle socket, as before. The HUD can show the held weapon and its rounds through the `player.weapon`, `player.ammo` and `player.reserve` bindings (see [HUD and menus](hud-and-menus.md)); the built-in HUD shows them at the bottom left.
+On touch screens a player with weapons also gets Reload and Next weapon buttons. The graph's **IsReloading** variable is on during a reload, and **IsFiring** is off then. A blueprint without weapons fires an automatic with unlimited rounds from its Muzzle socket, as before. The HUD can show the held weapon and its rounds through the `player.weapon`, `player.ammo` and `player.reserve` bindings (see [HUD and menus](hud-and-menus.md)); the built-in HUD shows them at the bottom left.
 
 ## Hit reactions
 

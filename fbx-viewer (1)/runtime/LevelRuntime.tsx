@@ -943,7 +943,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
             </AuvraCanvas>
 
             {/* On-screen joystick and buttons on touch devices; unmounted while paused so look input does not pile up. */}
-            {touchInput && !paused && !isGameOver && <TouchControls input={touchInput} />}
+            {touchInput && !paused && !isGameOver && <TouchControls input={touchInput} weapons={!!player.blueprint.weapons?.length} />}
 
             {overlay ?? (
                 <FallbackHud
