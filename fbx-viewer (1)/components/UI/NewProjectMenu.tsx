@@ -15,6 +15,7 @@ export const PROJECT_TEMPLATE_OPTIONS: readonly ProjectTemplateOption[] = [
   { template: 'starter', label: 'Starter', description: 'A walkable level with terrain, sky, player and props' },
   { template: 'arena', label: 'Arena Sample', description: 'A complete small game: coins, physics, HUD and menus' },
   { template: 'courtyard', label: 'Courtyard Sample', description: 'A quest: an NPC dialogue, scripted relics and a gate a timeline opens' },
+  { template: 'outpost', label: 'Outpost Sample', description: 'An action level on the full kit, with its own animated characters: raiders, supply caches, a beacon to light' },
 ];
 
 interface NewProjectMenuProps {

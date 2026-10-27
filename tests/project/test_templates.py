@@ -68,7 +68,7 @@ class TemplateTests(unittest.TestCase):
         return repository
 
     def test_template_names_list_every_template(self) -> None:
-        self.assertEqual(TEMPLATE_NAMES, ("blank", "starter", "arena", "courtyard"))
+        self.assertEqual(TEMPLATE_NAMES, ("blank", "starter", "arena", "courtyard", "outpost"))
 
     def test_starter_template_is_a_valid_playable_project(self) -> None:
         repository = self.create("starter")
@@ -394,6 +394,138 @@ class TemplateTests(unittest.TestCase):
         hud = {item["id"]: item for item in documents(repository, "hud")}
         bound = [element for element in hud["hud-main"]["elements"] if element["props"].get("bind") == {"text": "vars.relics"}]
         self.assertEqual(len(bound), 1)
+
+    def outpost(self) -> tuple[ProjectRepository, dict[str, Any], dict[str, dict[str, Any]]]:
+        repository = self.create("outpost")
+        apply_template(repository, "outpost", project_name="Outpost Sample")
+        levels = documents(repository, "levels")
+        self.assertEqual([level["name"] for level in levels], ["Outpost"])
+        objects = {item["id"]: item for item in documents(repository, "objects")}
+        return repository, levels[0], objects
+
+    def test_outpost_template_is_a_valid_project_whose_references_resolve(self) -> None:
+        repository, level, objects = self.outpost()
+        kinds = [item["type"] for item in objects.values()]
+        for kind in ("terrain", "sky_sphere", "player_start"):
+            self.assertEqual(kinds.count(kind), 1, kind)
+        model_ids = {item["id"] for item in documents(repository, "models")}
+        blueprint_ids = {item["id"] for item in documents(repository, "blueprints")}
+        for item in objects.values():
+            self.assertEqual(item["levelId"], level["id"])
+            if item["type"] == "prop" and item["modelId"]:
+                self.assertIn(item["modelId"], model_ids, item["id"])
+            elif item["type"] == "prop":
+                self.assertTrue(item.get("components"), item["id"])
+            if item["type"] == "spawn_point":
+                self.assertIn(item["spawnConfig"]["blueprintId"], blueprint_ids)
+        settings = next(item for item in documents(repository, "metadata") if item["id"] == "game-settings")["settings"]
+        self.assertEqual((settings["name"], settings["startupLevelId"]), ("Outpost Sample", level["id"]))
+        for blueprint in documents(repository, "blueprints"):
+            self.assertIn(blueprint["linkedModelId"], model_ids)
+        for asset_id in repository.referenced_asset_ids():
+            self.assertTrue(repository.assets.verify(asset_id), asset_id)
+
+    def test_outpost_characters_play_clips_their_models_carry(self) -> None:
+        repository, _, objects = self.outpost()
+        models = {item["id"]: item for item in documents(repository, "models")}
+        root = Path(__file__).resolve().parents[2] / "Auvra" / "project" / "templates" / "outpost" / "assets"
+        takes = {name: (root / f"{name}.fbx").read_bytes() for name in ("ranger", "raider")}
+
+        def clips(state: dict[str, Any]) -> list[str]:
+            if state["stateType"] == "StateMachine":
+                return [clip for inner in state["subGraph"]["states"] for clip in clips(inner)]
+            return [state["clipName"]] if state["clipName"] else [sample["clipName"] for sample in state["blendSamples"]]
+
+        blueprints = {item["id"]: item for item in documents(repository, "blueprints")}
+        for blueprint_id, fbx in (("outpost-player", takes["ranger"]), ("outpost-raider", takes["raider"])):
+            blueprint = blueprints[blueprint_id]
+            named = [clip for state in blueprint["animationGraph"]["states"] for clip in clips(state)]
+            named.append(blueprint["hitReactClip"])
+            named += [clip for key, clip in (blueprint.get("upperBody") or {}).items() if key != "maskBone" and clip]
+            for clip in named:
+                self.assertIn(clip.encode(), fbx, clip)
+        [wave] = components(objects["outpost-scout"], "animation")
+        self.assertIn(wave["props"]["clip"].encode(), takes["ranger"])
+        self.assertEqual(models["outpost-model-scout"]["assetId"], models["outpost-model-ranger"]["assetId"])
+        self.assertIn("Jacket", models["outpost-model-scout"]["materialOverrides"])
+
+    def test_outpost_player_graph_shows_the_animation_kit(self) -> None:
+        repository, _, _ = self.outpost()
+        player = next(item for item in documents(repository, "blueprints") if item["id"] == "outpost-player")
+        graph = player["animationGraph"]
+        states = {state["id"]: state for state in graph["states"]}
+        locomotion = states["locomotion"]
+        self.assertTrue(locomotion["isRoot"])
+        self.assertEqual(locomotion["stateType"], "StateMachine")
+        inner = {state["name"]: state for state in locomotion["subGraph"]["states"]}
+        self.assertEqual(inner["Walk"]["syncGroup"], inner["Run"]["syncGroup"])
+        self.assertEqual(states["combat"]["syncGroup"], inner["Walk"]["syncGroup"])
+        # The landing's curve drives LandLock, which holds the way out of the landing until it drops.
+        [curve] = states["land"]["curves"]
+        variables = {variable["id"]: variable for variable in graph["variables"]}
+        self.assertEqual(variables[curve["variableId"]]["type"], "Boolean")
+        recover = next(t for t in graph["transitions"] if t["fromStateId"] == "land")
+        self.assertEqual(recover["conditions"][0]["variableId"], curve["variableId"])
+        self.assertEqual((curve["keys"][0]["value"], curve["keys"][-1]["value"]), (1, 0))
+        for transition in graph["transitions"]:
+            self.assertIn(transition["toStateId"], states)
+            if not transition.get("anyState"):
+                self.assertIn(transition["fromStateId"], states)
+
+    def test_outpost_supplies_open_the_gate_light_the_beacon_and_save(self) -> None:
+        repository, level, objects = self.outpost()
+        audio_ids = {item["id"] for item in documents(repository, "audio")}
+        supplies = [item for item in objects.values() if item["name"].startswith("Supply Cache")]
+        self.assertEqual(len(supplies), 3)
+        for supply in supplies:
+            [trigger] = components(supply, "collider")
+            self.assertIs(trigger["props"]["isTrigger"], True)
+            source = components(supply, "script")[0]["props"]["source"]
+            self.assertIn("function onTriggerEnter", source)
+            self.assertIn("const SCORE_VARIABLE = 'supplies';", source)
+            self.assertIn(source.split("const PICKUP_SOUND = '")[1].split("'")[0], audio_ids)
+
+        [timeline] = components(objects["outpost-signal"], "timeline")
+        self.assertEqual((timeline["props"]["playVariable"], timeline["props"]["autoplay"]), ("gate_open", False))
+        tracks = {track["objectId"]: track for track in timeline["props"]["timeline"]["tracks"]}
+        for side in ("left", "right"):
+            gate = objects[f"outpost-gate-{side}"]
+            self.assertEqual(components(gate, "rigidBody")[0]["props"]["type"], "kinematicPosition")
+            self.assertLess(tracks[gate["id"]]["position"][-1]["value"][1], -5)
+        flame = tracks["outpost-beacon-flame"]["position"]
+        self.assertLess(flame[0]["value"][1], 0)
+        self.assertGreater(flame[-1]["value"][1], 5)
+
+        graph = Graph(level["blueprint"])
+        nodes = level["blueprint"]["nodes"]
+        [opener] = [node for node in nodes if node["type"] == "SetLevelVariable"]
+        self.assertEqual((opener["data"]["default_Name"], opener["data"]["default_Value"]), ("gate_open", "1"))
+        actions = [node["data"]["action"] for node in graph.flow(opener["id"]) if node["type"] == "LevelAction"]
+        self.assertEqual(actions, ["SaveGame"])
+        [arrive] = [node for node in nodes if node["type"] == "Event" and "Overlap" in node["name"]]
+        goal = objects[arrive["data"]["targetActorId"]]
+        self.assertIs(components(goal, "collider")[0]["props"]["isTrigger"], True)
+        # The goal is inside the walls: reachable only through the gate.
+        self.assertLess(goal["position"][2], objects["outpost-gate-left"]["position"][2])
+        self.assertEqual(graph.flow(arrive["id"])[-1]["data"]["action"], "EndGame")
+
+        hud = {item["id"]: item for item in documents(repository, "hud")}
+        bound = [element for element in hud["hud-main"]["elements"] if element["props"].get("bind") == {"text": "vars.supplies"}]
+        self.assertEqual(len(bound), 1)
+
+    def test_outpost_scout_talks_and_the_intro_cuts_back_to_play(self) -> None:
+        _, _, objects = self.outpost()
+        [dialogue] = components(objects["outpost-scout"], "dialogue")
+        data = dialogue["props"]["dialogue"]
+        lines = {line["id"]: line for line in data["lines"]}
+        self.assertIn(data["startId"], lines)
+        for line in lines.values():
+            for target in [line["next"]] + [choice["next"] for choice in line.get("choices", [])]:
+                self.assertTrue(target is None or target in lines, (line["id"], target))
+        [director] = components(objects["outpost-director"], "timeline")
+        [cut] = [track for track in director["props"]["timeline"]["tracks"] if track["kind"] == "camera"]
+        self.assertEqual([key["value"] for key in cut["keys"]], ["outpost-intro-camera", ""])
+        self.assertTrue(components(objects["outpost-intro-camera"], "camera"))
 
 
 if __name__ == "__main__":

@@ -44,7 +44,7 @@ class TemplatePlacementTests(unittest.TestCase):
         self.assertGreater(max(abs(prop["position"][1]) for prop in props), 0.5)
 
     def test_every_template_sky_is_editable(self) -> None:
-        for template in ("starter", "arena", "courtyard"):
+        for template in ("starter", "arena", "courtyard", "outpost"):
             skies = [item for item in self.objects(template) if item["type"] == "sky_sphere"]
             self.assertTrue(skies, template)
             for sky in skies:

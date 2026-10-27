@@ -14,7 +14,7 @@ The launcher prepares its own Python environment and frontend dependencies, then
 
 The quickest start is **Starter** in the header. It creates a project with a playable level (rolling terrain, sky, a player start, a player character and scattered props) and game settings already filled in. Press **PLAY LEVEL** in the World Editor straight away, then change things.
 
-**New** also offers two sample games to learn from. **Arena Sample** has coins, pushable crates, guards that chase and fight, a HUD and menus. **Courtyard Sample** is a small quest: talk to the Keeper (an NPC dialogue), collect three relics (each runs a script), and the north gate opens (a timeline the level blueprint starts). Open their level blueprints, scripts and timelines to see how they work.
+**New** also offers three sample games to learn from. **Arena Sample** has coins, pushable crates, guards that chase and fight, a HUD and menus. **Courtyard Sample** is a small quest: talk to the Keeper (an NPC dialogue), collect three relics (each runs a script), and the north gate opens (a timeline the level blueprint starts). **Outpost Sample** is a short action level on the whole kit: an opening camera shot, a Scout who waves and talks, three supply caches to recover while raiders come for you, and a beacon that lights and a gate that opens when you bring them back (then the game saves). Its Ranger, Raider and scenery were made for it, and the Ranger's animation graph shows a nested Locomotion state machine, sync groups, a landing curve, upper-body aim and fire clips and an additive hit reaction. Open their level blueprints, scripts and timelines to see how they work.
 
 For an empty project:
 
