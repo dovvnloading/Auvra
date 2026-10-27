@@ -32,6 +32,7 @@ const EXEMPT = new Map(Object.entries({
   'components/Scripting/scriptTemplates.ts': 'data-model',
   'runtime/components/scriptComponent.tsx': 'data-model',
   'runtime/ik.ts': 'hot-loop',
+  'runtime/ragdoll.ts': 'hot-loop',
   'runtime/scripting/protocol.ts': 'protocol-model',
   'runtime/scripting/scriptApi.ts': 'sandbox-proxy',
   'runtime/timeline/evaluate.ts': 'pure-utility',

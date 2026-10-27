@@ -6,6 +6,7 @@ import { LoadedModelData, Blueprint, AttachmentData, SocketData, Hittable, Hitbo
 import { GraphRuntime, GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
 import { PLAYER_PHYSICS_ID } from '../../runtime/physics';
 import { CharacterIK } from './CharacterIK';
+import { CharacterRagdoll } from './CharacterRagdoll';
 import { AttachmentController } from '../Scene/AttachmentController';
 import { SocketController, resolveSocketFlashTextureUrl } from '../Scene/SocketController'; // Using Visual Controller now
 import { useEntityHealth } from './hooks/useEntityHealth';
@@ -350,6 +351,8 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
                 eventSource={team === 'Player' ? 'player' : entityId}
             />
             <CharacterIK model={model.object} settings={blueprint.ik} physicsId={team === 'Player' ? PLAYER_PHYSICS_ID : undefined} />
+            {/* Enemies fall as ragdolls; the player's death ends the game, and its capsule would fight the bodies. */}
+            {isDead && team === 'Enemy' && <CharacterRagdoll model={model.object} />}
         </group>
     );
 });
