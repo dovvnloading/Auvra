@@ -26,7 +26,15 @@ export const createNormalizedTimeReader = (
     let lastTime: number | null = null;
     return (stateId: string): number | null => {
         const state = states.find(item => item.id === stateId);
-        const action = state?.stateType === 'Single' && state.clipName ? actionsMap[state.clipName] : undefined;
+        const single = !!state && (state.stateType ?? 'Single') === 'Single';
+        const action = single && state.clipName ? actionsMap[state.clipName] : undefined;
+        // A single state with no clip to play (none chosen, or not in this model) counts as finished,
+        // so its exit-time transitions still fire instead of leaving the character stuck in it.
+        if (single && !action) {
+            lastStateId = stateId;
+            lastTime = null;
+            return 1;
+        }
         const duration = action?.getClip().duration ?? 0;
         const time = action && duration > 0 ? Math.min(1, Math.max(0, action.time / duration)) : null;
         const wrapped = !!action && time !== null && lastTime !== null && stateId === lastStateId

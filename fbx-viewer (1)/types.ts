@@ -74,6 +74,8 @@ export interface LoadedModelData {
   materialOverrides?: MaterialOverrides;
   folder?: string; // Content browser folder path, e.g. 'Characters/Enemies'
   importSettings?: ModelImportSettings;
+  /** Names of the clips in the model's own file, as stored with its document (they survive renaming the model). */
+  sourceClipNames?: string[];
 }
 
 export type LevelObjectType = 'prop' | 'foliage' | 'spawn_point' | 'audio_emitter' | 'terrain' | 'sky_sphere' | 'player_start';
@@ -404,6 +406,8 @@ export interface Blueprint {
   weaponVolume?: number; // Base volume for weapon sounds
   /** Pose fixes applied after the animation graph each frame (runtime/ik.ts). */
   ik?: CharacterIKSettings;
+  /** A player's fire and aim clips, layered over its locomotion. */
+  upperBody?: UpperBodySettings;
   /** An enemy's authored behavior (runtime/behaviorTree.ts); without one it uses the built-in AI. */
   behaviorTree?: BehaviorTreeData;
 }
@@ -444,6 +448,19 @@ export interface CharacterIKSettings {
   lookAtBone?: string;
   /** Largest turn away from the animated pose, in degrees (default 70). */
   lookAtMaxAngle?: number;
+}
+
+/** The bone upper-body clips play from when a blueprint names none. */
+export const DEFAULT_UPPER_BODY_BONE = 'Spine';
+
+/** Clips a player character plays on its upper body, over whatever its legs are doing. */
+export interface UpperBodySettings {
+  /** Looped while the fire button is held. */
+  fireClip?: string | null;
+  /** Looped while aiming and not firing. */
+  aimClip?: string | null;
+  /** The bone the clips play from: it and everything below it in the skeleton (default 'Spine'). */
+  maskBone?: string;
 }
 
 export interface CameraState {

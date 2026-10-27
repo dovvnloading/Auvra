@@ -2,7 +2,8 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { FileText, Database, Tag, Plus, Trash2, Zap, Scaling, Camera, Crosshair, Palette, Check, Box, Music, Play, Footprints, Brain } from 'lucide-react';
 import { BehaviorTreeEditor } from './BehaviorTreeEditor';
-import { Blueprint, BlueprintStat, CharacterIKSettings } from '../../types';
+import { Blueprint, BlueprintStat, CharacterIKSettings, DEFAULT_UPPER_BODY_BONE, UpperBodySettings } from '../../types';
+import { ownClipsFirst } from '../../utils/animationBinding';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
 import { TransformInputGroup } from '../UI/Properties/TransformInputGroup';
 import { useScene } from '../../context/SceneContext';
@@ -18,11 +19,20 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
     blueprint,
     onUpdate
 }) => {
-    const { textures, audioAssets } = useScene();
+    const { textures, audioAssets, models } = useScene();
     const [activeTab, setActiveTab] = useState<'details' | 'stats' | 'tags' | 'materials' | 'audio' | 'behavior'>('details');
     const ik: CharacterIKSettings = blueprint.ik ?? {};
     const updateIK = (changes: Partial<CharacterIKSettings>, coalesce?: string) =>
         onUpdate(blueprint.id, { ik: { ...ik, ...changes } }, coalesce ? { coalesce } : undefined);
+    const upperBody: UpperBodySettings = blueprint.upperBody ?? {};
+    const updateUpperBody = (changes: Partial<UpperBodySettings>, coalesce?: string) =>
+        onUpdate(blueprint.id, { upperBody: { ...upperBody, ...changes } }, coalesce ? { coalesce } : undefined);
+    // Every clip name once, the linked model's first.
+    const clipNames = useMemo(() => {
+        const linked = models.find(model => model.id === blueprint.linkedModelId);
+        const ordered = ownClipsFirst(linked ? [linked] : undefined, models);
+        return [...new Set(ordered.flatMap(model => (model.animations ?? []).map(clip => clip.name)))];
+    }, [models, blueprint.linkedModelId]);
     const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
     // Helpers
@@ -254,6 +264,44 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                     </p>
                                 </div>
                             </div>
+
+                            {blueprint.type === 'Player Character' && (
+                                <div className="space-y-2">
+                                    <label className="text-[10px] uppercase font-bold text-gray-500 flex items-center gap-2">
+                                        <Crosshair size={12} /> Upper Body (Fire & Aim)
+                                    </label>
+                                    <div className="bg-gray-800/50 rounded p-3 border border-gray-800 space-y-3">
+                                        {([['fireClip', 'While firing'], ['aimClip', 'While aiming']] as const).map(([key, label]) => {
+                                            const current = upperBody[key] ?? '';
+                                            return (
+                                                <div key={key} className="flex items-center justify-between gap-4">
+                                                    <span className="text-xs text-gray-400 shrink-0">{label}</span>
+                                                    <select
+                                                        value={current}
+                                                        onChange={(e) => updateUpperBody({ [key]: e.target.value || null })}
+                                                        className="w-36 bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500"
+                                                    >
+                                                        <option value="">Graph only</option>
+                                                        {clipNames.map(name => <option key={name} value={name}>{name}</option>)}
+                                                        {current && !clipNames.includes(current) && <option value={current}>{current} (missing)</option>}
+                                                    </select>
+                                                </div>
+                                            );
+                                        })}
+                                        <div className="flex items-center justify-between gap-4">
+                                            <span className="text-xs text-gray-400 shrink-0">From bone</span>
+                                            <input
+                                                value={upperBody.maskBone ?? DEFAULT_UPPER_BODY_BONE}
+                                                onChange={(e) => updateUpperBody({ maskBone: e.target.value }, 'upperBodyMaskBone')}
+                                                className="w-36 bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500"
+                                            />
+                                        </div>
+                                        <p className="text-[9px] text-gray-500 leading-tight">
+                                            Looped during play on this bone and everything below it in the skeleton (Spine: chest, arms and head) while the legs keep walking or running. Firing wins over aiming.
+                                        </p>
+                                    </div>
+                                </div>
+                            )}
 
                             <div className="space-y-2">
                                 <label className="text-[10px] uppercase font-bold text-gray-500">System Info</label>

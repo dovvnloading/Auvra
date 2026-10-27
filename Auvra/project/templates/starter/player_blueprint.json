@@ -79,6 +79,24 @@
    "value": false
   },
   {
+   "id": "v9",
+   "name": "IsGrounded",
+   "type": "Boolean",
+   "value": true
+  },
+  {
+   "id": "v10",
+   "name": "IsFalling",
+   "type": "Boolean",
+   "value": false
+  },
+  {
+   "id": "v11",
+   "name": "VerticalSpeed",
+   "type": "Float",
+   "value": 0
+  },
+  {
    "id": "v_cam_dist",
    "name": "CameraDistance",
    "type": "Float",
@@ -134,6 +152,24 @@
     "name": "IsDead",
     "type": "Boolean",
     "value": false
+   },
+   {
+    "id": "v9",
+    "name": "IsGrounded",
+    "type": "Boolean",
+    "value": true
+   },
+   {
+    "id": "v10",
+    "name": "IsFalling",
+    "type": "Boolean",
+    "value": false
+   },
+   {
+    "id": "v11",
+    "name": "VerticalSpeed",
+    "type": "Float",
+    "value": 0
    },
    {
     "id": "v_cam_dist",
@@ -396,6 +432,34 @@
       ]
      }
     ]
+   },
+   {
+    "id": "s5",
+    "name": "Falling",
+    "clipName": null,
+    "position": {
+     "x": 1000,
+     "y": 100
+    },
+    "loop": true,
+    "stateType": "Single",
+    "blendSamples": [],
+    "blendParamX": "",
+    "blendParamY": ""
+   },
+   {
+    "id": "s6",
+    "name": "Land",
+    "clipName": null,
+    "position": {
+     "x": 1300,
+     "y": 100
+    },
+    "loop": false,
+    "stateType": "Single",
+    "blendSamples": [],
+    "blendParamX": "",
+    "blendParamY": ""
    }
   ],
   "transitions": [
@@ -555,69 +619,91 @@
     ]
    },
    {
-    "id": "t5",
+    "id": "t_jump",
     "fromStateId": "s1",
     "toStateId": "s4",
+    "anyState": true,
+    "priority": 50,
     "duration": 0.1,
     "conditions": [
      {
       "variableId": "v2",
       "operator": "==",
       "value": true
-     }
-    ]
-   },
-   {
-    "id": "t6",
-    "fromStateId": "s2",
-    "toStateId": "s4",
-    "duration": 0.1,
-    "conditions": [
+     },
      {
-      "variableId": "v2",
-      "operator": "==",
-      "value": true
+      "variableId": "v11",
+      "operator": ">",
+      "value": 0
      }
     ]
    },
    {
-    "id": "t7",
-    "fromStateId": "s3",
-    "toStateId": "s4",
-    "duration": 0.1,
-    "conditions": [
-     {
-      "variableId": "v2",
-      "operator": "==",
-      "value": true
-     }
-    ]
-   },
-   {
-    "id": "t7b",
-    "fromStateId": "s7",
-    "toStateId": "s4",
-    "duration": 0.1,
-    "conditions": [
-     {
-      "variableId": "v2",
-      "operator": "==",
-      "value": true
-     }
-    ]
-   },
-   {
-    "id": "t_jump_idle",
+    "id": "t_fall",
     "fromStateId": "s4",
-    "toStateId": "s1",
+    "toStateId": "s5",
+    "anyState": true,
+    "priority": 40,
+    "duration": 0.25,
+    "conditions": [
+     {
+      "variableId": "v10",
+      "operator": "==",
+      "value": true
+     },
+     {
+      "variableId": "v11",
+      "operator": "<=",
+      "value": 0
+     }
+    ]
+   },
+   {
+    "id": "t_fall_land",
+    "fromStateId": "s5",
+    "toStateId": "s6",
+    "duration": 0.1,
+    "conditions": [
+     {
+      "variableId": "v9",
+      "operator": "==",
+      "value": true
+     }
+    ]
+   },
+   {
+    "id": "t_jump_land",
+    "fromStateId": "s4",
+    "toStateId": "s6",
+    "duration": 0.1,
+    "conditions": [
+     {
+      "variableId": "v9",
+      "operator": "==",
+      "value": true
+     }
+    ]
+   },
+   {
+    "id": "t_land_walk",
+    "fromStateId": "s6",
+    "toStateId": "s2",
     "duration": 0.2,
     "conditions": [
      {
-      "variableId": "v2",
-      "operator": "==",
-      "value": false
+      "variableId": "v1",
+      "operator": ">",
+      "value": 0
      }
     ]
+   },
+   {
+    "id": "t_land_idle",
+    "fromStateId": "s6",
+    "toStateId": "s1",
+    "duration": 0.2,
+    "exitTime": 0.8,
+    "conditions": []
    }
   ],
   "activeStateId": "s1"

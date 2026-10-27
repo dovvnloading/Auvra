@@ -51,6 +51,18 @@ class AnimationGraphSchemaTests(unittest.TestCase):
 
 
 
+class UpperBodySchemaTests(unittest.TestCase):
+    def test_accepts_upper_body_clips(self):
+        blueprint = {"id": "bp1", "name": "Hero", "type": "Player Character",
+                     "upperBody": {"fireClip": "Shooting", "aimClip": None, "maskBone": "Spine"}}
+        validate_domain("blueprints", domain_document("blueprints", [blueprint]))
+
+    def test_rejects_unknown_upper_body_fields(self):
+        blueprint = {"id": "bp1", "name": "Hero", "type": "Player Character", "upperBody": {"reloadClip": "Reload"}}
+        with self.assertRaises(Exception):
+            validate_domain("blueprints", domain_document("blueprints", [blueprint]))
+
+
 class BehaviorTreeSchemaTests(unittest.TestCase):
     def _blueprint(self, tree):
         return {"id": "bp1", "name": "Grunt", "type": "Enemy Controller", "behaviorTree": tree}

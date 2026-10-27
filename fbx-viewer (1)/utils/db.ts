@@ -24,6 +24,8 @@ export interface DBModel {
   thumbnail?: string;
   isPlacedInScene: boolean;
   textureOverrides?: Record<string, string>; // MaterialName -> logical texture id
+  /** The names given to the clips in the model's own file. */
+  clipNames?: string[];
 }
 
 export interface DBAttachment {
@@ -254,6 +256,7 @@ class DBOperations {
     await projectService.applyChanges([{ domain: 'models', operation: 'upsert', id: model.id, value: {
       id: model.id, name: model.name, assetId: modelAssetId,
       category: model.category, isPlacedInScene: model.isPlacedInScene,
+      ...(model.clipNames?.length ? { clipNames: model.clipNames } : {}),
     } }, ...animationAssets.map((animation) => ({
       domain: 'animations', operation: 'upsert' as const, id: animation.id, value: animation,
     }))], transfer.diagnostics);
@@ -320,8 +323,9 @@ class DBOperations {
   }
 
   /** Rename and/or move a model in the content browser; folder '' is the library root. */
-  async updateModelInfo(id: string, updates: AssetInfoUpdate): Promise<void> {
-      await this.canonicalChange('models', 'upsert', assetInfoDocument(id, updates), id);
+  /** `clipNames` keeps the model's clip names when it is renamed (they would follow the new name). */
+  async updateModelInfo(id: string, updates: AssetInfoUpdate, clipNames?: string[]): Promise<void> {
+      await this.canonicalChange('models', 'upsert', { ...assetInfoDocument(id, updates), ...(clipNames?.length ? { clipNames } : {}) }, id);
   }
 
   async addModelTextureOverride(modelId: string, materialNames: string[], file: File, dimensions: { width: number; height: number }): Promise<string> {
@@ -364,16 +368,21 @@ class DBOperations {
     await projectService.applyChanges(changes);
   }
 
-  async addAnimations(modelId: string, files: File[], transfer: AssetTransferOptions = {}): Promise<void> {
+  /** `clipNames[i]` names the clips of `files[i]`; they are stored so the clips keep those names. */
+  async addAnimations(modelId: string, files: File[], transfer: AssetTransferOptions = {}, clipNames: string[][] = []): Promise<void> {
     this.requireNativeProject();
-    const animationAssets: Array<{ id: string; name: string; assetId: string; modelId: string }> = [];
+    const animationAssets: Array<{ id: string; name: string; assetId: string; modelId: string; clipNames?: string[] }> = [];
     for (const [index, file] of files.entries()) {
       const assetId = await projectService.uploadAsset(file, {
         ...transfer,
         onProgress: (progress) => transfer.onProgress?.((index + progress) / Math.max(1, files.length)),
       });
       assertTransferActive(transfer);
-      animationAssets.push({ id: assetId, name: file.name, assetId, modelId });
+      // Its own id, not the file's hash: the same file on two models is two documents.
+      animationAssets.push({
+        id: crypto.randomUUID(), name: file.name, assetId, modelId,
+        ...(clipNames[index]?.length ? { clipNames: clipNames[index] } : {}),
+      });
     }
     assertTransferActive(transfer);
     transfer.onPhase?.('project_record_commit');

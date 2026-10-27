@@ -5,7 +5,7 @@ import { LoadedModelData, AssetCategory, AssetInfoUpdate, ModelImportSettings } 
 import { importPhaseLabel, loadFBXFile } from '../utils/modelLoader';
 import { disposeModel, disposeObject } from '../utils/processing/ModelLifecycle';
 import { applyModelImportSettings, resolveImportSettings, stripGeometry } from '../utils/processing/ModelTransforms';
-import { prepareAnimationClips } from '../utils/animationBinding';
+import { applyStoredClipNames, prepareAnimationClips, uniqueClipNames } from '../utils/animationBinding';
 import { generateThumbnail } from '../utils/thumbnailGenerator';
 import { dbOperations, normalizeAssetInfoUpdate, withoutMaterialOverrideTexture } from '../utils/db';
 import { projectService } from '../utils/projectService';
@@ -165,6 +165,10 @@ export const useModelManager = (
       newModel.category = category;
       newModel.thumbnail = undefined;
       newModel.isPlacedInScene = false;
+      // Stored with the model, so renaming it later does not rename its clips.
+      const clipNames = uniqueClipNames(newModel.animations.map((clip) => clip.name), new Set());
+      newModel.animations.forEach((clip, index) => { clip.name = clipNames[index]; });
+      newModel.sourceClipNames = clipNames;
       if (importSettings) applyModelImportSettings(newModel, importSettings);
 
       if (category === 'Animation') {
@@ -194,6 +198,7 @@ export const useModelManager = (
         transfer.onPhase('project_record_commit');
         await projectService.applyChanges([{ domain: 'models', operation: 'upsert', id: newModel.id, value: {
           id: newModel.id, name: newModel.name, assetId, category: newModel.category, isPlacedInScene: false, importSettings,
+          ...(clipNames.length ? { clipNames } : {}),
         } }], transfer.diagnostics);
       } else {
         await dbOperations.addModel({
@@ -205,6 +210,7 @@ export const useModelManager = (
           thumbnail: newModel.thumbnail,
           isPlacedInScene: false,
           textureOverrides: {},
+          clipNames,
         }, transfer);
       }
 
@@ -292,6 +298,8 @@ export const useModelManager = (
           phase, progress: progress * 0.55, detail: importPhaseLabel(phase), diagnostic,
         }),
       });
+      // The clips from the model's own file come first; its animation documents' follow.
+      const ownClipCount = replacement.animations.length;
       replacement.category = category;
       replacement.isPlacedInScene = existing.isPlacedInScene;
       replacement.textureOverrides = existing.textureOverrides;
@@ -321,6 +329,7 @@ export const useModelManager = (
         const animationModel = await loadFBXFile(animationFile, { normalize: false, signal: operation.signal, diagnostics: trace });
         try {
           const prepared = prepareAnimationClips(replacement.object, animationModel.object, animationModel.animations);
+          applyStoredClipNames(prepared.clips, animation.clipNames);
           replacement.animations.push(...prepared.clips);
         } finally {
           disposeModel(animationModel);
@@ -347,6 +356,16 @@ export const useModelManager = (
         assetId,
       };
       if (importSettings) document.importSettings = importSettings;
+      // The new file keeps the stored clip names when it has as many clips; otherwise its own are stored.
+      const ownClips = replacement.animations.slice(0, ownClipCount);
+      if (Array.isArray(stored?.clipNames) && stored.clipNames.length === ownClips.length) {
+        applyStoredClipNames(ownClips, stored.clipNames);
+      } else {
+        const names = uniqueClipNames(ownClips.map((clip) => clip.name), new Set());
+        ownClips.forEach((clip, index) => { clip.name = names[index]; });
+        if (names.length) document.clipNames = names; else delete document.clipNames;
+      }
+      replacement.sourceClipNames = ownClips.map((clip) => clip.name);
       await projectService.applyChanges([{ domain: 'models', operation: 'upsert', id: modelId, value: document }], trace);
 
       operation.update({ phase: 'library_publication', progress: 0.98, detail: 'Publishing to library', diagnostic });
@@ -408,8 +427,11 @@ export const useModelManager = (
     if (info.name !== undefined && models.some((model) => model.id !== id && model.name === info.name)) {
       throw new Error(`A model named "${info.name}" is already in the library.`);
     }
+    // A model's clips are named after its file when it loads, so a renamed model stores the names
+    // its clips have now (older projects have none stored) to keep them.
+    const sourceClipNames = info.name !== undefined ? models.find((model) => model.id === id)?.sourceClipNames : undefined;
     try {
-      await dbOperations.updateModelInfo(id, info);
+      await dbOperations.updateModelInfo(id, info, sourceClipNames);
     } catch (error) {
       frontendDiagnostics.failure('model_info_update_failed', error);
       throw error;
@@ -498,6 +520,9 @@ export const useModelManager = (
       const targetModel = models.find((model) => model.id === modelId);
       if (!targetModel) throw new Error('The target model is no longer loaded.');
       const allNewClips: THREE.AnimationClip[] = [];
+      // Each new clip gets a name the model has not used ("Walk 2" for a second Walk), stored with its file.
+      const takenClipNames = new Set(targetModel.animations.map((clip) => clip.name));
+      const clipNamesByFile: string[][] = [];
 
       for (const [index, file] of files.entries()) {
         const assetAlias = aliases[index];
@@ -516,6 +541,9 @@ export const useModelManager = (
         try {
           operation.update({ phase: 'animation_binding', detail: `Binding animation — ${file.name}`, diagnostic });
           const prepared = prepareAnimationClips(targetModel.object, loaded.object, loaded.animations);
+          const names = uniqueClipNames(prepared.clips.map((clip) => clip.name), takenClipNames);
+          prepared.clips.forEach((clip, clipIndex) => { clip.name = names[clipIndex]; });
+          clipNamesByFile.push(names);
           allNewClips.push(...prepared.clips);
           operation.update({ phase: 'animation_binding', diagnostic: {
             ...diagnostic, bindingMode: prepared.mode, clipCount: prepared.clips.length,
@@ -538,7 +566,7 @@ export const useModelManager = (
           if (progress >= 1) operation.lockCancellation();
           operation.update({ progress: 0.72 + progress * 0.25, detail: progress >= 1 ? 'Finalizing project records' : 'Saving animation sources' });
         },
-      });
+      }, clipNamesByFile);
       if (operation.signal.aborted) throw new DOMException('Animation import was cancelled.', 'AbortError');
       operation.update({ phase: 'library_publication', progress: 0.98, detail: 'Publishing animations', diagnostic: {
         ...initialDiagnostic, clipCount: allNewClips.length,

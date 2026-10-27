@@ -2,6 +2,22 @@
 
 Player and enemy characters are blueprints in the **Blueprints** tab. Their animation graphs are edited in the **Graph** tab.
 
+## Setting up a character
+
+1. Import the character's mesh with **Import > Character**.
+2. Select the mesh in the library and import its clips with **Import > Animation**. For Mixamo, download the character "With Skin" and each animation "Without Skin".
+3. Open the blueprint and pick the mesh under **Linked Mesh**.
+
+Linking a mesh gives each state the mesh's clip whose name fits it:
+
+- Idle, Walk and Run go to the states of the same names, and Run also goes to Chase.
+- Jump goes to Jump, Falling to Falling, and Landing to Land.
+- Punch or Attack goes to Attack, and Death or Dying to Death.
+- Strafe Left, Strafe Right and Walk Back go to the strafe blend's samples.
+- Shooting goes to the player's fire clip, and an aiming clip to its aim clip (see "Upper body while firing and aiming").
+
+Clips named for fights, transitions or other directions ("Fight Idle", "Start Walking") are passed over for plain ones. A missing strafe clip falls back to Walk. A state that already plays one of the mesh's clips is left alone. **Match Clips** next to Linked Mesh does the same again, for clips imported after linking. A notice lists what was matched.
+
 ## Stats
 
 Select a blueprint and open the inspector's **Stats** tab. The **Attributes** list holds the character's stats; **+ Add** adds one. Stats are matched by exact name. A speed, range or cooldown stat that is missing, or not a positive number, uses the default below.
@@ -81,7 +97,7 @@ A state plays one of three things:
 - **Blend 1D**: several clips placed along one variable, such as Idle at 0, Walk at 0.5 and Run at 1 on a Speed variable. The two clips either side of the value blend linearly; past the ends the end clip plays alone.
 - **Blend 2D**: clips placed on two variables, such as strafe directions on InputX and InputY. The samples are triangulated, so inside a triangle only its three corners contribute, exactly one clip plays at a sample's position, and outside the samples the nearest edge is used. The plot above the sample list shows where the samples sit.
 
-States name their clips, and the clip list offers every model's clips, the character's own first. Where another model has a clip of the same name (two characters that both have `Idle`), the character plays its own.
+States name their clips, and the clip list offers every model's clips, the character's own first. A clip keeps the name it was given at import, even when its model is renamed in the library. A second clip of a name the model already has is numbered ("Walk 2"). Where another model has a clip of the same name (two characters that both have `Idle`), the character plays its own.
 
 ### Playback rate
 
@@ -94,6 +110,28 @@ A Single state can have **Notifies**: named points in its clip, in seconds. Each
 ### Root motion
 
 Turn on **Root motion** for a Single state whose clip moves the character itself, such as a dodge roll, a vault or a scripted step. The hips' forward and sideways travel is taken out of the pose and moves the player's character controller instead, so the character collides as it moves and its feet do not slide. Vertical hip motion stays in the pose. In the Graph tab preview the model moves by the same travel. Root motion moves the player; enemies keep their AI movement.
+
+## Jumping, falling and landing
+
+During play the character controller sets three graph variables:
+
+| Variable | Value |
+|---|---|
+| **IsGrounded** | true while standing on something |
+| **IsFalling** | true in the air after a jump, or after more than 0.15 s off the ground. Running over a bump or down a step does not count. |
+| **VerticalSpeed** | upward speed in world units per second, negative while dropping |
+
+New player blueprints use them for three states:
+
+- **Jump** plays while rising after a jump.
+- **Falling** plays past the top of the jump, or after walking off a ledge.
+- **Land** plays on touching down. Moving cuts it short into Walk; standing still lets it finish into Idle.
+
+A state with no clip counts as finished at once, so a Land state without a landing clip goes straight to Idle.
+
+## Upper body while firing and aiming
+
+A player blueprint's **Upper Body (Fire & Aim)** section, under Details, picks a clip to loop while the fire button is held and one to loop while aiming. Firing wins over aiming. The clip plays on **From bone** and everything below it in the skeleton: Spine by default, which is the chest, arms and head. The legs keep walking, running or jumping underneath. With "Graph only" the graph's pose is left as it is.
 
 ## One-shot animations on part of the body
 
