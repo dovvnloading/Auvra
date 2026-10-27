@@ -292,11 +292,12 @@ class _LogicGraph:
         return self.add(key, "GetLevelVariable", f"Get Level Variable ({variable})", at, inputs=[("Name", "String")],
                         outputs=[("Value", "String"), ("Is Set", "Boolean")], data={"default_Name": variable})
 
-    def set_level_variable(self, key: str, variable: str, at: tuple[int, int]) -> str:
+    def set_level_variable(self, key: str, variable: str, at: tuple[int, int], value: str = "") -> str:
+        """``value`` is what an unwired Value input writes."""
         return self.add(key, "SetLevelVariable", f"Set Level Variable ({variable})", at,
                         inputs=[("Exec", "Exec"), ("Name", "String"), ("Value", "String")],
                         outputs=[("Out", "Exec"), ("Success", "Boolean")],
-                        data={"default_Name": variable, "default_Value": ""})
+                        data={"default_Name": variable, "default_Value": value})
 
     def play_sound(self, key: str, audio_id: str, at: tuple[int, int]) -> str:
         return self.add(key, "PlaySound", "Play Sound", at, inputs=[("Exec", "Exec"), ("Sound", "String"), ("Bus", "String")],
@@ -621,7 +622,6 @@ def _apply_arena(repository: Any, project_name: str) -> None:
 
 # --- courtyard -------------------------------------------------------------------------------
 
-_COURTYARD_ROOT = _TEMPLATES_ROOT / "courtyard"
 _COURTYARD_LEVEL_ID = "courtyard-level-1"
 _COURTYARD_PLAYER_ID = "courtyard-player"
 _CHIME_SOUND_ID = "courtyard-sound-chime"
@@ -807,15 +807,13 @@ def _courtyard_logic(exit_trigger: dict[str, Any]) -> dict[str, Any]:
     graph.wire(relics, "Value", all_found, "A")
     found = graph.branch("if-all-found", (380, 260))
     once = graph.do_once("open-once", (640, 260))
-    open_gate = graph.set_level_variable("open-gate", _GATE_VARIABLE, (900, 260))
-    open_gate_node = next(node for node in graph.nodes if node["id"] == open_gate)
-    open_gate_node["data"]["default_Value"] = "1"
-    rumble = graph.play_sound("gate-sound", _CHIME_SOUND_ID, (1160, 260))
+    open_gate = graph.set_level_variable("open-gate", _GATE_VARIABLE, (900, 260), value="1")
+    chime = graph.play_sound("gate-sound", _CHIME_SOUND_ID, (1160, 260))
     announce = graph.print_string("gate-opens", "All three relics! The north gate grinds open.", (1420, 260))
     graph.chain((tick, "", "Exec"), (found, "Exec", ""))
     graph.wire(all_found, "Result", found, "Condition")
     graph.wire(found, "True", once, "Exec")
-    graph.chain((once, "", "Completed"), (open_gate, "Exec", "Out"), (rumble, "Exec", "Out"), (announce, "Exec", ""))
+    graph.chain((once, "", "Completed"), (open_gate, "Exec", "Out"), (chime, "Exec", "Out"), (announce, "Exec", ""))
 
     leave = graph.overlap("exit-overlap", exit_trigger, (80, 660))
     leave_once = graph.do_once("exit-once", (380, 660))
