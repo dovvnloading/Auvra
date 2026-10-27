@@ -97,9 +97,9 @@ const influence = (mesh: THREE.Mesh, morph: string) => mesh.morphTargetInfluence
 describe('Play Player Animation node', () => {
   it('declares its pins and defaults', () => {
     const definition = WORLD_NODE_DEFINITIONS.find(d => d.type === 'PlayPlayerAnimation')!;
-    expect(definition.inputs.map(p => `${p.name}:${p.dataType}`)).toEqual(['Exec:Exec', 'Clip:String', 'Mask Bone:String', 'Blend In:Float', 'Rate:Float']);
+    expect(definition.inputs.map(p => `${p.name}:${p.dataType}`)).toEqual(['Exec:Exec', 'Clip:String', 'Mask Bone:String', 'Blend In:Float', 'Rate:Float', 'Additive:Boolean']);
     expect(definition.outputs.map(p => `${p.name}:${p.dataType}`)).toEqual(['Out:Exec', 'Played:Boolean']);
-    expect(definition.data).toEqual({ default_Clip: '', 'default_Mask Bone': '', 'default_Blend In': DEFAULT_ANIMATION_BLEND_IN, default_Rate: 1 });
+    expect(definition.data).toEqual({ default_Clip: '', 'default_Mask Bone': '', 'default_Blend In': DEFAULT_ANIMATION_BLEND_IN, default_Rate: 1, default_Additive: false });
     expect(DEFAULT_ANIMATION_BLEND_IN).toBe(0.15);
   });
 
@@ -118,6 +118,12 @@ describe('Play Player Animation node', () => {
     node.run();
     expect(playPlayerAnimation).toHaveBeenCalledWith('Punch', { blendIn: 0.3, rate: 2, maskBone: 'Spine' });
     expect(node.fired).toEqual([{ pin: 'Out', data: { Played: false } }]);
+  });
+
+  it('asks for an additive montage when Additive is on', () => {
+    const playPlayerAnimation = vi.fn(() => true);
+    harness('PlayPlayerAnimation', { Clip: 'Flinch', Additive: true }, fakeServices({ playPlayerAnimation })).run();
+    expect(playPlayerAnimation).toHaveBeenCalledWith('Flinch', { blendIn: 0.15, rate: 1, additive: true });
   });
 
   it('continues with Played false when there is no animation service', () => {

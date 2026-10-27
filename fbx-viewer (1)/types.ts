@@ -410,6 +410,8 @@ export interface Blueprint {
   ik?: CharacterIKSettings;
   /** A player's fire and aim clips, layered over its locomotion. */
   upperBody?: UpperBodySettings;
+  /** Added on top of whatever the character is doing each time it is hurt (not by the hit that kills it). */
+  hitReactClip?: string | null;
   /** An enemy's authored behavior (runtime/behaviorTree.ts); without one it uses the built-in AI. */
   behaviorTree?: BehaviorTreeData;
 }

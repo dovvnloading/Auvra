@@ -304,6 +304,30 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                             )}
 
                             <div className="space-y-2">
+                                <label className="text-[10px] uppercase font-bold text-gray-500 flex items-center gap-2">
+                                    <Zap size={12} /> Hit Reaction
+                                </label>
+                                <div className="bg-gray-800/50 rounded p-3 border border-gray-800 space-y-3">
+                                    <div className="flex items-center justify-between gap-4">
+                                        <span className="text-xs text-gray-400 shrink-0">When hurt</span>
+                                        <select
+                                            aria-label="Hit reaction clip"
+                                            value={blueprint.hitReactClip ?? ''}
+                                            onChange={(e) => onUpdate(blueprint.id, { hitReactClip: e.target.value || null })}
+                                            className="w-36 bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500"
+                                        >
+                                            <option value="">None</option>
+                                            {clipNames.map(name => <option key={name} value={name}>{name}</option>)}
+                                            {blueprint.hitReactClip && !clipNames.includes(blueprint.hitReactClip) && <option value={blueprint.hitReactClip}>{blueprint.hitReactClip} (missing)</option>}
+                                        </select>
+                                    </div>
+                                    <p className="text-[9px] text-gray-500 leading-tight">
+                                        Added on top of the current animation each time the character is hurt, so it flinches without stopping. The clip&apos;s first frame is its neutral pose.
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div className="space-y-2">
                                 <label className="text-[10px] uppercase font-bold text-gray-500">System Info</label>
                                 <div className="bg-gray-800/50 rounded p-3 border border-gray-800 space-y-2">
                                     <div className="flex justify-between text-[10px]">

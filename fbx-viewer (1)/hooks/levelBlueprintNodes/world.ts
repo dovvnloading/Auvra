@@ -102,6 +102,8 @@ export interface PlayAnimationOptions {
     rate: number;
     /** Only this bone and its children play the clip; omitted plays it on the full body. */
     maskBone?: string;
+    /** Add the clip's motion on top of the current pose instead of replacing it. */
+    additive?: boolean;
 }
 
 /** What world nodes may do to the play session. Implementations must never write to the project. */
@@ -290,10 +292,10 @@ export const WORLD_NODE_DEFINITIONS: readonly WorldNodeDefinition[] = [
     {
         type: 'PlayPlayerAnimation',
         title: 'Play Player Animation',
-        description: "Plays a clip once over the player's animation graph, then blends back. Mask Bone limits it to that bone and its children (e.g. Spine); empty plays it on the full body. Played is false when the clip cannot play.",
-        inputs: [exec('Exec', 'Input'), input('Clip', 'String'), input('Mask Bone', 'String'), input('Blend In', 'Float'), input('Rate', 'Float')],
+        description: "Plays a clip once over the player's animation graph, then blends back. Mask Bone limits it to that bone and its children (e.g. Spine); empty plays it on the full body. Additive adds the clip's motion to the pose instead of replacing it (a flinch while running). Played is false when the clip cannot play.",
+        inputs: [exec('Exec', 'Input'), input('Clip', 'String'), input('Mask Bone', 'String'), input('Blend In', 'Float'), input('Rate', 'Float'), input('Additive', 'Boolean')],
         outputs: [exec('Out', 'Output'), output('Played', 'Boolean')],
-        data: { default_Clip: '', 'default_Mask Bone': '', 'default_Blend In': DEFAULT_ANIMATION_BLEND_IN, default_Rate: 1 },
+        data: { default_Clip: '', 'default_Mask Bone': '', 'default_Blend In': DEFAULT_ANIMATION_BLEND_IN, default_Rate: 1, default_Additive: false },
     },
     {
         type: 'SetMorphTarget',
@@ -556,6 +558,7 @@ const runPlayPlayerAnimation: WorldNodeExecutor = (_node, ctx) => {
     const blendIn = Math.max(0, toNumber(ctx.evaluate('Blend In'), DEFAULT_ANIMATION_BLEND_IN));
     const rate = toNumber(ctx.evaluate('Rate'), 1);
     const options: PlayAnimationOptions = maskBone ? { blendIn, rate, maskBone } : { blendIn, rate };
+    if (ctx.evaluate('Additive') === true) options.additive = true;
     const played = clip !== '' && rate > 0 && ctx.services.playPlayerAnimation?.(clip, options) === true;
     finish(ctx, { Played: played });
 };
