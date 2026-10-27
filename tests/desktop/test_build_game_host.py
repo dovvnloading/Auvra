@@ -10,6 +10,7 @@ import unittest
 from Auvra.desktop.assets import AssetTransferRegistry
 from Auvra.desktop.dialogs import DialogSelection, WinFormsProjectDialogs
 from Auvra.desktop.project_host import NativeProjectHost
+from Auvra.host.validation import validate_message
 from Auvra.host.dispatcher import HostOperationError
 from Auvra.project.game_build import BUILD_MARKER, TEMPLATE_MANIFEST
 from tests.desktop.test_dialogs import _Forms
@@ -125,12 +126,15 @@ class BuildGameHostTests(unittest.TestCase):
         self.assertEqual(result["projectId"], self.project_id)
         self.assertEqual(result["revision"], self.revision)
         self.assertRegex(result["handle"], r"^build-[A-Za-z0-9_-]+$")
-        self.assertEqual(set(result["report"]), {"target", "files", "bytes", "assets", "levels"})
+        self.assertEqual(set(result["report"]), {"target", "files", "sizeBytes", "assets", "levels"})
         self.assertEqual(result["report"]["target"], "web")
         self.assertEqual(result["report"]["assets"], 1)
         self.assertEqual(result["report"]["levels"], 1)
-        self.assertGreater(result["report"]["bytes"], 0)
+        self.assertGreater(result["report"]["sizeBytes"], 0)
         encoded = json.dumps(result)
+        # The reply must pass the host protocol, which the editor checks before accepting it.
+        validate_message({"protocol": "auvra.host/1", "type": "response", "id": "r1", "session": "s1",
+                          "revision": 1, "ok": True, "result": result})
         self.assertNotIn(str(self.root), encoded)
         self.assertNotIn(self.root.as_posix(), encoded)
 
@@ -147,6 +151,12 @@ class BuildGameHostTests(unittest.TestCase):
         self.assertEqual(sorted(path.name for path in self.builds.iterdir()),
                          ["Demo Game-Web", "Demo Game-Windows"])
         self._assert_error("invalid_request", destinationHandle="build-unknown")
+
+    def test_dialog_handle_asks_for_a_folder(self) -> None:
+        # The editor sends "dialog" when it has no folder to reuse.
+        result = self._build(destinationHandle="dialog")
+        self.assertEqual(self.dialogs.build_requests, ["Demo Game"])
+        self.assertRegex(result["handle"], r"^build-[A-Za-z0-9_-]+$")
 
     def test_read_only_project_builds_but_identity_and_revision_must_match(self) -> None:
         self.host.service.active.read_only = True
