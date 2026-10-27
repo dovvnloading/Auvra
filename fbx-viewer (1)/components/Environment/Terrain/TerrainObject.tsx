@@ -34,6 +34,8 @@ interface TerrainObjectProps {
     sculptingEnabled?: boolean;
     sculptSettings?: TerrainBrushSettings;
     onHeightUpdate?: (id: string, heights: number[]) => void;
+    /** Runs as a height stroke begins, before it changes anything (the undo snapshot). */
+    onStrokeStart?: () => void;
     /**
      * Draw distant parts with fewer vertices (TerrainLodMesh). Used by the game runtime; the editor keeps
      * the full-resolution mesh, which sculpting and placement work on directly.
@@ -98,6 +100,7 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
     sculptingEnabled: sculptingRequested,
     sculptSettings,
     onHeightUpdate,
+    onStrokeStart,
     lod = false
 }, ref) => {
     // Heights stored in a heightfield asset are loaded after the level opens.
@@ -246,6 +249,7 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
         if (!sculptsHeights) return;
         // R3F automatically captures pointer on the target mesh
         isSculpting.current = true;
+        onStrokeStart?.();
         
         // Initial sculpt on click
         if (sculptSettings) {

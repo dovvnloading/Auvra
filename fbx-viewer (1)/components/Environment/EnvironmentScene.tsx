@@ -777,6 +777,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                         const source = objectById.get(id);
                         if (source) updateLevelObject(id, { terrainData: { ...source.terrainData!, heights } });
                     }}
+                    onStrokeStart={onSnapshot}
                 />
             ))}
 
