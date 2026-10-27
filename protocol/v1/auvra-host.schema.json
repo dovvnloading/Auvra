@@ -15,7 +15,7 @@
     "sha256": {"type":"string","pattern":"^[A-Fa-f0-9]{64}$"},
     "mime": {"type":"string","minLength":1,"maxLength":127,"pattern":"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$"},
     "emptyObject": {"type":"object","properties":{},"required":[],"additionalProperties":false},
-    "jsonValue": {"oneOf":[{"type":"null"},{"type":"boolean"},{"type":"string","maxLength":1048576,"not":{"pattern":"^(?:[A-Za-z]:[\\\\/]|\\\\\\\\|file://|/)"}},{"type":"number"},{"type":"array","items":{"$ref":"#/$defs/jsonValue"},"maxItems":100000},{"type":"object","propertyNames":{"not":{"pattern":"^(?:path|filepath|filesystempath|sourcepath|assetpath|directorypath|absolutepath|localpath|base64|binary|bytes|blob)$"}},"additionalProperties":{"$ref":"#/$defs/jsonValue"},"maxProperties":10000}]},
+    "jsonValue": {"oneOf":[{"type":"null"},{"type":"boolean"},{"type":"string","maxLength":1048576,"not":{"pattern":"^(?:[A-Za-z]:[\\\\/]|\\\\\\\\|file://|/(?:[^/\\r\\n][^\\r\\n]*)?$)"}},{"type":"number"},{"type":"array","items":{"$ref":"#/$defs/jsonValue"},"maxItems":100000},{"type":"object","propertyNames":{"not":{"pattern":"^(?:path|filepath|filesystempath|sourcepath|assetpath|directorypath|absolutepath|localpath|base64|binary|bytes|blob)$"}},"additionalProperties":{"$ref":"#/$defs/jsonValue"},"maxProperties":10000}]},
     "projectRef": {"type":"object","required":["projectId"],"properties":{"projectId":{"$ref":"#/$defs/projectId"}},"additionalProperties":false},
     "mutationRef": {"type":"object","required":["projectId","expectedRevision"],"properties":{"projectId":{"$ref":"#/$defs/projectId"},"expectedRevision":{"$ref":"#/$defs/revision"}},"additionalProperties":false},
     "request": {
