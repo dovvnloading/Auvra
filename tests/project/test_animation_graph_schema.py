@@ -34,6 +34,26 @@ class AnimationGraphSchemaTests(unittest.TestCase):
                        notifies=[{"id": "n1", "name": "Footstep", "time": 0.25}])
         validate_domain("graphs", domain_document("graphs", [graph]))
 
+    def test_accepts_nested_state_machines(self):
+        inner = {"id": "i1", "name": "Walk", "position": {"x": 0, "y": 0}, "loop": True, "isRoot": True,
+                 "stateType": "Single", "clipName": "Walk", "blendSamples": [], "blendParamX": "", "blendParamY": ""}
+        graph = _graph(stateType="StateMachine", subGraph={"states": [inner], "transitions": []})
+        validate_domain("graphs", domain_document("graphs", [graph]))
+
+    def test_rejects_unknown_fields_inside_nested_state_machines(self):
+        graph = _graph(stateType="StateMachine", subGraph={"states": [{"id": "i1", "mood": "calm"}], "transitions": []})
+        with self.assertRaisesRegex(ValueError, "unknown fields in states"):
+            validate_domain("graphs", domain_document("graphs", [graph]))
+
+    def test_accepts_curves(self):
+        graph = _graph(curves=[{"id": "c1", "variableId": "v1", "keys": [{"time": 0, "value": 0}, {"time": 1, "value": 1}]}])
+        validate_domain("graphs", domain_document("graphs", [graph]))
+
+    def test_rejects_unknown_curve_key_fields(self):
+        graph = _graph(curves=[{"id": "c1", "variableId": "v1", "keys": [{"time": 0, "value": 0, "ease": "in"}]}])
+        with self.assertRaisesRegex(ValueError, "unknown fields in keys"):
+            validate_domain("graphs", domain_document("graphs", [graph]))
+
     def test_rejects_unknown_notify_fields(self):
         graph = _graph(notifies=[{"id": "n1", "name": "Footstep", "time": 0.25, "sound": "x"}])
         with self.assertRaisesRegex(ValueError, "unknown fields in notifies"):

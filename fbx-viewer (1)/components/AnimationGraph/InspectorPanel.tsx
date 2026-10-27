@@ -19,6 +19,8 @@ interface InspectorPanelProps {
     availableClips: AvailableClipInfo[];
     onDeleteState: (id: string) => void;
     onDeleteTransition: (id: string) => void;
+    /** Shows a State Machine state's own states on the canvas. */
+    onOpenStateMachine?: (id: string) => void;
 }
 
 export const InspectorPanel: React.FC<InspectorPanelProps> = ({
@@ -28,7 +30,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     updateGraph,
     availableClips,
     onDeleteState,
-    onDeleteTransition
+    onDeleteTransition,
+    onOpenStateMachine
 }) => {
     const selectedNode = graph.states.find(s => s.id === selectedNodeId);
     const selectedTransition = graph.transitions.find(t => t.id === selectedNodeId);
@@ -69,6 +72,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     onDelete={onDeleteState}
                     clipOptions={clipOptions}
                     blendParamOptions={blendParamOptions}
+                    onOpenStateMachine={onOpenStateMachine}
+                    clipDuration={availableClips.find(item => item.name === selectedNode.clipName)?.clip?.duration}
                 />
              ) : selectedTransition ? (
                 <TransitionInspector 

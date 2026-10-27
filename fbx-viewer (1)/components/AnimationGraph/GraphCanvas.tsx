@@ -28,6 +28,8 @@ interface GraphCanvasProps {
     activeStateId?: string | null;
     /** The transition the preview runtime took last; highlighted briefly each time it fires. */
     firedTransition?: FiredTransition | null;
+    /** Opens a State Machine state (double-click) to edit the states inside it. */
+    onOpenStateMachine?: (id: string) => void;
 }
 
 /** A transition the preview runtime just took; `seq` grows with every firing, so a repeat flashes again. */
@@ -55,7 +57,8 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
     canUndo = false,
     canRedo = false,
     activeStateId = null,
-    firedTransition = null
+    firedTransition = null,
+    onOpenStateMachine
 }) => {
     const canvasRef = useRef<HTMLDivElement>(null);
     
@@ -277,6 +280,10 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
                             }
                             onSelectNode(state.id);
                         }}
+                        onDoubleClick={state.stateType === 'StateMachine' && onOpenStateMachine ? (e) => {
+                            e.stopPropagation();
+                            onOpenStateMachine(state.id);
+                        } : undefined}
                     />
                 ))}
             </div>

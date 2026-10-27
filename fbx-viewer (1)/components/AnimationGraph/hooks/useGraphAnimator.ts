@@ -8,6 +8,7 @@ import type { MontagePlayer } from '../utils/montage';
 import { crossedNotifies } from '../utils/notifies';
 import { rootMotionDelta, type RootMotion } from '../utils/rootMotion';
 import { actionPhase, syncBlendActions, syncLeader } from '../utils/syncGroups';
+import { curveVariableValue } from '../utils/curves';
 
 /**
  * Animation runs before every other frame callback (priority -1), so IK, sockets and attachments
@@ -268,6 +269,13 @@ export const useGraphAnimator = (
         const clipName = currentState.clipName as string;
         const duration = tracked.getClip().duration;
         const after = tracked.time;
+
+        // Curves drive their variables from the clip's time, ready for this frame's transitions.
+        currentState.curves?.forEach(curve => {
+            if (!curve.variableId || !curve.keys.length) return;
+            const type = graph.variables.find(variable => variable.id === curve.variableId)?.type;
+            variables[curve.variableId] = curveVariableValue(curve, after, type);
+        });
 
         if (currentState.notifies?.length && duration > 0) {
             crossedNotifies(currentState.notifies, before, after, duration, currentState.loop, tracked.timeScale).forEach(notify => {

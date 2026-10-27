@@ -1,6 +1,7 @@
 
-import React, { useState, useMemo, useCallback, useRef } from 'react';
-import { BoxSelect, Network, Component, FileCode, Settings } from 'lucide-react';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { BoxSelect, Network, Component, FileCode, Settings, ChevronRight } from 'lucide-react';
+import type { AnimationGraphData } from '../../types';
 import { GraphPreview, type PreviewStatus } from './GraphPreview';
 import { BlackboardPanel } from './BlackboardPanel';
 import { InspectorPanel } from './InspectorPanel';
@@ -9,6 +10,7 @@ import type { GraphRuntimeAPI } from './GraphRuntime';
 import { Select } from '../UI/Select';
 import { useGraphContext } from './hooks/useGraphContext';
 import { useGraphHistory } from './hooks/useGraphHistory';
+import { authoredTransitionId, graphLevel, levelActiveStateId, writeGraphLevel } from './utils/stateMachines';
 
 interface GraphEditorProps {
     visible: boolean;
@@ -64,21 +66,54 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
       setLastFired({ key: contextKeyRef.current, fired: { id, seq: firedSeqRef.current } });
   }, []);
 
+  // --- Nested state machines: the canvas shows one level at a time ---
+  // The State Machine states opened, from the top level down; empty shows the top level.
+  const [machinePath, setMachinePath] = useState<string[]>([]);
+  useEffect(() => { setMachinePath([]); }, [contextKey]);
+  const level = graphLevel(currentGraph, machinePath);
+  // A machine that was deleted, retyped or undone away drops the view back to the top.
+  const path = useMemo(() => (level ? machinePath : []), [level, machinePath]);
+  useEffect(() => { if (!level && machinePath.length) setMachinePath([]); }, [level, machinePath.length]);
+  const levelGraph = useMemo<AnimationGraphData>(
+      () => (level ? { ...currentGraph, states: level.states, transitions: level.transitions } : currentGraph),
+      [currentGraph, level],
+  );
+  const updateLevel = useCallback((modelId: string, data: Partial<AnimationGraphData>) => {
+      updateGraphWithHistory(modelId, writeGraphLevel(currentGraph, path, data));
+  }, [updateGraphWithHistory, currentGraph, path]);
+  const updateLevelLive = useCallback((modelId: string, data: Partial<AnimationGraphData>) => {
+      handleUpdateGraph(modelId, writeGraphLevel(currentGraph, path, data));
+  }, [handleUpdateGraph, currentGraph, path]);
+  const { commitMove } = history;
+  const commitLevelMove = useCallback((before: AnimationGraphData) => {
+      commitMove({ ...currentGraph, ...writeGraphLevel(currentGraph, path, { states: before.states, transitions: before.transitions }) });
+  }, [commitMove, currentGraph, path]);
+  const openStateMachine = useCallback((id: string) => {
+      setMachinePath(current => [...(graphLevel(currentGraph, current) ? current : []), id]);
+      setSelectedNodeId(null);
+  }, [currentGraph]);
+  const crumbs = path.map((id, index) => ({
+      id,
+      name: graphLevel(currentGraph, path.slice(0, index))?.states.find(state => state.id === id)?.name ?? 'State Machine',
+  }));
+
   const previewRunning = visible && previewStatus !== 'no-mesh';
-  const liveActiveStateId = previewRunning && liveActive?.key === contextKey ? liveActive.id : null;
-  const firedTransition = previewRunning && lastFired?.key === contextKey ? lastFired.fired : null;
+  const liveActiveStateId = previewRunning && liveActive?.key === contextKey ? levelActiveStateId(liveActive.id, path) : null;
+  const firedTransition = previewRunning && lastFired?.key === contextKey
+      ? { ...lastFired.fired, id: authoredTransitionId(lastFired.fired.id) }
+      : null;
 
   const handleDeleteState = (id: string) => {
-      const updatedStates = currentGraph.states.filter(s => s.id !== id);
+      const updatedStates = levelGraph.states.filter(s => s.id !== id);
       // An any-state transition belongs to its target only; its stored source is not a real link.
-      const updatedTrans = currentGraph.transitions.filter(t => t.toStateId !== id && (t.anyState || t.fromStateId !== id));
-      updateGraphWithHistory('', { states: updatedStates, transitions: updatedTrans });
+      const updatedTrans = levelGraph.transitions.filter(t => t.toStateId !== id && (t.anyState || t.fromStateId !== id));
+      updateLevel('', { states: updatedStates, transitions: updatedTrans });
       setSelectedNodeId(null);
   };
 
   const handleDeleteTransition = (id: string) => {
-      const updatedTrans = currentGraph.transitions.filter(t => t.id !== id);
-      updateGraphWithHistory('', { transitions: updatedTrans });
+      const updatedTrans = levelGraph.transitions.filter(t => t.id !== id);
+      updateLevel('', { transitions: updatedTrans });
       setSelectedNodeId(null);
   };
 
@@ -155,14 +190,15 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
                         />
                     )}
                     {activeSidebarTab === 'inspector' && (
-                        <InspectorPanel 
+                        <InspectorPanel
                             selectedNodeId={selectedNodeId}
-                            graph={currentGraph}
+                            graph={levelGraph}
                             modelId={selectedContextId}
-                            updateGraph={updateGraphWithHistory}
+                            updateGraph={updateLevel}
                             availableClips={allSceneClips}
                             onDeleteState={handleDeleteState}
                             onDeleteTransition={handleDeleteTransition}
+                            onOpenStateMachine={openStateMachine}
                         />
                     )}
                 </div>
@@ -195,14 +231,37 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
                     )}
                 </div>
 
+                {/* Which state machine the canvas shows */}
+                {crumbs.length > 0 && (
+                    <nav aria-label="State machine path" className="flex items-center gap-1 px-3 py-1.5 bg-gray-950 border-b border-gray-800 text-[11px] shrink-0">
+                        <button type="button" onClick={() => { setMachinePath([]); setSelectedNodeId(null); }} className="px-1.5 py-0.5 rounded text-gray-400 hover:text-white hover:bg-gray-800">
+                            Graph
+                        </button>
+                        {crumbs.map((crumb, index) => (
+                            <React.Fragment key={crumb.id}>
+                                <ChevronRight size={12} className="text-gray-600" />
+                                <button
+                                    type="button"
+                                    disabled={index === crumbs.length - 1}
+                                    onClick={() => { setMachinePath(path.slice(0, index + 1)); setSelectedNodeId(null); }}
+                                    className={`px-1.5 py-0.5 rounded ${index === crumbs.length - 1 ? 'text-white font-bold' : 'text-gray-400 hover:text-white hover:bg-gray-800'}`}
+                                >
+                                    {crumb.name}
+                                </button>
+                            </React.Fragment>
+                        ))}
+                    </nav>
+                )}
+
                 {/* Graph Canvas */}
-                <GraphCanvas 
-                    key={selectedContextId}
-                    graph={currentGraph}
+                <GraphCanvas
+                    key={`${selectedContextId}:${path.join('/')}`}
+                    graph={levelGraph}
                     modelId={selectedContextId}
-                    updateGraph={updateGraphWithHistory}
-                    updateGraphLive={handleUpdateGraph}
-                    onMoveEnd={history.commitMove}
+                    updateGraph={updateLevel}
+                    updateGraphLive={updateLevelLive}
+                    onMoveEnd={commitLevelMove}
+                    onOpenStateMachine={openStateMachine}
                     onUndo={history.undo}
                     onRedo={history.redo}
                     canUndo={history.canUndo}

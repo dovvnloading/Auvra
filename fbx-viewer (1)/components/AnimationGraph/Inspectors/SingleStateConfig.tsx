@@ -3,6 +3,7 @@ import { Bell, Layers, Plus, X } from 'lucide-react';
 import { AnimNotify, GraphState } from '../../../types';
 import { Select } from '../../UI/Select';
 import { ScrubbableInput } from '../../UI/Properties/ScrubbableInput';
+import { CurvesEditor } from './CurvesEditor';
 
 const NO_PLAY_RATE_PARAM_OPTIONS = [{ label: '-- None --', value: '' }];
 
@@ -12,6 +13,10 @@ interface SingleStateConfigProps {
     clipOptions: { label: string; value: string }[];
     /** The graph's Float variables that can drive the play rate, led by a None entry (value ''). */
     playRateParamOptions?: { label: string; value: string }[];
+    /** The graph's variables a curve can drive, led by a None entry (value ''). */
+    curveVariableOptions?: { label: string; value: string }[];
+    /** Length of the state's clip in seconds, when it is loaded. */
+    clipDuration?: number;
 }
 
 const ToggleRow: React.FC<{ label: string; checked: boolean; onChange: (checked: boolean) => void }> = ({ label, checked, onChange }) => (
@@ -34,7 +39,9 @@ export const SingleStateConfig: React.FC<SingleStateConfigProps> = ({
     node,
     updateState,
     clipOptions,
-    playRateParamOptions = NO_PLAY_RATE_PARAM_OPTIONS
+    playRateParamOptions = NO_PLAY_RATE_PARAM_OPTIONS,
+    curveVariableOptions = NO_PLAY_RATE_PARAM_OPTIONS,
+    clipDuration
 }) => {
     const playRate = typeof node.playRate === 'number' && Number.isFinite(node.playRate) ? node.playRate : 1;
     const notifies = node.notifies ?? [];
@@ -147,6 +154,13 @@ export const SingleStateConfig: React.FC<SingleStateConfigProps> = ({
                     )}
                 </div>
             </div>
-        </div>
+
+            <CurvesEditor
+                curves={node.curves ?? []}
+                onChange={(curves) => updateState({ curves })}
+                variableOptions={curveVariableOptions}
+                clipDuration={clipDuration}
+            />
+</div>
     );
 };
