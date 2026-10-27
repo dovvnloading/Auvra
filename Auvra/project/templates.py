@@ -5,8 +5,8 @@ sky, a player start, a player character blueprint, scattered props and game sett
 user can press Play immediately and learn by editing something that works.
 
 ``arena`` ("Arena Sample") is a small complete game to learn from. Level 1 is a walled arena:
-collect every spinning coin while red guards from a spawner hunt you, then travel to the Finish
-level. It shows solid and trigger colliders, dynamic rigid bodies, rotator, mover, particle and
+collect every spinning coin while red guards from a spawner hunt you (a shot guard falls as a
+ragdoll: its model is rigged, see templates/arena/enemy_model.py), then travel to the Finish level. It shows solid and trigger colliders, dynamic rigid bodies, rotator, mover, particle and
 light components, a level blueprint that keeps score in a level variable, plays a sound and
 changes level, an enemy blueprint, a HUD bound to the score and authored title and pause menus.
 """
