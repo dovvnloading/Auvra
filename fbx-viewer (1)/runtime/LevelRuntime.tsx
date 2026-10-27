@@ -48,6 +48,7 @@ import { PostProcessAllowedContext, usePostProcessClaimed } from './components/p
 import type { InputState } from './input';
 import { collectTimelineTargets } from './timeline/evaluate';
 import { TouchControls } from './TouchControls';
+import { spawnPositionAround } from './spawning';
 import { NetSessionProvider } from './net/NetSessionContext';
 import { NetStatus } from './net/NetStatus';
 import { LocalPlayerReplicator, RemotePlayers } from './net/RemotePlayers';
@@ -142,11 +143,12 @@ const SpawnerSystem: React.FC<{
 
                 if (sState.timer >= cfg.interval) {
                     sState.timer = 0;
+                    const index = sState.count;
                     sState.count++;
 
                     onSpawn({
                         blueprintId: cfg.blueprintId,
-                        position: obj.position,
+                        position: spawnPositionAround(obj.position, index),
                         rotation: obj.rotation,
                         spawnerId: obj.id
                     });
