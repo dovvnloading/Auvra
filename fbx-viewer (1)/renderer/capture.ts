@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { clone as cloneWithSkeletons } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { rendererCoordinator } from "./registry";
 import { diagnosticErrorType, frontendDiagnostics } from "../diagnostics/runtime";
 
@@ -26,15 +27,26 @@ class CaptureRenderer {
       const light = new THREE.DirectionalLight(0xffffff, 1.5);
       light.position.set(2, 2, 5);
       scene.add(light);
-      const clone = object.clone(true);
-      scene.add(clone);
+      // Object3D.clone leaves a skinned mesh bound to the original's bones, so it would be drawn
+      // wherever those are; this clone's meshes follow its own bones.
+      const clone = cloneWithSkeletons(object);
+      // The clone is centred on the origin, then the pivot scales it about that point.
+      const pivot = new THREE.Group();
+      pivot.add(clone);
+      scene.add(pivot);
+      clone.updateMatrixWorld(true);
+      clone.traverse((child) => {
+        const mesh = child as THREE.SkinnedMesh;
+        // A skeleton that has never been drawn has no bone matrices, so its mesh would measure as a point.
+        if (mesh.isSkinnedMesh) { mesh.skeleton.update(); mesh.computeBoundingBox(); }
+      });
       const box = new THREE.Box3().setFromObject(clone);
       const size = new THREE.Vector3();
       const center = new THREE.Vector3();
       box.getSize(size); box.getCenter(center);
       clone.position.sub(center);
       const maxDimension = Math.max(size.x, size.y, size.z);
-      if (maxDimension > 0) clone.scale.multiplyScalar(2 / maxDimension);
+      if (maxDimension > 0) pivot.scale.setScalar(2 / maxDimension);
       const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
       camera.position.set(2.5, 2.5, 4);
       camera.lookAt(0, 0, 0);

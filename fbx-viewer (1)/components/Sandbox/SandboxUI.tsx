@@ -75,11 +75,11 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                         <AlertTriangle size={48} />
                     </div>
                     <h1 className="text-6xl font-black text-white tracking-[0.2em] drop-shadow-[0_0_25px_rgba(220,38,38,0.6)] font-mono">
-                        SIGNAL LOST
+                        GAME OVER
                     </h1>
                     <div className="h-px w-64 bg-red-900/50 mt-4 mb-4"></div>
                     <p className="text-xs text-red-400 font-mono tracking-widest uppercase">
-                        Simulation Terminated • Fatal Error
+                        The player was defeated
                     </p>
                 </div>
 
@@ -89,7 +89,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                         className="group relative px-8 py-3 bg-white text-black font-bold text-sm uppercase tracking-widest hover:bg-gray-200 transition-all clip-path-slant"
                     >
                         <span className="flex items-center gap-2">
-                            <RotateCcw size={16} /> Reboot System
+                            <RotateCcw size={16} /> Restart
                         </span>
                         <div className="absolute inset-0 border-2 border-white group-hover:scale-105 transition-transform" />
                     </button>
@@ -99,7 +99,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                         className="group px-8 py-3 bg-transparent text-gray-500 hover:text-red-500 font-bold text-sm uppercase tracking-widest border border-gray-800 hover:border-red-900 transition-all"
                     >
                         <span className="flex items-center gap-2">
-                            <XCircle size={16} /> Abort
+                            <XCircle size={16} /> Exit
                         </span>
                     </button>
                 </div>

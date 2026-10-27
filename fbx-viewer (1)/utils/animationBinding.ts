@@ -45,6 +45,16 @@ const bones = (root: THREE.Object3D): THREE.Bone[] => {
 
 export const isSkeletalModel = (model: AnimationTargetCandidate): boolean => bones(model.object).length > 0;
 
+/**
+ * `own` followed by the rest of `all`. Where models have clips of the same name ("Idle"), an
+ * animation graph plays the first one listed, so a model's own clips must come before the others.
+ */
+export const ownClipsFirst = <T>(own: readonly T[] | undefined, all: readonly T[]): T[] => {
+  if (!own?.length) return [...all];
+  const mine = new Set(own);
+  return [...own, ...all.filter((item) => !mine.has(item))];
+};
+
 export const selectAnimationTarget = <T extends AnimationTargetCandidate>(
   models: T[],
   selectedModelId: string | null,

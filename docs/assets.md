@@ -11,6 +11,8 @@ The **Content Browser** imports **FBX**, **glTF (.gltf with embedded data)**, **
 
 Animations in FBX and glTF files are kept and can be bound to characters in the animation graph.
 
+Animation files without a mesh, such as Mixamo downloads made "Without Skin", go onto a character: select the character in the library, then choose **Import > Animation** and pick one or more files. A file with one clip names the clip after the file, so `Walk.fbx` gives a clip called `Walk`. Clips made for a skeleton with the same bone names (Mixamo characters share one) play as they are. Others are retargeted when most of their animated bones match the character's.
+
 ## Reimport
 
 Choose **Reimport** on a model to replace its source file. The model keeps its id, so everything placed in levels and linked in blueprints updates to the new file.

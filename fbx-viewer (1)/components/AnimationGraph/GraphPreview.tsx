@@ -258,28 +258,57 @@ const PreviewSession: React.FC<PreviewSessionProps> = ({ resources, graph, allCl
     );
 };
 
-// The camera frames the model's origin raised to about chest height.
+// Without measurable bounds the camera frames the model's origin raised to about chest height.
 const FOCUS_OFFSET = new THREE.Vector3(0, 1, 0);
 // Share of the remaining distance the camera closes on the model each frame while following.
 const FOLLOW_LERP = 0.1;
 const MIN_FRAMING_DISTANCE = 2;
 const MAX_FRAMING_DISTANCE = 15;
+// Room left around a model framed by its bounds.
+const FRAMING_MARGIN = 1.15;
 
-const modelFocus = (object: THREE.Object3D, out: THREE.Vector3): THREE.Vector3 => {
+// Bones run through the middle of the body; the skin and the head reach past them.
+const SKELETON_PADDING = 1.2;
+
+const _bounds = new THREE.Box3();
+const _point = new THREE.Vector3();
+
+/**
+ * The model's bounding sphere, or null when it has nothing to measure. A skinned model is
+ * measured by its bones: its meshes' bounds depend on bone matrices that are only right once
+ * the model has been drawn.
+ */
+const measureModel = (object: THREE.Object3D, out: THREE.Sphere): THREE.Sphere | null => {
+    object.updateWorldMatrix(true, true);
+    _bounds.makeEmpty();
+    object.traverse((child) => {
+        if ((child as THREE.Bone).isBone) _bounds.expandByPoint(child.getWorldPosition(_point));
+    });
+    const skinned = !_bounds.isEmpty();
+    if (!skinned) _bounds.setFromObject(object);
+    if (_bounds.isEmpty()) return null;
+    _bounds.getBoundingSphere(out);
+    if (skinned) out.radius *= SKELETON_PADDING;
+    return out;
+};
+
+const modelFocus = (object: THREE.Object3D, offset: THREE.Vector3, out: THREE.Vector3): THREE.Vector3 => {
     object.updateWorldMatrix(true, false);
-    return object.getWorldPosition(out).add(FOCUS_OFFSET);
+    return object.getWorldPosition(out).add(offset);
 };
 
 /**
  * Orbit camera for the preview. It frames the model when the model appears, looking from the
- * main viewport's direction, and then leaves the view to the user; with `follow` on, the target
- * and the camera move with the model.
+ * main viewport's direction at the middle of its bounds from far enough to see all of it, and
+ * then leaves the view to the user; with `follow` on, the target and the camera move with the model.
  */
 const PreviewCamera: React.FC<{ targetObject: THREE.Object3D; follow: boolean }> = ({ targetObject, follow }) => {
     const { cameraState } = useScene();
     const camera = useThree(state => state.camera);
     const controlsRef = useRef<OrbitControlsImpl>(null);
     const focus = useRef(new THREE.Vector3());
+    // From the model's origin to the point the camera looks at.
+    const focusOffset = useRef(FOCUS_OFFSET.clone());
     const step = useRef(new THREE.Vector3());
     // The main view's direction when the preview opened; later main-view moves do not reframe.
     const initialView = useRef(cameraState);
@@ -290,8 +319,17 @@ const PreviewCamera: React.FC<{ targetObject: THREE.Object3D; follow: boolean }>
         const { position, target } = initialView.current;
         const offset = new THREE.Vector3(position[0] - target[0], position[1] - target[1], position[2] - target[2]);
         if (offset.lengthSq() < 1e-6) offset.set(4, 3, 8);
-        offset.setLength(THREE.MathUtils.clamp(offset.length(), MIN_FRAMING_DISTANCE, MAX_FRAMING_DISTANCE));
-        modelFocus(targetObject, focus.current);
+        let distance = THREE.MathUtils.clamp(offset.length(), MIN_FRAMING_DISTANCE, MAX_FRAMING_DISTANCE);
+        const bounds = measureModel(targetObject, new THREE.Sphere());
+        if (bounds) {
+            focusOffset.current.copy(bounds.center).sub(targetObject.getWorldPosition(focus.current));
+            const halfFov = THREE.MathUtils.degToRad((camera as THREE.PerspectiveCamera).fov ?? 45) / 2;
+            distance = Math.max(distance, (bounds.radius / Math.sin(halfFov)) * FRAMING_MARGIN);
+        } else {
+            focusOffset.current.copy(FOCUS_OFFSET);
+        }
+        offset.setLength(distance);
+        modelFocus(targetObject, focusOffset.current, focus.current);
         controls.target.copy(focus.current);
         camera.position.copy(focus.current).add(offset);
         controls.update();
@@ -300,7 +338,7 @@ const PreviewCamera: React.FC<{ targetObject: THREE.Object3D; follow: boolean }>
     useFrame(() => {
         const controls = controlsRef.current;
         if (!follow || !controls) return;
-        modelFocus(targetObject, focus.current);
+        modelFocus(targetObject, focusOffset.current, focus.current);
         step.current.subVectors(focus.current, controls.target).multiplyScalar(FOLLOW_LERP);
         controls.target.add(step.current);
         camera.position.add(step.current);

@@ -208,6 +208,9 @@ export class ProjectService {
     file: File,
     options: AssetTransferOptions,
   ): Promise<string | null> {
+    // A file picked from disk is sent through a Blob that wraps it: WebView2 does not
+    // pass a picked file's own body to the native asset handler, so its upload fails.
+    const body = new Blob([file], { type: ticket.mime });
     // XMLHttpRequest is deliberately used for this local, ticketed transfer:
     // Fetch has no upload-progress surface. The native WebView handler streams
     // the body on its bounded background owner.
@@ -215,7 +218,7 @@ export class ProjectService {
       return fetch(ticket.url, {
         method: ticket.method,
         headers: { 'Content-Type': ticket.mime },
-        body: file,
+        body,
         signal: options.signal,
       }).then((response) => {
         if (!response.ok) throw new Error(`Asset upload failed (${response.status})`);
@@ -254,7 +257,7 @@ export class ProjectService {
       request.onabort = () => finish(() => reject(new DOMException('Asset upload was cancelled.', 'AbortError')));
       options.signal?.addEventListener('abort', onAbort, { once: true });
       if (options.signal?.aborted) onAbort();
-      else request.send(file);
+      else request.send(body);
     });
   }
 

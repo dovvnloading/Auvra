@@ -12,6 +12,7 @@ import { SocketController, resolveSocketFlashTextureUrl } from '../Scene/SocketC
 import { useEntityHealth } from './hooks/useEntityHealth';
 import { WorldHealthBar } from './UI/WorldHealthBar';
 import { useGameContent } from '../../runtime/GameContentContext';
+import { ownClipsFirst } from '../../utils/animationBinding';
 
 /** Seconds the death animation plays before the body starts fading. */
 const DEATH_ANIM_DURATION = 3;
@@ -20,15 +21,47 @@ const FADE_DURATION = 1.5;
 /** Largest frame step the death sequence accepts, so a resumed or backgrounded tab does not skip it. */
 const MAX_DEATH_STEP = 0.1;
 
-const collectMaterials = (object: THREE.Object3D): THREE.Material[] => {
+interface FadeMaterials {
+    /** The copies to fade. */
+    materials: THREE.Material[];
+    /** Puts the original materials back and frees the copies. */
+    restore: () => void;
+}
+
+interface DeathSequence {
+    elapsed: number;
+    /** Taken when the body starts fading. */
+    fade: FadeMaterials | null;
+    despawned: boolean;
+}
+
+/**
+ * Gives every mesh under `object` its own transparent copy of its materials to fade. The originals
+ * are shared with the model in the library and with every other entity of the same model, so
+ * fading them would hide all of those too.
+ */
+export const takeFadeMaterials = (object: THREE.Object3D): FadeMaterials => {
     const materials: THREE.Material[] = [];
+    const meshes: Array<[THREE.Mesh, THREE.Material | THREE.Material[]]> = [];
     object.traverse((child) => {
-        if ((child as THREE.Mesh).isMesh) {
-            const mesh = child as THREE.Mesh;
-            materials.push(...(Array.isArray(mesh.material) ? mesh.material : [mesh.material]));
-        }
+        const mesh = child as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        const copy = (material: THREE.Material) => {
+            const faded = material.clone();
+            faded.transparent = true;
+            materials.push(faded);
+            return faded;
+        };
+        meshes.push([mesh, mesh.material]);
+        mesh.material = Array.isArray(mesh.material) ? mesh.material.map(copy) : copy(mesh.material);
     });
-    return materials;
+    return {
+        materials,
+        restore: () => {
+            for (const [mesh, original] of meshes) mesh.material = original;
+            for (const material of materials) material.dispose();
+        },
+    };
 };
 
 interface SandboxEntityProps {
@@ -93,6 +126,9 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
     
     // Track initialization to prevent resetting position on re-renders
     const initializedModelId = useRef<string | null>(null);
+
+    // A clip name another model shares resolves to this model's own clip.
+    const clips = useMemo(() => ownClipsFirst(model.animations, allClips), [model.animations, allClips]);
 
     // --- Configuration ---
     const maxHealth = useMemo(() => {
@@ -186,15 +222,13 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
     // Driven by the frame loop (not wall-clock timers) so pausing the game pauses it.
     const onDespawnRef = useRef(onDespawn);
     onDespawnRef.current = onDespawn;
-    const deathSequence = useRef<{ elapsed: number; fadeMaterials: THREE.Material[] | null; despawned: boolean } | null>(null);
+    const deathSequence = useRef<DeathSequence | null>(null);
 
     useEffect(() => {
-        collectMaterials(model.object).forEach(mat => {
-            mat.opacity = 1;
-            mat.transparent = false;
-            mat.needsUpdate = true;
-        });
-        deathSequence.current = isDead ? { elapsed: 0, fadeMaterials: null, despawned: false } : null;
+        const sequence: DeathSequence | null = isDead ? { elapsed: 0, fade: null, despawned: false } : null;
+        deathSequence.current = sequence;
+        // Revived, restarted or removed: the model gets its own materials back.
+        return () => sequence?.fade?.restore();
     }, [isDead, model.object]);
 
     useFrame((_, delta) => {
@@ -204,17 +238,11 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
         sequence.elapsed += Math.min(delta, MAX_DEATH_STEP);
         if (sequence.elapsed < DEATH_ANIM_DURATION) return;
 
-        if (!sequence.fadeMaterials) {
-            sequence.fadeMaterials = collectMaterials(model.object);
-            sequence.fadeMaterials.forEach(mat => {
-                mat.transparent = true;
-                mat.needsUpdate = true;
-            });
-        }
+        sequence.fade ??= takeFadeMaterials(model.object);
 
         const t = Math.min(1, (sequence.elapsed - DEATH_ANIM_DURATION) / FADE_DURATION);
         const alpha = 1 - t;
-        sequence.fadeMaterials.forEach(mat => {
+        sequence.fade.materials.forEach(mat => {
             mat.opacity = alpha;
         });
 
@@ -347,7 +375,7 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
             <GraphRuntime
                 modelObject={model.object}
                 graph={blueprint.animationGraph}
-                allClips={allClips}
+                allClips={clips}
                 enableInputs={false}
                 driveLocomotion={false}
                 apiRef={internalApiRef}
