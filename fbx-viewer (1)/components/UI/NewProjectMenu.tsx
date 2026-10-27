@@ -14,6 +14,7 @@ export const PROJECT_TEMPLATE_OPTIONS: readonly ProjectTemplateOption[] = [
   { template: 'blank', label: 'Blank project', description: 'An empty project to build from scratch' },
   { template: 'starter', label: 'Starter', description: 'A walkable level with terrain, sky, player and props' },
   { template: 'arena', label: 'Arena Sample', description: 'A complete small game: coins, physics, HUD and menus' },
+  { template: 'courtyard', label: 'Courtyard Sample', description: 'A quest: an NPC dialogue, scripted relics and a gate a timeline opens' },
 ];
 
 interface NewProjectMenuProps {

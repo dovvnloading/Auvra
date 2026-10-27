@@ -17,6 +17,8 @@ interface CharacterCameraRigProps {
     mouseSensitivity?: number;
     /** Mouse up looks down; defaults to the player's options. */
     invertY?: boolean;
+    /** The target's starting yaw (radians, facing along +Z at 0): the camera starts behind it. */
+    initialYaw?: number;
 }
 
 // Reusable math objects
@@ -32,7 +34,8 @@ export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({
     isAiming,
     aimOffset = [0.5, 4.5, 1.0],
     mouseSensitivity,
-    invertY
+    invertY,
+    initialYaw = 0
 }) => {
     const { camera, gl } = useThree();
 
@@ -56,7 +59,7 @@ export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({
 
     // Internal State
     const state = useRef({
-        theta: Math.PI,    // Yaw
+        theta: initialYaw + Math.PI,    // Yaw: the camera sits behind the target, looking the way it faces
         phi: Math.PI / 2.5,  // Pitch
         aimFactor: 0,      // 0 to 1 blending
         currentDistance: defaultDistance

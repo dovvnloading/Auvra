@@ -12,6 +12,8 @@ The **Environment** tab is where levels are built.
 | Terrain | — | Create, sculpt (raise, lower, flatten, smooth) and texture-paint terrain |
 | Mask | M | Create texture masks on objects |
 
+The left panel's **Logic Actors** add a Player Start, an Enemy Spawner, an Audio Emitter, a Sky Sphere and an **Empty Object**: an object with no model, drawn in the editor as a small marker, for components such as trigger colliders, timelines, cameras and level streaming, or as a parent to group other objects under.
+
 Gizmo modes: **W** move, **E** rotate, **R** scale, **Z** toggles world/local space, **X** toggles grid snapping. Every object type can be transformed, including props, foliage and terrain. The inspector also has exact position, rotation (degrees) and scale fields.
 
 ## Camera
@@ -149,7 +151,7 @@ All game sound plays through four mixer buses (Master, Music, Effects and Interf
 
 ## Level streaming
 
-Big worlds can be split into levels that load as the player moves. Build each area as its own level, then in the level the player starts in, add an empty object with a **Level Streaming** component where the area begins:
+Big worlds can be split into levels that load as the player moves. Build each area as its own level, then in the level the player starts in, add an **Empty Object** with a **Level Streaming** component where the area begins:
 
 - **Level to load** picks the area's level.
 - **Box size** is the trigger volume around the object (drawn as a violet box in the editor).

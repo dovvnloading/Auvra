@@ -14,6 +14,8 @@ The launcher prepares its own Python environment and frontend dependencies, then
 
 The quickest start is **Starter** in the header. It creates a project with a playable level (rolling terrain, sky, a player start, a player character and scattered props) and game settings already filled in. Press **PLAY LEVEL** in the World Editor straight away, then change things.
 
+**New** also offers two sample games to learn from. **Arena Sample** has coins, pushable crates, guards that chase and fight, a HUD and menus. **Courtyard Sample** is a small quest: talk to the Keeper (an NPC dialogue), collect three relics (each runs a script), and the north gate opens (a timeline the level blueprint starts). Open their level blueprints, scripts and timelines to see how they work.
+
 For an empty project:
 
 1. Click **New** in the header (click again to confirm). A project is a folder with an `.auvra` descriptor, JSON documents and content-addressed assets.

@@ -240,7 +240,33 @@ export const LevelObjectRenderer = forwardRef<THREE.Group, LevelObjectRendererPr
         return renderGizmo("#22d3ee", <Sun size={24} />, "SKYLIGHT");
     }
 
-    // --- CASE 4: Standard Mesh (Prop/Foliage) ---
+    // --- CASE 4: Empty object (a prop with no model): a small marker so it can be seen and clicked ---
+    if (data.type === 'prop' && !data.modelId) {
+        const color = isSelected ? '#60a5fa' : hovered ? '#e2e8f0' : '#94a3b8';
+        return (
+            <group
+                ref={internalRef}
+                {...transform}
+                onClick={onClick}
+                onPointerOver={(e) => { e.stopPropagation(); setHovered(true); }}
+                onPointerOut={(e) => { e.stopPropagation(); setHovered(false); }}
+                visible={visible}
+                userData={{ levelObjectId: data.id }}
+            >
+                <mesh>
+                    <sphereGeometry args={[0.45, 8, 8]} />
+                    <meshBasicMaterial visible={false} />
+                </mesh>
+                <mesh>
+                    <octahedronGeometry args={[0.3]} />
+                    <meshBasicMaterial color={color} wireframe />
+                </mesh>
+                <axesHelper args={[0.6]} />
+            </group>
+        );
+    }
+
+    // --- CASE 5: Standard Mesh (Prop/Foliage) ---
     if (!clone) return null;
 
     return (
