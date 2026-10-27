@@ -146,7 +146,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
                    { label: 'Import project', description: 'Open an .auvrapack project file', onSelect: () => runProjectAction(importProject) },
                    { label: 'Export project', description: 'Save this project as an .auvrapack file', disabled: !projectStatus.projectId, onSelect: () => runProjectAction(exportProject) },
                    { label: 'Import legacy file', description: 'Import a legacy .forge project', onSelect: () => runProjectAction(importLegacyProject) },
-                   { label: 'Copy browser data', description: 'Copy read-only OmniRenderDB data into this empty native project', disabled: !projectStatus.projectId || projectStatus.readOnly, onSelect: () => runProjectAction(migrateLegacyBrowserProject) },
+                   { label: 'Browser data', description: 'Copy read-only OmniRenderDB data into this empty native project', disabled: !projectStatus.projectId || projectStatus.readOnly, onSelect: () => runProjectAction(migrateLegacyBrowserProject) },
                  ]}
                />
                <button onClick={() => runProjectAction(closeProject)} disabled={isLoading || !projectStatus.projectId} className="flex items-center gap-2 px-2 py-1 text-xs font-bold text-gray-500 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50" title="Close project">
