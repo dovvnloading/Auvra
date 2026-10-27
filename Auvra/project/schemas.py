@@ -438,7 +438,14 @@ def _canonical_rotation(value: Any, index: int, *, domain: str = "objects") -> l
         euler_z = 0.0
     return [euler_x, euler_y, euler_z]
 
-def _assert_known_nested(value: Any, parent_key: str | None = None) -> None:
+def _assert_known_nested(value: Any, parent_key: str | None = None, freeform: bool = False) -> None:
+    """Check nested authored records against the stable editor keys.
+
+    Below a free-form key (component props, node data, settings) the
+    contents belong to whatever owns them, so ``_NESTED_KEYS`` is not
+    applied there: a component's own field named ``position`` or ``size``
+    is not the HUD layout record of that name.
+    """
     if isinstance(value, dict):
         if parent_key in ("materialOverrides", "textureOverrides"):
             for name in value:
@@ -454,15 +461,15 @@ def _assert_known_nested(value: Any, parent_key: str | None = None) -> None:
             if len(value) > 128: raise ValueError(f"{parent_key} exceeds property limit")
             for key, child in value.items():
                 if not isinstance(key, str) or len(key) > 128: raise ValueError(f"invalid {parent_key} key")
-                _assert_known_nested(child, key)
+                _assert_known_nested(child, key, True)
             return
-        allowed = _NESTED_KEYS.get(parent_key)
+        allowed = None if freeform else _NESTED_KEYS.get(parent_key)
         if allowed is not None:
             unknown = set(value) - allowed
             if unknown: raise ValueError(f"unknown fields in {parent_key}: {sorted(unknown)!r}")
-        for key, child in value.items(): _assert_known_nested(child, key)
+        for key, child in value.items(): _assert_known_nested(child, key, freeform)
     elif isinstance(value, list):
-        for child in value: _assert_known_nested(child, parent_key)
+        for child in value: _assert_known_nested(child, parent_key, freeform)
 
 def _asset_handles(value: Any, parent_key: str | None = None):
     if isinstance(value, dict):
