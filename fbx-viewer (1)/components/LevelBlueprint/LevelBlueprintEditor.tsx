@@ -243,6 +243,8 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
             ], { eventName: '' });
         } else if (type === 'TimelineEvent') {
             addNode('Event', 'Event TimelineEvent', [], [{ name: 'Exec', dataType: 'Exec', direction: 'Output' }], { eventName: '' });
+        } else if (type === 'DialogueEvent') {
+            addNode('Event', 'Event DialogueEvent', [], [{ name: 'Exec', dataType: 'Exec', direction: 'Output' }], { eventName: '' });
         } else if (type === 'AnimNotify') {
             addNode('Event', 'Event AnimNotify', [], [{ name: 'Exec', dataType: 'Exec', direction: 'Output' }], { notifyName: '', notifySource: 'player' });
         } else if (type === 'Tick') {
@@ -270,6 +272,14 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
             [{ name: 'Exec', dataType: 'Exec', direction: 'Input' }, { name: 'Blend', dataType: 'Float', direction: 'Input' }],
             [{ name: 'Out', dataType: 'Exec', direction: 'Output' }],
             { cameraId: '', default_Blend: 0 }
+        );
+    };
+
+    const handleAddStartDialogue = () => {
+        addNode('StartDialogue', 'Start Dialogue',
+            [{ name: 'Exec', dataType: 'Exec', direction: 'Input' }],
+            [{ name: 'Out', dataType: 'Exec', direction: 'Output' }],
+            { targetObjectId: '' }
         );
     };
 
@@ -611,6 +621,9 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                         <button onClick={() => handleAddEvent('TimelineEvent', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
                             <Timer size={12} className="text-red-400 group-hover:text-red-300" /> Timeline Event
                         </button>
+                        <button onClick={() => handleAddEvent('DialogueEvent', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
+                            <MessageSquare size={12} className="text-red-400 group-hover:text-red-300" /> Dialogue Event
+                        </button>
                         <button onClick={() => handleAddEvent('AnimNotify', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
                             <Activity size={12} className="text-red-400 group-hover:text-red-300" /> Animation Notify
                         </button>
@@ -621,6 +634,14 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                         <div className="px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Cameras</div>
                         <button onClick={handleAddSetActiveCamera} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
                             <Video size={12} className="text-pink-400 group-hover:text-pink-300" /> Set Active Camera
+                        </button>
+                    </div>
+
+                    {/* Dialogue */}
+                    <div className="space-y-1">
+                        <div className="px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Dialogue</div>
+                        <button onClick={handleAddStartDialogue} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
+                            <MessageSquare size={12} className="text-sky-400 group-hover:text-sky-300" /> Start Dialogue
                         </button>
                     </div>
 

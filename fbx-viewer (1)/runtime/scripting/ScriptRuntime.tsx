@@ -5,6 +5,7 @@ import { frontendDiagnostics } from '../../diagnostics/runtime';
 import type { LevelObject } from '../../types';
 import { animationEvents } from '../animationEvents';
 import { timelineEvents } from '../timeline/events';
+import { dialogueSpeakers, dialogueStore, startDialogue } from '../dialogue';
 import { AUDIO_BUSES, type AudioBus } from '../audioMixer';
 import { readScriptSource, SCRIPT_COMPONENT_TYPE } from '../components/scriptComponent';
 import { DEFAULT_INPUT_MAP, type InputState } from '../input';
@@ -291,6 +292,8 @@ export const parseScriptCommand = (value: unknown): ScriptCommand | null => {
                 && typeof v.blend === 'number' && Number.isFinite(v.blend) && v.blend >= 0 && v.blend <= 30
                 ? { type: 'setCamera', objectId: v.objectId as string | null, blend: v.blend }
                 : null;
+        case 'startDialogue':
+            return hasKeys(v, ['type', 'objectId']) && isName(v.objectId) ? { type: 'startDialogue', objectId: v.objectId } : null;
         case 'netSend': {
             const to = optional(v.to, isName);
             if (!hasKeys(v, ['type', 'name', 'payload'], ['to']) || !isName(v.name) || v.name.length > NET_LIMITS.maxEventNameLength
@@ -555,6 +558,8 @@ export interface ScriptCommandServices {
     sendNetEvent(name: string, payload: ScriptNetPayload, to?: string): void;
     /** Shows a level camera, or the gameplay camera for null. */
     setCamera(objectId: string | null, blend: number): void;
+    /** False when the object has no Dialogue component in the session, or another conversation is open. */
+    startDialogue(objectId: string): boolean;
 }
 
 /** What applying one frame's commands produced for the next snapshot. */
@@ -639,6 +644,9 @@ export const applyScriptCommand = (command: ScriptCommand, services: ScriptComma
             return;
         case 'setCamera':
             services.setCamera(command.objectId, command.blend);
+            return;
+        case 'startDialogue':
+            services.startDialogue(command.objectId);
             return;
         case 'log':
             services.log(command.scriptId, command.level, command.message);
@@ -922,6 +930,13 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
             openLevel: levelId => latest.current.openLevel(levelId),
             sendNetEvent: (name, payload, to) => netRef.current?.sendEvent(name, payload, to),
             setCamera: (objectId, blend) => cameraDirector.setActive(objectId, blend),
+            startDialogue: objectId => {
+                if (!dialogueSpeakers.has(objectId)) {
+                    noteOnce(state, `dialogue:${objectId}`, `startDialogue: object "${objectId}" has no Dialogue component.`);
+                    return false;
+                }
+                return startDialogue(objectId);
+            },
             log: (scriptId, level, message) => {
                 if (logs >= MAX_LOGS_PER_FRAME) {
                     droppedLogs += 1;
@@ -1061,6 +1076,11 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
     useEffect(() => timelineEvents.subscribe(event => pushEvent(host.current, {
         type: 'timelineEvent',
         timelineObjectId: event.timelineObjectId,
+        name: event.name,
+    })), []);
+    useEffect(() => dialogueStore.onEvent(event => pushEvent(host.current, {
+        type: 'dialogueEvent',
+        objectId: event.objectId,
         name: event.name,
     })), []);
     useEffect(() => netSession?.onEvent((from, name, payload) => pushEvent(host.current, {

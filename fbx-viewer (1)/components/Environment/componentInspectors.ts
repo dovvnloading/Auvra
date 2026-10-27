@@ -1,4 +1,5 @@
 import { registerComponentInspector } from '../../runtime/components/registry';
+import { DialogueInspector } from '../Dialogue/DialogueInspector';
 import { ScriptInspector } from '../Scripting/ScriptInspector';
 import { TimelineInspector } from '../Timeline/TimelineInspector';
 import { LevelStreamingInspector } from './LevelStreamingInspector';
@@ -11,3 +12,4 @@ import { LevelStreamingInspector } from './LevelStreamingInspector';
 registerComponentInspector('script', ScriptInspector);
 registerComponentInspector('timeline', TimelineInspector);
 registerComponentInspector('levelStreaming', LevelStreamingInspector);
+registerComponentInspector('dialogue', DialogueInspector);

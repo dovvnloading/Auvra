@@ -673,6 +673,36 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                     </div>
                 )}
 
+                {node.type === 'StartDialogue' && (
+                    <div className="space-y-1">
+                        <label className="text-[10px] text-gray-400">Speaker</label>
+                        <select
+                            value={typeof node.data?.targetObjectId === 'string' ? node.data.targetObjectId : ''}
+                            onChange={(e) => onUpdate({ data: { ...(node.data || {}), targetObjectId: e.target.value } })}
+                            className="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-sky-500"
+                        >
+                            <option value="">Choose an object</option>
+                            {levelObjects.filter(object => object.components?.some(component => component.type === 'dialogue')).map(object => (
+                                <option key={object.id} value={object.id}>{object.name || object.id}</option>
+                            ))}
+                        </select>
+                        <p className="text-[10px] text-gray-500">Opens the conversation on an object with a Dialogue component, wherever the player is. Does nothing while another conversation is open.</p>
+                    </div>
+                )}
+
+                {node.type === 'Event' && node.name === 'Event DialogueEvent' && (
+                    <div className="space-y-1">
+                        <label className="text-[10px] text-gray-400">Event name (empty: any dialogue event)</label>
+                        <input
+                            value={typeof node.data?.eventName === 'string' ? node.data.eventName : ''}
+                            onChange={(e) => onUpdate({ data: { ...(node.data || {}), eventName: e.target.value } })}
+                            className="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-red-500"
+                            placeholder="e.g. AcceptedQuest"
+                        />
+                        <p className="text-[10px] text-gray-500">Runs when a dialogue line or choice that raises this event is shown or chosen.</p>
+                    </div>
+                )}
+
                 {node.type === 'Event' && node.name === 'Event NetworkEvent' && (
                     <div className="space-y-1">
                         <label className="text-[10px] text-gray-400">Event name (empty: any network event)</label>

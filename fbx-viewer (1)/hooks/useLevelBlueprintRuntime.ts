@@ -10,6 +10,7 @@ import { frontendDiagnostics } from '../diagnostics/runtime';
 import { TriggerEvent, useTriggerEvents } from '../runtime/triggers';
 import { animationEvents, type AnimationEvent } from '../runtime/animationEvents';
 import { timelineEvents, type TimelineEvent } from '../runtime/timeline/events';
+import { dialogueSpeakers, dialogueStore, startDialogue, type DialogueEvent } from '../runtime/dialogue';
 import { useNetSession } from '../runtime/net/NetSessionContext';
 import { cameraDirector } from '../runtime/cameraDirector';
 import type { NetPayload } from '../runtime/net/protocol';
@@ -93,6 +94,12 @@ export const networkPayload = (value: unknown): NetPayload => {
 
 /** Whether an Event TimelineEvent node handles an event: its event name matches, or it is empty and takes any. */
 export const timelineEventMatches = (node: LogicNode, event: TimelineEvent): boolean => {
+    const name = typeof node.data?.eventName === 'string' ? node.data.eventName.trim() : '';
+    return !name || name === event.name;
+};
+
+/** Whether an Event DialogueEvent node handles an event: its event name matches, or it is empty and takes any. */
+export const dialogueEventMatches = (node: LogicNode, event: DialogueEvent): boolean => {
     const name = typeof node.data?.eventName === 'string' ? node.data.eventName.trim() : '';
     return !name || name === event.name;
 };
@@ -445,6 +452,14 @@ export const useLevelBlueprintRuntime = ({
             const cameraId = typeof node.data?.cameraId === 'string' ? node.data.cameraId : '';
             cameraDirector.setActive(cameraId || null, Number.isFinite(blend) ? blend : 0);
         }
+        else if (node.type === 'StartDialogue') {
+            const objectId = typeof node.data?.targetObjectId === 'string' ? node.data.targetObjectId : '';
+            if (!objectId || !dialogueSpeakers.has(objectId)) {
+                addNotification({ message: 'Start Dialogue: the chosen object has no Dialogue component in this session.', type: 'warning' });
+            } else {
+                startDialogue(objectId);
+            }
+        }
         else if (node.type === 'SendNetworkEvent') {
             const namePin = node.inputs.find(p => p.name === 'Name');
             const valuePin = node.inputs.find(p => p.name === 'Value');
@@ -647,6 +662,16 @@ export const useLevelBlueprintRuntime = ({
             .forEach(node => executeNode(node.id, {}));
     };
     useEffect(() => timelineEvents.subscribe(event => handleTimelineEvent.current(event)), []);
+
+    // --- Event: Dialogue event (a dialogue line or choice raised it) ---
+    const handleDialogueEvent = useRef<(event: DialogueEvent) => void>(() => undefined);
+    handleDialogueEvent.current = (event: DialogueEvent) => {
+        if (!hasBegunPlay.current || sessionEnded.current) return;
+        blueprint.nodes
+            .filter(n => n.type === 'Event' && n.name === 'Event DialogueEvent' && dialogueEventMatches(n, event))
+            .forEach(node => executeNode(node.id, {}));
+    };
+    useEffect(() => dialogueStore.onEvent(event => handleDialogueEvent.current(event)), []);
 
     // --- Event: Tick & Overlap Physics ---
     useFrame((state, delta) => {

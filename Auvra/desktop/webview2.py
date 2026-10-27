@@ -29,9 +29,22 @@ from .contracts import (
 from .policy import FramePolicy
 from .sdk import SdkLayout, acquire_sdk
 from Auvra.diagnostics.core import trace_public_class
+from Auvra.diagnostics.webview import WEBVIEW_DIAGNOSTIC_PROTOCOL
 from Auvra.host.validation import ProtocolValidationError, validate_message
 
 MESSAGE_MAX_BYTES = 256 * 1024
+
+
+def _validate_envelope(message: Any) -> None:
+    """Check a host protocol message against the host schema.
+
+    Diagnostics envelopes (``auvra.diagnostics/1``) are a separate protocol:
+    the controller's diagnostics lane validates them field by field, so they
+    pass through here untouched in both directions.
+    """
+    if isinstance(message, dict) and message.get("protocol") == WEBVIEW_DIAGNOSTIC_PROTOCOL:
+        return
+    validate_message(message)
 
 
 @trace_public_class("webview_frame", concise=("start", "close", "post_message"))
@@ -258,14 +271,14 @@ class WebView2Frame:
             except (TypeError, ValueError, json.JSONDecodeError) as exc:
                 raise ValueError("message must be valid JSON") from exc
             try:
-                validate_message(parsed)
+                _validate_envelope(parsed)
             except ProtocolValidationError as exc:
                 raise ValueError("message is not a valid protocol envelope") from exc
         else:
             raise TypeError("message must be JSON text or an object")
         if isinstance(message, dict):
             try:
-                validate_message(message)
+                _validate_envelope(message)
             except ProtocolValidationError as exc:
                 raise ValueError("message is not a valid protocol envelope") from exc
         if len(body.encode("utf-8")) > MESSAGE_MAX_BYTES:
@@ -817,7 +830,7 @@ class WebView2Frame:
                 self._signal("message_rejected", {"code": "message_too_large"})
                 return
             parsed = json.loads(body)
-            validate_message(parsed)
+            _validate_envelope(parsed)
         except (TypeError, ValueError, json.JSONDecodeError, ProtocolValidationError):
             self._signal("message_rejected", {"code": "invalid_message"})
             return

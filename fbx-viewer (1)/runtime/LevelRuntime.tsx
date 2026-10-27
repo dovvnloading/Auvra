@@ -40,6 +40,9 @@ import { ComponentHostContext } from './components/builtins';
 import { getComponentDefinition } from './components/registry';
 import { IKPlayerTargetContext } from './components/ikComponents';
 import { CameraDirectorDriver } from './components/cameraComponent';
+import { DialogueDriver } from './components/dialogueComponent';
+import { dialogueStore, useDialogueState } from './dialogue';
+import { DialogueOverlay } from './DialogueOverlay';
 import { LevelStreamingContext, streamedObjects, streamedRoots, type LevelStreaming } from './levelStreaming';
 import { PostProcessAllowedContext, usePostProcessClaimed } from './components/postProcess';
 import type { InputState } from './input';
@@ -530,6 +533,20 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
     // Variables are read once per session; LevelSession remounts for every new session.
     }, [level.id, sessionRestore]);
 
+    // Conversations read and write this session's level variables and end with it.
+    useEffect(() => {
+        dialogueStore.setHooks({
+            readVariable: name => levelVariables.get(name),
+            setVariable: (name, value) => { levelVariables.set(name, value); },
+        });
+        return () => {
+            dialogueStore.setHooks(null);
+            dialogueStore.reset();
+        };
+    }, []);
+    // The player stands still and the camera holds while a conversation is open.
+    const talking = useDialogueState().active !== null;
+
     // --- CALCULATE ALL SCENE CLIPS ---
     const allSceneClips = useMemo(() => models.flatMap(m => m.animations || []), [models]);
 
@@ -619,7 +636,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
 
     if (!runtimePlayerModel) return null;
 
-    const controlsEnabled = !isGameOver && !paused;
+    const controlsEnabled = !isGameOver && !paused && !talking;
 
     return (
         <IKPlayerTargetContext.Provider value={playerTargetRef}>
@@ -751,6 +768,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                 isAiming={isAiming}
                 aimOffset={player.blueprint.aimOffset || [0.5, 4.5, 1.0]}
             />
+            <DialogueDriver enabled={!isGameOver && !paused} />
             {/* After the rig: a level camera, or a blend back from one, has the last word on the view. */}
             <CameraDirectorDriver />
         </RuntimeSpawnerProvider>
@@ -903,6 +921,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                     host={runtimeHost}
                 />
             )}
+            {!paused && !isGameOver && <DialogueOverlay input={touchInput} />}
             <ProfilerPanel visible={profilerVisible} />
         </div>
         </NetSessionProvider>

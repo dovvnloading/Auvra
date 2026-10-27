@@ -40,6 +40,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/scripting/protocol.ts': 'protocol-model',
   'runtime/scripting/scriptApi.ts': 'sandbox-proxy',
   'runtime/timeline/evaluate.ts': 'pure-utility',
+  'components/Dialogue/dialogueEditing.ts': 'pure-utility',
   'runtime/timeline/types.ts': 'data-model',
   'script-frame.ts': 'sandbox-proxy',
   'components/Environment/hooks/useEnvironmentHotkeys.ts': 'input-adapter',

@@ -53,6 +53,8 @@ export type ScriptEvent =
     | { type: 'triggerEnter' | 'triggerExit'; triggerId: string; otherId: string }
     | { type: 'animNotify'; source: string | null; name: string }
     | { type: 'timelineEvent'; timelineObjectId: string; name: string }
+    /** A dialogue line or choice raised `name`; objectId holds the Dialogue component. */
+    | { type: 'dialogueEvent'; objectId: string; name: string }
     /** A multiplayer event another player sent (ctx.net.send there). */
     | { type: 'netEvent'; from: string; name: string; payload: ScriptNetPayload }
     | { type: 'spawned'; requestId: string; objectIds: string[] };
@@ -98,6 +100,8 @@ export type ScriptCommand =
     | { type: 'openLevel'; levelId: string }
     /** Shows a level camera (objectId null: the gameplay camera), blending over `blend` seconds. */
     | { type: 'setCamera'; objectId: string | null; blend: number }
+    /** Opens the conversation of the Dialogue component on object `objectId`. */
+    | { type: 'startDialogue'; objectId: string }
     /** A multiplayer event to every other player, or to one (`to`). */
     | { type: 'netSend'; name: string; payload: ScriptNetPayload; to?: string }
     | { type: 'log'; scriptId: string; level: 'info' | 'warn' | 'error'; message: string };

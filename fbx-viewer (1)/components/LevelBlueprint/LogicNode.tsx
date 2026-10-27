@@ -102,6 +102,7 @@ const NODE_STYLES: Record<string, { border: string, bg: string, icon: React.Reac
     'SendNetworkEvent': { border: 'border-teal-800', bg: 'bg-teal-950/70', icon: <Send size={14} className="text-teal-400" /> },
     'IsNetworkHost': { border: 'border-teal-800', bg: 'bg-teal-950/70', icon: <Crown size={14} className="text-teal-400" /> },
     'SetActiveCamera': { border: 'border-pink-800', bg: 'bg-pink-950/70', icon: <Video size={14} className="text-pink-400" /> },
+    'StartDialogue': { border: 'border-sky-800', bg: 'bg-sky-950/70', icon: <MessageSquare size={14} className="text-sky-400" /> },
     'InputActionPressed': { border: 'border-orange-800', bg: 'bg-orange-950/70', icon: <Gamepad2 size={14} className="text-orange-400" /> },
     'GetLevelVariable': { border: 'border-teal-800', bg: 'bg-teal-950/60', icon: <Variable size={14} className="text-teal-400" /> },
     'SetLevelVariable': { border: 'border-teal-800', bg: 'bg-teal-950/80', icon: <Variable size={14} className="text-teal-400" /> },
