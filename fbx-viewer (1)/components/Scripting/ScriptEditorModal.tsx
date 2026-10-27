@@ -40,6 +40,7 @@ export const SCRIPT_API_REFERENCE: ScriptApiSection[] = [
             { signature: 'onTriggerExit(ctx, other)', description: 'Something left the trigger.' },
             { signature: 'onAnimNotify(ctx, name, source)', description: "An animation notify fired. source is 'player' for the player character; a level object's own notifies (source is its id) reach only its scripts." },
             { signature: 'onTimelineEvent(ctx, name, timelineObjectId)', description: 'A playing timeline crossed a key on one of its event tracks. Reaches every script.' },
+            { signature: 'onDialogueEvent(ctx, name, objectId)', description: 'A dialogue line or choice raised an event. objectId holds the Dialogue component. Reaches every script.' },
             { signature: 'onSpawned(ctx, requestId, objectIds)', description: "This script's ctx.spawn request was placed. objectIds start with the new root object." },
         ],
     },
@@ -76,6 +77,7 @@ export const SCRIPT_API_REFERENCE: ScriptApiSection[] = [
             { signature: 'ctx.playSound(audioId, bus?)', description: "Plays a sound once on 'sfx' (default), 'music', 'ui' or 'master'." },
             { signature: 'ctx.playPlayerAnimation(clipName, maskBone?)', description: 'Plays a clip once on the player, optionally on one bone and the bones below it.' },
             { signature: 'ctx.openLevel(levelId)', description: 'Loads another level of the game.' },
+            { signature: 'ctx.startDialogue(objectId?)', description: "Opens the conversation of the object's Dialogue component (default: this script's object). Does nothing while another is open." },
         ],
     },
     {

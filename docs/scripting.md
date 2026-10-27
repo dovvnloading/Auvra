@@ -59,7 +59,7 @@ function onUpdate(ctx, dt) {
 - **Writing callbacks.** A callback can also be a top-level `const` holding a function, and `export` in front of one is allowed. Scripts cannot import other files or modules, and a script that defines none of the callbacks is reported as an error.
 - **TypeScript.** Type annotations, interfaces and enums are accepted. Types are not checked.
 - **When scripts load.** Scripts load once, when play starts: every enabled Script component with a non-empty script, on the objects in the level. Scripts on objects spawned later do not run. Top-level code runs once, as the script loads; use it for constants, and keep values that change in `ctx.state`.
-- **Order in a frame.** Each frame, `onStart` runs for scripts that have not started yet, then the frame's events in the order they happened (`onTriggerEnter`, `onTriggerExit`, `onAnimNotify`, `onTimelineEvent`, `onSpawned`), then every script's `onUpdate`. Scripts run in the order of their objects in the level. Callbacks stop running once their object is destroyed.
+- **Order in a frame.** Each frame, `onStart` runs for scripts that have not started yet, then the frame's events in the order they happened (`onTriggerEnter`, `onTriggerExit`, `onAnimNotify`, `onTimelineEvent`, `onDialogueEvent`, `onNetEvent`, `onSpawned`), then every script's `onUpdate`. Scripts run in the order of their objects in the level. Callbacks stop running once their object is destroyed.
 - **One frame behind.** Each frame the game hands scripts a snapshot of the world. Changes a script makes show at once to every script in the same frame: positions, visibility, destroyed objects and level variables read back as just set. The game itself applies them on the next frame, so things the game moves (the player, physics bodies) are seen as they were a frame ago, and the answers to `ctx.spawn` and `ctx.raycast` arrive on the next frame.
 - **Sandboxed.** Scripts run in a separate sandboxed page. They cannot reach the editor, the game page, the project or its files; they see and change the world only through `ctx`. Everything a script changes lasts for the play session only.
 
@@ -73,6 +73,7 @@ function onUpdate(ctx, dt) {
 | `onTriggerExit(ctx, other)` | When it leaves the trigger again |
 | `onTimelineEvent(ctx, name, timelineObjectId)` | When a playing [timeline](timelines.md) crosses a key on one of its event tracks; `name` is the key's text. Reaches every script |
 | `onAnimNotify(ctx, name, source)` | When an animation [notify](characters.md#notifies) named `name` is raised. `source` is `'player'` for the player character. A notify raised by a level object's own animation (`source` is its id) reaches only that object's scripts; every other notify reaches every script |
+| `onDialogueEvent(ctx, name, objectId)` | When a [dialogue](dialogue.md) line or choice raises an event; `objectId` is the object whose Dialogue component holds the conversation. Reaches every script |
 | `onNetEvent(ctx, name, value, fromPeerId)` | When another player's `ctx.net.send` (or **Send Network Event**) arrives in a [multiplayer](multiplayer.md) game. Reaches every script |
 | `onSpawned(ctx, requestId, objectIds)` | On the script that called `ctx.spawn`, once the copy has been placed. `requestId` is the value `ctx.spawn` returned; `objectIds` are the new objects, root first, and empty when the prefab does not exist |
 
@@ -120,6 +121,7 @@ Transforms are relative to the object's parent, like the inspector's; for an obj
 | `ctx.playSound(audioId, bus)` | Plays a sound once, in 2D. `bus` is optional: `'sfx'` (the default), `'music'`, `'ui'` or `'master'` |
 | `ctx.playPlayerAnimation(clipName, maskBone)` | Plays a clip once on the player character, like the **Play Player Animation** node. `maskBone` is optional; see [One-shot animations](characters.md#one-shot-animations-on-part-of-the-body) |
 | `ctx.setCamera(objectId, blendSeconds)` | Shows the view of the object's Camera component, blending over `blendSeconds` (default 0); `null` gives the view back to the gameplay camera. See [Camera cuts](timelines.md#camera-cuts) |
+| `ctx.startDialogue(objectId)` | Opens the conversation of the object's Dialogue component, like the **Start Dialogue** node; without an id, the one on the script's own object. Does nothing while another conversation is open. See [Dialogue](dialogue.md) |
 | `ctx.openLevel(levelId)` | Loads another level, like the **Open Level** node. Inside the editor it prints a note instead. Commands issued after it in the same frame are dropped |
 
 ### Input, variables and state
@@ -145,7 +147,7 @@ Transforms are relative to the object's parent, like the inspector's; for an obj
 
 See [Multiplayer](multiplayer.md).
 
-Unknown actions read as released. The actions are MoveForward, MoveBack, MoveLeft, MoveRight, Jump, Sprint, Fire, Aim, Interact and Pause; see [Controls](building-games.md#controls) for their keys. **Interact** has no built-in use, so it is free for scripts.
+Unknown actions read as released. The actions are MoveForward, MoveBack, MoveLeft, MoveRight, Jump, Sprint, Fire, Aim, Interact and Pause; see [Controls](building-games.md#controls) for their keys. Near an object with a [Dialogue](dialogue.md) component, **Interact** opens its conversation; anywhere else it has no built-in use, so it is free for scripts.
 
 ## Examples
 

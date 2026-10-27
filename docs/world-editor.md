@@ -67,6 +67,7 @@ Objects can carry components that add behaviour. Select an object and use **Add 
 | Script | Runs your own JavaScript or TypeScript during play (see [Gameplay scripting](scripting.md)) |
 | Network Sync | In multiplayer games the host sends the object's position and rotation and the other players follow it (see [Multiplayer](multiplayer.md)) |
 | Timeline | Plays keyed tracks that move, show and hide objects, write level variables and raise events (see [Timelines](timelines.md)) |
+| Dialogue | A conversation the player opens with Interact when within reach: lines, choices, level variables and dialogue events (see [Dialogue](dialogue.md)) |
 
 Each component's settings appear in the inspector and can be toggled on and off.
 

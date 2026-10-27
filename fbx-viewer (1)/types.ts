@@ -345,7 +345,9 @@ export interface LogicNode {
           // Multiplayer (hooks/useLevelBlueprintRuntime.ts)
           'SendNetworkEvent' | 'IsNetworkHost' |
           // Cameras (hooks/useLevelBlueprintRuntime.ts)
-          'SetActiveCamera';
+          'SetActiveCamera' |
+          // Dialogue (hooks/useLevelBlueprintRuntime.ts)
+          'StartDialogue';
     name: string;
     position: { x: number; y: number };
     inputs: LogicPin[];

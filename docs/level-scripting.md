@@ -12,6 +12,7 @@ Nodes are added from the palette. Select a node to edit it in the inspector: dat
 | Event Tick | Every frame; provides Delta Seconds |
 | On Overlap | When the player enters the chosen actor (palette: **Actor Begin Overlap**) |
 | Network Event | When another player sends a network event with its name; provides Value (as text) and From (their player id). See [Multiplayer](multiplayer.md) |
+| Dialogue Event | When a dialogue line or choice raises an event with its name (empty: any). See [Dialogue](dialogue.md#dialogue-events) |
 
 **On Overlap** targets a specific object, picked from a list showing its name, type and a short id. Renaming the object does not break the reference. Older graphs that referenced actors by name are converted automatically when the name is unique; ambiguous ones show a warning until you pick the actor.
 
@@ -41,6 +42,10 @@ Math (Add, Subtract, Multiply, Divide), comparisons (Greater, Less, Equal) and l
 ## Cameras
 
 **Set Active Camera** switches the view to an object with a Camera component (picked in the inspector), or back to the gameplay camera, easing over its **Blend** seconds. Timelines can cut between cameras too; see [Camera cuts](timelines.md#camera-cuts).
+
+## Dialogue
+
+**Start Dialogue** opens the conversation of an object with a Dialogue component (picked in the inspector), wherever the player is. It does nothing while another conversation is open. Lines and choices can raise events that the **Dialogue Event** event handles. See [Dialogue](dialogue.md).
 
 ## Multiplayer
 

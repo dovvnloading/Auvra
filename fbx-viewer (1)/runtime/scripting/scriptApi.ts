@@ -39,7 +39,7 @@ type TransformField = 'position' | 'rotation' | 'scale';
 export type ScriptSoundBus = NonNullable<Extract<ScriptCommand, { type: 'playSound' }>['bus']>;
 
 /** Every callback a script may define. */
-export const SCRIPT_CALLBACK_NAMES = ['onStart', 'onTriggerEnter', 'onTriggerExit', 'onAnimNotify', 'onTimelineEvent', 'onNetEvent', 'onSpawned', 'onUpdate'] as const;
+export const SCRIPT_CALLBACK_NAMES = ['onStart', 'onTriggerEnter', 'onTriggerExit', 'onAnimNotify', 'onTimelineEvent', 'onDialogueEvent', 'onNetEvent', 'onSpawned', 'onUpdate'] as const;
 export type ScriptCallbackName = typeof SCRIPT_CALLBACK_NAMES[number];
 
 /** Compiled scripts call `__auvraScriptGuard.tick()` on every loop iteration and function entry. */
@@ -148,6 +148,8 @@ export interface ScriptContext {
     openLevel(levelId: string): void;
     /** Switches the view to the camera component on object `objectId`, or back to the gameplay camera (null). */
     setCamera(objectId: string | null, blendSeconds?: number): void;
+    /** Opens the conversation of the Dialogue component on object `objectId` (default: the script's own object). */
+    startDialogue(objectId?: string): void;
     /** Multiplayer: who is here, who hosts, and events to the other players. */
     readonly net: ScriptNet;
     log(...values: unknown[]): void;
@@ -168,6 +170,8 @@ export interface ScriptCallbacks {
     onAnimNotify?(ctx: ScriptContext, name: string, source: string | null): void;
     /** Fires for every script when a timeline's event track crosses a key. */
     onTimelineEvent?(ctx: ScriptContext, name: string, timelineObjectId: string): void;
+    /** Fires for every script when a dialogue line or choice raises an event. */
+    onDialogueEvent?(ctx: ScriptContext, name: string, objectId: string): void;
     /** Fires for every script when another player's ctx.net.send arrives. */
     onNetEvent?(ctx: ScriptContext, name: string, payload: ScriptNetPayload, fromPeerId: string): void;
     /** Fires for the script that requested the spawn. */
@@ -354,6 +358,8 @@ const isScriptEvent = (value: unknown): value is ScriptEvent => {
             return typeof value.name === 'string' && (value.source === null || typeof value.source === 'string');
         case 'timelineEvent':
             return typeof value.name === 'string' && typeof value.timelineObjectId === 'string';
+        case 'dialogueEvent':
+            return typeof value.name === 'string' && typeof value.objectId === 'string';
         case 'netEvent':
             return typeof value.name === 'string' && typeof value.from === 'string' && isScriptNetPayload(value.payload);
         case 'spawned':
@@ -792,6 +798,9 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
                     pending.blend = Math.min(blendSeconds, 30);
                 } else queue(record, { type: 'setCamera', objectId: camera, blend: Math.min(blendSeconds, 30) }, 'camera');
             },
+            startDialogue: (objectId?: string) => {
+                queue(record, { type: 'startDialogue', objectId: objectId === undefined ? record.objectId : readId('startDialogue', objectId) });
+            },
             net: {
                 connected: () => world.snapshot.net.connected,
                 isHost: () => world.snapshot.net.isHost,
@@ -846,6 +855,10 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
         } else if (event.type === 'timelineEvent') {
             for (const record of scripts) {
                 if (record.started) run(record, 'onTimelineEvent', event.name, event.timelineObjectId);
+            }
+        } else if (event.type === 'dialogueEvent') {
+            for (const record of scripts) {
+                if (record.started) run(record, 'onDialogueEvent', event.name, event.objectId);
             }
         } else if (event.type === 'netEvent') {
             for (const record of scripts) {
