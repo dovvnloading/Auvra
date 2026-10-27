@@ -3,6 +3,9 @@ import * as THREE from 'three';
 import { useScene } from '../../context/SceneContext';
 import { useNotification } from '../../context/NotificationContext';
 import { useNativeProjectDocument } from '../../utils/useNativeProjectDocument';
+import { HUD_DOCUMENT_ID } from '../../utils/projectHydration';
+import { HUDRenderer } from '../HUDEditor/HUDRenderer';
+import type { HUDDocumentData } from '../../runtime/types';
 import { LevelRuntime } from '../../runtime/LevelRuntime';
 import type { RuntimeInspector } from '../../runtime/PauseController';
 import { PlayToolbar } from './PlayToolbar';
@@ -39,6 +42,8 @@ const createDefaultGameSettingsDocument = (): GameSettingsDocument => ({
     settings: DEFAULT_GAME_SETTINGS,
 });
 
+const createEmptyHud = (): HUDDocumentData => ({ id: HUD_DOCUMENT_ID, elements: [] });
+
 /**
  * PLAY IN EDITOR
  *
@@ -53,6 +58,11 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
         'metadata', GAME_SETTINGS_DOCUMENT_ID, createDefaultGameSettingsDocument,
     );
     const settings = useMemo(() => normalizeGameSettings(settingsDocument.settings), [settingsDocument]);
+    // The game HUD the built game shows; with no elements the runtime's own HUD stands in, as in the player.
+    const { document: hudDocument } = useNativeProjectDocument<HUDDocumentData>('hud', HUD_DOCUMENT_ID, createEmptyHud);
+    const hudOverlay = useMemo(() => (
+        Array.isArray(hudDocument.elements) && hudDocument.elements.length > 0 ? <HUDRenderer document={hudDocument} bindings /> : undefined
+    ), [hudDocument]);
     const { document: localizationDocument } = useNativeProjectDocument<LocalizationDocument>(
         'metadata', LOCALIZATION_DOCUMENT_ID, createDefaultLocalizationDocument,
     );
@@ -168,6 +178,7 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
                     sessionKey={sessionKey}
                     stepRequest={stepRequest}
                     inspectRef={inspectRef}
+                    overlay={hudOverlay}
                 />
                 <PlayToolbar
                     paused={paused}
