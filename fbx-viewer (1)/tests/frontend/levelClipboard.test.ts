@@ -73,6 +73,20 @@ describe('levelClipboard', () => {
     expect(objects[1].components?.[0].id).toBe('c1');
   });
 
+  it('numbers a copy whose name the level already uses', () => {
+    const objects = [
+      { ...level()[0], id: 'a', name: 'Crate 1', parentId: null },
+      { ...level()[0], id: 'b', name: 'Crate 8', parentId: null },
+      { ...level()[0], id: 'c', name: 'Rock', parentId: null },
+    ];
+    const payload = copyLevelObjects(objects, ['a', 'c'])!;
+    const pasted = pasteLevelObjects(payload, { levelId: 'level-1', levelObjects: objects, createId: sequentialIds() });
+    expect(pasted.objects.map((object) => object.name).sort()).toEqual(['Crate 9', 'Rock 2']);
+    // Another level that has neither name keeps them.
+    const elsewhere = pasteLevelObjects(payload, { levelId: 'level-2', levelObjects: [], createId: sequentialIds() });
+    expect(elsewhere.objects.map((object) => object.name).sort()).toEqual(['Crate 1', 'Rock']);
+  });
+
   it('keeps a link to a parent that exists in the target level', () => {
     const objects = level();
     const payload = copyLevelObjects(objects, ['child'])!;
