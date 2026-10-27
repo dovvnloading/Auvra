@@ -9,7 +9,8 @@ import { PlayToolbar } from './PlayToolbar';
 import { GameContentProvider, useGameContent } from '../../runtime/GameContentContext';
 import { projectService } from '../../utils/projectService';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
-import type { PrefabData } from '../../types';
+import type { LevelObject, PrefabData } from '../../types';
+import { objectsByLevel } from '../../runtime/levelStreaming';
 import { gameState } from '../../runtime/gameState';
 import { createDefaultLocalizationDocument, localization, LOCALIZATION_DOCUMENT_ID, type LocalizationDocument } from '../../runtime/localization';
 import {
@@ -81,7 +82,20 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
         );
         return () => { current = false; };
     }, []);
-    const playContent = useMemo(() => ({ ...content, prefabs: prefabs ?? [] }), [content, prefabs]);
+    // Level Streaming volumes load other levels' objects: a read-only snapshot taken when play starts.
+    const [otherLevels, setOtherLevels] = useState<Record<string, LevelObject[]>>({});
+    useEffect(() => {
+        let current = true;
+        if (!projectService.getStatus().projectId) return undefined;
+        projectService.getSnapshotAll('objects').then(snapshot => {
+            const raw = snapshot?.domains?.objects as unknown;
+            const records = Array.isArray(raw) ? raw : (raw as { documents?: unknown[] } | undefined)?.documents ?? [];
+            const objects = records.filter((doc): doc is LevelObject => typeof (doc as LevelObject | null)?.id === 'string' && typeof (doc as LevelObject).levelId === 'string');
+            if (current) setOtherLevels(objectsByLevel(objects));
+        }, error => frontendDiagnostics.failure('play_level_objects_load_failed', error));
+        return () => { current = false; };
+    }, []);
+    const playContent = useMemo(() => ({ ...content, prefabs: prefabs ?? [], levelObjects: otherLevels }), [content, prefabs, otherLevels]);
     const [sessionKey, setSessionKey] = useState(0);
     const [paused, setPaused] = useState(false);
     const [stepRequest, setStepRequest] = useState(0);

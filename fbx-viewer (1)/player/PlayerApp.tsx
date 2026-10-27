@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { GameContentProvider } from '../runtime/GameContentContext';
+import { objectsByLevel } from '../runtime/levelStreaming';
 import { LevelRuntime } from '../runtime/LevelRuntime';
 import { createSaveGameStore } from '../runtime/saveGame';
 import { gameState, useGameState } from '../runtime/gameState';
@@ -86,7 +87,8 @@ export const PlayerApp: React.FC = () => {
                     onProgress: (value, label) => setProgress({ value, label }),
                     signal: controller.signal,
                 });
-                if (!controller.signal.aborted) setLoaded(content);
+                // Level Streaming volumes load other levels' objects (terrain heights resolved above) on demand.
+                if (!controller.signal.aborted) setLoaded({ ...content, content: { ...content.content, levelObjects: objectsByLevel(content.objects) } });
             } catch (failure) {
                 if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : String(failure));
             }

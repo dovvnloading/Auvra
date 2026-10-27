@@ -40,6 +40,7 @@ import { ComponentHostContext } from './components/builtins';
 import { getComponentDefinition } from './components/registry';
 import { IKPlayerTargetContext } from './components/ikComponents';
 import { CameraDirectorDriver } from './components/cameraComponent';
+import { LevelStreamingContext, streamedObjects, streamedRoots, type LevelStreaming } from './levelStreaming';
 import { PostProcessAllowedContext, usePostProcessClaimed } from './components/postProcess';
 import type { InputState } from './input';
 import { collectTimelineTargets } from './timeline/evaluate';
@@ -457,6 +458,28 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
         spawnObjects: spawnRuntimeObjects
     } = useRuntimeLevelWorld(authoredObjects);
 
+    // --- LEVEL STREAMING ---
+    // Streamed levels join the session copy like spawned prefabs; unloading removes their root objects.
+    const streamedRootIds = useRef(new Map<string, string[]>());
+    const levelStreaming = useMemo<LevelStreaming>(() => ({
+        load: (levelId) => {
+            if (streamedRootIds.current.has(levelId) || levelId === level.id) return false;
+            const source = content.levelObjects?.[levelId];
+            if (!source?.length) return false;
+            const objects = streamedObjects(levelId, source, level.id);
+            streamedRootIds.current.set(levelId, streamedRoots(objects));
+            spawnRuntimeObjects(objects);
+            return true;
+        },
+        unload: (levelId) => {
+            const roots = streamedRootIds.current.get(levelId);
+            if (!roots) return;
+            streamedRootIds.current.delete(levelId);
+            roots.forEach(id => destroyRuntimeObject(id));
+        },
+        isLoaded: (levelId) => streamedRootIds.current.has(levelId),
+    }), [content.levelObjects, destroyRuntimeObject, level.id, spawnRuntimeObjects]);
+
     // Prefab documents come with the game content (the project or game pack 'prefabs' domain).
     const prefabs = content.prefabs;
     const reportedMissingPrefabs = useRef(new Set<string>());
@@ -600,6 +623,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
 
     return (
         <IKPlayerTargetContext.Provider value={playerTargetRef}>
+        <LevelStreamingContext.Provider value={levelStreaming}>
         <RuntimeSpawnerProvider spawnPrefab={spawnPrefab}>
             {/* --- Replaced Hardcoded Lights with SkySystem --- */}
             <SkySystem levelObjects={runtimeLevelObjects} />
@@ -730,6 +754,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
             {/* After the rig: a level camera, or a blend back from one, has the last word on the view. */}
             <CameraDirectorDriver />
         </RuntimeSpawnerProvider>
+        </LevelStreamingContext.Provider>
         </IKPlayerTargetContext.Provider>
     );
 };

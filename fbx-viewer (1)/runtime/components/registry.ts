@@ -10,6 +10,7 @@ import { IK_COMPONENTS } from './ikComponents';
 import { JOINT_COMPONENTS } from './jointComponents';
 import { NET_SYNC_COMPONENT } from './netSyncComponent';
 import { LOD_COMPONENTS } from './lodComponents';
+import { LEVEL_STREAMING_COMPONENT } from './levelStreamingComponent';
 import { PHYSICS_COMPONENTS } from './physicsComponents';
 import { POST_PROCESS_COMPONENT } from './postProcess';
 import { REFLECTION_PROBE_COMPONENT } from './reflectionProbe';
@@ -32,6 +33,7 @@ export const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
     POST_PROCESS_COMPONENT,
     REFLECTION_PROBE_COMPONENT,
     ...LOD_COMPONENTS,
+    LEVEL_STREAMING_COMPONENT,
     ...IK_COMPONENTS,
     SCRIPT_COMPONENT,
     NET_SYNC_COMPONENT,

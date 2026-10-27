@@ -61,6 +61,7 @@ Objects can carry components that add behaviour. Select an object and use **Add 
 | Reflection Probe | Captures its surroundings into a reflection map for shiny materials within its radius; the nearest probe wins where probes overlap. Updates once at start, at an interval, or every frame |
 | Post Process | Bloom, ambient occlusion, tone mapping, vignette, depth of field, colour grading and antialiasing for the whole level |
 | LOD Group | Shows one of the object's children by camera distance (LOD 0, 1, 2) and hides all of them past the last distance |
+| Level Streaming | Loads another level's objects while the player is inside its box and unloads them after the player leaves (see [Level streaming](#level-streaming)) |
 | Distance Cull | Hides the object and its children beyond a distance |
 | Look At IK / Foot IK | Turn a bone toward the camera or the player, or plant the feet of the object's model on the ground (see [IK](characters.md#ik)) |
 | Script | Runs your own JavaScript or TypeScript during play (see [Gameplay scripting](scripting.md)) |
@@ -144,6 +145,16 @@ Add an **Audio Source** component to play a sound from an object during play. In
 | Mixer Bus | SFX | SFX, Music, UI or Master |
 
 All game sound plays through four mixer buses (Master, Music, Effects and Interface), and players set each one's volume in the game's Options screen. Weapon sounds use Effects. **Audio Emitter** objects use Music when they are 2D and looping, and Effects otherwise. The **Play Sound** blueprint node chooses its bus.
+
+## Level streaming
+
+Big worlds can be split into levels that load as the player moves. Build each area as its own level, then in the level the player starts in, add an empty object with a **Level Streaming** component where the area begins:
+
+- **Level to load** picks the area's level.
+- **Box size** is the trigger volume around the object (drawn as a violet box in the editor).
+- **Unload delay** is how long the player must be outside the box before the area unloads (2 s by default).
+
+While the player is inside the box, every object of that level joins the play session: props, lights, terrain, colliders, components and scripts. Areas keep their own coordinates, so build them where they sit in the world. The area's player start and sky are not loaded; the starting level's are used. Objects loaded this way can be destroyed and moved like any others; unloading discards those changes, and the area loads fresh next time. Loading never changes the project. In the editor, play reads the other levels as they were when play started; a streamed level's sculpted terrain shows flat in play-in-editor until it is opened in the editor once.
 
 ## Terrain detail in play
 
