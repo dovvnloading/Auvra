@@ -5,6 +5,7 @@ vi.mock('../../components/Scripting/ScriptInspector', () => ({ ScriptInspector: 
 vi.mock('../../components/Timeline/TimelineInspector', () => ({ TimelineInspector: () => null }));
 vi.mock('../../components/Environment/LevelStreamingInspector', () => ({ LevelStreamingInspector: () => null }));
 vi.mock('../../components/Dialogue/DialogueInspector', () => ({ DialogueInspector: () => null }));
+vi.mock('../../components/Environment/ReachIKInspector', () => ({ ReachIKInspector: () => null }));
 
 describe('component registry', () => {
   it('leaves editor inspectors out until the editor registers them', async () => {

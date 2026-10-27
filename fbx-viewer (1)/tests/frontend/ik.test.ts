@@ -661,8 +661,8 @@ const mount = (type: string, host: THREE.Object3D, props: Record<string, unknown
 };
 
 describe('IK component definitions', () => {
-  it('registers lookAtIK and footIK with their documented defaults', () => {
-    expect(IK_COMPONENTS.map(entry => entry.type)).toEqual(['lookAtIK', 'footIK']);
+  it('registers lookAtIK, footIK and Reach IK with their documented defaults', () => {
+    expect(IK_COMPONENTS.map(entry => entry.type)).toEqual(['lookAtIK', 'footIK', 'twoBoneIK']);
     expect(componentOf('lookAtIK').props).toEqual({ boneName: 'Head', target: 'camera', maxAngle: 70, weight: 1, forwardAxis: '+z' });
     expect(componentOf('footIK').props).toEqual({ leftFoot: 'LeftFoot', rightFoot: 'RightFoot', maxStep: 0.5, weight: 1 });
     expect(definition('lookAtIK').props.find(prop => prop.key === 'target')?.options?.map(option => option.value)).toEqual(['camera', 'player']);
