@@ -1,7 +1,9 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
+import { useRapier } from '@react-three/rapier';
 import { frontendDiagnostics } from '../diagnostics/runtime';
+import { usePhysicsAvailable } from './physics';
 import { useRuntimeServices } from './RuntimeServicesContext';
 
 interface PauseControllerProps {
@@ -34,12 +36,15 @@ const lockPointer = (canvas: HTMLCanvasElement) => {
  */
 export const PauseController: React.FC<PauseControllerProps> = ({ paused, canPause, sessionKey, onRequestPause }) => {
     const setFrameloop = useThree(state => state.setFrameloop);
+    const clock = useThree(state => state.clock);
     const camera = useThree(state => state.camera);
     const gl = useThree(state => state.gl);
 
     useEffect(() => {
+        // Reading the clock on resume drops the paused time, so the first frame back is not one huge step.
+        if (!paused) clock.getDelta();
         setFrameloop(paused ? 'never' : 'always');
-    }, [paused, setFrameloop]);
+    }, [clock, paused, setFrameloop]);
 
     // Every level sound plays through the camera's AudioListener, so suspending its context freezes them in place.
     useEffect(() => {
@@ -98,5 +103,91 @@ export const PauseActionWatcher: React.FC<{ enabled: boolean; onRequestPause: ()
     useFrame(() => {
         if (enabled && input.wasPressed('Pause')) onRequestPause();
     });
+    return null;
+};
+
+/** Seconds of game time one stepped frame advances. */
+export const STEP_SECONDS = 1 / 60;
+
+const PhysicsStepRegistrar: React.FC<{ stepRef: React.MutableRefObject<((delta: number) => void) | null> }> = ({ stepRef }) => {
+    const { step } = useRapier();
+    useEffect(() => {
+        stepRef.current = step;
+        return () => { stepRef.current = null; };
+    }, [step, stepRef]);
+    return null;
+};
+
+/**
+ * Runs exactly one frame of the paused game each time `stepRequest` changes: one physics tick, then
+ * every frame callback with a delta of STEP_SECONDS. Does nothing while the game runs. Mount inside
+ * PhysicsWorld.
+ */
+export const FrameStepper: React.FC<{ paused: boolean; stepRequest: number }> = ({ paused, stepRequest }) => {
+    const advance = useThree(state => state.advance);
+    const clock = useThree(state => state.clock);
+    const physicsAvailable = usePhysicsAvailable();
+    const stepPhysics = useRef<((delta: number) => void) | null>(null);
+    const lastRequest = useRef(stepRequest);
+
+    useEffect(() => {
+        if (stepRequest === lastRequest.current) return;
+        lastRequest.current = stepRequest;
+        if (!paused) return;
+        stepPhysics.current?.(STEP_SECONDS);
+        // In frameloop 'never' the timestamp sets the clock, so the frame's delta is exactly one step.
+        advance(clock.elapsedTime + STEP_SECONDS);
+    }, [advance, clock, paused, stepRequest]);
+
+    return physicsAvailable ? <PhysicsStepRegistrar stepRef={stepPhysics} /> : null;
+};
+
+/** One level object as it is in the running game. Rotation is world Euler XYZ in degrees. */
+export interface InspectedObject {
+    id: string;
+    position: [number, number, number];
+    rotation: [number, number, number];
+    visible: boolean;
+}
+
+export type RuntimeInspector = () => InspectedObject[];
+
+const effectivelyVisible = (object: THREE.Object3D): boolean => {
+    for (let node: THREE.Object3D | null = object; node; node = node.parent) if (!node.visible) return false;
+    return true;
+};
+
+/** Every drawn level object (tagged with userData.levelObjectId) with its live world transform, outermost group per id. */
+export const inspectScene = (scene: THREE.Object3D): InspectedObject[] => {
+    const found = new Map<string, InspectedObject>();
+    const position = new THREE.Vector3();
+    const quaternion = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    const euler = new THREE.Euler();
+    scene.updateMatrixWorld(true);
+    scene.traverse(node => {
+        const id = node.userData?.levelObjectId;
+        if (typeof id !== 'string' || found.has(id)) return;
+        node.matrixWorld.decompose(position, quaternion, scale);
+        euler.setFromQuaternion(quaternion);
+        const degrees = (value: number) => Math.round(THREE.MathUtils.radToDeg(value) * 10) / 10;
+        found.set(id, {
+            id,
+            position: [position.x, position.y, position.z],
+            rotation: [degrees(euler.x), degrees(euler.y), degrees(euler.z)],
+            visible: effectivelyVisible(node),
+        });
+    });
+    return [...found.values()];
+};
+
+/** Lets code outside the canvas (the play toolbar) read the running scene through `inspectRef`. */
+export const SceneInspector: React.FC<{ inspectRef?: React.MutableRefObject<RuntimeInspector | null> }> = ({ inspectRef }) => {
+    const scene = useThree(state => state.scene);
+    useEffect(() => {
+        if (!inspectRef) return;
+        inspectRef.current = () => inspectScene(scene);
+        return () => { inspectRef.current = null; };
+    }, [inspectRef, scene]);
     return null;
 };

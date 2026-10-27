@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+import type { MutableRefObject, ReactNode } from 'react';
+import type { RuntimeInspector } from './PauseController';
 import type {
     AttachmentData, AudioData, Blueprint, LevelBlueprintData, LevelData, LevelObject,
     LoadedModelData, PrefabData, SocketData, TextureData,
@@ -95,6 +96,10 @@ export interface LevelRuntimeProps {
     restore?: SaveGameData | null;
     /** The player's saved options (sensitivity, volumes, bindings); without one the game settings' defaults apply. */
     playerOptions?: PlayerOptionsStore;
+    /** While paused, each change runs exactly one frame (play-in-editor's Step). */
+    stepRequest?: number;
+    /** Filled with a reader of the running scene's level objects (play-in-editor's inspector). */
+    inspectRef?: MutableRefObject<RuntimeInspector | null>;
 }
 
 /** Checkpoint-style save. */

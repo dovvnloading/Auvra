@@ -36,6 +36,18 @@ For an empty project:
 
 ## Play
 
-Click **PLAY LEVEL** in the World Editor toolbar to play the current level inside the editor. **Esc** leaves play mode, and **F3** shows a performance overlay. Play never changes your saved project: anything destroyed or spawned while playing is reset when you stop.
+Click **PLAY LEVEL** in the World Editor toolbar to play the current level inside the editor. **F3** shows a performance overlay.
+
+**Esc** pauses play and shows the play toolbar:
+
+| Control | Key | Does |
+|---|---|---|
+| Resume | F8 | Carries on playing |
+| Step | F10 | Runs exactly one frame (1/60 s) of the paused game: physics, animation, AI and scripts |
+| Restart | | Starts the level again |
+| Inspect | | Lists every object drawn as its own group (objects with components, children or a timeline) with its live world position, rotation and visibility; filter by name, and step to watch values change |
+| Stop | Esc | Returns to the editor |
+
+Play never changes your saved project: anything destroyed or spawned while playing is reset when you stop.
 
 When the level works, see [Building and shipping games](building-games.md).
