@@ -1,7 +1,8 @@
-"""Regenerates assets/enemy.fbx, the Arena guard: a blocky humanoid on a Mixamo-named skeleton (Hips,
-Spine, Head, arms, legs) with each box skinned rigidly to its bone, so a killed guard falls as a ragdoll.
+"""Regenerates Auvra/project/templates/arena/assets/enemy.fbx, the Arena guard: a blocky humanoid
+on a Mixamo-named skeleton (Hips, Spine, Head, arms, legs) with each box skinned rigidly to its
+bone, so a killed guard falls as a ragdoll.
 
-    blender -b --factory-startup --python enemy_model.py
+    blender -b --factory-startup --python tools/arena_enemy_model.py
 """
 from pathlib import Path
 import bpy
@@ -9,7 +10,7 @@ import bmesh
 from mathutils import Vector
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
-out = str(Path(__file__).resolve().parent / 'assets' / 'enemy.fbx')
+out = str(Path(__file__).resolve().parents[1] / 'Auvra' / 'project' / 'templates' / 'arena' / 'assets' / 'enemy.fbx')
 color = (0.75, 0.1, 0.08, 1.0)
 
 # name: (head, tail, parent)
