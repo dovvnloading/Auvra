@@ -140,6 +140,12 @@ class WebView2HandlerTests(unittest.TestCase):
         self.frame._on_message(None, message("http://127.0.0.1:3000/", valid))
         self.assertEqual(self.received, [valid])
 
+    def test_diagnostics_envelopes_reach_the_diagnostics_lane(self):
+        heartbeat = '{"protocol":"auvra.diagnostics/1","type":"heartbeat","visibility":"visible","activeCount":0}'
+        self.frame._on_message(None, message("http://127.0.0.1:3000/", heartbeat))
+        self.frame._on_message(None, message("https://evil.test/", heartbeat))
+        self.assertEqual(self.received, [heartbeat])
+
     def test_native_message_cap_is_before_parse(self):
         oversized = '{' + (' ' * (256 * 1024)) + '}'
         self.frame._on_message(None, message("http://127.0.0.1:3000/", oversized))
