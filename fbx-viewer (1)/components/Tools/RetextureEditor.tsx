@@ -133,6 +133,10 @@ export const RetextureEditor: React.FC = () => {
         }
     }, [generatedTextureUrl, selectedModel?.id, previewModelId, previewTexture]);
 
+    // Generation restyles the model's own texture map; a model drawn with plain colours has none.
+    const noSourceTexture = Boolean(selectedModel) && !currentTextureBase64 && !generatedTextureUrl && !isGenerating;
+    const canGenerate = Boolean(selectedModel && prompt && currentTextureBase64) && !isGenerating;
+
     const handleGenerate = () => {
         if (currentTextureBase64 && prompt) {
             setPreviewModelId(selectedModelId);
@@ -179,7 +183,10 @@ export const RetextureEditor: React.FC = () => {
                         <AuvraCanvas surfaceId="preview-retexture-editor" role="preview" shadows camera={{ position: [2, 2, 4], fov: 45 }} className="flex-1">
                             <color attach="background" args={['#0a0a0a']} />
                             <LocalEnvironment />
-                            
+                            {/* The environment map lights only standard materials; imported models are often Phong. */}
+                            <ambientLight intensity={0.5} />
+                            <directionalLight position={[10, 10, 5]} intensity={1.5} castShadow shadow-bias={-0.0001} />
+
                             <group>
                                 <Center>
                                     <primitive object={selectedModel.object} />
@@ -231,6 +238,12 @@ export const RetextureEditor: React.FC = () => {
                                 />
                             ) : generatedTextureUrl ? (
                                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center text-[10px] text-blue-300"><ImageIcon size={24} /><span>Preview asset ready in host memory</span><span className="text-gray-600">Commit or discard to finish.</span></div>
+                            ) : noSourceTexture ? (
+                                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center text-[10px] text-gray-500">
+                                    <ImageIcon size={24} />
+                                    <span>This model has no texture map to restyle.</span>
+                                    <span className="text-gray-600">Retexture works on models drawn with an image texture.</span>
+                                </div>
                             ) : (
                                 <div className="absolute inset-0 flex items-center justify-center text-gray-600">
                                     <ImageIcon size={24} />
@@ -305,10 +318,11 @@ export const RetextureEditor: React.FC = () => {
                         ) : (
                             <button
                                 onClick={handleGenerate}
-                                disabled={!selectedModel || !prompt || isGenerating}
+                                disabled={!canGenerate}
+                                title={noSourceTexture ? 'This model has no texture map to restyle.' : undefined}
                                 className={`
                                     w-full py-3 rounded-lg font-bold text-xs flex items-center justify-center gap-2 transition-all
-                                    ${(!selectedModel || !prompt || isGenerating) 
+                                    ${!canGenerate 
                                         ? 'bg-gray-800 text-gray-500 cursor-not-allowed border border-gray-700' 
                                         : 'bg-white text-black hover:bg-gray-200 shadow-xl'
                                     }
