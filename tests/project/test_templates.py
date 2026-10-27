@@ -68,7 +68,7 @@ class TemplateTests(unittest.TestCase):
         return repository
 
     def test_template_names_list_every_template(self) -> None:
-        self.assertEqual(TEMPLATE_NAMES, ("blank", "starter", "arena"))
+        self.assertEqual(TEMPLATE_NAMES, ("blank", "starter", "arena", "courtyard"))
 
     def test_starter_template_is_a_valid_playable_project(self) -> None:
         repository = self.create("starter")
@@ -296,6 +296,104 @@ class TemplateTests(unittest.TestCase):
                 self.assertLessEqual(element["position"]["y"] + element["size"]["height"], 1080, element["id"])
                 if element["type"] == "Button":
                     self.assertTrue(element["props"]["label"].strip())
+
+    # -- courtyard ----------------------------------------------------------------------------
+
+    def courtyard(self) -> tuple[ProjectRepository, dict[str, Any], dict[str, dict[str, Any]]]:
+        repository = self.create("courtyard")
+        apply_template(repository, "courtyard", project_name="Courtyard Sample")
+        levels = documents(repository, "levels")
+        self.assertEqual([level["name"] for level in levels], ["Courtyard"])
+        objects = {item["id"]: item for item in documents(repository, "objects")}
+        return repository, levels[0], objects
+
+    def test_courtyard_template_is_a_valid_project_whose_references_resolve(self) -> None:
+        repository, level, objects = self.courtyard()
+        kinds = [item["type"] for item in objects.values()]
+        for kind in ("terrain", "sky_sphere", "player_start"):
+            self.assertEqual(kinds.count(kind), 1, kind)
+        model_ids = {item["id"] for item in documents(repository, "models")}
+        for item in objects.values():
+            self.assertEqual(item["levelId"], level["id"])
+            # A prop has a model, or none at all (an empty object that only carries components).
+            if item["type"] == "prop" and item["modelId"]:
+                self.assertIn(item["modelId"], model_ids, item["id"])
+            elif item["type"] == "prop":
+                self.assertTrue(item.get("components"), item["id"])
+        settings = next(item for item in documents(repository, "metadata") if item["id"] == "game-settings")["settings"]
+        self.assertEqual((settings["name"], settings["startupLevelId"]), ("Courtyard Sample", level["id"]))
+        player = next(item for item in documents(repository, "blueprints") if item["id"] == settings["playerBlueprintId"])
+        self.assertEqual(player["type"], "Player Character")
+        for asset_id in repository.referenced_asset_ids():
+            self.assertTrue(repository.assets.verify(asset_id), asset_id)
+
+        path, revision = repository.path, repository.revision
+        repository.close()
+        with ProjectRepository(path) as reopened:
+            self.assertEqual(reopened.revision, revision)
+
+    def test_courtyard_keeper_dialogue_leads_somewhere_on_every_path(self) -> None:
+        _, _, objects = self.courtyard()
+        keeper = objects["courtyard-keeper"]
+        [dialogue] = components(keeper, "dialogue")
+        data = dialogue["props"]["dialogue"]
+        lines = {line["id"]: line for line in data["lines"]}
+        self.assertIn(data["startId"], lines)
+        for line in lines.values():
+            targets = [line["next"]] + [choice["next"] for choice in line.get("choices", [])]
+            for target in targets:
+                self.assertTrue(target is None or target in lines, (line["id"], target))
+        self.assertGreater(dialogue["props"]["radius"], 0)
+        # The keeper stands beside the gate, not in the way out.
+        self.assertGreater(abs(keeper["position"][0]), 2.5)
+
+    def test_courtyard_relics_open_the_gate_that_leads_to_the_exit(self) -> None:
+        repository, level, objects = self.courtyard()
+        audio_ids = {item["id"] for item in documents(repository, "audio")}
+        relics = [item for item in objects.values() if item["name"].startswith("Relic")]
+        self.assertEqual(len(relics), 3)
+        for relic in relics:
+            [trigger] = components(relic, "collider")
+            self.assertIs(trigger["props"]["isTrigger"], True)
+            [script] = components(relic, "script")
+            source = script["props"]["source"]
+            self.assertIn("function onTriggerEnter", source)
+            self.assertIn("const SCORE_VARIABLE = 'relics';", source)
+            sound = source.split("const PICKUP_SOUND = '")[1].split("'")[0]
+            self.assertIn(sound, audio_ids)
+
+        # The gate halves are kinematic, so their colliders follow the timeline that sinks them.
+        [timeline] = components(objects["courtyard-gate-mechanism"], "timeline")
+        self.assertEqual(timeline["props"]["playVariable"], "gate_open")
+        self.assertIs(timeline["props"]["autoplay"], False)
+        tracks = timeline["props"]["timeline"]["tracks"]
+        self.assertEqual(len(tracks), 2)
+        for track in tracks:
+            gate = objects[track["objectId"]]
+            self.assertEqual(components(gate, "rigidBody")[0]["props"]["type"], "kinematicPosition")
+            start, end = track["position"][0]["value"], track["position"][-1]["value"]
+            self.assertEqual(start, gate["position"])
+            self.assertLess(end[1], -2.5)
+
+        graph = Graph(level["blueprint"])
+        nodes = level["blueprint"]["nodes"]
+        [opener] = [node for node in nodes if node["type"] == "SetLevelVariable"]
+        self.assertEqual((opener["data"]["default_Name"], opener["data"]["default_Value"]), ("gate_open", "1"))
+        [equal] = [node for node in nodes if node["type"] == "Equal"]
+        self.assertEqual(equal["data"]["default_B"], len(relics))
+        self.assertEqual(graph.source(equal["id"], "A")["data"]["default_Name"], "relics")
+        [leave] = [node for node in nodes if node["type"] == "Event" and "Overlap" in node["name"]]
+        exit_trigger = objects[leave["data"]["targetActorId"]]
+        self.assertIs(components(exit_trigger, "collider")[0]["props"]["isTrigger"], True)
+        self.assertLess(exit_trigger["position"][2], objects["courtyard-gate-left"]["position"][2])
+        self.assertEqual(graph.flow(leave["id"])[-1]["data"]["action"], "EndGame")
+        for node in nodes:
+            if node["type"] == "PlaySound":
+                self.assertIn(node["data"]["default_Sound"], audio_ids)
+
+        hud = {item["id"]: item for item in documents(repository, "hud")}
+        bound = [element for element in hud["hud-main"]["elements"] if element["props"].get("bind") == {"text": "vars.relics"}]
+        self.assertEqual(len(bound), 1)
 
 
 if __name__ == "__main__":

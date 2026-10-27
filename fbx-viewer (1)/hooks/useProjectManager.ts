@@ -20,6 +20,7 @@ const DEFAULT_PROJECT_NAMES: Record<ProjectTemplate, string> = {
   blank: 'Untitled',
   starter: 'Starter Game',
   arena: 'Arena Sample',
+  courtyard: 'Courtyard Sample',
 };
 
 interface UseProjectManagerProps {

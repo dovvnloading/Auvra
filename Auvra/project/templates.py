@@ -23,7 +23,7 @@ from typing import Any, Iterable
 from .assets import encode_heightfield
 from .errors import InvalidProjectError
 
-TEMPLATE_NAMES = ("blank", "starter", "arena")
+TEMPLATE_NAMES = ("blank", "starter", "arena", "courtyard")
 _TEMPLATES_ROOT = Path(__file__).resolve().parent / "templates"
 _STARTER_ROOT = _TEMPLATES_ROOT / "starter"
 _ARENA_ROOT = _TEMPLATES_ROOT / "arena"
@@ -619,4 +619,265 @@ def _apply_arena(repository: Any, project_name: str) -> None:
     repository.apply_changes(changes, expected_revision=repository.revision)
 
 
-_BUILDERS = {"starter": _apply_starter, "arena": _apply_arena}
+# --- courtyard -------------------------------------------------------------------------------
+
+_COURTYARD_ROOT = _TEMPLATES_ROOT / "courtyard"
+_COURTYARD_LEVEL_ID = "courtyard-level-1"
+_COURTYARD_PLAYER_ID = "courtyard-player"
+_CHIME_SOUND_ID = "courtyard-sound-chime"
+_RELICS_VARIABLE = "relics"
+_GATE_VARIABLE = "gate_open"
+_COURTYARD_FLAT_RADIUS = 34.0
+_COURTYARD_HALF = 15.0     # the walls stand on a square this far from the middle
+_GATE_X = (-1.25, 1.25)    # the two gate crates fill the gap in the north wall
+
+_COURTYARD_MODELS = {
+    "courtyard-model-character": (_STARTER_ROOT / "assets" / "character.fbx", "Character", "Character", 5.0),
+    "courtyard-model-keeper": (_ARENA_ROOT / "assets" / "enemy.fbx", "Keeper", "Character", 5.0),
+    "courtyard-model-crate": (_STARTER_ROOT / "assets" / "crate.fbx", "Crate", "Prop", _CRATE_SIZE),
+    "courtyard-model-relic": (_ARENA_ROOT / "assets" / "coin.fbx", "Relic", "Prop", _COIN_SIZE),
+    "courtyard-model-rock": (_STARTER_ROOT / "assets" / "rock.fbx", "Rock", "Environment", 3.0),
+    "courtyard-model-tree": (_STARTER_ROOT / "assets" / "tree.fbx", "Tree", "Environment", 9.0),
+}
+
+# A warm late-afternoon sky.
+_COURTYARD_SKY = dict(_SKY_CONFIG, timeOfDay=17.0, sunColor="#ffd9a8", fogColor="#c9a888", fogDensity=0.015)
+
+# The Script component on each relic: the editor's Collectible template, counting into `relics`.
+_RELIC_SCRIPT = f"""// A relic: spins, and when the player walks into its trigger adds one to the level variable
+// '{_RELICS_VARIABLE}', plays the chime and removes itself. The level blueprint opens the gate at three.
+const SCORE_VARIABLE = '{_RELICS_VARIABLE}';
+const POINTS = 1;
+const PICKUP_SOUND = '{_CHIME_SOUND_ID}';
+const SPIN_SPEED = 2; // radians per second
+
+function onStart(ctx) {{
+    ctx.state.startRotation = ctx.self.rotation;
+    ctx.state.startTime = ctx.time;
+}}
+
+function onUpdate(ctx) {{
+    const [rx, ry, rz] = ctx.state.startRotation;
+    ctx.self.setRotation(rx, ry + (ctx.time - ctx.state.startTime) * SPIN_SPEED, rz);
+}}
+
+function onTriggerEnter(ctx, other) {{
+    // other is the object that entered, or null for the player: only the player collects it.
+    if (other) return;
+    const score = Number(ctx.vars.get(SCORE_VARIABLE)) || 0;
+    ctx.vars.set(SCORE_VARIABLE, score + POINTS);
+    if (PICKUP_SOUND) ctx.playSound(PICKUP_SOUND, 'sfx');
+    ctx.log('Relics: ' + (score + POINTS) + ' / 3');
+    ctx.self.destroy();
+}}
+"""
+
+_KEEPER_DIALOGUE = {
+    "startId": "keeper-welcome",
+    "lines": [
+        {"id": "keeper-welcome", "speaker": "Keeper", "next": "keeper-gate",
+         "text": "Welcome to the old courtyard, traveller."},
+        {"id": "keeper-gate", "speaker": "Keeper", "next": None,
+         "text": "The north gate behind me opens only for someone who has gathered all three sun relics.",
+         "choices": [
+             {"id": "keeper-ask", "text": "Where are the relics?", "next": "keeper-hints"},
+             {"id": "keeper-go", "text": "I'll find them.", "next": "keeper-farewell"},
+         ]},
+        {"id": "keeper-hints", "speaker": "Keeper", "next": "keeper-farewell",
+         "text": "One rests among the eastern stones, one in the western garden, and one on the old well by the east wall."},
+        {"id": "keeper-farewell", "speaker": "Keeper", "next": None,
+         "text": "Bring all three and the gate will open on its own. Good luck."},
+    ],
+}
+
+# Relic (x, z) positions and what they sit on (the height of their base).
+_RELICS = (("East Stones", 11.0, 6.0, 0.0), ("West Garden", -10.5, 3.0, 0.0), ("Old Well", 9.0, -10.0, 1.0))
+
+
+def _courtyard_objects(heightfield_id: str) -> list[dict[str, Any]]:
+    level = _COURTYARD_LEVEL_ID
+    objects = [
+        _terrain_object("courtyard-terrain", level, heightfield_id, _TERRAIN_SAMPLES, _TERRAIN_SIZE),
+        _object("courtyard-sky", level, "Sky", "sky_sphere", [0.0, 5.0, 0.0], skyConfig=dict(_COURTYARD_SKY)),
+        # Facing north (-Z), toward the Keeper and the gate.
+        _object("courtyard-player-start", level, "Player Start", "player_start", [0.0, 0.0, 11.0], rotation_y=round(math.pi, 4)),
+    ]
+
+    # The walls: a ring of fixed crates on a square, with a gap in the north side the gate fills.
+    offsets = [-_COURTYARD_HALF + _CRATE_SIZE / 2 + _CRATE_SIZE * index for index in range(12)]
+    wall: list[tuple[float, float]] = []
+    for offset in offsets:
+        if offset not in _GATE_X:
+            wall.append((offset, -_COURTYARD_HALF))
+        wall.extend([(offset, _COURTYARD_HALF), (-_COURTYARD_HALF, offset), (_COURTYARD_HALF, offset)])
+    for index, (x, z) in enumerate(wall):
+        object_id = f"courtyard-wall-{index + 1}"
+        objects.append(_object(object_id, level, f"Wall {index + 1}", "prop", [x, 0.0, z],
+                               model_id="courtyard-model-crate", components=[_crate_collider(object_id)]))
+
+    # The gate: kinematic bodies, so their colliders follow the timeline that sinks them into the ground.
+    gate = []
+    for side, x in zip(("Left", "Right"), _GATE_X):
+        object_id = f"courtyard-gate-{side.lower()}"
+        gate.append(_object(object_id, level, f"Gate {side}", "prop", [x, 0.0, -_COURTYARD_HALF],
+                            model_id="courtyard-model-crate", components=[
+                                _component(object_id, "rigidBody", type="kinematicPosition", mass=50, gravityScale=1,
+                                           lockRotation=True),
+                                _crate_collider(object_id),
+                            ]))
+    objects.extend(gate)
+    sink = -_CRATE_SIZE - 0.1
+    objects.append(_object("courtyard-gate-mechanism", level, "Gate Mechanism", "prop", [0.0, 3.0, -_COURTYARD_HALF],
+                           components=[_component("courtyard-gate-mechanism", "timeline", autoplay=False, loop=False,
+                                                  speed=1, playVariable=_GATE_VARIABLE, timeline={
+                               "duration": 2.5,
+                               "tracks": [{
+                                   "id": f"{item['id']}-sinks", "kind": "transform", "objectId": item["id"],
+                                   "position": [
+                                       {"time": 0, "value": item["position"], "interpolation": "smooth"},
+                                       {"time": 2.5, "value": [item["position"][0], sink, item["position"][2]]},
+                                   ],
+                               } for item in gate],
+                           })]))
+
+    # The Keeper, beside the gate rather than in its way: talks when the player is near and presses Interact;
+    # a capsule keeps the player from walking through them.
+    objects.append(_object("courtyard-keeper", level, "Keeper", "prop", [-4.5, 0.0, -11.5],
+                           model_id="courtyard-model-keeper", components=[
+                               _component("courtyard-keeper", "dialogue", radius=5, prompt="Talk to the Keeper",
+                                          dialogue=_KEEPER_DIALOGUE),
+                               _component("courtyard-keeper", "collider", shape="capsule", radius=0.9, height=3.2,
+                                          offset=[0.0, 2.5, 0.0], isTrigger=False),
+                           ]))
+
+    # The old well: a low crate the third relic sits on.
+    objects.append(_object("courtyard-well", level, "Old Well", "prop", [9.0, 0.0, -10.0], model_id="courtyard-model-crate",
+                           scale=0.4, components=[_crate_collider("courtyard-well")]))
+    for index, (name, x, z, base) in enumerate(_RELICS):
+        object_id = f"courtyard-relic-{index + 1}"
+        objects.append(_object(object_id, level, f"Relic ({name})", "prop", [x, base + 0.6, z],
+                               model_id="courtyard-model-relic", components=[
+                                   _component(object_id, "collider", "trigger", shape="sphere", radius=1.6,
+                                              offset=[0.0, _COIN_SIZE / 2, 0.0], isTrigger=True),
+                                   _component(object_id, "script", source=_RELIC_SCRIPT),
+                                   _component(object_id, "particles", preset="sparks", rate=8, burst=0, loop=True),
+                                   _component(object_id, "pointLight", color="#ffd27a", intensity=12, distance=6,
+                                              castShadow=False),
+                               ]))
+
+    # Past the gate: reaching it ends the game.
+    objects.append(_object("courtyard-exit", level, "Courtyard Exit", "prop", [0.0, 0.0, -21.0], components=[
+        _component("courtyard-exit", "collider", "trigger", shape="box", size=[8.0, 4.0, 3.0], offset=[0.0, 2.0, 0.0],
+                   isTrigger=True),
+    ]))
+
+    for index, (x, z, rotation) in enumerate(((12.0, 8.5, 0.6), (9.0, 9.5, 2.2), (12.5, 3.0, 1.4))):
+        objects.append(_object(f"courtyard-rock-{index + 1}", level, f"Eastern Stone {index + 1}", "prop", [x, 0.0, z],
+                               model_id="courtyard-model-rock", rotation_y=rotation))
+    for index, (x, z, rotation) in enumerate(((-11.0, 8.0, 0.4), (-12.0, -1.5, 1.9), (-8.0, -6.5, 2.8))):
+        objects.append(_object(f"courtyard-garden-tree-{index + 1}", level, f"Garden Tree {index + 1}", "prop",
+                               [x, 0.0, z], model_id="courtyard-model-tree", rotation_y=rotation))
+    for index in range(14):
+        angle = index * 2 * math.pi / 14 + 0.2
+        radius = 38.0 + 4.0 * math.sin(index * 1.9)
+        x, z = round(radius * math.cos(angle), 2), round(radius * math.sin(angle), 2)
+        objects.append(_object(f"courtyard-tree-{index + 1}", level, f"Tree {index + 1}", "prop",
+                               [x, round(_hills(x, z, _COURTYARD_FLAT_RADIUS) - 0.3, 2), z],
+                               model_id="courtyard-model-tree", rotation_y=round(angle, 3)))
+    return objects
+
+
+def _courtyard_logic(exit_trigger: dict[str, Any]) -> dict[str, Any]:
+    """Every frame, three relics open the gate (once); walking through it ends the game."""
+
+    graph = _LogicGraph("courtyard-logic")
+    begin = graph.begin_play("begin", (80, 40))
+    hint = graph.print_string("hint", "Find the Keeper by the north gate.", (380, 40))
+    graph.chain((begin, "", "Exec"), (hint, "Exec", "Out"))
+
+    tick = graph.tick("tick", (80, 260))
+    relics = graph.get_level_variable("get-relics", _RELICS_VARIABLE, (80, 460))
+    all_found = graph.pure_math("all-found", "Equal", "Equal (==)", (380, 460), "Boolean", B=len(_RELICS))
+    graph.wire(relics, "Value", all_found, "A")
+    found = graph.branch("if-all-found", (380, 260))
+    once = graph.do_once("open-once", (640, 260))
+    open_gate = graph.set_level_variable("open-gate", _GATE_VARIABLE, (900, 260))
+    open_gate_node = next(node for node in graph.nodes if node["id"] == open_gate)
+    open_gate_node["data"]["default_Value"] = "1"
+    rumble = graph.play_sound("gate-sound", _CHIME_SOUND_ID, (1160, 260))
+    announce = graph.print_string("gate-opens", "All three relics! The north gate grinds open.", (1420, 260))
+    graph.chain((tick, "", "Exec"), (found, "Exec", ""))
+    graph.wire(all_found, "Result", found, "Condition")
+    graph.wire(found, "True", once, "Exec")
+    graph.chain((once, "", "Completed"), (open_gate, "Exec", "Out"), (rumble, "Exec", "Out"), (announce, "Exec", ""))
+
+    leave = graph.overlap("exit-overlap", exit_trigger, (80, 660))
+    leave_once = graph.do_once("exit-once", (380, 660))
+    farewell = graph.print_string("farewell", "You leave the courtyard with the relics. Thanks for playing!", (640, 660))
+    pause = graph.delay("before-end", 3.0, (900, 660))
+    end = graph.level_action("end-game", "End Game", (1160, 660), action="EndGame")
+    graph.chain((leave, "", "Exec"), (leave_once, "Exec", "Completed"), (farewell, "Exec", "Out"), (pause, "Exec", "Out"),
+                (end, "Exec", ""))
+
+    return graph.document([
+        {"id": "courtyard-variable-relics", "name": _RELICS_VARIABLE, "type": "Float", "value": 0},
+        {"id": "courtyard-variable-gate", "name": _GATE_VARIABLE, "type": "Float", "value": 0},
+    ])
+
+
+def _courtyard_hud() -> list[dict[str, Any]]:
+    total = len(_RELICS)
+    main = _hud_document("hud-main", "Main HUD", [
+        _hud_element("hud-main-panel", "Relic Panel", "Container",
+                     {"backgroundColor": "rgba(0,0,0,0.45)", "borderColor": "rgba(255,215,140,0.7)", "borderWidth": 2,
+                      "borderRadius": 12}, 32, 32, 380, 88, 1),
+        _hud_text("hud-main-relics-label", "Relics Label", "Relics:", 56, 50, 150, 56, size=40, color="#ffd78c"),
+        _hud_text("hud-main-relics-value", "Relics Value", "0", 206, 50, 60, 56, size=40, align="center",
+                  bind={"text": f"vars.{_RELICS_VARIABLE}"}),
+        _hud_text("hud-main-relics-total", "Relics Total", f"/ {total}", 272, 50, 120, 56, size=40,
+                  color="rgba(255,255,255,0.7)"),
+        _hud_text("hud-main-hint", "Hint", "Talk to the Keeper, find three relics, then leave through the north gate.",
+                  360, 1000, 1200, 40, size=24, color="rgba(255,255,255,0.85)", weight="normal", align="center"),
+    ])
+    title = _menu("menu-title", "Title Menu", "COURTYARD", "Find the three sun relics to open the gate.", 480, [
+        ("play", "Play", "primary"), ("options", "Options", "secondary"), ("quit", "Quit", "outline"),
+    ])
+    pause = _menu("menu-pause", "Pause Menu", "PAUSED", f"Find all {total} relics, then leave through the north gate.",
+                  400, [
+                      ("resume", "Resume", "primary"), ("save", "Save", "secondary"), ("load", "Load", "secondary"),
+                      ("options", "Options", "secondary"), ("quit", "Quit to title", "outline"),
+                  ])
+    return [main, title, pause]
+
+
+def _apply_courtyard(repository: Any, project_name: str) -> None:
+    asset_ids = {model_id: _store_file(repository, path, FBX_MIME) for model_id, (path, _, _, _) in _COURTYARD_MODELS.items()}
+    sound_path = _ARENA_ROOT / "assets" / "coin.wav"
+    sound_asset = _store_file(repository, sound_path, WAV_MIME)
+    heights = [_terrain_height(column, row, _COURTYARD_FLAT_RADIUS)
+               for row in range(_TERRAIN_SAMPLES) for column in range(_TERRAIN_SAMPLES)]
+    heightfield = _store_heightfield(repository, heights, _TERRAIN_SAMPLES, "courtyard-terrain.ahf")
+
+    player = json.loads((_STARTER_ROOT / "player_blueprint.json").read_text(encoding="utf-8"))
+    player.update(id=_COURTYARD_PLAYER_ID, linkedModelId="courtyard-model-character")
+
+    objects = _courtyard_objects(heightfield)
+    exit_trigger = next(item for item in objects if item["id"] == "courtyard-exit")
+    changes = {
+        "models": [_model_document(model_id, asset_ids[model_id], name, category, size)
+                   for model_id, (_, name, category, size) in _COURTYARD_MODELS.items()],
+        "blueprints": [player],
+        "audio": [{"id": _CHIME_SOUND_ID, "name": "Chime", "assetId": sound_asset, "type": WAV_MIME,
+                   "duration": _wav_duration(sound_path)}],
+        "levels": [{"id": _COURTYARD_LEVEL_ID, "name": "Courtyard", "createdAt": 0, "blueprint": _courtyard_logic(exit_trigger)}],
+        "objects": objects,
+        "hud": _courtyard_hud(),
+        "metadata": [{"id": "game-settings", "settings": {
+            "schema": 1, "name": project_name, "startupLevelId": _COURTYARD_LEVEL_ID,
+            "playerBlueprintId": _COURTYARD_PLAYER_ID,
+        }}],
+    }
+    repository.apply_changes(changes, expected_revision=repository.revision)
+
+
+_BUILDERS = {"starter": _apply_starter, "arena": _apply_arena, "courtyard": _apply_courtyard}
