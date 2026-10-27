@@ -48,6 +48,7 @@ HUD elements can show live game values. A binding maps one of the element's attr
 |---|---|
 | `player.health`, `player.maxHealth`, `player.stamina` | Player stats |
 | `player.isAiming` | Whether the player is aiming |
+| `player.weapon`, `player.ammo`, `player.magazine`, `player.reserve`, `player.reloading` | The held [weapon](characters.md#weapons): its name, the rounds in its magazine, the magazine size, the rounds carried (-1 for unlimited) and whether it is reloading |
 | `level.id` | The current level's id |
 | `vars.<name>` | A [level variable](level-scripting.md#level-variables), such as `vars.score` |
 

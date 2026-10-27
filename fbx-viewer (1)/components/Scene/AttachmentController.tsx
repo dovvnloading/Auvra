@@ -12,6 +12,8 @@ interface AttachmentControllerProps {
    * it. Defaults to false (editor behavior: the shared object is reparented).
    */
   cloneForInstance?: boolean;
+  /** Kept on its bone but not drawn, such as a weapon the character is not holding. */
+  hidden?: boolean;
 }
 
 // Clones share geometry and materials with the source attachment, so only the
@@ -24,7 +26,7 @@ const disposeInstanceClone = (object: THREE.Object3D) => {
     });
 };
 
-export const AttachmentController: React.FC<AttachmentControllerProps> = ({ data, parentObject, cloneForInstance = false }) => {
+export const AttachmentController: React.FC<AttachmentControllerProps> = ({ data, parentObject, cloneForInstance = false, hidden = false }) => {
     const attachment = useMemo<THREE.Object3D>(
         () => (cloneForInstance ? SkeletonUtils.clone(data.object) : data.object),
         [cloneForInstance, data.object]
@@ -77,6 +79,10 @@ export const AttachmentController: React.FC<AttachmentControllerProps> = ({ data
         attachment.scale.set(...data.scale);
         attachment.updateMatrix();
     }, [data.position, data.rotation, data.scale, attachment]);
+
+    useEffect(() => {
+        attachment.visible = !hidden;
+    }, [attachment, hidden]);
 
     return null;
 };

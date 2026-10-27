@@ -7,6 +7,11 @@ export const HUD_BINDING_SOURCES: readonly { path: string; label: string }[] = [
     { path: 'player.maxHealth', label: 'Player max health' },
     { path: 'player.stamina', label: 'Player stamina' },
     { path: 'player.isAiming', label: 'Player is aiming' },
+    { path: 'player.weapon', label: 'Held weapon' },
+    { path: 'player.ammo', label: 'Ammo in magazine' },
+    { path: 'player.magazine', label: 'Magazine size' },
+    { path: 'player.reserve', label: 'Ammo in reserve' },
+    { path: 'player.reloading', label: 'Player is reloading' },
     { path: 'level.id', label: 'Current level id' },
 ];
 

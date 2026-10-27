@@ -143,6 +143,19 @@ A player blueprint's **Upper Body (Fire & Aim)** section, under Details, picks a
 
 **Aim view**, under Camera Settings, sets how the player aims. **Scope** looks out of the character's eyes, hides it and shows the scope reticle. **Over the shoulder** moves the camera close behind the character's shoulder and keeps the character, its aim clip and its weapon in view, with a small crosshair. **Aim Camera Offset** fine-tunes where the camera sits; changing the view resets it to that view's default. Under Pose Adjustment, **Lean the spine with the aim** bends the spine up and down with the camera while aiming, so the arms follow where you look.
 
+## Weapons
+
+A player blueprint's **Weapons** section, under Details, lists the weapons the player carries. The player starts holding the first; **Next weapon** (Q) switches to the next and **Reload** (R) reloads. Each weapon has:
+
+- **Model**: one of the character model's attachments, shown while the weapon is held. The other weapons' attachments are put away.
+- **Muzzle**: the socket its shots leave from and flash at during hip fire (and while aiming over the shoulder). Without one, the first socket named Muzzle is used.
+- **Fire mode**: **Automatic** fires while the button is held, **Semi-automatic** once per press. **Rate** sets how many shots a second it can fire.
+- **Damage** per projectile, **Pellets** per shot (more than one for a shotgun), projectile **Speed**, and **Spread**: the largest angle, in degrees, a shot strays from the aim. Aiming cuts the spread to a quarter.
+- **Mag**, **Reserve** and **Reload**: the rounds a magazine holds, the rounds carried besides (-1 is unlimited) and how long a reload takes. Firing with an empty magazine starts a reload; a magazine of 0 never runs out. Each weapon keeps its own rounds when you switch away, and switching cancels a reload.
+- **Fire clip**, **Aim clip** and **Reload clip**: upper-body clips for this weapon, in place of the blueprint's Upper Body clips. The reload clip plays once, from the same bone, when a reload starts.
+
+The graph's **IsReloading** variable is on during a reload, and **IsFiring** is off then. A blueprint without weapons fires an automatic with unlimited rounds from its Muzzle socket, as before. The HUD can show the held weapon and its rounds through the `player.weapon`, `player.ammo` and `player.reserve` bindings (see [HUD and menus](hud-and-menus.md)); the built-in HUD shows them at the bottom left.
+
 ## Hit reactions
 
 A character blueprint's **Hit Reaction** clip is added on top of whatever the character is doing each time it is hurt and survives, so it flinches without stopping. The clip's first frame counts as its neutral pose: only its movement away from that frame is added.

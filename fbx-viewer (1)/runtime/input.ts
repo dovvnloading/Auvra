@@ -26,6 +26,8 @@ export const DEFAULT_INPUT_MAP: InputActionMap = [
     { name: 'Fire', label: 'Fire', bindings: [{ device: 'mouse', button: 0 }, { device: 'gamepad', button: 7 }] },
     { name: 'Aim', label: 'Aim', bindings: [{ device: 'mouse', button: 2 }, { device: 'gamepad', button: 6 }] },
     { name: 'Interact', label: 'Interact', bindings: [{ device: 'keyboard', code: 'KeyF' }, { device: 'gamepad', button: 2 }] },
+    { name: 'Reload', label: 'Reload', bindings: [{ device: 'keyboard', code: 'KeyR' }, { device: 'gamepad', button: 1 }] },
+    { name: 'NextWeapon', label: 'Next weapon', bindings: [{ device: 'keyboard', code: 'KeyQ' }, { device: 'gamepad', button: 3 }] },
     { name: 'Pause', label: 'Pause', bindings: [{ device: 'keyboard', code: 'Escape' }, { device: 'gamepad', button: 9 }] },
 ];
 

@@ -2,6 +2,7 @@
 import React, { useCallback } from 'react';
 import { Gamepad2, User, Skull, Play, Square, MousePointer2, HeartPulse, AlertCircle, CheckCircle2, Keyboard, RotateCcw, AlertTriangle, XCircle, Zap, ZapOff } from 'lucide-react';
 import { Blueprint, LoadedModelData } from '../../types';
+import type { PlayerWeaponStatus } from '../../runtime/gameState';
 import { ScopeReticle } from '../HUDEditor/assets/ScopeReticle';
 
 interface SandboxUIProps {
@@ -13,7 +14,7 @@ interface SandboxUIProps {
     enemyBlueprint: Blueprint;
     playerModel: LoadedModelData | undefined;
     enemyModel: LoadedModelData | undefined;
-    playerStats?: { health: number; maxHealth: number; stamina: number };
+    playerStats?: { health: number; maxHealth: number; stamina: number } & Partial<PlayerWeaponStatus>;
     isAiming?: boolean;
     highQuality?: boolean;
     onToggleQuality?: () => void;
@@ -241,6 +242,12 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
     const healthPercent = Math.max(0, Math.min(100, (health / maxHealth) * 100));
     const staminaPercent = Math.max(0, Math.min(100, stamina));
 
+    // The held weapon, for a blueprint with weapons of its own.
+    const weaponName = playerStats?.weapon;
+    const showWeapon = !!weaponName && !!playerBlueprint.weapons?.length;
+    const magazine = playerStats?.magazine ?? 0;
+    const reserve = playerStats?.reserve ?? -1;
+
     // --- GAME HUD ---
     return (
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
@@ -282,6 +289,22 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                     </div>
                 </div>
             </div>
+
+            {/* Held weapon (Bottom Left) */}
+            {showWeapon && (
+                <div data-testid="hud-weapon" className="absolute bottom-6 left-6 flex flex-col items-start gap-0.5 px-3 py-2 bg-gray-950/70 border border-gray-800 rounded backdrop-blur-sm">
+                    <span className="text-[9px] font-bold text-gray-400 tracking-wider uppercase">{weaponName}</span>
+                    {magazine > 0 ? (
+                        <span className="font-mono font-bold text-gray-100 text-lg leading-none">
+                            {playerStats?.ammo ?? 0}
+                            <span className="text-gray-500 text-xs"> / {reserve < 0 ? '\u221e' : reserve}</span>
+                        </span>
+                    ) : (
+                        <span className="font-mono font-bold text-gray-100 text-lg leading-none">{'\u221e'}</span>
+                    )}
+                    {playerStats?.reloading && <span className="text-[9px] font-bold text-amber-400 tracking-wider uppercase">Reloading</span>}
+                </div>
+            )}
 
             {/* Bottom Controls */}
             <div className="absolute bottom-6 right-6 z-50 pointer-events-auto">

@@ -1,15 +1,37 @@
 import { useSyncExternalStore } from 'react';
 
+/** The held weapon, as the HUD shows it: rounds in the magazine (`ammo`) and carried (`reserve`, -1 unlimited). */
+export interface PlayerWeaponStatus {
+    weapon: string;
+    ammo: number;
+    magazine: number;
+    reserve: number;
+    reloading: boolean;
+}
+
+export interface PlayerGameState extends PlayerWeaponStatus {
+    health: number;
+    maxHealth: number;
+    stamina: number;
+    isAiming: boolean;
+}
+
 /** Live values the HUD and menus read while a level runs. */
 export interface GameStateSnapshot {
     levelId: string | null;
-    player: { health: number; maxHealth: number; stamina: number; isAiming: boolean };
+    player: PlayerGameState;
     vars: Record<string, number | boolean | string>;
 }
 
+/** The player at the start of a session, before its stats and weapon report in. */
+export const INITIAL_PLAYER_STATE: PlayerGameState = {
+    health: 100, maxHealth: 100, stamina: 100, isAiming: false,
+    weapon: '', ammo: 0, magazine: 0, reserve: -1, reloading: false,
+};
+
 const INITIAL: GameStateSnapshot = {
     levelId: null,
-    player: { health: 100, maxHealth: 100, stamina: 100, isAiming: false },
+    player: INITIAL_PLAYER_STATE,
     vars: {},
 };
 
@@ -41,7 +63,7 @@ export const gameState = {
     },
 };
 
-/** Reads a binding path: 'player.health', 'player.maxHealth', 'player.stamina', 'player.isAiming', 'level.id', 'vars.<name>'. */
+/** Reads a binding path: 'player.<field>' (health, maxHealth, stamina, isAiming, weapon, ammo, magazine, reserve, reloading), 'level.id', 'vars.<name>'. */
 const ownValue = (record: object, key: string): unknown =>
     (Object.prototype.hasOwnProperty.call(record, key) ? (record as Record<string, unknown>)[key] : undefined);
 

@@ -88,7 +88,10 @@ interface SandboxEntityProps {
 export interface SandboxEntityHandle extends Hittable {
     object: THREE.Group;
     getSocketWorldPosition: (socketNamePrefix: string) => { position: THREE.Vector3, direction: THREE.Vector3 } | null;
-    triggerMuzzleFlash: () => void;
+    /** Flashes the socket whose name starts with `socketName`, else the first muzzle socket. */
+    triggerMuzzleFlash: (socketName?: string | null) => void;
+    /** Shows weapon `index` of the blueprint's weapons and puts the others' attachments away. */
+    holdWeapon: (index: number) => void;
 }
 
 export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>(({
@@ -111,6 +114,14 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
 }, ref) => {
 
     const { textures } = useGameContent();
+
+    // Only the held weapon's attachment shows; the other weapons' are put away.
+    const [heldWeapon, setHeldWeapon] = useState(0);
+    const stowedAttachments = useMemo(() => {
+        const weapons = blueprint.weapons ?? [];
+        const held = weapons[heldWeapon]?.attachmentId;
+        return new Set(weapons.map(weapon => weapon.attachmentId).filter((id): id is string => !!id && id !== held));
+    }, [blueprint.weapons, heldWeapon]);
 
     // --- Muzzle Flash (entity-local, one tick counter per socket) ---
     const [flashTicks, setFlashTicks] = useState<Record<string, number>>({});
@@ -278,8 +289,10 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
             return { position: worldPos, direction: worldDir };
         },
 
-        triggerMuzzleFlash: () => {
-            const muzzleSocket = sockets.find(s => s.name.toLowerCase().includes('muzzle'));
+        triggerMuzzleFlash: (socketName) => {
+            const muzzleSocket = socketName
+                ? sockets.find(s => s.name.startsWith(socketName))
+                : sockets.find(s => s.name.toLowerCase().includes('muzzle'));
             if (muzzleSocket) {
                 triggerSocketFlash(muzzleSocket.id);
             }
@@ -304,7 +317,9 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
             }
         },
         
-        isDead: () => isDead
+        isDead: () => isDead,
+
+        holdWeapon: setHeldWeapon,
     }));
 
     // --- Lifecycle ---
@@ -359,6 +374,7 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
                     data={att}
                     parentObject={model.object}
                     cloneForInstance
+                    hidden={stowedAttachments.has(att.id)}
                 />
             ))}
 

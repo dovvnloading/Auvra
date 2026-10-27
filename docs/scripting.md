@@ -147,7 +147,7 @@ Transforms are relative to the object's parent, like the inspector's; for an obj
 
 See [Multiplayer](multiplayer.md).
 
-Unknown actions read as released. The actions are MoveForward, MoveBack, MoveLeft, MoveRight, Jump, Sprint, Fire, Aim, Interact and Pause; see [Controls](building-games.md#controls) for their keys. Near an object with a [Dialogue](dialogue.md) component, **Interact** opens its conversation; anywhere else it has no built-in use, so it is free for scripts.
+Unknown actions read as released. The actions are MoveForward, MoveBack, MoveLeft, MoveRight, Jump, Sprint, Fire, Aim, Interact, Reload, NextWeapon and Pause; see [Controls](building-games.md#controls) for their keys. Near an object with a [Dialogue](dialogue.md) component, **Interact** opens its conversation; anywhere else it has no built-in use, so it is free for scripts.
 
 ## Examples
 

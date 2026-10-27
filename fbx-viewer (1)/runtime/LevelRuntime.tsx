@@ -31,7 +31,7 @@ import { frontendDiagnostics } from '../diagnostics/runtime';
 import { aimCameraOffset, AttachmentData, Blueprint, LevelComponent, LevelObject, LoadedModelData, SocketData } from '../types';
 import { instantiatePrefab } from '../utils/prefabs';
 import { useGameContent } from './GameContentContext';
-import { gameState, useGameState } from './gameState';
+import { gameState, INITIAL_PLAYER_STATE, type PlayerWeaponStatus, useGameState } from './gameState';
 import { FrameStepper, PauseActionWatcher, PauseController, SceneInspector } from './PauseController';
 import { PhysicsWorld } from './physics';
 import { TriggerEventsProvider } from './triggers';
@@ -550,7 +550,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
     useLayoutEffect(() => {
         gameState.update({
             levelId: level.id,
-            player: { health: 100, maxHealth: 100, stamina: 100, isAiming: false },
+            player: INITIAL_PLAYER_STATE,
             vars: sessionRestore?.variables
         });
         // Declared variables start at their defaults; a loaded save puts its values back on top.
@@ -603,6 +603,10 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
     const handleAimChange = useCallback((aiming: boolean) => {
         setIsAiming(aiming);
         gameState.update({ player: { isAiming: aiming } });
+    }, []);
+
+    const handleWeaponChange = useCallback((status: PlayerWeaponStatus) => {
+        gameState.update({ player: status });
     }, []);
 
     const handlePlayerHit = useCallback((damage: number) => {
@@ -760,6 +764,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                 levelObjects={renderPlan.playerObstacles}
                 onStaminaChange={handleStaminaChange}
                 onAimChange={handleAimChange}
+                onWeaponChange={handleWeaponChange}
                 weaponSounds={weaponSoundUrls}
                 weaponVolume={player.blueprint.weaponVolume ?? 1.0}
                 blueprint={player.blueprint}

@@ -5,17 +5,26 @@ import { ProjectileManagerHandle } from '../ProjectileManager';
 import { SandboxEntityHandle } from '../SandboxEntity';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { releaseSound, routeSoundToBus, useRuntimeMixer } from '../../../runtime/components/audioComponents';
+import type { ResolvedWeapon } from '../../../runtime/weapons';
 
-interface CombatConfig {
-    FIRE_RATE: number;
-    FIRE_DELAY: number;
-    PLAYER_DAMAGE: number;
-}
+/** Seconds the first hip-fire shot of a press waits for the firing pose to come up. */
+export const HIP_FIRE_DELAY = 0.1;
 
-const DEFAULT_CONFIG: CombatConfig = {
-    FIRE_RATE: 0.15,
-    FIRE_DELAY: 0.1, // Reduced for snappier feel
-    PLAYER_DAMAGE: 10
+const _spreadAxis = new THREE.Vector3();
+const _spreadTurn = new THREE.Quaternion();
+
+/**
+ * `direction` turned away by a random angle of up to `degrees`, in a random direction around it:
+ * the stray of an inaccurate shot.
+ */
+export const spreadDirection = (direction: THREE.Vector3, degrees: number, random: () => number = Math.random): THREE.Vector3 => {
+    if (!(degrees > 0)) return direction;
+    _spreadAxis.set(1, 0, 0);
+    if (Math.abs(direction.x) > 0.9) _spreadAxis.set(0, 1, 0);
+    _spreadAxis.cross(direction).normalize();
+    // Round the aim, then out from it.
+    _spreadAxis.applyQuaternion(_spreadTurn.setFromAxisAngle(direction, random() * Math.PI * 2));
+    return direction.applyQuaternion(_spreadTurn.setFromAxisAngle(_spreadAxis, THREE.MathUtils.degToRad(degrees) * Math.sqrt(random()))).normalize();
 };
 
 export const usePlayerCombat = (
@@ -26,10 +35,6 @@ export const usePlayerCombat = (
     _camera?: THREE.Camera, // For Attaching Audio Listener Context if needed
     baseVolume: number = 1.0
 ) => {
-    const fireCooldown = useRef(0);
-    const firingWarmup = useRef(0);
-    const wasFiring = useRef(false);
-    
     // Audio Buffers Cache
     const soundBuffers = useRef<AudioBuffer[]>([]);
 
@@ -91,37 +96,22 @@ export const usePlayerCombat = (
         sound.play();
     };
 
-    const updateCombat = (isFiring: boolean, isAiming: boolean, camera: THREE.Camera, delta: number) => {
-        const { FIRE_RATE, FIRE_DELAY, PLAYER_DAMAGE } = DEFAULT_CONFIG;
-
-        if (isFiring) {
-            // Edge Detection: If triggers was just pressed
-            if (!wasFiring.current) {
-                // If aiming, shoot instantly. If hip firing, slight delay for animation
-                firingWarmup.current = isAiming ? 0 : FIRE_DELAY; 
-                fireCooldown.current = 0; 
+    /**
+     * Fires `shots` shots of `weapon` (the weapon state decides how many this frame), each of its
+     * pellets with its damage, speed and spread. `flashWhileAiming`: the character is in view while
+     * aiming (over the shoulder), so the muzzle flashes then too.
+     */
+    const fireShots = (weapon: ResolvedWeapon, shots: number, isAiming: boolean, camera: THREE.Camera, flashWhileAiming = false) => {
+        const entity = entityRef.current;
+        const manager = projectileManager.current;
+        if (!entity || !manager) return;
+        for (let shot = 0; shot < shots; shot += 1) {
+            if ((!isAiming || flashWhileAiming) && entity.triggerMuzzleFlash) entity.triggerMuzzleFlash(weapon.muzzleSocket);
+            for (let pellet = 0; pellet < weapon.pellets; pellet += 1) {
+                spawnProjectile(entity, manager, modelObject, camera, isAiming, weapon);
             }
-
-            if (firingWarmup.current > 0) {
-                // Wait for animation to transition
-                firingWarmup.current -= delta;
-            } else {
-                // Animation ready, process shots
-                if (fireCooldown.current > 0) fireCooldown.current -= delta;
-
-                if (fireCooldown.current <= 0) {
-                    fireCooldown.current = FIRE_RATE;
-                    
-                    // Attempt to fire
-                    if (entityRef.current && projectileManager.current) {
-                        spawnProjectile(entityRef.current, projectileManager.current, modelObject, camera, isAiming, PLAYER_DAMAGE);
-                        playGunshot(camera);
-                    }
-                }
-            }
+            playGunshot(camera);
         }
-
-        wasFiring.current = isFiring;
     };
 
     const spawnProjectile = (
@@ -130,7 +120,7 @@ export const usePlayerCombat = (
         model: THREE.Object3D,
         camera: THREE.Camera,
         isAiming: boolean,
-        damage: number
+        weapon: ResolvedWeapon
     ) => {
         let origin: THREE.Vector3;
         let direction: THREE.Vector3;
@@ -144,13 +134,8 @@ export const usePlayerCombat = (
             direction = camForward;
         } else {
             // HIP FIRE from Muzzle
-            let spawn = entity.getSocketWorldPosition('Muzzle');
-            
-            // Trigger Visual Flash (Only in Hip Fire, or if visible)
-            if (entity.triggerMuzzleFlash) {
-                entity.triggerMuzzleFlash();
-            }
-            
+            let spawn = entity.getSocketWorldPosition(weapon.muzzleSocket || 'Muzzle');
+
             if (!spawn) {
                 // Fallback: Fire from chest height forward
                 const fallbackPos = model.position.clone().add(new THREE.Vector3(0, 1.5, 0));
@@ -164,14 +149,10 @@ export const usePlayerCombat = (
             direction = spawn.direction;
         }
 
-        manager.fire(
-            origin, 
-            direction, 
-            60, // Faster projectile for aim mode feel
-            'Player', 
-            damage
-        );
+        // Aiming steadies the weapon: a quarter of its spread.
+        spreadDirection(direction, isAiming ? weapon.spread / 4 : weapon.spread);
+        manager.fire(origin, direction, weapon.projectileSpeed, 'Player', weapon.damage);
     };
 
-    return { updateCombat };
+    return { fireShots };
 };

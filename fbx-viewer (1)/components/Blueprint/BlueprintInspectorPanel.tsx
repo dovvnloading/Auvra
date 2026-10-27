@@ -2,6 +2,7 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { FileText, Database, Tag, Plus, Trash2, Zap, Scaling, Camera, Crosshair, Palette, Check, Box, Music, Play, Footprints, Brain } from 'lucide-react';
 import { BehaviorTreeEditor } from './BehaviorTreeEditor';
+import { WeaponsPanel } from './WeaponsPanel';
 import { aimCameraOffset, AimView, Blueprint, BlueprintStat, CharacterIKSettings, DEFAULT_UPPER_BODY_BONE, UpperBodySettings } from '../../types';
 import { ownClipsFirst } from '../../utils/animationBinding';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
@@ -19,7 +20,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
     blueprint,
     onUpdate
 }) => {
-    const { textures, audioAssets, models } = useScene();
+    const { textures, audioAssets, models, attachments, sockets } = useScene();
     const [activeTab, setActiveTab] = useState<'details' | 'stats' | 'tags' | 'materials' | 'audio' | 'behavior'>('details');
     const ik: CharacterIKSettings = blueprint.ik ?? {};
     const updateIK = (changes: Partial<CharacterIKSettings>, coalesce?: string) =>
@@ -324,6 +325,16 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                         </p>
                                     </div>
                                 </div>
+                            )}
+
+                            {blueprint.type === 'Player Character' && (
+                                <WeaponsPanel
+                                    weapons={blueprint.weapons ?? []}
+                                    attachments={attachments.filter(attachment => attachment.parentModelId === blueprint.linkedModelId)}
+                                    sockets={sockets.filter(socket => socket.parentModelId === blueprint.linkedModelId)}
+                                    clipNames={clipNames}
+                                    onChange={(weapons, coalesce) => onUpdate(blueprint.id, { weapons }, coalesce ? { coalesce } : undefined)}
+                                />
                             )}
 
                             <div className="space-y-2">

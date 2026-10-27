@@ -5,8 +5,10 @@ import unittest
 from pathlib import Path
 from typing import Any
 
+from Auvra.host.validation import _check_json_safe
 from Auvra.project.errors import InvalidProjectError
 from Auvra.project.repository import ProjectRepository
+from Auvra.project.schemas import DOMAIN_NAMES
 from Auvra.project.service import ProjectService
 from Auvra.project.index import ProjectIndex
 from Auvra.project.templates import TEMPLATE_NAMES, apply_template
@@ -86,6 +88,16 @@ class TemplateTests(unittest.TestCase):
         self.assertIn(player["linkedModelId"], model_ids)
         for asset_id in repository.referenced_asset_ids():
             self.assertTrue(repository.assets.verify(asset_id), asset_id)
+
+    def test_every_template_crosses_the_host_protocol(self) -> None:
+        # The editor reads each document through the protocol, which refuses path-like strings
+        # (a HUD text of "/"), so a template that holds one opens to a closed connection.
+        for template in TEMPLATE_NAMES:
+            repository = self.create(f"protocol-{template}")
+            apply_template(repository, template, project_name="Protocol")
+            for domain in DOMAIN_NAMES:
+                with self.subTest(template=template, domain=domain):
+                    _check_json_safe(repository.get_domain(domain))
 
     def test_blank_template_leaves_the_project_empty(self) -> None:
         repository = self.create("blank")
@@ -457,6 +469,12 @@ class TemplateTests(unittest.TestCase):
         for item in (pistol, muzzle):
             self.assertEqual((item["parentModelId"], item["boneName"]), ("outpost-model-ranger", "RightHand"))
         self.assertTrue(repository.assets.verify(pistol["assetId"]))
+        # It is the Ranger's one weapon, fired from that muzzle, its rounds on the HUD.
+        [weapon] = player["weapons"]
+        self.assertEqual((weapon["attachmentId"], weapon["muzzleSocket"], weapon["fireMode"]), (pistol["id"], muzzle["name"], "semi"))
+        [main] = [hud for hud in documents(repository, "hud") if hud["id"] == "hud-main"]
+        bound = {element["props"].get("bind", {}).get("text") for element in main["elements"]}
+        self.assertLessEqual({"player.weapon", "player.ammo", "player.reserve"}, bound)
 
     def test_outpost_player_graph_shows_the_animation_kit(self) -> None:
         repository, _, _ = self.outpost()
