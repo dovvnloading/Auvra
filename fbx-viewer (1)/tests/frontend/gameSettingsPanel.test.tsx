@@ -1,3 +1,4 @@
+import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GameSettingsPanel, readBuildTargets } from '../../components/Settings/GameSettingsPanel';
@@ -107,6 +108,17 @@ beforeEach(() => {
 });
 
 describe('Game settings panel draft', () => {
+    it('shows the project settings once they load, under StrictMode as in the editor', () => {
+        project.document = defaultDocument();
+        project.hydrated = false;
+        render(<React.StrictMode><GameSettingsPanel onClose={() => undefined} /></React.StrictMode>);
+        expect(nameField()).toHaveValue('Untitled Game');
+
+        act(() => project.set(documentWith({ name: 'Arena Sample' })));
+        expect(nameField()).toHaveValue('Arena Sample');
+        expect(revertButton()).toBeDisabled();
+    });
+
     it('keeps an edited draft while a revision change re-hydrates the document', () => {
         project.document = documentWith({ name: 'Arena' });
         render(<GameSettingsPanel onClose={() => undefined} />);

@@ -67,6 +67,8 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
   );
   const stored = useMemo(() => normalizeLocalizationSettings(document.settings), [document]);
   const [draft, setDraft] = useState<LocalizationSettings>(stored);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   const [newKey, setNewKey] = useState('');
   const [newLocale, setNewLocale] = useState('');
   const [filter, setFilter] = useState('');
@@ -79,15 +81,14 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
   // An unedited draft follows the stored document (hydrate, another writer). An edited draft is kept:
   // a failed save rolls the document back and every revision bump re-hydrates it, and neither may
   // discard typed text. A content check against the last `stored` would not do, because the
-  // optimistic write makes the draft look clean just before the rollback arrives.
+  // optimistic write makes the draft look clean just before the rollback arrives. Decided here, not
+  // in a setDraft updater, which StrictMode calls twice (the second call would see the moved baseline).
   useEffect(() => {
     const next = JSON.stringify(stored);
     if (next === baselineRef.current) return;
-    setDraft((current) => {
-      if (JSON.stringify(normalizeLocalizationSettings(current)) !== baselineRef.current) return current;
-      baselineRef.current = next;
-      return stored;
-    });
+    if (JSON.stringify(normalizeLocalizationSettings(draftRef.current)) !== baselineRef.current) return;
+    baselineRef.current = next;
+    setDraft(stored);
   }, [stored]);
 
   // A project switch always discards the draft.
