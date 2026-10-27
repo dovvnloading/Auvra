@@ -24,6 +24,7 @@ const EXEMPT = new Map(Object.entries({
   'components/AnimationGraph/utils/transitions.ts': 'pure-utility',
   'components/AnimationGraph/utils/graphMath.ts': 'pure-utility',
   'components/AnimationGraph/utils/boneMask.ts': 'pure-utility',
+  'components/AnimationGraph/utils/clipMatching.ts': 'pure-utility',
   'components/AnimationGraph/utils/montage.ts': 'hot-loop',
   'components/AnimationGraph/utils/notifies.ts': 'pure-utility',
   'components/AnimationGraph/utils/rootMotion.ts': 'hot-loop',

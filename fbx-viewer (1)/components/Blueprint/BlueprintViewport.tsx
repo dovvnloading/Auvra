@@ -1,10 +1,12 @@
 
 import React, { useState, useMemo } from 'react';
 import * as THREE from 'three';
-import { Shield, Skull, Box, Trash2, Eye, ChevronUp, Search, Check, Undo2, Redo2 } from 'lucide-react';
+import { Shield, Skull, Box, Trash2, Eye, ChevronUp, Search, Check, Undo2, Redo2, Wand2 } from 'lucide-react';
 import { Blueprint, LoadedModelData } from '../../types';
 import { GraphPreview } from '../AnimationGraph/GraphPreview';
 import { useScene } from '../../context/SceneContext';
+import { useNotification } from '../../context/NotificationContext';
+import { matchGraphClips, matchUpperBodyClips } from '../AnimationGraph/utils/clipMatching';
 
 interface BlueprintViewportProps {
     blueprint: Blueprint;
@@ -28,8 +30,44 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
     history
 }) => {
     const { textures } = useScene();
+    const { addNotification } = useNotification();
     const [isMeshSelectorOpen, setIsMeshSelectorOpen] = useState(false);
     const [meshSearch, setMeshSearch] = useState('');
+
+    /**
+     * Gives the graph's states, and a player's fire and aim clips, the model's clips whose names fit
+     * them (Idle, Walk, Run, Jump, Shooting, ...), where none is set or the model lacks the one that is.
+     * Linking a mesh does this too.
+     */
+    const matchClips = (model: LoadedModelData, linking: boolean) => {
+        const clips = (model.animations ?? []).map(clip => clip.name);
+        const graph = matchGraphClips(blueprint.animationGraph, clips);
+        const upper = blueprint.type === 'Player Character'
+            ? matchUpperBodyClips(blueprint.upperBody, clips)
+            : { settings: blueprint.upperBody, assigned: [] };
+        const assigned = [...graph.assigned, ...upper.assigned];
+        if (linking || assigned.length) {
+            onUpdate(blueprint.id, {
+                ...(linking ? { linkedModelId: model.id } : {}),
+                ...(graph.assigned.length ? { animationGraph: graph.graph } : {}),
+                ...(upper.assigned.length ? { upperBody: upper.settings } : {}),
+            });
+        }
+        if (assigned.length) {
+            const list = assigned.slice(0, 6).map(item => `${item.target} → ${item.clip}`).join(', ');
+            addNotification({
+                message: `Matched ${assigned.length} to ${model.name}'s clips: ${list}${assigned.length > 6 ? ', …' : ''}.`,
+                type: 'success',
+            });
+        } else if (!linking) {
+            addNotification({
+                message: model.animations?.length
+                    ? `Every state already plays one of ${model.name}'s clips, or none of its clip names fit a state.`
+                    : `${model.name} has no animation clips. Import some with Import > Animation.`,
+                type: 'info',
+            });
+        }
+    };
 
     const filteredModels = useMemo(() => {
         return models.filter(m => m.name.toLowerCase().includes(meshSearch.toLowerCase()));
@@ -122,6 +160,16 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
                             <Box size={16} className="text-gray-400" />
                             <span className="text-xs font-bold text-gray-200">LINKED MESH</span>
                         </div>
+                        {linkedModel && (
+                            <button
+                                type="button"
+                                onClick={() => matchClips(linkedModel, false)}
+                                className="flex items-center gap-1.5 text-[10px] font-bold text-gray-300 hover:text-white bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1 transition-colors"
+                                title="Give each animation state the clip of this mesh whose name fits it (Idle, Walk, Run, Jump, Falling, Land, Attack, Death...), where the state has none or one this mesh lacks"
+                            >
+                                <Wand2 size={12} /> Match Clips
+                            </button>
+                        )}
                     </div>
 
                     <div className="p-4">
@@ -171,7 +219,7 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
                                             <div 
                                                 key={m.id}
                                                 onClick={() => {
-                                                    onUpdate(blueprint.id, { linkedModelId: m.id });
+                                                    matchClips(m, true);
                                                     setIsMeshSelectorOpen(false);
                                                 }}
                                                 className={`flex items-center gap-3 p-2 hover:bg-gray-800 cursor-pointer border-b border-gray-800 last:border-0 ${linkedModel?.id === m.id ? 'bg-blue-900/20' : ''}`}
@@ -193,7 +241,7 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
 
                         <p className="text-[10px] text-gray-500 mt-3 leading-relaxed">
                             Select the skeletal mesh (FBX) that this blueprint controls. 
-                            <br/>Animations will be previewed on this mesh.
+                            <br/>Animations will be previewed on this mesh. Linking it gives each state the mesh's clip whose name fits.
                         </p>
                     </div>
                 </div>
