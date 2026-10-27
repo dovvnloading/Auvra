@@ -53,6 +53,10 @@ export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects }) => {
     }, [config.timeOfDay, config.azimuth]);
 
     const isNight = config.timeOfDay < 6 || config.timeOfDay > 18;
+    // The sun dims through sunset and gives no light below the horizon, where it would light the scene
+    // from underneath; a faint moon opposite it keeps the night readable.
+    const daylight = THREE.MathUtils.smoothstep(sunPosition.y / 100, -0.05, 0.15);
+    const moonPosition = useMemo(() => sunPosition.clone().multiplyScalar(-1), [sunPosition]);
 
     // Default Fallback if no sky object exists (Standard Editor Lighting)
     if (!skyObject) {
@@ -87,12 +91,13 @@ export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects }) => {
             {/* Main Sun Light */}
             <directionalLight 
                 position={sunPosition} 
-                intensity={config.sunIntensity} 
+                intensity={config.sunIntensity * daylight} 
                 color={config.sunColor}
                 castShadow 
                 shadow-bias={-0.0001}
                 shadow-mapSize={[2048, 2048]}
             />
+            <directionalLight position={moonPosition} intensity={config.sunIntensity * 0.12 * (1 - daylight)} color="#9db4ff" />
 
             {/* Ambient Light (Fill) */}
             <ambientLight intensity={config.ambienceIntensity} />
