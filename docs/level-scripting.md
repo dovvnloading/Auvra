@@ -11,6 +11,7 @@ Nodes are added from the palette. Select a node to edit it in the inspector: dat
 | Event BeginPlay | Once when the level starts (and again after a restart) |
 | Event Tick | Every frame; provides Delta Seconds |
 | On Overlap | When the player enters the chosen actor (palette: **Actor Begin Overlap**) |
+| Network Event | When another player sends a network event with its name; provides Value (as text) and From (their player id). See [Multiplayer](multiplayer.md) |
 
 **On Overlap** targets a specific object, picked from a list showing its name, type and a short id. Renaming the object does not break the reference. Older graphs that referenced actors by name are converted automatically when the name is unique; ambiguous ones show a warning until you pick the actor.
 
@@ -36,6 +37,15 @@ It fires once per entry, and again only after the player has left.
 | Get / Set Variable | Reads or writes animation-graph variables on the player (**Entity Variables** section) |
 
 Math (Add, Subtract, Multiply, Divide), comparisons (Greater, Less, Equal) and logic (And, Or) nodes feed values into actions. Literal nodes provide numbers, strings and booleans.
+
+## Multiplayer
+
+| Node | Does |
+|---|---|
+| Send Network Event | Sends its Name and Value to every other player |
+| Is Network Host | True for the host, and in single-player games |
+
+Use **Is Network Host** in front of anything that must happen once for everyone, and **Send Network Event** so the other players follow. See [Multiplayer](multiplayer.md).
 
 ## Flow control
 

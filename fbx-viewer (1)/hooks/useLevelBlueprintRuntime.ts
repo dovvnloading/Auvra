@@ -10,6 +10,8 @@ import { frontendDiagnostics } from '../diagnostics/runtime';
 import { TriggerEvent, useTriggerEvents } from '../runtime/triggers';
 import { animationEvents, type AnimationEvent } from '../runtime/animationEvents';
 import { timelineEvents, type TimelineEvent } from '../runtime/timeline/events';
+import { useNetSession } from '../runtime/net/NetSessionContext';
+import type { NetPayload } from '../runtime/net/protocol';
 import type { RuntimeHost } from '../runtime/types';
 import { levelVariables } from '../runtime/levelVariables';
 import { RuntimeServices, useRuntimeServices } from '../runtime/RuntimeServicesContext';
@@ -72,6 +74,20 @@ export const animNotifyMatches = (node: LogicNode, event: AnimationEvent): boole
     if (source === 'any') return true;
     if (source === 'enemies') return event.objectId !== 'player';
     return event.objectId === 'player';
+};
+
+/** Whether an Event NetworkEvent node handles an event called `name`: its event name matches, or it is empty and takes any. */
+export const networkEventMatches = (node: LogicNode, name: string): boolean => {
+    const wanted = typeof node.data?.eventName === 'string' ? node.data.eventName.trim() : '';
+    return !wanted || wanted === name;
+};
+
+/** A blueprint value as a network payload: numbers, booleans and text as they are, anything else as text. */
+export const networkPayload = (value: unknown): NetPayload => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    if (typeof value === 'boolean' || typeof value === 'string') return value;
+    return String(value);
 };
 
 /** Whether an Event TimelineEvent node handles an event: its event name matches, or it is empty and takes any. */
@@ -233,7 +249,7 @@ export const useLevelBlueprintRuntime = ({
      * @param context The running event's context; an overlap event's Other Actor output reads its otherActorId.
      * @returns The evaluated value (number, boolean, string, etc.) or null.
      */
-    const evaluateInput = useCallback((nodeId: string, inputPinId: string, context?: { otherActorId?: string }): any => {
+    const evaluateInput = useCallback((nodeId: string, inputPinId: string, context?: { otherActorId?: string; networkValue?: string; networkFrom?: string }): any => {
         // Editor-made nodes start with an Exec pin, so data pins are found by name, then by data-pin order.
         const dataPin = (pins: LogicPin[], name: string, index: number): LogicPin | undefined =>
             pins.find(p => p.name === name) ?? pins.filter(p => p.dataType !== 'Exec')[index];
@@ -268,8 +284,15 @@ export const useLevelBlueprintRuntime = ({
                 const pin = sourceNode.outputs.find(p => p.id === connection.fromPinId);
                 if (sourceNode.name === 'Event Tick' && pin?.name === 'Delta Seconds') return currentDelta.current;
                 if (pin?.name === 'Other Actor') return context?.otherActorId ?? null;
+                if (sourceNode.name === 'Event NetworkEvent' && pin?.name === 'Value') return context?.networkValue ?? '';
+                if (sourceNode.name === 'Event NetworkEvent' && pin?.name === 'From') return context?.networkFrom ?? '';
                 return null;
             }
+
+            // --- MULTIPLAYER ---
+            case 'IsNetworkHost':
+                // A single-player game is its own host.
+                return !netSessionRef.current || netSessionRef.current.isHost();
 
             // --- LITERALS ---
             case 'LiteralFloat':
@@ -415,6 +438,13 @@ export const useLevelBlueprintRuntime = ({
             // Use blue/info type for BP logs to distinguish them
             addNotification({ message: `[Output] ${msg}`, type: 'info', duration: 3000 });
         } 
+        else if (node.type === 'SendNetworkEvent') {
+            const namePin = node.inputs.find(p => p.name === 'Name');
+            const valuePin = node.inputs.find(p => p.name === 'Value');
+            const name = String((namePin ? evaluateInput(node.id, namePin.id, context) : null) ?? '').trim();
+            const value = valuePin ? evaluateInput(node.id, valuePin.id, context) : null;
+            if (name) netSessionRef.current?.sendEvent(name, networkPayload(value));
+        }
         else if (node.type === 'DestroyActor') {
             // Context usually comes from Overlap event
             if (context.otherActorId) {
@@ -586,6 +616,20 @@ export const useLevelBlueprintRuntime = ({
             .forEach(node => executeNode(node.id, {}));
     };
     useEffect(() => animationEvents.subscribe(event => handleAnimationEvent.current(event)), []);
+
+    // --- Event: Network event (another player's Send Network Event or ctx.net.send) ---
+    const handleNetworkEvent = useRef<(from: string, name: string, payload: NetPayload) => void>(() => undefined);
+    handleNetworkEvent.current = (from: string, name: string, payload: NetPayload) => {
+        if (!hasBegunPlay.current || sessionEnded.current) return;
+        const value = payload === null ? '' : typeof payload === 'object' ? JSON.stringify(payload) : String(payload);
+        blueprint.nodes
+            .filter(n => n.type === 'Event' && n.name === 'Event NetworkEvent' && networkEventMatches(n, name))
+            .forEach(node => executeNode(node.id, { networkValue: value, networkFrom: from }));
+    };
+    const netSession = useNetSession();
+    const netSessionRef = useRef(netSession);
+    netSessionRef.current = netSession;
+    useEffect(() => netSession?.onEvent((from, name, payload) => handleNetworkEvent.current(from, name, payload)), [netSession]);
 
     // --- Event: Timeline event (a playing timeline crossed an event key) ---
     const handleTimelineEvent = useRef<(event: TimelineEvent) => void>(() => undefined);

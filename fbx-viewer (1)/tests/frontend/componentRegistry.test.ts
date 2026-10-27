@@ -17,7 +17,7 @@ describe('component registry', () => {
     expect(types).toEqual([
       'rotator', 'mover', 'pointLight', 'spotLight', 'collider', 'rigidBody', 'joint', 'particles', 'decal', 'water', 'audioSource',
       'reverbZone', 'musicPlayer',
-      'postProcess', 'reflectionProbe', 'lodGroup', 'distanceCull', 'lookAtIK', 'footIK', 'script', 'timeline',
+      'postProcess', 'reflectionProbe', 'lodGroup', 'distanceCull', 'lookAtIK', 'footIK', 'script', 'netSync', 'timeline',
     ]);
     for (const definition of COMPONENT_DEFINITIONS) {
       expect(getComponentDefinition(definition.type)).toBe(definition);

@@ -63,6 +63,7 @@ Objects can carry components that add behaviour. Select an object and use **Add 
 | Distance Cull | Hides the object and its children beyond a distance |
 | Look At IK / Foot IK | Turn a bone toward the camera or the player, or plant the feet of the object's model on the ground (see [IK](characters.md#ik)) |
 | Script | Runs your own JavaScript or TypeScript during play (see [Gameplay scripting](scripting.md)) |
+| Network Sync | In multiplayer games the host sends the object's position and rotation and the other players follow it (see [Multiplayer](multiplayer.md)) |
 | Timeline | Plays keyed tracks that move, show and hide objects, write level variables and raise events (see [Timelines](timelines.md)) |
 
 Each component's settings appear in the inspector and can be toggled on and off.

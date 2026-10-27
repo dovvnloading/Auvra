@@ -53,7 +53,20 @@ export type ScriptEvent =
     | { type: 'triggerEnter' | 'triggerExit'; triggerId: string; otherId: string }
     | { type: 'animNotify'; source: string | null; name: string }
     | { type: 'timelineEvent'; timelineObjectId: string; name: string }
+    /** A multiplayer event another player sent (ctx.net.send there). */
+    | { type: 'netEvent'; from: string; name: string; payload: ScriptNetPayload }
     | { type: 'spawned'; requestId: string; objectIds: string[] };
+
+/** A multiplayer event's payload: a value, a list of values, or a flat object of values. */
+export type ScriptNetPayload = ScriptValue | ScriptValue[] | Record<string, ScriptValue> | null;
+
+/** Multiplayer as scripts see it; a single-player game is never connected and always the host. */
+export interface ScriptNetState {
+    connected: boolean;
+    isHost: boolean;
+    selfId: string | null;
+    peers: { id: string; name: string }[];
+}
 
 /** The world as scripts see it for one frame. */
 export interface ScriptSnapshot {
@@ -69,6 +82,7 @@ export interface ScriptSnapshot {
     events: ScriptEvent[];
     /** Answers to the previous frame's raycast commands, by request id (null: no hit). */
     raycasts: Record<string, ScriptRaycastHit | null>;
+    net: ScriptNetState;
 }
 
 export type ScriptCommand =
@@ -82,6 +96,8 @@ export type ScriptCommand =
     | { type: 'raycast'; requestId: string; origin: ScriptVec3; direction: ScriptVec3; maxDistance: number; excludeObjectId?: string }
     | { type: 'playPlayerAnimation'; clipName: string; maskBone?: string }
     | { type: 'openLevel'; levelId: string }
+    /** A multiplayer event to every other player, or to one (`to`). */
+    | { type: 'netSend'; name: string; payload: ScriptNetPayload; to?: string }
     | { type: 'log'; scriptId: string; level: 'info' | 'warn' | 'error'; message: string };
 
 /** Runtime -> frame. The first message on the window is the bootstrap; the rest go over the port. */

@@ -341,7 +341,9 @@ export interface LogicNode {
           'SpawnPrefab' | 'GetActorTransform' | 'SetActorTransform' | 'PlaySound' | 'ApplyImpulse' | 'Raycast' |
           'GetLevelVariable' | 'SetLevelVariable' | 'InputActionPressed' | 'RandomFloat' | 'RandomInt' | 'Print' |
           // Animation (hooks/levelBlueprintNodes/world.ts)
-          'PlayPlayerAnimation' | 'SetMorphTarget';
+          'PlayPlayerAnimation' | 'SetMorphTarget' |
+          // Multiplayer (hooks/useLevelBlueprintRuntime.ts)
+          'SendNetworkEvent' | 'IsNetworkHost';
     name: string;
     position: { x: number; y: number };
     inputs: LogicPin[];

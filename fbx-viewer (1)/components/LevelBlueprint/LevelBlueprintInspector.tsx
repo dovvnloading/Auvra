@@ -656,6 +656,19 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                 )}
 
                 {/* Specific: Event (Animation Notify) */}
+                {node.type === 'Event' && node.name === 'Event NetworkEvent' && (
+                    <div className="space-y-1">
+                        <label className="text-[10px] text-gray-400">Event name (empty: any network event)</label>
+                        <input
+                            value={typeof node.data?.eventName === 'string' ? node.data.eventName : ''}
+                            onChange={(e) => onUpdate({ data: { ...(node.data || {}), eventName: e.target.value } })}
+                            className="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-red-500"
+                            placeholder="e.g. DoorOpened"
+                        />
+                        <p className="text-[10px] text-gray-500">Runs when another player sends this event. Value is what they sent, as text; From is their player id.</p>
+                    </div>
+                )}
+
                 {node.type === 'Event' && node.name === 'Event TimelineEvent' && (
                     <div className="space-y-1">
                         <label className="text-[10px] text-gray-400">Event name (empty: any timeline event)</label>

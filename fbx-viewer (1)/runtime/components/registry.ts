@@ -7,6 +7,7 @@ import { DECAL_COMPONENT } from './decalComponent';
 import { PARTICLES_COMPONENT } from './particles';
 import { IK_COMPONENTS } from './ikComponents';
 import { JOINT_COMPONENTS } from './jointComponents';
+import { NET_SYNC_COMPONENT } from './netSyncComponent';
 import { LOD_COMPONENTS } from './lodComponents';
 import { PHYSICS_COMPONENTS } from './physicsComponents';
 import { POST_PROCESS_COMPONENT } from './postProcess';
@@ -31,6 +32,7 @@ export const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
     ...LOD_COMPONENTS,
     ...IK_COMPONENTS,
     SCRIPT_COMPONENT,
+    NET_SYNC_COMPONENT,
     TIMELINE_COMPONENT,
 ];
 

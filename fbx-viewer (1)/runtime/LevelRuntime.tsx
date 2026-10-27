@@ -43,6 +43,9 @@ import { PostProcessAllowedContext, usePostProcessClaimed } from './components/p
 import type { InputState } from './input';
 import { collectTimelineTargets } from './timeline/evaluate';
 import { TouchControls } from './TouchControls';
+import { NetSessionProvider } from './net/NetSessionContext';
+import { NetStatus } from './net/NetStatus';
+import { LocalPlayerReplicator, RemotePlayers } from './net/RemotePlayers';
 import type { ComponentDefinition } from './components/types';
 import { ScriptRuntime } from './scripting/ScriptRuntime';
 import type { GameContent, LevelRuntimeProps, PlayerStart, RuntimeHost, RuntimeLevel, SaveGameData } from './types';
@@ -634,6 +637,10 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
             <BloodSystem ref={bloodSystemRef} />
             <ProjectileManager ref={projectileManagerRef} />
 
+            {/* Multiplayer: this player's state goes out, other players' avatars come in (nothing without a session). */}
+            <LocalPlayerReplicator playerObject={runtimePlayerModel.object} playerApiRef={playerApiRef} />
+            <RemotePlayers player={player} allClips={allSceneClips} />
+
             <SandboxEntity
                 ref={playerEntityRef}
                 model={runtimePlayerModel}
@@ -790,7 +797,9 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
     }
 
     return (
+        <NetSessionProvider settings={settings.network} gameId={netGameId(settings.name)} name="Player">
         <div className="relative w-full h-full bg-black cursor-none">
+            <NetStatus />
             <AuvraCanvas
                 surfaceId="runtime-level-game-loop"
                 role="runtime"
@@ -868,8 +877,12 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
             )}
             <ProfilerPanel visible={profilerVisible} />
         </div>
+        </NetSessionProvider>
     );
 };
+
+/** The game id the relay keeps rooms apart by: the game's name, lower-cased, letters and digits. */
+const netGameId = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'auvra-game';
 
 const RuntimeEnemyController: React.FC<{
     data: SpawnedEnemy;

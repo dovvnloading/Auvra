@@ -5,6 +5,7 @@ import type {
     LoadedModelData, PrefabData, SocketData, TextureData,
 } from '../types';
 import type { PlayerOptionsStore } from './playerOptions';
+import { DEFAULT_NETWORK_SETTINGS, normalizeNetworkSettings, type NetworkSettings } from './net/protocol';
 
 /** Everything the gameplay runtime needs from loaded content, whether it came from the editor or a game pack. */
 export interface GameContent {
@@ -41,6 +42,8 @@ export interface GameSettings {
     quality: { shadows: boolean; postProcessing: boolean; maxDpr: number; fov: number };
     input: { mouseSensitivity: number; invertY: boolean };
     audio: { masterVolume: number };
+    /** Multiplayer through a relay server (runtime/net/protocol.ts). */
+    network: NetworkSettings;
 }
 
 export const GAME_SETTINGS_DOCUMENT_ID = 'game-settings';
@@ -54,6 +57,7 @@ export const DEFAULT_GAME_SETTINGS: GameSettings = {
     quality: { shadows: true, postProcessing: true, maxDpr: 2, fov: 60 },
     input: { mouseSensitivity: 0.002, invertY: false },
     audio: { masterVolume: 1 },
+    network: DEFAULT_NETWORK_SETTINGS,
 };
 
 /** Merges a stored (possibly partial or older) settings object over the defaults. */
@@ -67,6 +71,7 @@ export const normalizeGameSettings = (value: unknown): GameSettings => {
         quality: { ...DEFAULT_GAME_SETTINGS.quality, ...(stored.quality ?? {}) },
         input: { ...DEFAULT_GAME_SETTINGS.input, ...(stored.input ?? {}) },
         audio: { ...DEFAULT_GAME_SETTINGS.audio, ...(stored.audio ?? {}) },
+        network: normalizeNetworkSettings(stored.network),
     };
 };
 

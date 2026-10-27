@@ -9,6 +9,7 @@ import {
   GameSettings,
   normalizeGameSettings,
 } from '../../runtime/types';
+import { normalizeNetworkSettings } from '../../runtime/net/protocol';
 
 interface GameSettingsDocument {
   id: string;
@@ -95,6 +96,7 @@ const sanitizeGameSettings = (value: GameSettings): GameSettings => {
     audio: {
       masterVolume: clamp(settings.audio.masterVolume, LIMITS.masterVolume.min, LIMITS.masterVolume.max, defaults.audio.masterVolume),
     },
+    network: normalizeNetworkSettings(settings.network),
   };
 };
 
@@ -277,6 +279,26 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
             <label className="block text-[9px] uppercase text-gray-500">Master volume · {Math.round(draft.audio.masterVolume * 100)}%
               <input type="range" aria-label="Master volume" min={LIMITS.masterVolume.min} max={LIMITS.masterVolume.max} step={LIMITS.masterVolume.step} value={draft.audio.masterVolume} disabled={disabled} onChange={(event) => { const masterVolume = Number(event.target.value); update((current) => ({ ...current, audio: { ...current.audio, masterVolume } })); }} className="mt-1 w-full" />
             </label>
+          </div>
+
+          <div className={sectionClass}>
+            <div className={sectionTitleClass}>Multiplayer</div>
+            <Toggle label="Online multiplayer" checked={draft.network.enabled} disabled={disabled} onChange={(enabled) => update((current) => ({ ...current, network: { ...current.network, enabled } }))} />
+            {draft.network.enabled && (
+              <>
+                <label className="block text-[9px] uppercase text-gray-500">Server address
+                  <input type="text" aria-label="Server address" value={draft.network.serverUrl} disabled={disabled} placeholder="ws://127.0.0.1:7777" onChange={(event) => { const serverUrl = event.target.value; update((current) => ({ ...current, network: { ...current.network, serverUrl } })); }} className={`mt-1 ${inputClass}`} />
+                </label>
+                {!/^wss?:\/\//i.test(draft.network.serverUrl.trim()) && <p className="text-[10px] text-amber-400">The address must start with ws:// or wss://.</p>}
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="block text-[9px] uppercase text-gray-500">Room
+                    <input type="text" aria-label="Room" value={draft.network.room} disabled={disabled} onChange={(event) => { const room = event.target.value; update((current) => ({ ...current, network: { ...current.network, room } })); }} className={`mt-1 ${inputClass}`} />
+                  </label>
+                  <NumberField label="Max players" value={draft.network.maxPlayers} limits={{ min: 1, max: 16, step: 1 }} disabled={disabled} onChange={(maxPlayers) => update((current) => ({ ...current, network: { ...current.network, maxPlayers } }))} />
+                </div>
+                <p className="text-[10px] text-gray-500">Players meet through a relay server: run <code>python -m Auvra.net.relay</code>, or the <code>server/relay.py</code> shipped with the build. Play in the editor reaches a relay on this machine at port 7777.</p>
+              </>
+            )}
           </div>
 
           <div className={sectionClass}>

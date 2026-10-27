@@ -632,7 +632,8 @@ describe('templates and examples on the script host', () => {
     id, name, position, rotation: [0, 0, 0], scale: [1, 1, 1], parentId: null, visible: true,
   });
   const snapshot = (frame: number, objects: ScriptObjectState[], overrides: Partial<ScriptSnapshot> = {}): ScriptSnapshot => ({
-    frame, time: frame * 0.5, delta: 0.5, objects, player: null, input: {}, variables: {}, events: [], raycasts: {}, ...overrides,
+    frame, time: frame * 0.5, delta: 0.5, objects, player: null, input: {}, variables: {}, events: [], raycasts: {},
+    net: { connected: false, isHost: true, selfId: null, peers: [] }, ...overrides,
   });
   /** Loads `source` on `objectId` with a budgeted guard, as the script frame does. */
   const load = (source: string, objectId: string, objects: ScriptObjectState[]) => {

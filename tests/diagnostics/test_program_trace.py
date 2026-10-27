@@ -35,6 +35,8 @@ PYTHON_EXEMPTIONS = {
     "Auvra/launcher/platform/windows_job.py": "startup-child",
     "Auvra/launcher/process.py": "startup-child",
     "Auvra/launcher/readiness.py": "startup-child",
+    # Ships beside game builds as a single standard-library file, so it cannot import Auvra diagnostics.
+    "Auvra/net/relay.py": "standalone-server",
     "Auvra/plugins/protocol.py": "protocol-model",
     "Auvra/project/archive.py": "project-service-child",
     "Auvra/project/errors.py": "error-model",

@@ -19,6 +19,7 @@ const snapshot = (overrides: Partial<ScriptSnapshot> = {}): ScriptSnapshot => ({
   variables: {},
   events: [],
   raycasts: {},
+  net: { connected: false, isHost: true, selfId: null, peers: [] },
   ...overrides,
 });
 
