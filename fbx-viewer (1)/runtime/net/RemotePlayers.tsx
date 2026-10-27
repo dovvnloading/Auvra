@@ -10,7 +10,7 @@ import { playerEntityId, type NetEntityState, type NetVec3 } from './protocol';
 import { applyEntityState, createInterpolationBuffer, entityStateOf, netSyncOutbox, type InterpolationBuffer } from './replication';
 
 /** Animation graph inputs a player avatar carries over the network. */
-export const REPLICATED_PLAYER_VARS = ['Speed', 'InputX', 'InputY', 'IsJumping', 'IsSprinting', 'IsAiming', 'IsFiring', 'IsDead'] as const;
+export const REPLICATED_PLAYER_VARS = ['Speed', 'InputX', 'InputY', 'IsJumping', 'IsGrounded', 'IsFalling', 'VerticalSpeed', 'IsSprinting', 'IsAiming', 'IsFiring', 'IsDead'] as const;
 
 /** The player's replicated animation inputs, read from its graph. */
 export const playerVars = (api: Pick<GraphRuntimeAPI, 'getVariable'> | undefined): Record<string, number | boolean> => {

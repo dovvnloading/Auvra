@@ -43,6 +43,7 @@ export const CHARACTER = {
     DEFAULT_GRAVITY: -9.81,  // Used when the world has no downward gravity
     MAX_STEP: 1 / 20,        // Longest frame simulated in one go (tab switches, hitches)
     TELEPORT_DISTANCE: 0.01, // Model moved by someone else (spawn, restart, load) further than this
+    FALL_DELAY: 0.15,        // Seconds off the ground, without a jump, before it counts as a fall (not a bump or a step down)
 };
 
 /** Blueprint speed stats are Unreal-style centimetres per second (the default player walks at 450). */
@@ -115,7 +116,15 @@ export interface CharacterRig {
     placedAt: THREE.Vector3;
     verticalSpeed: number;
     grounded: boolean;
+    /** Seconds since the character last stood on something. */
+    airborneTime: number;
+    /** Left the ground by jumping, and has not landed since. */
+    jumped: boolean;
 }
+
+/** Off the ground after a jump, or for longer than FALL_DELAY: running over a bump or down a step is not a fall. */
+export const isFalling = (character: Pick<CharacterRig, 'grounded' | 'jumped' | 'airborneTime'>): boolean =>
+    !character.grounded && (character.jumped || character.airborneTime > CHARACTER.FALL_DELAY);
 
 /**
  * The surrounding Rapier world, or null without one (the Sandbox tab, or a PhysicsWorld whose engine
@@ -179,6 +188,8 @@ export const createCharacterRig = ({ world, rapier }: CharacterPhysicsContext, m
         placedAt: model.position.clone(),
         verticalSpeed: 0,
         grounded: false,
+        airborneTime: 0,
+        jumped: false,
     };
 };
 
@@ -255,11 +266,14 @@ export const stepCharacterPhysics = (
         character.body.setTranslation(centre, true);
         character.verticalSpeed = 0;
         character.grounded = false;
+        character.airborneTime = 0;
+        character.jumped = false;
     }
 
     const gravity = physicsWorld.gravity.y < 0 ? physicsWorld.gravity.y : CHARACTER.DEFAULT_GRAVITY;
     if (character.grounded && input.jumpPressed) {
         character.verticalSpeed = Math.sqrt(2 * -gravity * character.height * CHARACTER.JUMP_RATIO);
+        character.jumped = true;
     }
     character.verticalSpeed = Math.max(-CHARACTER.TERMINAL_SPEED, character.verticalSpeed + gravity * dt);
 
@@ -292,6 +306,12 @@ export const stepCharacterPhysics = (
 
     if (grounded && character.verticalSpeed < 0) character.verticalSpeed = 0;
     character.grounded = grounded;
+    if (grounded) {
+        character.airborneTime = 0;
+        character.jumped = false;
+    } else {
+        character.airborneTime += dt;
+    }
 
     // The collider moves now so the next frame's sweep starts here even if the world has not stepped yet;
     // the body follows on the next step.
@@ -472,7 +492,11 @@ export const usePlayerPhysics = (
             localInputX: localX,
             localInputY: localY,
             /** Off the ground in the physics world (jumping or falling); always false without one. */
-            isAirborne: physics ? !(rig.current?.grounded ?? true) : false
+            isAirborne: physics ? !(rig.current?.grounded ?? true) : false,
+            /** Off the ground after a jump or for more than a moment (see isFalling); always false without physics. */
+            isFalling: physics && rig.current ? isFalling(rig.current) : false,
+            /** Upward speed in world units per second, negative while dropping; 0 without physics. */
+            verticalSpeed: physics ? (rig.current?.verticalSpeed ?? 0) : 0,
         };
     };
 
