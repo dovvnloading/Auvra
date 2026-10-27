@@ -20,7 +20,7 @@ import {
     createTerrainSplatTexture,
     prepareTerrainLayerTexture,
     setTerrainSplatTexture,
-    TERRAIN_FLAT_COLOR,
+    createTerrainGroundMaterial,
 } from './terrainLayerMaterial';
 
 interface TerrainObjectProps {
@@ -158,14 +158,8 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
     }, [splat, splatResources]);
 
     // --- Material ---
-    const material = useMemo(() => new THREE.MeshStandardMaterial({
-        color: TERRAIN_FLAT_COLOR,
-        roughness: 0.9,
-        metalness: 0.1,
-        flatShading: true,
-        side: THREE.DoubleSide,
-        vertexColors: false
-    }), []);
+    // Unpainted terrain: grass, earth and rock by slope (see createTerrainGroundMaterial).
+    const material = useMemo(() => createTerrainGroundMaterial(), []);
     useEffect(() => () => material.dispose(), [material]);
 
     const layered = layers.length > 0;

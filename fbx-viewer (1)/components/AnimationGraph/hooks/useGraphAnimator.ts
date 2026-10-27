@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { AnimationGraphData, GraphState } from '../../../types';
@@ -88,7 +88,29 @@ export interface AnimatorExtras {
     rootMotionOut?: React.MutableRefObject<THREE.Vector3>;
     /** Who raises this character's notifies (a level object id, 'player', or null). */
     eventSource?: string | null;
+    /** Pose less often when far from the camera or out of view (see animationUpdateInterval). */
+    lod?: boolean;
 }
+
+/** Roughly a character's size, for telling whether it is on screen. */
+const LOD_VIEW_RADIUS = 4;
+
+/**
+ * Every how many frames a character is posed: every frame up close, less often with distance (in
+ * world units, where characters are about 5 tall), and every 8th frame when off screen.
+ */
+export const animationUpdateInterval = (distance: number, inView: boolean): number => {
+    if (!inView) return 8;
+    if (distance < 30) return 1;
+    if (distance < 60) return 2;
+    if (distance < 120) return 3;
+    return 4;
+};
+
+const _lodPosition = new THREE.Vector3();
+const _lodSphere = new THREE.Sphere();
+const _lodFrustum = new THREE.Frustum();
+const _lodMatrix = new THREE.Matrix4();
 
 const _rootDelta = new THREE.Vector3();
 const _rootBasis = new THREE.Matrix3();
@@ -129,10 +151,29 @@ export const useGraphAnimator = (
     }, [activeClipName, activeLoop, activeStateType, actionsMap]);
 
 
+    // Time not yet given to the mixer by a character posed less often (extras.lod).
+    const lodPending = useRef({ delta: 0, frames: 0 });
+
     // -- FRAME LOOP --
-    useFrame((_state, rawDelta) => {
+    useFrame((state, rawDelta) => {
         if (!mixer) return;
-        const delta = clampAnimationDelta(rawDelta);
+        let delta = clampAnimationDelta(rawDelta);
+        if (extras.lod && modelObject) {
+            // A distant or off-screen character skips frames; the time it skipped is played on the
+            // next one, so its clips keep their pace and its transitions still fire.
+            modelObject.getWorldPosition(_lodPosition);
+            const camera = state.camera;
+            _lodFrustum.setFromProjectionMatrix(_lodMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+            const inView = _lodFrustum.intersectsSphere(_lodSphere.set(_lodPosition, LOD_VIEW_RADIUS));
+            const interval = animationUpdateInterval(_lodPosition.distanceTo(camera.position), inView);
+            const pending = lodPending.current;
+            pending.delta += delta;
+            pending.frames += 1;
+            if (pending.frames < interval) return;
+            delta = pending.delta;
+            pending.delta = 0;
+            pending.frames = 0;
+        }
         const blend = blendDurationRef?.current ?? DEFAULT_BLEND_SECONDS;
         const variables = variablesRef.current;
 

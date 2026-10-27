@@ -67,7 +67,9 @@ export const useGraphRuntime = (
     enableInputs: boolean,
     onActiveStateChange?: (id: string) => void,
     driveLocomotion: boolean = true,
-    eventSource: string | null = null
+    eventSource: string | null = null,
+    /** Pose less often when far from the camera or out of view (characters other than the player). */
+    lod: boolean = false
 ) => {
 
     // 1. Central Data Store for Variables, keyed by variable id.
@@ -151,6 +153,7 @@ export const useGraphRuntime = (
         rootMotions,
         rootMotionOut: rootMotionRef,
         eventSource,
+        lod,
     });
 
     // Without a character controller (the editor preview) the graph applies its own root motion.
