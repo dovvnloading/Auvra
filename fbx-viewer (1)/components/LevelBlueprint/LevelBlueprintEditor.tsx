@@ -459,7 +459,10 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
 
         const nodes: LogicNode[] = [];
         const connections: LogicConnection[] = [];
-        const startX = 200, startY = 200;
+        // Below the graph's existing nodes, so the template never lands on top of them.
+        const existing = activeLevelBlueprint.nodes;
+        const startX = existing.length ? Math.min(...existing.map(node => node.position.x)) : 200;
+        const startY = existing.length ? Math.max(...existing.map(node => node.position.y)) + 300 : 200;
 
         // 1. Tick
         const tickId = crypto.randomUUID();
