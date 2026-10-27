@@ -16,7 +16,9 @@ The left panel's **Logic Actors** add a Player Start, an Enemy Spawner, an Audio
 
 Select an Enemy Spawner to set what it spawns: the **Enemy** blueprint, a new one **Every** so many seconds, and **Max** in all (0 for no limit). Enemies appear around the spawner. A spawner with no enemy chosen spawns nothing.
 
-The sun casts shadows within 50 units of the point a little ahead of the camera, so they follow the view in the editor and in play. Objects farther away cast none.
+The sun casts shadows around the point the camera looks at, in the editor and in play. They are sharpest up close and reach further as the camera pulls back, up to 400 units around that point; objects beyond that cast none.
+
+Terrain without texture layers is shaded as grass on gentle ground, earth on slopes and rock on steep faces. Paint layers to replace it.
 
 Gizmo modes: **W** move, **E** rotate, **R** scale, **Z** toggles world/local space, **X** toggles grid snapping. Every object type can be transformed, including props, foliage and terrain. The inspector also has exact position, rotation (degrees) and scale fields.
 
