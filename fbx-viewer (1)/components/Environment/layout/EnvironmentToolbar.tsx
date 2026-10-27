@@ -11,7 +11,7 @@ interface EnvironmentToolbarProps {
     actions: {
         setInteractionMode: (mode: any) => void;
         updateTransformSettings: (updates: any) => void;
-        handlePlayStart: () => void;
+        handlePlayStart: (fromCamera?: boolean) => void;
         setLayout: (layout: 'single' | 'quad') => void;
         setCameraSpeed: (speed: number) => void;
         toggleMute: () => void;
@@ -214,13 +214,23 @@ export const EnvironmentToolbar: React.FC<EnvironmentToolbarProps> = ({ state, a
                     </div>
                 )}
                 
-                <button 
-                    onClick={actions.handlePlayStart}
-                    className="flex items-center gap-2 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded font-bold text-xs shadow-lg shadow-blue-900/20 transition-all hover:scale-105"
-                    title="Enter Game Mode to test level"
-                >
-                    <Play size={14} fill="currentColor" /> PLAY LEVEL
-                </button>
+                <div className="flex items-center rounded shadow-lg shadow-blue-900/20">
+                    <button
+                        onClick={() => actions.handlePlayStart()}
+                        className="flex items-center gap-2 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-l font-bold text-xs transition-colors"
+                        title="Play the level from its Player Start"
+                    >
+                        <Play size={14} fill="currentColor" /> PLAY LEVEL
+                    </button>
+                    <button
+                        onClick={() => actions.handlePlayStart(true)}
+                        className="flex items-center px-2 py-1.5 bg-blue-700 hover:bg-blue-500 text-white rounded-r border-l border-blue-900 transition-colors"
+                        title="Play from here: start under the editor camera"
+                        aria-label="Play from here"
+                    >
+                        <Video size={14} />
+                    </button>
+                </div>
             </div>
         </div>
     );

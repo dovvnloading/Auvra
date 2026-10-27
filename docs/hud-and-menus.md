@@ -1,6 +1,6 @@
 # HUD, menus and localization
 
-The **HUD/UI** tab edits the screens drawn over the game: the in-game HUD and the title and pause menus. These screens appear in built games; playing in the editor shows a built-in HUD instead.
+The **HUD/UI** tab edits the screens drawn over the game: the in-game HUD and the title and pause menus. Playing in the editor shows the Game HUD as the built game does, or a built-in HUD while the Game HUD is empty; the title and pause menus appear only in built games.
 
 ## Screens
 

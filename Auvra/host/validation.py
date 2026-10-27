@@ -26,6 +26,10 @@ _FORBIDDEN_JSON_KEY = re.compile(
 _WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
 _UNC_PATH = re.compile(r"^\\\\")
 _FILE_URI = re.compile(r"^file://", re.I)
+# An absolute POSIX path: "/" then a name (or "/" alone). "//" opens a code comment and "/ 4" is
+# HUD text, not paths, and text with a line break (code, prose) is never a path; the protocol
+# schema and the editor's sanitizeJson agree.
+_POSIX_ABSOLUTE = re.compile(r"^/(?:[^/\s]|$)")
 MAX_MESSAGE_BYTES = 256 * 1024
 
 
@@ -34,7 +38,8 @@ def _check_json_safe(value: Any, *, depth: int = 0) -> None:
     if depth > 32:
         raise ProtocolValidationError("message nesting is too deep")
     if isinstance(value, str):
-        if _WINDOWS_DRIVE.match(value) or _UNC_PATH.match(value) or _FILE_URI.match(value) or value.startswith("/"):
+        posix_path = _POSIX_ABSOLUTE.match(value) is not None and "\n" not in value and "\r" not in value
+        if _WINDOWS_DRIVE.match(value) or _UNC_PATH.match(value) or _FILE_URI.match(value) or posix_path:
             raise ProtocolValidationError("filesystem paths are not allowed")
         return
     if value is None or isinstance(value, (bool, int)):

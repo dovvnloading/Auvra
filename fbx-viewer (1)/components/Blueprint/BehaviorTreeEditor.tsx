@@ -134,6 +134,8 @@ export const BehaviorTreeEditor: React.FC<BehaviorTreeEditorProps> = ({ tree, on
         const valueLabel = node.type === 'cooldown' ? 'Seconds' : leaf?.value;
         const canAdd = info.children === 'many' || (info.children === 'one' && (node.children?.length ?? 0) === 0);
         const index = siblings.indexOf(id);
+        // Buttons name the node they act on, so a screen reader (or a test) can tell the rows apart.
+        const name = leaf?.label ?? info.label;
         return (
             <div key={id}>
                 <div className="flex items-start gap-1.5 py-1 group" style={{ paddingLeft: depth * 14 }} data-behavior-node={node.type}>
@@ -176,15 +178,15 @@ export const BehaviorTreeEditor: React.FC<BehaviorTreeEditorProps> = ({ tree, on
                     </div>
                     <div className="flex flex-col gap-0.5 opacity-60 group-hover:opacity-100">
                         {canAdd && (
-                            <button type="button" onClick={() => setAdding(adding === id ? null : id)} title="Add a child" aria-label="Add a child" className="text-gray-400 hover:text-white"><Plus size={12} /></button>
+                            <button type="button" onClick={() => setAdding(adding === id ? null : id)} title="Add a child" aria-label={`Add a child to ${name}`} className="text-gray-400 hover:text-white"><Plus size={12} /></button>
                         )}
-                        {index > 0 && <button type="button" onClick={() => onChange(moveBehaviorNode(tree, id, -1))} title="Move up" aria-label="Move up" className="text-gray-400 hover:text-white"><ArrowUp size={12} /></button>}
-                        {index >= 0 && index < siblings.length - 1 && <button type="button" onClick={() => onChange(moveBehaviorNode(tree, id, 1))} title="Move down" aria-label="Move down" className="text-gray-400 hover:text-white"><ArrowDown size={12} /></button>}
+                        {index > 0 && <button type="button" onClick={() => onChange(moveBehaviorNode(tree, id, -1))} title="Move up" aria-label={`Move ${name} up`} className="text-gray-400 hover:text-white"><ArrowUp size={12} /></button>}
+                        {index >= 0 && index < siblings.length - 1 && <button type="button" onClick={() => onChange(moveBehaviorNode(tree, id, 1))} title="Move down" aria-label={`Move ${name} down`} className="text-gray-400 hover:text-white"><ArrowDown size={12} /></button>}
                         <button
                             type="button"
                             onClick={() => onChange(id === tree.rootId ? undefined : removeBehaviorNode(tree, id))}
                             title={id === tree.rootId ? 'Remove the tree and use the built-in AI' : 'Delete this node and everything under it'}
-                            aria-label="Delete node"
+                            aria-label={`Delete ${name}`}
                             className="text-gray-500 hover:text-red-400"
                         >
                             <Trash2 size={12} />

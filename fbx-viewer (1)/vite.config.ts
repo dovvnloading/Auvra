@@ -3,12 +3,15 @@ import { createHash, randomBytes } from 'node:crypto';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { collectThirdPartyNotices } from './scripts/licenses/notices.mjs';
+import { classicSandboxFrames } from './scripts/frames/classicFrames.mjs';
 
+// Chromium (and so WebView2) dropped CSP navigate-to and logs every page that sends it; the desktop
+// host's frame policy is what keeps navigation on the app origin.
 // Play-in-editor multiplayer reaches a relay on this machine at its default port (Auvra/net/relay.py).
 const LOCAL_RELAY = 'ws://127.0.0.1:7777 ws://localhost:7777';
-const editorDevCsp = (port: number, nonce: string) => `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-${nonce}' 'wasm-unsafe-eval'; connect-src 'self' blob: https://assets.auvra.local http://127.0.0.1:${port} ws://127.0.0.1:${port} ${LOCAL_RELAY}; form-action 'none'; navigate-to 'self';`;
-const editorPackagedCsp = `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' blob: https://assets.auvra.local ${LOCAL_RELAY}; form-action 'none'; navigate-to 'self';`;
-const hudPackagedCsp = `default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'none'; connect-src 'none'; media-src 'none'; form-action 'none'; navigate-to 'none';`;
+const editorDevCsp = (port: number, nonce: string) => `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-${nonce}' 'wasm-unsafe-eval'; connect-src 'self' blob: https://assets.auvra.local http://127.0.0.1:${port} ws://127.0.0.1:${port} ${LOCAL_RELAY}; form-action 'none';`;
+const editorPackagedCsp = `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' blob: https://assets.auvra.local ${LOCAL_RELAY}; form-action 'none';`;
+const hudPackagedCsp = `default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'none'; connect-src 'none'; media-src 'none'; form-action 'none';`;
 const playerPackagedCsp = `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src 'self' blob:; form-action 'none'`;
 const playerDevCsp = (port: number, nonce: string) => playerPackagedCsp
   .replace("script-src 'self'", `script-src 'self' 'nonce-${nonce}'`)
@@ -123,6 +126,8 @@ export default defineConfig(({ command, mode }) => {
         });
       },
     },
+    // The sandbox frames load their code as classic scripts: an opaque-origin frame's module loads are refused.
+    classicSandboxFrames({ root: __dirname, frameCsp: hudCsp }),
     ...(isPlayer ? [playerTemplatePlugin()] : []),
   ],
   ...(isPlayer ? { base: './' } : {}),

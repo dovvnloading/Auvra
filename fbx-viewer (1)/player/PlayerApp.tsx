@@ -4,7 +4,7 @@ import { objectsByLevel } from '../runtime/levelStreaming';
 import { LevelRuntime } from '../runtime/LevelRuntime';
 import { createSaveGameStore } from '../runtime/saveGame';
 import { gameState, useGameState } from '../runtime/gameState';
-import type { LoadedGameContent, PlayerStart, RuntimeHost, RuntimeLevel, SaveGameData } from '../runtime/types';
+import type { LoadedGameContent, PlayerStart, RuntimeHost, RuntimeLevel, RuntimeSaveState, SaveGameData } from '../runtime/types';
 import { loadGameContent } from '../utils/projectHydration';
 import { HUDRenderer } from '../components/HUDEditor/HUDRenderer';
 import { loadGamePack, type GamePackSource } from './gamePack';
@@ -61,6 +61,8 @@ export const PlayerApp: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
     const [screen, setScreen] = useState<Screen>('title');
     const [session, setSession] = useState<Session | null>(null);
+    // Filled by the running level: what a save records of the session.
+    const saveStateRef = useRef<(() => RuntimeSaveState | null) | null>(null);
     const [paused, setPaused] = useState(false);
     const [toasts, setToasts] = useState<Toast[]>([]);
     const [optionsOpen, setOptionsOpen] = useState(false);
@@ -157,6 +159,7 @@ export const PlayerApp: React.FC = () => {
     const saveGame = useCallback((slot = 'auto') => {
         if (!saves || !session || !manifest) return;
         const state = gameState.get();
+        const live = saveStateRef.current?.() ?? null;
         const start = levels.get(session.levelId)?.objects.find(object => object.type === 'player_start');
         const data: SaveGameData = {
             schema: 1,
@@ -165,12 +168,12 @@ export const PlayerApp: React.FC = () => {
             savedAt: new Date().toISOString(),
             levelId: session.levelId,
             player: {
-                position: start?.position ?? [0, 0, 0],
-                rotation: start?.rotation ?? [0, 0, 0],
+                position: live?.position ?? start?.position ?? [0, 0, 0],
+                rotation: live?.rotation ?? start?.rotation ?? [0, 0, 0],
                 health: state.player.health,
                 stamina: state.player.stamina,
             },
-            destroyedObjectIds: [],
+            destroyedObjectIds: live?.destroyedObjectIds ?? [],
             variables: { ...state.vars },
         };
         if (saves.save(data)) {
@@ -296,6 +299,7 @@ export const PlayerApp: React.FC = () => {
                         overlay={hudOverlay}
                         restore={session.restore}
                         playerOptions={optionsStore ?? undefined}
+                        saveStateRef={saveStateRef}
                     />
                 )}
 

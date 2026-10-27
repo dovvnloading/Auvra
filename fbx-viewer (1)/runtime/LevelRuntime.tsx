@@ -48,12 +48,13 @@ import { PostProcessAllowedContext, usePostProcessClaimed } from './components/p
 import type { InputState } from './input';
 import { collectTimelineTargets } from './timeline/evaluate';
 import { TouchControls } from './TouchControls';
+import { spawnPositionAround } from './spawning';
 import { NetSessionProvider } from './net/NetSessionContext';
 import { NetStatus } from './net/NetStatus';
 import { LocalPlayerReplicator, RemotePlayers } from './net/RemotePlayers';
 import type { ComponentDefinition } from './components/types';
 import { ScriptRuntime } from './scripting/ScriptRuntime';
-import type { GameContent, LevelRuntimeProps, PlayerStart, RuntimeHost, RuntimeLevel, SaveGameData } from './types';
+import type { GameContent, LevelRuntimeProps, PlayerStart, RuntimeHost, RuntimeLevel, RuntimeSaveState, SaveGameData } from './types';
 
 type Vec3 = [number, number, number];
 
@@ -142,11 +143,12 @@ const SpawnerSystem: React.FC<{
 
                 if (sState.timer >= cfg.interval) {
                     sState.timer = 0;
+                    const index = sState.count;
                     sState.count++;
 
                     onSpawn({
                         blueprintId: cfg.blueprintId,
-                        position: obj.position,
+                        position: spawnPositionAround(obj.position, index),
                         rotation: obj.rotation,
                         spawnerId: obj.id
                     });
@@ -433,13 +435,14 @@ interface LevelSessionProps {
     isGameOver: boolean;
     paused: boolean;
     onGameOver: () => void;
+    saveStateRef?: React.MutableRefObject<(() => RuntimeSaveState | null) | null>;
 }
 
 /**
  * One play session of a level. Mounted under a group keyed by the session key, so a restart or a load
  * starts from a fresh runtime copy: BeginPlay, overlaps, spawner counts and spawned enemies all reset.
  */
-const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, start, restore, host, sessionKey, isGameOver, paused, onGameOver }) => {
+const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, start, restore, host, sessionKey, isGameOver, paused, onGameOver, saveStateRef }) => {
     const { models, audioAssets } = content;
     // Fixed for the session: a host that rebuilds these objects must not teleport the player mid-session.
     const [sessionStart] = useState(start);
@@ -512,6 +515,29 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
     // Level play has no single enemy instance, so 'Enemy'-targeted variable nodes resolve to nothing.
     const enemyApiRef = useRef<GraphRuntimeAPI | undefined>(undefined);
     const playerEntityRef = useRef<SandboxEntityHandle>(null);
+
+    // A save records the player's transform and the authored actors gone so far (those a loaded save
+    // had already removed included), which is what loading it restores.
+    const runtimeObjectsRef = useRef(runtimeLevelObjects);
+    runtimeObjectsRef.current = runtimeLevelObjects;
+    useEffect(() => {
+        if (!saveStateRef) return undefined;
+        saveStateRef.current = () => {
+            const body = playerEntityRef.current?.object;
+            if (!body) return null;
+            const position = body.getWorldPosition(new THREE.Vector3());
+            const rotation = new THREE.Euler().setFromQuaternion(body.getWorldQuaternion(new THREE.Quaternion()));
+            const live = new Set(runtimeObjectsRef.current.map(object => object.id));
+            const destroyed = new Set(sessionRestore?.destroyedObjectIds ?? []);
+            for (const object of authoredObjects) if (!live.has(object.id)) destroyed.add(object.id);
+            return {
+                position: [position.x, position.y, position.z],
+                rotation: [rotation.x, rotation.y, rotation.z],
+                destroyedObjectIds: [...destroyed],
+            };
+        };
+        return () => { saveStateRef.current = null; };
+    }, [saveStateRef, authoredObjects, sessionRestore]);
     const projectileManagerRef = useRef<ProjectileManagerHandle>(null);
     const bloodSystemRef = useRef<BloodSystemHandle>(null);
 
@@ -796,7 +822,7 @@ const DefaultPostProcess: React.FC = () => {
  * Plays one level. Shared by play-in-editor and the standalone player: content comes from the
  * runtime content context, flow control (restart, end, open level, save, load, pause) from the host.
  */
-export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, playerStart, paused, host, sessionKey, overlay, restore, playerOptions, stepRequest = 0, inspectRef }) => {
+export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, playerStart, paused, host, sessionKey, overlay, restore, playerOptions, stepRequest = 0, inspectRef, saveStateRef }) => {
     const content = useGameContent();
     const player = useMemo(() => resolvePlayerAssets(content, settings.playerBlueprintId), [content, settings.playerBlueprintId]);
     const start = useMemo(() => resolvePlayerStart(level, playerStart, restore), [level, playerStart, restore]);
@@ -901,6 +927,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                                     isGameOver={isGameOver}
                                     paused={paused}
                                     onGameOver={handleGameOver}
+                                    saveStateRef={saveStateRef}
                                 />
                             </group>
                         </PhysicsWorld>

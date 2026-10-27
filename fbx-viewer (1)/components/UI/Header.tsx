@@ -4,6 +4,7 @@ import { Brush, Grid, Network, FileCode, Gamepad2, Download, Upload, LayoutTempl
 import { useScene } from '../../context/SceneContext';
 import type { ProjectTemplate } from '../../types';
 import { NewProjectMenu } from './NewProjectMenu';
+import { MenuButton } from './MenuButton';
 import { SettingsModal } from '../Settings/SettingsModal';
 import { GameSettingsPanel } from '../Settings/GameSettingsPanel';
 import { LocalizationPanel } from '../Settings/LocalizationPanel';
@@ -100,7 +101,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
            </select>}
            {typeof projectStatus.progress === 'number' && <div className="text-[10px] text-blue-400">{Math.round(projectStatus.progress * 100)}%</div>}
            {projectStatus.recoveryAvailable && <div className="flex items-center gap-1 text-[10px] text-amber-400" title="Project recovery is available">
-             <span>Recovery available</span>
+             {projectStatus.recoveryPoints.length === 0 && <span>Recovery available</span>}
              {projectStatus.recoveryPoints.length > 0 && <select
                aria-label="Recovery points"
                className="max-w-28 bg-gray-900 border border-amber-900 text-[10px] text-amber-300 rounded px-1 py-1"
@@ -108,7 +109,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
                onChange={(event) => { if (event.target.value) runProjectAction(() => recoverProject(event.target.value)); }}
                disabled={isLoading}
              >
-               <option value="">Open recovery…</option>
+               <option value="">Recovery available…</option>
                {projectStatus.recoveryPoints.map((point) => <option key={point.recoveryId} value={point.recoveryId}>{point.kind}{point.size ? ` (${Math.round(point.size / 1024)} KiB)` : ''}</option>)}
              </select>}
            </div>}
@@ -136,14 +137,18 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
                >
                    <FolderOpen size={12} /> Open
                </button>
-               <button onClick={() => runProjectAction(importProject)} disabled={isLoading} className="flex items-center gap-2 px-3 py-1 text-xs font-bold text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50" title="Import an .auvrapack project">
-                   <Upload size={12} /> Import
-               </button>
-               <button onClick={() => runProjectAction(importLegacyProject)} disabled={isLoading} className="flex items-center gap-2 px-2 py-1 text-xs font-bold text-gray-500 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50" title="Import a legacy .forge project">Legacy file</button>
-               <button onClick={() => runProjectAction(migrateLegacyBrowserProject)} disabled={isLoading || !projectStatus.projectId || projectStatus.readOnly} className="flex items-center gap-2 px-2 py-1 text-xs font-bold text-gray-500 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50" title="Copy read-only OmniRenderDB data into this empty native project">Browser data</button>
-               <button onClick={() => runProjectAction(exportProject)} disabled={isLoading || !projectStatus.projectId} className="flex items-center gap-2 px-3 py-1 text-xs font-bold text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50" title="Export an .auvrapack project">
-                   <Download size={12} /> Export
-               </button>
+               <MenuButton
+                 label="More"
+                 icon={<Upload size={12} />}
+                 title="Import, export and migrate projects"
+                 disabled={isLoading}
+                 items={[
+                   { label: 'Import project', description: 'Open an .auvrapack project file', onSelect: () => runProjectAction(importProject) },
+                   { label: 'Export project', description: 'Save this project as an .auvrapack file', disabled: !projectStatus.projectId, onSelect: () => runProjectAction(exportProject) },
+                   { label: 'Import legacy file', description: 'Import a legacy .forge project', onSelect: () => runProjectAction(importLegacyProject) },
+                   { label: 'Browser data', description: 'Copy read-only OmniRenderDB data into this empty native project', disabled: !projectStatus.projectId || projectStatus.readOnly, onSelect: () => runProjectAction(migrateLegacyBrowserProject) },
+                 ]}
+               />
                <button onClick={() => runProjectAction(closeProject)} disabled={isLoading || !projectStatus.projectId} className="flex items-center gap-2 px-2 py-1 text-xs font-bold text-gray-500 hover:text-white hover:bg-gray-800 rounded transition-colors disabled:opacity-50" title="Close project">
                    <X size={12} />
                </button>
@@ -159,11 +164,12 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
            <button type="button" onClick={() => setGameSettingsOpen(true)} className="flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-900 px-3 py-1 text-xs font-bold text-gray-400 hover:bg-gray-800 hover:text-white" title="Game settings">
              <SlidersHorizontal size={13} /> Game Settings
            </button>
-           <button type="button" onClick={() => setLocalizationOpen(true)} className="flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-900 px-3 py-1 text-xs font-bold text-gray-400 hover:bg-gray-800 hover:text-white" title="Text translations for the game">
-             <Languages size={13} /> Localization
+           {/* Icon-only, so the header fits laptop widths; the title names them. */}
+           <button type="button" onClick={() => setLocalizationOpen(true)} aria-label="Localization" className="flex items-center rounded-lg border border-gray-800 bg-gray-900 px-2 py-1.5 text-gray-400 hover:bg-gray-800 hover:text-white" title="Localization: text translations for the game">
+             <Languages size={13} />
            </button>
-           <button type="button" onClick={() => setSettingsOpen(true)} className="flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-900 px-3 py-1 text-xs font-bold text-gray-400 hover:bg-gray-800 hover:text-white" title="Provider settings">
-             <Settings2 size={13} /> Settings
+           <button type="button" onClick={() => setSettingsOpen(true)} aria-label="Settings" className="flex items-center rounded-lg border border-gray-800 bg-gray-900 px-2 py-1.5 text-gray-400 hover:bg-gray-800 hover:text-white" title="Settings: AI providers">
+             <Settings2 size={13} />
            </button>
        </div>
        {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}

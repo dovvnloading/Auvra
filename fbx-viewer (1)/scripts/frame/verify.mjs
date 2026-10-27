@@ -67,6 +67,8 @@ check(/(?:^|;\s*)default-src 'none';/.test(sandboxCsp) && /(?:^|;\s*)connect-src
 check(/\.replace\('__AUVRA_SCRIPT_CSP__', hudCsp\)/.test(source.vite), "script frame CSP placeholder is not replaced with the sandbox policy");
 const buildInputs = ["editorInput", "playerInput"].map((name) => source.vite.match(new RegExp(`const ${name}[^=]*=\\s*\\{([^}]*)\\}`))?.[1] ?? "");
 check(buildInputs.every((input) => input.includes("'hud-frame.html'") && input.includes("'script-frame.html'")), "sandbox frames are missing from the editor or player build");
+// An opaque-origin frame's module scripts are CORS loads every host refuses; the frames load classic bundles.
+check(source.vite.includes("classicSandboxFrames({ root: __dirname, frameCsp: hudCsp })"), "sandbox frames do not load their code as classic scripts");
 const editorCspDefinitions = {
   development: source.vite.match(/const editorDevCsp[^`]+`([^`]+)`;/)?.[1],
   packaged: source.vite.match(/const editorPackagedCsp\s*=\s*`([^`]+)`;/)?.[1],

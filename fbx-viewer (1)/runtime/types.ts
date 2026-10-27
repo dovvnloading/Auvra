@@ -107,9 +107,18 @@ export interface LevelRuntimeProps {
     stepRequest?: number;
     /** Filled with a reader of the running scene's level objects (play-in-editor's inspector). */
     inspectRef?: MutableRefObject<RuntimeInspector | null>;
+    /** Filled with a reader of what a save records of the running session (the built game's Save). */
+    saveStateRef?: MutableRefObject<(() => RuntimeSaveState | null) | null>;
 }
 
-/** Checkpoint-style save. */
+/** What a running session puts in a save: where the player stands and which authored objects are gone. */
+export interface RuntimeSaveState {
+    position: [number, number, number];
+    rotation: [number, number, number];
+    destroyedObjectIds: string[];
+}
+
+/** A saved play session: loading it starts the level with the player where they were and destroyed actors gone. */
 export interface SaveGameData {
     schema: 1;
     gameId: string;

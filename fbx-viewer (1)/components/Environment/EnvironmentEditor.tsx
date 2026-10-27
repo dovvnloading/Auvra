@@ -67,6 +67,7 @@ export const EnvironmentEditor: React.FC = () => {
             <LevelGameLoop 
                 onExit={actions.handlePlayStop} 
                 spawnPosition={state.editorCameraPos.current}
+                fromCamera={state.playFromCamera}
             />
         );
     }

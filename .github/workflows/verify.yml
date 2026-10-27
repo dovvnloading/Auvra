@@ -176,7 +176,9 @@ jobs:
       - name: Install WebKitGTK 4.1 and libsoup 3 development packages
         run: |
           sudo apt-get update
-          sudo apt-get install --yes pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libdbus-1-dev
+          # Headers and libraries only: the recommended extras (portals, docs, GObject introspection data)
+          # add many packages to a download that is slow on some runner mirrors.
+          sudo apt-get install --yes --no-install-recommends pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libdbus-1-dev
 
       - name: Select pinned Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt

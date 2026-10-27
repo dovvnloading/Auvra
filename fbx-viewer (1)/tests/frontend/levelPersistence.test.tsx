@@ -387,3 +387,28 @@ describe('terrain heightfields', () => {
     expect((changes[0].value as LevelObject).terrainData).toEqual({ resolution: 2, width: 10, depth: 10, textureId: 'texture', heightfield });
   });
 });
+
+describe('level blueprint edits', () => {
+  it('keep every keystroke when edits arrive faster than the host saves them', async () => {
+    const { result } = renderEditor();
+    const written: string[] = [];
+    let releaseFirst: () => void = () => undefined;
+    const firstHeld = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    vi.mocked(dbOperations.addLevel).mockImplementation(async (saved, lease) => {
+      if (!written.length) await firstHeld;
+      editorSession.requireWritable(lease, projectService.getStatus());
+      written.push(saved.blueprint?.variables[0]?.name ?? '');
+      mocks.status.revision += 1;
+      editorSession.advanceRevision(mocks.status.projectId, mocks.status.revision);
+    });
+    const typed = (name: string) => act(() => result.current.levels.updateLevelBlueprint({ variables: [{ id: 'v', name, type: 'String', value: '' }] }));
+    typed('a');
+    typed('ab');
+    typed('abc');
+    await act(async () => { releaseFirst(); await firstHeld; });
+
+    // The first save was in flight; the edits made meanwhile are saved once, newest last.
+    await waitFor(() => expect(written).toEqual(['a', 'abc']));
+    expect(result.current.levels.activeLevelBlueprint.variables[0].name).toBe('abc');
+  });
+});

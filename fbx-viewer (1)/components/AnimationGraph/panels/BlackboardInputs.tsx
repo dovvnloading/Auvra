@@ -3,6 +3,7 @@ import { Gamepad2, Plus, Keyboard, Trash2, ArrowRight } from 'lucide-react';
 import { AnimationGraphData, InputBinding } from '../../../types';
 import { KeyRecorder } from '../KeyRecorder';
 import { Select } from '../../UI/Select';
+import { appAlert } from '../../../utils/appDialogs';
 
 interface BlackboardInputsProps {
     graph: AnimationGraphData;
@@ -15,7 +16,7 @@ export const BlackboardInputs: React.FC<BlackboardInputsProps> = ({ graph, model
     const addInput = () => {
         // Automatically create a variable if none exist
         if (graph.variables.length === 0) {
-            alert("Create a variable first!");
+            void appAlert('Create a variable first.', 'Input bindings set a graph variable, and this graph has none yet.');
             return;
         }
 

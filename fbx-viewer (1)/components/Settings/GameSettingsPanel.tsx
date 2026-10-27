@@ -134,6 +134,8 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
   );
   const stored = useMemo(() => normalizeGameSettings(document.settings), [document]);
   const [draft, setDraft] = useState<GameSettings>(stored);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -143,16 +145,15 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
   // An unedited draft follows the stored document (hydrate, another writer). An edited draft is kept
   // until the user saves or reverts: every revision bump re-hydrates the document and a failed save
   // rolls it back, and neither may discard what the user typed. A placeholder shown while loading
-  // never replaces the draft.
+  // never replaces the draft. This is decided here, not in a setDraft updater: React calls updaters
+  // twice in StrictMode, and the second call would see the moved baseline and keep the old draft.
   useEffect(() => {
     if (!hydrated) return;
     const next = JSON.stringify(stored);
     if (next === baselineRef.current) return;
-    setDraft((current) => {
-      if (JSON.stringify(normalizeGameSettings(current)) !== baselineRef.current) return current;
-      baselineRef.current = next;
-      return stored;
-    });
+    if (JSON.stringify(normalizeGameSettings(draftRef.current)) !== baselineRef.current) return;
+    baselineRef.current = next;
+    setDraft(stored);
   }, [stored, hydrated]);
 
   // A project switch always discards the draft.

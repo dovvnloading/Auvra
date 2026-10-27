@@ -3,6 +3,9 @@ import * as THREE from 'three';
 import { useScene } from '../../context/SceneContext';
 import { useNotification } from '../../context/NotificationContext';
 import { useNativeProjectDocument } from '../../utils/useNativeProjectDocument';
+import { HUD_DOCUMENT_ID } from '../../utils/projectHydration';
+import { HUDRenderer } from '../HUDEditor/HUDRenderer';
+import type { HUDDocumentData } from '../../runtime/types';
 import { LevelRuntime } from '../../runtime/LevelRuntime';
 import type { RuntimeInspector } from '../../runtime/PauseController';
 import { PlayToolbar } from './PlayToolbar';
@@ -26,6 +29,8 @@ import {
 interface LevelGameLoopProps {
     onExit: () => void;
     spawnPosition?: THREE.Vector3;
+    /** Start at `spawnPosition` even when the level has a Player Start ("Play from here"). */
+    fromCamera?: boolean;
 }
 
 interface GameSettingsDocument {
@@ -39,6 +44,8 @@ const createDefaultGameSettingsDocument = (): GameSettingsDocument => ({
     settings: DEFAULT_GAME_SETTINGS,
 });
 
+const createEmptyHud = (): HUDDocumentData => ({ id: HUD_DOCUMENT_ID, elements: [] });
+
 /**
  * PLAY IN EDITOR
  *
@@ -46,13 +53,23 @@ const createDefaultGameSettingsDocument = (): GameSettingsDocument => ({
  * game settings. Escape pauses; while paused the play toolbar resumes, steps one frame, restarts,
  * inspects the running objects or stops and returns to the editor (Escape again).
  */
-export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosition }) => {
+export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosition, fromCamera = false }) => {
     const { levelObjects, activeLevelBlueprint, levels, currentLevelId } = useScene();
     const { addNotification } = useNotification();
     const { document: settingsDocument, hydrated: settingsHydrated } = useNativeProjectDocument<GameSettingsDocument>(
         'metadata', GAME_SETTINGS_DOCUMENT_ID, createDefaultGameSettingsDocument,
     );
     const settings = useMemo(() => normalizeGameSettings(settingsDocument.settings), [settingsDocument]);
+    // Play waits for the settings the first time only. The project moves to a new revision when an edit
+    // made just before Play is saved, which re-hydrates the document; unmounting the running session
+    // then would start it again (BeginPlay and every script's onStart twice).
+    const settingsLoaded = useRef(false);
+    if (settingsHydrated) settingsLoaded.current = true;
+    // The game HUD the built game shows; with no elements the runtime's own HUD stands in, as in the player.
+    const { document: hudDocument } = useNativeProjectDocument<HUDDocumentData>('hud', HUD_DOCUMENT_ID, createEmptyHud);
+    const hudOverlay = useMemo(() => (
+        Array.isArray(hudDocument.elements) && hudDocument.elements.length > 0 ? <HUDRenderer document={hudDocument} bindings /> : undefined
+    ), [hudDocument]);
     const { document: localizationDocument } = useNativeProjectDocument<LocalizationDocument>(
         'metadata', LOCALIZATION_DOCUMENT_ID, createDefaultLocalizationDocument,
     );
@@ -117,10 +134,14 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
         blueprint: activeLevelBlueprint,
     }), [activeLevelBlueprint, currentLevelId, levelObjects, levels]);
 
-    // Play starts where the editor camera is, on the ground.
+    // Play starts at the level's Player Start (null lets the runtime use it). "Play from here", or a
+    // level without one, starts under the editor camera, on the ground.
+    const hasPlayerStart = levelObjects.some(object => object.type === 'player_start');
     const playerStart = useMemo<PlayerStart | null>(() => (
-        spawnPosition ? { position: [spawnPosition.x, 0.5, spawnPosition.z], rotation: [0, 0, 0] } : null
-    ), [spawnPosition]);
+        spawnPosition && (fromCamera || !hasPlayerStart)
+            ? { position: [spawnPosition.x, 0.5, spawnPosition.z], rotation: [0, 0, 0] }
+            : null
+    ), [spawnPosition, fromCamera, hasPlayerStart]);
 
     const exitRef = useRef(onExit);
     const notifyRef = useRef(addNotification);
@@ -152,7 +173,7 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
     // Each play-in-editor run starts from a clean game state.
     useEffect(() => () => gameState.reset(), []);
 
-    if (!settingsHydrated || prefabs === null) {
+    if (!settingsLoaded.current || prefabs === null) {
         return <div className="flex items-center justify-center h-full w-full bg-black text-xs text-gray-500">Starting play session...</div>;
     }
 
@@ -168,6 +189,7 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
                     sessionKey={sessionKey}
                     stepRequest={stepRequest}
                     inspectRef={inspectRef}
+                    overlay={hudOverlay}
                 />
                 <PlayToolbar
                     paused={paused}

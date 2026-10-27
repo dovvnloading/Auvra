@@ -922,11 +922,56 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       scheduleFlush();
   }, [addNotification, levelObjects, scheduleFlush, session]);
 
+  // Blueprint edits arrive per keystroke. One write runs at a time and edits made meanwhile are
+  // folded into the next one, which takes its lease when it starts: a lease captured before the
+  // previous write landed names a stale project revision, so that write was refused and its
+  // rollback dropped the newest characters.
+  const blueprintWrites = useRef<{
+      running: boolean;
+      queued: { lease: EditorSessionLease; level: LevelData; blueprint: LevelBlueprintData } | null;
+      /** What the project holds, restored when the newest edit cannot be saved. */
+      saved: LevelBlueprintData | null;
+  }>({ running: false, queued: null, saved: null });
+
+  const drainBlueprintWrites = useCallback(async () => {
+      const writes = blueprintWrites.current;
+      if (writes.running) return;
+      writes.running = true;
+      try {
+          while (writes.queued) {
+              const { lease: origin, level, blueprint } = writes.queued;
+              writes.queued = null;
+              // An edit belongs to the session it was made in; only the revision may have moved since.
+              if (!session.isSameSession(origin)) continue;
+              const lease = session.captureReady() ?? origin;
+              try {
+                  await dbOperations.addLevel({ ...level, blueprint }, lease);
+                  writes.saved = blueprint;
+              } catch (error) {
+                  // A newer edit is written next and carries this one's changes.
+                  if (writes.queued) continue;
+                  const saved = writes.saved;
+                  setWorkingState(current => current.activeLevelBlueprint === blueprint && saved
+                      ? {
+                          ...current,
+                          activeLevelBlueprint: saved,
+                          levels: current.levels.map(item => item.id === level.id ? { ...item, blueprint: saved } : item),
+                      }
+                      : current);
+                  frontendDiagnostics.failure('level_blueprint_persist_failed', error);
+              }
+          }
+      } finally {
+          writes.running = false;
+      }
+  }, [session]);
+
   const updateLevelBlueprint = useCallback((data: Partial<LevelBlueprintData>) => {
       const lease = session.requireCurrent(session.captureReady());
       projectService.assertWritable();
       const next = { ...activeLevelBlueprint, ...data };
-      const previous = activeLevelBlueprint;
+      const writes = blueprintWrites.current;
+      if (!writes.running && !writes.queued) writes.saved = activeLevelBlueprint;
       setWorkingState(prev => ({
           ...prev,
           activeLevelBlueprint: next,
@@ -937,21 +982,11 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       if (currentLevelId) {
           const lvl = levels.find(l => l.id === currentLevelId);
           if (lvl) {
-              dbOperations.addLevel({ ...lvl, blueprint: next }, lease).catch((error) => {
-                  setWorkingState(current => current.activeLevelBlueprint === next
-                      ? {
-                          ...current,
-                          activeLevelBlueprint: previous,
-                          levels: current.levels.map(level => level.id === currentLevelId
-                              ? { ...level, blueprint: previous }
-                              : level),
-                      }
-                      : current);
-                  frontendDiagnostics.failure('level_blueprint_persist_failed', error);
-              });
+              writes.queued = { lease, level: lvl, blueprint: next };
+              void drainBlueprintWrites();
           }
       }
-  }, [activeLevelBlueprint, currentLevelId, levels, session]);
+  }, [activeLevelBlueprint, currentLevelId, drainBlueprintWrites, levels, session]);
 
   const hydrateProjectState = useCallback((nextLevels: LevelData[], nextObjects: LevelObject[], nextCurrentLevelId?: string | null) => {
       const selected = nextCurrentLevelId || nextLevels[0]?.id || null;

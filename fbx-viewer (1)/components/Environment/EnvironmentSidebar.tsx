@@ -3,6 +3,7 @@ import { Search, Trees, Box, Image, MousePointer2, Layers, Trash2, Plus, Chevron
 import { useScene } from '../../context/SceneContext';
 import { LevelObject } from '../../types';
 import { editorSession } from '../../utils/editorSession';
+import { appAlert, appConfirm, appPrompt } from '../../utils/appDialogs';
 import { reparentPreservingWorld, wouldCreateCycle } from '../../utils/sceneGraph';
 import { PrefabPanel } from './PrefabPanel';
 import { LightingPanel } from './LightingPanel';
@@ -185,8 +186,8 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
 
     const handleCreateLevel = async () => {
         if (!canEdit()) return;
-        const name = prompt("Enter new level name:");
-        if (name) {
+        const name = (await appPrompt('New level', { message: 'Name the new level.', acceptLabel: 'Create' }))?.trim();
+        if (name && canEdit()) {
             await createLevel(name);
         }
     };
@@ -259,7 +260,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
         // Check if one already exists
         const existing = levelObjects.find(o => o.type === 'sky_sphere');
         if (existing) {
-            alert("A Sky Sphere already exists in this level.");
+            void appAlert('A Sky Sphere already exists in this level.', 'It is selected now.');
             onSelectObject(existing.id);
             return;
         }
@@ -518,7 +519,11 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                             <span className="text-xs truncate">{lvl.name}</span>
                                             {levels.length > 1 && (
                                                 <button
-                                                    onClick={(e) => { e.stopPropagation(); if(canEdit() && confirm('Delete level?')) void deleteLevel(lvl.id); }}
+                                                    onClick={async (e) => {
+                                                        e.stopPropagation();
+                                                        if (!canEdit()) return;
+                                                        if (await appConfirm(`Delete level "${lvl.name}"?`, { message: 'Its objects are deleted with it.', acceptLabel: 'Delete', danger: true }) && canEdit()) void deleteLevel(lvl.id);
+                                                    }}
                                                     className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400"
                                                     title="Delete Level"
                                                 >
@@ -530,7 +535,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                 </div>
                                 <div className="border-t border-gray-700 p-1">
                                     <button
-                                        onClick={handleCreateLevel}
+                                        onClick={() => { setShowLevelMenu(false); void handleCreateLevel(); }}
                                         className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
                                         title="Create a new empty level"
                                     >
@@ -802,9 +807,9 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                         </button>
 
                                         <button
-                                            onClick={(e) => {
+                                            onClick={async (e) => {
                                                 e.stopPropagation();
-                                                if(window.confirm('Delete object?')) removeLevelObject(obj.id);
+                                                if (await appConfirm(`Delete "${obj.name}"?`, { acceptLabel: 'Delete', danger: true })) removeLevelObject(obj.id);
                                             }}
                                             className="p-1 rounded text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
                                             title="Delete Object"

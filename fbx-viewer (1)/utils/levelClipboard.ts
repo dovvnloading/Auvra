@@ -48,6 +48,24 @@ export interface PastedObjects {
 
 const cloneJson = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * `name`, or when `taken` has it, the name numbered after the highest one in use: "Crate 3" becomes
+ * "Crate 9" when Crates 1 to 8 exist, and "Rock" becomes "Rock 2". Scripts find objects by name.
+ */
+export const uniqueObjectName = (name: string, taken: ReadonlySet<string>): string => {
+  if (!taken.has(name)) return name;
+  const base = name.replace(/\s+\d+$/, '') || name;
+  const numbered = new RegExp(`^${escapeRegExp(base)}\\s+(\\d+)$`);
+  let highest = 1;
+  for (const used of taken) {
+    const match = numbered.exec(used);
+    if (match) highest = Math.max(highest, Number(match[1]));
+  }
+  return `${base} ${highest + 1}`;
+};
+
 /** Snapshot of `ids` and all their descendants (singletons excluded), or null when nothing is copyable. */
 export const copyLevelObjects = (objects: readonly LevelObject[], ids: readonly string[]): LevelClipboardPayload | null => {
   const picked = new Map<string, LevelObject>();
@@ -79,8 +97,11 @@ export const pasteLevelObjects = (payload: LevelClipboardPayload, options: Paste
 
   const objects: LevelObject[] = [];
   const rootIds: string[] = [];
+  const names = new Set(options.levelObjects.map((object) => object.name));
   for (const source of placeable) {
     const copy: LevelObject = { ...cloneJson(source), id: idMap.get(source.id)!, levelId: options.levelId };
+    copy.name = uniqueObjectName(copy.name, names);
+    names.add(copy.name);
     const parentId = source.parentId ?? null;
     if (parentId && idMap.has(parentId)) {
       copy.parentId = idMap.get(parentId)!;

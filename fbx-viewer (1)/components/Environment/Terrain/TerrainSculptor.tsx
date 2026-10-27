@@ -48,39 +48,32 @@ const canPaint = (target: TerrainPaintTarget | null, layer: number): target is T
 
 interface TerrainSculptorProps {
     settings: TerrainBrushSettings;
-    onStrokeEnd: (objectId: string, newHeights: number[]) => void;
     /** A paint stroke ended: the terrain's full splat weights (0-255 RGBA per sample). */
     onPaintStrokeEnd?: (objectId: string, splat: number[]) => void;
-    /** The first edit of a sculpt or paint stroke, before it is committed (take an undo snapshot). */
+    /** The first edit of a paint stroke, before it is committed (take an undo snapshot). */
     onStrokeStart?: () => void;
     enabled: boolean;
 }
 
 export const TerrainSculptor: React.FC<TerrainSculptorProps> = ({ 
     settings, 
-    onStrokeEnd,
     onPaintStrokeEnd,
     onStrokeStart,
     enabled
 }) => {
-    const { camera, raycaster, pointer, scene, gl } = useThree();
+    const { camera, raycaster, pointer, scene, gl, events } = useThree();
     const cursorRef = useRef<THREE.Mesh>(null);
     const isSculpting = useRef(false);
     
-    // Track the currently hovered/active terrain mesh
-    const activeMeshRef = useRef<THREE.Mesh | null>(null);
     const terrainMeshesRef = useRef<THREE.Mesh[]>([]);
     // Terrains whose splat weights the current paint stroke changed.
     const paintedMeshesRef = useRef<Set<THREE.Mesh>>(new Set());
-    // The tool a stroke started with; changing tools mid-stroke must not commit
-    // the other kind of edit.
-    const strokeToolRef = useRef<TerrainBrushTool>(settings.tool);
     // Set once the current stroke has changed a terrain (and taken its undo snapshot).
     const strokeChangedRef = useRef(false);
 
     // Input handlers are bound once per canvas; they read the latest props here.
-    const latest = useRef({ settings, onStrokeEnd, onPaintStrokeEnd, onStrokeStart });
-    latest.current = { settings, onStrokeEnd, onPaintStrokeEnd, onStrokeStart };
+    const latest = useRef({ settings, onPaintStrokeEnd, onStrokeStart });
+    latest.current = { settings, onPaintStrokeEnd, onStrokeStart };
 
     const paintLayer = Math.max(0, Math.floor(settings.paintLayer ?? 0));
 
@@ -111,92 +104,6 @@ export const TerrainSculptor: React.FC<TerrainSculptorProps> = ({
             terrainMeshesRef.current = meshes;
         }
     });
-
-    // --- SCULPT LOGIC ---
-    const applySculpt = (point: THREE.Vector3, mesh: THREE.Mesh) => {
-        const geom = mesh.geometry as THREE.PlaneGeometry;
-        if (!geom) return;
-
-        const posAttr = geom.attributes.position;
-        const count = posAttr.count;
-        
-        // 1. Ensure Matrices are current to perform accurate World->Local transform
-        mesh.updateMatrixWorld();
-
-        // 2. Transform Hit Point to Mesh Local Space
-        // Note: PlaneGeometry is flat on XY. TerrainObject rotates it -90 on X.
-        // So Local Z is World Y (Up).
-        const localPoint = mesh.worldToLocal(point.clone());
-        
-        // 3. Calculate Local Radius
-        // We must account for the parent scale. `mesh.worldToLocal` handles scaling logic for the point,
-        // but for the radius distance check, we need to know how many local units = 1 world unit.
-        // We get World Scale of the mesh.
-        const worldScale = new THREE.Vector3();
-        mesh.getWorldScale(worldScale);
-        
-        // Average X/Z scale to normalize the brush circle
-        const scaleFactor = (worldScale.x + worldScale.z) / 2;
-        
-        // Local Radius = World Radius / Scale
-        const localRadius = settings.radius / scaleFactor;
-        const radiusSq = localRadius * localRadius;
-        
-        const strength = settings.strength * 0.5;
-        let modified = false;
-
-        for (let i = 0; i < count; i++) {
-            const x = posAttr.getX(i);
-            const y = posAttr.getY(i); 
-            
-            // Distance on the flat plane (XY local)
-            const dx = x - localPoint.x;
-            const dy = y - localPoint.y;
-            const distSq = dx*dx + dy*dy;
-
-            if (distSq < radiusSq) {
-                const dist = Math.sqrt(distSq);
-                const falloff = Math.max(0, 1 - (dist / localRadius));
-                // Cubic ease for smoother mountains
-                const influence = Math.pow(falloff, 2) * strength;
-
-                const currentHeight = posAttr.getZ(i);
-                let newHeight = currentHeight;
-
-                switch (settings.tool) {
-                    case 'raise':
-                        newHeight += influence;
-                        break;
-                    case 'lower':
-                        newHeight -= influence;
-                        break;
-                    case 'flatten':
-                        // Lerp towards target local height
-                        // Note: flattenHeight is likely World Height. We need to transform it?
-                        // Usually terrains are at Y=0. So World Height = Local Height.
-                        newHeight = THREE.MathUtils.lerp(currentHeight, settings.flattenHeight, influence * 0.5);
-                        break;
-                    case 'smooth':
-                        // Simple erosion: Average with current
-                        newHeight = THREE.MathUtils.lerp(currentHeight, currentHeight * 0.9, influence * 0.5);
-                        break;
-                }
-
-                if (newHeight !== currentHeight) {
-                    posAttr.setZ(i, newHeight);
-                    modified = true;
-                }
-            }
-        }
-
-        if (modified) {
-            noteStrokeChange();
-            posAttr.needsUpdate = true;
-            // Recompute normals for lighting updates (can be expensive, consider throttling)
-            geom.computeVertexNormals();
-            geom.computeBoundingSphere();
-        }
-    };
 
     // --- PAINT LOGIC ---
     const applyPaint = (point: THREE.Vector3, mesh: THREE.Mesh) => {
@@ -239,8 +146,6 @@ export const TerrainSculptor: React.FC<TerrainSculptorProps> = ({
         if (intersects.length > 0) {
             const hit = intersects[0];
             const hitMesh = hit.object as THREE.Mesh;
-            
-            activeMeshRef.current = hitMesh;
 
             if (cursorRef.current) {
                 cursorRef.current.position.copy(hit.point);
@@ -258,16 +163,11 @@ export const TerrainSculptor: React.FC<TerrainSculptorProps> = ({
                 (cursorRef.current.material as THREE.MeshBasicMaterial).color.set(isSculpting.current ? '#ffff00' : idle);
             }
 
-            if (isSculpting.current && !hitMesh.userData.heightsPending) {
-                if (strokeToolRef.current === 'paint') {
-                    if (painting) applyPaint(hit.point, hitMesh);
-                } else if (!painting) {
-                    applySculpt(hit.point, hitMesh);
-                }
+            if (isSculpting.current && painting && !hitMesh.userData.heightsPending) {
+                applyPaint(hit.point, hitMesh);
             }
         } else {
             // Missed terrain
-            activeMeshRef.current = null;
             if (cursorRef.current) {
                 // Keep cursor visible at last known depth or pointer projection? 
                 // Better to hide or turn red to indicate "Off Terrain"
@@ -286,11 +186,14 @@ export const TerrainSculptor: React.FC<TerrainSculptorProps> = ({
 
     // Input Handlers
     useEffect(() => {
-        const domElement = gl.domElement;
+        // The editor's canvas takes no pointer events (pointer-events: none); input arrives on the
+        // element R3F's events are connected to, the viewport's event source.
+        const domElement: HTMLElement = events.connected ?? gl.domElement;
 
+        // Only paint strokes start here: height strokes belong to the selected terrain's own mesh
+        // (TerrainObject), so they are not applied twice.
         const handleDown = (e: MouseEvent) => {
-            if (enabled && e.button === 0 && !e.altKey && !e.ctrlKey) {
-                strokeToolRef.current = latest.current.settings.tool;
+            if (enabled && e.button === 0 && !e.altKey && !e.ctrlKey && latest.current.settings.tool === 'paint') {
                 strokeChangedRef.current = false;
                 paintedMeshesRef.current.clear();
                 isSculpting.current = true;
@@ -300,35 +203,15 @@ export const TerrainSculptor: React.FC<TerrainSculptorProps> = ({
         const handleUp = () => {
             if (isSculpting.current) {
                 isSculpting.current = false;
-                const { onStrokeEnd: endSculpt, onPaintStrokeEnd: endPaint } = latest.current;
-
-                if (strokeToolRef.current === 'paint') {
-                    for (const mesh of paintedMeshesRef.current) {
-                        const target = getTerrainPaintTarget(mesh);
-                        const objectId = mesh.userData.levelObjectId;
-                        if (target && !target.pending && objectId && endPaint) {
-                            endPaint(objectId, Array.from(target.weights));
-                        }
-                    }
-                    paintedMeshesRef.current.clear();
-                    return;
-                }
-                
-                // Commit changes if we have a valid mesh
-                const mesh = activeMeshRef.current;
-                if (mesh && !mesh.userData.heightsPending) {
-                    const geom = mesh.geometry as THREE.PlaneGeometry;
+                const endPaint = latest.current.onPaintStrokeEnd;
+                for (const mesh of paintedMeshesRef.current) {
+                    const target = getTerrainPaintTarget(mesh);
                     const objectId = mesh.userData.levelObjectId;
-                    
-                    if (objectId && geom) {
-                        const heights: number[] = [];
-                        const posAttr = geom.attributes.position;
-                        for(let i=0; i<posAttr.count; i++) {
-                            heights.push(posAttr.getZ(i));
-                        }
-                        endSculpt(objectId, heights);
+                    if (target && !target.pending && objectId && endPaint) {
+                        endPaint(objectId, Array.from(target.weights));
                     }
                 }
+                paintedMeshesRef.current.clear();
             }
         };
 
@@ -345,7 +228,7 @@ export const TerrainSculptor: React.FC<TerrainSculptorProps> = ({
             window.removeEventListener('mouseup', handleUp);
             domElement.removeEventListener('mouseleave', handleLeave);
         };
-    }, [enabled, gl]);
+    }, [enabled, gl, events.connected]);
 
     return (
         <group>

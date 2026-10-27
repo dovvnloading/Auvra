@@ -21,6 +21,16 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(ProtocolValidationError): validate_message({**base, "payload": {"filePath": "C:/secret"}})
         with self.assertRaises(ProtocolValidationError): validate_message({**base, "payload": {"blob": b"secret"}})
 
+    def test_code_comments_are_not_filesystem_paths(self):
+        def change(code):
+            return {"protocol":"auvra.host/1","type":"request","id":"r1","session":"s1","revision":0,
+                    "method":"project.applyChanges","payload":{"projectId":"p1","expectedRevision":0,
+                    "changes":[{"domain":"levels","documentId":"l1","operation":"upsert","document":{"code": code}}]}}
+        for code in ("// Write React code here\nreturn null;", "/* setup */\nfunction onStart(ctx) {}", "//", "/ 4"):
+            validate_message(change(code))
+        for path in ("/home/user/secret.fbx", "/", "/tmp"):
+            with self.assertRaises(ProtocolValidationError): validate_message(change(path))
+
     def test_pathfinding_key_is_not_confused_with_filesystem_authority(self):
         value = {"protocol":"auvra.host/1","type":"request","id":"r1","session":"s1","revision":0,
                  "method":"project.applyChanges","payload":{"projectId":"p1","expectedRevision":0,

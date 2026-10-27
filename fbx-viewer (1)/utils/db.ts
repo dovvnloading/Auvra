@@ -60,16 +60,24 @@ export type DBModelMetadata = Omit<DBModel, 'file' | 'animationFiles'>;
 export type DBAttachmentMetadata = Omit<DBAttachment, 'file'>;
 
 class DBOperations {
-  private dbPromise: Promise<IDBDatabase>;
+  /** Legacy browser storage, or null where there never was any (the usual case). */
+  private dbPromise: Promise<IDBDatabase | null>;
   private mutationQueue: Promise<unknown> = Promise.resolve();
 
   constructor() {
     this.dbPromise = new Promise((resolve, reject) => {
       // Legacy storage is a read-only migration source. Opening without a
-      // version prevents upgrades; a new database is aborted immediately.
+      // version prevents upgrades; a new database is aborted immediately,
+      // which fails the request: that means "nothing to migrate", not an error.
       const request = indexedDB.open(DB_NAME);
+      let missing = false;
 
-      request.onerror = () => {
+      request.onerror = (event) => {
+        if (missing) {
+          event.preventDefault();
+          resolve(null);
+          return;
+        }
         frontendDiagnostics.failure('legacy_database_request_failed', request.error);
         reject(request.error);
       };
@@ -79,19 +87,20 @@ class DBOperations {
       };
 
       request.onupgradeneeded = () => {
+        missing = true;
         request.transaction?.abort();
-        reject(new Error('Legacy project storage does not exist; refusing to create or upgrade it'));
       };
     });
   }
 
-  private async getDB(): Promise<IDBDatabase> {
+  private async getDB(): Promise<IDBDatabase | null> {
     return this.dbPromise;
   }
 
   /** Read one bounded legacy page through a readonly cursor. */
   private async readOnlyStorePage<T>(storeName: string, offset: number, pageSize = 64): Promise<{ values: T[]; nextOffset: number | null }> {
     const db = await this.getDB();
+    if (!db) return { values: [], nextOffset: null };
     return new Promise((resolve, reject) => {
       const transaction = db.transaction([storeName], 'readonly');
       const cursorRequest = transaction.objectStore(storeName).openCursor();
@@ -124,7 +133,7 @@ class DBOperations {
 
   private async *readOnlyStorePages<T>(storeName: string): AsyncGenerator<T[]> {
     const db = await this.getDB();
-    if (!db.objectStoreNames.contains(storeName)) return;
+    if (!db || !db.objectStoreNames.contains(storeName)) return;
     let offset = 0;
     for (;;) {
       const page = await this.readOnlyStorePage<T>(storeName, offset);
@@ -256,6 +265,7 @@ class DBOperations {
 
   async getAllModelMetadata(): Promise<DBModelMetadata[]> {
     const db = await this.getDB();
+    if (!db) return [];
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(['models'], 'readonly');
       const store = transaction.objectStore('models');
@@ -278,6 +288,7 @@ class DBOperations {
 
   async getModelFiles(id: string): Promise<{ file: Blob, animationFiles: Array<{ name: string, file: Blob }> } | null> {
     const db = await this.getDB();
+    if (!db) return null;
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(['models'], 'readonly');
       const store = transaction.objectStore('models');
@@ -397,6 +408,7 @@ class DBOperations {
 
   async getAllAttachmentMetadata(): Promise<DBAttachmentMetadata[]> {
     const db = await this.getDB();
+    if (!db) return [];
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(['attachments'], 'readonly');
       const store = transaction.objectStore('attachments');
@@ -419,6 +431,7 @@ class DBOperations {
 
   async getAttachmentFile(id: string): Promise<Blob | null> {
     const db = await this.getDB();
+    if (!db) return null;
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(['attachments'], 'readonly');
       const store = transaction.objectStore('attachments');
@@ -477,6 +490,7 @@ class DBOperations {
    */
   async getLevelObjects(levelId: string): Promise<DBLevelObject[]> {
       const db = await this.getDB();
+      if (!db) return [];
       return new Promise((resolve, reject) => {
           const transaction = db.transaction(['levelObjects'], 'readonly');
           const store = transaction.objectStore('levelObjects');

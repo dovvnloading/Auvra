@@ -9,6 +9,7 @@ import { useAssets, useLevel } from '../../context/SceneContext';
 import { LevelObject } from '../../types';
 import { InteractionMode, PaintMode, PaintSettings, TransformSettings, ViewportLayout, SculptSettings } from './types';
 import { EnvironmentScene } from './EnvironmentScene';
+import type { FoliagePlacement } from './FoliageBrushTool';
 import { editorSession } from '../../utils/editorSession';
 import { raycastPlacement } from '../../utils/surfacePlacement';
 import { getWorldMatrix } from '../../utils/sceneGraph';
@@ -414,7 +415,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
     isMuted
 }) => {
     const { models } = useAssets();
-    const { levelObjects, addLevelObject, removeLevelObjects, updateLevelObject, snapshotHistory } = useLevel();
+    const { levelObjects, addLevelObject, addLevelObjects, removeLevelObjects, updateLevelObject, snapshotHistory } = useLevel();
     const containerRef = useRef<HTMLDivElement>(null);
 
     // Active View State (the selection itself lives in the editor state)
@@ -459,15 +460,27 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
         addLevelObject(activeModelId, pos.toArray(), [0, rotY, 0], [1, 1, 1], 'prop');
     };
 
-    const handlePaint = (pos: THREE.Vector3, rot: THREE.Euler, scale: THREE.Vector3) => {
-        if (!canEdit()) return;
-        if (!activeModelId) return;
-        addLevelObject(activeModelId, pos.toArray(), [rot.x, rot.y, rot.z], scale.toArray(), 'foliage');
+    // A whole paint or erase stroke is saved at once, as one undo step.
+    const handlePaint = async (placements: FoliagePlacement[]) => {
+        const model = activeModelId ? models.find(m => m.id === activeModelId) : undefined;
+        if (!canEdit() || !model) return;
+        try {
+            await addLevelObjects(placements.map((placement): LevelObject => ({
+                id: crypto.randomUUID(),
+                levelId: '',
+                modelId: model.id,
+                name: `${model.name}_Foliage`,
+                type: 'foliage',
+                ...placement,
+            })));
+        } catch {
+            // addLevelObjects has already reported the failure.
+        }
     };
 
-    const handleErase = (ids: string[]) => {
+    const handleErase = async (ids: string[]) => {
         if (!canEdit()) return;
-        removeLevelObjects(ids);
+        await removeLevelObjects(ids);
     };
 
     // --- Content browser drag & drop ---
@@ -564,7 +577,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                 {layout === 'single' ? (
                     <div className="relative w-full h-full bg-[#111] pointer-events-auto border-b border-gray-800">
                         <div ref={viewMain} className="w-full h-full" onMouseDown={() => setActiveView('main')} />
-                        <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'main' ? 'bg-blue-600 text-white' : 'bg-black/50 text-gray-500'}`}>
+                        <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'main' ? 'bg-blue-600 text-white' : 'bg-black/70 text-gray-200'}`}>
                             PERSPECTIVE
                         </div>
                     </div>
@@ -573,28 +586,28 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                         {/* 1. TOP LEFT -> LEFT View */}
                         <div className="relative bg-[#111]">
                             <div ref={viewLeft} className="w-full h-full" onMouseDown={() => setActiveView('left')} />
-                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'left' ? 'bg-blue-600 text-white' : 'bg-black/50 text-gray-500'}`}>
+                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'left' ? 'bg-blue-600 text-white' : 'bg-black/70 text-gray-200'}`}>
                                 LEFT
                             </div>
                         </div>
                         {/* 2. TOP RIGHT -> RIGHT View */}
                         <div className="relative bg-[#111]">
                             <div ref={viewRight} className="w-full h-full" onMouseDown={() => setActiveView('right')} />
-                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'right' ? 'bg-blue-600 text-white' : 'bg-black/50 text-gray-500'}`}>
+                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'right' ? 'bg-blue-600 text-white' : 'bg-black/70 text-gray-200'}`}>
                                 RIGHT
                             </div>
                         </div>
                         {/* 3. BOTTOM LEFT -> TOP View */}
                         <div className="relative bg-[#111]">
                             <div ref={viewTop} className="w-full h-full" onMouseDown={() => setActiveView('top')} />
-                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'top' ? 'bg-blue-600 text-white' : 'bg-black/50 text-gray-500'}`}>
+                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'top' ? 'bg-blue-600 text-white' : 'bg-black/70 text-gray-200'}`}>
                                 TOP
                             </div>
                         </div>
                         {/* 4. BOTTOM RIGHT -> BOTTOM View */}
                         <div className="relative bg-[#111]">
                             <div ref={viewBottom} className="w-full h-full" onMouseDown={() => setActiveView('bottom')} />
-                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'bottom' ? 'bg-blue-600 text-white' : 'bg-black/50 text-gray-500'}`}>
+                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'bottom' ? 'bg-blue-600 text-white' : 'bg-black/70 text-gray-200'}`}>
                                 BOTTOM
                             </div>
                         </div>

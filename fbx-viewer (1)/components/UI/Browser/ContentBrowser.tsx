@@ -35,6 +35,7 @@ import {
     type BrowserAssetKind,
 } from './browserFolders';
 import { selectAnimationTarget } from '../../../utils/animationBinding';
+import { appAlert } from '../../../utils/appDialogs';
 
 type AssetInfoUpdate = { name?: string; folder?: string };
 
@@ -400,7 +401,7 @@ export const ContentBrowser: React.FC = () => {
                 await addAnimations(files, target.id);
                 selectModel(target.id);
             } catch (error) {
-                alert(error instanceof Error ? error.message : 'Select a skeletal model before importing animation clips.');
+                void appAlert('Animation clips were not imported.', error instanceof Error ? error.message : 'Select a skeletal model before importing animation clips.');
             }
             return;
         }

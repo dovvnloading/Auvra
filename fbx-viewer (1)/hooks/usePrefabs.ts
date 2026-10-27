@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { LevelObject, PrefabData } from '../types';
 import { useScene } from '../context/SceneContext';
 import { useNotification } from '../context/NotificationContext';
@@ -49,14 +49,34 @@ const instanceCount = (count: number): string => (count ? `; ${count} other inst
  * linked instances into the current level, and keep every instance in step with
  * its prefab (apply an instance's changes to the prefab, revert, unlink).
  */
+/**
+ * The project's prefabs, shared by every usePrefabs(): a prefab made in the Prefabs panel is known at
+ * once to the inspector's instance controls (Apply, Revert, Unlink), which use their own hook.
+ */
+const sharedPrefabs = {
+  list: [] as PrefabData[],
+  /** Bumped by every load, so only the newest load's answer is kept. */
+  loads: 0,
+  listeners: new Set<() => void>(),
+};
+const subscribePrefabs = (listener: () => void) => {
+  sharedPrefabs.listeners.add(listener);
+  return () => { sharedPrefabs.listeners.delete(listener); };
+};
+const readPrefabs = () => sharedPrefabs.list;
+const writePrefabs = (update: PrefabData[] | ((current: PrefabData[]) => PrefabData[])) => {
+  sharedPrefabs.list = typeof update === 'function' ? update(sharedPrefabs.list) : update;
+  [...sharedPrefabs.listeners].forEach(listener => listener());
+};
+
 export const usePrefabs = () => {
   const { models, levelObjects, currentLevelId, addLevelObject, addLevelObjects, updateLevelObject, removeLevelObjects, snapshotHistory } = useScene();
   const { addNotification } = useNotification();
-  const [prefabs, setPrefabs] = useState<PrefabData[]>([]);
+  const prefabs = useSyncExternalStore(subscribePrefabs, readPrefabs, readPrefabs);
+  const setPrefabs = writePrefabs;
   const [isLoading, setIsLoading] = useState(false);
   const [isPlacing, setIsPlacing] = useState(false);
   const [projectId, setProjectId] = useState<string | null>(projectService.getStatus().projectId);
-  const loadToken = useRef(0);
   const placingRef = useRef(false);
   // New object id -> parent link, name, components, ... still to write.
   const pendingFields = useRef(new Map<string, Partial<LevelObject>>());
@@ -65,18 +85,19 @@ export const usePrefabs = () => {
   useEffect(() => projectService.subscribe((status) => setProjectId(status.projectId)), []);
 
   const refresh = useCallback(async () => {
-    const token = ++loadToken.current;
+    const token = ++sharedPrefabs.loads;
     setIsLoading(true);
     try {
       const loaded = await dbOperations.getAllPrefabs();
-      if (token !== loadToken.current) return;
+      if (token !== sharedPrefabs.loads) return;
       setPrefabs([...loaded].sort((a, b) => a.name.localeCompare(b.name)));
     } catch (error) {
-      if (token !== loadToken.current) return;
+      if (token !== sharedPrefabs.loads) return;
       setPrefabs([]);
       frontendDiagnostics.failure('prefab_list_failed', error);
     } finally {
-      if (token === loadToken.current) setIsLoading(false);
+      // This caller's load is over even when another caller's newer load wrote the list.
+      setIsLoading(false);
     }
   }, []);
 

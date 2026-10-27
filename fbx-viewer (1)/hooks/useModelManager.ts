@@ -9,6 +9,7 @@ import { prepareAnimationClips } from '../utils/animationBinding';
 import { generateThumbnail } from '../utils/thumbnailGenerator';
 import { dbOperations, normalizeAssetInfoUpdate, withoutMaterialOverrideTexture } from '../utils/db';
 import { projectService } from '../utils/projectService';
+import { appAlert } from '../utils/appDialogs';
 import { isAbortError, useOperationActions } from '../context/OperationContext';
 import { useNotification } from '../context/NotificationContext';
 import { assetDiagnosticAttributes, frontendDiagnostics, type DiagnosticAttributes } from '../diagnostics/runtime';
@@ -134,7 +135,7 @@ export const useModelManager = (
     const importSettings = requestedSettings && category !== 'Animation' ? resolveImportSettings(requestedSettings) : undefined;
     // Prevent duplicate imports
     if (models.some(m => m.name === file.name)) {
-        alert(`A model named "${file.name}" is already loaded in the library.`);
+        void appAlert(`A model named "${file.name}" is already loaded in the library.`);
         return;
     }
     const assetAlias = frontendDiagnostics.nextAssetAlias();
@@ -257,7 +258,7 @@ export const useModelManager = (
     }
     const name = reimportedModelName(existing.name, file.name);
     if (models.some((model) => model.id !== modelId && model.name === name)) {
-      alert(`A model named "${name}" is already loaded in the library.`);
+      void appAlert(`A model named "${name}" is already loaded in the library.`);
       return;
     }
     const category = existing.category;
@@ -639,7 +640,7 @@ export const useModelManager = (
         : candidate));
     } catch (error) {
       frontendDiagnostics.failure('texture_override_persist_failed', error);
-      alert('Failed to apply texture override.');
+      void appAlert('The texture override could not be applied.');
     }
   }, [models]);
 
@@ -708,7 +709,7 @@ export const useModelManager = (
 
     } catch (e) {
         frontendDiagnostics.failure('texture_reset_failed', e);
-        alert("Failed to reset texture.");
+        void appAlert('The texture could not be reset.');
     } finally {
         setIsLoading(false);
     }

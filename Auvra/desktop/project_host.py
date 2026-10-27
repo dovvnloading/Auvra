@@ -993,7 +993,9 @@ class NativeProjectHost:
         domains = {domain: active.get_domain(domain) for domain in DOMAIN_NAMES}
         game_name = self._game_name(domains, active.name)
         handle = payload.get("destinationHandle")
-        if handle is not None:
+        # "dialog" (what the editor sends) or no handle asks for a folder; a handle from an
+        # earlier build reuses that folder.
+        if handle is not None and handle != "dialog":
             remembered = self._build_destinations.get(handle) if isinstance(handle, str) else None
             if remembered is None or remembered[0] != project_id:
                 raise HostOperationError("invalid_request", "Build destination is no longer available")
@@ -1033,10 +1035,12 @@ class NativeProjectHost:
         self._queue("project.status", self._status_value(busy=False, progress=None))
         return self._status_value(
             handle=handle,
+            # "bytes" is a reserved protocol key (binary payloads), so the size travels as sizeBytes;
+            # a reply carrying it is refused by the editor and closes the host connection.
             report={
                 "target": report.target,
                 "files": report.files,
-                "bytes": report.bytes,
+                "sizeBytes": report.bytes,
                 "assets": report.assets,
                 "levels": report.levels,
             },
