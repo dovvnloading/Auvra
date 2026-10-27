@@ -30,6 +30,24 @@ Speeds and distances are in centimetres: 100 is one world unit.
 
 Enemy blueprints made before these stats were used have Speed 350, so their enemies chase at 3.5 instead of 6.5. Set Speed to 650 to restore the earlier pace.
 
+## Enemy behavior
+
+An enemy blueprint either uses the built-in AI (attack the player in range, chase what it sees, search where it last saw the player, otherwise patrol) or a behavior tree you author on its **Behavior** tab. **Start from the built-in AI** creates a tree that behaves the same, to change from there; **Start empty** begins with one selector.
+
+The tree is evaluated from the top every frame. Each node succeeds, fails or is still running:
+
+| Node | Does |
+|---|---|
+| Selector | Tries its children in order and stops at the first that does not fail |
+| Sequence | Runs its children in order and stops at the first that does not succeed |
+| Inverter | Swaps its child's success and failure |
+| Succeeder | Succeeds even when its child fails |
+| Cooldown | Lets its child succeed at most once every Value seconds |
+| Condition | Succeeds when its test holds: can see the player, saw the player recently, player within a distance, health below a percent, a random chance (rolled once a second), or a graph variable is on |
+| Action | Chase the player (until in attack range), attack, strafe for some seconds, search where the player was last seen, patrol to a random point, wait, move to an object (by id), flee to a safe distance, return to the spawn point, set a graph variable, or play an animation |
+
+Actions use the enemy's Speed, Attack Range, Attack Cooldown and Sight Range stats like the built-in AI, and attacks deal damage at the same moment of the attack. An action that is interrupted by another branch starts over the next time it runs. Problems such as a decorator without its one child show under the tree. Use **Delete** on the top node to go back to the built-in AI.
+
 ## Enemy navigation
 
 During level play, enemies find paths around obstacles when they patrol, chase, search and return. Auvra builds a walkable grid from the level when play starts:

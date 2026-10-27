@@ -1,6 +1,7 @@
 
 import React, { useState, useMemo, useRef } from 'react';
-import { FileText, Database, Tag, Plus, Trash2, Zap, Scaling, Camera, Crosshair, Palette, Check, Box, Music, Play, Footprints } from 'lucide-react';
+import { FileText, Database, Tag, Plus, Trash2, Zap, Scaling, Camera, Crosshair, Palette, Check, Box, Music, Play, Footprints, Brain } from 'lucide-react';
+import { BehaviorTreeEditor } from './BehaviorTreeEditor';
 import { Blueprint, BlueprintStat, CharacterIKSettings } from '../../types';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
 import { TransformInputGroup } from '../UI/Properties/TransformInputGroup';
@@ -17,7 +18,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
     onUpdate
 }) => {
     const { textures, audioAssets } = useScene();
-    const [activeTab, setActiveTab] = useState<'details' | 'stats' | 'tags' | 'materials' | 'audio'>('details');
+    const [activeTab, setActiveTab] = useState<'details' | 'stats' | 'tags' | 'materials' | 'audio' | 'behavior'>('details');
     const ik: CharacterIKSettings = blueprint.ik ?? {};
     const updateIK = (changes: Partial<CharacterIKSettings>, coalesce?: string) =>
         onUpdate(blueprint.id, { ik: { ...ik, ...changes } }, coalesce ? { coalesce } : undefined);
@@ -100,6 +101,14 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                         className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 flex items-center justify-center gap-1.5 min-w-[70px] ${activeTab === 'audio' ? 'border-blue-500 text-white bg-gray-900' : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-900'}`}
                     >
                         <Music size={12} /> Audio
+                    </button>
+                )}
+                {blueprint.type === 'Enemy Controller' && (
+                    <button
+                        onClick={() => setActiveTab('behavior')}
+                        className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 flex items-center justify-center gap-1.5 min-w-[70px] ${activeTab === 'behavior' ? 'border-blue-500 text-white bg-gray-900' : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-900'}`}
+                    >
+                        <Brain size={12} /> Behavior
                     </button>
                 )}
                 <button 
@@ -432,6 +441,13 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                 </div>
                             </div>
                         </div>
+                    )}
+
+                    {activeTab === 'behavior' && (
+                        <BehaviorTreeEditor
+                            tree={blueprint.behaviorTree}
+                            onChange={(behaviorTree, coalesce) => onUpdate(blueprint.id, { behaviorTree }, coalesce ? { coalesce } : undefined)}
+                        />
                     )}
 
                     {activeTab === 'tags' && (

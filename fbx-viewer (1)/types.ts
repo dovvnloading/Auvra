@@ -402,6 +402,33 @@ export interface Blueprint {
   weaponVolume?: number; // Base volume for weapon sounds
   /** Pose fixes applied after the animation graph each frame (runtime/ik.ts). */
   ik?: CharacterIKSettings;
+  /** An enemy's authored behavior (runtime/behaviorTree.ts); without one it uses the built-in AI. */
+  behaviorTree?: BehaviorTreeData;
+}
+
+/** Composite nodes run their children in order; decorators wrap one child; leaves test or act. */
+export type BehaviorNodeType = 'selector' | 'sequence' | 'inverter' | 'succeeder' | 'cooldown' | 'condition' | 'action';
+
+export type BehaviorCondition = 'canSeePlayer' | 'remembersPlayer' | 'playerWithin' | 'healthBelow' | 'chance' | 'variableTrue';
+
+export type BehaviorAction = 'chase' | 'attack' | 'strafe' | 'search' | 'patrol' | 'wait' | 'moveTo' | 'flee' | 'returnHome' | 'setVariable' | 'playAnimation';
+
+export interface BehaviorNode {
+  id: string;
+  type: BehaviorNodeType;
+  /** Child ids, in order (composites any number, decorators one). */
+  children?: string[];
+  condition?: BehaviorCondition;
+  action?: BehaviorAction;
+  /** Distance (m), seconds, percent or chance (0..1), by condition or action. */
+  value?: number;
+  /** A graph variable, an object id or a clip name, by condition or action. */
+  text?: string;
+}
+
+export interface BehaviorTreeData {
+  rootId: string;
+  behaviorNodes: BehaviorNode[];
 }
 
 export interface CharacterIKSettings {

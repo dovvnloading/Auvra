@@ -954,6 +954,7 @@ const RuntimeEnemyController: React.FC<{
                 enabled={enabled}
                 onDealDamage={handleAttack}
                 stats={assets.blueprint?.stats}
+                behaviorTree={assets.blueprint?.behaviorTree}
             />
         </>
     );

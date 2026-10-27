@@ -50,5 +50,25 @@ class AnimationGraphSchemaTests(unittest.TestCase):
             validate_domain("blueprints", domain_document("blueprints", [blueprint]))
 
 
+
+class BehaviorTreeSchemaTests(unittest.TestCase):
+    def _blueprint(self, tree):
+        return {"id": "bp1", "name": "Grunt", "type": "Enemy Controller", "behaviorTree": tree}
+
+    def test_accepts_behavior_trees(self):
+        tree = {"rootId": "root", "behaviorNodes": [
+            {"id": "root", "type": "selector", "children": ["see", "wait"]},
+            {"id": "see", "type": "condition", "condition": "playerWithin", "value": 5},
+            {"id": "wait", "type": "action", "action": "moveTo", "text": "door-1"},
+        ]}
+        validate_domain("blueprints", domain_document("blueprints", [self._blueprint(tree)]))
+
+    def test_rejects_unknown_node_kinds_and_fields(self):
+        for node in ({"id": "root", "type": "teleport"}, {"id": "root", "type": "action", "action": "explode"},
+                     {"id": "root", "type": "selector", "extra": 1}):
+            with self.subTest(node=node), self.assertRaises(Exception):
+                validate_domain("blueprints", domain_document("blueprints", [self._blueprint({"rootId": "root", "behaviorNodes": [node]})]))
+
+
 if __name__ == "__main__":
     unittest.main()
