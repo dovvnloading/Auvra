@@ -9,6 +9,13 @@ collect every spinning coin while red guards from a spawner hunt you (rigged and
 guard falls as a ragdoll; tools/arena_enemy_model.py builds the model), then travel to the Finish level. It shows solid and trigger colliders, dynamic rigid bodies, rotator, mover, particle and
 light components, a level blueprint that keeps score in a level variable, plays a sound and
 changes level, an enemy blueprint, a HUD bound to the score and authored title and pause menus.
+
+``outpost`` ("Outpost Sample") is built on the whole kit with characters and scenery made for it
+(tools/outpost_character_model.py, tools/outpost_props_model.py), so it can be shared: an intro
+camera cut, a Scout who waves and talks, three supply caches whose scripts count into a level
+variable, raider spawners, a timeline that opens the gate and lights the beacon, an autosave, and a
+player graph with a nested Locomotion state machine, sync groups, a landing curve, upper-body aim
+and fire clips and an additive hit reaction.
 """
 
 from __future__ import annotations
@@ -23,7 +30,7 @@ from typing import Any, Iterable
 from .assets import encode_heightfield
 from .errors import InvalidProjectError
 
-TEMPLATE_NAMES = ("blank", "starter", "arena", "courtyard")
+TEMPLATE_NAMES = ("blank", "starter", "arena", "courtyard", "outpost")
 _TEMPLATES_ROOT = Path(__file__).resolve().parent / "templates"
 _STARTER_ROOT = _TEMPLATES_ROOT / "starter"
 _ARENA_ROOT = _TEMPLATES_ROOT / "arena"
@@ -884,4 +891,456 @@ def _apply_courtyard(repository: Any, project_name: str) -> None:
     repository.apply_changes(changes, expected_revision=repository.revision)
 
 
-_BUILDERS = {"starter": _apply_starter, "arena": _apply_arena, "courtyard": _apply_courtyard}
+# --- outpost ---------------------------------------------------------------------------------
+
+_OUTPOST_ROOT = _TEMPLATES_ROOT / "outpost"
+_OUTPOST_LEVEL_ID = "outpost-level-1"
+_OUTPOST_PLAYER_ID = "outpost-player"
+_OUTPOST_RAIDER_ID = "outpost-raider"
+_SIGNAL_SOUND_ID = "outpost-sound-signal"
+_SUPPLIES_VARIABLE = "supplies"
+_SIGNAL_VARIABLE = "gate_open"
+_OUTPOST_FLAT_RADIUS = 36.0
+_CAMP_CENTER_Z = -8.0
+_CAMP_HALF = 13.2          # the palisade stands on a square this far from the camp's middle
+_PALISADE_WIDTH = 3.3      # one wall segment, normalised to _PALISADE_HEIGHT tall
+_PALISADE_HEIGHT = 7.0
+_BEACON_HEIGHT = 9.0
+_SUPPLY_SIZE = 2.0
+
+# Model id -> (asset file, display name, category, normalised size, material overrides). The
+# characters and scenery are built from scratch by tools/outpost_character_model.py and
+# tools/outpost_props_model.py, so the sample can be shared freely.
+_OUTPOST_MODELS = {
+    "outpost-model-ranger": (_OUTPOST_ROOT / "assets" / "ranger.fbx", "Ranger", "Character", 5.0, None),
+    "outpost-model-scout": (_OUTPOST_ROOT / "assets" / "ranger.fbx", "Scout", "Character", 5.0,
+                            {"Jacket": {"color": "#3d5d86"}, "Pants": {"color": "#5b5348"}, "Hair": {"color": "#8a5a2b"}}),
+    "outpost-model-raider": (_OUTPOST_ROOT / "assets" / "raider.fbx", "Raider", "Character", 5.0, None),
+    "outpost-model-palisade": (_OUTPOST_ROOT / "assets" / "palisade.fbx", "Palisade", "Environment", _PALISADE_HEIGHT, None),
+    "outpost-model-supply": (_OUTPOST_ROOT / "assets" / "supply.fbx", "Supply Cache", "Prop", _SUPPLY_SIZE, None),
+    "outpost-model-beacon": (_OUTPOST_ROOT / "assets" / "beacon.fbx", "Signal Beacon", "Environment", _BEACON_HEIGHT, None),
+    "outpost-model-tent": (_OUTPOST_ROOT / "assets" / "tent.fbx", "Tent", "Environment", 7.0, None),
+    "outpost-model-crate": (_STARTER_ROOT / "assets" / "crate.fbx", "Crate", "Prop", _CRATE_SIZE, None),
+    "outpost-model-rock": (_STARTER_ROOT / "assets" / "rock.fbx", "Rock", "Environment", 3.0, None),
+    "outpost-model-tree": (_STARTER_ROOT / "assets" / "tree.fbx", "Tree", "Environment", 9.0, None),
+}
+
+# Clip names as the FBX files carry them.
+_CLIP = {name: f"Armature|{name}" for name in (
+    "Idle", "Walk", "Run", "Walk Back", "Strafe Left", "Strafe Right", "Jump", "Falling", "Landing", "Punch",
+    "Shooting", "Aiming", "Hit Reaction", "Death", "Wave")}
+
+# Late afternoon, the sun warm and low over the camp.
+_OUTPOST_SKY = dict(_SKY_CONFIG, timeOfDay=16.4, sunIntensity=1.8, sunColor="#ffdcb0", fogColor="#c9ad92", fogDensity=0.009,
+                    azimuth=0.1)
+
+# Supply caches: (name, x, z). Out past the camp, one behind it.
+_SUPPLIES = (("East Ridge", 27.0, 6.0), ("West Woods", -26.0, -16.0), ("North Rocks", 9.0, -31.0))
+
+_SUPPLY_SCRIPT = f"""// A supply cache: bobs gently, and when the player reaches it adds one to the level
+// variable '{_SUPPLIES_VARIABLE}', plays the signal chime and is taken. The level blueprint lights the
+// beacon and opens the gate at three.
+const SCORE_VARIABLE = '{_SUPPLIES_VARIABLE}';
+const PICKUP_SOUND = '{_SIGNAL_SOUND_ID}';
+const TOTAL = {len(_SUPPLIES)};
+
+function onStart(ctx) {{
+    ctx.state.base = ctx.self.position;
+    ctx.state.startTime = ctx.time;
+}}
+
+function onUpdate(ctx) {{
+    const [x, y, z] = ctx.state.base;
+    ctx.self.setPosition(x, y + 0.15 * Math.sin((ctx.time - ctx.state.startTime) * 2), z);
+}}
+
+function onTriggerEnter(ctx, other) {{
+    // other is the object that entered, or null for the player: only the player picks it up.
+    if (other) return;
+    const count = (Number(ctx.vars.get(SCORE_VARIABLE)) || 0) + 1;
+    ctx.vars.set(SCORE_VARIABLE, count);
+    ctx.playSound(PICKUP_SOUND, 'sfx');
+    ctx.log('Supplies: ' + count + ' / ' + TOTAL);
+    ctx.self.destroy();
+}}
+"""
+
+_SCOUT_DIALOGUE = {
+    "startId": "scout-hail",
+    "lines": [
+        {"id": "scout-hail", "speaker": "Scout", "next": "scout-raid",
+         "text": "Ranger! Thank the hills you came. Raiders hit us at dawn."},
+        {"id": "scout-raid", "speaker": "Scout", "next": None,
+         "text": "They scattered our three supply caches across the hills. Without them we can't light the signal beacon.",
+         "choices": [
+             {"id": "scout-where", "text": "Where are the caches?", "next": "scout-caches"},
+             {"id": "scout-raiders", "text": "How many raiders?", "next": "scout-warning"},
+             {"id": "scout-go", "text": "I'll bring them back.", "next": "scout-farewell"},
+         ]},
+        {"id": "scout-caches", "speaker": "Scout", "next": "scout-raid",
+         "text": "One on the east ridge, one in the western woods, and one past the north wall among the rocks."},
+        {"id": "scout-warning", "speaker": "Scout", "next": "scout-raid",
+         "text": "Two bands camp north of here, and more keep coming. Hold the right mouse button to aim, click to fire."},
+        {"id": "scout-farewell", "speaker": "Scout", "next": None,
+         "text": "Bring all three and the gate opens and the beacon burns. Then meet me inside."},
+    ],
+}
+
+
+def _palisade(object_id: str, level: str, name: str, x: float, z: float, rotation: float,
+              extra: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    collider = _component(object_id, "collider", shape="box", size=[_PALISADE_WIDTH, _PALISADE_HEIGHT, 0.9],
+                          offset=[0.0, _PALISADE_HEIGHT / 2, 0.0], isTrigger=False)
+    return _object(object_id, level, name, "prop", [x, 0.0, z], model_id="outpost-model-palisade",
+                   rotation_y=rotation, components=(extra or []) + [collider])
+
+
+def _outpost_objects(heightfield_id: str) -> list[dict[str, Any]]:
+    level = _OUTPOST_LEVEL_ID
+    center_z, half = _CAMP_CENTER_Z, _CAMP_HALF
+    south_z = center_z + half
+    objects = [
+        _terrain_object("outpost-terrain", level, heightfield_id, _TERRAIN_SAMPLES, _TERRAIN_SIZE),
+        _object("outpost-sky", level, "Sky", "sky_sphere", [0.0, 5.0, 0.0], skyConfig=dict(_OUTPOST_SKY)),
+        # Facing north (-Z), toward the camp gate.
+        _object("outpost-player-start", level, "Player Start", "player_start", [0.0, 0.0, 26.0], rotation_y=round(math.pi, 4)),
+    ]
+
+    # The palisade: eight segments a side, the middle two of the south side are the gate.
+    offsets = [(index - 3.5) * _PALISADE_WIDTH for index in range(8)]
+    gate_offsets = offsets[3:5]
+    wall = 0
+    for offset in offsets:
+        sides = [(offset, center_z - half, 0.0), (half, center_z + offset, math.pi / 2), (-half, center_z + offset, math.pi / 2)]
+        if offset not in gate_offsets:
+            sides.append((offset, south_z, 0.0))
+        for x, z, rotation in sides:
+            wall += 1
+            objects.append(_palisade(f"outpost-wall-{wall}", level, f"Palisade {wall}", round(x, 2), round(z, 2), round(rotation, 4)))
+    gate = []
+    for side, offset in zip(("Left", "Right"), gate_offsets):
+        object_id = f"outpost-gate-{side.lower()}"
+        # Kinematic, so the collider follows the timeline that sinks the gate.
+        gate.append(_palisade(object_id, level, f"Gate {side}", round(offset, 2), south_z, 0.0, extra=[
+            _component(object_id, "rigidBody", type="kinematicPosition", mass=80, gravityScale=1, lockRotation=True)]))
+    objects.extend(gate)
+
+    beacon_z = center_z - 3.0
+    objects.append(_object("outpost-beacon", level, "Signal Beacon", "prop", [0.0, 0.0, beacon_z], model_id="outpost-model-beacon",
+                           components=[_component("outpost-beacon", "collider", shape="box", size=[4.4, _BEACON_HEIGHT, 4.4],
+                                                  offset=[0.0, _BEACON_HEIGHT / 2, 0.0], isTrigger=False)]))
+    # The flame waits below ground; the signal timeline lifts it into the brazier.
+    flame_lit = [0.0, _BEACON_HEIGHT - 0.2, beacon_z]
+    flame_hidden = [0.0, -30.0, beacon_z]
+    objects.append(_object("outpost-beacon-flame", level, "Beacon Flame", "prop", flame_hidden, components=[
+        _component("outpost-beacon-flame", "particles", preset="fire", rate=40, burst=0, loop=True),
+        _component("outpost-beacon-flame", "pointLight", color="#ff9a3c", intensity=80, distance=40, castShadow=False),
+    ]))
+    sink = -_PALISADE_HEIGHT - 0.5
+    tracks: list[dict[str, Any]] = [{
+        "id": f"{item['id']}-sinks", "kind": "transform", "objectId": item["id"],
+        "position": [{"time": 0, "value": item["position"], "interpolation": "smooth"},
+                     {"time": 3.0, "value": [item["position"][0], sink, item["position"][2]]}],
+    } for item in gate]
+    tracks.append({"id": "outpost-flame-rises", "kind": "transform", "objectId": "outpost-beacon-flame",
+                   "position": [{"time": 0, "value": flame_hidden, "interpolation": "step"}, {"time": 0.4, "value": flame_lit}]})
+    objects.append(_object("outpost-signal", level, "Signal Mechanism", "prop", [0.0, 0.0, south_z - 2.0], components=[
+        _component("outpost-signal", "timeline", autoplay=False, loop=False, speed=1, playVariable=_SIGNAL_VARIABLE,
+                   timeline={"duration": 3.0, "tracks": tracks})]))
+
+    # Inside: tents, stacked crates, and the goal the gate lets you reach.
+    objects += [
+        _object("outpost-tent-1", level, "Tent 1", "prop", [-8.0, 0.0, center_z - 4.0], model_id="outpost-model-tent",
+                rotation_y=round(math.pi / 2, 4), components=[_component("outpost-tent-1", "collider", shape="box",
+                                                                          size=[4.8, 4.0, 6.4], offset=[0.0, 2.0, 0.0], isTrigger=False)]),
+        _object("outpost-tent-2", level, "Tent 2", "prop", [8.0, 0.0, center_z - 6.0], model_id="outpost-model-tent",
+                rotation_y=round(-math.pi / 2, 4), components=[_component("outpost-tent-2", "collider", shape="box",
+                                                                           size=[4.8, 4.0, 6.4], offset=[0.0, 2.0, 0.0], isTrigger=False)]),
+    ]
+    for index, (x, z, rotation) in enumerate(((-9.5, center_z + 7.0, 0.2), (-7.0, center_z + 7.5, 1.0), (9.0, center_z + 6.5, 0.6))):
+        object_id = f"outpost-crate-{index + 1}"
+        objects.append(_object(object_id, level, f"Crate {index + 1}", "prop", [x, 0.0, z], model_id="outpost-model-crate",
+                               rotation_y=rotation, components=[_crate_collider(object_id)]))
+    # From just inside the gate to the foot of the beacon.
+    objects.append(_object("outpost-goal", level, "Beacon Square", "prop", [0.0, 0.0, center_z + 4.0], components=[
+        _component("outpost-goal", "collider", "trigger", shape="box", size=[12.0, 4.0, 10.0], offset=[0.0, 2.0, 0.0],
+                   isTrigger=True),
+    ]))
+
+    # The Scout waits outside the gate, waving the player over, and talks when they come close.
+    objects.append(_object("outpost-scout", level, "Scout", "prop", [-6.5, 0.0, south_z + 4.0], model_id="outpost-model-scout",
+                           rotation_y=0.35, components=[
+                               _component("outpost-scout", "animation", clip=_CLIP["Wave"], loop=True, speed=1, startAt=0),
+                               _component("outpost-scout", "dialogue", radius=7, prompt="Talk to the Scout",
+                                          dialogue=_SCOUT_DIALOGUE),
+                               _component("outpost-scout", "collider", shape="capsule", radius=0.9, height=3.2,
+                                          offset=[0.0, 2.5, 0.0], isTrigger=False),
+                               _component("outpost-scout", "lookAtIK", boneName="Head", target="player", maxAngle=70, weight=1),
+                           ]))
+
+    for index, (name, x, z) in enumerate(_SUPPLIES):
+        object_id = f"outpost-supply-{index + 1}"
+        objects.append(_object(object_id, level, f"Supply Cache ({name})", "prop", [x, 0.3, z], model_id="outpost-model-supply",
+                               rotation_y=round(0.7 * index, 3), components=[
+                                   _component(object_id, "collider", "trigger", shape="sphere", radius=3.0,
+                                              offset=[0.0, 1.0, 0.0], isTrigger=True),
+                                   _component(object_id, "script", source=_SUPPLY_SCRIPT),
+                                   _component(object_id, "particles", preset="sparks", rate=6, burst=0, loop=True),
+                                   _component(object_id, "pointLight", color="#9fd4ff", intensity=14, distance=8, castShadow=False),
+                               ]))
+        # A boulder beside each cache to fight from.
+        objects.append(_object(f"outpost-cover-{index + 1}", level, f"Boulder {index + 1}", "prop", [x + 3.5, 0.0, z + 2.0],
+                               model_id="outpost-model-rock", rotation_y=round(1.3 * index, 3), scale=1.4))
+
+    # The raiders come from the hills north of the camp, away from where the Ranger starts.
+    for index, (x, z) in enumerate(((36.0, -36.0), (-36.0, -32.0))):
+        objects.append(_object(f"outpost-raider-camp-{index + 1}", level, f"Raider Spawner {index + 1}", "spawn_point",
+                               [x, 0.0, z], spawnConfig={"blueprintId": _OUTPOST_RAIDER_ID, "interval": 14, "maxSpawns": 2,
+                                                         "team": "Enemy"}))
+
+    for index in range(16):
+        angle = index * 2 * math.pi / 16 + 0.15
+        radius = 44.0 + 4.0 * math.sin(index * 2.3)
+        x, z = round(radius * math.cos(angle), 2), round(radius * math.sin(angle), 2)
+        objects.append(_object(f"outpost-tree-{index + 1}", level, f"Tree {index + 1}", "prop",
+                               [x, round(_hills(x, z, _OUTPOST_FLAT_RADIUS) - 0.3, 2), z],
+                               model_id="outpost-model-tree", rotation_y=round(angle, 3)))
+
+    # The opening shot: a camera high over the approach that drifts in, then hands over to play.
+    start, end = [0.0, 20.0, 50.0], [0.0, 15.0, 38.0]
+    objects.append(_object("outpost-intro-camera", level, "Intro Camera", "prop", start,
+                           components=[_component("outpost-intro-camera", "camera", fov=55, startActive=False, blendIn=0)]))
+    objects[-1]["rotation"] = [-0.33, 0.0, 0.0]
+    objects.append(_object("outpost-director", level, "Intro Director", "prop", [0.0, 0.0, 30.0], components=[
+        _component("outpost-director", "timeline", autoplay=True, loop=False, speed=1, timeline={
+            "duration": 5.0,
+            "tracks": [
+                {"id": "outpost-intro-cut", "kind": "camera", "blend": 1.5,
+                 "keys": [{"time": 0, "value": "outpost-intro-camera"}, {"time": 4.0, "value": ""}]},
+                {"id": "outpost-intro-dolly", "kind": "transform", "objectId": "outpost-intro-camera",
+                 "position": [{"time": 0, "value": start, "interpolation": "smooth"}, {"time": 4.5, "value": end}]},
+            ],
+        })]))
+    return objects
+
+
+def _outpost_logic(goal: dict[str, Any]) -> dict[str, Any]:
+    """Three supplies light the beacon, open the gate and save; reaching the beacon ends the game; a
+    fallen ranger restarts the level."""
+
+    graph = _LogicGraph("outpost-logic")
+    begin = graph.begin_play("begin", (80, 40))
+    hint = graph.print_string("hint", "Talk to the Scout by the camp gate.", (380, 40))
+    graph.chain((begin, "", "Exec"), (hint, "Exec", "Out"))
+
+    tick = graph.tick("tick", (80, 260))
+    checks = graph.sequence("checks", (340, 260))
+    graph.chain((tick, "", "Exec"), (checks, "Exec", ""))
+
+    supplies = graph.get_level_variable("get-supplies", _SUPPLIES_VARIABLE, (340, 460))
+    all_found = graph.pure_math("all-found", "Equal", "Equal (==)", (620, 460), "Boolean", B=len(_SUPPLIES))
+    graph.wire(supplies, "Value", all_found, "A")
+    found = graph.branch("if-all-found", (620, 260))
+    once = graph.do_once("signal-once", (880, 260))
+    signal = graph.set_level_variable("signal", _SIGNAL_VARIABLE, (1140, 260), value="1")
+    chime = graph.play_sound("signal-sound", _SIGNAL_SOUND_ID, (1400, 260))
+    announce = graph.print_string("beacon-lit", "All three caches! The beacon is lit and the gate opens.", (1660, 260))
+    save = graph.level_action("autosave", "Save Game", (1920, 260), action="SaveGame")
+    saved = graph.print_string("saved", "Progress saved.", (2180, 260))
+    graph.wire(checks, "Then 0", found, "Exec")
+    graph.wire(all_found, "Result", found, "Condition")
+    graph.wire(found, "True", once, "Exec")
+    graph.chain((once, "", "Completed"), (signal, "Exec", "Out"), (chime, "Exec", "Out"), (announce, "Exec", "Out"),
+                (save, "Exec", "Out"), (saved, "Exec", ""))
+
+    dead = graph.player_variable("player-is-dead", "IsDead", "Boolean", (620, 640))
+    fallen = graph.branch("if-player-dead", (880, 600))
+    restart_once = graph.do_once("restart-once", (1140, 600))
+    pause = graph.delay("before-restart", 2.5, (1400, 600))
+    restart = graph.level_action("restart", "Restart Level", (1660, 600), action="Restart")
+    graph.wire(checks, "Then 1", fallen, "Exec")
+    graph.wire(dead, "Value", fallen, "Condition")
+    graph.wire(fallen, "True", restart_once, "Exec")
+    graph.chain((restart_once, "", "Completed"), (pause, "Exec", "Out"), (restart, "Exec", ""))
+
+    arrive = graph.overlap("goal-overlap", goal, (80, 860))
+    arrive_once = graph.do_once("goal-once", (380, 860))
+    farewell = graph.print_string("farewell", "The beacon burns over a safe outpost. Thanks for playing!", (640, 860))
+    linger = graph.delay("before-end", 3.0, (900, 860))
+    end = graph.level_action("end-game", "End Game", (1160, 860), action="EndGame")
+    graph.chain((arrive, "", "Exec"), (arrive_once, "Exec", "Completed"), (farewell, "Exec", "Out"), (linger, "Exec", "Out"),
+                (end, "Exec", ""))
+
+    return graph.document([
+        {"id": "outpost-variable-supplies", "name": _SUPPLIES_VARIABLE, "type": "Float", "value": 0},
+        {"id": "outpost-variable-signal", "name": _SIGNAL_VARIABLE, "type": "Float", "value": 0},
+    ])
+
+
+def _graph_state(state_id: str, name: str, x: float, y: float, clip: str | None = None, *, loop: bool = True,
+                 **extra: Any) -> dict[str, Any]:
+    state = {"id": state_id, "name": name, "position": {"x": x, "y": y}, "loop": loop, "stateType": "Single",
+             "clipName": clip, "blendSamples": [], "blendParamX": "", "blendParamY": ""}
+    state.update(extra)
+    return state
+
+
+def _when(transition_id: str, source: str, target: str, duration: float, *conditions: tuple[str, str, Any],
+          **extra: Any) -> dict[str, Any]:
+    transition = {"id": transition_id, "fromStateId": source, "toStateId": target, "duration": duration,
+                  "conditions": [{"variableId": v, "operator": op, "value": value} for v, op, value in conditions]}
+    transition.update(extra)
+    return transition
+
+
+def _outpost_player() -> dict[str, Any]:
+    """The starter player's controls and variables on the Ranger, with a graph that shows the
+    animation kit: a Locomotion state machine whose walk and run share a sync group, a blended
+    combat strafe, jump, fall and a landing whose curve holds the character until it recovers,
+    death, upper-body aim and fire clips and an additive hit reaction."""
+
+    player = json.loads((_STARTER_ROOT / "player_blueprint.json").read_text(encoding="utf-8"))
+    graph = player["animationGraph"]
+    speed, jumping, x_input, y_input, sprint, aiming, dead, grounded, falling, vertical = (
+        "v1", "v2", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11")
+    graph["variables"].append({"id": "v_land_lock", "name": "LandLock", "type": "Boolean", "value": False})
+
+    locomotion = {
+        "states": [
+            _graph_state("loco-idle", "Idle", 80, 120, _CLIP["Idle"], isRoot=True),
+            _graph_state("loco-walk", "Walk", 380, 40, _CLIP["Walk"], syncGroup="Feet"),
+            _graph_state("loco-run", "Run", 680, 120, _CLIP["Run"], syncGroup="Feet"),
+        ],
+        "transitions": [
+            _when("loco-start", "loco-idle", "loco-walk", 0.2, (speed, ">", 0)),
+            _when("loco-stop", "loco-walk", "loco-idle", 0.25, (speed, "==", 0)),
+            _when("loco-sprint", "loco-walk", "loco-run", 0.35, (sprint, "==", True), (y_input, ">", 0)),
+            _when("loco-ease", "loco-run", "loco-walk", 0.35, (sprint, "==", False)),
+            _when("loco-halt", "loco-run", "loco-idle", 0.3, (speed, "==", 0)),
+        ],
+    }
+    strafe = _graph_state("combat", "Combat Move", 380, 340, None, stateType="Blend2D", blendParamX=x_input,
+                          blendParamY=y_input, syncGroup="Feet", blendSamples=[
+                              {"id": "combat-idle", "clipName": _CLIP["Idle"], "position": [0, 0]},
+                              {"id": "combat-forward", "clipName": _CLIP["Walk"], "position": [0, 1]},
+                              {"id": "combat-back", "clipName": _CLIP["Walk Back"], "position": [0, -1]},
+                              {"id": "combat-left", "clipName": _CLIP["Strafe Left"], "position": [-1, 0]},
+                              {"id": "combat-right", "clipName": _CLIP["Strafe Right"], "position": [1, 0]},
+                          ])
+    # The landing's curve holds LandLock on for its first 0.3 s: the impact plays out before moving on.
+    landing_curve = {"id": "land-lock-curve", "variableId": "v_land_lock",
+                     "keys": [{"time": 0, "value": 1}, {"time": 0.28, "value": 1}, {"time": 0.32, "value": 0}]}
+    graph["states"] = [
+        _graph_state("locomotion", "Locomotion", 80, 120, None, isRoot=True, stateType="StateMachine", subGraph=locomotion),
+        strafe,
+        _graph_state("jump", "Jump", 700, -80, _CLIP["Jump"], loop=False),
+        _graph_state("fall", "Falling", 1000, -80, _CLIP["Falling"]),
+        _graph_state("land", "Land", 1000, 160, _CLIP["Landing"], loop=False, curves=[landing_curve]),
+        _graph_state("death", "Death", 700, 420, _CLIP["Death"], loop=False),
+    ]
+    graph["transitions"] = [
+        _when("to-combat", "locomotion", "combat", 0.2, (aiming, "==", True)),
+        _when("from-combat", "combat", "locomotion", 0.2, (aiming, "==", False)),
+        _when("take-off", "locomotion", "jump", 0.1, (jumping, "==", True), (vertical, ">", 0), anyState=True, priority=50),
+        _when("drop", "jump", "fall", 0.25, (falling, "==", True), (vertical, "<=", 0), anyState=True, priority=40),
+        _when("touch-down", "fall", "land", 0.1, (grounded, "==", True)),
+        _when("short-hop", "jump", "land", 0.1, (grounded, "==", True)),
+        _when("recover", "land", "locomotion", 0.2, ("v_land_lock", "==", False)),
+        _when("fallen", "locomotion", "death", 0.15, (dead, "==", True), anyState=True, priority=100),
+    ]
+    graph["activeStateId"] = "locomotion"
+    player.update(
+        id=_OUTPOST_PLAYER_ID, name="Ranger", linkedModelId="outpost-model-ranger",
+        description="The Ranger: the starter controls on a character with its own clips.",
+        upperBody={"fireClip": _CLIP["Shooting"], "aimClip": _CLIP["Aiming"], "maskBone": "Spine"},
+        hitReactClip=_CLIP["Hit Reaction"],
+        ik={"footIK": True, "footMaxStep": 0.4},
+    )
+    player["variables"] = graph["variables"]
+    return player
+
+
+def _outpost_raider() -> dict[str, Any]:
+    """The Arena guard's AI and graph on the Raider: runs at the player, punches, flinches when shot."""
+
+    raider = json.loads((_ARENA_ROOT / "enemy_blueprint.json").read_text(encoding="utf-8"))
+    clips = {"Idle": _CLIP["Idle"], "Chase": _CLIP["Run"], "Attack": _CLIP["Punch"], "Strafe": _CLIP["Walk"]}
+    for state in raider["animationGraph"]["states"]:
+        if state["name"] in clips:
+            state["clipName"] = clips[state["name"]]
+    raider.update(id=_OUTPOST_RAIDER_ID, name="Raider", linkedModelId="outpost-model-raider",
+                  description="A raider: chases the Ranger on sight and punches in range. Shot raiders flinch, then fall as ragdolls.",
+                  hitReactClip=_CLIP["Hit Reaction"])
+    tuning = {"Health": 45, "Damage": 7}
+    for stat in raider["stats"]:
+        stat["value"] = tuning.get(stat["name"], stat["value"])
+    return raider
+
+
+def _outpost_hud() -> list[dict[str, Any]]:
+    total = len(_SUPPLIES)
+    main = _hud_document("hud-main", "Main HUD", [
+        _hud_element("hud-main-panel", "Supplies Panel", "Container",
+                     {"backgroundColor": "rgba(0,0,0,0.45)", "borderColor": "rgba(159,212,255,0.7)", "borderWidth": 2,
+                      "borderRadius": 12}, 32, 32, 420, 150, 1),
+        _hud_text("hud-main-supplies-label", "Supplies Label", "Supplies:", 56, 50, 190, 56, size=40, color="#9fd4ff"),
+        _hud_text("hud-main-supplies-value", "Supplies Value", "0", 246, 50, 60, 56, size=40, align="center",
+                  bind={"text": f"vars.{_SUPPLIES_VARIABLE}"}),
+        _hud_text("hud-main-supplies-total", "Supplies Total", f"/ {total}", 312, 50, 120, 56, size=40,
+                  color="rgba(255,255,255,0.7)"),
+        _hud_element("hud-main-health", "Health", "HealthBar",
+                     {"value": 100, "max": 100, "barColor": "#dc2626", "backgroundColor": "#1f2937", "showIcon": True,
+                      "showText": True, "bind": {"value": "player.health", "max": "player.maxHealth"}},
+                     48, 116, 380, 52, 2),
+        # Along the top, clear of the dialogue box at the bottom.
+        _hud_text("hud-main-hint", "Hint",
+                  "Talk to the Scout, recover three supply caches, reach the beacon. Right mouse aims, left mouse fires.",
+                  500, 40, 1180, 40, size=24, color="rgba(255,255,255,0.85)", weight="normal", align="center"),
+    ])
+    title = _menu("menu-title", "Title Menu", "OUTPOST", "Recover the supplies. Light the beacon.", 480, [
+        ("play", "Play", "primary"), ("continue", "Continue", "secondary"), ("options", "Options", "secondary"),
+        ("quit", "Quit", "outline"),
+    ])
+    pause = _menu("menu-pause", "Pause Menu", "PAUSED", f"Recover all {total} supply caches, then reach the beacon.", 400, [
+        ("resume", "Resume", "primary"), ("save", "Save", "secondary"), ("load", "Load", "secondary"),
+        ("options", "Options", "secondary"), ("quit", "Quit to title", "outline"),
+    ])
+    return [main, title, pause]
+
+
+def _apply_outpost(repository: Any, project_name: str) -> None:
+    stored: dict[Path, str] = {}
+    for path, _, _, _, _ in _OUTPOST_MODELS.values():
+        if path not in stored:
+            stored[path] = _store_file(repository, path, FBX_MIME)
+    sound_path = _ARENA_ROOT / "assets" / "coin.wav"
+    sound_asset = _store_file(repository, sound_path, WAV_MIME)
+    heights = [_terrain_height(column, row, _OUTPOST_FLAT_RADIUS)
+               for row in range(_TERRAIN_SAMPLES) for column in range(_TERRAIN_SAMPLES)]
+    heightfield = _store_heightfield(repository, heights, _TERRAIN_SAMPLES, "outpost-terrain.ahf")
+
+    models = []
+    for model_id, (path, name, category, size, overrides) in _OUTPOST_MODELS.items():
+        model = _model_document(model_id, stored[path], name, category, size)
+        if overrides:
+            model["materialOverrides"] = overrides
+        models.append(model)
+
+    objects = _outpost_objects(heightfield)
+    goal = next(item for item in objects if item["id"] == "outpost-goal")
+    changes = {
+        "models": models,
+        "blueprints": [_outpost_player(), _outpost_raider()],
+        "audio": [{"id": _SIGNAL_SOUND_ID, "name": "Signal Chime", "assetId": sound_asset, "type": WAV_MIME,
+                   "duration": _wav_duration(sound_path)}],
+        "levels": [{"id": _OUTPOST_LEVEL_ID, "name": "Outpost", "createdAt": 0, "blueprint": _outpost_logic(goal)}],
+        "objects": objects,
+        "hud": _outpost_hud(),
+        "metadata": [{"id": "game-settings", "settings": {
+            "schema": 1, "name": project_name, "startupLevelId": _OUTPOST_LEVEL_ID, "playerBlueprintId": _OUTPOST_PLAYER_ID,
+        }}],
+    }
+    repository.apply_changes(changes, expected_revision=repository.revision)
+
+
+_BUILDERS = {"starter": _apply_starter, "arena": _apply_arena, "courtyard": _apply_courtyard, "outpost": _apply_outpost}

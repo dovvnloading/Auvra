@@ -1,6 +1,7 @@
 import type React from 'react';
 import type { LevelComponent } from '../../types';
 import { BUILTIN_COMPONENTS } from './builtins';
+import { ANIMATION_COMPONENT } from './animationComponent';
 import { AUDIO_COMPONENTS } from './audioComponents';
 import { AUDIO_ZONE_COMPONENTS } from './audioZones';
 import { CAMERA_COMPONENT } from './cameraComponent';
@@ -35,6 +36,7 @@ export const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
     REFLECTION_PROBE_COMPONENT,
     ...LOD_COMPONENTS,
     LEVEL_STREAMING_COMPONENT,
+    ANIMATION_COMPONENT,
     ...IK_COMPONENTS,
     SCRIPT_COMPONENT,
     NET_SYNC_COMPONENT,
