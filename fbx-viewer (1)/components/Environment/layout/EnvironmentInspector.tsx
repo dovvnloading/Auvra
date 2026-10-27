@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { Box, Move, RotateCw, Scaling, Trash2, X, RotateCcw, Skull, Timer, Users, UserPlus, Hash, Music, Volume2, Radio, Ear, Repeat, VolumeX, Mountain, Layers, Plus, CircleDashed, Hammer, ArrowUp, ArrowDown, Minus, Activity, Wind, AlertTriangle, Grid, Sun, CloudFog, PersonStanding, Puzzle, GitBranch, Boxes, Brush } from 'lucide-react';
 import { EditorState } from '../types';
 import { PrefabInstanceSection } from '../PrefabInstanceSection';
-import { LevelComponent, LevelObject } from '../../../types';
+import { LevelComponent, LevelObject, SpawnConfig } from '../../../types';
 import { EnvironmentBrushPanel } from '../EnvironmentBrushPanel';
 import { EnvironmentMaskTool } from '../EnvironmentMaskTool';
 import { TerrainLayerPanel } from '../Terrain/TerrainLayerPanel';
@@ -41,6 +41,10 @@ const AXIS_COLORS = ['text-red-400', 'text-green-400', 'text-blue-400'];
 const SECTION_TITLE = 'text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5';
 const MIN_ABS_SCALE = 0.001;
 const MULTI_SELECTION_NAME_LIMIT = 8;
+/** What a new Enemy Spawner starts with: no enemy chosen yet, one every 5 s, no limit. */
+const DEFAULT_SPAWN_CONFIG: SpawnConfig = { blueprintId: '', interval: 5, maxSpawns: 0, team: 'Enemy' };
+/** A shorter interval would spawn an enemy almost every frame. */
+const MIN_SPAWN_INTERVAL = 0.5;
 
 /** LevelObject.rotation is Euler XYZ in radians; the inspector shows degrees to one decimal. */
 const toDisplayDegrees = (radians: number) => Math.round(THREE.MathUtils.radToDeg(radians) * 10) / 10;
@@ -1073,6 +1077,66 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                 </button>
                             </div>
                         )}
+
+                        {/* --- SPAWNER CONFIGURATION --- */}
+                        {isSpawner && (() => {
+                            const spawn = selectedObject.spawnConfig ?? DEFAULT_SPAWN_CONFIG;
+                            const enemies = blueprints.filter(blueprint => blueprint.type === 'Enemy Controller');
+                            const missing = !!spawn.blueprintId && !enemies.some(blueprint => blueprint.id === spawn.blueprintId);
+                            return (
+                                <div className="space-y-4 pt-2 border-t border-gray-800/50">
+                                    <div className="space-y-3 bg-red-950/20 p-3 rounded border border-red-900/30">
+                                        <div className="flex items-center gap-2 text-xs font-bold text-red-400 uppercase tracking-wide">
+                                            <Users size={12} /> Spawning
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="text-[10px] font-medium text-gray-400 flex items-center gap-1.5">
+                                                <UserPlus size={10} /> Enemy
+                                            </label>
+                                            <select
+                                                value={missing ? '' : spawn.blueprintId}
+                                                onChange={(e) => commitUpdate({ spawnConfig: { ...spawn, blueprintId: e.target.value } })}
+                                                className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-white focus:outline-none focus:border-red-500"
+                                                title="The enemy blueprint this spawner creates"
+                                            >
+                                                <option value="">-- Select Enemy --</option>
+                                                {enemies.map(blueprint => (
+                                                    <option key={blueprint.id} value={blueprint.id}>{blueprint.name}</option>
+                                                ))}
+                                            </select>
+                                            {!spawn.blueprintId || missing ? (
+                                                <p className="text-[10px] text-amber-400 flex items-start gap-1.5 pt-1">
+                                                    <AlertTriangle size={10} className="shrink-0 mt-0.5" />
+                                                    {enemies.length
+                                                        ? 'Choose an enemy. The spawner creates nothing until one is set.'
+                                                        : 'Create an Enemy blueprint in the Blueprints tab, then choose it here.'}
+                                                </p>
+                                            ) : null}
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <ScrubbableInput
+                                                label="Every (s)"
+                                                value={spawn.interval}
+                                                onChange={(v) => scrubUpdate({ spawnConfig: { ...spawn, interval: Math.max(MIN_SPAWN_INTERVAL, v) } })}
+                                                step={0.5} labelWidth="w-16"
+                                            />
+                                            <ScrubbableInput
+                                                label="Max"
+                                                value={spawn.maxSpawns}
+                                                onChange={(v) => scrubUpdate({ spawnConfig: { ...spawn, maxSpawns: Math.max(0, Math.round(v)) } })}
+                                                step={1} labelWidth="w-10"
+                                            />
+                                        </div>
+                                        <p className="text-[10px] text-gray-500 leading-relaxed flex items-start gap-1.5">
+                                            <Hash size={10} className="shrink-0 mt-0.5" />
+                                            {spawn.maxSpawns > 0
+                                                ? `Spawns one enemy every ${spawn.interval} s around this point, ${spawn.maxSpawns} in all.`
+                                                : `Spawns one enemy every ${spawn.interval} s around this point, with no limit (Max 0).`}
+                                        </p>
+                                    </div>
+                                </div>
+                            );
+                        })()}
 
                         {/* --- AUDIO CONFIGURATION --- */}
                         {isAudio && (

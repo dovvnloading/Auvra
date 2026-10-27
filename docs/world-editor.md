@@ -14,6 +14,8 @@ The **Environment** tab is where levels are built.
 
 The left panel's **Logic Actors** add a Player Start, an Enemy Spawner, an Audio Emitter, a Sky Sphere and an **Empty Object**: an object with no model, drawn in the editor as a small marker, for components such as trigger colliders, timelines, cameras and level streaming, or as a parent to group other objects under.
 
+Select an Enemy Spawner to set what it spawns: the **Enemy** blueprint, a new one **Every** so many seconds, and **Max** in all (0 for no limit). Enemies appear around the spawner. A spawner with no enemy chosen spawns nothing.
+
 Gizmo modes: **W** move, **E** rotate, **R** scale, **Z** toggles world/local space, **X** toggles grid snapping. Every object type can be transformed, including props, foliage and terrain. The inspector also has exact position, rotation (degrees) and scale fields.
 
 ## Camera
