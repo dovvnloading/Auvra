@@ -2,7 +2,7 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { FileText, Database, Tag, Plus, Trash2, Zap, Scaling, Camera, Crosshair, Palette, Check, Box, Music, Play, Footprints, Brain } from 'lucide-react';
 import { BehaviorTreeEditor } from './BehaviorTreeEditor';
-import { Blueprint, BlueprintStat, CharacterIKSettings, DEFAULT_UPPER_BODY_BONE, UpperBodySettings } from '../../types';
+import { aimCameraOffset, AimView, Blueprint, BlueprintStat, CharacterIKSettings, DEFAULT_UPPER_BODY_BONE, UpperBodySettings } from '../../types';
 import { ownClipsFirst } from '../../utils/animationBinding';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
 import { TransformInputGroup } from '../UI/Properties/TransformInputGroup';
@@ -74,7 +74,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
         }
     };
 
-    const aimOffset = blueprint.aimOffset || [0.5, 4.5, 1.0];
+    const aimOffset = aimCameraOffset(blueprint);
 
     const activeTexture = useMemo(() => 
         textures.find(t => t.id === blueprint.textureId), 
@@ -175,9 +175,21 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                         <Camera size={12} /> Camera Settings
                                     </label>
                                     <div className="bg-gray-800/50 rounded p-3 border border-gray-800 space-y-3">
+                                        <div className="flex items-center justify-between gap-4">
+                                            <span className="text-xs text-gray-400 shrink-0">Aim view</span>
+                                            <select
+                                                aria-label="Aim view"
+                                                value={blueprint.aimView ?? 'scope'}
+                                                onChange={(e) => onUpdate(blueprint.id, { aimView: e.target.value as AimView, aimOffset: undefined })}
+                                                className="w-40 bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500"
+                                            >
+                                                <option value="scope">Scope (first person)</option>
+                                                <option value="shoulder">Over the shoulder</option>
+                                            </select>
+                                        </div>
                                         <div className="flex flex-col gap-2">
                                             <span className="text-[10px] text-gray-400 flex items-center gap-1.5 font-bold">
-                                                <Crosshair size={10} /> Scope Offset (Aiming)
+                                                <Crosshair size={10} /> Aim Camera Offset
                                             </span>
                                             <TransformInputGroup 
                                                 label="Offset (X/Y/Z)"
@@ -187,7 +199,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                             />
                                         </div>
                                         <p className="text-[9px] text-gray-500 leading-tight mt-1">
-                                            Adjust the camera position when aiming down sights (Holding F). Coordinates are relative to the character root.
+                                            Where the camera sits while aiming: right, height, and back toward the camera (negative is behind the character). Changing the aim view resets it to that view's default.
                                         </p>
                                     </div>
                                 </div>
@@ -198,6 +210,17 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                     <Footprints size={12} /> Pose Adjustment (IK)
                                 </label>
                                 <div className="bg-gray-800/50 rounded p-3 border border-gray-800 space-y-3">
+                                    {blueprint.type === 'Player Character' && (
+                                        <label className="flex items-center justify-between gap-4 text-xs text-gray-400">
+                                            <span>Lean the spine with the aim</span>
+                                            <input
+                                                type="checkbox"
+                                                checked={!!ik.aimPitch}
+                                                onChange={(e) => updateIK({ aimPitch: e.target.checked })}
+                                                className="rounded bg-gray-800 border-gray-600 text-blue-500 focus:ring-0"
+                                            />
+                                        </label>
+                                    )}
                                     <label className="flex items-center justify-between gap-4 text-xs text-gray-400">
                                         <span>Plant feet on the ground</span>
                                         <input

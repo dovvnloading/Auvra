@@ -91,11 +91,15 @@ Number conditions compare with a small tolerance, so `Speed == 0` still matches 
 
 ## States and blend spaces
 
-A state plays one of three things:
+A state plays one of these:
 
 - **Single**: one clip.
 - **Blend 1D**: several clips placed along one variable, such as Idle at 0, Walk at 0.5 and Run at 1 on a Speed variable. The two clips either side of the value blend linearly; past the ends the end clip plays alone.
 - **Blend 2D**: clips placed on two variables, such as strafe directions on InputX and InputY. The samples are triangulated, so inside a triangle only its three corners contribute, exactly one clip plays at a sample's position, and outside the samples the nearest edge is used. The plot above the sample list shows where the samples sit.
+- **Machine**: a state machine of its own, with its own states and transitions, such as a Locomotion machine holding Idle, Walk and Run. Double-click it on the canvas (or click **Open State Machine**) to edit what is inside; the bar above the canvas leads back out. Entering it starts its entry state; its own transitions run while any state inside plays; transitions from the machine leave from whichever state inside is playing. The preview highlights the machine and, inside it, the state that is playing.
+- **Conduit**: a junction with no animation. A transition into it is taken only when one of the conduit's own transitions is ready too, and the character goes straight on to that state with that transition's crossfade. Use it to share exit rules: Walk and Run both go to an Airborne conduit that sends on to Jump or Fall.
+
+Blend samples run in step: they share one cycle length, weighted by how much each plays, and follow the heaviest sample's phase, so a walk and a run of different lengths keep their feet together. Give states the same **Sync Group** to carry that phase across transitions as well: a Run entered from a Walk in the same group starts mid-stride where the walk was, instead of from its first frame.
 
 States name their clips, and the clip list offers every model's clips, the character's own first. A clip keeps the name it was given at import, even when its model is renamed in the library. A second clip of a name the model already has is numbered ("Walk 2"). Where another model has a clip of the same name (two characters that both have `Idle`), the character plays its own.
 
@@ -106,6 +110,10 @@ States name their clips, and the clip list offers every model's clips, the chara
 ### Notifies
 
 A Single state can have **Notifies**: named points in its clip, in seconds. Each time playback crosses one, the character raises that notify. In level scripting, the **Animation Notify** event runs when a notify with its name is raised (leave the name empty to catch every notify), from the player, from enemies, or from anyone. Use notifies for footstep sounds, attack hit frames and effects.
+
+### Curves
+
+A Single state can have **Curves**: values keyed over its clip, in seconds, each driving a graph variable while the state plays. The value runs in straight lines between keys and holds before the first and after the last; a Boolean variable is on above 0.5. Transitions and other systems then follow the clip's timing: a curve that holds a LandLock variable on for the first 0.3 s of a landing keeps the landing from being cut short, a combo window opens a variable during the frames an attack can chain. The graph under each curve shows it over the clip.
 
 ### Root motion
 
@@ -133,16 +141,25 @@ A state with no clip counts as finished at once, so a Land state without a landi
 
 A player blueprint's **Upper Body (Fire & Aim)** section, under Details, picks a clip to loop while the fire button is held and one to loop while aiming. Firing wins over aiming. The clip plays on **From bone** and everything below it in the skeleton: Spine by default, which is the chest, arms and head. The legs keep walking, running or jumping underneath. With "Graph only" the graph's pose is left as it is.
 
+**Aim view**, under Camera Settings, sets how the player aims. **Scope** looks out of the character's eyes, hides it and shows the scope reticle. **Over the shoulder** moves the camera close behind the character's shoulder and keeps the character, its aim clip and its weapon in view, with a small crosshair. **Aim Camera Offset** fine-tunes where the camera sits; changing the view resets it to that view's default. Under Pose Adjustment, **Lean the spine with the aim** bends the spine up and down with the camera while aiming, so the arms follow where you look.
+
+## Hit reactions
+
+A character blueprint's **Hit Reaction** clip is added on top of whatever the character is doing each time it is hurt and survives, so it flinches without stopping. The clip's first frame counts as its neutral pose: only its movement away from that frame is added.
+
 ## One-shot animations on part of the body
 
-The **Play Player Animation** node in level scripting plays a clip once over whatever the graph is doing, then blends back. Give it a **Mask Bone** such as `Spine` to play it on that bone and everything below it only: an upper-body reload or wave while the legs keep running. Leave it empty for a full-body animation. A new one interrupts the one playing with a crossfade.
+The **Play Player Animation** node in level scripting plays a clip once over whatever the graph is doing, then blends back. Give it a **Mask Bone** such as `Spine` to play it on that bone and everything below it only: an upper-body reload or wave while the legs keep running. Leave it empty for a full-body animation. A new one interrupts the one playing with a crossfade. Turn on **Additive** to add the clip's movement to the pose instead of replacing it, such as a flinch or a shrug over a run; additive and replacing animations play alongside each other.
 
 ## IK
 
-Two components adjust a character's pose after its animation:
+These components adjust a placed character's pose after its animation:
 
 - **Look At IK** turns a bone (the head by default) toward the camera or the player, up to a maximum angle, with a weight to soften it.
 - **Foot IK** casts down from each foot and bends the leg so the foot sits on the ground under it, on slopes and steps up to **Max Step**. It needs colliders or terrain under the character.
+- **Reach IK** bends a limb so a bone (the right hand by default, with the forearm and upper arm above it) reaches another object in the level or the player, with an offset and a weight: a hand on a lever, a foot on a pedal, a greeting.
+
+A placed character stands in its rest pose unless something animates it: give it an **Animation** component to play one of its clips during play, looping or once, at a speed and from a point in the clip, such as an NPC idling, waving or working.
 
 ## Ragdolls
 

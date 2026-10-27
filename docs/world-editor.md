@@ -72,7 +72,7 @@ Objects can carry components that add behaviour. Select an object and use **Add 
 | Level Streaming | Loads another level's objects while the player is inside its box and unloads them after the player leaves (see [Level streaming](#level-streaming)) |
 | Distance Cull | Hides the object and its children beyond a distance |
 | Animation | Plays one of a placed character's clips during play, looping or once, at a speed and from a point in the clip: an NPC idling, waving or working. Clip names match with or without an FBX take prefix such as `Armature|` |
-| Look At IK / Foot IK | Turn a bone toward the camera or the player, or plant the feet of the object's model on the ground (see [IK](characters.md#ik)) |
+| Look At IK / Foot IK / Reach IK | Turn a bone toward the camera or the player, plant the feet of the object's model on the ground, or bend a limb so a hand or foot reaches another object or the player (see [IK](characters.md#ik)) |
 | Script | Runs your own JavaScript or TypeScript during play (see [Gameplay scripting](scripting.md)) |
 | Network Sync | In multiplayer games the host sends the object's position and rotation and the other players follow it (see [Multiplayer](multiplayer.md)) |
 | Timeline | Plays keyed tracks that move, show and hide objects, write level variables and raise events (see [Timelines](timelines.md)) |

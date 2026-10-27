@@ -33,6 +33,7 @@ interface AssetContextType {
   previewTexture: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<void>;
   resetModelTexture: (modelId: string) => Promise<void>;
   updateModelMaterialOverrides: (modelId: string, overrides: MaterialOverrides) => Promise<void>;
+  mirrorClip: (modelId: string, clipName: string) => Promise<void>;
   setModels: (models: LoadedModelData[]) => void;
 
   // Attachments
@@ -170,6 +171,7 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     previewTexture: modelManager.previewTexture,
     resetModelTexture: modelManager.resetModelTexture,
     updateModelMaterialOverrides: modelManager.updateModelMaterialOverrides,
+    mirrorClip: modelManager.mirrorClip,
     setModels: modelManager.setModels,
 
     // Attachments

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layers, Settings, Activity, Crown, Trash2, Link2, Network } from 'lucide-react';
+import { Layers, Settings, Activity, Crown, Trash2, Link2, Network, GitFork } from 'lucide-react';
 import { GraphState, AnimationGraphData, StateType } from '../../../types';
 import { SingleStateConfig } from './SingleStateConfig';
 import { BlendStateConfig } from './BlendStateConfig';
@@ -7,10 +7,11 @@ import { innerStateCount, newSubStateMachine } from '../utils/stateMachines';
 
 /** State kinds offered by the type switch, in display order. */
 const STATE_TYPES: { type: StateType; label: string }[] = [
-    { type: 'Single', label: 'Single Clip' },
+    { type: 'Single', label: 'Clip' },
     { type: 'Blend1D', label: 'Blend 1D' },
     { type: 'Blend2D', label: 'Blend 2D' },
     { type: 'StateMachine', label: 'Machine' },
+    { type: 'Conduit', label: 'Conduit' },
 ];
 
 interface StateInspectorProps {
@@ -37,7 +38,8 @@ export const StateInspector: React.FC<StateInspectorProps> = ({
     clipDuration
 }) => {
     const machine = node.stateType === 'StateMachine';
-    const curveVariableOptions = [
+    const conduit = node.stateType === 'Conduit';
+const curveVariableOptions = [
         { label: '-- None --', value: '' },
         ...graph.variables.map(variable => ({ label: `${variable.name} (${variable.type})`, value: variable.id })),
     ];
@@ -102,7 +104,7 @@ export const StateInspector: React.FC<StateInspectorProps> = ({
                 </div>
 
                 {/* Sync Group */}
-                {!machine && <div className="space-y-1.5">
+                {!machine && !conduit && <div className="space-y-1.5">
                     <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider flex items-center gap-1.5">
                         <Link2 size={10} /> Sync Group
                     </label>
@@ -117,7 +119,18 @@ export const StateInspector: React.FC<StateInspectorProps> = ({
                 </div>}
 
                 {/* Configuration based on Type */}
-                {machine ? (
+                {conduit ? (
+                    <div className="bg-gray-800 rounded-lg border border-gray-700 p-3 space-y-2">
+                        <span className="text-xs font-medium text-gray-200 flex items-center gap-2">
+                            <GitFork size={12} className="text-gray-400" /> Conduit
+                        </span>
+                        <p className="text-[10px] text-gray-500 leading-relaxed">
+                            A junction with no animation. A transition into it is taken only when one of its own transitions
+                            is ready too, and the character goes straight through to that one&apos;s state with its crossfade.
+                            Use it to share exit rules between several states.
+                        </p>
+                    </div>
+                ) : machine ? (
                     <div className="bg-gray-800 rounded-lg border border-gray-700 p-3 space-y-3">
                         <span className="text-xs font-medium text-gray-200 flex items-center gap-2">
                             <Network size={12} className="text-gray-400" /> {innerStateCount(node)} {innerStateCount(node) === 1 ? 'state' : 'states'} inside

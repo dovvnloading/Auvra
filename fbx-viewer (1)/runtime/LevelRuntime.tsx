@@ -28,7 +28,7 @@ import { useLevelBlueprintRuntime, UseLevelBlueprintRuntimeProps } from '../hook
 import { withWorldPose } from '../hooks/levelBlueprintNodes/world';
 import { useRuntimeLevelWorld } from '../hooks/useRuntimeLevelWorld';
 import { frontendDiagnostics } from '../diagnostics/runtime';
-import { AttachmentData, Blueprint, LevelComponent, LevelObject, LoadedModelData, SocketData } from '../types';
+import { aimCameraOffset, AttachmentData, Blueprint, LevelComponent, LevelObject, LoadedModelData, SocketData } from '../types';
 import { instantiatePrefab } from '../utils/prefabs';
 import { useGameContent } from './GameContentContext';
 import { gameState, useGameState } from './gameState';
@@ -792,7 +792,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                 graph={player.blueprint.animationGraph}
                 active={controlsEnabled}
                 isAiming={isAiming}
-                aimOffset={player.blueprint.aimOffset || [0.5, 4.5, 1.0]}
+                aimOffset={aimCameraOffset(player.blueprint)}
                 initialYaw={sessionStart.rotation[1]}
             />
             <DialogueDriver enabled={!isGameOver && !paused} />

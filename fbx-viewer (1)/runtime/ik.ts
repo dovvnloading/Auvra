@@ -382,7 +382,13 @@ export class IKPoseGuard {
         for (const [bone, entry] of this.entries) entry.written = snapshot(bone, entry.written);
     }
 
-    /** Puts back the pre-IK pose of every bone still holding IK's pose and forgets them, e.g. when the IK stops. */
+    /**
+     * Puts back the pre-IK pose of every bone still holding IK's pose and forgets them, e.g. when the IK
+     * stops. Call it each frame before the animation mixer too (useRestoreBeforeAnimation): the mixer
+     * writes only values that changed, and while blending it mixes in a property's original value, which
+     * it captures from the bone as it is then; a bone still holding last frame's IK would feed into it
+     * and the IK would build on itself.
+     */
     release(): void {
         for (const [bone, entry] of this.entries) this.undo(bone, entry);
         this.entries.clear();

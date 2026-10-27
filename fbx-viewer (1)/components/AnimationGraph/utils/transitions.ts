@@ -47,6 +47,35 @@ export const conditionsMet = (transition: GraphTransition, variables: Record<str
     return !any;
 };
 
+/** How many conduits in a row a transition may pass through before it counts as having no way on. */
+const MAX_CONDUIT_CHAIN = 8;
+
+/**
+ * Where `transition` really leads when it enters conduits: the conduits' own transitions are taken
+ * at once, each the one selectTransition would pick, until a state that is not a conduit. Returns
+ * the transition that arrives there (its target and crossfade are used), or null when a conduit on
+ * the way has no ready transition, in which case the transition into it is not taken.
+ */
+export const throughConduits = (
+    transition: GraphTransition,
+    transitions: GraphTransition[],
+    isConduit: (stateId: string) => boolean,
+    variables: Record<string, number | boolean>,
+    depth = 0,
+): GraphTransition | null => {
+    if (!isConduit(transition.toStateId)) return transition;
+    if (depth >= MAX_CONDUIT_CHAIN) return null;
+    let onward: GraphTransition | null = null;
+    // A conduit has no clip, so exit times count as reached.
+    selectTransition(transitions, transition.toStateId, variables, 1, (candidate) => {
+        if (candidate.toStateId === transition.toStateId) return false;
+        const arrived = throughConduits(candidate, transitions, isConduit, variables, depth + 1);
+        if (arrived) onward = arrived;
+        return arrived !== null;
+    });
+    return onward;
+};
+
 /** Whether `transition` is checked while `activeStateId` plays: its source state, or any state but its target. */
 export const transitionAppliesTo = (transition: GraphTransition, activeStateId: string): boolean =>
     transition.anyState ? transition.toStateId !== activeStateId : transition.fromStateId === activeStateId;
@@ -70,6 +99,8 @@ export const selectTransition = (
     activeStateId: string,
     variables: Record<string, number | boolean>,
     normalizedTime: number | null,
+    /** A last say on a ready transition, such as whether a conduit it leads to has a way on. */
+    canTake?: (transition: GraphTransition) => boolean,
 ): GraphTransition | null => {
     let best: GraphTransition | null = null;
     let bestPriority = 0;
@@ -87,6 +118,7 @@ export const selectTransition = (
             continue;
         }
         if (!conditionsMet(transition, variables)) continue;
+        if (canTake && !canTake(transition)) continue;
         best = transition;
         bestPriority = priority;
     }

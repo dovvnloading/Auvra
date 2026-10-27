@@ -8,7 +8,7 @@ import { isTerrainSplatPending } from '../components/Environment/Terrain/terrain
 import { applyModelImportSettings, stripGeometry } from './processing/ModelTransforms';
 import { generateThumbnail } from './thumbnailGenerator';
 import { disposeModel, disposeObject } from './processing/ModelLifecycle';
-import { applyStoredClipNames, prepareAnimationClips } from './animationBinding';
+import { applyStoredClipNames, mirrorModelClips, prepareAnimationClips } from './animationBinding';
 import { hydrateMaterialOverrides, overrideTextureFlipY } from './materialOverrides';
 import {
   assetDiagnosticAttributes,
@@ -322,6 +322,12 @@ export async function loadGameContent(
             }
           } catch (error) { recordAssetFailure('animation_hydration_failed', error, animationPhase, animationDiagnostic); }
           complete(`Loaded animation — ${animation.name || 'animation.fbx'}`, animationDiagnostic);
+        }
+        if (Array.isArray(item.mirroredClips) && item.mirroredClips.length) {
+          loaded.mirroredClips = item.mirroredClips.filter((name: unknown): name is string => typeof name === 'string');
+          try {
+            loaded.animations.push(...mirrorModelClips(loaded.object, loaded.animations, loaded.mirroredClips));
+          } catch (error) { recordAssetFailure('clip_mirror_failed', error, 'animation_binding', diagnostic); }
         }
         models.push(loaded);
       } catch (error) {

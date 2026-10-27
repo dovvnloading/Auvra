@@ -1,9 +1,10 @@
 import React, { useMemo } from 'react';
 import * as THREE from 'three';
-import { Play, Pause, Film, StopCircle, Plus, CornerDownRight } from 'lucide-react';
+import { Play, Pause, Film, StopCircle, Plus, CornerDownRight, FlipHorizontal2 } from 'lucide-react';
 import { LoadedModelData } from '../../../types';
 import { useScene } from '../../../context/SceneContext';
 import { MODEL_FILE_ACCEPT } from '../../../utils/modelLoader';
+import { mirroredClipName } from '../../../utils/animationBinding';
 
 interface AnimationControlsProps {
   model: LoadedModelData | null;
@@ -24,7 +25,7 @@ export const AnimationControls: React.FC<AnimationControlsProps> = ({
   onPlayPause,
   onSpeedChange
 }) => {
-  const { models, addAnimations, isLoading } = useScene();
+  const { models, addAnimations, isLoading, mirrorClip } = useScene();
 
   if (!model) return null;
 
@@ -160,10 +161,13 @@ export const AnimationControls: React.FC<AnimationControlsProps> = ({
                     allClips.map((item, idx) => {
                         const isActive = activeClip === item.clip;
                         const isExternal = item.sourceModelId !== model.id;
+                        // A model's own clip can get a mirrored copy, once; a copy is not mirrored back.
+                        const canMirror = !isExternal && !item.clip.name.endsWith(mirroredClipName(''))
+                            && !model.animations.some(clip => clip.name === mirroredClipName(item.clip.name));
                         
                         return (
+                            <div key={`${item.sourceModelId}-${idx}`} className="relative group/clip">
                             <button
-                                key={`${item.sourceModelId}-${idx}`}
                                 onClick={() => onAnimationSelect(item.clip)}
                                 className={`
                                     w-full text-left px-3 py-2 rounded-md text-xs transition-all flex flex-col gap-0.5 group border
@@ -187,6 +191,19 @@ export const AnimationControls: React.FC<AnimationControlsProps> = ({
                                     </div>
                                 )}
                             </button>
+                            {canMirror && (
+                                <button
+                                    type="button"
+                                    onClick={() => { void mirrorClip(model.id, item.clip.name); }}
+                                    disabled={isLoading}
+                                    title="Add a mirrored copy: left and right swapped"
+                                    aria-label={`Mirror ${item.clip.name}`}
+                                    className="absolute right-6 top-1/2 -translate-y-1/2 p-1 rounded text-gray-500 hover:text-white hover:bg-gray-700 opacity-0 group-hover/clip:opacity-100 focus:opacity-100 transition-opacity"
+                                >
+                                    <FlipHorizontal2 size={12} />
+                                </button>
+                            )}
+                            </div>
                         );
                     })
                 )}

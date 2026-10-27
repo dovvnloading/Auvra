@@ -19,7 +19,7 @@ describe('component registry', () => {
     expect(types).toEqual([
       'rotator', 'mover', 'pointLight', 'spotLight', 'camera', 'collider', 'rigidBody', 'joint', 'particles', 'decal', 'water', 'audioSource',
       'reverbZone', 'musicPlayer',
-      'postProcess', 'reflectionProbe', 'lodGroup', 'distanceCull', 'levelStreaming', 'animation', 'lookAtIK', 'footIK', 'script', 'netSync', 'timeline',
+      'postProcess', 'reflectionProbe', 'lodGroup', 'distanceCull', 'levelStreaming', 'animation', 'lookAtIK', 'footIK', 'twoBoneIK', 'script', 'netSync', 'timeline',
       'dialogue',
     ]);
     for (const definition of COMPONENT_DEFINITIONS) {
