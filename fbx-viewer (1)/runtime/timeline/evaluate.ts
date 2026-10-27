@@ -53,6 +53,8 @@ export interface TimelineEvaluation {
     transforms: TimelineTransformSample[];
     visibility: TimelineVisibilitySample[];
     variables: TimelineVariableSample[];
+    /** The shot of the last unmuted camera track: a camera object id, '' for the gameplay camera; absent without camera keys. */
+    camera?: { objectId: string; blend: number };
 }
 
 // --- SAMPLING ---
@@ -126,6 +128,7 @@ export const evaluateTimeline = (data: TimelineData, time: number): TimelineEval
     const transforms = new Map<string, TimelineTransformSample>();
     const visibility = new Map<string, boolean>();
     const variables = new Map<string, number>();
+    let camera: TimelineEvaluation['camera'];
     for (const track of data.tracks) {
         if (track.muted) continue;
         if (track.kind === 'transform') {
@@ -146,12 +149,16 @@ export const evaluateTimeline = (data: TimelineData, time: number): TimelineEval
             const name = track.name.trim();
             const value = name ? sampleNumberKeys(track.keys, at) : undefined;
             if (value !== undefined) variables.set(name, value);
+        } else if (track.kind === 'camera') {
+            const shot = sampleStepKeys(track.keys, at);
+            if (shot !== undefined) camera = { objectId: shot.trim(), blend: Math.max(0, track.blend ?? 0) };
         }
     }
     return {
         transforms: [...transforms.values()],
         visibility: [...visibility].map(([objectId, visible]) => ({ objectId, visible })),
         variables: [...variables].map(([name, value]) => ({ name, value })),
+        ...(camera ? { camera } : {}),
     };
 };
 
@@ -327,6 +334,11 @@ const normalizeTrack = (value: unknown): TimelineTrack | null => {
         case 'event': {
             const keys = normalizeKeys(value.keys, readText, false);
             return keys ? { ...base, kind: 'event', keys } : null;
+        }
+        case 'camera': {
+            const keys = normalizeKeys(value.keys, readText, false);
+            const blend = typeof value.blend === 'number' && Number.isFinite(value.blend) ? Math.min(30, Math.max(0, value.blend)) : undefined;
+            return keys ? { ...base, kind: 'camera', keys, ...(blend !== undefined ? { blend } : {}) } : null;
         }
         default:
             return null;

@@ -656,6 +656,23 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                 )}
 
                 {/* Specific: Event (Animation Notify) */}
+                {node.type === 'SetActiveCamera' && (
+                    <div className="space-y-1">
+                        <label className="text-[10px] text-gray-400">Camera</label>
+                        <select
+                            value={typeof node.data?.cameraId === 'string' ? node.data.cameraId : ''}
+                            onChange={(e) => onUpdate({ data: { ...(node.data || {}), cameraId: e.target.value } })}
+                            className="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-pink-500"
+                        >
+                            <option value="">Gameplay camera</option>
+                            {levelObjects.filter(object => object.components?.some(component => component.type === 'camera')).map(object => (
+                                <option key={object.id} value={object.id}>{object.name || object.id}</option>
+                            ))}
+                        </select>
+                        <p className="text-[10px] text-gray-500">Switches the view to an object with a Camera component, or back to the gameplay camera, blending over Blend seconds.</p>
+                    </div>
+                )}
+
                 {node.type === 'Event' && node.name === 'Event NetworkEvent' && (
                     <div className="space-y-1">
                         <label className="text-[10px] text-gray-400">Event name (empty: any network event)</label>

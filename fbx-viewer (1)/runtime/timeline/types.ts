@@ -54,7 +54,15 @@ export interface TimelineEventTrack extends TrackBase {
     keys: TimelineKey<string>[];
 }
 
-export type TimelineTrack = TimelineTransformTrack | TimelineVisibilityTrack | TimelineVariableTrack | TimelineEventTrack;
+/** Cuts the view to a camera component's object at each key (the value; '' is the gameplay camera). */
+export interface TimelineCameraTrack extends TrackBase {
+    kind: 'camera';
+    keys: TimelineKey<string>[];
+    /** Seconds each cut blends over; 0 cuts at once. */
+    blend?: number;
+}
+
+export type TimelineTrack = TimelineTransformTrack | TimelineVisibilityTrack | TimelineVariableTrack | TimelineEventTrack | TimelineCameraTrack;
 
 export interface TimelineData {
     /** Seconds; playback ends (or loops) here. */

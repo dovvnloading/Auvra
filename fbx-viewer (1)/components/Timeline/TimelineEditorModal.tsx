@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, Crosshair, Eye, Film, Hash, Move3d, Plus, Trash2, Volume2, VolumeX, X, Zap } from 'lucide-react';
+import { AlertTriangle, Crosshair, Eye, Film, Hash, Move3d, Plus, Trash2, Video, Volume2, VolumeX, X, Zap } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { LevelObject } from '../../types';
 import type { TimelineData, TimelineInterpolation, TimelineKey, TimelineTrack, TimelineVec3 } from '../../runtime/timeline/types';
@@ -75,7 +75,7 @@ const MIN_ROW_HEIGHT = 60;
 const DRAG_THRESHOLD = 3;
 const TIME_EPSILON = 1e-4;
 const TICK_STEPS = [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120];
-const TRACK_KINDS: TrackKind[] = ['transform', 'visibility', 'variable', 'event'];
+const TRACK_KINDS: TrackKind[] = ['transform', 'visibility', 'variable', 'event', 'camera'];
 const TRANSFORM_CHANNELS: TransformChannel[] = ['position', 'rotation', 'scale'];
 const CHANNEL_LABELS: Record<TransformChannel, string> = { position: 'Position', rotation: 'Rotation', scale: 'Scale' };
 const AXES = ['X', 'Y', 'Z'] as const;
@@ -90,7 +90,12 @@ const KIND_INFO: Record<TrackKind, { label: string; icon: LucideIcon; text: stri
     visibility: { label: 'Visibility', icon: Eye, text: 'text-emerald-400', fill: 'bg-emerald-400' },
     variable: { label: 'Variable', icon: Hash, text: 'text-violet-400', fill: 'bg-violet-400' },
     event: { label: 'Event', icon: Zap, text: 'text-amber-400', fill: 'bg-amber-400' },
+    camera: { label: 'Camera', icon: Video, text: 'text-pink-400', fill: 'bg-pink-400' },
 };
+
+/** Objects that carry a Camera component, which camera keys can cut to. */
+export const cameraObjects = (objects: readonly LevelObject[]): LevelObject[] =>
+    objects.filter(object => object.components?.some(component => component.type === 'camera' && component.enabled !== false));
 
 const SECTION_TITLE = 'text-[10px] font-bold text-gray-500 uppercase tracking-wider';
 const FIELD_CLASS = 'bg-gray-950 border border-gray-800 rounded px-1.5 h-6 text-[11px] text-white focus:outline-none focus:border-blue-500';
@@ -123,6 +128,7 @@ const createTrack = (kind: TrackKind, id: string, objectId: string): TimelineTra
         case 'visibility': return { id, kind, objectId, keys: [] };
         case 'variable': return { id, kind, name: '', keys: [] };
         case 'event': return { id, kind, keys: [] };
+        case 'camera': return { id, kind, keys: [], blend: 0 };
     }
 };
 
@@ -132,6 +138,7 @@ const lanesOf = (track: TimelineTrack): Lane[] => {
         case 'visibility': return [{ channel: 'keys', label: 'Visible' }];
         case 'variable': return [{ channel: 'keys', label: 'Value' }];
         case 'event': return [{ channel: 'keys', label: 'Events' }];
+        case 'camera': return [{ channel: 'keys', label: 'Shots' }];
     }
 };
 
@@ -156,6 +163,7 @@ const setKeys = (track: TimelineTrack, channel: Channel, keys: AnyKey[]): Timeli
         case 'visibility': return { ...track, keys: keys as TimelineKey<boolean>[] };
         case 'variable': return { ...track, keys: keys as TimelineKey<number>[] };
         case 'event': return { ...track, keys: keys as TimelineKey<string>[] };
+        case 'camera': return { ...track, keys: keys as TimelineKey<string>[] };
     }
 };
 
@@ -218,6 +226,7 @@ const createKey = (track: TimelineTrack, channel: Channel, time: number, objects
         case 'visibility': value = previous ? !previous.value : true; break;
         case 'variable': value = neighbour?.value ?? 0; break;
         case 'event': value = neighbour?.value ?? 'Event'; break;
+        case 'camera': value = neighbour?.value ?? cameraObjects(objects)[0]?.id ?? ''; break;
     }
     const key: AnyKey = { time, value };
     if (blends(track) && previous?.interpolation) key.interpolation = previous.interpolation;
@@ -299,7 +308,9 @@ const KeyDetails: React.FC<{
     duration: number;
     onChange: (next: AnyKey) => void;
     onDelete: () => void;
-}> = ({ track, channel, trackName, timelineKey, duration, onChange, onDelete }) => {
+    /** Camera objects a camera key can cut to. */
+    cameras?: { id: string; label: string }[];
+}> = ({ track, channel, trackName, timelineKey, duration, onChange, onDelete, cameras = [] }) => {
     const laneLabel = lanesOf(track).find(lane => lane.channel === channel)?.label ?? '';
     const { value } = timelineKey;
 
@@ -338,6 +349,19 @@ const KeyDetails: React.FC<{
         );
     } else if (typeof value === 'number') {
         editor = <NumberField label="Value" value={value} onChange={(next) => onChange({ ...timelineKey, value: next })} />;
+    } else if (track.kind === 'camera') {
+        editor = (
+            <select
+                aria-label="Camera"
+                value={value}
+                onChange={(event) => onChange({ ...timelineKey, value: event.target.value })}
+                className={`w-full ${FIELD_CLASS}`}
+            >
+                <option value="">Gameplay camera</option>
+                {value && !cameras.some(camera => camera.id === value) && <option value={value}>Missing camera</option>}
+                {cameras.map(camera => <option key={camera.id} value={camera.id}>{camera.label}</option>)}
+            </select>
+        );
     } else {
         editor = (
             <label className="block text-[10px] text-gray-400">
@@ -386,7 +410,7 @@ const KeyDetails: React.FC<{
                         {INTERPOLATIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
                     </select>
                 ) : (
-                    <p className="text-[10px] text-gray-500">{track.kind === 'event' ? 'Event' : 'Visibility'} keys always step: the value holds until the next key.</p>
+                    <p className="text-[10px] text-gray-500">{track.kind === 'event' ? 'Event' : track.kind === 'camera' ? 'Camera' : 'Visibility'} keys always step: the value holds until the next key.</p>
                 )}
                 {blends(track) && (
                     <p className="text-[10px] text-gray-500 leading-snug">How the value moves from this key to the next: a straight line, a hold, or an ease in and out.</p>
@@ -431,6 +455,10 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({ timeli
             return { id: object.id, label: (counts.get(name) ?? 0) > 1 ? `${name} (${object.id.slice(0, 4)})` : name };
         });
     }, [objects]);
+    const cameraOptions = useMemo(() => {
+        const ids = new Set(cameraObjects(objects).map(object => object.id));
+        return objectOptions.filter(option => ids.has(option.id));
+    }, [objects, objectOptions]);
     const lateKeys = useMemo(() => draft.tracks.reduce((count, track) => count + lanesOf(track).reduce(
         (laneCount, lane) => laneCount + getKeys(track, lane.channel).filter(key => key.time > draft.duration + TIME_EPSILON).length, 0,
     ), 0), [draft]);
@@ -464,6 +492,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({ timeli
             }
             case 'variable': return track.name.trim() || 'Variable';
             case 'event': return 'Events';
+            case 'camera': return 'Camera cuts';
         }
     };
 
@@ -839,6 +868,28 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({ timeli
                                                 {track.kind === 'event' && (
                                                     <div className="px-1 text-[10px] leading-snug text-gray-500">Raises each key's name as an event when playback passes it.</div>
                                                 )}
+                                                {track.kind === 'camera' && (
+                                                    <label className="flex items-center gap-1 px-1 text-[10px] text-gray-400">
+                                                        Blend
+                                                        <input
+                                                            type="number"
+                                                            aria-label="Camera blend seconds"
+                                                            min={0}
+                                                            max={30}
+                                                            step={0.1}
+                                                            value={track.blend ?? 0}
+                                                            onChange={(event) => {
+                                                                const blend = Number(event.target.value);
+                                                                if (Number.isFinite(blend)) changeTrack(track.id, current => (current.kind === 'camera' ? { ...current, blend: Math.min(30, Math.max(0, blend)) } : current));
+                                                            }}
+                                                            className={`w-14 ${FIELD_CLASS}`}
+                                                        />
+                                                        s
+                                                    </label>
+                                                )}
+                                                {track.kind === 'camera' && cameraOptions.length === 0 && (
+                                                    <div className="px-1 text-[10px] leading-snug text-amber-400">Add a Camera component to an object to cut to it.</div>
+                                                )}
                                                 {track.kind === 'transform' && (
                                                     <button
                                                         type="button"
@@ -920,6 +971,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({ timeli
                                 duration={duration}
                                 onChange={changeSelectedKey}
                                 onDelete={deleteSelectedKey}
+                                cameras={cameraOptions}
                             />
                         ) : (
                             <div className="space-y-2 text-[11px] leading-snug text-gray-500">

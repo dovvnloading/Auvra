@@ -38,6 +38,10 @@ It fires once per entry, and again only after the player has left.
 
 Math (Add, Subtract, Multiply, Divide), comparisons (Greater, Less, Equal) and logic (And, Or) nodes feed values into actions. Literal nodes provide numbers, strings and booleans.
 
+## Cameras
+
+**Set Active Camera** switches the view to an object with a Camera component (picked in the inspector), or back to the gameplay camera, easing over its **Blend** seconds. Timelines can cut between cameras too; see [Camera cuts](timelines.md#camera-cuts).
+
 ## Multiplayer
 
 | Node | Does |

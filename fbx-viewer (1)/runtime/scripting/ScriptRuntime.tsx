@@ -31,6 +31,7 @@ import {
 import { isScriptNetPayload } from './scriptApi';
 import { useNetSession } from '../net/NetSessionContext';
 import { NET_LIMITS, type NetSession } from '../net/protocol';
+import { cameraDirector } from '../cameraDirector';
 
 const OFFLINE_NET: ScriptNetState = { connected: false, isHost: true, selfId: null, peers: [] };
 
@@ -285,6 +286,11 @@ export const parseScriptCommand = (value: unknown): ScriptCommand | null => {
         }
         case 'openLevel':
             return hasKeys(v, ['type', 'levelId']) && isName(v.levelId) ? { type: 'openLevel', levelId: v.levelId } : null;
+        case 'setCamera':
+            return hasKeys(v, ['type', 'objectId', 'blend']) && (v.objectId === null || isName(v.objectId))
+                && typeof v.blend === 'number' && Number.isFinite(v.blend) && v.blend >= 0 && v.blend <= 30
+                ? { type: 'setCamera', objectId: v.objectId as string | null, blend: v.blend }
+                : null;
         case 'netSend': {
             const to = optional(v.to, isName);
             if (!hasKeys(v, ['type', 'name', 'payload'], ['to']) || !isName(v.name) || v.name.length > NET_LIMITS.maxEventNameLength
@@ -547,6 +553,8 @@ export interface ScriptCommandServices {
     log(scriptId: string, level: CommandOf<'log'>['level'], message: string): void;
     /** Sends a multiplayer event; does nothing in a single-player game. */
     sendNetEvent(name: string, payload: ScriptNetPayload, to?: string): void;
+    /** Shows a level camera, or the gameplay camera for null. */
+    setCamera(objectId: string | null, blend: number): void;
 }
 
 /** What applying one frame's commands produced for the next snapshot. */
@@ -628,6 +636,9 @@ export const applyScriptCommand = (command: ScriptCommand, services: ScriptComma
             return;
         case 'netSend':
             services.sendNetEvent(command.name, command.payload, command.to);
+            return;
+        case 'setCamera':
+            services.setCamera(command.objectId, command.blend);
             return;
         case 'log':
             services.log(command.scriptId, command.level, command.message);
@@ -910,6 +921,7 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
             },
             openLevel: levelId => latest.current.openLevel(levelId),
             sendNetEvent: (name, payload, to) => netRef.current?.sendEvent(name, payload, to),
+            setCamera: (objectId, blend) => cameraDirector.setActive(objectId, blend),
             log: (scriptId, level, message) => {
                 if (logs >= MAX_LOGS_PER_FRAME) {
                     droppedLogs += 1;

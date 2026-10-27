@@ -119,6 +119,7 @@ Transforms are relative to the object's parent, like the inspector's; for an obj
 | `ctx.raycastResult(requestId)` | The answer, during the next frame only: `{ objectId, object, point, normal, distance }` (`object` is a handle, or `null`), or `null` when the ray hit nothing. In any other frame it is `undefined`, so keep what you need in `ctx.state` |
 | `ctx.playSound(audioId, bus)` | Plays a sound once, in 2D. `bus` is optional: `'sfx'` (the default), `'music'`, `'ui'` or `'master'` |
 | `ctx.playPlayerAnimation(clipName, maskBone)` | Plays a clip once on the player character, like the **Play Player Animation** node. `maskBone` is optional; see [One-shot animations](characters.md#one-shot-animations-on-part-of-the-body) |
+| `ctx.setCamera(objectId, blendSeconds)` | Shows the view of the object's Camera component, blending over `blendSeconds` (default 0); `null` gives the view back to the gameplay camera. See [Camera cuts](timelines.md#camera-cuts) |
 | `ctx.openLevel(levelId)` | Loads another level, like the **Open Level** node. Inside the editor it prints a note instead. Commands issued after it in the same frame are dropped |
 
 ### Input, variables and state

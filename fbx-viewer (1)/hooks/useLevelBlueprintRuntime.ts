@@ -11,6 +11,7 @@ import { TriggerEvent, useTriggerEvents } from '../runtime/triggers';
 import { animationEvents, type AnimationEvent } from '../runtime/animationEvents';
 import { timelineEvents, type TimelineEvent } from '../runtime/timeline/events';
 import { useNetSession } from '../runtime/net/NetSessionContext';
+import { cameraDirector } from '../runtime/cameraDirector';
 import type { NetPayload } from '../runtime/net/protocol';
 import type { RuntimeHost } from '../runtime/types';
 import { levelVariables } from '../runtime/levelVariables';
@@ -438,6 +439,12 @@ export const useLevelBlueprintRuntime = ({
             // Use blue/info type for BP logs to distinguish them
             addNotification({ message: `[Output] ${msg}`, type: 'info', duration: 3000 });
         } 
+        else if (node.type === 'SetActiveCamera') {
+            const blendPin = node.inputs.find(p => p.name === 'Blend');
+            const blend = Number(blendPin ? evaluateInput(node.id, blendPin.id, context) : 0);
+            const cameraId = typeof node.data?.cameraId === 'string' ? node.data.cameraId : '';
+            cameraDirector.setActive(cameraId || null, Number.isFinite(blend) ? blend : 0);
+        }
         else if (node.type === 'SendNetworkEvent') {
             const namePin = node.inputs.find(p => p.name === 'Name');
             const valuePin = node.inputs.find(p => p.name === 'Value');

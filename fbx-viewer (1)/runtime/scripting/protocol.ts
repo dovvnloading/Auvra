@@ -96,6 +96,8 @@ export type ScriptCommand =
     | { type: 'raycast'; requestId: string; origin: ScriptVec3; direction: ScriptVec3; maxDistance: number; excludeObjectId?: string }
     | { type: 'playPlayerAnimation'; clipName: string; maskBone?: string }
     | { type: 'openLevel'; levelId: string }
+    /** Shows a level camera (objectId null: the gameplay camera), blending over `blend` seconds. */
+    | { type: 'setCamera'; objectId: string | null; blend: number }
     /** A multiplayer event to every other player, or to one (`to`). */
     | { type: 'netSend'; name: string; payload: ScriptNetPayload; to?: string }
     | { type: 'log'; scriptId: string; level: 'info' | 'warn' | 'error'; message: string };
