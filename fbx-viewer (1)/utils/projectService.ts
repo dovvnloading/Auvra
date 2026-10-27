@@ -396,7 +396,7 @@ function sanitizeChange(change: ProjectChange): Record<string, unknown> {
 function sanitizeJson(value: unknown): unknown {
   if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') {
     if (typeof value === 'number' && !Number.isFinite(value)) throw new Error('Project JSON cannot contain non-finite numbers');
-    if (typeof value === 'string' && (/^(?:https?|blob|data|file):/i.test(value) || /^[A-Za-z]:[\\/]/.test(value) || /^\\\\/.test(value) || (/^\/(?:[^/]|$)/.test(value) && !/[\r\n]/.test(value)))) throw new Error('Project JSON cannot contain paths, URLs, or binary data');
+    if (typeof value === 'string' && (/^(?:https?|blob|data|file):/i.test(value) || /^[A-Za-z]:[\\/]/.test(value) || /^\\\\/.test(value) || (/^\/(?:[^/\s]|$)/.test(value) && !/[\r\n]/.test(value)))) throw new Error('Project JSON cannot contain paths, URLs, or binary data');
     return value;
   }
   if (typeof Blob !== 'undefined' && value instanceof Blob) throw new Error('Project JSON cannot contain binary blobs');

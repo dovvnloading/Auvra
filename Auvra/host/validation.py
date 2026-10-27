@@ -26,9 +26,10 @@ _FORBIDDEN_JSON_KEY = re.compile(
 _WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
 _UNC_PATH = re.compile(r"^\\\\")
 _FILE_URI = re.compile(r"^file://", re.I)
-# An absolute POSIX path: "/" then a name (or "/" alone). "//" opens a code comment, not a path,
-# and text with a line break (code, prose) is never a path; the editor's sanitizeJson agrees.
-_POSIX_ABSOLUTE = re.compile(r"^/(?:[^/]|$)")
+# An absolute POSIX path: "/" then a name (or "/" alone). "//" opens a code comment and "/ 4" is
+# HUD text, not paths, and text with a line break (code, prose) is never a path; the protocol
+# schema and the editor's sanitizeJson agree.
+_POSIX_ABSOLUTE = re.compile(r"^/(?:[^/\s]|$)")
 MAX_MESSAGE_BYTES = 256 * 1024
 
 

@@ -26,7 +26,7 @@ class ValidationTests(unittest.TestCase):
             return {"protocol":"auvra.host/1","type":"request","id":"r1","session":"s1","revision":0,
                     "method":"project.applyChanges","payload":{"projectId":"p1","expectedRevision":0,
                     "changes":[{"domain":"levels","documentId":"l1","operation":"upsert","document":{"code": code}}]}}
-        for code in ("// Write React code here\nreturn null;", "/* setup */\nfunction onStart(ctx) {}", "//"):
+        for code in ("// Write React code here\nreturn null;", "/* setup */\nfunction onStart(ctx) {}", "//", "/ 4"):
             validate_message(change(code))
         for path in ("/home/user/secret.fbx", "/", "/tmp"):
             with self.assertRaises(ProtocolValidationError): validate_message(change(path))
