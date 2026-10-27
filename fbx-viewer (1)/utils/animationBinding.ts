@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { animatedSkeleton, humanoidRole, matchHumanoidBones, retargetHumanoidClip } from './retargeting';
+import { animatedSkeleton, humanoidRole, matchHumanoidBones, mirrorHumanoidClip, retargetHumanoidClip } from './retargeting';
 
 export class AnimationImportError extends Error {
   constructor(message: string) {
@@ -23,13 +23,15 @@ export interface PreparedAnimationClips {
   animatedBones: number;
 }
 
+/**
+ * The skinned mesh whose skeleton has the most bones. A character split into parts (Mixamo's body,
+ * shoes, hair) often gives each part a small skeleton of copied bones; only the body's is complete.
+ */
 const skinnedMesh = (root: THREE.Object3D): THREE.SkinnedMesh | null => {
   let result: THREE.SkinnedMesh | null = null;
   root.traverse((child) => {
-    if (!result && (child as THREE.SkinnedMesh).isSkinnedMesh) {
-      const candidate = child as THREE.SkinnedMesh;
-      if (candidate.skeleton?.bones.length) result = candidate;
-    }
+    const candidate = child as THREE.SkinnedMesh;
+    if (candidate.isSkinnedMesh && (candidate.skeleton?.bones.length ?? 0) > (result?.skeleton.bones.length ?? 0)) result = candidate;
   });
   return result;
 };
@@ -60,6 +62,31 @@ export const uniqueClipNames = (names: readonly string[], taken: Set<string>): s
  * loaded, so without this a model renamed in the library would rename its clips too, and every
  * state that plays them would lose them. Ignored unless there is one stored name per clip.
  */
+/** The name a mirrored copy of a clip gets. */
+export const mirroredClipName = (name: string): string => `${name} (Mirrored)`;
+
+/**
+ * Mirrored copies (left and right swapped) of the clips in `clips` named in `names`, made on a copy
+ * of `object`'s skeleton at its bind pose. Names it has no clip for, or whose copy it already has,
+ * are skipped.
+ */
+export const mirrorModelClips = (
+  object: THREE.Object3D,
+  clips: readonly THREE.AnimationClip[],
+  names: readonly string[],
+): THREE.AnimationClip[] => {
+  const wanted = names.filter((name) => clips.some((clip) => clip.name === name) && !clips.some((clip) => clip.name === mirroredClipName(name)));
+  if (!wanted.length) return [];
+  const copy = cloneSkeleton(object);
+  const mesh = skinnedMesh(copy);
+  if (!mesh) throw new AnimationImportError('The model has no skeleton to mirror its clips on.');
+  copy.updateMatrixWorld(true);
+  mesh.skeleton.pose();
+  copy.updateMatrixWorld(true);
+  const rig = { root: copy, bones: mesh.skeleton.bones };
+  return wanted.map((name) => mirrorHumanoidClip(rig, clips.find((clip) => clip.name === name)!, mirroredClipName(name)));
+};
+
 export const applyStoredClipNames = (clips: readonly THREE.AnimationClip[], stored: unknown): void => {
   if (!Array.isArray(stored) || stored.length !== clips.length) return;
   if (!stored.every((name) => typeof name === 'string' && name.length > 0)) return;

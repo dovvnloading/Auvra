@@ -110,8 +110,11 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
         );
     }
 
+    // Aiming over the shoulder keeps the HUD and the crosshair; only the scope view looks through a reticle.
+    const scoped = !!isAiming && (playerBlueprint.aimView ?? 'scope') === 'scope';
+
     // --- SCOPE OVERLAY (Visible when aiming) ---
-    if (isPlaying && isAiming) {
+    if (isPlaying && scoped) {
         return (
             <div className="absolute inset-0 pointer-events-none z-50 overflow-hidden">
                 <ScopeReticle color="#ef4444" opacity={1} scale={1} glowIntensity={4} />
@@ -243,7 +246,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
             
             {/* Center Crosshair (Standard - Hidden when Scoped) */}
-            {!isAiming && (
+            {!scoped && (
                 <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center pointer-events-none opacity-80">
                     <div className="w-0.5 h-0.5 bg-white rounded-full shadow-[0_0_4px_rgba(255,255,255,0.8)] z-10" />
                     <div className="absolute w-4 h-4 border border-white/30 rounded-full" />

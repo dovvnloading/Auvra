@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { humanoidRole, matchHumanoidBones, retargetHumanoidClip } from '../../utils/retargeting';
+import { humanoidRole, matchHumanoidBones, mirrorBoneName, mirrorHumanoidClip, retargetHumanoidClip } from '../../utils/retargeting';
 
 describe('humanoidRole', () => {
   it('reads the same roles from Mixamo, Unreal, Rigify, Biped and plain names', () => {
@@ -137,5 +137,54 @@ describe('retargetHumanoidClip', () => {
     const hips = result.tracks.find(track => track.name === 'pelvis.position')!;
     // 50 cm forward on a 100 cm hip height is half a hip height on the 1-unit target.
     expect(Array.from(hips.values.slice(-3)).map(v => Number(v.toFixed(4)))).toEqual([0, 1, 0.5]);
+  });
+});
+
+describe('mirrorHumanoidClip', () => {
+  it('names the other side across the common schemes', () => {
+    expect(mirrorBoneName('mixamorig:LeftUpLeg')).toBe('mixamorig:RightUpLeg');
+    expect(mirrorBoneName('upperarm_l')).toBe('upperarm_r');
+    expect(mirrorBoneName('DEF-thigh.R')).toBe('DEF-thigh.L');
+    expect(mirrorBoneName('Bip01 L Thigh')).toBe('Bip01 R Thigh');
+    expect(mirrorBoneName('Hips')).toBeNull();
+  });
+
+  it('plays the left leg swing on the right leg and flips sideways hip travel', () => {
+    const root = new THREE.Group();
+    const bone = (name: string, parent: THREE.Object3D, position: [number, number, number]) => {
+      const created = new THREE.Bone();
+      created.name = name;
+      created.position.set(...position);
+      parent.add(created);
+      return created;
+    };
+    const hips = bone('Hips', root, [0, 1, 0]);
+    bone('Spine', hips, [0, 0.2, 0]);
+    const leftUp = bone('LeftUpLeg', hips, [0.1, 0, 0]);
+    bone('LeftLeg', leftUp, [0, -0.45, 0]);
+    const rightUp = bone('RightUpLeg', hips, [-0.1, 0, 0]);
+    bone('RightLeg', rightUp, [0, -0.45, 0]);
+    root.updateMatrixWorld(true);
+    const bones: THREE.Object3D[] = [];
+    root.traverse(node => { if ((node as THREE.Bone).isBone) bones.push(node); });
+
+    const swing = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 6);
+    const clip = new THREE.AnimationClip('Step', 1, [
+      new THREE.QuaternionKeyframeTrack('LeftUpLeg.quaternion', [0, 1], [0, 0, 0, 1, ...swing.toArray()]),
+      new THREE.VectorKeyframeTrack('Hips.position', [0, 1], [0, 1, 0, 0.2, 1, 0]),
+    ]);
+    const mirrored = mirrorHumanoidClip({ root, bones }, clip, 'Step (Mirrored)');
+    expect(mirrored.name).toBe('Step (Mirrored)');
+
+    const mixer = new THREE.AnimationMixer(root);
+    const action = mixer.clipAction(mirrored);
+    action.setLoop(THREE.LoopOnce, 1);
+    action.clampWhenFinished = true;
+    action.play();
+    mixer.setTime(1);
+    root.updateMatrixWorld(true);
+    expect(Math.abs(rightUp.quaternion.dot(swing))).toBeCloseTo(1, 5);
+    expect(Math.abs(leftUp.quaternion.dot(new THREE.Quaternion()))).toBeCloseTo(1, 5);
+    expect(hips.position.x).toBeCloseTo(-0.2, 5);
   });
 });

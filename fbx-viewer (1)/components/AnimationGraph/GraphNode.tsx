@@ -1,5 +1,5 @@
 import React from 'react';
-import { Crown, Network, Play } from 'lucide-react';
+import { Crown, GitFork, Network, Play } from 'lucide-react';
 import { GraphState } from '../../types';
 import { innerStateCount } from './utils/stateMachines';
 
@@ -23,6 +23,7 @@ export const GraphNode: React.FC<GraphNodeProps> = ({
     onDoubleClick
 }) => {
     const machine = state.stateType === 'StateMachine';
+    const conduit = state.stateType === 'Conduit';
     return (
         <div 
             className={`
@@ -55,7 +56,12 @@ export const GraphNode: React.FC<GraphNodeProps> = ({
             
             {/* Body */}
             <div className="p-3 text-[10px] text-gray-400 space-y-2">
-                {machine ? (
+                {conduit ? (
+                    <div className="flex items-center gap-1.5 text-amber-200/80 bg-amber-950/20 px-2 py-1 rounded border border-dashed border-amber-800/40">
+                        <GitFork size={8} />
+                        <span className="truncate">Conduit &middot; passes through</span>
+                    </div>
+                ) : machine ? (
                     <div className="flex items-center gap-1.5 text-violet-300 bg-violet-950/30 px-2 py-1 rounded border border-violet-900/30">
                         <Network size={8} />
                         <span className="truncate">State machine &middot; {innerStateCount(state)} {innerStateCount(state) === 1 ? 'state' : 'states'}</span>

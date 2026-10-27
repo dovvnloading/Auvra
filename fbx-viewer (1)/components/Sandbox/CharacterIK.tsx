@@ -12,6 +12,7 @@ import {
     resolveFootIKRig,
     updateFootIK,
     updateLookAtIK,
+    useRestoreBeforeAnimation,
 } from '../../runtime/components/ikComponents';
 
 const DEFAULT_FOOT_STEP = 0.5;
@@ -31,6 +32,7 @@ export const resolveCharacterIK = (settings: CharacterIKSettings | undefined) =>
         lookAt: settings?.lookAt === 'camera' || settings?.lookAt === 'player' ? settings.lookAt : 'none' as const,
         lookAtBone: settings?.lookAtBone?.trim() || DEFAULT_LOOK_BONE,
         lookAtMaxAngle: THREE.MathUtils.degToRad(finite(settings?.lookAtMaxAngle, DEFAULT_LOOK_ANGLE, 0, 180)),
+        aimPitch: settings?.aimPitch === true,
     };
 };
 
@@ -39,33 +41,82 @@ interface CharacterIKProps {
     settings?: CharacterIKSettings;
     /** The character's own physics id, so its capsule is not taken for ground. */
     physicsId?: string;
+    /** The player is aiming: with aimPitch on, the spine follows the camera up and down. */
+    aiming?: boolean;
 }
 
 const _lookTarget = new THREE.Vector3();
+const _aimDirection = new THREE.Vector3();
+const _aimRight = new THREE.Vector3();
+const _turn = new THREE.Quaternion();
+const _boneWorld = new THREE.Quaternion();
+const _parentWorld = new THREE.Quaternion();
+
+/** The spine bones the aim lean is shared across, bottom up. */
+const AIM_SPINE = ['Spine', 'Spine1', 'Spine2'];
+/** The furthest the spine leans up or down to follow the aim. */
+const MAX_AIM_PITCH = THREE.MathUtils.degToRad(60);
+/** How quickly the lean comes in and goes, per second. */
+const AIM_BLEND_RATE = 8;
+
+/** Turns `bone` by `angle` radians about the world-space `axis`, keeping its parent where it is. */
+export const turnBoneAboutWorldAxis = (bone: THREE.Object3D, axis: THREE.Vector3, angle: number): void => {
+    bone.updateWorldMatrix(true, false);
+    bone.getWorldQuaternion(_boneWorld).premultiply(_turn.setFromAxisAngle(axis, angle));
+    if (bone.parent) bone.parent.getWorldQuaternion(_parentWorld).invert();
+    else _parentWorld.identity();
+    bone.quaternion.copy(_parentWorld.multiply(_boneWorld));
+    bone.updateMatrixWorld(true);
+};
+
+/**
+ * The lean that points an aim along the camera: the camera's pitch (up positive), at most
+ * MAX_AIM_PITCH, scaled by `weight`.
+ */
+export const aimPitch = (direction: THREE.Vector3, weight: number): number =>
+    THREE.MathUtils.clamp(Math.asin(THREE.MathUtils.clamp(direction.y, -1, 1)), -MAX_AIM_PITCH, MAX_AIM_PITCH) * weight;
 
 /**
  * Applies a character blueprint's IK after its animation graph each frame (the graph animates at
  * priority -1, this runs at the default priority): foot planting on the ground under each foot and
  * a look-at toward the camera or the player.
  */
-export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physicsId }) => {
+export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physicsId, aiming = false }) => {
     const resolved = resolveCharacterIK(settings);
     const physics = usePhysicsQueries();
     const playerRef = useContext(IKPlayerTargetContext);
     const [guard] = useState(() => new IKPoseGuard());
     const [footState] = useState(createFootIKState);
     const [lookState] = useState(createLookAtIKState);
+    const [aimState] = useState(() => ({ weight: 0 }));
     useEffect(() => () => guard.release(), [guard, model]);
+    useRestoreBeforeAnimation(guard);
 
     const rig = useMemo(() => (resolved.footIK ? resolveFootIKRig(model, ['LeftFoot', 'RightFoot']) : null), [model, resolved.footIK]);
     const lookBone = useMemo(() => (resolved.lookAt !== 'none' ? findBone(model, resolved.lookAtBone) : null), [model, resolved.lookAt, resolved.lookAtBone]);
-    const bones = useMemo(() => [...(rig ? footIKBones(rig) : []), ...(lookBone ? [lookBone] : [])], [rig, lookBone]);
+    const spine = useMemo(
+        () => (resolved.aimPitch ? AIM_SPINE.map(name => findBone(model, name)).filter((bone): bone is THREE.Object3D => !!bone) : []),
+        [model, resolved.aimPitch],
+    );
+    const bones = useMemo(
+        () => [...(rig ? footIKBones(rig) : []), ...spine, ...(lookBone ? [lookBone] : [])],
+        [rig, spine, lookBone],
+    );
 
     useFrame(({ camera }, delta) => {
         if (!bones.length) return;
         guard.begin(bones);
         if (rig) {
             updateFootIK(model, rig, physics.raycast, { maxStep: resolved.footMaxStep, weight: 1, excludeObjectId: physicsId }, footState, delta);
+        }
+        if (spine.length) {
+            // The lean eases in and out with aiming, and is shared by the spine bones bottom up.
+            aimState.weight += ((aiming ? 1 : 0) - aimState.weight) * (1 - Math.exp(-AIM_BLEND_RATE * delta));
+            if (aimState.weight > 1e-3) {
+                const lean = aimPitch(camera.getWorldDirection(_aimDirection), aimState.weight);
+                _aimRight.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+                for (const bone of spine) turnBoneAboutWorldAxis(bone, _aimRight, lean / spine.length);
+            }
         }
         if (lookBone) {
             const player = resolved.lookAt === 'player' ? playerRef?.current ?? null : null;

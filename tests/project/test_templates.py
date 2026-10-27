@@ -449,6 +449,15 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(models["outpost-model-scout"]["assetId"], models["outpost-model-ranger"]["assetId"])
         self.assertIn("Jacket", models["outpost-model-scout"]["materialOverrides"])
 
+        # The Ranger aims over the shoulder with a pistol in the right hand and a muzzle at its barrel.
+        player = blueprints["outpost-player"]
+        self.assertEqual((player["aimView"], player["ik"]["aimPitch"]), ("shoulder", True))
+        [pistol] = documents(repository, "attachments")
+        [muzzle] = documents(repository, "sockets")
+        for item in (pistol, muzzle):
+            self.assertEqual((item["parentModelId"], item["boneName"]), ("outpost-model-ranger", "RightHand"))
+        self.assertTrue(repository.assets.verify(pistol["assetId"]))
+
     def test_outpost_player_graph_shows_the_animation_kit(self) -> None:
         repository, _, _ = self.outpost()
         player = next(item for item in documents(repository, "blueprints") if item["id"] == "outpost-player")

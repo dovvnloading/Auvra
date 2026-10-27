@@ -1,10 +1,10 @@
 
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { AnimationGraphData } from '../../../types';
+import { AnimationGraphData, GraphTransition } from '../../../types';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { blendSeconds, DEFAULT_BLEND_SECONDS } from '../utils/blending';
-import { selectTransition } from '../utils/transitions';
+import { selectTransition, throughConduits } from '../utils/transitions';
 import { ANIMATION_FRAME_PRIORITY } from './useGraphAnimator';
 
 export const useGraphStateMachine = (
@@ -18,6 +18,10 @@ export const useGraphStateMachine = (
     const previousStateRef = useRef<string | null>(null);
     // Crossfade length of the most recent transition, read by the animator on state entry.
     const blendDurationRef = useRef<number>(DEFAULT_BLEND_SECONDS);
+    const conduits = useMemo(
+        () => new Set(graph.states.filter(state => state.stateType === 'Conduit').map(state => state.id)),
+        [graph.states],
+    );
 
     // Initialize active state if missing
     useEffect(() => {
@@ -39,7 +43,22 @@ export const useGraphStateMachine = (
 
         // Check transitions for current state
         const activeId = activeStateRef.current;
-        const transition = selectTransition(graph.transitions, activeId, variablesRef.current, getNormalizedTime ? getNormalizedTime(activeId) : null);
+        const variables = variablesRef.current;
+        const normalizedTime = getNormalizedTime ? getNormalizedTime(activeId) : null;
+        let transition: GraphTransition | null;
+        if (conduits.size) {
+            // A transition into a conduit is taken only with a way on, and goes straight through to it.
+            const arrivals = new Map<GraphTransition, GraphTransition>();
+            const isConduit = (stateId: string) => conduits.has(stateId);
+            const chosen = selectTransition(graph.transitions, activeId, variables, normalizedTime, (candidate) => {
+                const arrived = throughConduits(candidate, graph.transitions, isConduit, variables);
+                if (arrived) arrivals.set(candidate, arrived);
+                return arrived !== null;
+            });
+            transition = chosen ? arrivals.get(chosen) ?? chosen : null;
+        } else {
+            transition = selectTransition(graph.transitions, activeId, variables, normalizedTime);
+        }
         if (transition) {
             const span = frontendDiagnostics.startSpan('animation_runtime', 'state_transition', {
                 category: 'runtime_transition',

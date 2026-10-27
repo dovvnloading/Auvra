@@ -1254,7 +1254,9 @@ def _outpost_player() -> dict[str, Any]:
         description="The Ranger: the starter controls on a character with its own clips.",
         upperBody={"fireClip": _CLIP["Shooting"], "aimClip": _CLIP["Aiming"], "maskBone": "Spine"},
         hitReactClip=_CLIP["Hit Reaction"],
-        ik={"footIK": True, "footMaxStep": 0.4},
+        # Over the shoulder, so the aim and fire clips show, with the spine leaning up and down with the aim.
+        aimView="shoulder",
+        ik={"footIK": True, "footMaxStep": 0.4, "aimPitch": True},
     )
     player["variables"] = graph["variables"]
     return player
@@ -1319,6 +1321,7 @@ def _apply_outpost(repository: Any, project_name: str) -> None:
                for row in range(_TERRAIN_SAMPLES) for column in range(_TERRAIN_SAMPLES)]
     heightfield = _store_heightfield(repository, heights, _TERRAIN_SAMPLES, "outpost-terrain.ahf")
 
+    pistol_asset = _store_file(repository, _OUTPOST_ROOT / "assets" / "pistol.fbx", FBX_MIME)
     models = []
     for model_id, (path, name, category, size, overrides) in _OUTPOST_MODELS.items():
         model = _model_document(model_id, stored[path], name, category, size)
@@ -1331,6 +1334,14 @@ def _apply_outpost(repository: Any, project_name: str) -> None:
     changes = {
         "models": models,
         "blueprints": [_outpost_player(), _outpost_raider()],
+        # The Ranger's pistol in the right hand (in the hand bone's metres; the file is in centimetres),
+        # and the muzzle at the end of its barrel for the flash.
+        "attachments": [{"id": "outpost-pistol", "name": "Pistol", "assetId": pistol_asset, "parentModelId": "outpost-model-ranger",
+                         "boneName": "RightHand", "position": [0.0, 0.075, 0.0], "rotation": [-90.0, 0.0, 0.0],
+                         "scale": [0.01, 0.01, 0.01]}],
+        "sockets": [{"id": "outpost-muzzle", "name": "Muzzle", "parentModelId": "outpost-model-ranger", "boneName": "RightHand",
+                     "position": [0.0, 0.24, -0.05], "rotation": [0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0],
+                     "flashConfig": {"enabled": True, "textureId": None, "scale": 1.0, "color": "#ffd27a", "duration": 0.08}}],
         "audio": [{"id": _SIGNAL_SOUND_ID, "name": "Signal Chime", "assetId": sound_asset, "type": WAV_MIME,
                    "duration": _wav_duration(sound_path)}],
         "levels": [{"id": _OUTPOST_LEVEL_ID, "name": "Outpost", "createdAt": 0, "blueprint": _outpost_logic(goal)}],

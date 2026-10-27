@@ -21,7 +21,7 @@ PREVIEW_DIR = Path(ARGS[1]) if len(ARGS) > 1 else None
 
 COLORS = {
     'Wood': '#7a5a3a', 'DarkWood': '#4e3923', 'Metal': '#7d838a', 'Canvas': '#c2b080', 'Rope': '#a08a5e',
-    'Coal': '#1c1714', 'Ember': '#e0702a', 'Cloth': '#5f7d45',
+    'Coal': '#1c1714', 'Ember': '#e0702a', 'Cloth': '#5f7d45', 'Gunmetal': '#2b2d31', 'Grip': '#5a3d28',
 }
 
 
@@ -156,7 +156,18 @@ def tent():
     return prop.build('Tent')
 
 
-PROPS = {'palisade': palisade, 'supply': supply_cache, 'beacon': beacon, 'tent': tent}
+def pistol():
+    """The Ranger's sidearm, 0.21 m long: the barrel points along -Y, the grip hangs down at the origin."""
+    prop = Prop()
+    prop.box((0, -0.06, 0.055), (0.03, 0.19, 0.035), 'Gunmetal')
+    prop.cylinder((0, -0.15, 0.05), (0, -0.165, 0.05), 0.009, 'Gunmetal', segments=8)
+    prop.box((0, 0.005, -0.005), (0.028, 0.04, 0.11), 'Grip', rotation=Matrix.Rotation(math.radians(-14), 4, 'X'))
+    prop.box((0, -0.05, 0.022), (0.026, 0.07, 0.03), 'Gunmetal')
+    prop.box((0, -0.045, -0.002), (0.006, 0.05, 0.006), 'Gunmetal')
+    return prop.build('Pistol')
+
+
+PROPS = {'palisade': palisade, 'supply': supply_cache, 'beacon': beacon, 'tent': tent, 'pistol': pistol}
 
 
 def render_preview(obj, path):

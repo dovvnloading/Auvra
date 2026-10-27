@@ -70,6 +70,8 @@ export interface LoadedModelData {
   isPlacedInScene: boolean; // Determines if visible in Scene/Hierarchy
   initialScale?: [number, number, number]; // Scale applied during normalization
   textureOverrides?: Record<string, string>; // Map<MaterialName, logical texture id>
+  /** Clips that also play mirrored (left and right swapped), as `<name> (Mirrored)`; rebuilt on load. */
+  mirroredClips?: string[];
   /** Per-material colour/PBR/texture overrides, keyed by material name (see utils/materialOverrides). */
   materialOverrides?: MaterialOverrides;
   folder?: string; // Content browser folder path, e.g. 'Characters/Enemies'
@@ -243,7 +245,8 @@ export interface InputBinding {
   targetValue: number | boolean;
 }
 
-export type StateType = 'Single' | 'Blend1D' | 'Blend2D' | 'StateMachine';
+/** Conduit: a junction with no animation; entering it goes straight on through one of its own transitions. */
+export type StateType = 'Single' | 'Blend1D' | 'Blend2D' | 'StateMachine' | 'Conduit';
 
 /** The states and transitions inside a State Machine state; its root state is where it is entered. */
 export interface SubStateMachine {
@@ -427,7 +430,9 @@ export interface Blueprint {
   variables: GraphVariable[]; // Moved here
   animationGraph: AnimationGraphData; // Encapsulated graph logic
   meshScale: number; // Global uniform scale for the character mesh
-  aimOffset?: [number, number, number]; // Scope camera offset calibration
+  aimOffset?: [number, number, number]; // Aim camera offset calibration (see aimCameraOffset)
+  /** How the player aims (default 'scope'): see AimView. */
+  aimView?: AimView;
   weaponSounds?: string[]; // Array of AudioAsset IDs
   weaponVolume?: number; // Base volume for weapon sounds
   /** Pose fixes applied after the animation graph each frame (runtime/ik.ts). */
@@ -476,7 +481,22 @@ export interface CharacterIKSettings {
   lookAtBone?: string;
   /** Largest turn away from the animated pose, in degrees (default 70). */
   lookAtMaxAngle?: number;
+  /** While aiming, the spine leans up and down with the camera, so the arms follow the aim. */
+  aimPitch?: boolean;
 }
+
+/** Where the camera aims from: the character's eyes, hiding it (`scope`), or over its shoulder with it in view. */
+export type AimView = 'scope' | 'shoulder';
+
+/** The aim camera's offset from the character (right, height, back toward the camera), per view. */
+export const DEFAULT_AIM_OFFSETS: Record<AimView, [number, number, number]> = {
+  scope: [0.5, 4.5, 1.0],
+  shoulder: [1.6, 4.6, -3.4],
+};
+
+/** The aim camera offset a blueprint uses: its own, or its aim view's default. */
+export const aimCameraOffset = (blueprint: Pick<Blueprint, 'aimOffset' | 'aimView'>): [number, number, number] =>
+  blueprint.aimOffset ?? DEFAULT_AIM_OFFSETS[blueprint.aimView ?? 'scope'];
 
 /** The bone upper-body clips play from when a blueprint names none. */
 export const DEFAULT_UPPER_BODY_BONE = 'Spine';
@@ -559,6 +579,8 @@ export interface SceneContextType {
   resetModelTexture: (modelId: string) => Promise<void>;
   /** Persist a model's material overrides and apply them to its loaded object; rejects when they cannot be saved. */
   updateModelMaterialOverrides: (modelId: string, overrides: MaterialOverrides) => Promise<void>;
+  /** Adds a mirrored copy (left and right swapped) of one of a model's clips. */
+  mirrorClip: (modelId: string, clipName: string) => Promise<void>;
 
   // Texture Actions
   textures: TextureData[];

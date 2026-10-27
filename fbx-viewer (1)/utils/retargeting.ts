@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 /**
  * Retargeting animation between humanoid skeletons that differ in bone names, bone axes, rest pose
@@ -167,6 +168,25 @@ const rootRelativePosition = (node: THREE.Object3D, root: THREE.Object3D, out: T
 
 const SAMPLE_RATE = 30;
 
+const _reflected = new THREE.Vector3();
+
+/** `v` reflected in the plane through the origin with unit normal `n`. */
+const reflectVector = (v: THREE.Vector3, n: THREE.Vector3): THREE.Vector3 => v.addScaledVector(n, -2 * v.dot(n));
+
+/** The rotation `q` makes, seen in a mirror with unit normal `n`: about the reflected axis, the other way round. */
+const reflectRotation = (q: THREE.Quaternion, n: THREE.Vector3): THREE.Quaternion => {
+  reflectVector(_reflected.set(q.x, q.y, q.z), n);
+  return q.set(-_reflected.x, -_reflected.y, -_reflected.z, q.w);
+};
+
+export interface RetargetOptions {
+  /**
+   * Unit normal, in the source root's space, of a mirror the source's motion is seen in: a left
+   * arm's swing becomes a right arm's (see mirrorHumanoidClip).
+   */
+  reflect?: THREE.Vector3;
+}
+
 /** Child roles followed first when a bone has several children (the hips: the spine before the legs). */
 const CHAIN_ROLES = ['Spine', 'Neck', 'Head', 'LeftMiddle1', 'RightMiddle1'];
 
@@ -184,6 +204,7 @@ const restAlignment = (
   target: RetargetRig,
   source: RetargetRig,
   pairs: Map<THREE.Object3D, THREE.Object3D>,
+  reflect?: THREE.Vector3,
 ): THREE.Quaternion => {
   const sourceBone = pairs.get(bone);
   const children = pairedDescendants(bone, pairs);
@@ -193,6 +214,7 @@ const restAlignment = (
     .sub(rootRelativePosition(bone, target.root, new THREE.Vector3()));
   const sourceDirection = rootRelativePosition(pairs.get(child)!, source.root, new THREE.Vector3())
     .sub(rootRelativePosition(sourceBone, source.root, new THREE.Vector3()));
+  if (reflect) reflectVector(sourceDirection, reflect);
   if (targetDirection.lengthSq() < 1e-12 || sourceDirection.lengthSq() < 1e-12) return new THREE.Quaternion();
   return new THREE.Quaternion().setFromUnitVectors(targetDirection.normalize(), sourceDirection.normalize());
 };
@@ -208,7 +230,9 @@ export const retargetHumanoidClip = (
   clip: THREE.AnimationClip,
   pairs: Map<THREE.Object3D, THREE.Object3D>,
   hip: THREE.Object3D | null,
+  options: RetargetOptions = {},
 ): THREE.AnimationClip => {
+  const { reflect } = options;
   const bones = [...target.bones].sort((a, b) => depthOf(a, target.root) - depthOf(b, target.root));
   target.root.updateMatrixWorld(true);
   source.root.updateMatrixWorld(true);
@@ -223,7 +247,7 @@ export const retargetHumanoidClip = (
   for (const sourceBone of pairs.values()) sourceRest.set(sourceBone, rootRelativeQuaternion(sourceBone, source.root, new THREE.Quaternion()));
   // Rigs rest in different poses (a T-pose source, an A-pose target): each target bone is first
   // turned to point where its source bone points at rest, so the source's poses come out the same.
-  const restAlign = bones.map((bone) => restAlignment(bone, target, source, pairs));
+  const restAlign = bones.map((bone) => restAlignment(bone, target, source, pairs, reflect));
 
   const sourceHip = hip ? pairs.get(hip) ?? null : null;
   const targetHipRest = hip ? rootRelativePosition(hip, target.root, new THREE.Vector3()) : null;
@@ -258,6 +282,7 @@ export const retargetHumanoidClip = (
         if (sourceBone) {
           // The turn the source bone made away from its rest pose, applied to this bone's rest pose.
           rootRelativeQuaternion(sourceBone, source.root, delta).multiply(_q.copy(sourceRest.get(sourceBone)!).invert());
+          if (reflect) reflectRotation(delta, reflect);
           world[index].copy(delta).multiply(restAlign[index]).multiply(restWorld[index]);
         } else {
           world[index].copy(parentWorld).multiply(restLocal[index]);
@@ -272,7 +297,9 @@ export const retargetHumanoidClip = (
         local.toArray(values, frame * 4);
       });
       if (hip && sourceHip && targetHipRest && sourceHipRest) {
-        rootRelativePosition(sourceHip, source.root, _v).sub(sourceHipRest).multiplyScalar(hipScale).add(targetHipRest);
+        rootRelativePosition(sourceHip, source.root, _v).sub(sourceHipRest);
+        if (reflect) reflectVector(_v, reflect);
+        _v.multiplyScalar(hipScale).add(targetHipRest);
         // Into the hips' parent space, which stays at rest above the hips.
         target.root.localToWorld(_v);
         hip.parent?.worldToLocal(_v);
@@ -288,4 +315,59 @@ export const retargetHumanoidClip = (
     new THREE.QuaternionKeyframeTrack(`${bone.name}.quaternion`, times, rotations[index]));
   if (hip && sourceHip) tracks.push(new THREE.VectorKeyframeTrack(`${hip.name}.position`, times, hipPositions));
   return new THREE.AnimationClip(clip.name, clip.duration, tracks);
+};
+
+/** The other side's name: Left/Right, left/right, L/R between separators (Bip01 L Thigh) and _l/_r, .L/.R endings. */
+export const mirrorBoneName = (name: string): string | null => {
+  const swapped = name
+    .replace(/Left|Right|left|right|LEFT|RIGHT/g, (side) => ({ Left: 'Right', Right: 'Left', left: 'right', right: 'left', LEFT: 'RIGHT', RIGHT: 'LEFT' })[side]!)
+    .replace(/(^|[\s_.:-])([LlRr])(?=$|[\s_.:-])/g, (_, separator: string, side: string) =>
+      separator + ({ L: 'R', R: 'L', l: 'r', r: 'l' } as Record<string, string>)[side]);
+  return swapped === name ? null : swapped;
+};
+
+/**
+ * `clip` reflected left to right on the rig it animates: every bone plays its partner's motion
+ * (left arm and right arm, matched by role or by name), seen in a mirror across the character's
+ * middle, so a step with the left foot becomes one with the right. Bones without a partner (the
+ * spine, the head) mirror their own motion. Expects a rig that is symmetric at rest; `rig` must be
+ * at rest and is not changed.
+ */
+export const mirrorHumanoidClip = (rig: RetargetRig, clip: THREE.AnimationClip, name = clip.name): THREE.AnimationClip => {
+  rig.root.updateMatrixWorld(true);
+  const copy = cloneSkeleton(rig.root);
+  copy.updateMatrixWorld(true);
+  const byName = new Map(rig.bones.map((bone) => [bone.name, bone]));
+  const byRole = new Map<string, THREE.Object3D>();
+  for (const bone of rig.bones) {
+    const role = humanoidRole(bone.name);
+    if (role && !byRole.has(role)) byRole.set(role, bone);
+  }
+  const partnerOf = (bone: THREE.Object3D): THREE.Object3D => {
+    const role = humanoidRole(bone.name);
+    const sided = role && /^(Left|Right)/.test(role) ? byRole.get(role.startsWith('Left') ? `Right${role.slice(4)}` : `Left${role.slice(5)}`) : undefined;
+    const named = mirrorBoneName(bone.name);
+    return sided ?? (named ? byName.get(named) : undefined) ?? bone;
+  };
+  const pairs = new Map<THREE.Object3D, THREE.Object3D>();
+  for (const bone of rig.bones) {
+    const partner = copy.getObjectByName(partnerOf(bone).name);
+    if (partner) pairs.set(bone, partner);
+  }
+
+  // The mirror runs through the middle of the body: its normal points from the right side to the left.
+  const across = new THREE.Vector3();
+  for (const part of ['UpperLeg', 'UpperArm', 'Shoulder', 'Foot']) {
+    const left = byRole.get(`Left${part}`);
+    const right = byRole.get(`Right${part}`);
+    if (left && right) across.add(rootRelativePosition(left, rig.root, new THREE.Vector3()).sub(rootRelativePosition(right, rig.root, new THREE.Vector3())));
+  }
+  if (across.lengthSq() < 1e-12) across.set(1, 0, 0);
+  across.normalize();
+
+  const hip = byRole.get('Hips') ?? [...rig.bones].sort((a, b) => depthOf(a, rig.root) - depthOf(b, rig.root))[0] ?? null;
+  const source = { root: copy, bones: [...pairs.values()] };
+  const mirrored = retargetHumanoidClip(rig, source, clip, pairs, hip, { reflect: across });
+  mirrored.name = name;
+  return mirrored;
 };

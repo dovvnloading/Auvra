@@ -14,6 +14,7 @@ import {
 } from '../ik';
 import { usePhysicsQueries } from '../physics';
 import type { PhysicsQueries } from '../physics';
+import { ANIMATION_FRAME_PRIORITY } from '../../components/AnimationGraph/hooks/useGraphAnimator';
 import { ComponentHostContext } from './builtins';
 import type { ComponentDefinition, ComponentRenderProps } from './types';
 
@@ -102,6 +103,11 @@ const sameChildren = (host: THREE.Object3D, children: readonly THREE.Object3D[])
         if (host.children[i] !== children[i]) return false;
     }
     return true;
+};
+
+/** Before each frame's animation, puts back the pose `guard`'s IK left (see IKPoseGuard.release). */
+export const useRestoreBeforeAnimation = (guard: IKPoseGuard): void => {
+    useFrame(() => guard.release(), ANIMATION_FRAME_PRIORITY - 1);
 };
 
 const lookUpUnderHost = <T,>(
@@ -234,6 +240,7 @@ const LookAtIKRuntime: React.FC<ComponentRenderProps> = ({ object, component }) 
     const [state] = useState(createLookAtIKState);
     const [playerHead] = useState((): PlayerHead => ({ player: null, head: null }));
     useEffect(() => () => guard.release(), [guard]);
+    useRestoreBeforeAnimation(guard);
 
     useFrame((frame, delta) => {
         const host = hostRef?.current;
@@ -458,6 +465,7 @@ const FootIKRuntime: React.FC<ComponentRenderProps> = ({ object, component }) =>
     const [lookup] = useState(() => createHostLookup<FootIKSetup>());
     const [state] = useState(createFootIKState);
     useEffect(() => () => guard.release(), [guard]);
+    useRestoreBeforeAnimation(guard);
 
     useFrame((_frame, delta) => {
         const host = hostRef?.current;
@@ -486,6 +494,106 @@ const FootIKRuntime: React.FC<ComponentRenderProps> = ({ object, component }) =>
 
 const FootIKRender: React.FC<ComponentRenderProps> = (props) => (
     props.mode === 'runtime' ? <FootIKRuntime {...props} /> : null
+);
+
+// --- REACH IK ---
+
+/** A twoBoneIK component's settings, read from its props. */
+export interface ReachIKSettings {
+    /** The bone that reaches (a hand or a foot); it and the two bones above it bend. */
+    endBone: string;
+    /** What it reaches for: a level object's id, or 'player'. Empty reaches for nothing. */
+    target: string;
+    /** Added to the target's position, in world units. */
+    offset: THREE.Vector3;
+    weight: number;
+}
+
+const REACH_DEFAULTS = { endBone: 'RightHand', weight: 1 };
+
+export const readReachIKSettings = (component: LevelComponent): ReachIKSettings => {
+    const offset = component.props.offset;
+    return {
+        endBone: readString(component, 'endBone', REACH_DEFAULTS.endBone),
+        target: typeof component.props.target === 'string' ? component.props.target.trim() : '',
+        offset: Array.isArray(offset) && offset.length === 3 && offset.every(value => typeof value === 'number' && Number.isFinite(value))
+            ? new THREE.Vector3(offset[0], offset[1], offset[2])
+            : new THREE.Vector3(),
+        weight: readNumber(component, 'weight', REACH_DEFAULTS.weight, 0, 1),
+    };
+};
+
+/** The nearest bone above `node`, or null. */
+const boneAbove = (node: THREE.Object3D): THREE.Object3D | null => {
+    for (let parent = node.parent; parent; parent = parent.parent) {
+        if ((parent as THREE.Bone).isBone) return parent;
+    }
+    return null;
+};
+
+/** The three bones a reach bends, top down (upper arm, forearm, hand), or null when `end` has fewer above it. */
+export const resolveReachChain = (end: THREE.Object3D): [THREE.Object3D, THREE.Object3D, THREE.Object3D] | null => {
+    const mid = boneAbove(end);
+    const root = mid ? boneAbove(mid) : null;
+    return root && mid ? [root, mid, end] : null;
+};
+
+/** A level object's transform group in the scene, by id. */
+const findLevelObject = (scene: THREE.Object3D, id: string): THREE.Object3D | null => {
+    let found: THREE.Object3D | null = null;
+    scene.traverse((node) => {
+        if (!found && node.userData?.levelObjectId === id && !(node as THREE.Mesh).isMesh) found = node;
+    });
+    return found;
+};
+
+const _reach = new THREE.Vector3();
+
+const ReachIKRuntime: React.FC<ComponentRenderProps> = ({ object, component }) => {
+    const hostRef = useContext(ComponentHostContext);
+    const playerRef = useContext(IKPlayerTargetContext);
+    const settings = readReachIKSettings(component);
+    const [guard] = useState(() => new IKPoseGuard());
+    const [lookup] = useState(() => createHostLookup<[THREE.Object3D, THREE.Object3D, THREE.Object3D]>());
+    // The target's group, found once and looked for again only when it leaves the scene.
+    const [targetCache] = useState(() => ({ id: '', node: null as THREE.Object3D | null }));
+    useEffect(() => () => guard.release(), [guard]);
+    useRestoreBeforeAnimation(guard);
+
+    useFrame(({ scene }) => {
+        const host = hostRef?.current;
+        if (!host) return;
+        const chain = lookUpUnderHost(
+            lookup, host, settings.endBone,
+            () => {
+                const end = findBone(host, settings.endBone, skipNestedObjects(object.id));
+                return end ? resolveReachChain(end) : null;
+            },
+            found => found.every(bone => isDescendantOf(bone, host))
+        );
+        let target: THREE.Object3D | null = null;
+        if (settings.target === 'player') {
+            target = playerRef?.current ?? null;
+        } else if (settings.target && settings.target !== object.id) {
+            if (targetCache.id !== settings.target || !targetCache.node || !isDescendantOf(targetCache.node, scene)) {
+                targetCache.id = settings.target;
+                targetCache.node = findLevelObject(scene, settings.target);
+            }
+            target = targetCache.node;
+        }
+        guard.begin(chain && target ? chain : NO_BONES);
+        if (chain && target) {
+            target.getWorldPosition(_reach).add(settings.offset);
+            solveTwoBoneIK(chain[0], chain[1], chain[2], _reach, null, settings.weight);
+        }
+        guard.commit();
+    });
+
+    return null;
+};
+
+const ReachIKRender: React.FC<ComponentRenderProps> = (props) => (
+    props.mode === 'runtime' ? <ReachIKRuntime {...props} /> : null
 );
 
 // --- DEFINITIONS ---
@@ -522,5 +630,16 @@ export const IK_COMPONENTS: ComponentDefinition[] = [
             { key: 'weight', label: 'Weight', type: 'number', default: FOOT_IK_DEFAULTS.weight, min: 0, max: 1, step: 0.05 }
         ],
         Render: FootIKRender
+    },
+    {
+        type: 'twoBoneIK',
+        label: 'Reach IK',
+        description: 'During play, bends a limb of the object\'s model so a bone (a hand by default, with the forearm and upper arm above it) reaches another object or the player: a hand on a lever, a foot on a pedal.',
+        props: [
+            { key: 'endBone', label: 'Reaching Bone', type: 'string', default: REACH_DEFAULTS.endBone },
+            { key: 'offset', label: 'Offset From Target', type: 'vector3', default: [0, 0, 0], step: 0.05 },
+            { key: 'weight', label: 'Weight', type: 'number', default: REACH_DEFAULTS.weight, min: 0, max: 1, step: 0.05 }
+        ],
+        Render: ReachIKRender
     }
 ];

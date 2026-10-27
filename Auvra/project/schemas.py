@@ -61,7 +61,7 @@ _NESTED_KEYS = {
     "layout": {"x", "y", "width", "height", "customData"},
     "lods": {"level", "maxDistance"},
     "render": {"visible", "radius", "selected", "lods"},
-    "ik": {"footIK", "footMaxStep", "lookAt", "lookAtBone", "lookAtMaxAngle"},
+    "ik": {"footIK", "footMaxStep", "lookAt", "lookAtBone", "lookAtMaxAngle", "aimPitch"},
     "upperBody": {"fireClip", "aimClip", "maskBone"},
     "behaviorTree": {"rootId", "behaviorNodes"},
     "behaviorNodes": {"id", "type", "children", "condition", "action", "value", "text"},

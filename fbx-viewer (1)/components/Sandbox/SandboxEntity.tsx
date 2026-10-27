@@ -212,12 +212,14 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
     useEffect(() => {
         if (!model.object) return;
         
+        // Over-the-shoulder aiming keeps the character in view; the scope looks out of its eyes.
+        const hidden = isAiming && (blueprint.aimView ?? 'scope') === 'scope';
         model.object.traverse((child) => {
             if ((child as THREE.Mesh).isMesh) {
-                child.visible = !isAiming;
+                child.visible = !hidden;
             }
         });
-    }, [isAiming, model.object]);
+    }, [isAiming, model.object, blueprint.aimView]);
 
     // --- Death & Despawn Sequence ---
     // Driven by the frame loop (not wall-clock timers) so pausing the game pauses it.
@@ -383,7 +385,7 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
                 eventSource={remote ? `remote:${entityId}` : team === 'Player' ? 'player' : entityId}
                 lod={remote || team !== 'Player'}
             />
-            <CharacterIK model={model.object} settings={blueprint.ik} physicsId={team === 'Player' && !remote ? PLAYER_PHYSICS_ID : undefined} />
+            <CharacterIK model={model.object} settings={blueprint.ik} physicsId={team === 'Player' && !remote ? PLAYER_PHYSICS_ID : undefined} aiming={isAiming} />
             {/* Enemies fall as ragdolls; the player's death ends the game, and its capsule would fight the bodies. */}
             {isDead && team === 'Enemy' && <CharacterRagdoll model={model.object} />}
         </group>

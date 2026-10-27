@@ -5,6 +5,7 @@ vi.mock('../../components/Scripting/ScriptInspector', () => ({ ScriptInspector: 
 vi.mock('../../components/Timeline/TimelineInspector', () => ({ TimelineInspector: () => null }));
 vi.mock('../../components/Environment/LevelStreamingInspector', () => ({ LevelStreamingInspector: () => null }));
 vi.mock('../../components/Dialogue/DialogueInspector', () => ({ DialogueInspector: () => null }));
+vi.mock('../../components/Environment/ReachIKInspector', () => ({ ReachIKInspector: () => null }));
 
 describe('component registry', () => {
   it('leaves editor inspectors out until the editor registers them', async () => {
@@ -19,7 +20,7 @@ describe('component registry', () => {
     expect(types).toEqual([
       'rotator', 'mover', 'pointLight', 'spotLight', 'camera', 'collider', 'rigidBody', 'joint', 'particles', 'decal', 'water', 'audioSource',
       'reverbZone', 'musicPlayer',
-      'postProcess', 'reflectionProbe', 'lodGroup', 'distanceCull', 'levelStreaming', 'animation', 'lookAtIK', 'footIK', 'script', 'netSync', 'timeline',
+      'postProcess', 'reflectionProbe', 'lodGroup', 'distanceCull', 'levelStreaming', 'animation', 'lookAtIK', 'footIK', 'twoBoneIK', 'script', 'netSync', 'timeline',
       'dialogue',
     ]);
     for (const definition of COMPONENT_DEFINITIONS) {

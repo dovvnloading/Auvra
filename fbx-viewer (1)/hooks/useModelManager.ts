@@ -5,7 +5,7 @@ import { LoadedModelData, AssetCategory, AssetInfoUpdate, ModelImportSettings } 
 import { importPhaseLabel, loadFBXFile } from '../utils/modelLoader';
 import { disposeModel, disposeObject } from '../utils/processing/ModelLifecycle';
 import { applyModelImportSettings, resolveImportSettings, stripGeometry } from '../utils/processing/ModelTransforms';
-import { applyStoredClipNames, prepareAnimationClips, uniqueClipNames } from '../utils/animationBinding';
+import { applyStoredClipNames, mirrorModelClips, prepareAnimationClips, uniqueClipNames } from '../utils/animationBinding';
 import { generateThumbnail } from '../utils/thumbnailGenerator';
 import { dbOperations, normalizeAssetInfoUpdate, withoutMaterialOverrideTexture } from '../utils/db';
 import { projectService } from '../utils/projectService';
@@ -478,6 +478,26 @@ export const useModelManager = (
     }));
   }, [models]);
 
+  /** Adds a mirrored copy of one of a model's clips (left and right swapped) and records it, so it is rebuilt on load. */
+  const mirrorClip = useCallback(async (modelId: string, clipName: string): Promise<void> => {
+    projectService.assertWritable();
+    const model = modelsRef.current.find((candidate) => candidate.id === modelId);
+    if (!model) return;
+    try {
+      const [mirrored] = mirrorModelClips(model.object, model.animations, [clipName]);
+      if (!mirrored) return;
+      const mirroredClips = [...(model.mirroredClips ?? []).filter((name) => name !== clipName), clipName];
+      await dbOperations.updateModelMirroredClips(modelId, mirroredClips);
+      setModels((previous) => previous.map((candidate) => (candidate.id === modelId
+        ? { ...candidate, animations: [...candidate.animations, mirrored], mirroredClips }
+        : candidate)));
+      addNotification({ message: `Added "${mirrored.name}".`, type: 'success' });
+    } catch (error) {
+      frontendDiagnostics.failure('clip_mirror_failed', error);
+      addNotification({ message: `Could not mirror "${clipName}"${error instanceof Error && error.message ? `: ${error.message}` : '.'}`, type: 'error' });
+    }
+  }, [addNotification]);
+
   const removeTextureReference = useCallback((textureId: string) => {
     setModels((previous) => previous.map((model) => {
       const overrides = model.textureOverrides;
@@ -756,6 +776,7 @@ export const useModelManager = (
     removeModel,
     removeTextureReference,
     updateModelMaterialOverrides,
+    mirrorClip,
     placeInScene,
     removeFromScene,
     addAnimations,
