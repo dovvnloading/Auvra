@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { clone as cloneSkeleton, retargetClip } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { animatedSkeleton, humanoidRole, matchHumanoidBones, retargetHumanoidClip } from './retargeting';
 
 export class AnimationImportError extends Error {
   constructor(message: string) {
@@ -95,14 +96,6 @@ export const selectAnimationTarget = <T extends AnimationTargetCandidate>(
   throw new AnimationImportError('Select the skeletal model that should own these animation clips.');
 };
 
-const canonicalBoneName = (name: string): string => {
-  const leaf = name.split(/[|:]/).pop() || name;
-  return leaf
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '')
-    .replace(/^(mixamorig|armature|skeleton)/, '');
-};
-
 const trackNodeName = (track: THREE.KeyframeTrack): string | null => {
   try {
     const parsed = THREE.PropertyBinding.parseTrackName(track.name);
@@ -120,73 +113,52 @@ const clipBindsDirectly = (root: THREE.Object3D, clip: THREE.AnimationClip): boo
   })
 );
 
-const uniqueBonesByCanonicalName = (values: THREE.Bone[]): Map<string, THREE.Bone> => {
-  const result = new Map<string, THREE.Bone>();
-  const ambiguous = new Set<string>();
-  for (const bone of values) {
-    const key = canonicalBoneName(bone.name);
-    if (!key) continue;
-    if (result.has(key)) {
-      result.delete(key);
-      ambiguous.add(key);
-    } else if (!ambiguous.has(key)) {
-      result.set(key, bone);
-    }
-  }
-  return result;
-};
+/** Roles a humanoid's arms, legs, spine and head fill; most of the target's must pair to retarget. */
+const CORE_ROLES = [
+  'Hips', 'Spine', 'Head', 'LeftUpperArm', 'LeftLowerArm', 'RightUpperArm', 'RightLowerArm',
+  'LeftUpperLeg', 'LeftLowerLeg', 'RightUpperLeg', 'RightLowerLeg',
+];
+const REQUIRED_CORE_SHARE = 0.8;
 
 const retargetAnimations = (
   targetRoot: THREE.Object3D,
   sourceRoot: THREE.Object3D,
   clips: THREE.AnimationClip[],
 ): PreparedAnimationClips => {
+  // A copy at its bind pose, whatever pose the library model is in now.
   const targetClone = cloneSkeleton(targetRoot);
   const targetMesh = skinnedMesh(targetClone);
   if (!targetMesh) {
     throw new AnimationImportError('The target model does not contain a bound skeleton.');
   }
+  targetClone.updateMatrixWorld(true);
+  targetMesh.skeleton.pose();
+  targetClone.updateMatrixWorld(true);
 
-  const sourceMesh = skinnedMesh(sourceRoot);
-  const sourceBones = bones(sourceRoot);
+  // Animation-only files often keep their skeleton as plain nodes, posed at the rig's rest pose.
+  const sourceBones = animatedSkeleton(sourceRoot, clips);
   if (!sourceBones.length) {
     throw new AnimationImportError('The animation FBX does not contain a skeleton.');
   }
 
-  const sourceByName = uniqueBonesByCanonicalName(sourceBones);
   const targetBones = targetMesh.skeleton.bones;
-  const names: Record<string, string> = {};
-  for (const targetBone of targetBones) {
-    const sourceBone = sourceByName.get(canonicalBoneName(targetBone.name));
-    if (sourceBone) names[targetBone.name] = sourceBone.name;
-  }
-
-  const animatedBoneKeys = new Set(
-    clips.flatMap((clip) => clip.tracks.map(trackNodeName))
-      .filter((name): name is string => name !== null)
-      .map(canonicalBoneName)
-      .filter((name) => sourceByName.has(name)),
-  );
-  const matchedAnimatedBones = [...animatedBoneKeys]
-    .filter((name) => targetBones.some((bone) => canonicalBoneName(bone.name) === name));
-  const requiredMatches = Math.max(1, Math.ceil(animatedBoneKeys.size * 0.8));
-  if (!animatedBoneKeys.size || matchedAnimatedBones.length < requiredMatches) {
+  const pairs = matchHumanoidBones(targetBones, sourceBones, targetClone, sourceRoot);
+  const roleOf = new Map(targetBones.map((bone) => [bone, humanoidRole(bone.name)]));
+  const core = targetBones.filter((bone) => CORE_ROLES.includes(roleOf.get(bone) ?? ''));
+  // A humanoid target needs most of its limbs paired; any other rig most of its bones.
+  const judged = core.length >= 5 ? core : targetBones;
+  const paired = judged.filter((bone) => pairs.has(bone)).length;
+  if (!paired || paired < Math.ceil(judged.length * REQUIRED_CORE_SHARE)) {
     throw new AnimationImportError(
-      `The animation skeleton is incompatible with the target (${matchedAnimatedBones.length}/${animatedBoneKeys.size} animated bones matched).`,
+      `The animation skeleton is incompatible with the target (${paired}/${judged.length} ${judged === core ? 'limb and spine' : ''} bones matched).`.replace('  ', ' '),
     );
   }
 
-  const hipTarget = targetBones.find((bone) => /^(hips?|pelvis|root)$/.test(canonicalBoneName(bone.name)));
-  const hip = hipTarget ? names[hipTarget.name] : undefined;
-  const sourceSkeleton = sourceMesh?.skeleton || new THREE.Skeleton(sourceBones);
+  const hip = targetBones.find((bone) => roleOf.get(bone) === 'Hips' && pairs.has(bone))
+    ?? [...pairs.keys()].sort((a, b) => depth(a) - depth(b))[0]
+    ?? null;
   const prepared = clips.map((clip) => {
-    const result = retargetClip(targetMesh, sourceSkeleton, clip, {
-      names,
-      hip,
-      preserveHipPosition: false,
-      useFirstFramePosition: false,
-    });
-    result.name = clip.name;
+    const result = retargetHumanoidClip({ root: targetClone, bones: targetBones }, { root: sourceRoot, bones: sourceBones }, clip, pairs, hip);
     if (!result.tracks.length) {
       throw new AnimationImportError(`Animation "${clip.name}" produced no tracks for the target skeleton.`);
     }
@@ -196,9 +168,15 @@ const retargetAnimations = (
   return {
     clips: prepared,
     mode: 'retargeted',
-    matchedBones: Object.keys(names).length,
-    animatedBones: animatedBoneKeys.size,
+    matchedBones: pairs.size,
+    animatedBones: sourceBones.length,
   };
+};
+
+const depth = (node: THREE.Object3D): number => {
+  let count = 0;
+  for (let parent = node.parent; parent; parent = parent.parent) count += 1;
+  return count;
 };
 
 export const prepareAnimationClips = (

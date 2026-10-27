@@ -43,6 +43,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/timeline/evaluate.ts': 'pure-utility',
   'runtime/spawning.ts': 'pure-utility',
   'utils/appDialogs.ts': 'pure-utility',
+  'utils/retargeting.ts': 'pure-utility',
   'components/Dialogue/dialogueEditing.ts': 'pure-utility',
   'runtime/timeline/types.ts': 'data-model',
   'script-frame.ts': 'sandbox-proxy',
