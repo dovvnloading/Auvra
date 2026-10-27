@@ -3,6 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { collectThirdPartyNotices } from './scripts/licenses/notices.mjs';
+import { classicSandboxFrames } from './scripts/frames/classicFrames.mjs';
 
 // Play-in-editor multiplayer reaches a relay on this machine at its default port (Auvra/net/relay.py).
 const LOCAL_RELAY = 'ws://127.0.0.1:7777 ws://localhost:7777';
@@ -123,6 +124,8 @@ export default defineConfig(({ command, mode }) => {
         });
       },
     },
+    // The sandbox frames load their code as classic scripts: an opaque-origin frame's module loads are refused.
+    classicSandboxFrames({ root: __dirname, frameCsp: hudCsp }),
     ...(isPlayer ? [playerTemplatePlugin()] : []),
   ],
   ...(isPlayer ? { base: './' } : {}),
