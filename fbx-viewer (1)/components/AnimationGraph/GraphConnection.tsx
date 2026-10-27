@@ -55,12 +55,14 @@ export const GraphConnection: React.FC<GraphConnectionProps> = ({
 
     return (
         <g onClick={handleClick} className="group cursor-pointer">
-            {/* Invisible wide stroke for easier clicking */}
-            <path 
-                d={path} 
-                stroke="transparent" 
-                strokeWidth="20" 
-                fill="none" 
+            {/* Invisible wide stroke for easier clicking; the canvas SVG itself ignores the pointer */}
+            <path
+                d={path}
+                stroke="transparent"
+                strokeWidth="20"
+                fill="none"
+                pointerEvents="stroke"
+                data-transition-hit=""
             />
             
             {/* Visible Line */}
