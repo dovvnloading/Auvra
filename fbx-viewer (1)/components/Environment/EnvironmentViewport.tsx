@@ -577,7 +577,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                 {layout === 'single' ? (
                     <div className="relative w-full h-full bg-[#111] pointer-events-auto border-b border-gray-800">
                         <div ref={viewMain} className="w-full h-full" onMouseDown={() => setActiveView('main')} />
-                        <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'main' ? 'bg-blue-600 text-white' : 'bg-black/50 text-gray-500'}`}>
+                        <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'main' ? 'bg-blue-600 text-white' : 'bg-black/70 text-gray-200'}`}>
                             PERSPECTIVE
                         </div>
                     </div>
@@ -586,28 +586,28 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                         {/* 1. TOP LEFT -> LEFT View */}
                         <div className="relative bg-[#111]">
                             <div ref={viewLeft} className="w-full h-full" onMouseDown={() => setActiveView('left')} />
-                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'left' ? 'bg-blue-600 text-white' : 'bg-black/50 text-gray-500'}`}>
+                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'left' ? 'bg-blue-600 text-white' : 'bg-black/70 text-gray-200'}`}>
                                 LEFT
                             </div>
                         </div>
                         {/* 2. TOP RIGHT -> RIGHT View */}
                         <div className="relative bg-[#111]">
                             <div ref={viewRight} className="w-full h-full" onMouseDown={() => setActiveView('right')} />
-                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'right' ? 'bg-blue-600 text-white' : 'bg-black/50 text-gray-500'}`}>
+                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'right' ? 'bg-blue-600 text-white' : 'bg-black/70 text-gray-200'}`}>
                                 RIGHT
                             </div>
                         </div>
                         {/* 3. BOTTOM LEFT -> TOP View */}
                         <div className="relative bg-[#111]">
                             <div ref={viewTop} className="w-full h-full" onMouseDown={() => setActiveView('top')} />
-                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'top' ? 'bg-blue-600 text-white' : 'bg-black/50 text-gray-500'}`}>
+                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'top' ? 'bg-blue-600 text-white' : 'bg-black/70 text-gray-200'}`}>
                                 TOP
                             </div>
                         </div>
                         {/* 4. BOTTOM RIGHT -> BOTTOM View */}
                         <div className="relative bg-[#111]">
                             <div ref={viewBottom} className="w-full h-full" onMouseDown={() => setActiveView('bottom')} />
-                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'bottom' ? 'bg-blue-600 text-white' : 'bg-black/50 text-gray-500'}`}>
+                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'bottom' ? 'bg-blue-600 text-white' : 'bg-black/70 text-gray-200'}`}>
                                 BOTTOM
                             </div>
                         </div>
