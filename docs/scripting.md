@@ -73,6 +73,7 @@ function onUpdate(ctx, dt) {
 | `onTriggerExit(ctx, other)` | When it leaves the trigger again |
 | `onTimelineEvent(ctx, name, timelineObjectId)` | When a playing [timeline](timelines.md) crosses a key on one of its event tracks; `name` is the key's text. Reaches every script |
 | `onAnimNotify(ctx, name, source)` | When an animation [notify](characters.md#notifies) named `name` is raised. `source` is `'player'` for the player character. A notify raised by a level object's own animation (`source` is its id) reaches only that object's scripts; every other notify reaches every script |
+| `onNetEvent(ctx, name, value, fromPeerId)` | When another player's `ctx.net.send` (or **Send Network Event**) arrives in a [multiplayer](multiplayer.md) game. Reaches every script |
 | `onSpawned(ctx, requestId, objectIds)` | On the script that called `ctx.spawn`, once the copy has been placed. `requestId` is the value `ctx.spawn` returned; `objectIds` are the new objects, root first, and empty when the prefab does not exist |
 
 Triggers need a Collider with **Is Trigger** on, on the same object as the script (see [Physics](world-editor.md#physics)). The trigger callbacks also receive the entering object's id as a third argument, `'player'` for the player: `function onTriggerEnter(ctx, other, otherId)`.
@@ -131,6 +132,17 @@ Transforms are relative to the object's parent, like the inspector's; for an obj
 | `ctx.vars.set(name, value)` | Writes a level variable: a number, a boolean or a string of up to 4096 characters. Every script reads the new value at once; the Level Blueprint and the HUD see it from the next frame |
 | `ctx.state` | An object that keeps its contents between callbacks for the rest of the play session, for this script only |
 | `ctx.log(...)`, `ctx.warn(...)`, `ctx.error(...)` | Prints the values, separated by spaces, in the play output, labelled with the object's name: `[Script: Name] message`. Objects and arrays are printed as JSON |
+
+### Multiplayer
+
+| API | Does |
+|---|---|
+| `ctx.net.connected()` | True while connected to the relay |
+| `ctx.net.isHost()` | True for the host, and always in single-player games |
+| `ctx.net.selfId()`, `ctx.net.peers()` | This player's id (null offline), and the other players as `{ id, name }` |
+| `ctx.net.send(name, value, toPeerId)` | Sends an event to every other player, or only to `toPeerId`. `value` is a number, true/false, text, a list of those or a flat object of those; names are at most 64 characters |
+
+See [Multiplayer](multiplayer.md).
 
 Unknown actions read as released. The actions are MoveForward, MoveBack, MoveLeft, MoveRight, Jump, Sprint, Fire, Aim, Interact and Pause; see [Controls](building-games.md#controls) for their keys. **Interact** has no built-in use, so it is free for scripts.
 

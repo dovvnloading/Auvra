@@ -21,6 +21,7 @@ import {
     type ScriptCommand,
     type ScriptEvent,
     type ScriptInputAction,
+    type ScriptNetPayload,
     type ScriptObjectState,
     type ScriptRaycastHit,
     type ScriptSnapshot,
@@ -38,7 +39,7 @@ type TransformField = 'position' | 'rotation' | 'scale';
 export type ScriptSoundBus = NonNullable<Extract<ScriptCommand, { type: 'playSound' }>['bus']>;
 
 /** Every callback a script may define. */
-export const SCRIPT_CALLBACK_NAMES = ['onStart', 'onTriggerEnter', 'onTriggerExit', 'onAnimNotify', 'onTimelineEvent', 'onSpawned', 'onUpdate'] as const;
+export const SCRIPT_CALLBACK_NAMES = ['onStart', 'onTriggerEnter', 'onTriggerExit', 'onAnimNotify', 'onTimelineEvent', 'onNetEvent', 'onSpawned', 'onUpdate'] as const;
 export type ScriptCallbackName = typeof SCRIPT_CALLBACK_NAMES[number];
 
 /** Compiled scripts call `__auvraScriptGuard.tick()` on every loop iteration and function entry. */
@@ -51,6 +52,8 @@ const MAX_LOG_CHARS = 1024;
 const MAX_ERROR_CHARS = 1024;
 const MAX_PENDING_ERRORS = 256;
 const MAX_PENDING_SPAWNS = 4096;
+// Mirrors NET_LIMITS.maxEventNameLength (runtime/net/protocol.ts); this file stays free of runtime imports.
+const MAX_NET_EVENT_NAME = 64;
 // Room a frame message keeps for its envelope around the command list.
 const MESSAGE_ENVELOPE_BYTES = 1024;
 const CALLBACK_EXPORTS = SCRIPT_CALLBACK_NAMES
@@ -108,6 +111,17 @@ export interface ScriptRaycastResult extends ScriptRaycastHit {
     object: ObjectHandle | null;
 }
 
+/** ctx.net. In a single-player game connected() is false, isHost() true and send() does nothing. */
+export interface ScriptNet {
+    connected(): boolean;
+    /** The host runs the authoritative game logic; the others follow it. */
+    isHost(): boolean;
+    selfId(): string | null;
+    peers(): { id: string; name: string }[];
+    /** Sends an event to every other player, or only to `toPeerId`; they get it in onNetEvent. */
+    send(name: string, payload?: ScriptNetPayload, toPeerId?: string): void;
+}
+
 /** What every callback receives first. One context per script, kept for its lifetime. */
 export interface ScriptContext {
     /** The object the script component is attached to. */
@@ -132,6 +146,8 @@ export interface ScriptContext {
     playSound(audioId: string, bus?: ScriptSoundBus): void;
     playPlayerAnimation(clipName: string, maskBone?: string): void;
     openLevel(levelId: string): void;
+    /** Multiplayer: who is here, who hosts, and events to the other players. */
+    readonly net: ScriptNet;
     log(...values: unknown[]): void;
     warn(...values: unknown[]): void;
     error(...values: unknown[]): void;
@@ -150,6 +166,8 @@ export interface ScriptCallbacks {
     onAnimNotify?(ctx: ScriptContext, name: string, source: string | null): void;
     /** Fires for every script when a timeline's event track crosses a key. */
     onTimelineEvent?(ctx: ScriptContext, name: string, timelineObjectId: string): void;
+    /** Fires for every script when another player's ctx.net.send arrives. */
+    onNetEvent?(ctx: ScriptContext, name: string, payload: ScriptNetPayload, fromPeerId: string): void;
     /** Fires for the script that requested the spawn. */
     onSpawned?(ctx: ScriptContext, requestId: string, objectIds: string[]): void;
 }
@@ -215,7 +233,17 @@ interface LoadedScript extends ScriptRecord {
 
 const EMPTY_SNAPSHOT: ScriptSnapshot = {
     frame: 0, time: 0, delta: 0, objects: [], player: null, input: {}, variables: {}, events: [], raycasts: {},
+    net: { connected: false, isHost: true, selfId: null, peers: [] },
 };
+
+const isNetPeer = (value: unknown): boolean => isRecord(value) && typeof value.id === 'string' && typeof value.name === 'string';
+const isNetState = (value: unknown): boolean => isRecord(value) && typeof value.connected === 'boolean' && typeof value.isHost === 'boolean'
+    && (value.selfId === null || typeof value.selfId === 'string') && Array.isArray(value.peers) && value.peers.every(isNetPeer);
+const isNetScalar = (value: unknown): boolean => typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value));
+/** A ctx.net payload: a value, a list of values, a flat object of values, or null. */
+export const isScriptNetPayload = (value: unknown): value is ScriptNetPayload => value === null || isNetScalar(value)
+    || (Array.isArray(value) && value.every(isNetScalar))
+    || (isRecord(value) && Object.values(value).every(isNetScalar));
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const copy = (vector: ScriptVec3): ScriptVec3 => [vector[0], vector[1], vector[2]];
@@ -324,6 +352,8 @@ const isScriptEvent = (value: unknown): value is ScriptEvent => {
             return typeof value.name === 'string' && (value.source === null || typeof value.source === 'string');
         case 'timelineEvent':
             return typeof value.name === 'string' && typeof value.timelineObjectId === 'string';
+        case 'netEvent':
+            return typeof value.name === 'string' && typeof value.from === 'string' && isScriptNetPayload(value.payload);
         case 'spawned':
             return typeof value.requestId === 'string' && Array.isArray(value.objectIds) && value.objectIds.every(id => typeof id === 'string');
         default:
@@ -342,7 +372,8 @@ export const isScriptSnapshot = (value: unknown): value is ScriptSnapshot => isR
     && (value.player === null || (isRecord(value.player) && isVec3(value.player.position) && isVec3(value.player.rotation)))
     && everyValue(value.input, isInputAction) && everyValue(value.variables, isScriptValue)
     && Array.isArray(value.events) && value.events.every(isScriptEvent)
-    && everyValue(value.raycasts, isRaycastHit);
+    && everyValue(value.raycasts, isRaycastHit)
+    && isNetState(value.net);
 
 /** Whether a message's script entry is exactly { id, objectId, source } with non-empty ids. */
 export const isScriptSource = (value: unknown): value is ScriptSource => isRecord(value)
@@ -749,6 +780,21 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
             openLevel: (levelId: string) => {
                 queue(record, { type: 'openLevel', levelId: readId('openLevel', levelId) });
             },
+            net: {
+                connected: () => world.snapshot.net.connected,
+                isHost: () => world.snapshot.net.isHost,
+                selfId: () => world.snapshot.net.selfId,
+                peers: () => world.snapshot.net.peers.map(peer => ({ ...peer })),
+                send: (name: string, payload: ScriptNetPayload = null, toPeerId?: string) => {
+                    const event = readId('net.send', name);
+                    if (event.length > MAX_NET_EVENT_NAME) throw new TypeError(`net.send names are at most ${MAX_NET_EVENT_NAME} characters`);
+                    if (!isScriptNetPayload(payload)) throw new TypeError('net.send payload must be a value, a list of values or a flat object of values');
+                    const command: ScriptCommand = toPeerId === undefined
+                        ? { type: 'netSend', name: event, payload: JSON.parse(JSON.stringify(payload)) as ScriptNetPayload }
+                        : { type: 'netSend', name: event, payload: JSON.parse(JSON.stringify(payload)) as ScriptNetPayload, to: readId('net.send peer', toPeerId) };
+                    queue(record, command);
+                },
+            },
             log: (...values: unknown[]) => log(record, 'info', values),
             warn: (...values: unknown[]) => log(record, 'warn', values),
             error: (...values: unknown[]) => log(record, 'error', values),
@@ -788,6 +834,10 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
         } else if (event.type === 'timelineEvent') {
             for (const record of scripts) {
                 if (record.started) run(record, 'onTimelineEvent', event.name, event.timelineObjectId);
+            }
+        } else if (event.type === 'netEvent') {
+            for (const record of scripts) {
+                if (record.started) run(record, 'onNetEvent', event.name, event.payload, event.from);
             }
         } else if (event.type === 'spawned') {
             const record = pendingSpawns.get(event.requestId);

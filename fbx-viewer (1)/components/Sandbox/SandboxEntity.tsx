@@ -6,6 +6,7 @@ import { LoadedModelData, Blueprint, AttachmentData, SocketData, Hittable, Hitbo
 import { GraphRuntime, GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
 import { PLAYER_PHYSICS_ID } from '../../runtime/physics';
 import { CharacterIK } from './CharacterIK';
+import { CharacterRagdoll } from './CharacterRagdoll';
 import { AttachmentController } from '../Scene/AttachmentController';
 import { SocketController, resolveSocketFlashTextureUrl } from '../Scene/SocketController'; // Using Visual Controller now
 import { useEntityHealth } from './hooks/useEntityHealth';
@@ -47,6 +48,8 @@ interface SandboxEntityProps {
     onHealthChange?: (current: number, max: number) => void;
     onDespawn?: () => void;
     onSpawnBlood?: (position: THREE.Vector3) => void;
+    /** Another peer's avatar in a multiplayer game: driven by the network, not this player. */
+    remote?: boolean;
 }
 
 export interface SandboxEntityHandle extends Hittable {
@@ -70,7 +73,8 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
     unregisterHittable,
     onHealthChange,
     onDespawn,
-    onSpawnBlood
+    onSpawnBlood,
+    remote = false
 }, ref) => {
 
     const { textures } = useGameContent();
@@ -347,9 +351,11 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
                 enableInputs={false}
                 driveLocomotion={false}
                 apiRef={internalApiRef}
-                eventSource={team === 'Player' ? 'player' : entityId}
+                eventSource={remote ? `remote:${entityId}` : team === 'Player' ? 'player' : entityId}
             />
-            <CharacterIK model={model.object} settings={blueprint.ik} physicsId={team === 'Player' ? PLAYER_PHYSICS_ID : undefined} />
+            <CharacterIK model={model.object} settings={blueprint.ik} physicsId={team === 'Player' && !remote ? PLAYER_PHYSICS_ID : undefined} />
+            {/* Enemies fall as ragdolls; the player's death ends the game, and its capsule would fight the bodies. */}
+            {isDead && team === 'Enemy' && <CharacterRagdoll model={model.object} />}
         </group>
     );
 });

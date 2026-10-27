@@ -32,7 +32,7 @@ import { AttachmentData, Blueprint, LevelComponent, LevelObject, LoadedModelData
 import { instantiatePrefab } from '../utils/prefabs';
 import { useGameContent } from './GameContentContext';
 import { gameState, useGameState } from './gameState';
-import { PauseActionWatcher, PauseController } from './PauseController';
+import { FrameStepper, PauseActionWatcher, PauseController, SceneInspector } from './PauseController';
 import { PhysicsWorld } from './physics';
 import { TriggerEventsProvider } from './triggers';
 import { RuntimeServicesProvider, RuntimeSpawnerProvider, type SpawnPosition, toSpawnPoint } from './RuntimeServicesContext';
@@ -43,6 +43,9 @@ import { PostProcessAllowedContext, usePostProcessClaimed } from './components/p
 import type { InputState } from './input';
 import { collectTimelineTargets } from './timeline/evaluate';
 import { TouchControls } from './TouchControls';
+import { NetSessionProvider } from './net/NetSessionContext';
+import { NetStatus } from './net/NetStatus';
+import { LocalPlayerReplicator, RemotePlayers } from './net/RemotePlayers';
 import type { ComponentDefinition } from './components/types';
 import { ScriptRuntime } from './scripting/ScriptRuntime';
 import type { GameContent, LevelRuntimeProps, PlayerStart, RuntimeHost, RuntimeLevel, SaveGameData } from './types';
@@ -613,6 +616,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                         castShadow
                         receiveShadow
                         sculptingEnabled={false}
+                        lod
                     />
                 ))}
 
@@ -632,6 +636,10 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
 
             <BloodSystem ref={bloodSystemRef} />
             <ProjectileManager ref={projectileManagerRef} />
+
+            {/* Multiplayer: this player's state goes out, other players' avatars come in (nothing without a session). */}
+            <LocalPlayerReplicator playerObject={runtimePlayerModel.object} playerApiRef={playerApiRef} />
+            <RemotePlayers player={player} allClips={allSceneClips} />
 
             <SandboxEntity
                 ref={playerEntityRef}
@@ -742,7 +750,7 @@ const DefaultPostProcess: React.FC = () => {
  * Plays one level. Shared by play-in-editor and the standalone player: content comes from the
  * runtime content context, flow control (restart, end, open level, save, load, pause) from the host.
  */
-export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, playerStart, paused, host, sessionKey, overlay, restore, playerOptions }) => {
+export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, playerStart, paused, host, sessionKey, overlay, restore, playerOptions, stepRequest = 0, inspectRef }) => {
     const content = useGameContent();
     const player = useMemo(() => resolvePlayerAssets(content, settings.playerBlueprintId), [content, settings.playerBlueprintId]);
     const start = useMemo(() => resolvePlayerStart(level, playerStart, restore), [level, playerStart, restore]);
@@ -789,7 +797,9 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
     }
 
     return (
+        <NetSessionProvider settings={settings.network} gameId={netGameId(settings.name)} name="Player">
         <div className="relative w-full h-full bg-black cursor-none">
+            <NetStatus />
             <AuvraCanvas
                 surfaceId="runtime-level-game-loop"
                 role="runtime"
@@ -812,6 +822,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
 
                 <CameraSettings fov={settings.quality.fov} />
                 <ProfilerProbe enabled={profilerVisible} />
+                <SceneInspector inspectRef={inspectRef} />
                 <PauseController
                     paused={paused}
                     canPause={!isGameOver}
@@ -830,6 +841,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                     {/* Each session gets a fresh trigger bus and physics world, so no body or listener outlives it. */}
                     <TriggerEventsProvider key={sessionKey}>
                         <PhysicsWorld paused={paused}>
+                            <FrameStepper paused={paused} stepRequest={stepRequest} />
                             {/* Remount = new play session (BeginPlay, overlaps, spawner counts); the canvas and its GL context stay. */}
                             <group key={sessionKey}>
                                 <LevelSession
@@ -865,8 +877,12 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
             )}
             <ProfilerPanel visible={profilerVisible} />
         </div>
+        </NetSessionProvider>
     );
 };
+
+/** The game id the relay keeps rooms apart by: the game's name, lower-cased, letters and digits. */
+const netGameId = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'auvra-game';
 
 const RuntimeEnemyController: React.FC<{
     data: SpawnedEnemy;

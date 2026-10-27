@@ -56,11 +56,14 @@ Objects can carry components that add behaviour. Select an object and use **Add 
 | Music | Plays a playlist of audio assets on the music bus, with shuffle, loop and crossfades |
 | Physics Joint | Connects the object's rigid body to another object or to the world: fixed, ball, hinge or slider, with limits and a break force |
 | Decal | Projects a texture onto the object or onto any surface under it |
+| Water | An animated water surface with waves, reflections and foam; dynamic rigid bodies float in it and are slowed by it |
+| Reflection Probe | Captures its surroundings into a reflection map for shiny materials within its radius; the nearest probe wins where probes overlap. Updates once at start, at an interval, or every frame |
 | Post Process | Bloom, ambient occlusion, tone mapping, vignette, depth of field, colour grading and antialiasing for the whole level |
 | LOD Group | Shows one of the object's children by camera distance (LOD 0, 1, 2) and hides all of them past the last distance |
 | Distance Cull | Hides the object and its children beyond a distance |
 | Look At IK / Foot IK | Turn a bone toward the camera or the player, or plant the feet of the object's model on the ground (see [IK](characters.md#ik)) |
 | Script | Runs your own JavaScript or TypeScript during play (see [Gameplay scripting](scripting.md)) |
+| Network Sync | In multiplayer games the host sends the object's position and rotation and the other players follow it (see [Multiplayer](multiplayer.md)) |
 | Timeline | Plays keyed tracks that move, show and hide objects, write level variables and raise events (see [Timelines](timelines.md)) |
 
 Each component's settings appear in the inspector and can be toggled on and off.
@@ -141,6 +144,10 @@ Add an **Audio Source** component to play a sound from an object during play. In
 
 All game sound plays through four mixer buses (Master, Music, Effects and Interface), and players set each one's volume in the game's Options screen. Weapon sounds use Effects. **Audio Emitter** objects use Music when they are 2D and looping, and Effects otherwise. The **Play Sound** blueprint node chooses its bus.
 
+## Terrain detail in play
+
+In play and in built games, a terrain with a resolution of 64 or more is drawn in chunks of 32 by 32 cells. Chunks far from the camera use a half, a quarter or an eighth of the vertices per side, and short skirts under their edges hide the seams where chunks of different detail meet. The editor always shows the full-resolution terrain, which sculpting, painting and placement work on. Collisions always use the full-resolution heights.
+
 ## Terrain painting
 
 A terrain can blend up to four textures. Import the textures in the Content Browser first.
@@ -153,7 +160,15 @@ To erase paint, paint layer 1 over it. Only the last layer can be removed; its p
 
 ## Prefabs
 
-A prefab is a reusable object tree. Select an object (its children come with it) and choose **Create from selection** in the prefab panel under the outliner. **Place** adds a copy to the current level. Placed copies are independent of the prefab. The **Spawn Prefab** blueprint node places copies during play.
+A prefab is a reusable object tree. Select an object (its children come with it) and choose **Create from selection** in the prefab panel under the outliner; the selection becomes the prefab's first instance. **Place** adds another instance to the current level. The **Spawn Prefab** blueprint node places copies during play.
+
+Instances stay linked to their prefab. Select any object of an instance and the inspector shows which prefab it belongs to and what it overrides:
+
+- **Apply** saves the instance as the new version of the prefab and updates every other instance, in every level. Objects you added under the instance become part of the prefab.
+- **Revert** puts the instance back to the prefab, dropping its overrides. The instance keeps its own position, rotation and scale.
+- **Unlink** turns the instance into plain objects that prefab changes no longer reach.
+
+When a prefab changes, a property an instance changed itself (an override, such as a moved child or a different light intensity) is kept; every other property takes the prefab's new value. Objects added to the prefab appear in every instance and removed ones disappear. Deleting a prefab unlinks its instances and leaves them in their levels.
 
 ## Placement
 

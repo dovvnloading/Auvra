@@ -1,9 +1,11 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useScene } from '../../context/SceneContext';
 import { useNotification } from '../../context/NotificationContext';
 import { useNativeProjectDocument } from '../../utils/useNativeProjectDocument';
 import { LevelRuntime } from '../../runtime/LevelRuntime';
+import type { RuntimeInspector } from '../../runtime/PauseController';
+import { PlayToolbar } from './PlayToolbar';
 import { GameContentProvider, useGameContent } from '../../runtime/GameContentContext';
 import { projectService } from '../../utils/projectService';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
@@ -40,7 +42,8 @@ const createDefaultGameSettingsDocument = (): GameSettingsDocument => ({
  * PLAY IN EDITOR
  *
  * Thin shell over the shared level runtime: plays the level open in the editor with the project's
- * game settings, and returns to the editor when the level ends or Escape is pressed.
+ * game settings. Escape pauses; while paused the play toolbar resumes, steps one frame, restarts,
+ * inspects the running objects or stops and returns to the editor (Escape again).
  */
 export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosition }) => {
     const { levelObjects, activeLevelBlueprint, levels, currentLevelId } = useScene();
@@ -80,6 +83,18 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
     }, []);
     const playContent = useMemo(() => ({ ...content, prefabs: prefabs ?? [] }), [content, prefabs]);
     const [sessionKey, setSessionKey] = useState(0);
+    const [paused, setPaused] = useState(false);
+    const [stepRequest, setStepRequest] = useState(0);
+    const inspectRef = useRef<RuntimeInspector | null>(null);
+    const objectNames = useMemo(() => new Map(levelObjects.map(object => [object.id, object.name] as const)), [levelObjects]);
+    const resume = useCallback(() => setPaused(false), []);
+    const step = useCallback(() => setStepRequest(request => request + 1), []);
+    const restart = useCallback(() => {
+        setSessionKey(key => key + 1);
+        setPaused(false);
+    }, []);
+    const stop = useCallback(() => exitRef.current(), []);
+    const inspect = useCallback(() => inspectRef.current, []);
 
     const level = useMemo<RuntimeLevel>(() => ({
         id: currentLevelId ?? 'editor-level',
@@ -106,14 +121,17 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
         };
         return {
             print,
-            restartLevel: () => setSessionKey(key => key + 1),
+            restartLevel: () => {
+                setSessionKey(key => key + 1);
+                setPaused(false);
+            },
             endLevel: () => exitRef.current(),
             // Play-in-editor plays only the level open in the editor.
             openLevel: () => print('OpenLevel is available in the built game', 'warning'),
             saveGame: () => print('Save Game is available in the built game'),
             loadGame: () => print('Load Game is available in the built game'),
-            // Escape returns to the editor, as it always has in play-in-editor.
-            requestPause: () => exitRef.current(),
+            // Escape (or losing the pointer) pauses; the toolbar then offers step, inspect and stop.
+            requestPause: () => setPaused(true),
         };
     }, []);
 
@@ -126,14 +144,28 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
 
     return (
         <GameContentProvider value={playContent}>
-            <LevelRuntime
-                level={level}
-                settings={settings}
-                playerStart={playerStart}
-                paused={false}
-                host={host}
-                sessionKey={sessionKey}
-            />
+            <div className="relative w-full h-full">
+                <LevelRuntime
+                    level={level}
+                    settings={settings}
+                    playerStart={playerStart}
+                    paused={paused}
+                    host={host}
+                    sessionKey={sessionKey}
+                    stepRequest={stepRequest}
+                    inspectRef={inspectRef}
+                />
+                <PlayToolbar
+                    paused={paused}
+                    onResume={resume}
+                    onStep={step}
+                    onRestart={restart}
+                    onStop={stop}
+                    inspect={inspect}
+                    objectNames={objectNames}
+                    frame={stepRequest}
+                />
+            </div>
         </GameContentProvider>
     );
 };

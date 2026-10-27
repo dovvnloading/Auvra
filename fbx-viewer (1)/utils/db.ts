@@ -520,9 +520,10 @@ class DBOperations {
     await this.canonicalChange('prefabs', 'upsert', prefab, prefab.id, lease);
   }
 
-  /** Instances are copies, not links: they stay in their levels, but their
-   * prefabId must resolve, so it is cleared in the same transaction. Queued
-   * behind earlier writes so a pending instance write cannot re-add it. */
+  /** Instances stay in their levels as plain objects: their prefabId must
+   * resolve, so it (and the prefab object link) is cleared in the same
+   * transaction. Queued behind earlier writes so a pending instance write
+   * cannot re-add it. */
   async deletePrefab(id: string, lease?: EditorSessionLease): Promise<void> {
     await this.enqueueMutation(async () => {
       this.requireEditorLease(lease);
@@ -534,9 +535,27 @@ class DBOperations {
       ];
       for (const record of nativeDomainRecords(snapshot, 'objects')) {
         if (record.prefabId !== id) continue;
-        const { prefabId: _unlinked, ...object } = record;
+        const { prefabId: _unlinked, prefabObjectId: _unlinkedObject, ...object } = record;
         changes.push({ domain: 'objects', operation: 'upsert', id: record.id, value: object });
       }
+      await projectService.applyChanges(changes);
+    });
+  }
+
+  /**
+   * Saves a changed prefab together with the edits that bring its instances in other levels up to
+   * date (utils/prefabSync.ts), as one transaction. `removals` are deleted in the order given
+   * (children before parents).
+   */
+  async updatePrefabAndInstances(prefab: PrefabData, upserts: DBLevelObject[], removals: string[], lease?: EditorSessionLease): Promise<void> {
+    await this.enqueueMutation(async () => {
+      this.requireEditorLease(lease);
+      this.requireNativeProject();
+      const changes: Array<{ domain: string; operation: 'remove' | 'upsert'; id: string; value?: unknown }> = [
+        { domain: 'prefabs', operation: 'upsert', id: prefab.id, value: prefab },
+        ...removals.map(id => ({ domain: 'objects', operation: 'remove' as const, id })),
+        ...upserts.map(object => ({ domain: 'objects', operation: 'upsert' as const, id: object.id, value: object })),
+      ];
       await projectService.applyChanges(changes);
     });
   }

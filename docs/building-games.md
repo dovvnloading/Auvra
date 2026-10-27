@@ -99,7 +99,7 @@ Building again into the same parent replaces the previous build. Auvra only repl
 - **Saves** are checkpoints: level, player health and stamina, and level variables. They are stored per game on the player's machine: the Windows build keeps them in `%LOCALAPPDATA%\AuvraGames\<game>`, the Linux build in `~/.local/share/AuvraGames/<game>` (or under `$XDG_DATA_HOME`), and the macOS build in the system's web storage for the game.
 - **F3** toggles a performance overlay: frame rate, average and worst frame time, draw calls, triangles, geometries, textures and (where the browser reports it) memory. It also works when you play in the editor.
 
-The Game HUD, the menus and the Options screen appear only in built games. Playing in the editor shows a built-in HUD, and **Esc** returns to the editor.
+The Game HUD, the menus and the Options screen appear only in built games. Playing in the editor shows a built-in HUD, and **Esc** pauses with the play toolbar (see [Getting started](getting-started.md)).
 
 ## Options
 

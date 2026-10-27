@@ -1,8 +1,9 @@
 
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { Box, Move, RotateCw, Scaling, Trash2, X, RotateCcw, Skull, Timer, Users, UserPlus, Hash, Music, Volume2, Radio, Ear, Repeat, VolumeX, Mountain, Layers, Plus, CircleDashed, Hammer, ArrowUp, ArrowDown, Minus, Activity, Wind, AlertTriangle, Grid, Sun, CloudFog, PersonStanding, Puzzle, Package, GitBranch, Boxes, Brush } from 'lucide-react';
+import { Box, Move, RotateCw, Scaling, Trash2, X, RotateCcw, Skull, Timer, Users, UserPlus, Hash, Music, Volume2, Radio, Ear, Repeat, VolumeX, Mountain, Layers, Plus, CircleDashed, Hammer, ArrowUp, ArrowDown, Minus, Activity, Wind, AlertTriangle, Grid, Sun, CloudFog, PersonStanding, Puzzle, GitBranch, Boxes, Brush } from 'lucide-react';
 import { EditorState } from '../types';
+import { PrefabInstanceSection } from '../PrefabInstanceSection';
 import { LevelComponent, LevelObject } from '../../../types';
 import { EnvironmentBrushPanel } from '../EnvironmentBrushPanel';
 import { EnvironmentMaskTool } from '../EnvironmentMaskTool';
@@ -937,14 +938,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                 className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500/20 transition-all"
                                 title="Rename Object"
                             />
-                            {selectedObject.prefabId && (
-                                <div
-                                    className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-purple-900/30 border border-purple-700/50 text-[10px] font-bold text-purple-300"
-                                    title={`Instantiated from prefab ${selectedObject.prefabId}. Instances are copies; editing this object does not change the prefab.`}
-                                >
-                                    <Package size={10} /> Prefab Instance
-                                </div>
-                            )}
+                            <PrefabInstanceSection object={selectedObject} />
                         </div>
 
                         <ParentField object={selectedObject} objects={levelObjects} onReparent={reparent} />

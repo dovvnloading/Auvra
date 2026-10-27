@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
-import { Play, GitBranch, CheckSquare, Database, Trash2, ArrowLeft, MessageSquare, Box, Shield, Skull, Calculator, Timer, Hash, Type, ToggleLeft, Activity, X, LayoutTemplate, RefreshCcw, DoorOpen, Save, FolderOpen, Undo2, Redo2 } from 'lucide-react';
+import { Send, Crown, Play, GitBranch, CheckSquare, Database, Trash2, ArrowLeft, MessageSquare, Box, Shield, Skull, Calculator, Timer, Hash, Type, ToggleLeft, Activity, X, LayoutTemplate, RefreshCcw, DoorOpen, Save, FolderOpen, Undo2, Redo2 } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
 import { LogicCanvas, LogicGraphSnapshot } from './LogicCanvas';
 import { LevelBlueprintInspector } from './LevelBlueprintInspector';
@@ -235,6 +235,12 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
     const handleAddEvent = (type: string, label: string) => {
         if (type === 'BeginPlay') {
             addNode('Event', 'Event BeginPlay', [], [{ name: 'Exec', dataType: 'Exec', direction: 'Output' }]);
+        } else if (type === 'NetworkEvent') {
+            addNode('Event', 'Event NetworkEvent', [], [
+                { name: 'Exec', dataType: 'Exec', direction: 'Output' },
+                { name: 'Value', dataType: 'String', direction: 'Output' },
+                { name: 'From', dataType: 'String', direction: 'Output' }
+            ], { eventName: '' });
         } else if (type === 'TimelineEvent') {
             addNode('Event', 'Event TimelineEvent', [], [{ name: 'Exec', dataType: 'Exec', direction: 'Output' }], { eventName: '' });
         } else if (type === 'AnimNotify') {
@@ -245,6 +251,22 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                 { name: 'Delta Seconds', dataType: 'Float', direction: 'Output' }
             ]);
         }
+    };
+
+    const handleAddSendNetworkEvent = () => {
+        addNode('SendNetworkEvent', 'Send Network Event',
+            [
+                { name: 'Exec', dataType: 'Exec', direction: 'Input' },
+                { name: 'Name', dataType: 'String', direction: 'Input' },
+                { name: 'Value', dataType: 'String', direction: 'Input' }
+            ],
+            [{ name: 'Out', dataType: 'Exec', direction: 'Output' }],
+            { default_Name: 'event', default_Value: '' }
+        );
+    };
+
+    const handleAddIsNetworkHost = () => {
+        addNode('IsNetworkHost', 'Is Network Host', [], [{ name: 'Is Host', dataType: 'Boolean', direction: 'Output' }]);
     };
 
     const handleAddPrintString = () => {
@@ -575,11 +597,25 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                         <button onClick={handleAddBeginOverlap} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
                             <Box size={12} className="text-red-400 group-hover:text-red-300" /> Actor Begin Overlap
                         </button>
+                        <button onClick={() => handleAddEvent('NetworkEvent', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
+                            <Activity size={12} className="text-red-400 group-hover:text-red-300" /> Network Event
+                        </button>
                         <button onClick={() => handleAddEvent('TimelineEvent', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
                             <Timer size={12} className="text-red-400 group-hover:text-red-300" /> Timeline Event
                         </button>
                         <button onClick={() => handleAddEvent('AnimNotify', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
                             <Activity size={12} className="text-red-400 group-hover:text-red-300" /> Animation Notify
+                        </button>
+                    </div>
+
+                    {/* Multiplayer */}
+                    <div className="space-y-1">
+                        <div className="px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Multiplayer</div>
+                        <button onClick={handleAddSendNetworkEvent} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
+                            <Send size={12} className="text-teal-400 group-hover:text-teal-300" /> Send Network Event
+                        </button>
+                        <button onClick={handleAddIsNetworkHost} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
+                            <Crown size={12} className="text-teal-400 group-hover:text-teal-300" /> Is Network Host
                         </button>
                     </div>
 

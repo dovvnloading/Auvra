@@ -64,6 +64,7 @@ const fakeServices = (objects: LevelObject[] = []) => {
     spawnPrefab: (prefabId, position) => { calls.push(['spawnPrefab', prefabId, position]); return prefabId === 'crate' ? ['crate-root', 'crate-lid'] : []; },
     setVariable: (name, value) => { calls.push(['setVariable', name, value]); return true; },
     playSound: record('playSound'),
+    sendNetEvent: record('sendNetEvent'),
     raycast: (origin, direction, maxDistance, options) => {
       calls.push(['raycast', origin.toArray(), direction.toArray(), maxDistance, options]);
       return direction.z > 0 ? hit : null;

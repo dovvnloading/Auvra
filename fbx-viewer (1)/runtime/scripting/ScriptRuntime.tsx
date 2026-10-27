@@ -19,6 +19,8 @@ import {
     type ScriptEvent,
     type ScriptHostMessage,
     type ScriptInputAction,
+    type ScriptNetPayload,
+    type ScriptNetState,
     type ScriptObjectState,
     type ScriptRaycastHit,
     type ScriptSnapshot,
@@ -26,6 +28,17 @@ import {
     type ScriptValue,
     type ScriptVec3,
 } from './protocol';
+import { isScriptNetPayload } from './scriptApi';
+import { useNetSession } from '../net/NetSessionContext';
+import { NET_LIMITS, type NetSession } from '../net/protocol';
+
+const OFFLINE_NET: ScriptNetState = { connected: false, isHost: true, selfId: null, peers: [] };
+
+/** Multiplayer as scripts see it this frame. */
+export const scriptNetState = (session: NetSession | null): ScriptNetState => {
+    if (!session || session.status() !== 'connected') return OFFLINE_NET;
+    return { connected: true, isHost: session.isHost(), selfId: session.selfId(), peers: session.peers().map(peer => ({ id: peer.id, name: peer.name })) };
+};
 
 /**
  * SCRIPT RUNTIME
@@ -272,6 +285,12 @@ export const parseScriptCommand = (value: unknown): ScriptCommand | null => {
         }
         case 'openLevel':
             return hasKeys(v, ['type', 'levelId']) && isName(v.levelId) ? { type: 'openLevel', levelId: v.levelId } : null;
+        case 'netSend': {
+            const to = optional(v.to, isName);
+            if (!hasKeys(v, ['type', 'name', 'payload'], ['to']) || !isName(v.name) || v.name.length > NET_LIMITS.maxEventNameLength
+                || !isScriptNetPayload(v.payload) || to === false) return null;
+            return to ? { type: 'netSend', name: v.name, payload: v.payload, to } : { type: 'netSend', name: v.name, payload: v.payload };
+        }
         case 'log':
             return hasKeys(v, ['type', 'scriptId', 'level', 'message']) && isName(v.scriptId)
                 && (LOG_LEVELS as readonly unknown[]).includes(v.level) && isText(v.message)
@@ -417,6 +436,8 @@ export interface ScriptSnapshotSources {
     input: ScriptSnapshot['input'];
     variables: ScriptSnapshot['variables'];
     events: readonly ScriptEvent[];
+    /** Multiplayer state; offline (connected false, host true) when omitted. */
+    net?: ScriptNetState;
     raycasts: ReadonlyMap<string, ScriptRaycastHit | null>;
 }
 
@@ -461,6 +482,7 @@ export const buildScriptSnapshot = (sources: ScriptSnapshotSources): ScriptSnaps
         events: [...sources.events],
         // fromEntries defines own properties, so a request id such as '__proto__' stays an ordinary key.
         raycasts: Object.fromEntries(sources.raycasts),
+        net: sources.net ?? OFFLINE_NET,
     };
 };
 
@@ -523,6 +545,8 @@ export interface ScriptCommandServices {
     playPlayerAnimation(clipName: string, maskBone?: string): boolean;
     openLevel(levelId: string): void;
     log(scriptId: string, level: CommandOf<'log'>['level'], message: string): void;
+    /** Sends a multiplayer event; does nothing in a single-player game. */
+    sendNetEvent(name: string, payload: ScriptNetPayload, to?: string): void;
 }
 
 /** What applying one frame's commands produced for the next snapshot. */
@@ -601,6 +625,9 @@ export const applyScriptCommand = (command: ScriptCommand, services: ScriptComma
         case 'openLevel':
             results.ended = true;
             services.openLevel(command.levelId);
+            return;
+        case 'netSend':
+            services.sendNetEvent(command.name, command.payload, command.to);
             return;
         case 'log':
             services.log(command.scriptId, command.level, command.message);
@@ -709,6 +736,9 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
     const sceneRef = useRef(scene);
     sceneRef.current = scene;
     const triggerEvents = useTriggerEvents();
+    const netSession = useNetSession();
+    const netRef = useRef(netSession);
+    netRef.current = netSession;
     const [initialState] = useState(newHostState);
     const host = useRef<HostState>(initialState);
 
@@ -879,6 +909,7 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
                 return played;
             },
             openLevel: levelId => latest.current.openLevel(levelId),
+            sendNetEvent: (name, payload, to) => netRef.current?.sendEvent(name, payload, to),
             log: (scriptId, level, message) => {
                 if (logs >= MAX_LOGS_PER_FRAME) {
                     droppedLogs += 1;
@@ -941,6 +972,7 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
             variables: levelVariables.all(),
             events: state.events,
             raycasts: state.raycasts,
+            net: scriptNetState(netRef.current),
         });
     };
 
@@ -1019,6 +1051,9 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
         timelineObjectId: event.timelineObjectId,
         name: event.name,
     })), []);
+    useEffect(() => netSession?.onEvent((from, name, payload) => pushEvent(host.current, {
+        type: 'netEvent', from, name, payload: payload as ScriptNetPayload,
+    })), [netSession]);
 
     // A re-render can mount new groups (a spawned object, a changed render plan); hidden objects stay hidden.
     useEffect(() => {

@@ -69,8 +69,40 @@ DEFAULT_GAME_SETTINGS: dict[str, Any] = {
     "quality": {"shadows": True, "postProcessing": True, "maxDpr": 2, "fov": 60},
     "input": {"mouseSensitivity": 0.002, "invertY": False},
     "audio": {"masterVolume": 1},
+    "network": {"enabled": False, "serverUrl": "ws://127.0.0.1:7777", "room": "main", "maxPlayers": 8},
 }
-_NESTED_SETTINGS = ("window", "quality", "input", "audio")
+_NESTED_SETTINGS = ("window", "quality", "input", "audio", "network")
+
+# A multiplayer build talks to its relay: the player CSP's connect-src gains that one origin, and the
+# relay script ships beside the game.
+_PLAYER_CONNECT_SRC = "connect-src 'self' blob:"
+_RELAY_URL = re.compile(r"^(wss?)://([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::(\d{1,5}))?(?:/[^\s;'\"]*)?$")
+RELAY_SCRIPT = Path(__file__).resolve().parent.parent / "net" / "relay.py"
+_RELAY_README = """Multiplayer relay for {name}
+
+Players of this game meet in rooms on a relay server. Run it on a machine every player can reach:
+
+    python relay.py --port {port}
+
+It needs Python 3.12 or newer and nothing else. The game connects to {url}; change Multiplayer >
+Server address in Game Settings and rebuild to point it somewhere else. Use --allow-origin to accept
+only your game's web origin, and put the relay behind TLS (wss://) when players connect over the internet.
+"""
+
+
+def relay_origin(settings: Mapping[str, Any]) -> str | None:
+    """The ws/wss origin of an enabled multiplayer relay, or None (disabled or not a valid address)."""
+
+    network = settings.get("network")
+    if not isinstance(network, Mapping) or network.get("enabled") is not True:
+        return None
+    match = _RELAY_URL.fullmatch(str(network.get("serverUrl", "")).strip())
+    if not match:
+        return None
+    scheme, host, port = match.group(1).lower(), match.group(2).lower(), match.group(3)
+    if port is not None and not 0 < int(port) < 65536:
+        return None
+    return f"{scheme}://{host}" + (f":{port}" if port else "")
 
 _MIME_EXTENSIONS = {
     "model/fbx": "fbx",
@@ -220,6 +252,16 @@ def build_game(
             relative = layout.notices if entry["path"] == NOTICES_FILE else web + entry["path"]
             _copy_verified(template_root, staging, entry, relative)
             records.append({**entry, "path": relative})
+        origin = relay_origin(settings)
+        if settings["network"].get("enabled") is True:
+            if origin is None:
+                warnings.append("multiplayer is on but the server address is not a ws:// or wss:// URL; the game will play offline")
+            else:
+                _allow_relay_origin(staging, f"{web}index.html", origin, records, warnings)
+                port = re.search(r":(\d+)$", origin)
+                readme = _RELAY_README.format(name=settings["name"], port=port.group(1) if port else 7777, url=settings["network"]["serverUrl"])
+                _write(staging, "server/relay.py", RELAY_SCRIPT.read_bytes(), records)
+                _write(staging, "server/README.txt", readme.encode("utf-8"), records)
         for domain in DOMAIN_NAMES:
             document = {"schemaVersion": SCHEMA_VERSION, "documents": content[domain]}
             _write(staging, f"{web}game/content/{domain}.json", canonical_json(document).encode("utf-8"), records)
@@ -471,6 +513,22 @@ def _copy_verified(template_root: Path, staging: Path, entry: Mapping[str, Any],
                 writer.write(chunk)
     if written != entry["size"] or digest.hexdigest() != entry["sha256"]:
         raise GameBuildError("unsupported_capability", f"the player template file {relative} is stale or corrupt")
+
+
+def _allow_relay_origin(staging: Path, relative: str, origin: str, records: list[dict[str, Any]], warnings: list[str]) -> None:
+    """Adds the relay origin to the staged player page's connect-src and updates its build record."""
+
+    target = staging.joinpath(*relative.split("/"))
+    html = target.read_text(encoding="utf-8")
+    if html.count(_PLAYER_CONNECT_SRC + ";") != 1:
+        warnings.append("the player page has no recognised connect-src; multiplayer connections may be blocked")
+        return
+    data = html.replace(_PLAYER_CONNECT_SRC + ";", f"{_PLAYER_CONNECT_SRC} {origin};").encode("utf-8")
+    target.write_bytes(data)
+    for record in records:
+        if record["path"] == relative:
+            record["size"] = len(data)
+            record["sha256"] = hashlib.sha256(data).hexdigest()
 
 
 def _write(staging: Path, relative: str, data: bytes, records: list[dict[str, Any]], *, mode: int | None = None) -> None:

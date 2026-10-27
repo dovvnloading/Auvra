@@ -7,11 +7,14 @@ import { DECAL_COMPONENT } from './decalComponent';
 import { PARTICLES_COMPONENT } from './particles';
 import { IK_COMPONENTS } from './ikComponents';
 import { JOINT_COMPONENTS } from './jointComponents';
+import { NET_SYNC_COMPONENT } from './netSyncComponent';
 import { LOD_COMPONENTS } from './lodComponents';
 import { PHYSICS_COMPONENTS } from './physicsComponents';
 import { POST_PROCESS_COMPONENT } from './postProcess';
+import { REFLECTION_PROBE_COMPONENT } from './reflectionProbe';
 import { SCRIPT_COMPONENT } from './scriptComponent';
 import { TIMELINE_COMPONENT } from './timelineComponent';
+import { WATER_COMPONENT } from './waterComponent';
 import type { ComponentDefinition, ComponentInspectorProps } from './types';
 
 /** Every component type an object can carry, in the order the inspector offers them. */
@@ -21,12 +24,15 @@ export const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
     ...JOINT_COMPONENTS,
     PARTICLES_COMPONENT,
     DECAL_COMPONENT,
+    WATER_COMPONENT,
     ...AUDIO_COMPONENTS,
     ...AUDIO_ZONE_COMPONENTS,
     POST_PROCESS_COMPONENT,
+    REFLECTION_PROBE_COMPONENT,
     ...LOD_COMPONENTS,
     ...IK_COMPONENTS,
     SCRIPT_COMPONENT,
+    NET_SYNC_COMPONENT,
     TIMELINE_COMPONENT,
 ];
 
