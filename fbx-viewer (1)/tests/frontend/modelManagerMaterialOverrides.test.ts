@@ -33,7 +33,11 @@ vi.mock('../../utils/processing/ModelTransforms', () => ({
   stripGeometry: () => undefined,
 }));
 vi.mock('../../utils/thumbnailGenerator', () => ({ generateThumbnail: () => 'data:thumbnail' }));
-vi.mock('../../utils/animationBinding', () => ({ prepareAnimationClips: () => ({ clips: [], mode: 'direct' }) }));
+vi.mock('../../utils/animationBinding', () => ({
+  prepareAnimationClips: () => ({ clips: [], mode: 'direct' }),
+  uniqueClipNames: (names: string[]) => [...names],
+  applyStoredClipNames: () => undefined,
+}));
 vi.mock('../../context/NotificationContext', () => ({ useNotification: () => ({ addNotification: mocks.addNotification }) }));
 vi.mock('../../context/OperationContext', () => ({
   isAbortError: (error: unknown) => error instanceof Error && error.name === 'AbortError',

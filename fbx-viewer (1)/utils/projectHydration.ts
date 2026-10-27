@@ -8,7 +8,7 @@ import { isTerrainSplatPending } from '../components/Environment/Terrain/terrain
 import { applyModelImportSettings, stripGeometry } from './processing/ModelTransforms';
 import { generateThumbnail } from './thumbnailGenerator';
 import { disposeModel, disposeObject } from './processing/ModelLifecycle';
-import { prepareAnimationClips } from './animationBinding';
+import { applyStoredClipNames, prepareAnimationClips } from './animationBinding';
 import { hydrateMaterialOverrides, overrideTextureFlipY } from './materialOverrides';
 import {
   assetDiagnosticAttributes,
@@ -209,7 +209,7 @@ export async function loadGameContent(
       catch (error) { recordAssetFailure('audio_hydration_failed', error, 'source_read', diagnostic); }
       complete(`Loaded audio — ${item.name}`, diagnostic);
     }
-    const animationDocuments = documents('animations') as Array<{ assetId?: string; modelId?: string; name?: string }>;
+    const animationDocuments = documents('animations') as Array<{ assetId?: string; modelId?: string; name?: string; clipNames?: unknown }>;
     for (const value of documents('models')) {
       const item = value as Record<string, any>;
       if (!item.id || !item.name || !item.assetId) continue;
@@ -234,6 +234,9 @@ export async function loadGameContent(
         });
         loadedModel = loaded;
         assertCurrent();
+        // Clips keep the names stored at import, not the model's current name (see applyStoredClipNames).
+        applyStoredClipNames(loaded.animations, item.clipNames);
+        loaded.sourceClipNames = loaded.animations.map((clip) => clip.name);
         loaded.category = item.category || 'Prop';
         loaded.isPlacedInScene = Boolean(item.isPlacedInScene);
         loaded.textureOverrides = item.textureOverrides;
@@ -311,6 +314,7 @@ export async function loadGameContent(
               animationPhase = 'animation_binding';
               report(`Binding animation — ${animationName}`, 0.96, animationPhase, animationDiagnostic);
               const prepared = prepareAnimationClips(loaded.object, animationModel.object, animationModel.animations);
+              applyStoredClipNames(prepared.clips, animation.clipNames);
               animationDiagnostic = { ...animationDiagnostic, bindingMode: prepared.mode, clipCount: prepared.clips.length };
               loaded.animations.push(...prepared.clips);
             } finally {

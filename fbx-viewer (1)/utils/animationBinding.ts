@@ -45,6 +45,26 @@ const bones = (root: THREE.Object3D): THREE.Bone[] => {
 
 export const isSkeletalModel = (model: AnimationTargetCandidate): boolean => bones(model.object).length > 0;
 
+/** `names` made unique among themselves and against `taken` ("Idle", then "Idle 2"); `taken` gains them. */
+export const uniqueClipNames = (names: readonly string[], taken: Set<string>): string[] =>
+  names.map((name) => {
+    let candidate = name;
+    for (let suffix = 2; taken.has(candidate); suffix += 1) candidate = `${name} ${suffix}`;
+    taken.add(candidate);
+    return candidate;
+  });
+
+/**
+ * Gives `clips` the names stored with their document. A clip is named after its file when it is
+ * loaded, so without this a model renamed in the library would rename its clips too, and every
+ * state that plays them would lose them. Ignored unless there is one stored name per clip.
+ */
+export const applyStoredClipNames = (clips: readonly THREE.AnimationClip[], stored: unknown): void => {
+  if (!Array.isArray(stored) || stored.length !== clips.length) return;
+  if (!stored.every((name) => typeof name === 'string' && name.length > 0)) return;
+  clips.forEach((clip, index) => { clip.name = stored[index] as string; });
+};
+
 /**
  * `own` followed by the rest of `all`. Where models have clips of the same name ("Idle"), an
  * animation graph plays the first one listed, so a model's own clips must come before the others.
