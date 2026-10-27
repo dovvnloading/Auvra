@@ -65,6 +65,7 @@ const fakeServices = (objects: LevelObject[] = []) => {
     setVariable: (name, value) => { calls.push(['setVariable', name, value]); return true; },
     playSound: record('playSound'),
     sendNetEvent: record('sendNetEvent'),
+    setCamera: record('setCamera'),
     raycast: (origin, direction, maxDistance, options) => {
       calls.push(['raycast', origin.toArray(), direction.toArray(), maxDistance, options]);
       return direction.z > 0 ? hit : null;

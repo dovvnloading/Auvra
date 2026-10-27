@@ -1,4 +1,4 @@
-import React, { useContext, useMemo, useRef } from 'react';
+import React, { useContext, useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
@@ -16,6 +16,7 @@ import {
     type TimelinePlayback,
 } from '../timeline/evaluate';
 import { timelineEvents } from '../timeline/events';
+import { cameraDirector } from '../cameraDirector';
 import { ComponentHostContext } from './builtins';
 import type { ComponentDefinition, ComponentRenderProps } from './types';
 
@@ -120,6 +121,11 @@ const TimelinePlayer: React.FC<ComponentRenderProps> = ({ object, component }) =
     const groups = useRef(new Map<string, THREE.Object3D>());
     const sinceSearch = useRef(Number.POSITIVE_INFINITY);
     const reportedMissing = useRef(new Set<string>());
+    // The camera this timeline cut to, given back to the gameplay camera when the timeline goes away.
+    const shot = useRef<string | null>(null);
+    useEffect(() => () => {
+        if (shot.current && cameraDirector.activeId() === shot.current) cameraDirector.setActive(null, 0);
+    }, []);
 
     useFrame((_state, delta) => {
         const step = Math.min(delta, MAX_FRAME_STEP);
@@ -151,7 +157,13 @@ const TimelinePlayer: React.FC<ComponentRenderProps> = ({ object, component }) =
             }
         }
 
-        applyTimeline(evaluateTimeline(data, advanced.playback.time), id => (owner && id === object.id ? owner : found.get(id) ?? null));
+        const evaluation = evaluateTimeline(data, advanced.playback.time);
+        applyTimeline(evaluation, id => (owner && id === object.id ? owner : found.get(id) ?? null));
+        // Camera keys cut the view; a cut to the shot already showing does nothing.
+        if (evaluation.camera && evaluation.camera.objectId !== shot.current) {
+            shot.current = evaluation.camera.objectId;
+            cameraDirector.setActive(shot.current || null, evaluation.camera.blend);
+        }
         for (const name of advanced.events) timelineEvents.emit({ timelineObjectId: object.id, name });
     });
 

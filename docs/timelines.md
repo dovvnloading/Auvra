@@ -29,6 +29,7 @@ Nothing you change reaches the level until you click **Save**, which stores the 
 | Visibility | An object in this level | Visible or hidden |
 | Variable | A level variable, by name | A number |
 | Event | None | An event name (see [Events](#events)) |
+| Camera | None | The camera to show from this key on: an object with a Camera component, or the gameplay camera (see [Camera cuts](#camera-cuts)) |
 
 Each track's header has:
 
@@ -81,6 +82,10 @@ For example, a door that opens when the player steps on a switch:
 1. Add a **Timeline** to the door. Turn **Autoplay** off and set **Play Variable** to `doorOpen`.
 2. In the editor, add a Transform track (it targets the door), key the closed pose at 0 s and the open pose at 1.5 s, and set the first key's interpolation to **Smooth**.
 3. In the Level Blueprint, declare `doorOpen` as a Boolean (false), and connect **On Overlap** on the switch to **Set Level Variable** `doorOpen` = true.
+
+## Camera cuts
+
+A Camera track switches the view at each key to the camera chosen for it, until the next key. Choose **Gameplay camera** to hand the view back to the player's camera. The track's **Blend** sets how long each switch eases over (0 cuts at once). Cameras are objects with a **Camera** component; the editor shows its view pyramid. When a timeline that switched cameras goes away, the gameplay camera comes back.
 
 ## Events
 

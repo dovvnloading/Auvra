@@ -3,6 +3,7 @@ import type { LevelComponent } from '../../types';
 import { BUILTIN_COMPONENTS } from './builtins';
 import { AUDIO_COMPONENTS } from './audioComponents';
 import { AUDIO_ZONE_COMPONENTS } from './audioZones';
+import { CAMERA_COMPONENT } from './cameraComponent';
 import { DECAL_COMPONENT } from './decalComponent';
 import { PARTICLES_COMPONENT } from './particles';
 import { IK_COMPONENTS } from './ikComponents';
@@ -20,6 +21,7 @@ import type { ComponentDefinition, ComponentInspectorProps } from './types';
 /** Every component type an object can carry, in the order the inspector offers them. */
 export const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
     ...BUILTIN_COMPONENTS,
+    CAMERA_COMPONENT,
     ...PHYSICS_COMPONENTS,
     ...JOINT_COMPONENTS,
     PARTICLES_COMPONENT,

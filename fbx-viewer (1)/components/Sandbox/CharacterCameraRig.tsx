@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { AnimationGraphData } from '../../types';
 import { useRuntimeServices } from '../../runtime/RuntimeServicesContext';
+import { cameraDirector } from '../../runtime/cameraDirector';
 
 interface CharacterCameraRigProps {
     target: THREE.Object3D;
@@ -115,6 +116,8 @@ export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({
     // Frame Loop - Standard Priority
     useFrame((_, delta) => {
         if (!target) return;
+        // A level camera (timeline, Set Active Camera, script) owns the view; the rig resumes when it is released.
+        if (cameraDirector.activeId() !== null) return;
 
         // Touch look (the right-hand drag area); devices without pointer lock have no mouse look.
         if (active) {

@@ -47,6 +47,7 @@ Objects can carry components that add behaviour. Select an object and use **Add 
 |---|---|
 | Rotator | Spins the object around an axis |
 | Mover | Moves the object back and forth by an offset |
+| Camera | A level camera looking along the object's -Z axis. Timelines, the **Set Active Camera** node and scripts switch the view to it; **Active at start** shows it as play begins (see [Camera cuts](timelines.md#camera-cuts)) |
 | Point Light / Spot Light | Light sources, visible in the editor and in play (see [Lights](#lights)) |
 | Collider | A physics shape: solid scenery or a trigger volume (see [Physics](#physics)) |
 | Rigid Body | Simulates the object during play (see [Physics](#physics)) |

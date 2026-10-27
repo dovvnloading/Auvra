@@ -39,6 +39,7 @@ import { RuntimeServicesProvider, RuntimeSpawnerProvider, type SpawnPosition, to
 import { ComponentHostContext } from './components/builtins';
 import { getComponentDefinition } from './components/registry';
 import { IKPlayerTargetContext } from './components/ikComponents';
+import { CameraDirectorDriver } from './components/cameraComponent';
 import { PostProcessAllowedContext, usePostProcessClaimed } from './components/postProcess';
 import type { InputState } from './input';
 import { collectTimelineTargets } from './timeline/evaluate';
@@ -726,6 +727,8 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                 isAiming={isAiming}
                 aimOffset={player.blueprint.aimOffset || [0.5, 4.5, 1.0]}
             />
+            {/* After the rig: a level camera, or a blend back from one, has the last word on the view. */}
+            <CameraDirectorDriver />
         </RuntimeSpawnerProvider>
         </IKPlayerTargetContext.Provider>
     );

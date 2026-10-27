@@ -146,6 +146,8 @@ export interface ScriptContext {
     playSound(audioId: string, bus?: ScriptSoundBus): void;
     playPlayerAnimation(clipName: string, maskBone?: string): void;
     openLevel(levelId: string): void;
+    /** Switches the view to the camera component on object `objectId`, or back to the gameplay camera (null). */
+    setCamera(objectId: string | null, blendSeconds?: number): void;
     /** Multiplayer: who is here, who hosts, and events to the other players. */
     readonly net: ScriptNet;
     log(...values: unknown[]): void;
@@ -779,6 +781,16 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
             },
             openLevel: (levelId: string) => {
                 queue(record, { type: 'openLevel', levelId: readId('openLevel', levelId) });
+            },
+            setCamera: (objectId: string | null, blendSeconds = 0) => {
+                const camera = objectId === null ? null : readId('setCamera', objectId);
+                if (!isFiniteNumber(blendSeconds) || blendSeconds < 0) throw new TypeError('setCamera blend must be a number of seconds, 0 or more');
+                // One camera switch per frame: the last one asked for wins.
+                const pending = merged.get('camera');
+                if (pending?.type === 'setCamera') {
+                    pending.objectId = camera;
+                    pending.blend = Math.min(blendSeconds, 30);
+                } else queue(record, { type: 'setCamera', objectId: camera, blend: Math.min(blendSeconds, 30) }, 'camera');
             },
             net: {
                 connected: () => world.snapshot.net.connected,

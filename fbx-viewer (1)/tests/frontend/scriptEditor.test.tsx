@@ -592,7 +592,7 @@ describe('script templates', () => {
 });
 
 describe('scripting documentation', () => {
-  const docs = readFileSync(path.resolve(__dirname, '../../../docs/scripting.md'), 'utf8');
+  const docs = readFileSync(path.resolve(__dirname, '../../../docs/scripting.md'), 'utf8').replace(/\r\n/g, '\n');
   const examples = [...docs.matchAll(/```js\n([\s\S]*?)```/g)].map(match => match[1]);
 
   it('lists every callback and ctx member the editor reference lists', () => {
@@ -653,7 +653,7 @@ describe('templates and examples on the script host', () => {
     commands.filter((command): command is Extract<ScriptCommand, { type: T }> => command.type === type);
 
   it('compiles and runs every template and documentation example without errors', () => {
-    const docs = readFileSync(path.resolve(__dirname, '../../../docs/scripting.md'), 'utf8');
+    const docs = readFileSync(path.resolve(__dirname, '../../../docs/scripting.md'), 'utf8').replace(/\r\n/g, '\n');
     const examples = [...docs.matchAll(/```js\n([\s\S]*?)```/g)].map(match => match[1]);
     for (const source of [...SCRIPT_TEMPLATES.map(item => item.source), ...examples]) {
       const objects = [state('self', 'Self', [0, 1, 0]), state('door', 'Door', [4, 0, 0])];

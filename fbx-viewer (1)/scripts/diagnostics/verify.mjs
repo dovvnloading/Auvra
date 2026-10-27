@@ -33,6 +33,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/components/scriptComponent.tsx': 'data-model',
   'runtime/ik.ts': 'hot-loop',
   'runtime/ragdoll.ts': 'hot-loop',
+  'runtime/cameraDirector.ts': 'hot-loop',
   'runtime/net/protocol.ts': 'protocol-model',
   'runtime/net/replication.ts': 'hot-loop',
   'runtime/scripting/protocol.ts': 'protocol-model',
