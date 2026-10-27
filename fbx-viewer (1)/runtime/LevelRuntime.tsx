@@ -793,6 +793,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                 active={controlsEnabled}
                 isAiming={isAiming}
                 aimOffset={player.blueprint.aimOffset || [0.5, 4.5, 1.0]}
+                initialYaw={sessionStart.rotation[1]}
             />
             <DialogueDriver enabled={!isGameOver && !paused} />
             {/* After the rig: a level camera, or a blend back from one, has the last word on the view. */}
