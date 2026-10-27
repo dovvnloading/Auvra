@@ -70,6 +70,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/playerOptions.ts': 'pure-derived-state',
   'runtime/components/types.ts': 'data-model',
   'utils/prefabs.ts': 'pure-utility',
+  'utils/prefabSync.ts': 'pure-utility',
   'utils/sceneGraph.ts': 'pure-utility',
   'utils/surfacePlacement.ts': 'hot-loop',
   'player/gamePack.ts': 'context-adapter',

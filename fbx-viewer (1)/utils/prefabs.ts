@@ -6,8 +6,9 @@ import { collectSubtree, getWorldMatrix } from './sceneGraph';
  * Pure prefab helpers. A prefab is a copy of one object subtree: the root is
  * stored without a parent at the placement origin (keeping its world rotation
  * and scale), descendants keep their local transforms and parent links.
- * Placing a prefab copies it into a level with fresh ids; instances record the
- * prefab they came from but are not live links.
+ * Placing a prefab copies it into a level with fresh ids; every placed object
+ * records the prefab and the prefab object it came from, so prefab changes can
+ * reach it later (utils/prefabSync.ts).
  */
 export type PrefabObject = PrefabData['objects'][number];
 
@@ -75,7 +76,7 @@ export const createPrefabFromSubtree = (objects: readonly LevelObject[], rootId:
   const rotation = new THREE.Euler().setFromQuaternion(quaternion, 'XYZ');
 
   const prefabObjects = subtree.map((object): PrefabObject => {
-    const { levelId: _levelId, prefabId: _prefabId, ...document } = cloneDocument(object);
+    const { levelId: _levelId, prefabId: _prefabId, prefabObjectId: _prefabObjectId, ...document } = cloneDocument(object);
     if (object.id !== rootId) return document;
     return {
       ...document,
@@ -128,6 +129,7 @@ export const instantiatePrefab = (prefab: PrefabData, levelId: string, position:
       parentId: isRoot ? null : ids.get(object.parentId as string)!,
       position: isRoot ? addVec(position, object.position) : object.position,
       prefabId: prefab.id,
+      prefabObjectId: object.id,
       ...(components ? { components } : {}),
     };
   });

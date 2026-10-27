@@ -177,8 +177,10 @@ export interface LevelObject {
   parentId?: string | null;
   /** Behaviour attached to the object (lights, movers, ...); see runtime/components. */
   components?: LevelComponent[];
-  /** Prefab this object was instantiated from (instances are copies, not live links). */
+  /** Prefab this object belongs to an instance of (utils/prefabSync.ts keeps instances in step with it). */
   prefabId?: string;
+  /** The prefab object this object was made from; the one matching the prefab's rootId heads the instance. */
+  prefabObjectId?: string;
 }
 
 export interface LevelComponent {

@@ -153,7 +153,15 @@ To erase paint, paint layer 1 over it. Only the last layer can be removed; its p
 
 ## Prefabs
 
-A prefab is a reusable object tree. Select an object (its children come with it) and choose **Create from selection** in the prefab panel under the outliner. **Place** adds a copy to the current level. Placed copies are independent of the prefab. The **Spawn Prefab** blueprint node places copies during play.
+A prefab is a reusable object tree. Select an object (its children come with it) and choose **Create from selection** in the prefab panel under the outliner; the selection becomes the prefab's first instance. **Place** adds another instance to the current level. The **Spawn Prefab** blueprint node places copies during play.
+
+Instances stay linked to their prefab. Select any object of an instance and the inspector shows which prefab it belongs to and what it overrides:
+
+- **Apply** saves the instance as the new version of the prefab and updates every other instance, in every level. Objects you added under the instance become part of the prefab.
+- **Revert** puts the instance back to the prefab, dropping its overrides. The instance keeps its own position, rotation and scale.
+- **Unlink** turns the instance into plain objects that prefab changes no longer reach.
+
+When a prefab changes, a property an instance changed itself (an override, such as a moved child or a different light intensity) is kept; every other property takes the prefab's new value. Objects added to the prefab appear in every instance and removed ones disappear. Deleting a prefab unlinks its instances and leaves them in their levels.
 
 ## Placement
 
