@@ -423,6 +423,17 @@ async def start_relay(host: str = "127.0.0.1", port: int = 7777, *, max_players:
     return RelayHandle(server, relay, bound)
 
 
+def _quiet_disconnects(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+    """A player whose game closed without saying goodbye is an ordinary disconnect, not a fault.
+
+    On Windows the proactor reports such a reset from its transport callback as an unhandled
+    "Exception in callback" traceback; anything else still goes to the default handler.
+    """
+    if isinstance(context.get("exception"), (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+        return
+    loop.default_exception_handler(context)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Auvra multiplayer relay")
     parser.add_argument("--host", default="0.0.0.0", help="address to listen on (default all interfaces)")
@@ -432,6 +443,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     async def serve() -> None:
+        asyncio.get_running_loop().set_exception_handler(_quiet_disconnects)
         handle = await start_relay(args.host, args.port, max_players=args.max_players, allowed_origins=args.allow_origin)
         print(f"Auvra relay listening on {args.host}:{handle.port}", flush=True)
         try:

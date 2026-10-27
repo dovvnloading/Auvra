@@ -243,3 +243,19 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QuietDisconnectTests(unittest.TestCase):
+    def test_resets_are_quiet_and_other_errors_reach_the_default_handler(self):
+        from Auvra.net import relay as relay_module
+        seen = []
+
+        class Loop:
+            def default_exception_handler(self, context):
+                seen.append(context)
+
+        relay_module._quiet_disconnects(Loop(), {"exception": ConnectionResetError(10054, "reset")})
+        relay_module._quiet_disconnects(Loop(), {"exception": ConnectionAbortedError()})
+        self.assertEqual(seen, [])
+        relay_module._quiet_disconnects(Loop(), {"exception": ValueError("real fault")})
+        self.assertEqual(len(seen), 1)
