@@ -56,6 +56,8 @@ Objects can carry components that add behaviour. Select an object and use **Add 
 | Music | Plays a playlist of audio assets on the music bus, with shuffle, loop and crossfades |
 | Physics Joint | Connects the object's rigid body to another object or to the world: fixed, ball, hinge or slider, with limits and a break force |
 | Decal | Projects a texture onto the object or onto any surface under it |
+| Water | An animated water surface with waves, reflections and foam; dynamic rigid bodies float in it and are slowed by it |
+| Reflection Probe | Captures its surroundings into a reflection map for shiny materials within its radius; the nearest probe wins where probes overlap. Updates once at start, at an interval, or every frame |
 | Post Process | Bloom, ambient occlusion, tone mapping, vignette, depth of field, colour grading and antialiasing for the whole level |
 | LOD Group | Shows one of the object's children by camera distance (LOD 0, 1, 2) and hides all of them past the last distance |
 | Distance Cull | Hides the object and its children beyond a distance |
