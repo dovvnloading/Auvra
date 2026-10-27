@@ -4,8 +4,9 @@ import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import { GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
 import { AI_CONFIG, resolveAITuning } from './AI/AIConfig';
-import type { BlueprintStat } from '../../types';
+import type { BehaviorTreeData, BlueprintStat } from '../../types';
 import { useAIBrain } from './AI/useAIBrain';
+import { useBehaviorBrain } from './AI/useBehaviorBrain';
 import { useAILocomotion } from './AI/useAILocomotion';
 
 interface AIControllerProps {
@@ -17,6 +18,8 @@ interface AIControllerProps {
     onDealDamage?: () => void;
     /** Enemy blueprint stats ('Speed', 'Attack Range', 'Attack Cooldown', 'Sight Range'). */
     stats?: readonly BlueprintStat[];
+    /** The blueprint's authored behavior; without one the built-in AI decides. */
+    behaviorTree?: BehaviorTreeData;
 }
 
 export const AIController: React.FC<AIControllerProps> = ({
@@ -26,7 +29,8 @@ export const AIController: React.FC<AIControllerProps> = ({
     boundarySize,
     enabled,
     onDealDamage,
-    stats
+    stats,
+    behaviorTree
 }) => {
     // Callback wrapper
     const handleAttack = useCallback(() => {
@@ -35,7 +39,9 @@ export const AIController: React.FC<AIControllerProps> = ({
 
     // --- Systems ---
     const tuning = useMemo(() => resolveAITuning(stats), [stats]);
-    const brain = useAIBrain(enemyApi, handleAttack, tuning);
+    const builtIn = useAIBrain(enemyApi, handleAttack, tuning);
+    const authored = useBehaviorBrain(behaviorTree, enemyApi, handleAttack, tuning);
+    const brain = behaviorTree && behaviorTree.behaviorNodes.length > 0 ? authored : builtIn;
     const locomotion = useAILocomotion();
 
     // Reusable Vectors

@@ -59,6 +59,8 @@ _NESTED_KEYS = {
     "lods": {"level", "maxDistance"},
     "render": {"visible", "radius", "selected", "lods"},
     "ik": {"footIK", "footMaxStep", "lookAt", "lookAtBone", "lookAtMaxAngle"},
+    "behaviorTree": {"rootId", "behaviorNodes"},
+    "behaviorNodes": {"id", "type", "children", "condition", "action", "value", "text"},
 }
 _FREEFORM_KEYS = {"settings", "overrides", "style", "payload", "data", "customData", "props"}
 # ``materialOverrides`` is keyed by authored material names, so its entries are
