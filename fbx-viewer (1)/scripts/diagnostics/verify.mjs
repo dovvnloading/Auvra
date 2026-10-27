@@ -62,6 +62,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/components/registry.ts': 'data-model',
   'runtime/levelVariables.ts': 'pure-derived-state',
   'components/Environment/Terrain/terrainSplatCodec.ts': 'pure-utility',
+  'components/Environment/Terrain/terrainChunks.ts': 'pure-utility',
   'components/Environment/Terrain/terrainLayerMaterial.ts': 'pure-utility',
   'components/Environment/Terrain/terrainSplatEditor.ts': 'context-adapter',
   'runtime/localization.ts': 'pure-derived-state',

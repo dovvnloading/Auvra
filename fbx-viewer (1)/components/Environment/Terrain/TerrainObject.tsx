@@ -6,6 +6,7 @@ import { isTerrainHeightfieldPending, terrainSamplesPerSide } from '../../../uti
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { useGameContent } from '../../../runtime/GameContentContext';
 import { TerrainBrushSettings, TerrainPaintTarget, TERRAIN_PAINT_CURSOR_COLOR } from './TerrainSculptor';
+import { TerrainLodMesh } from './TerrainLodMesh';
 import {
     createDefaultTerrainSplat,
     fillDefaultTerrainSplat,
@@ -33,7 +34,15 @@ interface TerrainObjectProps {
     sculptingEnabled?: boolean;
     sculptSettings?: TerrainBrushSettings;
     onHeightUpdate?: (id: string, heights: number[]) => void;
+    /**
+     * Draw distant parts with fewer vertices (TerrainLodMesh). Used by the game runtime; the editor keeps
+     * the full-resolution mesh, which sculpting and placement work on directly.
+     */
+    lod?: boolean;
 }
+
+/** Below this many cells per side one mesh is cheap enough; chunking would only add draw calls. */
+const MIN_LOD_SEGMENTS = 64;
 
 /**
  * Layer textures by URL. Each URL is loaded once and disposed when no layer
@@ -88,7 +97,8 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
     onClick,
     sculptingEnabled: sculptingRequested,
     sculptSettings,
-    onHeightUpdate
+    onHeightUpdate,
+    lod = false
 }, ref) => {
     // Heights stored in a heightfield asset are loaded after the level opens.
     // Until then the flat placeholder must not be sculpted and committed.
@@ -96,7 +106,7 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
     const sculptingEnabled = Boolean(sculptingRequested) && !heightsPending;
     const meshRef = useRef<THREE.Mesh>(null);
     const groupRef = useRef<THREE.Group>(null);
-    const geometryRef = useRef<THREE.PlaneGeometry>(null);
+    const geometryRef = useRef<THREE.PlaneGeometry | null>(null);
     
     // Sculpting State
     const [hoverPoint, setHoverPoint] = useState<THREE.Vector3 | null>(null);
@@ -107,6 +117,11 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
     const { resolution, width, depth, heights } = data.terrainData || { resolution: 64, width: 100, depth: 100, heights: [] };
     const paintState: TerrainPaintState | undefined = data.terrainData;
     const samplesPerSide = terrainSamplesPerSide(resolution);
+    // Built here rather than in JSX so LOD chunks can share its vertex buffers.
+    const planeGeometry = useMemo(() => new THREE.PlaneGeometry(width, depth, resolution, resolution), [width, depth, resolution]);
+    geometryRef.current = planeGeometry;
+    useEffect(() => () => planeGeometry.dispose(), [planeGeometry]);
+    const chunked = lod && !sculptingEnabled && resolution >= MIN_LOD_SEGMENTS;
 
     // --- Texture Layers ---
     // Up to four layers blended by the splat map. Without layers the terrain
@@ -366,18 +381,27 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
                 rotation={[-Math.PI / 2, 0, 0]} // Rotate to face up
                 receiveShadow={receiveShadow}
                 castShadow={castShadow}
+                visible={!chunked}
+                geometry={planeGeometry}
                 material={layerMaterial ?? material}
                 onPointerMove={handlePointerMove}
                 onPointerDown={handlePointerDown}
                 onPointerUp={handlePointerUp}
                 onPointerOut={handlePointerOut}
                 userData={{ levelObjectId: data.id, isTerrain: true, heightsPending, terrainPaint: paintTarget }}
-            >
-                <planeGeometry 
-                    ref={geometryRef} 
-                    args={[width, depth, resolution, resolution]} 
-                />
-            </mesh>
+            />
+            {chunked && (
+                <group rotation={[-Math.PI / 2, 0, 0]}>
+                    <TerrainLodMesh
+                        source={planeGeometry}
+                        segments={resolution}
+                        version={heights}
+                        material={layerMaterial ?? material}
+                        castShadow={castShadow}
+                        receiveShadow={receiveShadow}
+                    />
+                </group>
+            )}
             
             {/* Sculpt Brush Cursor - Rendered in WORLD space relative to group, or projected? 
                 Actually, simpler to put it in the scene. 

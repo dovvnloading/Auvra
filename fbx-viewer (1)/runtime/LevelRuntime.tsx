@@ -613,6 +613,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                         castShadow
                         receiveShadow
                         sculptingEnabled={false}
+                        lod
                     />
                 ))}
 

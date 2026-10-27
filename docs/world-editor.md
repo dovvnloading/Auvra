@@ -143,6 +143,10 @@ Add an **Audio Source** component to play a sound from an object during play. In
 
 All game sound plays through four mixer buses (Master, Music, Effects and Interface), and players set each one's volume in the game's Options screen. Weapon sounds use Effects. **Audio Emitter** objects use Music when they are 2D and looping, and Effects otherwise. The **Play Sound** blueprint node chooses its bus.
 
+## Terrain detail in play
+
+In play and in built games, a terrain with a resolution of 64 or more is drawn in chunks of 32 by 32 cells. Chunks far from the camera use a half, a quarter or an eighth of the vertices per side, and short skirts under their edges hide the seams where chunks of different detail meet. The editor always shows the full-resolution terrain, which sculpting, painting and placement work on. Collisions always use the full-resolution heights.
+
 ## Terrain painting
 
 A terrain can blend up to four textures. Import the textures in the Content Browser first.
