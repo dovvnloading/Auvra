@@ -630,6 +630,7 @@ _GATE_VARIABLE = "gate_open"
 _COURTYARD_FLAT_RADIUS = 34.0
 _COURTYARD_HALF = 15.0     # the walls stand on a square this far from the middle
 _GATE_X = (-1.25, 1.25)    # the two gate crates fill the gap in the north wall
+_GATE_HEIGHT_SCALE = 1.4   # the gate doors stand taller than the wall
 
 _COURTYARD_MODELS = {
     "courtyard-model-character": (_STARTER_ROOT / "assets" / "character.fbx", "Character", "Character", 5.0),
@@ -715,7 +716,8 @@ def _courtyard_objects(heightfield_id: str) -> list[dict[str, Any]]:
         objects.append(_object(object_id, level, f"Wall {index + 1}", "prop", [x, 0.0, z],
                                model_id="courtyard-model-crate", components=[_crate_collider(object_id)]))
 
-    # The gate: kinematic bodies, so their colliders follow the timeline that sinks them into the ground.
+    # The gate: two tall, thin doors standing out from the wall. Kinematic bodies, so their colliders
+    # follow the timeline that sinks them into the ground.
     gate = []
     for side, x in zip(("Left", "Right"), _GATE_X):
         object_id = f"courtyard-gate-{side.lower()}"
@@ -725,10 +727,14 @@ def _courtyard_objects(heightfield_id: str) -> list[dict[str, Any]]:
                                            lockRotation=True),
                                 _crate_collider(object_id),
                             ]))
+        gate[-1]["scale"] = [1.0, _GATE_HEIGHT_SCALE, 0.6]
     objects.extend(gate)
-    sink = -_CRATE_SIZE - 0.1
-    objects.append(_object("courtyard-gate-mechanism", level, "Gate Mechanism", "prop", [0.0, 3.0, -_COURTYARD_HALF],
-                           components=[_component("courtyard-gate-mechanism", "timeline", autoplay=False, loop=False,
+    sink = -_CRATE_SIZE * _GATE_HEIGHT_SCALE - 0.1
+    # A warm lamp over the gate shows the way out; the gate's timeline lives on the same object.
+    objects.append(_object("courtyard-gate-mechanism", level, "Gate Mechanism", "prop", [0.0, 4.2, -_COURTYARD_HALF + 1.0],
+                           components=[_component("courtyard-gate-mechanism", "pointLight", color="#ffb36b", intensity=30,
+                                                  distance=12, castShadow=False),
+                                       _component("courtyard-gate-mechanism", "timeline", autoplay=False, loop=False,
                                                   speed=1, playVariable=_GATE_VARIABLE, timeline={
                                "duration": 2.5,
                                "tracks": [{
