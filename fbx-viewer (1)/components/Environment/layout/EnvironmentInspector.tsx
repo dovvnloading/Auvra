@@ -14,6 +14,7 @@ import { WaveformEditor } from '../assets/WaveformEditor';
 import { DEFAULT_SKY_CONFIG } from '../SkySystem';
 import { isTerrainHeightfieldPending } from '../../../utils/terrainHeightfieldCodec';
 import { editorSession } from '../../../utils/editorSession';
+import { appConfirm } from '../../../utils/appDialogs';
 import { collectSubtree, getWorldMatrix, reparentPreservingWorld, sortByHierarchy, toLocalTransform, wouldCreateCycle } from '../../../utils/sceneGraph';
 import { COMPONENT_DEFINITIONS, createComponent, getComponentDefinition } from '../../../runtime/components/registry';
 import type { ComponentPropSchema } from '../../../runtime/components/types';
@@ -881,8 +882,8 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                     edits={edits}
                     updateLevelObject={actions.updateLevelObject}
                     onClear={() => actions.setSelectedObjectId(null)}
-                    onDelete={(ids) => {
-                        if (!confirm(`Delete ${ids.length} objects?`)) return;
+                    onDelete={async (ids) => {
+                        if (!await appConfirm(`Delete ${ids.length} objects?`, { acceptLabel: 'Delete', danger: true })) return;
                         if (editorSession.captureReady() !== null) removeLevelObjects(ids);
                         actions.setSelectedObjectId(null);
                     }}
@@ -1185,8 +1186,9 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                         {/* Generic Delete Button */}
                         <div className="pt-4 border-t border-gray-800 mt-auto">
                             <button
-                                onClick={() => {
-                                    if(confirm('Delete object?')) actions.removeLevelObject(selectedObject.id);
+                                onClick={async () => {
+                                    if (!await appConfirm(`Delete "${selectedObject.name}"?`, { acceptLabel: 'Delete', danger: true })) return;
+                                    actions.removeLevelObject(selectedObject.id);
                                     actions.setSelectedObjectId(null);
                                 }}
                                 className="w-full py-2 bg-red-900/20 hover:bg-red-900/40 text-red-400 border border-red-900/50 rounded text-xs font-bold transition-colors flex items-center justify-center gap-2"

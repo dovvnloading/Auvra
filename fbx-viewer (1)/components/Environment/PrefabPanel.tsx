@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Boxes, PackagePlus, MapPin, Trash2, RefreshCw } from 'lucide-react';
 import { usePrefabs } from '../../hooks/usePrefabs';
 import { editorSession } from '../../utils/editorSession';
+import { appConfirm, appPrompt } from '../../utils/appDialogs';
 
 interface PrefabPanelProps {
     /** Current World Editor selection; the prefab root is the primary's selection root. */
@@ -28,8 +29,8 @@ export const PrefabPanel: React.FC<PrefabPanelProps> = ({
 
     const handleCreate = async () => {
         if (!canEdit() || isCreating) return;
-        const name = prompt('Prefab name (leave empty to use the object name):', '');
-        if (name === null) return;
+        const name = await appPrompt('New prefab', { message: 'Name the prefab, or leave it empty to use the object name.', acceptLabel: 'Create' });
+        if (name === null || !canEdit()) return;
         const ids = selectedObjectIds.length > 0 ? selectedObjectIds : primaryObjectId ? [primaryObjectId] : [];
         setIsCreating(true);
         try {
@@ -47,7 +48,7 @@ export const PrefabPanel: React.FC<PrefabPanelProps> = ({
 
     const handleDelete = async (id: string, name: string) => {
         if (!canEdit()) return;
-        if (!confirm(`Delete prefab "${name}"? Placed copies stay in their levels.`)) return;
+        if (!await appConfirm(`Delete prefab "${name}"?`, { message: 'Placed copies stay in their levels.', acceptLabel: 'Delete', danger: true }) || !canEdit()) return;
         await deletePrefab(id);
     };
 

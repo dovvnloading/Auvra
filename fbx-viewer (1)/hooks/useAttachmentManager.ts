@@ -9,6 +9,7 @@ import { isAbortError, useOperationActions } from '../context/OperationContext';
 import { useNotification } from '../context/NotificationContext';
 import { assetDiagnosticAttributes, frontendDiagnostics } from '../diagnostics/runtime';
 import { editorSession, type EditorSessionLease } from '../utils/editorSession';
+import { appAlert } from '../utils/appDialogs';
 
 export const useAttachmentManager = (
   models: LoadedModelData[],
@@ -170,7 +171,7 @@ export const useAttachmentManager = (
         await addAttachment(file, parentModelId);
     } catch (e) {
         frontendDiagnostics.failure('attachment_library_add_failed', e);
-        alert("Failed to add attachment from library.");
+        void appAlert('The attachment could not be added from the library.');
     } finally {
         setIsLoading(false);
     }

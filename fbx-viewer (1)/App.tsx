@@ -18,6 +18,7 @@ import { EnvironmentEditor } from './components/Environment/EnvironmentEditor';
 import { installRendererDiagnostics } from './renderer/diagnostics';
 import { OperationProvider } from './context/OperationContext';
 import { OperationCenter } from './components/UI/OperationCenter';
+import { AppDialogHost } from './components/UI/AppDialogHost';
 import { frontendDiagnostics } from './diagnostics/runtime';
 
 const AppContent: React.FC = () => {
@@ -178,6 +179,7 @@ const App: React.FC = () => {
       <OperationProvider>
         <SceneProvider>
           <AppContent />
+          <AppDialogHost />
         </SceneProvider>
       </OperationProvider>
     </NotificationProvider>

@@ -6,6 +6,7 @@ import { Blueprint, BlueprintStat, CharacterIKSettings } from '../../types';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
 import { TransformInputGroup } from '../UI/Properties/TransformInputGroup';
 import { useScene } from '../../context/SceneContext';
+import { appPrompt } from '../../utils/appDialogs';
 
 interface BlueprintInspectorPanelProps {
     blueprint: Blueprint;
@@ -466,8 +467,8 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                     </div>
                                 ))}
                                 <button 
-                                    onClick={() => {
-                                        const t = prompt("Enter new tag:");
+                                    onClick={async () => {
+                                        const t = (await appPrompt('New tag', { acceptLabel: 'Add' }))?.trim();
                                         if (t) onUpdate(blueprint.id, { traits: [...blueprint.traits, t] });
                                     }}
                                     className="px-2 py-1 bg-gray-800 rounded border border-dashed border-gray-600 text-xs text-gray-500 hover:text-white hover:border-gray-400 flex items-center gap-1"

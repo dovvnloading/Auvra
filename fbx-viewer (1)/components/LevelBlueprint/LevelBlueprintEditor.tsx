@@ -11,6 +11,7 @@ import { LogicNode, LogicConnection, PrefabData, LevelBlueprintData } from '../.
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { useEditorHistory } from '../../utils/history';
 import { projectService } from '../../utils/projectService';
+import { appAlert } from '../../utils/appDialogs';
 import { migrateLegacyOverlapTargets, overlapEventName, overlapTargetData } from './overlapTargets';
 import { FLOW_NODE_DEFINITIONS } from '../../hooks/levelBlueprintNodes/flow';
 import { PLAYER_ACTOR_ID, WORLD_NODE_DEFINITIONS, WorldNodeType } from '../../hooks/levelBlueprintNodes/world';
@@ -452,7 +453,7 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
         
         if (!hasPlayer) {
             // Warn if no player exists to target
-            alert("No Player Character blueprint found.");
+            void appAlert('No Player Character blueprint found.', 'Create a blueprint of type Player Character first.');
             return;
         }
 
