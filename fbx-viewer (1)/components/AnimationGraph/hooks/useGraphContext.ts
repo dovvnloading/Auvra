@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useScene } from '../../../context/SceneContext';
 import { AnimationGraphData, LoadedModelData } from '../../../types';
+import { ownClipsFirst } from '../../../utils/animationBinding';
 
 export type ContextType = 'model' | 'blueprint';
 
@@ -142,16 +143,17 @@ export const useGraphContext = (): GraphContextState => {
         }
     }, [contextType, selectedContextId, updateGraph, blueprints, updateBlueprint]);
 
-    // 4. Aggregate Animations
+    // 4. Aggregate Animations (the edited model's own first: a clip name another model shares
+    // resolves to its own clip, in the clip list and in the preview, as it does in play)
     const allSceneClips = useMemo(() => {
-        return models.flatMap(m => 
+        return ownClipsFirst(previewModel ? [previewModel] : undefined, models).flatMap(m =>
             (m.animations || []).map(clip => ({
                 name: clip.name,
                 source: m.name,
                 clip: clip
             }))
         );
-    }, [models]);
+    }, [models, previewModel]);
 
     // 5. Options for Dropdown
     const contextOptions = useMemo(() => {
