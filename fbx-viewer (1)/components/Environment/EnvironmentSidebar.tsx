@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Trees, Box, Image, MousePointer2, Layers, Trash2, Plus, ChevronDown, ChevronRight, Crosshair, CornerLeftUp, Skull, Music, Sun, PersonStanding } from 'lucide-react';
+import { Search, Trees, Box, Image, MousePointer2, Layers, Trash2, Plus, ChevronDown, ChevronRight, Crosshair, CornerLeftUp, Skull, Music, Sun, PersonStanding, Axis3d } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
 import { LevelObject } from '../../types';
 import { editorSession } from '../../utils/editorSession';
 import { appAlert, appConfirm, appPrompt } from '../../utils/appDialogs';
 import { reparentPreservingWorld, wouldCreateCycle } from '../../utils/sceneGraph';
+import { uniqueObjectName } from '../../utils/levelClipboard';
 import { PrefabPanel } from './PrefabPanel';
 import { LightingPanel } from './LightingPanel';
 
@@ -64,7 +65,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
     onToggleSelection,
     onRequestFocus
 }) => {
-    const { models, levelObjects, removeLevelObject, levels, currentLevelId, createLevel, loadLevel, deleteLevel, addLevelObject, updateLevelObject, snapshotHistory } = useScene();
+    const { models, levelObjects, removeLevelObject, levels, currentLevelId, createLevel, loadLevel, deleteLevel, addLevelObject, addLevelObjects, updateLevelObject, snapshotHistory } = useScene();
     const [activeTab, setActiveTab] = useState<'assets' | 'outliner'>('assets');
     const [search, setSearch] = useState('');
     const [showLevelMenu, setShowLevelMenu] = useState(false);
@@ -205,6 +206,28 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
 
         if (newId) {
             onSelectObject(newId);
+        }
+    };
+
+    // An object with no model: a place for components (trigger volumes, timelines, level streaming,
+    // cameras) and a parent to group other objects under.
+    const handleAddEmpty = async () => {
+        if (!canEdit() || !currentLevelId) return;
+        try {
+            const [id] = await addLevelObjects([{
+                id: crypto.randomUUID(),
+                levelId: currentLevelId,
+                modelId: '',
+                name: uniqueObjectName('Empty', new Set(levelObjects.map(object => object.name))),
+                type: 'prop',
+                position: [0, 1, 0],
+                rotation: [0, 0, 0],
+                scale: [1, 1, 1],
+                parentId: null,
+            }]);
+            if (id) onSelectObject(id);
+        } catch {
+            // addLevelObjects has already reported the failure.
         }
     };
 
@@ -638,6 +661,16 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                     <Music size={16} />
                                 </div>
                                 <div className="text-xs font-bold">Audio Emitter</div>
+                            </div>
+                            <div
+                                onClick={handleAddEmpty}
+                                className="flex items-center gap-3 px-3 py-2.5 rounded-md cursor-pointer transition-all border border-transparent hover:bg-gray-800 hover:text-white text-gray-400 group"
+                                title="Add an empty object, for components such as trigger colliders, timelines and level streaming, or to group objects"
+                            >
+                                <div className="w-8 h-8 rounded bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0 text-slate-300 group-hover:bg-slate-700/40 group-hover:border-slate-400/50">
+                                    <Axis3d size={16} />
+                                </div>
+                                <div className="text-xs font-bold">Empty Object</div>
                             </div>
                             <div
                                 onClick={handleAddSkySphere}

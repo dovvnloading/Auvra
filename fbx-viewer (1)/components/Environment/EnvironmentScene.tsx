@@ -25,7 +25,11 @@ type SelectHandler = (id: string, event?: unknown) => void;
 
 // Objects drawn as editor markers rather than model geometry.
 const MARKER_TYPES = new Set<LevelObject['type']>(['spawn_point', 'audio_emitter', 'sky_sphere', 'player_start']);
-const isInstancedType = (type: LevelObject['type']) => type !== 'terrain' && !MARKER_TYPES.has(type);
+/** A prop with no model (an empty object, or one that only carries components such as a light). */
+const isEmptyProp = (object: LevelObject) => object.type === 'prop' && !object.modelId;
+/** Drawn one by one with its own marker rather than in an instanced layer. */
+const isMarkerObject = (object: LevelObject) => MARKER_TYPES.has(object.type) || isEmptyProp(object);
+const isInstancedObject = (object: LevelObject) => object.type !== 'terrain' && !isMarkerObject(object);
 
 /** Selected instanced objects past this many keep the in-layer highlight instead of a proxy. */
 const MAX_SELECTION_PROXIES = 64;
@@ -539,7 +543,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
         const consider = (id: string | null) => {
             if (!id || ids.has(id) || ids.size >= MAX_SELECTION_PROXIES) return;
             const object = resolvedById.get(id);
-            if (object && isInstancedType(object.type)) ids.add(id);
+            if (object && isInstancedObject(object)) ids.add(id);
         };
         // The primary first, so it always gets a proxy for the gizmo.
         consider(selectedId);
@@ -696,7 +700,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
         const terrains: LevelObject[] = [];
         resolvedObjects.forEach(obj => {
             if (obj.type === 'foliage') foliage.push(obj);
-            else if (MARKER_TYPES.has(obj.type)) markers.push(obj);
+            else if (isMarkerObject(obj)) markers.push(obj);
             else if (obj.type === 'terrain') terrains.push(obj);
             else props.push(obj);
         });
@@ -711,7 +715,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
     // Terrain and instanced objects draw their geometry elsewhere, so their components get a group of their own.
     const previewObjects = useMemo(
         () => resolvedObjects.filter(object => object.components?.length
-            && (object.type === 'terrain' || (isInstancedType(object.type) && !promotedIds.has(object.id)))),
+            && (object.type === 'terrain' || (isInstancedObject(object) && !promotedIds.has(object.id)))),
         [resolvedObjects, promotedIds]
     );
 
