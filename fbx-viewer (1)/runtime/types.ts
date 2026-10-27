@@ -17,6 +17,8 @@ export interface GameContent {
     audioAssets: AudioData[];
     /** Prefab documents that Spawn Prefab can instantiate during play. */
     prefabs?: PrefabData[];
+    /** Every level's objects by level id, for Level Streaming volumes. */
+    levelObjects?: Readonly<Record<string, LevelObject[]>>;
 }
 
 /** One playable level: its objects (already filtered to this level) and its level blueprint. */

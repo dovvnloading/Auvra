@@ -1,6 +1,7 @@
 import { registerComponentInspector } from '../../runtime/components/registry';
 import { ScriptInspector } from '../Scripting/ScriptInspector';
 import { TimelineInspector } from '../Timeline/TimelineInspector';
+import { LevelStreamingInspector } from './LevelStreamingInspector';
 
 /**
  * Editor-only Inspectors for component settings a schema field cannot edit. Importing this module
@@ -9,3 +10,4 @@ import { TimelineInspector } from '../Timeline/TimelineInspector';
  */
 registerComponentInspector('script', ScriptInspector);
 registerComponentInspector('timeline', TimelineInspector);
+registerComponentInspector('levelStreaming', LevelStreamingInspector);

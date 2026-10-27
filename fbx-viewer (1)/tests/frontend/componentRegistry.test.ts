@@ -3,6 +3,7 @@ import { COMPONENT_DEFINITIONS, createComponent, getComponentDefinition } from '
 
 vi.mock('../../components/Scripting/ScriptInspector', () => ({ ScriptInspector: () => null }));
 vi.mock('../../components/Timeline/TimelineInspector', () => ({ TimelineInspector: () => null }));
+vi.mock('../../components/Environment/LevelStreamingInspector', () => ({ LevelStreamingInspector: () => null }));
 
 describe('component registry', () => {
   it('leaves editor inspectors out until the editor registers them', async () => {
@@ -17,7 +18,7 @@ describe('component registry', () => {
     expect(types).toEqual([
       'rotator', 'mover', 'pointLight', 'spotLight', 'camera', 'collider', 'rigidBody', 'joint', 'particles', 'decal', 'water', 'audioSource',
       'reverbZone', 'musicPlayer',
-      'postProcess', 'reflectionProbe', 'lodGroup', 'distanceCull', 'lookAtIK', 'footIK', 'script', 'netSync', 'timeline',
+      'postProcess', 'reflectionProbe', 'lodGroup', 'distanceCull', 'levelStreaming', 'lookAtIK', 'footIK', 'script', 'netSync', 'timeline',
     ]);
     for (const definition of COMPONENT_DEFINITIONS) {
       expect(getComponentDefinition(definition.type)).toBe(definition);
