@@ -10,7 +10,7 @@ import { AVAILABLE_COMPONENTS } from './componentRegistry';
 import { Code, Settings2, Sliders, Palette, Type, Move, Scaling, Undo2, Redo2, AlertTriangle } from 'lucide-react';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
 import { useNativeProjectDocument } from '../../utils/useNativeProjectDocument';
-import { useEditorHistory } from '../../utils/history';
+import { isEditableTarget, useEditorHistory } from '../../utils/history';
 import { editorSession } from '../../utils/editorSession';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { useLevel } from '../../context/LevelContext';
@@ -469,6 +469,19 @@ export const HUDEditor: React.FC = () => {
             .catch((cause) => frontendDiagnostics.failure('hud_element_delete_failed', cause));
         if (selectedId === id) setSelectedId(null);
     };
+
+    // Delete or Backspace removes the selected element, as in the World Editor (not while typing).
+    const deleteSelectedRef = useRef(() => { if (selectedId) handleDelete(selectedId); });
+    deleteSelectedRef.current = () => { if (selectedId) handleDelete(selectedId); };
+    useEffect(() => {
+        const onKeyDown = (event: KeyboardEvent) => {
+            if ((event.key !== 'Delete' && event.key !== 'Backspace') || isEditableTarget(event.target)) return;
+            event.preventDefault();
+            deleteSelectedRef.current();
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, []);
 
     const handleToggleVisibility = (id: string) => {
         const el = elements.find(e => e.id === id);

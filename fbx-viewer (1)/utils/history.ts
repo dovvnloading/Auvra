@@ -40,7 +40,8 @@ export const createHistory = <T,>(limit = 100): History<T> => {
     };
 };
 
-const isEditableTarget = (target: EventTarget | null) => {
+/** True for text fields and other inputs, where editor shortcuts must leave keys alone. */
+export const isEditableTarget = (target: EventTarget | null) => {
     const element = target as HTMLElement | null;
     return !!element && (element.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName));
 };
