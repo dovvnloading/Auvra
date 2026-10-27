@@ -60,6 +60,11 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
         'metadata', GAME_SETTINGS_DOCUMENT_ID, createDefaultGameSettingsDocument,
     );
     const settings = useMemo(() => normalizeGameSettings(settingsDocument.settings), [settingsDocument]);
+    // Play waits for the settings the first time only. The project moves to a new revision when an edit
+    // made just before Play is saved, which re-hydrates the document; unmounting the running session
+    // then would start it again (BeginPlay and every script's onStart twice).
+    const settingsLoaded = useRef(false);
+    if (settingsHydrated) settingsLoaded.current = true;
     // The game HUD the built game shows; with no elements the runtime's own HUD stands in, as in the player.
     const { document: hudDocument } = useNativeProjectDocument<HUDDocumentData>('hud', HUD_DOCUMENT_ID, createEmptyHud);
     const hudOverlay = useMemo(() => (
@@ -168,7 +173,7 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
     // Each play-in-editor run starts from a clean game state.
     useEffect(() => () => gameState.reset(), []);
 
-    if (!settingsHydrated || prefabs === null) {
+    if (!settingsLoaded.current || prefabs === null) {
         return <div className="flex items-center justify-center h-full w-full bg-black text-xs text-gray-500">Starting play session...</div>;
     }
 
