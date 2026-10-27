@@ -67,6 +67,16 @@ class ProjectDialogTests(unittest.TestCase):
             selected = dialogs.choose_create_location("../escape")
             self.assertEqual(selected.path, Path(temp).absolute() / "AuvraProject")
 
+    def test_taken_project_folders_are_numbered(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / "Demo").mkdir()
+            (Path(temp) / "Demo 2").write_text("", encoding="utf-8")
+            forms = _Forms(result=1, folder=temp, file=str(Path(temp) / "unused"))
+            dialogs = WinFormsProjectDialogs(lambda: forms)
+            self.assertEqual(dialogs.choose_create_location("Demo").path, Path(temp).absolute() / "Demo 3")
+            self.assertEqual(dialogs.choose_save_as_location("Demo").path, Path(temp).absolute() / "Demo 3")
+            self.assertEqual(dialogs.choose_save_as_location("Other").path, Path(temp).absolute() / "Other")
+
     def test_cancel_returns_none_and_disposes_dialog(self) -> None:
         forms = _Forms(result=0, folder="", file="")
         dialogs = WinFormsProjectDialogs(lambda: forms)

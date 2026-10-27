@@ -756,7 +756,8 @@ class NativeProjectHost:
         destination = self._choose(lambda: self.dialogs.choose_create_location(name))
         self._queue("project.opening", self._status_value(busy=True, progress=0.0, operation="create"))
         self._retire_active_pending_assets()
-        status = self.service.create(destination, name, payload.get("template"))
+        # The project takes its folder's name, which the dialog numbers ("Starter Game 2") when taken.
+        status = self.service.create(destination, destination.name, payload.get("template"))
         self._progress("create", 0.6)
         self._native_staged_assets.clear()
         self._hydrate_native(self.service.active, lambda value: self._progress("create", 0.6 + value * 0.35))
@@ -959,7 +960,7 @@ class NativeProjectHost:
         name = payload["name"]
         destination = self._choose(lambda: self.dialogs.choose_save_as_location(name))
         self._retire_active_pending_assets()
-        status = self.service.save_as(destination, project_id=active.project_id, name=name)
+        status = self.service.save_as(destination, project_id=active.project_id, name=destination.name)
         self._native_staged_assets.clear()
         self._hydrate_native(self.service.active)
         self._dirty_since = self._last_mutation = None

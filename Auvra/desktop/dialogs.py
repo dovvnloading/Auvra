@@ -31,6 +31,15 @@ def _validated_name(value: str, fallback: str = "AuvraProject") -> str:
     return candidate
 
 
+def _free_folder(parent: Path, name: str) -> Path:
+    """`parent / name`, or "name 2", "name 3"... when a file or folder of that name is already there."""
+    candidate, number = parent / name, 1
+    while candidate.exists():
+        number += 1
+        candidate = parent / f"{name} {number}"
+    return candidate
+
+
 @trace_public_class("project_dialogs", concise=(
     "choose_create_location", "choose_open_project", "choose_save_as_location",
     "choose_export_pack", "choose_import_pack", "choose_import_legacy",
@@ -72,7 +81,7 @@ class WinFormsProjectDialogs:
             selected = self._selection(dialog.SelectedPath)
             if selected is None:
                 return None
-            return DialogSelection(selected.path / _validated_name(suggested_name))
+            return DialogSelection(_free_folder(selected.path, _validated_name(suggested_name)))
         finally:
             dialog.Dispose()
     def choose_open_project(self) -> DialogSelection | None:
@@ -92,7 +101,7 @@ class WinFormsProjectDialogs:
             selected = self._selection(dialog.SelectedPath)
             if selected is None:
                 return None
-            return DialogSelection(selected.path / _validated_name(suggested_name))
+            return DialogSelection(_free_folder(selected.path, _validated_name(suggested_name)))
         finally:
             dialog.Dispose()
 
