@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import contextlib
 import io
 import json
+import shutil
 from pathlib import Path
 import tempfile
 import threading
@@ -35,12 +37,33 @@ def _await_writer(session, timeout: float = 30.0) -> None:
         writer.join(timeout)
 
 
+@contextlib.contextmanager
+def _temporary_root():
+    """A temporary directory whose removal retries for a few seconds: on Windows a just-closed log
+    file can stay locked briefly (for example while a virus scanner reads it)."""
+    raw = tempfile.mkdtemp(prefix="auvra diagnostics ")
+    try:
+        yield raw
+    finally:
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                shutil.rmtree(raw)
+                break
+            except FileNotFoundError:
+                break
+            except PermissionError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.1)
+
+
 class DiagnosticsCoreTests(unittest.TestCase):
     def tearDown(self) -> None:
         install_diagnostics(None)
 
     def test_record_is_canonical_bounded_and_path_free(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="auvra diagnostics ") as raw:
+        with _temporary_root() as raw:
             root = Path(raw) / "diagnostics"
             session = DiagnosticsSession(root, source_root=Path(raw), run_id="run-schema", mode="test")
             session.start()
@@ -85,7 +108,7 @@ class DiagnosticsCoreTests(unittest.TestCase):
         self.assertLessEqual(len(safe["items"]), 17)
 
     def test_persistence_deduplicates_and_ignores_incomplete_final_line(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="auvra diagnostics ") as raw:
+        with _temporary_root() as raw:
             root = Path(raw) / "diagnostics"
             session = DiagnosticsSession(root, run_id="run-repeat", mode="test")
             session.start()
@@ -105,7 +128,7 @@ class DiagnosticsCoreTests(unittest.TestCase):
             self.assertEqual(summary["repeated"], 2)
 
     def test_unclean_run_is_retained_when_the_next_session_starts(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="auvra diagnostics ") as raw:
+        with _temporary_root() as raw:
             root = Path(raw) / "diagnostics"
             first = DiagnosticsSession(root, run_id="run-first", mode="test")
             first.start()
@@ -134,7 +157,7 @@ class DiagnosticsCoreTests(unittest.TestCase):
                 gate.wait(5)
                 super()._write_record(record)
 
-        with tempfile.TemporaryDirectory(prefix="auvra diagnostics ") as raw:
+        with _temporary_root() as raw:
             root = Path(raw) / "diagnostics"
             session = BlockingSession(root, run_id="run-close-drain", mode="test")
             session.start()
@@ -164,7 +187,7 @@ class DiagnosticsCoreTests(unittest.TestCase):
             self.assertFalse(summary["drainIncomplete"])
 
     def test_segments_and_run_retention_are_bounded(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="auvra diagnostics ") as raw, \
+        with _temporary_root() as raw, \
              patch("Auvra.diagnostics.core.SEGMENT_MAX_BYTES", 2048), \
              patch("Auvra.diagnostics.core.RUN_MAX_SEGMENTS", 2), \
              patch("Auvra.diagnostics.core.RUN_MAX_COUNT", 2):
@@ -194,7 +217,7 @@ class DiagnosticsCoreTests(unittest.TestCase):
                 gate.wait(5)
                 super()._write_record(record)
 
-        with tempfile.TemporaryDirectory(prefix="auvra diagnostics ") as raw:
+        with _temporary_root() as raw:
             session = BlockingSession(Path(raw) / "diagnostics", run_id="run-pressure", mode="test")
             session.start()
             started = time.monotonic()
@@ -227,7 +250,7 @@ class DiagnosticsCoreTests(unittest.TestCase):
                 gate.wait(5)
                 super()._write_record(record)
 
-        with tempfile.TemporaryDirectory(prefix="auvra diagnostics ") as raw:
+        with _temporary_root() as raw:
             session = BlockingSession(Path(raw) / "diagnostics", run_id="run-priority", mode="test")
             session.start()
             session.start_detailed_capture()
@@ -246,7 +269,7 @@ class DiagnosticsCoreTests(unittest.TestCase):
             _await_writer(session)
 
     def test_cli_reads_canonical_latest_run(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="auvra diagnostics ") as raw:
+        with _temporary_root() as raw:
             paths = Paths.from_repo_root(Path(raw))
             session = DiagnosticsSession(paths.diagnostics_root, run_id="run-cli", mode="test")
             session.start()
@@ -262,7 +285,7 @@ class DiagnosticsCoreTests(unittest.TestCase):
             self.assertEqual(records[0]["schema"], DIAGNOSTIC_SCHEMA)
 
     def test_storage_failure_degrades_to_bounded_memory(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="auvra diagnostics ") as raw:
+        with _temporary_root() as raw:
             blocked = Path(raw) / "diagnostics"
             blocked.write_text("not a directory", encoding="utf-8")
             session = DiagnosticsSession(blocked, run_id="run-memory", mode="test")
@@ -276,7 +299,7 @@ class DiagnosticsCoreTests(unittest.TestCase):
             session.close(outcome="failure")
 
     def test_stall_escalation_uses_safe_frames_and_emits_one_recovery(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="auvra diagnostics ") as raw:
+        with _temporary_root() as raw:
             source = Path(raw)
             session = DiagnosticsSession(source / "diagnostics", source_root=source,
                                          run_id="run-stall", mode="test")
