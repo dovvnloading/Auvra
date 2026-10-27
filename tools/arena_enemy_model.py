@@ -2,15 +2,18 @@
 on a Mixamo-named skeleton (Hips, Spine, Head, arms, legs) with each box skinned rigidly to its
 bone, so a killed guard falls as a ragdoll.
 
-    blender -b --factory-startup --python tools/arena_enemy_model.py
+    blender -b --factory-startup --python tools/arena_enemy_model.py [-- OUTPUT.fbx]
 """
+import math
+import sys
 from pathlib import Path
 import bpy
 import bmesh
 from mathutils import Vector
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
-out = str(Path(__file__).resolve().parents[1] / 'Auvra' / 'project' / 'templates' / 'arena' / 'assets' / 'enemy.fbx')
+out = (sys.argv[sys.argv.index('--') + 1] if '--' in sys.argv
+       else str(Path(__file__).resolve().parents[1] / 'Auvra' / 'project' / 'templates' / 'arena' / 'assets' / 'enemy.fbx'))
 color = (0.75, 0.1, 0.08, 1.0)
 
 # name: (head, tail, parent)
@@ -89,7 +92,49 @@ body.parent = rig
 modifier = body.modifiers.new('Armature', 'ARMATURE')
 modifier.object = rig
 
+# Clips, named for the guard's animation graph states. Each key is (frame, degrees about the bone's
+# own X axis); the bones hang down, so a positive angle swings a limb backwards and bends a knee.
+FPS = 24
+CLIPS = {
+    'Idle': {  # two seconds of breathing
+        'Spine': [(1, 0), (25, 3), (49, 0)],
+        'Head': [(1, 0), (25, -2), (49, 0)],
+        'LeftArm': [(1, 0), (25, 3), (49, 0)],
+        'RightArm': [(1, 0), (25, 3), (49, 0)],
+    },
+    'Walk': {  # one stride a second
+        'LeftUpLeg': [(1, -25), (13, 25), (25, -25)],
+        'RightUpLeg': [(1, 25), (13, -25), (25, 25)],
+        'LeftLeg': [(1, 10), (7, 5), (13, 40), (19, 25), (25, 10)],
+        'RightLeg': [(1, 40), (7, 25), (13, 10), (19, 5), (25, 40)],
+        'LeftArm': [(1, 20), (13, -20), (25, 20)],
+        'RightArm': [(1, -20), (13, 20), (25, -20)],
+        'Spine': [(1, 4), (25, 4)],
+    },
+    'Attack': {  # a punch with the right arm
+        'RightArm': [(1, 0), (5, -95), (9, -70), (15, 0)],
+        'RightForeArm': [(1, 0), (4, -40), (6, 0), (15, 0)],
+        'Spine': [(1, 0), (5, 8), (15, 0)],
+    },
+}
+bpy.context.scene.render.fps = FPS
+rig.animation_data_create()
+for name, tracks in CLIPS.items():
+    action = bpy.data.actions.new(name)
+    action.use_fake_user = True
+    rig.animation_data.action = action
+    for bone_name, keys in tracks.items():
+        pose_bone = rig.pose.bones[bone_name]
+        pose_bone.rotation_mode = 'XYZ'
+        for frame, degrees in keys:
+            pose_bone.rotation_euler = (math.radians(degrees), 0.0, 0.0)
+            pose_bone.keyframe_insert('rotation_euler', frame=frame)
+        pose_bone.rotation_euler = (0.0, 0.0, 0.0)
+rig.animation_data.action = bpy.data.actions['Idle']
+
 bpy.ops.export_scene.fbx(
     filepath=out, use_selection=False, object_types={'ARMATURE', 'MESH'},
-    add_leaf_bones=False, bake_anim=False, armature_nodetype='NULL', mesh_smooth_type='FACE',
+    add_leaf_bones=False, armature_nodetype='NULL', mesh_smooth_type='FACE',
+    bake_anim=True, bake_anim_use_all_actions=True, bake_anim_use_nla_strips=False,
+    bake_anim_force_startend_keying=True,
 )

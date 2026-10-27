@@ -158,7 +158,7 @@
    {
     "id": "es1",
     "name": "Idle",
-    "clipName": null,
+    "clipName": "Armature|Idle",
     "position": {
      "x": 400,
      "y": 300
@@ -173,7 +173,9 @@
    {
     "id": "es2",
     "name": "Chase",
-    "clipName": null,
+    "clipName": "Armature|Walk",
+    "playRate": 1,
+    "playRateParam": "v_speed",
     "position": {
      "x": 700,
      "y": 300
@@ -187,7 +189,7 @@
    {
     "id": "es3",
     "name": "Attack",
-    "clipName": null,
+    "clipName": "Armature|Attack",
     "position": {
      "x": 550,
      "y": 100
@@ -215,7 +217,7 @@
    {
     "id": "es5",
     "name": "Strafe",
-    "clipName": null,
+    "clipName": "Armature|Walk",
     "position": {
      "x": 400,
      "y": 500
