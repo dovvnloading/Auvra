@@ -1,5 +1,6 @@
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import * as THREE from 'three';
 import { Play, GitBranch, CheckSquare, Database, Trash2, ArrowLeft, MessageSquare, Box, Shield, Skull, Calculator, Timer, Hash, Type, ToggleLeft, Activity, X, LayoutTemplate, RefreshCcw, DoorOpen, Save, FolderOpen, Undo2, Redo2 } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
 import { LogicCanvas, LogicGraphSnapshot } from './LogicCanvas';
@@ -12,7 +13,7 @@ import { useEditorHistory } from '../../utils/history';
 import { projectService } from '../../utils/projectService';
 import { migrateLegacyOverlapTargets, overlapEventName, overlapTargetData } from './overlapTargets';
 import { FLOW_NODE_DEFINITIONS } from '../../hooks/levelBlueprintNodes/flow';
-import { WORLD_NODE_DEFINITIONS, WorldNodeType } from '../../hooks/levelBlueprintNodes/world';
+import { PLAYER_ACTOR_ID, WORLD_NODE_DEFINITIONS, WorldNodeType } from '../../hooks/levelBlueprintNodes/world';
 
 // Repeated edits to the same field within this window (typing) merge into a single undo step.
 const HISTORY_COALESCE_MS = 1000;
@@ -21,6 +22,7 @@ const HISTORY_COALESCE_MS = 1000;
 const WORLD_PALETTE_GROUPS: { label: string, types: WorldNodeType[] }[] = [
     { label: 'Actors', types: ['SpawnPrefab', 'GetActorTransform', 'SetActorTransform', 'ApplyImpulse', 'Raycast'] },
     { label: 'Audio & Input', types: ['PlaySound', 'InputActionPressed'] },
+    { label: 'Animation', types: ['PlayPlayerAnimation', 'SetMorphTarget'] },
     { label: 'Level Variables', types: ['GetLevelVariable', 'SetLevelVariable'] },
     { label: 'Utilities', types: ['RandomFloat', 'RandomInt', 'Print'] },
 ];
@@ -41,6 +43,17 @@ const REGISTRY_PALETTE: { label: string, definitions: LogicNodeDefinition[] }[] 
     if (ungrouped.length > 0) groups.push({ label: 'World', definitions: [...ungrouped] });
     return groups.filter(group => group.definitions.length > 0);
 })();
+
+/** Sorted, distinct names of the bones or morph targets under some models, for the Animation nodes' suggestions. */
+const modelPartNames = (objects: THREE.Object3D[], part: 'bones' | 'morphs'): string[] => {
+    const names = new Set<string>();
+    objects.forEach(object => object.traverse(child => {
+        if (part === 'bones' && (child as THREE.Bone).isBone && child.name) names.add(child.name);
+        const dictionary = part === 'morphs' && (child as THREE.Mesh).isMesh ? (child as THREE.Mesh).morphTargetDictionary : undefined;
+        if (dictionary) Object.keys(dictionary).forEach(name => names.add(name));
+    }));
+    return [...names].sort((a, b) => a.localeCompare(b));
+};
 
 /** Ids of every pin on a node, used to drop wires to pins an edit removed. */
 const pinIdsOf = (node: Pick<LogicNode, 'inputs' | 'outputs'>) => new Set([...node.inputs, ...node.outputs].map(pin => pin.id));
@@ -71,7 +84,7 @@ interface LevelBlueprintEditorProps {
  * - Handles adding new nodes to the active graph.
  */
 export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onClose, selectedObjectId }) => {
-    const { activeLevelBlueprint, updateLevelBlueprint, blueprints, levelObjects, levels, currentLevelId, audioAssets } = useScene();
+    const { activeLevelBlueprint, updateLevelBlueprint, blueprints, levelObjects, levels, currentLevelId, audioAssets, models } = useScene();
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
     // Prefabs live in their own project domain (not scene state); Spawn Prefab nodes pick from them.
@@ -222,6 +235,10 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
     const handleAddEvent = (type: string, label: string) => {
         if (type === 'BeginPlay') {
             addNode('Event', 'Event BeginPlay', [], [{ name: 'Exec', dataType: 'Exec', direction: 'Output' }]);
+        } else if (type === 'TimelineEvent') {
+            addNode('Event', 'Event TimelineEvent', [], [{ name: 'Exec', dataType: 'Exec', direction: 'Output' }], { eventName: '' });
+        } else if (type === 'AnimNotify') {
+            addNode('Event', 'Event AnimNotify', [], [{ name: 'Exec', dataType: 'Exec', direction: 'Output' }], { notifyName: '', notifySource: 'player' });
         } else if (type === 'Tick') {
             addNode('Event', 'Event Tick', [], [
                 { name: 'Exec', dataType: 'Exec', direction: 'Output' },
@@ -499,6 +516,25 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
         [activeLevelBlueprint.variables]
     );
 
+    // Suggestions for the Animation nodes. Play mode gives the player every model's clips; its character
+    // is a Player Character blueprint's model.
+    const animationClips = useMemo(
+        () => [...new Set((models ?? []).flatMap(model => (model.animations ?? []).map(clip => clip.name)).filter(name => name !== ''))]
+            .sort((a, b) => a.localeCompare(b)),
+        [models]
+    );
+    const playerModels = useMemo(() => {
+        const modelIds = new Set((blueprints ?? []).filter(bp => bp.type === 'Player Character').map(bp => bp.linkedModelId));
+        return (models ?? []).filter(model => modelIds.has(model.id));
+    }, [blueprints, models]);
+    const playerBones = useMemo(() => modelPartNames(playerModels.map(model => model.object), 'bones'), [playerModels]);
+    const morphTargetsOf = useCallback((actorId: string): string[] => {
+        if (actorId === PLAYER_ACTOR_ID) return modelPartNames(playerModels.map(model => model.object), 'morphs');
+        const modelId = levelObjects.find(obj => obj.id === actorId)?.modelId;
+        const model = modelId ? (models ?? []).find(m => m.id === modelId) : undefined;
+        return model ? modelPartNames([model.object], 'morphs') : [];
+    }, [levelObjects, models, playerModels]);
+
     return (
         <div className="flex h-full w-full bg-gray-950 text-white font-sans overflow-hidden absolute inset-0 z-50">
             
@@ -538,6 +574,12 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                         </button>
                         <button onClick={handleAddBeginOverlap} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
                             <Box size={12} className="text-red-400 group-hover:text-red-300" /> Actor Begin Overlap
+                        </button>
+                        <button onClick={() => handleAddEvent('TimelineEvent', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
+                            <Timer size={12} className="text-red-400 group-hover:text-red-300" /> Timeline Event
+                        </button>
+                        <button onClick={() => handleAddEvent('AnimNotify', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
+                            <Activity size={12} className="text-red-400 group-hover:text-red-300" /> Animation Notify
                         </button>
                     </div>
 
@@ -705,6 +747,9 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                     prefabs={prefabs}
                     audioAssets={audioAssets}
                     levelVariables={levelVariables}
+                    animationClips={animationClips}
+                    playerBones={playerBones}
+                    morphTargetsOf={morphTargetsOf}
                     connectedPinIds={connectedPinIds}
                     onDelete={handleDelete}
                 />

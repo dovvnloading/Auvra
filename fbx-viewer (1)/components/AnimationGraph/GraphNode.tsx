@@ -5,6 +5,7 @@ import { GraphState } from '../../types';
 interface GraphNodeProps {
     state: GraphState;
     isSelected: boolean;
+    /** The preview runtime is in this state right now. */
     isActive: boolean;
     onPointerDown: (e: React.PointerEvent) => void;
     onClick: (e: React.MouseEvent) => void;
@@ -23,19 +24,25 @@ export const GraphNode: React.FC<GraphNodeProps> = ({
                 absolute w-[160px] rounded-lg shadow-2xl cursor-default group
                 border-2 transition-all duration-100 z-10
                 ${isSelected ? 'border-blue-500 bg-gray-800 scale-105 shadow-blue-500/10' : (state.isRoot ? 'border-amber-600/50 bg-gray-900' : 'border-gray-700 bg-gray-900 hover:border-gray-600')}
+                ${isActive ? 'ring-2 ring-green-500/80 ring-offset-2 ring-offset-[#0F0F0F] shadow-green-500/20' : ''}
             `}
             style={{ left: state.position.x, top: state.position.y }}
             onPointerDown={onPointerDown}
             onClick={onClick}
+            data-state-id={state.id}
+            data-active={isActive ? 'true' : undefined}
         >
             {/* Header */}
-            <div className={`px-3 py-2 border-b flex items-center justify-between ${isSelected ? 'border-blue-900 bg-blue-900/20' : (state.isRoot ? 'border-amber-800 bg-amber-900/20' : 'border-gray-800 bg-gray-950/30')}`}>
-                <div className="flex items-center gap-2">
-                    {state.isRoot && <Crown size={12} className="text-amber-400" />}
+            <div className={`px-3 py-2 border-b flex items-center justify-between gap-2 ${isSelected ? 'border-blue-900 bg-blue-900/20' : (state.isRoot ? 'border-amber-800 bg-amber-900/20' : 'border-gray-800 bg-gray-950/30')}`}>
+                <div className="flex items-center gap-2 min-w-0">
+                    {state.isRoot && <Crown size={12} className="text-amber-400 shrink-0" />}
                     <span className={`text-xs font-bold truncate ${state.isRoot ? 'text-amber-100' : 'text-gray-200'}`}>{state.name}</span>
                 </div>
                 {isActive && (
-                    <span className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)] animate-pulse"></span>
+                    <span className="flex items-center gap-1 shrink-0 text-[8px] font-bold uppercase tracking-wider text-green-400" title="The preview is in this state">
+                        <span className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)] animate-pulse"></span>
+                        Active
+                    </span>
                 )}
             </div>
             

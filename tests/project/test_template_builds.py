@@ -34,6 +34,7 @@ PLAYER_FILES = {
     "index.html": b'<!doctype html><html><head><title>Player</title></head>'
                   b'<body><script type="module" src="assets/player.js"></script></body></html>',
     "hud-frame.html": b"<!doctype html><title>HUD</title>",
+    "script-frame.html": b"<!doctype html><title>Scripts</title>",
     "assets/player.js": b"console.log('player');",
     "assets/player.css": b"body{margin:0}",
     "THIRD_PARTY_NOTICES.txt": b"three - MIT License\n",

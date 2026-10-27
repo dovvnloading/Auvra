@@ -4,14 +4,19 @@ import { AnimationGraphData } from '../../types';
 import { BlackboardInputs } from './panels/BlackboardInputs';
 import { BlackboardVariables } from './panels/BlackboardVariables';
 import { Select } from '../UI/Select';
+import type { GraphRuntimeAPI } from './GraphRuntime';
 
 interface BlackboardPanelProps {
     graph: AnimationGraphData;
     modelId: string;
     updateGraph: (modelId: string, data: Partial<AnimationGraphData>) => void;
+    /** The preview's runtime API, for the live variable watch. */
+    runtime?: React.MutableRefObject<GraphRuntimeAPI | undefined>;
+    /** The preview is running: variables show their live values and can be poked. */
+    live?: boolean;
 }
 
-export const BlackboardPanel: React.FC<BlackboardPanelProps> = ({ graph, modelId, updateGraph }) => {
+export const BlackboardPanel: React.FC<BlackboardPanelProps> = ({ graph, modelId, updateGraph, runtime, live = false }) => {
     const [activeTab, setActiveTab] = useState('variables');
 
     const options = [
@@ -46,6 +51,8 @@ export const BlackboardPanel: React.FC<BlackboardPanelProps> = ({ graph, modelId
                         graph={graph} 
                         modelId={modelId} 
                         updateGraph={updateGraph} 
+                        runtime={runtime}
+                        live={live}
                     />
                 )}
             </div>

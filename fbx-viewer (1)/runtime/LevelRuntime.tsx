@@ -38,7 +38,13 @@ import { TriggerEventsProvider } from './triggers';
 import { RuntimeServicesProvider, RuntimeSpawnerProvider, type SpawnPosition, toSpawnPoint } from './RuntimeServicesContext';
 import { ComponentHostContext } from './components/builtins';
 import { getComponentDefinition } from './components/registry';
+import { IKPlayerTargetContext } from './components/ikComponents';
+import { PostProcessAllowedContext, usePostProcessClaimed } from './components/postProcess';
+import type { InputState } from './input';
+import { collectTimelineTargets } from './timeline/evaluate';
+import { TouchControls } from './TouchControls';
 import type { ComponentDefinition } from './components/types';
+import { ScriptRuntime } from './scripting/ScriptRuntime';
 import type { GameContent, LevelRuntimeProps, PlayerStart, RuntimeHost, RuntimeLevel, SaveGameData } from './types';
 
 type Vec3 = [number, number, number];
@@ -151,9 +157,11 @@ type LevelLogicSystemProps = Omit<UseLevelBlueprintRuntimeProps, 'getObject' | '
     /** The session copy's actor lookup, parent links included. */
     getObject: (id: string) => LevelObject | null;
     setObjectTransform: ObjectTransformWrite;
+    /** The session copy as rendered (local transforms): gameplay scripts load from its script components and read it. */
+    sessionObjects: LevelObject[];
 };
 
-const LevelLogicSystem: React.FC<LevelLogicSystemProps> = ({ getObject, setObjectTransform, ...props }) => {
+const LevelLogicSystem: React.FC<LevelLogicSystemProps> = ({ getObject, setObjectTransform, sessionObjects, ...props }) => {
     // The session renders inside PhysicsWorld, so Raycast and Apply Impulse nodes reach the level's bodies.
     const physics = usePhysicsQueries();
     const applyImpulse = useCallback((id: string, [x, y, z]: [number, number, number]) => {
@@ -188,7 +196,23 @@ const LevelLogicSystem: React.FC<LevelLogicSystemProps> = ({ getObject, setObjec
     }, [setObjectTransform]);
 
     useLevelBlueprintRuntime({ raycast: physics.raycast, applyImpulse, ...props, getObject: getLiveObject, setObjectTransform: setLiveObjectTransform });
-    return null;
+
+    // Gameplay scripts act on the world through the same session services as the blueprint's nodes.
+    const { destroyActor, addNotification, host, playerEntityRef, playerApiRef } = props;
+    return (
+        <ScriptRuntime
+            objects={sessionObjects}
+            getObject={getLiveObject}
+            setObjectTransform={setLiveObjectTransform}
+            destroyObject={destroyActor}
+            applyImpulse={applyImpulse}
+            raycast={physics.raycast}
+            playerEntityRef={playerEntityRef}
+            playerApiRef={playerApiRef}
+            openLevel={levelId => host?.openLevel(levelId)}
+            print={(message, type) => addNotification({ message, type })}
+        />
+    );
 };
 
 /** Keeps the camera's field of view on the game settings, including changes made while playing. */
@@ -273,6 +297,8 @@ const planLevelRender = (objects: LevelObject[]): LevelRenderPlan => {
     const parents = new Set<string>();
     const dynamic = new Set<string>();
     const underBody = new Set<string>();
+    // Timelines move their targets, so those need their own transform group and count as moving.
+    const timelineTargets = collectTimelineTargets(objects);
     const visit = (root: LevelObject) => {
         const stack: [LevelObject, string | null][] = [[root, null]];
         while (stack.length) {
@@ -285,9 +311,9 @@ const planLevelRender = (objects: LevelObject[]): LevelRenderPlan => {
             }
             worldMatrices.set(obj.id, world);
             treeParent.set(obj.id, parentId);
-            if (parentId && (underBody.has(parentId) || (index.get(parentId)?.components ?? [])
-                .some(c => c.enabled !== false && ['collider', 'rigidBody', 'mover', 'rotator'].includes(c.type)))) underBody.add(obj.id);
-            if (mountedComponents(obj).length || (parentId && dynamic.has(parentId))) dynamic.add(obj.id);
+            if (timelineTargets.has(obj.id) || (parentId && (underBody.has(parentId) || (index.get(parentId)?.components ?? [])
+                .some(c => c.enabled !== false && ['collider', 'rigidBody', 'mover', 'rotator'].includes(c.type))))) underBody.add(obj.id);
+            if (mountedComponents(obj).length || timelineTargets.has(obj.id) || (parentId && dynamic.has(parentId))) dynamic.add(obj.id);
             const children = childMap.get(obj.id);
             if (children) for (let i = children.length - 1; i >= 0; i--) stack.push([children[i], obj.id]);
         }
@@ -561,11 +587,15 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
     const navOptions = useMemo(() => ({ shapeBounds: navShapeBounds }), [navShapeBounds]);
     const navGrid = useNavGrid(runtimeLevelObjects, navOptions);
 
+    // Look-at IK aimed at 'player' (level components and enemy blueprints) follows the player's model.
+    const playerTargetRef = useMemo(() => ({ current: runtimePlayerModel?.object ?? null }), [runtimePlayerModel]);
+
     if (!runtimePlayerModel) return null;
 
     const controlsEnabled = !isGameOver && !paused;
 
     return (
+        <IKPlayerTargetContext.Provider value={playerTargetRef}>
         <RuntimeSpawnerProvider spawnPrefab={spawnPrefab}>
             {/* --- Replaced Hardcoded Lights with SkySystem --- */}
             <SkySystem levelObjects={runtimeLevelObjects} />
@@ -668,6 +698,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                 destroyActor={destroyRuntimeObject}
                 getObject={getRuntimeObject}
                 setObjectTransform={setRuntimeObjectTransform}
+                sessionObjects={runtimeLevelObjects}
                 addNotification={handleNotification}
                 onRestart={host.restartLevel}
                 onEndLevel={host.endLevel}
@@ -688,6 +719,20 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                 aimOffset={player.blueprint.aimOffset || [0.5, 4.5, 1.0]}
             />
         </RuntimeSpawnerProvider>
+        </IKPlayerTargetContext.Provider>
+    );
+};
+
+/** The runtime's own bloom, vignette and tone mapping, standing down while a level Post Process component owns the canvas. */
+const DefaultPostProcess: React.FC = () => {
+    if (usePostProcessClaimed()) return null;
+    return (
+        <EffectComposer enableNormalPass={false}>
+            <Bloom luminanceThreshold={1.2} mipmapBlur intensity={0.6} />
+            <Vignette eskil={false} offset={0.1} darkness={1.1} />
+            {/* The composer bypasses the renderer's ACES tone mapping, so apply it as the final effect. */}
+            <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
+        </EffectComposer>
     );
 };
 
@@ -730,6 +775,8 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
     const dpr = Math.min(dprLevel, maxDpr);
     const toggleQuality = useCallback(() => setHighQuality(prev => !prev), []);
     const profilerVisible = useProfilerToggle();
+    const postProcessAllowed = settings.quality.postProcessing && highQuality;
+    const [touchInput, setTouchInput] = useState<InputState | null>(null);
 
     if (!player) {
         return (
@@ -773,17 +820,12 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                 />
 
                 {/* --- GPU POST PROCESSING PIPELINE --- */}
-                {settings.quality.postProcessing && highQuality && (
-                    <EffectComposer enableNormalPass={false}>
-                        <Bloom luminanceThreshold={1.2} mipmapBlur intensity={0.6} />
-                        <Vignette eskil={false} offset={0.1} darkness={1.1} />
-                        {/* The composer bypasses the renderer's ACES tone mapping, so apply it as the final effect. */}
-                        <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
-                    </EffectComposer>
-                )}
+                {/* A level Post Process component replaces the default stack; the quality setting and the fallback gate both. */}
+                <PostProcessAllowedContext.Provider value={postProcessAllowed}>
+                {postProcessAllowed && <DefaultPostProcess />}
 
                 {/* Input, audio buses and player options live for the whole run; the session adds its prefab spawner. */}
-                <RuntimeServicesProvider settings={settings} playerOptions={playerOptions} inputEnabled={!paused}>
+                <RuntimeServicesProvider settings={settings} playerOptions={playerOptions} inputEnabled={!paused} onInput={setTouchInput}>
                     <PauseActionWatcher enabled={!paused && !isGameOver} onRequestPause={runtimeHost.requestPause} />
                     {/* Each session gets a fresh trigger bus and physics world, so no body or listener outlives it. */}
                     <TriggerEventsProvider key={sessionKey}>
@@ -806,7 +848,11 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                         </PhysicsWorld>
                     </TriggerEventsProvider>
                 </RuntimeServicesProvider>
+                </PostProcessAllowedContext.Provider>
             </AuvraCanvas>
+
+            {/* On-screen joystick and buttons on touch devices; unmounted while paused so look input does not pile up. */}
+            {touchInput && !paused && !isGameOver && <TouchControls input={touchInput} />}
 
             {overlay ?? (
                 <FallbackHud

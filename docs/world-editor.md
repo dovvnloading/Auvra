@@ -52,6 +52,16 @@ Objects can carry components that add behaviour. Select an object and use **Add 
 | Rigid Body | Simulates the object during play (see [Physics](#physics)) |
 | Particles | Emits smoke, sparks, fire, dust or custom particles (see [Particles](#particles)) |
 | Audio Source | Plays a sound from the object during play (see [Audio](#audio)) |
+| Reverb Zone | Adds room, hall, cave or outdoor reverb to sound effects while the camera is inside it |
+| Music | Plays a playlist of audio assets on the music bus, with shuffle, loop and crossfades |
+| Physics Joint | Connects the object's rigid body to another object or to the world: fixed, ball, hinge or slider, with limits and a break force |
+| Decal | Projects a texture onto the object or onto any surface under it |
+| Post Process | Bloom, ambient occlusion, tone mapping, vignette, depth of field, colour grading and antialiasing for the whole level |
+| LOD Group | Shows one of the object's children by camera distance (LOD 0, 1, 2) and hides all of them past the last distance |
+| Distance Cull | Hides the object and its children beyond a distance |
+| Look At IK / Foot IK | Turn a bone toward the camera or the player, or plant the feet of the object's model on the ground (see [IK](characters.md#ik)) |
+| Script | Runs your own JavaScript or TypeScript during play (see [Gameplay scripting](scripting.md)) |
+| Timeline | Plays keyed tracks that move, show and hide objects, write level variables and raise events (see [Timelines](timelines.md)) |
 
 Each component's settings appear in the inspector and can be toggled on and off.
 

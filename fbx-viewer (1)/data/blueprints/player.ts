@@ -81,20 +81,15 @@ export const PLAYER_GRAPH: AnimationGraphData = {
     
     { id: 't_run_idle', fromStateId: 's3', toStateId: 's1', duration: 0.3, conditions: [{ variableId: 'v1', operator: '==', value: 0 }] },
 
-    // --- COMBAT ENTRY (Any -> Strafe) ---
-    { id: 't_enter_combat_1', fromStateId: 's1', toStateId: 's7', duration: 0.2, conditions: [{ variableId: 'v7', operator: '==', value: true }] },
-    { id: 't_enter_combat_2', fromStateId: 's2', toStateId: 's7', duration: 0.2, conditions: [{ variableId: 'v7', operator: '==', value: true }] },
-    { id: 't_enter_combat_3', fromStateId: 's3', toStateId: 's7', duration: 0.2, conditions: [{ variableId: 'v7', operator: '==', value: true }] },
+    // --- COMBAT ENTRY (Any -> Strafe), except mid-jump ---
+    { id: 't_enter_combat_1', fromStateId: 's1', toStateId: 's7', anyState: true, duration: 0.2, conditions: [{ variableId: 'v7', operator: '==', value: true }, { variableId: 'v2', operator: '==', value: false }] },
 
     // --- COMBAT EXIT (Strafe -> Any) ---
     { id: 't_exit_combat_idle', fromStateId: 's7', toStateId: 's1', duration: 0.2, conditions: [{ variableId: 'v7', operator: '==', value: false }, { variableId: 'v1', operator: '==', value: 0 }] },
     { id: 't_exit_combat_walk', fromStateId: 's7', toStateId: 's2', duration: 0.2, conditions: [{ variableId: 'v7', operator: '==', value: false }, { variableId: 'v1', operator: '>', value: 0 }] },
 
     // --- JUMP (Overrides all) ---
-    { id: 't5', fromStateId: 's1', toStateId: 's4', duration: 0.1, conditions: [{ variableId: 'v2', operator: '==', value: true }] },
-    { id: 't6', fromStateId: 's2', toStateId: 's4', duration: 0.1, conditions: [{ variableId: 'v2', operator: '==', value: true }] },
-    { id: 't7', fromStateId: 's3', toStateId: 's4', duration: 0.1, conditions: [{ variableId: 'v2', operator: '==', value: true }] },
-    { id: 't7b', fromStateId: 's7', toStateId: 's4', duration: 0.1, conditions: [{ variableId: 'v2', operator: '==', value: true }] },
+    { id: 't5', fromStateId: 's1', toStateId: 's4', anyState: true, priority: 50, duration: 0.1, conditions: [{ variableId: 'v2', operator: '==', value: true }] },
     
     // Jump Return
     { id: 't_jump_idle', fromStateId: 's4', toStateId: 's1', duration: 0.2, conditions: [{ variableId: 'v2', operator: '==', value: false }] },

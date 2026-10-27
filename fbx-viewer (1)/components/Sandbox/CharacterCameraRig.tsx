@@ -37,7 +37,7 @@ export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({
 
     // Look settings: explicit props, else the player's options (the game's defaults outside a runtime).
     // Kept in a ref so changing them in the options menu applies without re-binding the listeners.
-    const { options } = useRuntimeServices();
+    const { options, input } = useRuntimeServices();
     const look = useRef({ sensitivity: 0, invertY: false });
     look.current.sensitivity = mouseSensitivity ?? options.mouseSensitivity;
     look.current.invertY = invertY ?? options.invertY;
@@ -115,6 +115,17 @@ export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({
     // Frame Loop - Standard Priority
     useFrame((_, delta) => {
         if (!target) return;
+
+        // Touch look (the right-hand drag area); devices without pointer lock have no mouse look.
+        if (active) {
+            const touchLook = input.lookDelta();
+            if (touchLook.x !== 0 || touchLook.y !== 0) {
+                const sensitivity = isAiming ? look.current.sensitivity * 0.3 : look.current.sensitivity;
+                const pitchSign = look.current.invertY ? -1 : 1;
+                state.current.theta -= touchLook.x * sensitivity;
+                state.current.phi = Math.max(minPitch, Math.min(maxPitch, state.current.phi - touchLook.y * sensitivity * pitchSign));
+            }
+        }
 
         // 1. Interpolate Aim Factor (Smooth transition between modes)
         const targetAimFactor = isAiming ? 1.0 : 0.0;

@@ -30,7 +30,7 @@
   ],
   "invalid": [
     {"name":"project create with unknown template","message":{"protocol":"auvra.host/1","type":"request","id":"r3u","session":"s1","revision":0,"method":"project.create","payload":{"name":"Demo","template":"shooter"}}},
-    {"name":"build game unknown target","message":{"protocol":"auvra.host/1","type":"request","id":"r-build","session":"s1","revision":0,"method":"project.buildGame","payload":{"projectId":"p1","expectedRevision":0,"target":"linux"}}},
+    {"name":"build game unknown target","message":{"protocol":"auvra.host/1","type":"request","id":"r-build","session":"s1","revision":0,"method":"project.buildGame","payload":{"projectId":"p1","expectedRevision":0,"target":"android"}}},
     {"name":"build game path field","message":{"protocol":"auvra.host/1","type":"request","id":"r-build","session":"s1","revision":0,"method":"project.buildGame","payload":{"projectId":"p1","expectedRevision":0,"target":"windows","path":"C:/out"}}},
     {"name":"build game missing expectedRevision","message":{"protocol":"auvra.host/1","type":"request","id":"r-build","session":"s1","revision":0,"method":"project.buildGame","payload":{"projectId":"p1","target":"web"}}},
     {"name":"unknown protocol","message":{"protocol":"auvra.host/2","type":"request","id":"r1","session":"s1","revision":0,"method":"host.ping","payload":{}}},

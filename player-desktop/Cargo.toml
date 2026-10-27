@@ -3,7 +3,7 @@ name = "auvra-player"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-description = "Standalone Windows player for games exported by Auvra"
+description = "Standalone desktop player for games exported by Auvra"
 publish = false
 
 [dependencies]

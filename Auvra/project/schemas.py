@@ -43,9 +43,10 @@ _NESTED_KEYS = {
     "position": {"x", "y"},
     "variables": {"id", "name", "type", "value"},
     "inputs": {"id", "key", "type", "targetVariableId", "targetValue", "name", "dataType", "direction"},
-    "states": {"id", "name", "position", "loop", "isRoot", "stateType", "clipName", "blendSamples", "blendParamX", "blendParamY"},
+    "states": {"id", "name", "position", "loop", "isRoot", "stateType", "clipName", "blendSamples", "blendParamX", "blendParamY", "playRate", "playRateParam", "notifies", "rootMotion"},
+    "notifies": {"id", "name", "time"},
     "blendSamples": {"id", "clipName", "position"},
-    "transitions": {"id", "fromStateId", "toStateId", "duration", "conditions", "exitTime"},
+    "transitions": {"id", "fromStateId", "toStateId", "duration", "conditions", "exitTime", "conditionMode", "anyState", "priority"},
     "conditions": {"variableId", "operator", "value"},
     "nodes": {"id", "type", "name", "position", "inputs", "outputs", "data", "customData"},
     "outputs": {"id", "name", "dataType", "direction"},
@@ -57,6 +58,7 @@ _NESTED_KEYS = {
     "layout": {"x", "y", "width", "height", "customData"},
     "lods": {"level", "maxDistance"},
     "render": {"visible", "radius", "selected", "lods"},
+    "ik": {"footIK", "footMaxStep", "lookAt", "lookAtBone", "lookAtMaxAngle"},
 }
 _FREEFORM_KEYS = {"settings", "overrides", "style", "payload", "data", "customData", "props"}
 # ``materialOverrides`` is keyed by authored material names, so its entries are

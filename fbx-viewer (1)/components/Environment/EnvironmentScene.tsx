@@ -11,6 +11,7 @@ import { FoliageBrushTool } from './FoliageBrushTool';
 import { TerrainObject } from './Terrain/TerrainObject';
 import { TerrainSculptor } from './Terrain/TerrainSculptor';
 import { InstancedLevelLayer } from './InstancedLevelLayer';
+import { LodEditorPreviewContext, useLodEditorPreview } from '../../runtime/components/lodComponents';
 import { AudioSystem } from './AudioSystem';
 import { SkySystem } from './SkySystem';
 import { useAssets } from '../../context/AssetContext';
@@ -357,7 +358,8 @@ const LevelObjectNode = React.memo(({
     isSelected,
     selectable,
     onRegister,
-    onSelect
+    onSelect,
+    hidden = false
 }: {
     object: LevelObject,
     source: LevelObject,
@@ -365,7 +367,9 @@ const LevelObjectNode = React.memo(({
     isSelected: boolean,
     selectable: boolean,
     onRegister: RegisterNode,
-    onSelect: SelectHandler
+    onSelect: SelectHandler,
+    /** Hidden by an LOD Group or Distance Cull editor preview. */
+    hidden?: boolean
 }) => {
     const ref = useRegisteredNode(object.id, onRegister);
 
@@ -385,7 +389,7 @@ const LevelObjectNode = React.memo(({
                 model={model}
                 isSelected={isSelected}
                 applyTransform={false}
-                visible={true}
+                visible={!hidden}
             />
             <LevelComponentPreviews object={source} />
         </group>
@@ -524,6 +528,9 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
         }
         return children;
     }, [levelObjects]);
+
+    // LOD Group / Distance Cull components with "preview in editor" hide objects by camera distance.
+    const { preview: lodPreview, hiddenIds: lodHiddenIds } = useLodEditorPreview(levelObjects);
 
     // --- Selection ---
     const selection = useStableIdSet(selectedId ? [...(selectedIds ?? []), selectedId] : (selectedIds ?? []));
@@ -712,12 +719,17 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
     const isActiveView = viewId === activeViewId;
     const objectsInteractive = isActiveView && interactionMode !== 'place' && interactionMode !== 'paint';
     const highlightedIds = isActiveView ? selection : EMPTY_IDS;
+    const layerHiddenIds = useMemo(
+        () => (lodHiddenIds.size ? new Set([...promotedIds, ...lodHiddenIds]) : promotedIds),
+        [promotedIds, lodHiddenIds]
+    );
+
     const handleInstancedSelect = useCallback((id: string, event: unknown) => {
         if (isActiveView) handleSelect(id, event);
     }, [isActiveView, handleSelect]);
 
     return (
-        <>
+        <LodEditorPreviewContext.Provider value={lodPreview}>
             {/* Dynamic Sky System */}
             <SkySystem levelObjects={resolvedObjects} />
 
@@ -747,7 +759,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                     onRegister={registerNode}
                     data={terrain}
                     isSelected={selection.has(terrain.id) && isActiveView}
-                    visible={true}
+                    visible={!lodHiddenIds.has(terrain.id)}
                     receiveShadow
                     castShadow
                     onClick={(e) => {
@@ -791,7 +803,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                 levelObjects={foliageObjects}
                 onSelect={handleInstancedSelect}
                 interactive={objectsInteractive}
-                hiddenIds={promotedIds}
+                hiddenIds={layerHiddenIds}
                 selectedIds={highlightedIds}
             />
 
@@ -801,7 +813,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                 levelObjects={propObjects}
                 onSelect={handleInstancedSelect}
                 interactive={objectsInteractive}
-                hiddenIds={promotedIds}
+                hiddenIds={layerHiddenIds}
                 selectedIds={highlightedIds}
             />
 
@@ -815,6 +827,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                     selectable={true}
                     onRegister={registerNode}
                     onSelect={handleSelect}
+                    hidden={lodHiddenIds.has(obj.id)}
                 />
             ))}
 
@@ -829,6 +842,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                     selectable={objectsInteractive}
                     onRegister={registerNode}
                     onSelect={handleSelect}
+                    hidden={lodHiddenIds.has(obj.id)}
                 />
             ))}
 
@@ -892,6 +906,6 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                     )}
                 </>
             )}
-        </>
+        </LodEditorPreviewContext.Provider>
     );
 };

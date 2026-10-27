@@ -6,7 +6,7 @@ import {
     Plus, Minus, X, Divide, ChevronRight, ChevronLeft, Equal, Hash, Type as TypeIcon, ToggleLeft, ArrowRight,
     Skull, Shield, Clock, RefreshCcw, AlertTriangle,
     ListOrdered, Repeat, Repeat1, ArrowLeftRight, DoorClosed, PackagePlus, Move3d, Volume2, Zap, Crosshair,
-    Variable, Gamepad2, Dices
+    Variable, Gamepad2, Dices, Film, Smile
 } from 'lucide-react';
 import { LogicNode, LogicPin, PinDataType, LevelObject } from '../../types';
 import { describeActor, isOverlapEvent, overlapEventName, overlapTargetWarning, resolveOverlapTarget, selectedOverlapActorId } from './overlapTargets';
@@ -97,6 +97,8 @@ const NODE_STYLES: Record<string, { border: string, bg: string, icon: React.Reac
     'ApplyImpulse': { border: 'border-sky-800', bg: 'bg-sky-950/80', icon: <Zap size={14} className="text-sky-400" /> },
     'Raycast': { border: 'border-sky-800', bg: 'bg-sky-950/80', icon: <Crosshair size={14} className="text-sky-400" /> },
     'PlaySound': { border: 'border-amber-800', bg: 'bg-amber-950/70', icon: <Volume2 size={14} className="text-amber-400" /> },
+    'PlayPlayerAnimation': { border: 'border-fuchsia-800', bg: 'bg-fuchsia-950/70', icon: <Film size={14} className="text-fuchsia-400" /> },
+    'SetMorphTarget': { border: 'border-fuchsia-800', bg: 'bg-fuchsia-950/70', icon: <Smile size={14} className="text-fuchsia-400" /> },
     'InputActionPressed': { border: 'border-orange-800', bg: 'bg-orange-950/70', icon: <Gamepad2 size={14} className="text-orange-400" /> },
     'GetLevelVariable': { border: 'border-teal-800', bg: 'bg-teal-950/60', icon: <Variable size={14} className="text-teal-400" /> },
     'SetLevelVariable': { border: 'border-teal-800', bg: 'bg-teal-950/80', icon: <Variable size={14} className="text-teal-400" /> },

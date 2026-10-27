@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { RotateCcw, Save, SlidersHorizontal, X } from 'lucide-react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Hammer, RotateCcw, Save, SlidersHorizontal, X } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
+import { projectService } from '../../utils/projectService';
 import { useNativeProjectDocument } from '../../utils/useNativeProjectDocument';
 import {
   DEFAULT_GAME_SETTINGS,
@@ -15,6 +16,44 @@ interface GameSettingsDocument {
 }
 
 interface GameSettingsPanelProps { onClose: () => void; }
+
+/** Build Game targets in picker order; each is a `target` the host's project.buildGame accepts. */
+export const GAME_BUILD_TARGETS = ['web', 'windows', 'linux', 'macos'] as const;
+
+/** A platform Build Game can produce. */
+export type GameBuildTarget = typeof GAME_BUILD_TARGETS[number];
+
+/** Whether the host can build one target now, as the project status `buildTargets` reports it. */
+export interface GameBuildTargetStatus {
+  target: GameBuildTarget;
+  available: boolean;
+  reason?: string;
+}
+
+const BUILD_TARGET_COPY: Record<GameBuildTarget, { label: string; detail: string }> = {
+  web: { label: 'Web', detail: 'Static folder to host over http(s)' },
+  windows: { label: 'Windows', detail: 'Folder with a .exe' },
+  linux: { label: 'Linux', detail: 'Folder with an executable; needs WebKitGTK' },
+  macos: { label: 'macOS', detail: 'Unsigned .app bundle' },
+};
+
+/**
+ * Availability of every Build Game target from a project status. When the host does not report
+ * `buildTargets`, every target stays enabled and the host rejects a build it cannot run.
+ */
+export const readBuildTargets = (status: unknown): GameBuildTargetStatus[] => {
+  const reported = status && typeof status === 'object' ? (status as { buildTargets?: unknown }).buildTargets : undefined;
+  const entries = Array.isArray(reported)
+    ? reported.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    : null;
+  return GAME_BUILD_TARGETS.map((target) => {
+    if (!entries) return { target, available: true };
+    const entry = entries.find((item) => item.target === target);
+    if (!entry) return { target, available: false, reason: 'This editor cannot build for this platform.' };
+    const reason = typeof entry.reason === 'string' && entry.reason.trim() ? entry.reason : undefined;
+    return { target, available: entry.available === true, ...(reason ? { reason } : {}) };
+  });
+};
 
 // Module scoped so the document hook sees a stable factory and does not re-hydrate every render.
 const createDefaultGameSettingsDocument = (): GameSettingsDocument => ({
@@ -87,7 +126,7 @@ const NumberField: React.FC<{ label: string; value: number; limits: { min: numbe
 );
 
 export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose }) => {
-  const { levels, blueprints, projectStatus } = useScene();
+  const { levels, blueprints, projectStatus, buildGame, isLoading } = useScene();
   const { document, hydrated, error, replace } = useNativeProjectDocument<GameSettingsDocument>(
     'metadata', GAME_SETTINGS_DOCUMENT_ID, createDefaultGameSettingsDocument,
   );
@@ -126,6 +165,17 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
     setDraft(stored);
   };
 
+  const buildIdPrefix = useId();
+  const buildTargets = useMemo(() => readBuildTargets(projectStatus), [projectStatus]);
+  const [buildTarget, setBuildTarget] = useState<GameBuildTarget>('web');
+  const [building, setBuilding] = useState(false);
+
+  // Availability is host-wide and can change while the editor runs (a desktop player built or
+  // downloaded since startup), so opening the panel asks the host again.
+  useEffect(() => {
+    void projectService.refreshStatus().catch(() => undefined);
+  }, []);
+
   const playerBlueprints = useMemo(() => blueprints.filter((blueprint) => blueprint.type === 'Player Character'), [blueprints]);
   const missingLevel = draft.startupLevelId !== null && !levels.some((level) => level.id === draft.startupLevelId);
   const missingBlueprint = draft.playerBlueprintId !== null && !playerBlueprints.some((blueprint) => blueprint.id === draft.playerBlueprintId);
@@ -136,6 +186,28 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
   const update = (patch: (current: GameSettings) => GameSettings) => {
     setMessage(null);
     setDraft((current) => patch(current));
+  };
+
+  const selectedBuild = buildTargets.find((item) => item.target === buildTarget) ?? buildTargets[0];
+  const buildBlocked = !projectStatus.projectId
+    ? 'Open a project to build it.'
+    : dirty
+      ? 'Save or revert your changes first; builds use the saved settings.'
+      : !selectedBuild.available
+        ? selectedBuild.reason ?? 'This target is not available.'
+        : null;
+  const canBuild = hydrated && !saving && !building && !isLoading && buildBlocked === null;
+
+  const build = async () => {
+    const { target } = selectedBuild;
+    setBuilding(true); setMessage(null);
+    try {
+      // project.buildGame accepts every GameBuildTarget; the scene action forwards it unchanged.
+      await (buildGame as (target: GameBuildTarget) => Promise<void>)(target);
+      setMessage(`${BUILD_TARGET_COPY[target].label} build finished.`);
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : 'The game could not be built.');
+    } finally { setBuilding(false); }
   };
 
   const save = async () => {
@@ -205,6 +277,29 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
             <label className="block text-[9px] uppercase text-gray-500">Master volume · {Math.round(draft.audio.masterVolume * 100)}%
               <input type="range" aria-label="Master volume" min={LIMITS.masterVolume.min} max={LIMITS.masterVolume.max} step={LIMITS.masterVolume.step} value={draft.audio.masterVolume} disabled={disabled} onChange={(event) => { const masterVolume = Number(event.target.value); update((current) => ({ ...current, audio: { ...current.audio, masterVolume } })); }} className="mt-1 w-full" />
             </label>
+          </div>
+
+          <div className={sectionClass}>
+            <div className={sectionTitleClass}>Build game</div>
+            <fieldset className="grid grid-cols-2 gap-2" aria-label="Build target">
+              {buildTargets.map(({ target, available, reason }) => {
+                const copy = BUILD_TARGET_COPY[target];
+                const hintId = `${buildIdPrefix}-${target}-hint`;
+                return (
+                  <label key={target} className={`flex items-start gap-2 rounded border px-2 py-1.5 text-xs ${buildTarget === target && available ? 'border-emerald-600 bg-emerald-950/30' : 'border-gray-800'} ${available ? 'cursor-pointer text-gray-200' : 'cursor-not-allowed text-gray-500'}`}>
+                    <input type="radio" name={`${buildIdPrefix}-target`} value={target} aria-label={copy.label} aria-describedby={hintId} checked={buildTarget === target} disabled={!available || building} onChange={() => setBuildTarget(target)} className="mt-0.5" />
+                    <span className="min-w-0">
+                      <span className="block font-bold">{copy.label}</span>
+                      <span id={hintId} className={`block text-[10px] ${available ? 'text-gray-500' : 'text-amber-400'}`}>{available ? copy.detail : reason ?? 'Not available in this editor.'}</span>
+                    </span>
+                  </label>
+                );
+              })}
+            </fieldset>
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[10px] text-gray-500">{buildBlocked ?? 'Pick a parent folder; an earlier build of this target there is replaced.'}</p>
+              <button type="button" disabled={!canBuild} onClick={() => void build()} className="flex shrink-0 items-center gap-2 rounded bg-emerald-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-600 disabled:opacity-50"><Hammer size={13} /> {building ? 'Building…' : `Build ${BUILD_TARGET_COPY[selectedBuild.target].label}`}</button>
+            </div>
           </div>
 
           {(message || error) && <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs text-gray-300">{message || error?.message}</div>}

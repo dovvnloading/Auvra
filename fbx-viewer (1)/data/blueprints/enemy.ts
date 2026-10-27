@@ -33,11 +33,9 @@ export const ENEMY_GRAPH: AnimationGraphData = {
     { id: 'et1', fromStateId: 'es1', toStateId: 'es2', duration: 0.2, conditions: [{ variableId: 'v_speed', operator: '>', value: 0.1 }] },
     { id: 'et2', fromStateId: 'es2', toStateId: 'es1', duration: 0.2, conditions: [{ variableId: 'v_speed', operator: '<=', value: 0.1 }] },
     
-    // Attack Logic (Triggered by AttackIndex > 0)
-    { id: 'et3', fromStateId: 'es1', toStateId: 'es3', duration: 0.1, conditions: [{ variableId: 'v_attack', operator: '>', value: 0 }] },
-    { id: 'et4', fromStateId: 'es2', toStateId: 'es3', duration: 0.1, conditions: [{ variableId: 'v_attack', operator: '>', value: 0 }] },
-    { id: 'et9', fromStateId: 'es5', toStateId: 'es3', duration: 0.1, conditions: [{ variableId: 'v_attack', operator: '>', value: 0 }] },
-    
+    // Attack Logic (Triggered by AttackIndex > 0), from any living state
+    { id: 'et3', fromStateId: 'es1', toStateId: 'es3', anyState: true, priority: 10, duration: 0.1, conditions: [{ variableId: 'v_attack', operator: '>', value: 0 }, { variableId: 'v_dead', operator: '==', value: false }] },
+
     // Return from Attack (When AttackIndex reset to 0)
     { id: 'et5', fromStateId: 'es3', toStateId: 'es1', duration: 0.2, conditions: [{ variableId: 'v_attack', operator: '==', value: 0 }] },
 
@@ -45,11 +43,8 @@ export const ENEMY_GRAPH: AnimationGraphData = {
     { id: 'et_strafe_start', fromStateId: 'es1', toStateId: 'es5', duration: 0.2, conditions: [{ variableId: 'v_input_x', operator: '!=', value: 0 }] },
     { id: 'et_strafe_end', fromStateId: 'es5', toStateId: 'es1', duration: 0.2, conditions: [{ variableId: 'v_input_x', operator: '==', value: 0 }] },
 
-    // Death (Global)
-    { id: 'et6', fromStateId: 'es1', toStateId: 'es4', duration: 0.1, conditions: [{ variableId: 'v_dead', operator: '==', value: true }] },
-    { id: 'et7', fromStateId: 'es2', toStateId: 'es4', duration: 0.1, conditions: [{ variableId: 'v_dead', operator: '==', value: true }] },
-    { id: 'et8', fromStateId: 'es3', toStateId: 'es4', duration: 0.1, conditions: [{ variableId: 'v_dead', operator: '==', value: true }] },
-    { id: 'et10', fromStateId: 'es5', toStateId: 'es4', duration: 0.1, conditions: [{ variableId: 'v_dead', operator: '==', value: true }] }
+    // Death (Global): wins over everything else
+    { id: 'et6', fromStateId: 'es1', toStateId: 'es4', anyState: true, priority: 100, duration: 0.1, conditions: [{ variableId: 'v_dead', operator: '==', value: true }] }
   ],
   activeStateId: 'es1'
 };

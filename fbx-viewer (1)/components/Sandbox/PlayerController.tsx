@@ -10,6 +10,8 @@ import { usePlayerPhysics } from './hooks/usePlayerPhysics';
 import { usePlayerCombat } from './hooks/usePlayerCombat';
 import { Blueprint, LevelObject } from '../../types';
 
+const _rootTravel = new THREE.Vector3();
+
 interface PlayerControllerProps {
     apiRef: React.MutableRefObject<GraphRuntimeAPI | undefined>;
     entityRef: React.MutableRefObject<SandboxEntityHandle | null>;
@@ -93,7 +95,10 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
 
         // --- Step B: Physics & Movement ---
         // Returns localInputX/Y which are relative to Character Rotation
-        const { isMoving, effectiveSprint, localInputX, localInputY, isAirborne } = updatePhysics(input, delta);
+        // A state with root motion moves the character by the clip's own travel (taken every frame so none piles up).
+        const travel = apiRef.current.consumeRootMotion?.(_rootTravel);
+        const rootMotion = apiRef.current.getActiveState?.()?.rootMotion ? travel : null;
+        const { isMoving, effectiveSprint, localInputX, localInputY, isAirborne } = updatePhysics(input, delta, rootMotion);
 
         // --- Step C: Combat ---
         updateCombat(input.isFiring, input.isAiming, camera, delta);

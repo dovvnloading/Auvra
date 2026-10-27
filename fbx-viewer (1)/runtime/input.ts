@@ -45,16 +45,24 @@ export const describeBinding = (binding: InputBinding): string => {
     }
 };
 
-/** Live input state. Pure snapshot logic lives here so it can be tested without a DOM. */
+/**
+ * Live input state. Pure snapshot logic lives here so it can be tested without a DOM.
+ * Sources: keyboard, mouse, gamepads and a virtual source (on-screen touch controls) that drives actions by name.
+ */
 export class InputState {
     private readonly keys = new Set<string>();
     private readonly mouse = new Set<number>();
     // Pressed since the last endFrame, so a tap released before the next frame is not lost.
     private readonly tappedKeys = new Set<string>();
     private readonly tappedButtons = new Set<number>();
+    private readonly tappedVirtual = new Set<string>();
+    private readonly virtualAxes = new Map<string, number>();
+    private readonly virtualButtons = new Set<string>();
     private gamepads: (Gamepad | null)[] = [];
     private previous = new Set<string>();
     private current = new Set<string>();
+    private lookX = 0;
+    private lookY = 0;
 
     constructor(private map: InputActionMap) {}
 
@@ -64,7 +72,39 @@ export class InputState {
     mouseDown(button: number) { this.mouse.add(button); this.tappedButtons.add(button); }
     mouseUp(button: number) { this.mouse.delete(button); }
     setGamepads(gamepads: (Gamepad | null)[]) { this.gamepads = gamepads; }
-    clear() { this.keys.clear(); this.mouse.clear(); this.tappedKeys.clear(); this.tappedButtons.clear(); }
+    /** Releases everything held on every source, virtual included. */
+    clear() { this.keys.clear(); this.mouse.clear(); this.tappedKeys.clear(); this.tappedButtons.clear(); this.clearVirtual(); }
+
+    /** Analog strength 0..1 of an action from a virtual stick (values outside are clamped, non-finite is 0); 0 releases it. */
+    setVirtualAxis(action: string, value: number) {
+        const strength = Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
+        if (strength > 0) this.virtualAxes.set(action, strength);
+        else this.virtualAxes.delete(action);
+    }
+
+    /** Holds or releases an action from an on-screen button. A press latches until the next endFrame, like a key tap. */
+    setVirtualButton(action: string, pressed: boolean) {
+        if (pressed) { this.virtualButtons.add(action); this.tappedVirtual.add(action); }
+        else this.virtualButtons.delete(action);
+    }
+
+    /** Releases every virtual axis and button and drops pending look movement. */
+    clearVirtual() { this.virtualAxes.clear(); this.virtualButtons.clear(); this.tappedVirtual.clear(); this.lookX = 0; this.lookY = 0; }
+
+    /** Adds a camera-look drag in screen pixels (x right, y down), e.g. from the touch look area. */
+    addLookDelta(dx: number, dy: number) {
+        if (Number.isFinite(dx)) this.lookX += dx;
+        if (Number.isFinite(dy)) this.lookY += dy;
+    }
+
+    /** Look drag in pixels since the last endFrame (x right, y down): the touch counterpart of mouse movementX/movementY. */
+    lookDelta(): { x: number; y: number } { return { x: this.lookX, y: this.lookY }; }
+
+    /** The action of that name in the current map, if there is one. */
+    findAction(name: string): InputAction | undefined { return this.map.find(item => item.name === name); }
+
+    /** True when the current map has an action of that name. */
+    hasAction(name: string): boolean { return this.findAction(name) !== undefined; }
 
     /** Analog strength of one binding in [0, 1]. */
     private strength(binding: InputBinding): number {
@@ -79,9 +119,12 @@ export class InputState {
         }
     }
 
+    /** Strength 0..1 of a mapped action: the strongest of its bindings and the virtual source. Unmapped actions are 0. */
     value(name: string): number {
-        const action = this.map.find(item => item.name === name);
-        return action ? Math.min(1, Math.max(0, ...action.bindings.map(binding => this.strength(binding)))) : 0;
+        const action = this.findAction(name);
+        if (!action) return 0;
+        const virtual = this.virtualButtons.has(name) ? 1 : this.virtualAxes.get(name) ?? 0;
+        return Math.min(1, Math.max(0, virtual, ...action.bindings.map(binding => this.strength(binding))));
     }
 
     isDown(name: string): boolean { return this.value(name) > 0.5; }
@@ -89,16 +132,19 @@ export class InputState {
     /** -1..1 from a pair of opposing actions, e.g. axis('MoveLeft', 'MoveRight'). */
     axis(negative: string, positive: string): number { return this.value(positive) - this.value(negative); }
 
-    /** Call once per frame before reading wasPressed/wasReleased. */
+    /** Call once per frame before reading wasPressed/wasReleased. It also starts a new lookDelta. */
     endFrame() {
         this.previous = this.current;
         const tapped = (binding: InputBinding) => (binding.device === 'keyboard' && this.tappedKeys.has(binding.code))
             || (binding.device === 'mouse' && this.tappedButtons.has(binding.button));
         this.current = new Set(this.map
-            .filter(action => this.isDown(action.name) || action.bindings.some(tapped))
+            .filter(action => this.isDown(action.name) || this.tappedVirtual.has(action.name) || action.bindings.some(tapped))
             .map(action => action.name));
         this.tappedKeys.clear();
         this.tappedButtons.clear();
+        this.tappedVirtual.clear();
+        this.lookX = 0;
+        this.lookY = 0;
     }
 
     wasPressed(name: string): boolean { return this.current.has(name) && !this.previous.has(name); }

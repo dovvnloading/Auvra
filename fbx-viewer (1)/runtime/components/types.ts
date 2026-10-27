@@ -22,9 +22,18 @@ export interface ComponentRenderProps {
     mode: 'editor' | 'runtime';
 }
 
+export interface ComponentInspectorProps {
+    object: LevelObject;
+    component: LevelComponent;
+    /** Merges `changes` into the component's props and commits them as one undoable edit. */
+    onChangeProps: (changes: Record<string, unknown>) => void;
+}
+
 /**
  * A component type. Render is mounted inside the owning object's transform group, so it works
- * in local space and inherits the object's world transform.
+ * in local space and inherits the object's world transform. Inspector, when given, is shown under
+ * the schema fields for settings a plain field cannot edit (code, tracks, ...); props it owns are
+ * left out of `props`.
  */
 export interface ComponentDefinition {
     type: string;
@@ -32,4 +41,5 @@ export interface ComponentDefinition {
     description: string;
     props: ComponentPropSchema[];
     Render?: React.FC<ComponentRenderProps>;
+    Inspector?: React.FC<ComponentInspectorProps>;
 }

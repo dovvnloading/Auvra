@@ -5,6 +5,7 @@ import { LogicNode, LogicPin, LevelObject } from '../../types';
 import { describeActor, isOverlapEvent, overlapEventName, overlapTargetData, overlapTargetWarning, resolveOverlapTarget, selectedOverlapActorId } from './overlapTargets';
 import { findLogicNodeDefinition, LogicNodeDefinition } from './LogicNode';
 import { sequenceThenPin } from '../../hooks/levelBlueprintNodes/flow';
+import { PLAYER_ACTOR_ID } from '../../hooks/levelBlueprintNodes/world';
 import { AUDIO_BUSES } from '../../runtime/audioMixer';
 import { DEFAULT_INPUT_MAP } from '../../runtime/input';
 
@@ -21,6 +22,12 @@ interface LevelBlueprintInspectorProps {
     audioAssets?: { id: string, name: string }[];
     /** Declared level variables, offered as names for Get/Set Level Variable. */
     levelVariables?: { name: string, type: string }[];
+    /** Clip names a Play Player Animation node can play; empty means unknown (no warning for other names). */
+    animationClips?: string[];
+    /** Bone names of the player character, offered as a Play Player Animation mask. */
+    playerBones?: string[];
+    /** Morph target names of an actor's model (PLAYER_ACTOR_ID: the player character), offered by Set Morph Target. */
+    morphTargetsOf?: (actorId: string) => string[];
     /** Pins with a wire; a wired input ignores its default value. */
     connectedPinIds?: ReadonlySet<string>;
     onDelete: () => void;
@@ -148,15 +155,35 @@ interface RegistryNodeFieldsProps {
     prefabs: { id: string, name: string }[];
     audioAssets: { id: string, name: string }[];
     levelVariables: { name: string, type: string }[];
+    animationClips: string[];
+    playerBones: string[];
+    morphTargetsOf?: (actorId: string) => string[];
     connectedPinIds: ReadonlySet<string>;
 }
 
+/** Text field that suggests `options` (a datalist) but takes any name. */
+const SuggestField: React.FC<{
+    id: string;
+    value: string;
+    options: string[];
+    placeholder: string;
+    onChange: (value: string) => void;
+}> = ({ id, value, options, placeholder, onChange }) => (
+    <>
+        <input id={id} type="text" list={`${id}-options`} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className={FIELD_CLASS} />
+        <datalist id={`${id}-options`}>
+            {options.map(option => <option key={option} value={option} />)}
+        </datalist>
+    </>
+);
+
 /**
  * Inspector fields for flow and world registry nodes: one field per unwired data input, editing its
- * `default_<pin>` value, with pickers for prefabs, sounds, buses, input actions, actors and level variables.
+ * `default_<pin>` value, with pickers for prefabs, sounds, buses, input actions, actors and level variables,
+ * and suggestions for animation clips, mask bones and morph targets.
  */
 const RegistryNodeFields: React.FC<RegistryNodeFieldsProps> = ({
-    node, definition, onUpdate, levelObjects, prefabs, audioAssets, levelVariables, connectedPinIds
+    node, definition, onUpdate, levelObjects, prefabs, audioAssets, levelVariables, animationClips, playerBones, morphTargetsOf, connectedPinIds
 }) => {
     const data: Record<string, unknown> = node.data || {};
     const keyOf = (pin: LogicPin) => `default_${pin.name}`;
@@ -300,21 +327,85 @@ const RegistryNodeFields: React.FC<RegistryNodeFieldsProps> = ({
             );
         }
 
+        if (node.type === 'PlayPlayerAnimation' && pin.name === 'Clip') {
+            const clip = text.trim();
+            return (
+                <>
+                    <SuggestField id={fieldId(pin)} value={text} options={animationClips} placeholder="clip name" onChange={(name) => setDefault(pin, name, titled(name.trim() || undefined))} />
+                    {clip === ''
+                        ? <Warning>No clip; this node plays nothing.</Warning>
+                        : animationClips.length > 0 && !animationClips.includes(clip) && <Warning>No model in the project has a clip named "{clip}"; Played will be false.</Warning>}
+                </>
+            );
+        }
+
+        if (node.type === 'PlayPlayerAnimation' && pin.name === 'Mask Bone') {
+            const bone = text.trim();
+            return (
+                <>
+                    <SuggestField id={fieldId(pin)} value={text} options={playerBones} placeholder="full body" onChange={(name) => setDefault(pin, name)} />
+                    <div className="text-[10px] text-gray-500">Empty plays the clip on the full body; a bone limits it to that bone and its children (e.g. Spine for an upper-body attack).</div>
+                    {bone !== '' && playerBones.length > 0 && !playerBones.includes(bone) && <Warning>The player character has no bone named "{bone}".</Warning>}
+                </>
+            );
+        }
+
+        if (node.type === 'PlayPlayerAnimation' && pin.name === 'Rate') {
+            return (
+                <>
+                    <input id={fieldId(pin)} type="number" step="0.1" value={text} onChange={(e) => setDefault(pin, parseNumberField(e.target.value, false))} placeholder="1" className={FIELD_CLASS} />
+                    {typeof value === 'number' && value <= 0 && <Warning>Rate must be above 0; this node plays nothing.</Warning>}
+                </>
+            );
+        }
+
+        if (node.type === 'SetMorphTarget' && pin.name === 'Morph') {
+            // Suggestions come from the picked actor's model; a wired Actor is only known in play.
+            const actorPin = node.inputs.find(p => p.name === 'Actor' && p.dataType === 'Object');
+            const actorId = actorPin && !connectedPinIds.has(actorPin.id) ? fieldText(data[keyOf(actorPin)]).trim() : '';
+            const morphs = actorId && morphTargetsOf ? morphTargetsOf(actorId) : null;
+            const morph = text.trim();
+            return (
+                <>
+                    <SuggestField id={fieldId(pin)} value={text} options={morphs ?? []} placeholder="morph target name" onChange={(name) => setDefault(pin, name)} />
+                    {morph === ''
+                        ? <Warning>No morph target; this node changes nothing.</Warning>
+                        : morphs && morphs.length > 0 && !morphs.includes(morph) && <Warning>This actor's model has no morph target named "{morph}".</Warning>}
+                    {morphs && morphs.length === 0 && <div className="text-[10px] text-gray-500">This actor's model has no morph targets.</div>}
+                </>
+            );
+        }
+
+        if (node.type === 'SetMorphTarget' && pin.name === 'Weight') {
+            return (
+                <>
+                    <input id={fieldId(pin)} type="number" min="0" max="1" step="0.05" value={text} onChange={(e) => setDefault(pin, parseNumberField(e.target.value, false))} placeholder="unset" className={FIELD_CLASS} />
+                    <div className="text-[10px] text-gray-500">0 is off, 1 is the full shape; other values are clamped.</div>
+                </>
+            );
+        }
+
         if (pin.dataType === 'Object') {
-            const missing = text !== '' && !levelObjects.some(obj => obj.id === text);
+            // Set Morph Target can also reach the player character, which is not a level actor.
+            const offersPlayer = node.type === 'SetMorphTarget';
+            const isPlayer = offersPlayer && text === PLAYER_ACTOR_ID;
+            const missing = text !== '' && !isPlayer && !levelObjects.some(obj => obj.id === text);
+            const actorName = (id: string) => offersPlayer && id === PLAYER_ACTOR_ID ? 'Player' : levelObjects.find(obj => obj.id === id)?.name;
             return (
                 <>
                     <select
                         id={fieldId(pin)}
                         value={text}
-                        onChange={(e) => setDefault(pin, e.target.value, titled(levelObjects.find(obj => obj.id === e.target.value)?.name))}
+                        onChange={(e) => setDefault(pin, e.target.value, titled(actorName(e.target.value)))}
                         className={FIELD_CLASS}
                     >
                         <option value="">-- None --</option>
+                        {offersPlayer && <option value={PLAYER_ACTOR_ID}>Player character</option>}
                         {missing && <option value={text} disabled>Missing actor</option>}
                         {levelObjects.map(obj => <option key={obj.id} value={obj.id}>{describeActor(obj)}</option>)}
                     </select>
                     {missing && <Warning>Missing actor: it was deleted.</Warning>}
+                    {offersPlayer && text === '' && <Warning>No actor; this node changes nothing.</Warning>}
                 </>
             );
         }
@@ -441,6 +532,9 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
     prefabs = [],
     audioAssets = [],
     levelVariables = [],
+    animationClips = [],
+    playerBones = [],
+    morphTargetsOf,
     connectedPinIds = NO_CONNECTIONS,
     onDelete
 }) => {
@@ -558,6 +652,41 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                                 placeholder="Enter message..."
                             />
                         </div>
+                    </div>
+                )}
+
+                {/* Specific: Event (Animation Notify) */}
+                {node.type === 'Event' && node.name === 'Event TimelineEvent' && (
+                    <div className="space-y-1">
+                        <label className="text-[10px] text-gray-400">Event name (empty: any timeline event)</label>
+                        <input
+                            value={typeof node.data?.eventName === 'string' ? node.data.eventName : ''}
+                            onChange={(e) => onUpdate({ data: { ...(node.data || {}), eventName: e.target.value } })}
+                            className="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-red-500"
+                            placeholder="e.g. DoorOpened"
+                        />
+                    </div>
+                )}
+
+                {node.type === 'Event' && node.name === 'Event AnimNotify' && (
+                    <div className="space-y-1">
+                        <label className="text-[10px] text-gray-400">Notify name (empty: any notify)</label>
+                        <input
+                            value={typeof node.data?.notifyName === 'string' ? node.data.notifyName : ''}
+                            onChange={(e) => onUpdate({ data: { ...(node.data || {}), notifyName: e.target.value } })}
+                            className="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-red-500"
+                            placeholder="e.g. Footstep"
+                        />
+                        <label className="text-[10px] text-gray-400">Raised by</label>
+                        <select
+                            value={node.data?.notifySource === 'enemies' ? 'enemies' : node.data?.notifySource === 'any' ? 'any' : 'player'}
+                            onChange={(e) => onUpdate({ data: { ...(node.data || {}), notifySource: e.target.value } })}
+                            className="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-red-500"
+                        >
+                            <option value="player">Player</option>
+                            <option value="enemies">Enemies</option>
+                            <option value="any">Anyone</option>
+                        </select>
                     </div>
                 )}
 
@@ -713,6 +842,9 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                         prefabs={prefabs}
                         audioAssets={audioAssets}
                         levelVariables={levelVariables}
+                        animationClips={animationClips}
+                        playerBones={playerBones}
+                        morphTargetsOf={morphTargetsOf}
                         connectedPinIds={connectedPinIds}
                     />
                 )}

@@ -163,6 +163,112 @@ jobs:
       - name: Build locked desktop player
         run: cargo +1.98.0 build --release --locked
 
+  desktop-player-linux:
+    name: Desktop game player (ubuntu-latest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: player-desktop
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install WebKitGTK 4.1 and libsoup 3 development packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libdbus-1-dev
+
+      - name: Select pinned Rust toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt
+
+      - name: Check player formatting
+        run: cargo +1.98.0 fmt -- --check
+
+      - name: Run locked player tests
+        run: cargo +1.98.0 test --locked
+
+      - name: Build locked Linux game player
+        run: cargo +1.98.0 build --release --locked
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Stage the player with its third-party notices
+        working-directory: .
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: |
+          mkdir -p player-desktop/dist/linux-x64
+          cp player-desktop/target/release/auvra-player player-desktop/dist/linux-x64/auvra-player
+          chmod 0755 player-desktop/dist/linux-x64/auvra-player
+          file player-desktop/dist/linux-x64/auvra-player
+          python -m release.notices rust --strict --manifest-dir player-desktop --target x86_64-unknown-linux-gnu --output player-desktop/dist/linux-x64/THIRD_PARTY_NOTICES.txt
+
+      - name: Upload Linux game player
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: auvra-player-linux-x64
+          path: player-desktop/dist/linux-x64/
+          if-no-files-found: error
+
+  desktop-player-macos:
+    name: Desktop game player (macos-latest)
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: player-desktop
+    env:
+      # Matches LSMinimumSystemVersion in the Info.plist of exported macOS games.
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Select pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt
+          rustup target add --toolchain 1.98.0 x86_64-apple-darwin aarch64-apple-darwin
+
+      - name: Check player formatting
+        run: cargo +1.98.0 fmt -- --check
+
+      - name: Run locked player tests
+        run: cargo +1.98.0 test --locked
+
+      - name: Build locked macOS game player for x86_64 and arm64
+        run: |
+          cargo +1.98.0 build --release --locked --target x86_64-apple-darwin
+          cargo +1.98.0 build --release --locked --target aarch64-apple-darwin
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Stage the universal player with its third-party notices
+        working-directory: .
+        env:
+          RUSTUP_TOOLCHAIN: 1.98.0
+        run: |
+          mkdir -p player-desktop/dist/macos
+          lipo -create -output player-desktop/dist/macos/auvra-player player-desktop/target/x86_64-apple-darwin/release/auvra-player player-desktop/target/aarch64-apple-darwin/release/auvra-player
+          lipo player-desktop/dist/macos/auvra-player -verify_arch x86_64 arm64
+          # Ad-hoc sign every slice; Apple silicon refuses to run unsigned code.
+          codesign --force --sign - player-desktop/dist/macos/auvra-player
+          codesign --verify --verbose player-desktop/dist/macos/auvra-player
+          chmod 0755 player-desktop/dist/macos/auvra-player
+          lipo -info player-desktop/dist/macos/auvra-player
+          python -m release.notices rust --strict --manifest-dir player-desktop --target x86_64-apple-darwin --target aarch64-apple-darwin --output player-desktop/dist/macos/THIRD_PARTY_NOTICES.txt
+
+      - name: Upload macOS game player
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: auvra-player-macos
+          path: player-desktop/dist/macos/
+          if-no-files-found: error
+
   native-project-smoke:
     name: Native project lifecycle (Windows WebView2)
     runs-on: windows-latest
@@ -218,6 +324,7 @@ jobs:
   release-dev-msix:
     name: Clean Windows unsigned dev MSIX
     runs-on: windows-latest
+    needs: [desktop-player-linux, desktop-player-macos]
     permissions:
       contents: read
     steps:
@@ -249,6 +356,18 @@ jobs:
       - name: Build locked Windows game player
         working-directory: player-desktop
         run: cargo +1.98.0 build --release --locked
+
+      - name: Download Linux game player
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: auvra-player-linux-x64
+          path: player-desktop/dist/linux-x64
+
+      - name: Download macOS game player
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: auvra-player-macos
+          path: player-desktop/dist/macos
 
       - name: Set up CPython and locked host environment
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -300,7 +419,7 @@ jobs:
           $developmentSuffixes = '.pyc', '.pdb', '.ilk', '.obj', '.lib', '.exp', '.map', '.log', '.dmp', '.dump'
           Get-ChildItem -LiteralPath $site -File -Recurse | Where-Object { $developmentSuffixes -contains $_.Extension.ToLowerInvariant() } | Remove-Item -Force
           $stage = Join-Path $env:RUNNER_TEMP 'auvra-stage-inputs'
-          pwsh -NoProfile -File release/stage_inputs.ps1 -Frontend (Join-Path $env:GITHUB_WORKSPACE 'fbx-viewer (1)\dist') -PythonEmbed (Join-Path $env:AUVRA_RUNTIME 'python-embed') -PythonSitePackages $site -WebView2Sdk $env:AUVRA_SDK -WebView2Fixed (Join-Path $env:AUVRA_RUNTIME 'webview2-fixed') -NativeBinary (Join-Path $env:GITHUB_WORKSPACE 'native\target\release\auvra-native.exe') -GamePlayerBinary (Join-Path $env:GITHUB_WORKSPACE 'player-desktop\target\release\auvra-player.exe') -HostInput $hostInput -Licenses $licenses -Output $stage
+          pwsh -NoProfile -File release/stage_inputs.ps1 -Frontend (Join-Path $env:GITHUB_WORKSPACE 'fbx-viewer (1)\dist') -PythonEmbed (Join-Path $env:AUVRA_RUNTIME 'python-embed') -PythonSitePackages $site -WebView2Sdk $env:AUVRA_SDK -WebView2Fixed (Join-Path $env:AUVRA_RUNTIME 'webview2-fixed') -NativeBinary (Join-Path $env:GITHUB_WORKSPACE 'native\target\release\auvra-native.exe') -GamePlayerBinary (Join-Path $env:GITHUB_WORKSPACE 'player-desktop\target\release\auvra-player.exe') -LinuxGamePlayerBinary (Join-Path $env:GITHUB_WORKSPACE 'player-desktop\dist\linux-x64\auvra-player') -MacGamePlayerBinary (Join-Path $env:GITHUB_WORKSPACE 'player-desktop\dist\macos\auvra-player') -HostInput $hostInput -Licenses $licenses -Output $stage
           "AUVRA_STAGE=$stage" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Assemble and MakeAppx-validate unsigned dev package

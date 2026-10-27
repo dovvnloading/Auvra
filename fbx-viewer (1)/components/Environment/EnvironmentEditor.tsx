@@ -6,6 +6,8 @@ import { EnvironmentViewport } from './EnvironmentViewport';
 import { LevelGameLoop } from './LevelGameLoop';
 import { EnvironmentToolbar } from './layout/EnvironmentToolbar';
 import { EnvironmentInspector } from './layout/EnvironmentInspector';
+// Attaches the Script and Timeline component Inspectors (editor only).
+import './componentInspectors';
 import { useEnvironmentState } from './hooks/useEnvironmentState';
 import { useEnvironmentHotkeys } from './hooks/useEnvironmentHotkeys';
 import { LevelBlueprintEditor } from '../LevelBlueprint/LevelBlueprintEditor';

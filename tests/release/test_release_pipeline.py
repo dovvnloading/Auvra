@@ -5,6 +5,7 @@ import hashlib
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -13,11 +14,19 @@ from unittest import mock
 import xml.etree.ElementTree as ET
 
 from Auvra.project.schemas import DOMAIN_NAMES, PROJECT_SCHEMA_NAME
-from release import pipeline
+from release import notices, pipeline
 from release.asset_cooking import cook_assets
 from release.cross_backend import verify_cross_backend
 from release.lifecycle import LifecycleState
-from release.pipeline import ReleaseError, assemble, sign_msix, verify_package, write_input_inventory
+from release.pipeline import (
+    ReleaseError,
+    assemble,
+    canonical_json,
+    executable_format,
+    sign_msix,
+    verify_package,
+    write_input_inventory,
+)
 from release.runtime_verify import (
     HOST_SCHEMA_FILES,
     PROJECT_SCHEMA_NAMES,
@@ -34,6 +43,37 @@ def _notices(title: str, component: str) -> bytes:
     """A minimal staged notices file in the release.notices entry format."""
     rule = "=" * 78
     return f"{title}\n\n{rule}\n{component}\n{rule}\n\nPermission is hereby granted, free of charge.\n".encode("utf-8")
+
+
+# Release builds embed toolchain source paths (panic locations), which the
+# content scan rejects in text files; the players must still be accepted.
+BUILD_PATH = b"\x00/home/runner/.cargo/registry/src/index.crates.io-0000/tao-0.37.2/src/lib.rs\x00"
+
+
+def _elf(machine: int = 0x3E, elf_class: int = 2) -> bytes:
+    """A minimal ELF header: 64-bit little-endian x86-64 by default."""
+    return b"\x7fELF" + bytes((elf_class, 1, 1)) + bytes(9) + struct.pack("<HH", 3, machine) + bytes(44) + BUILD_PATH
+
+
+def _universal_macho(*cpus: int) -> bytes:
+    """A minimal Mach-O fat header, x86_64 and arm64 slices by default."""
+    slices = cpus or (0x01000007, 0x0100000C)
+    header = struct.pack(">II", 0xCAFEBABE, len(slices))
+    for index, cpu in enumerate(slices):
+        header += struct.pack(">IIIII", cpu, 0, 4096 * (index + 1), 16, 12)
+    return header + BUILD_PATH
+
+
+def stage_platform_players(staged: Path) -> None:
+    """Stage the optional Linux and macOS players as the CI artifacts provide them."""
+    for directory, binary, component in (
+        ("linux-x64", _elf(), "webkit2gtk@2.0.2 (MIT)"),
+        ("macos", _universal_macho(), "objc2-web-kit@0.3.2 (Zlib OR Apache-2.0 OR MIT)"),
+    ):
+        folder = staged / "game-player" / directory
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "auvra-player").write_bytes(binary)
+        (folder / "THIRD_PARTY_NOTICES.txt").write_bytes(_notices(f"{directory} player crates", component))
 
 
 class ReleasePipelineTests(unittest.TestCase):
@@ -98,6 +138,45 @@ class ReleasePipelineTests(unittest.TestCase):
                 "-Licenses", str(directories["licenses"]), "-Output", str(root / "staged"),
             )
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+
+    @unittest.skipUnless(os.name == "nt", "release wrappers require Windows PowerShell")
+    def test_stage_inputs_wrapper_requires_platform_player_notices(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            directories = {
+                name: root / name
+                for name in (
+                    "frontend", "python-embed", "python-site-packages", "webview2-sdk",
+                    "webview2-fixed", "native", "game-player", "host", "licenses", "linux", "renamed",
+                )
+            }
+            for directory in directories.values():
+                directory.mkdir()
+            native = directories["native"] / "auvra-native.exe"
+            native.write_bytes(b"native")
+            game_player = directories["game-player"] / "auvra-player.exe"
+            game_player.write_bytes(b"player")
+            linux_player = directories["linux"] / "auvra-player"
+            linux_player.write_bytes(_elf())
+            renamed_player = directories["renamed"] / "my-game"
+            renamed_player.write_bytes(_elf())
+            arguments = [
+                "-Frontend", str(directories["frontend"]),
+                "-PythonEmbed", str(directories["python-embed"]),
+                "-PythonSitePackages", str(directories["python-site-packages"]),
+                "-WebView2Sdk", str(directories["webview2-sdk"]),
+                "-WebView2Fixed", str(directories["webview2-fixed"]),
+                "-NativeBinary", str(native), "-GamePlayerBinary", str(game_player), "-HostInput", str(directories["host"]),
+                "-Licenses", str(directories["licenses"]),
+            ]
+            missing = self._run_wrapper("stage_inputs.ps1", *arguments, "-Output", str(root / "missing"),
+                                        "-LinuxGamePlayerBinary", str(linux_player))
+            renamed = self._run_wrapper("stage_inputs.ps1", *arguments, "-Output", str(root / "renamed-output"),
+                                        "-MacGamePlayerBinary", str(renamed_player))
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("needs THIRD_PARTY_NOTICES.txt beside it", missing.stdout + missing.stderr)
+        self.assertNotEqual(renamed.returncode, 0)
+        self.assertIn("MacGamePlayerBinary must be auvra-player", renamed.stdout + renamed.stderr)
 
     def staged_inputs(self, root: Path) -> Path:
         staged = root / "inputs"
@@ -278,6 +357,146 @@ class ReleasePipelineTests(unittest.TestCase):
             self.assertTrue((output / "native" / "auvra-native.exe").is_file())
             self.assertTrue((output / "game-player" / "auvra-player.exe").is_file())
             self.assertTrue((output / "release-manifest.json").is_file())
+
+    def test_platform_players_ship_hashed_with_their_notices(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs = self.staged_inputs(root)
+            stage_platform_players(inputs)
+            inventory = write_input_inventory(inputs, root / "inventory.json")
+            staged = {entry["path"]: entry["sha256"] for entry in inventory["inputs"]["game-player"]}
+            for relative in ("linux-x64/auvra-player", "linux-x64/THIRD_PARTY_NOTICES.txt",
+                             "macos/auvra-player", "macos/THIRD_PARTY_NOTICES.txt"):
+                self.assertEqual(staged[relative], hashlib.sha256((inputs / "game-player" / relative).read_bytes()).hexdigest())
+            output = root / "package"
+            manifest = assemble(inputs, output, channel="dev", version="1.0.0")
+            listed = {entry["path"]: entry for entry in manifest["files"]}
+            for relative in ("game-player/linux-x64/auvra-player", "game-player/macos/auvra-player"):
+                self.assertEqual((output / relative).read_bytes(), (inputs / relative).read_bytes())
+                self.assertEqual(listed[relative]["sha256"], hashlib.sha256((output / relative).read_bytes()).hexdigest())
+                notices_file = relative.replace("auvra-player", "THIRD_PARTY_NOTICES.txt")
+                self.assertEqual((output / notices_file).read_bytes(), (inputs / notices_file).read_bytes())
+                self.assertIn(notices_file, listed)
+            self.assertEqual(executable_format(output / "game-player" / "linux-x64" / "auvra-player"), "elf-x86_64")
+            self.assertEqual(executable_format(output / "game-player" / "macos" / "auvra-player"), "macho-universal")
+            text = (output / "THIRD_PARTY_NOTICES.txt").read_text(encoding="utf-8")
+            self.assertEqual(notices.verify_editor_notices(text)["player"], 3)
+            self.assertIn("webkit2gtk@2.0.2 (MIT)", text)
+            self.assertIn("objc2-web-kit@0.3.2 (Zlib OR Apache-2.0 OR MIT)", text)
+            sbom = json.loads((output / "sbom.json").read_text(encoding="utf-8"))
+            licenses = {item.get("purl"): item.get("licenses") for item in sbom["components"]}
+            self.assertEqual(licenses["pkg:cargo/webkit2gtk@2.0.2"], [{"license": {"name": "MIT"}}])
+            self.assertEqual(licenses["pkg:cargo/objc2-web-kit@0.3.2"],
+                             [{"license": {"name": "Zlib OR Apache-2.0 OR MIT"}}])
+            verify_package(output, expected_channel="dev")
+            verify_installed_package(output)
+
+            player = output / "game-player" / "linux-x64" / "auvra-player"
+            player.write_bytes(_elf() + b"tampered")
+            with self.assertRaisesRegex(ReleaseError, "integrity mismatch"):
+                verify_package(output)
+
+    def test_packaged_platform_players_must_keep_their_format_and_notices(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs = self.staged_inputs(root)
+            stage_platform_players(inputs)
+            package = root / "package"
+            assemble(inputs, package, channel="dev", version="1.0.0")
+            manifest_path = package / "release-manifest.json"
+
+            def rewrite(relative: str, data: bytes | None) -> None:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest["files"] = [entry for entry in manifest["files"] if entry["path"] != relative]
+                if data is None:
+                    (package / relative).unlink()
+                else:
+                    (package / relative).write_bytes(data)
+                    manifest["files"].append({"path": relative, "size": len(data),
+                                              "sha256": hashlib.sha256(data).hexdigest()})
+                manifest_path.write_bytes(canonical_json(manifest))
+
+            # Without build paths, so the failure is the format check rather than the content scan.
+            rewrite("game-player/macos/auvra-player", _universal_macho(0x0100000C).replace(BUILD_PATH, b""))
+            with self.assertRaisesRegex(ReleaseError, "game-player/macos/auvra-player is missing or is not a universal"):
+                verify_package(package)
+            rewrite("game-player/macos/auvra-player", _universal_macho())
+            verify_package(package)
+            rewrite("game-player/linux-x64/THIRD_PARTY_NOTICES.txt", None)
+            with self.assertRaisesRegex(ReleaseError, "game-player/linux-x64/THIRD_PARTY_NOTICES.txt is missing"):
+                verify_package(package)
+
+    def test_platform_players_are_optional_but_validated_when_staged(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs = self.staged_inputs(root)
+            manifest = assemble(inputs, root / "windows-only", channel="dev", version="1.0.0")
+            self.assertFalse(any(entry["path"].startswith(("game-player/linux-x64/", "game-player/macos/"))
+                                 for entry in manifest["files"]))
+            self.assertFalse((root / "windows-only" / "game-player" / "macos").exists())
+            stage_platform_players(inputs)
+            linux = inputs / "game-player" / "linux-x64"
+            macos = inputs / "game-player" / "macos"
+            cases = (
+                (linux / "auvra-player", _elf(elf_class=1), "game-player/linux-x64/auvra-player must be a 64-bit"),
+                (linux / "auvra-player", _elf(machine=0xB7), "game-player/linux-x64/auvra-player must be a 64-bit"),
+                (macos / "auvra-player", _elf(), "game-player/macos/auvra-player must be a universal"),
+                (macos / "auvra-player", _universal_macho(0x01000007), "game-player/macos/auvra-player must be a universal"),
+                (linux / "THIRD_PARTY_NOTICES.txt", b"Notices without entries\n", "lists no components"),
+            )
+            for path, data, message in cases:
+                original = path.read_bytes()
+                path.write_bytes(data)
+                with self.assertRaisesRegex(ReleaseError, message):
+                    write_input_inventory(inputs, root / "inventory.json")
+                with self.assertRaisesRegex(ReleaseError, message):
+                    assemble(inputs, root / "package", channel="dev", version="1.0.0")
+                self.assertFalse((root / "package").exists())
+                path.write_bytes(original)
+            exactly = "must contain exactly auvra-player and THIRD_PARTY_NOTICES.txt"
+            extra = linux / "README.txt"
+            extra.write_text("extra", encoding="utf-8")
+            with self.assertRaisesRegex(ReleaseError, exactly):
+                write_input_inventory(inputs, root / "inventory.json")
+            extra.unlink()
+            renamed = (macos / "THIRD_PARTY_NOTICES.txt").rename(macos / "NOTICES.txt")
+            with self.assertRaisesRegex(ReleaseError, exactly):
+                write_input_inventory(inputs, root / "inventory.json")
+            renamed.rename(macos / "THIRD_PARTY_NOTICES.txt")
+            write_input_inventory(inputs, root / "inventory.json")
+
+    def test_only_staged_platform_players_skip_the_text_content_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs = self.staged_inputs(root)
+            stage_platform_players(inputs)
+            (inputs / "host" / "tool").write_bytes(_elf())
+            with self.assertRaisesRegex(ReleaseError, "secret-like or private content in release: host/tool"):
+                assemble(inputs, root / "elsewhere", channel="dev", version="1.0.0")
+            (inputs / "host" / "tool").unlink()
+            (inputs / "game-player" / "linux-x64" / "auvra-player").write_bytes(
+                _elf() + b"api_key='0123456789abcdef0123456789'")
+            with self.assertRaisesRegex(ReleaseError, "secret-like or private content in release: game-player/linux-x64"):
+                assemble(inputs, root / "secret", channel="dev", version="1.0.0")
+
+    def test_executable_format_reads_only_the_supported_headers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "binary"
+            for data, expected in (
+                (_elf(), "elf-x86_64"),
+                (_universal_macho(), "macho-universal"),
+                (_universal_macho(0x0100000C, 0x01000007, 0x00000007), "macho-universal"),
+                (struct.pack(">II", 0xCAFEBABF, 2) + struct.pack(">IIQQII", 0x01000007, 0, 4096, 16, 12, 0)
+                 + struct.pack(">IIQQII", 0x0100000C, 0, 8192, 16, 14, 0), "macho-universal"),
+                (struct.pack(">II", 0xCAFEBABE, 52) + bytes(64), None),  # a Java class file
+                (struct.pack("<I", 0xFEEDFACF) + bytes(28), None),  # a thin Mach-O
+                (b"MZ" + bytes(62), None),
+                (b"", None),
+            ):
+                path.write_bytes(data)
+                self.assertEqual(executable_format(path), expected, data[:12])
+            self.assertIsNone(executable_format(Path(temporary) / "missing"))
+        self.assertEqual(set(pipeline.PLATFORM_PLAYERS), set(notices.PLATFORM_PLAYER_DIRECTORIES))
 
     def test_release_schema_contract_matches_host_schema_modules(self) -> None:
         self.assertEqual(sorted(PROJECT_SCHEMA_NAMES), sorted((*DOMAIN_NAMES, PROJECT_SCHEMA_NAME)))

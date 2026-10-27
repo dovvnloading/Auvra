@@ -1,8 +1,8 @@
-
-
 import { useEffect, useRef, useCallback, useMemo } from 'react';
+import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { AnimationGraphData } from '../../../types';
+import { MontagePlayer, type MontageOptions } from '../utils/montage';
 import { useAnimationMixer } from './useAnimationMixer';
 import { useInputHandler } from './useInputHandler';
 import { useGraphStateMachine } from './useGraphStateMachine';
@@ -37,57 +37,94 @@ export const createNormalizedTimeReader = (
     };
 };
 
+/**
+ * Maps a graph variable's id or name to the key its value is stored under (the id). Anything
+ * else, such as a stat or another external value, is stored under its own name.
+ */
+export const createVariableResolver = (variables: AnimationGraphData['variables']) => {
+    const keys = new Map<string, string>();
+    // Names first, so a variable whose id equals another's name still resolves to itself by id.
+    variables.forEach(variable => { if (!keys.has(variable.name)) keys.set(variable.name, variable.id); });
+    variables.forEach(variable => keys.set(variable.id, variable.id));
+    return (nameOrId: string): string => keys.get(nameOrId) ?? nameOrId;
+};
+
+/** Options for a one-shot animation layered over the graph (see MontagePlayer). */
+export type PlayMontageOptions = MontageOptions;
+
 export const useGraphRuntime = (
     modelObject: THREE.Group,
     graph: AnimationGraphData,
     allClips: THREE.AnimationClip[],
     enableInputs: boolean,
     onActiveStateChange?: (id: string) => void,
-    driveLocomotion: boolean = true
+    driveLocomotion: boolean = true,
+    eventSource: string | null = null
 ) => {
-    
-    // 1. Central Data Store for Variables
+
+    // 1. Central Data Store for Variables, keyed by variable id.
     const variablesRef = useRef<Record<string, number | boolean>>({});
-    
-    // Sync initial variables from graph definition
+    const resolve = useMemo(() => createVariableResolver(graph.variables), [graph.variables]);
+    const resolveRef = useRef(resolve);
+    resolveRef.current = resolve;
+    const knownIdsRef = useRef<Set<string>>(new Set());
+
+    // Seed new variables with their initial value and forget deleted ones.
     useEffect(() => {
+        const ids = new Set(graph.variables.map(v => v.id));
+        knownIdsRef.current.forEach(id => { if (!ids.has(id)) delete variablesRef.current[id]; });
         graph.variables.forEach(v => {
-            if (variablesRef.current[v.id] === undefined) {
-                variablesRef.current[v.id] = v.value;
-            }
+            if (variablesRef.current[v.id] === undefined) variablesRef.current[v.id] = v.value;
         });
+        knownIdsRef.current = ids;
     }, [graph.variables]);
 
-    // Setter API
     const setVariable = useCallback((nameOrId: string, value: number | boolean) => {
-        // Try to resolve Name -> ID
-        const variableByName = graph.variables.find(v => v.name === nameOrId);
-        
-        if (variableByName) {
-            // It's a graph variable, store by ID
-            variablesRef.current[variableByName.id] = value;
-        } else {
-            // It's a Virtual Variable (Stat/External), store by Name
-            variablesRef.current[nameOrId] = value;
-        }
-    }, [graph.variables]);
+        variablesRef.current[resolveRef.current(nameOrId)] = value;
+    }, []);
 
-    const getVariable = useCallback((name: string) => {
-        // 1. Try Graph Variable (ID lookup)
-        const variable = graph.variables.find(v => v.name === name);
-        if (variable) {
-            return variablesRef.current[variable.id];
-        }
-        // 2. Try Virtual Variable (Direct Name lookup)
-        return variablesRef.current[name];
-    }, [graph.variables]);
-    
+    const getVariable = useCallback((nameOrId: string) => variablesRef.current[resolveRef.current(nameOrId)], []);
+
     const getVariables = useCallback(() => ({ ...variablesRef.current }), []);
 
     // 2. Sub-System Hooks (Separation of Concerns)
-    
+
     // -- Graphics: Handles Three.js resources
-    const { mixer, actionsMap } = useAnimationMixer(modelObject, allClips);
+    const rootMotionClipNames = useMemo(
+        () => graph.states.filter(state => state.rootMotion && state.stateType === 'Single' && state.clipName).map(state => state.clipName as string),
+        [graph.states]
+    );
+    const { mixer, actionsMap, clipsByName, rootMotions } = useAnimationMixer(modelObject, allClips, rootMotionClipNames);
+
+    // -- One-shot layered animations
+    const montageRef = useRef<MontagePlayer | null>(null);
+    useEffect(() => {
+        if (!mixer || !modelObject) return;
+        const player = new MontagePlayer(mixer, modelObject);
+        montageRef.current = player;
+        return () => {
+            player.dispose();
+            if (montageRef.current === player) montageRef.current = null;
+        };
+    }, [mixer, modelObject]);
+
+    const clipsByNameRef = useRef(clipsByName);
+    clipsByNameRef.current = clipsByName;
+    const playMontage = useCallback((clipName: string, options: PlayMontageOptions = {}): boolean => {
+        const clip = clipsByNameRef.current[clipName];
+        if (!clip || !montageRef.current) return false;
+        montageRef.current.play(clip, options);
+        return true;
+    }, []);
+    const stopMontage = useCallback((blendOut?: number) => { montageRef.current?.stop(blendOut); }, []);
+
+    // -- Root motion: travel accumulates until the owner of the transform consumes it.
+    const rootMotionRef = useRef(new THREE.Vector3());
+    const consumeRootMotion = useCallback((out: THREE.Vector3 = new THREE.Vector3()) => {
+        out.copy(rootMotionRef.current);
+        rootMotionRef.current.set(0, 0, 0);
+        return out;
+    }, []);
 
     // -- Logic: Handles State Machine Transitions
     // A fresh reader whenever the states or clips change, so a live edit's clip reset is not read as a loop wrap.
@@ -101,7 +138,31 @@ export const useGraphRuntime = (
     useGraphLocomotion(modelObject, graph, variablesRef, driveLocomotion);
 
     // -- Animation: Handles Weight Blending & Playback
-    useGraphAnimator(mixer, actionsMap, graph, activeStateRef, previousStateRef, variablesRef, blendDurationRef);
+    useGraphAnimator(mixer, actionsMap, graph, activeStateRef, previousStateRef, variablesRef, blendDurationRef, modelObject, {
+        montage: montageRef,
+        rootMotions,
+        rootMotionOut: rootMotionRef,
+        eventSource,
+    });
 
-    return { setVariable, getVariable, getVariables };
+    // Without a character controller (the editor preview) the graph applies its own root motion.
+    useFrame(() => {
+        if (!driveLocomotion || !modelObject || rootMotionRef.current.lengthSq() === 0) return;
+        const parent = modelObject.parent;
+        const travel = consumeRootMotion();
+        if (parent) {
+            const start = parent.worldToLocal(modelObject.getWorldPosition(new THREE.Vector3()));
+            const end = parent.worldToLocal(modelObject.getWorldPosition(new THREE.Vector3()).add(travel));
+            modelObject.position.add(end.sub(start));
+        } else {
+            modelObject.position.add(travel);
+        }
+    });
+
+    const getActiveState = useCallback(() => {
+        const id = activeStateRef.current;
+        return graph.states.find(state => state.id === id) ?? null;
+    }, [activeStateRef, graph.states]);
+
+    return { setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, getActiveState };
 };

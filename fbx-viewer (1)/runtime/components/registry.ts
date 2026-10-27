@@ -1,21 +1,47 @@
+import type React from 'react';
 import type { LevelComponent } from '../../types';
 import { BUILTIN_COMPONENTS } from './builtins';
 import { AUDIO_COMPONENTS } from './audioComponents';
+import { AUDIO_ZONE_COMPONENTS } from './audioZones';
+import { DECAL_COMPONENT } from './decalComponent';
 import { PARTICLES_COMPONENT } from './particles';
+import { IK_COMPONENTS } from './ikComponents';
+import { JOINT_COMPONENTS } from './jointComponents';
+import { LOD_COMPONENTS } from './lodComponents';
 import { PHYSICS_COMPONENTS } from './physicsComponents';
-import type { ComponentDefinition } from './types';
+import { POST_PROCESS_COMPONENT } from './postProcess';
+import { SCRIPT_COMPONENT } from './scriptComponent';
+import { TIMELINE_COMPONENT } from './timelineComponent';
+import type { ComponentDefinition, ComponentInspectorProps } from './types';
 
 /** Every component type an object can carry, in the order the inspector offers them. */
 export const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
     ...BUILTIN_COMPONENTS,
     ...PHYSICS_COMPONENTS,
+    ...JOINT_COMPONENTS,
     PARTICLES_COMPONENT,
+    DECAL_COMPONENT,
     ...AUDIO_COMPONENTS,
+    ...AUDIO_ZONE_COMPONENTS,
+    POST_PROCESS_COMPONENT,
+    ...LOD_COMPONENTS,
+    ...IK_COMPONENTS,
+    SCRIPT_COMPONENT,
+    TIMELINE_COMPONENT,
 ];
 
 /** The definition for a stored component type, or undefined for a type this build does not know. */
 export const getComponentDefinition = (type: string): ComponentDefinition | undefined =>
     COMPONENT_DEFINITIONS.find(definition => definition.type === type);
+
+/**
+ * Attaches an editor Inspector to a component type. Inspectors are editor UI, so they are registered
+ * from the editor (components/Environment/componentInspectors.ts) and never reach the game player's bundle.
+ */
+export const registerComponentInspector = (type: string, Inspector: React.FC<ComponentInspectorProps>): void => {
+    const definition = getComponentDefinition(type);
+    if (definition) definition.Inspector = Inspector;
+};
 
 /** A new, enabled component of `type` with every property at its default. */
 export const createComponent = (type: string): LevelComponent => {

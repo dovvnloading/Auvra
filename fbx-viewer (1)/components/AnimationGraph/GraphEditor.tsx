@@ -1,10 +1,11 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback, useRef } from 'react';
 import { BoxSelect, Network, Component, FileCode, Settings } from 'lucide-react';
-import { GraphPreview } from './GraphPreview';
+import { GraphPreview, type PreviewStatus } from './GraphPreview';
 import { BlackboardPanel } from './BlackboardPanel';
 import { InspectorPanel } from './InspectorPanel';
-import { GraphCanvas } from './GraphCanvas';
+import { GraphCanvas, type FiredTransition } from './GraphCanvas';
+import type { GraphRuntimeAPI } from './GraphRuntime';
 import { Select } from '../UI/Select';
 import { useGraphContext } from './hooks/useGraphContext';
 import { useGraphHistory } from './hooks/useGraphHistory';
@@ -42,9 +43,35 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
   });
   const { updateGraphWithHistory } = history;
 
+  // --- Live debugging: what the preview runtime reports ---
+  // Reports are tagged with the graph they came from, so after switching context nothing from the
+  // previous graph shows until the new run reports its entry state.
+  const contextKey = `${contextType}:${selectedContextId ?? ''}`;
+  const contextKeyRef = useRef(contextKey);
+  contextKeyRef.current = contextKey;
+  const previewApiRef = useRef<GraphRuntimeAPI | undefined>(undefined);
+  const [previewStatus, setPreviewStatus] = useState<PreviewStatus>('no-mesh');
+  const [liveActive, setLiveActive] = useState<{ key: string; id: string } | null>(null);
+  const [lastFired, setLastFired] = useState<{ key: string; fired: FiredTransition } | null>(null);
+  const firedSeqRef = useRef(0);
+
+  const handleActiveStateChange = useCallback((id: string) => {
+      setLiveActive({ key: contextKeyRef.current, id });
+  }, []);
+
+  const handleTransitionFired = useCallback((id: string) => {
+      firedSeqRef.current += 1;
+      setLastFired({ key: contextKeyRef.current, fired: { id, seq: firedSeqRef.current } });
+  }, []);
+
+  const previewRunning = visible && previewStatus !== 'no-mesh';
+  const liveActiveStateId = previewRunning && liveActive?.key === contextKey ? liveActive.id : null;
+  const firedTransition = previewRunning && lastFired?.key === contextKey ? lastFired.fired : null;
+
   const handleDeleteState = (id: string) => {
       const updatedStates = currentGraph.states.filter(s => s.id !== id);
-      const updatedTrans = currentGraph.transitions.filter(t => t.fromStateId !== id && t.toStateId !== id);
+      // An any-state transition belongs to its target only; its stored source is not a real link.
+      const updatedTrans = currentGraph.transitions.filter(t => t.toStateId !== id && (t.anyState || t.fromStateId !== id));
       updateGraphWithHistory('', { states: updatedStates, transitions: updatedTrans });
       setSelectedNodeId(null);
   };
@@ -123,6 +150,8 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
                             graph={currentGraph} 
                             modelId={selectedContextId}
                             updateGraph={updateGraphWithHistory}
+                            runtime={previewApiRef}
+                            live={previewRunning}
                         />
                     )}
                     {activeSidebarTab === 'inspector' && (
@@ -151,16 +180,17 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
             <>
                 {/* Live Preview */}
                 <div className="h-[45%] bg-black relative border-b-4 border-gray-800 shadow-2xl z-20">
-                    <div className="absolute top-4 left-4 z-10 bg-gray-900/80 backdrop-blur px-3 py-1.5 rounded-full text-[10px] font-bold text-green-400 border border-gray-700 flex items-center gap-2 shadow-lg">
-                        <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                        LIVE PREVIEW {previewModel ? `(${previewModel.name})` : '(No Mesh Linked)'}
-                    </div>
-                    
                     {visible && (
                         <GraphPreview 
                             graph={currentGraph}
-                            model={previewModel}
+                            model={previewModel ?? null}
                             allClips={previewClips} 
+                            controls
+                            apiRef={previewApiRef}
+                            onActiveStateChange={handleActiveStateChange}
+                            onTransitionFired={handleTransitionFired}
+                            onStatusChange={setPreviewStatus}
+                            resetKey={contextKey}
                         />
                     )}
                 </div>
@@ -180,6 +210,8 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
                     selectedNodeId={selectedNodeId}
                     onSelectNode={handleSelectNode}
                     availableClips={allSceneClips}
+                    activeStateId={liveActiveStateId}
+                    firedTransition={firedTransition}
                 />
             </>
           ) : (
