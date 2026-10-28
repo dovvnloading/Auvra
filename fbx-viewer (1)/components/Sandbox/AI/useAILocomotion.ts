@@ -1,8 +1,9 @@
-import { useRef, useMemo } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
 import * as THREE from 'three';
 import { AI_CONFIG, AIState, AITuning, DEFAULT_AI_TUNING } from './AIConfig';
 import { usesPathfinding } from './AIStateMachine';
 import { advanceWaypoint, useNavMeshContext, type LevelNavMesh } from '../../../runtime/navigation';
+import type { NavAgent } from '../../../runtime/navMesh';
 import { PLAYER_PHYSICS_ID, usePhysicsQueries } from '../../../runtime/physics';
 
 interface LocomotionInput {
@@ -63,6 +64,14 @@ export const useAILocomotion = () => {
   const vNext = useMemo(() => new THREE.Vector3(), []);
   const vRay = useMemo(() => new THREE.Vector3(), []);
   const vDown = useMemo(() => new THREE.Vector3(0, -1, 0), []);
+
+  // This agent in the navmesh's crowd, which keeps agents from walking into each other.
+  const crowd = useRef<{ navMesh: LevelNavMesh | null; agent: NavAgent | null; at: THREE.Vector3 }>({ navMesh: null, agent: null, at: new THREE.Vector3() });
+  useEffect(() => () => {
+    crowd.current.agent?.remove();
+    crowd.current.agent = null;
+    crowd.current.navMesh = null;
+  }, []);
 
   const navigation = useRef<PathState>({
     navMesh: null,
@@ -264,11 +273,28 @@ export const useAILocomotion = () => {
     }
 
     // 5. Apply Position
-    // On a navmesh the move slides along walls, stops at ledges and follows the surface's height (still
-    // standing, it keeps the agent on the surface); off it, the agent moves freely.
+    // On a navmesh the agent moves in its crowd: at the velocity asked for, bent away from other agents,
+    // sliding along walls and stopping at ledges (still standing, it keeps the agent on the surface).
+    // Without a place in the crowd it moves over the navmesh alone; off the navmesh, freely.
     vNext.copy(enemyObject.position);
-    if (physics.current.currentSpeed > 0.01) vNext.addScaledVector(moveVector, physics.current.currentSpeed * delta);
-    const kept = navMesh ? navMesh.moveAlongSurface(enemyObject.position, vNext) : null;
+    const speed = physics.current.currentSpeed > 0.01 ? physics.current.currentSpeed : 0;
+    if (speed > 0) vNext.addScaledVector(moveVector, speed * delta);
+    const place = crowd.current;
+    if (place.navMesh !== navMesh) {
+        place.agent?.remove();
+        place.agent = navMesh ? navMesh.addAgent(enemyObject.position, tuning.runSpeed * 1.5) : null;
+        place.navMesh = navMesh;
+        place.at.copy(enemyObject.position);
+    }
+    let kept: THREE.Vector3 | null = null;
+    if (navMesh && place.agent) {
+        // Moved by something other than the crowd (spawned, knocked back): it carries on from there.
+        if (Math.hypot(enemyObject.position.x - place.at.x, enemyObject.position.z - place.at.z) > 0.5) place.agent.teleport(enemyObject.position);
+        kept = place.agent.position();
+        place.agent.move({ x: moveVector.x * speed, z: moveVector.z * speed }, tuning.runSpeed * 1.5);
+    } else if (navMesh) {
+        kept = navMesh.moveAlongSurface(enemyObject.position, vNext);
+    }
     if (kept && navMesh) {
         // The navmesh is only flat between its polygons' corners; the physics ground under the agent
         // (terrain, floors, ramps, stairs) gives its exact height, a step up or down at most.
@@ -278,6 +304,7 @@ export const useAILocomotion = () => {
         if (ground) kept.y = ground.point.y;
     }
     enemyObject.position.copy(kept ?? vNext);
+    place.at.copy(enemyObject.position);
 
     // 6. Calculate Local Graph Variables (InputX / InputY)
     // Project world moveVector onto local Forward/Right axis

@@ -451,9 +451,9 @@ interface LevelSessionProps {
  * One play session of a level. Mounted under a group keyed by the session key, so a restart or a load
  * starts from a fresh runtime copy: BeginPlay, overlaps, spawner counts and spawned enemies all reset.
  */
-/** Applies moving obstacles to the navmesh each frame. */
+/** Steps the navmesh's crowd and applies moving obstacles each frame, before the agents move. */
 const NavMeshUpdater: React.FC<{ navMesh: LevelNavMesh | null }> = ({ navMesh }) => {
-    useFrame(() => { navMesh?.update(); });
+    useFrame((_state, delta) => { navMesh?.update(delta); });
     return null;
 };
 

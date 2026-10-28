@@ -51,6 +51,8 @@ const simulate = (navMesh: LevelNavMesh, start: Vec3, destination: Vec3, state: 
   const target = new THREE.Vector3(...destination);
   const trail: THREE.Vector3[] = [];
   for (let frame = 0; frame < frames; frame++) {
+    // As the level's navmesh updater does: the crowd steps before the agents move.
+    navMesh.update(FRAME);
     result.current.updateLocomotion({
       enemyObject: enemy,
       destination: target.clone(),
@@ -132,5 +134,70 @@ describe('AI locomotion over the navmesh', () => {
     for (const point of trail) expect(Math.abs(point.x) > 0.5 || Math.abs(point.z) > 6).toBe(true);
     expect(enemy.position.distanceTo(new THREE.Vector3(5, 0, 0))).toBeLessThan(2.2);
     navMesh.dispose();
+  });
+
+  describe('in a crowd', () => {
+    /** Runs several agents together, each toward its own destination; returns where each was every frame. */
+    const simulateCrowd = (navMesh: LevelNavMesh, agents: { start: Vec3; destination: Vec3; state: AIState }[], frames: number) => {
+      const runs = agents.map(({ start, destination, state }) => {
+        const { result } = renderHook(() => useAILocomotion());
+        const enemy = new THREE.Object3D();
+        enemy.position.set(...start);
+        return { result, enemy, target: new THREE.Vector3(...destination), state, trail: [] as THREE.Vector3[] };
+      });
+      for (let frame = 0; frame < frames; frame++) {
+        navMesh.update(FRAME);
+        for (const run of runs) {
+          run.result.current.updateLocomotion({
+            enemyObject: run.enemy,
+            destination: run.target.clone(),
+            targetFocus: run.state === 'CHASE' ? run.target.clone() : null,
+            state: run.state,
+            delta: FRAME,
+            navMesh,
+          });
+          run.trail.push(run.enemy.position.clone());
+        }
+      }
+      return runs;
+    };
+    const apart = (a: THREE.Vector3, b: THREE.Vector3) => Math.hypot(a.x - b.x, a.z - b.z);
+
+    it('keeps agents heading for the same spot from standing in each other', () => {
+      const navMesh = bake([]);
+      // All from the same side: alone, each would stop on the same spot just short of it.
+      const [a, b, c] = simulateCrowd(navMesh, [
+        { start: [-6, 0, -0.3], destination: [0, 0, 0], state: 'PATROL' },
+        { start: [-7, 0, 0.3], destination: [0, 0, 0], state: 'PATROL' },
+        { start: [-8, 0, 0], destination: [0, 0, 0], state: 'PATROL' },
+      ], 600);
+      for (const [p, q] of [[a, b], [b, c], [a, c]]) expect(apart(p.enemy.position, q.enemy.position)).toBeGreaterThan(0.6);
+      for (const run of [a, b, c]) expect(apart(run.enemy.position, new THREE.Vector3())).toBeLessThan(2.5);
+      navMesh.dispose();
+    });
+
+    it('lets agents walking at each other pass without walking through each other', () => {
+      const navMesh = bake([]);
+      const [a, b] = simulateCrowd(navMesh, [
+        { start: [-8, 0, 0], destination: [8, 0, 0], state: 'PATROL' },
+        { start: [8, 0, 0], destination: [-8, 0, 0], state: 'PATROL' },
+      ], 900);
+      let closest = Infinity;
+      for (let i = 0; i < a.trail.length; i++) closest = Math.min(closest, apart(a.trail[i], b.trail[i]));
+      expect(closest).toBeGreaterThan(0.55);
+      expect(a.enemy.position.x).toBeGreaterThan(5);
+      expect(b.enemy.position.x).toBeLessThan(-5);
+      navMesh.dispose();
+    });
+
+    it('pushes an idle agent aside rather than letting others stand inside it', () => {
+      const navMesh = bake([]);
+      const [idle, walker] = simulateCrowd(navMesh, [
+        { start: [0, 0, 0], destination: [0, 0, 0], state: 'IDLE' },
+        { start: [-6, 0, 0], destination: [0, 0, 0], state: 'PATROL' },
+      ], 600);
+      expect(apart(idle.enemy.position, walker.enemy.position)).toBeGreaterThan(0.6);
+      navMesh.dispose();
+    });
   });
 });

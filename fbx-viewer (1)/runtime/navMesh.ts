@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import {
+    Crowd,
     Detour,
     NavMeshQuery,
     Raw,
@@ -9,6 +10,7 @@ import {
     importTileCache,
     init,
     statusDetail,
+    type CrowdAgent,
     type NavMesh,
     type Obstacle,
     type TileCache,
@@ -71,8 +73,11 @@ const FAR_SNAP = 25;
 const POLY_FLAG_WALK = 1;
 
 let ready: Promise<void> | null = null;
-/** Loads Recast's WebAssembly, once. */
-export const recastReady = (): Promise<void> => (ready ??= init());
+/**
+ * Loads Recast's WebAssembly, once: from `wasm` when given (a worker bundles it, as a worker cannot
+ * load code in pieces), else loaded on demand.
+ */
+export const recastReady = (wasm?: Parameters<typeof init>[0]): Promise<void> => (ready ??= init(wasm));
 
 const vector = ([x, y, z]: readonly number[]) => ({ x, y, z });
 
@@ -143,6 +148,42 @@ export interface NavObstacleHandle {
     obstacle: Obstacle | null;
 }
 
+// Agents the crowd keeps apart at once; more than that move on their own, without avoidance.
+const MAX_CROWD_AGENTS = 128;
+
+/**
+ * An agent in the navmesh's crowd. It moves at the velocity its owner asks for, which the crowd
+ * bends away from other agents and keeps on the navmesh; overlapping agents are pushed apart.
+ */
+export class NavAgent {
+    constructor(private readonly owner: LevelNavMesh, private readonly agent: CrowdAgent, private readonly rise: number) {}
+
+    /** Asks to move at this velocity (m/s, across the navmesh) from the next crowd step on. */
+    move(velocity: { x: number; z: number }, maxSpeed: number): void {
+        if (!this.owner.owns(this.agent)) return;
+        if (Math.abs(this.agent.maxSpeed - maxSpeed) > 1e-3) this.agent.updateParameters({ maxSpeed });
+        this.agent.requestMoveVelocity({ x: velocity.x, y: 0, z: velocity.z });
+    }
+
+    /** Where the crowd has the agent now (the navmesh's height), or null once it has left the crowd. */
+    position(): THREE.Vector3 | null {
+        if (!this.owner.owns(this.agent)) return null;
+        const { x, y, z } = this.agent.position();
+        return new THREE.Vector3(x, y - this.rise, z);
+    }
+
+    /** Puts the agent somewhere else (moved by something other than the crowd). */
+    teleport(position: NavPoint): void {
+        if (!this.owner.owns(this.agent)) return;
+        const at = this.owner.closestPoint(position);
+        if (at) this.agent.teleport({ x: at.x, y: at.y + this.rise, z: at.z });
+    }
+
+    remove(): void {
+        this.owner.removeAgent(this.agent);
+    }
+}
+
 const destroyRaw = (object: unknown) => {
     try {
         (Raw.Module as unknown as { destroy(object: unknown): void }).destroy(object);
@@ -158,6 +199,8 @@ export class LevelNavMesh {
 
     private readonly query: NavMeshQuery;
     private readonly obstacles = new Set<NavObstacleHandle>();
+    private crowd: Crowd | null = null;
+    private readonly agents = new Set<CrowdAgent>();
     private dirty = false;
     private disposed = false;
 
@@ -337,9 +380,50 @@ export class LevelNavMesh {
         this.dirty = true;
     }
 
-    /** Rebuilds tiles obstacles touched; call once a frame. True when the walkable area changed. */
-    update(): boolean {
-        if (!this.dirty || this.disposed) return false;
+    /**
+     * Adds an agent at `position` to the crowd, which keeps agents from walking into each other;
+     * null when the position is off the navmesh or the crowd is full.
+     */
+    addAgent(position: NavPoint, maxSpeed: number): NavAgent | null {
+        if (this.disposed) return null;
+        const { agentRadius, agentHeight } = this.settings;
+        this.crowd ??= new Crowd(this.navMesh, { maxAgents: MAX_CROWD_AGENTS, maxAgentRadius: agentRadius * 2 });
+        if (this.agents.size >= MAX_CROWD_AGENTS) return null;
+        const start = this.nearest(position, agentRadius + 0.5);
+        if (!start) return null;
+        const agent = this.crowd.addAgent(start.raw, {
+            radius: agentRadius,
+            height: agentHeight,
+            maxSpeed,
+            maxAcceleration: 30,
+            // Others within this range are steered round, and pushed apart when they overlap.
+            collisionQueryRange: agentRadius * 12,
+            pathOptimizationRange: agentRadius * 30,
+            separationWeight: 2,
+        });
+        this.agents.add(agent);
+        return new NavAgent(this, agent, this.rise);
+    }
+
+    /** True while `agent` is in this navmesh's crowd. */
+    owns(agent: CrowdAgent): boolean {
+        return !this.disposed && this.agents.has(agent);
+    }
+
+    removeAgent(agent: CrowdAgent): void {
+        if (!this.owns(agent)) return;
+        this.agents.delete(agent);
+        this.crowd?.removeAgent(agent);
+    }
+
+    /**
+     * Steps the crowd by `dt` seconds and rebuilds tiles obstacles touched; call once a frame. True
+     * when the walkable area changed.
+     */
+    update(dt = 0): boolean {
+        if (this.disposed) return false;
+        if (this.crowd && this.agents.size > 0 && dt > 0) this.crowd.update(Math.min(dt, 0.1));
+        if (!this.dirty) return false;
         const result = this.tileCache.update(this.navMesh);
         if (!result.upToDate) return false;
         this.dirty = false;
@@ -404,6 +488,8 @@ export class LevelNavMesh {
     dispose(): void {
         if (this.disposed) return;
         this.disposed = true;
+        this.agents.clear();
+        this.crowd?.destroy();
         this.query.destroy();
         this.tileCache.destroy();
         this.navMesh.destroy();

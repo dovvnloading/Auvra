@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 
+import RecastWasm from '@recast-navigation/wasm';
 import { bakeNavMeshData, recastReady, type NavBakeInput } from '../runtime/navMesh';
 
 /** Bakes level navmeshes off the main thread (runtime/navigation.ts asks); one bake per request. */
@@ -12,7 +13,7 @@ const scope = self as unknown as DedicatedWorkerGlobalScope;
 scope.onmessage = async (event: MessageEvent<BakeRequest>) => {
     const { id, input } = event.data;
     try {
-        await recastReady();
+        await recastReady(RecastWasm);
         const data = bakeNavMeshData(input);
         scope.postMessage({ id, data } satisfies BakeResponse, [data.buffer as ArrayBuffer]);
     } catch (error) {
