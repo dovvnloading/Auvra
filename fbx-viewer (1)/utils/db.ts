@@ -8,6 +8,7 @@ import { frontendDiagnostics } from '../diagnostics/runtime';
 import { editorSession, type EditorSessionLease } from './editorSession';
 import { sortByHierarchy } from './sceneGraph';
 import { normalizeMaterialOverrides, setMaterialOverrideField, type MaterialOverrides } from './materialOverrides';
+import { MATERIALS_DOMAIN, materialAssetDocument, readMaterialAsset, withoutGraphTexture } from '../runtime/materials/materialLibrary';
 
 const DB_NAME = 'OmniRenderDB';
 
@@ -608,6 +609,21 @@ class DBOperations {
       await this.canonicalChange('textures', 'upsert', assetInfoDocument(id, updates), id);
   }
 
+  /** Deletes a material asset; the model materials it shaded go back to their own shading. */
+  async deleteMaterialAsset(id: string): Promise<void> {
+    this.requireNativeProject();
+    const snapshot = await projectService.getSnapshotAll();
+    const changes: Array<{ domain: string; operation: 'remove' | 'upsert'; id: string; value?: unknown }> = [
+      { domain: MATERIALS_DOMAIN, operation: 'remove', id },
+    ];
+    for (const record of nativeDomainRecords(snapshot, 'models')) {
+      if (!record.materialOverrides) continue;
+      const materialOverrides = withoutMaterialOverrideAsset(record.materialOverrides, id);
+      if (materialOverrides !== record.materialOverrides) changes.push({ domain: 'models', operation: 'upsert', id: record.id, value: { ...record, materialOverrides } });
+    }
+    await projectService.applyChanges(changes);
+  }
+
   async deleteTexture(id: string): Promise<void> {
     this.requireNativeProject();
     const snapshot = await projectService.getSnapshotAll();
@@ -634,6 +650,13 @@ class DBOperations {
       if (record.flashConfig?.textureId === id) changes.push({ domain: 'sockets', operation: 'upsert', id: record.id, value: { ...record, flashConfig: null } });
     }
     for (const record of nativeDomainRecords(snapshot, 'materials')) {
+      // A graph's texture nodes let go of it too, or the asset's next save would name it again.
+      const asset = record.graph ? readMaterialAsset(record) : null;
+      const graph = asset && withoutGraphTexture(asset.graph, id);
+      if (asset && graph && graph !== asset.graph) {
+        changes.push({ domain: 'materials', operation: 'upsert', id: record.id, value: { ...record, ...materialAssetDocument({ ...asset, graph }) } });
+        continue;
+      }
       const textureIds = Array.isArray(record.textureIds) ? record.textureIds.filter((textureId: unknown) => textureId !== id) : [];
       if (textureIds.length !== (record.textureIds || []).length) changes.push({ domain: 'materials', operation: 'upsert', id: record.id, value: { ...record, textureIds } });
     }
@@ -818,7 +841,7 @@ frontendDiagnostics.instrumentClass(DBOperations, 'project_documents', [
   'updateModelTextureOverrides', 'updateModelMaterialOverrides', 'updateModelInfo', 'addModelTextureOverride', 'deleteModel',
   'addAnimations', 'addAttachment', 'updateAttachment', 'deleteAttachment',
   'addSocket', 'updateSocket', 'deleteSocket', 'addLevelObject',
-  'updateLevelObject', 'deleteLevelObject', 'getAllNativeLevelObjects', 'addTexture', 'updateTextureInfo', 'deleteTexture',
+  'updateLevelObject', 'deleteLevelObject', 'getAllNativeLevelObjects', 'addTexture', 'updateTextureInfo', 'deleteTexture', 'deleteMaterialAsset',
   'addAudio', 'updateAudioInfo', 'deleteAudio', 'saveBlueprint', 'deleteBlueprint',
   'getAllPrefabs', 'upsertPrefab', 'deletePrefab',
   'migrateLegacyDatabase', 'clearDatabase', 'deleteEntireDatabase',
@@ -885,6 +908,15 @@ export function normalizeAssetInfoUpdate(updates: AssetInfoUpdate): AssetInfoUpd
  * `overrides` without any texture slot referencing `textureId` (entries left
  * empty are dropped). Returns `overrides` itself when nothing references it.
  */
+/** The overrides with no material shaded by asset `materialId`; the same object when none was. */
+export function withoutMaterialOverrideAsset(overrides: MaterialOverrides, materialId: string): MaterialOverrides {
+  let next = overrides;
+  for (const [materialName, override] of Object.entries(overrides)) {
+    if (override?.materialId === materialId) next = setMaterialOverrideField(next, materialName, 'materialId', undefined);
+  }
+  return next;
+}
+
 export function withoutMaterialOverrideTexture(overrides: MaterialOverrides, textureId: string): MaterialOverrides {
   let next = overrides;
   for (const [materialName, override] of Object.entries(overrides)) {

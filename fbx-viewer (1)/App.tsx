@@ -10,6 +10,7 @@ import { ContentBrowser } from './components/UI/Browser/ContentBrowser';
 import { ViewControls } from './components/UI/Viewport/ViewControls';
 import { Header } from './components/UI/Header';
 import { RetextureEditor } from './components/Tools/RetextureEditor';
+import { MaterialGraphEditor } from './components/Materials/MaterialGraphEditor';
 import { GraphEditor } from './components/AnimationGraph/GraphEditor';
 import { BlueprintEditor } from './components/Blueprint/BlueprintEditor';
 import { SandboxScene } from './components/Sandbox/SandboxScene';
@@ -25,7 +26,7 @@ const AppContent: React.FC = () => {
   const { models, selectedModelId } = useScene();
   
   // App Mode
-  const [activeTab, setActiveTab] = useState<'scene' | 'graph' | 'blueprint' | 'sandbox' | 'hud' | 'retexture' | 'environment'>('scene');
+  const [activeTab, setActiveTab] = useState<'scene' | 'graph' | 'blueprint' | 'sandbox' | 'hud' | 'retexture' | 'materials' | 'environment'>('scene');
   const changeActiveTab = React.useMemo(
     () => frontendDiagnostics.wrap('editor_mode', 'change', setActiveTab, { category: 'action' }),
     [],
@@ -145,6 +146,13 @@ const AppContent: React.FC = () => {
           {activeTab === 'hud' && (
             <div className="absolute inset-0 w-full h-full">
                 <HUDEditor />
+            </div>
+          )}
+
+          {/* TAB 8: MATERIAL GRAPHS */}
+          {activeTab === 'materials' && (
+            <div className="absolute inset-0 w-full h-full">
+                <MaterialGraphEditor />
             </div>
           )}
 

@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Brush, Grid, Network, FileCode, Gamepad2, Download, Upload, LayoutTemplate, Trees, X, Save, FolderOpen, Settings2, SlidersHorizontal, Hammer, Languages } from 'lucide-react';
+import { Brush, Grid, Network, FileCode, Gamepad2, Download, Upload, LayoutTemplate, Trees, X, Save, FolderOpen, Settings2, SlidersHorizontal, Hammer, Languages, Palette } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
 import type { ProjectTemplate } from '../../types';
 import { NewProjectMenu } from './NewProjectMenu';
@@ -10,8 +10,8 @@ import { GameSettingsPanel } from '../Settings/GameSettingsPanel';
 import { LocalizationPanel } from '../Settings/LocalizationPanel';
 
 interface HeaderProps {
-  activeTab?: 'scene' | 'graph' | 'blueprint' | 'sandbox' | 'hud' | 'retexture' | 'environment';
-  onTabChange?: (tab: 'scene' | 'graph' | 'blueprint' | 'sandbox' | 'hud' | 'retexture' | 'environment') => void;
+  activeTab?: 'scene' | 'graph' | 'blueprint' | 'sandbox' | 'hud' | 'retexture' | 'materials' | 'environment';
+  onTabChange?: (tab: 'scene' | 'graph' | 'blueprint' | 'sandbox' | 'hud' | 'retexture' | 'materials' | 'environment') => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
@@ -80,6 +80,12 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
                 className={`flex items-center gap-2 px-3 py-1 rounded text-xs font-bold transition-all ${activeTab === 'retexture' ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
               >
                   <Brush size={12} /> Retexture
+              </button>
+              <button
+                onClick={() => onTabChange && onTabChange('materials')}
+                className={`flex items-center gap-2 px-3 py-1 rounded text-xs font-bold transition-all ${activeTab === 'materials' ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
+              >
+                  <Palette size={12} /> Materials
               </button>
            </div>
        </div>

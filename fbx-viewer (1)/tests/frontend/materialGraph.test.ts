@@ -46,7 +46,7 @@ const standardShader = (): THREE.WebGLProgramParametersWithUniforms => ({
 describe('material graphs', () => {
   it('converts values between float and vector types', () => {
     expect(convertValue('x', 'float', 'vec3')).toBe('vec3(x)');
-    expect(convertValue('x', 'float', 'vec4')).toBe('vec4(vec3(x), 1.0)');
+    expect(convertValue('x', 'float', 'vec4')).toBe('vec4(x)');
     expect(convertValue('v', 'vec4', 'vec3')).toBe('(v).xyz');
     expect(convertValue('v', 'vec3', 'float')).toBe('(v).x');
     expect(convertValue('v', 'vec2', 'vec4')).toBe('vec4(v, 0.0, 1.0)');
@@ -110,6 +110,16 @@ describe('material graphs', () => {
     expect(wouldCreateCycle(graph, 'a', 'out')).toBe(false);
     const looped = { ...graph, links: [...graph.links, link('b', 'out', 'a', 'a')] };
     expect(() => compileMaterialGraph(looped)).not.toThrow();
+  });
+
+  it('converts the param of an unwired input to the type of the input, as it does a wired value', () => {
+    const graph = normalizeMaterialGraph({
+      nodes: [node('out', OUTPUT_NODE_TYPE), node('lerp', 'lerp'), node('c', 'color')],
+      links: [link('c', 'out', 'lerp', 'a'), link('lerp', 'out', 'out', 'baseColor')],
+    });
+    const code = compileMaterialGraph(graph).statements.join('\n');
+    // B and T are float params feeding vec4 inputs.
+    expect(code).toMatch(/mix\(vec4\(mg_c_out_out_\d+, 1\.0\), vec4\(mg_lerp_b\), vec4\(mg_lerp_t\)\)/);
   });
 
   it('leaves out nodes that do not reach the output', () => {

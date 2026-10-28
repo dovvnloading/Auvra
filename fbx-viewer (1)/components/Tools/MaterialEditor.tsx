@@ -1,8 +1,9 @@
-import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import { AlertTriangle, ChevronDown, ChevronRight, Palette, RotateCcw, Save, Search, Trash2, Undo2 } from 'lucide-react';
 import type { LoadedModelData, TextureData } from '../../types';
 import { Select } from '../UI/Select';
+import { materialLibrary } from '../../runtime/materials/materialLibrary';
 import {
   MAX_EMISSIVE_INTENSITY,
   applyMaterialOverrides,
@@ -154,6 +155,23 @@ const TextureField: React.FC<{
  * values, emissive, opacity and texture maps). Every edit previews live on the
  * model; unsaved edits are reverted when the panel closes or the model changes.
  */
+/** A material asset (Materials tab) whose node graph shades this material instead of the fields below. */
+const MaterialAssetField: React.FC<{ value: string | undefined; onChange: (value: string | undefined) => void }> = ({ value, onChange }) => {
+  const id = useId();
+  const version = useSyncExternalStore((listener) => materialLibrary.subscribe(listener), () => materialLibrary.version);
+  const assets = useMemo(() => materialLibrary.list(), [version]);
+  return (
+    <FieldRow label="Material asset" htmlFor={id} overridden={Boolean(value)} onReset={() => onChange(undefined)}>
+      <select id={id} value={value ?? ''} onChange={(event) => onChange(event.target.value || undefined)}
+        className="flex-1 min-w-0 bg-gray-950 border border-gray-700 rounded px-1.5 py-1 text-[11px] text-gray-200">
+        <option value="">(its own)</option>
+        {assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
+        {value && !assets.some((asset) => asset.id === value) && <option value={value}>(missing material)</option>}
+      </select>
+    </FieldRow>
+  );
+};
+
 export const MaterialEditor: React.FC<MaterialEditorProps> = (props) => (
   // A different model (or a reloaded one) starts a fresh editing session.
   <MaterialEditorSession key={`${props.model.id}:${props.model.object.uuid}`} {...props} />
@@ -294,6 +312,8 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
     const { base } = material;
     return (
       <div className="px-3 pb-3 pt-1 space-y-1 border-t border-gray-800/80">
+        <MaterialAssetField value={override.materialId} onChange={(value) => editField(material.name, 'materialId', value)} />
+        {override.materialId && <p className="text-[9px] text-gray-500">Shaded by the material asset; the fields below apply again without one.</p>}
         {base.color !== null && (
           <ColorField label="Color" value={override.color ?? base.color} overridden={override.color !== undefined}
             onChange={(value) => editField(material.name, 'color', value)} onReset={() => editField(material.name, 'color', undefined)} />

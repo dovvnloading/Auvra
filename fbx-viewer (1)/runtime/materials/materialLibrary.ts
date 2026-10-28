@@ -43,6 +43,15 @@ export const graphTextures = (graph: MaterialGraph): Array<{ textureId: string; 
     return result;
 };
 
+/** The graph with its texture nodes cleared of `textureId`; the same graph when none samples it. */
+export const withoutGraphTexture = (graph: MaterialGraph, textureId: string): MaterialGraph => {
+    if (!graph.nodes.some(node => node.params.texture === textureId)) return graph;
+    return {
+        ...graph,
+        nodes: graph.nodes.map(node => (node.params.texture === textureId ? { ...node, params: { ...node.params, texture: '' } } : node)),
+    };
+};
+
 export const materialAssetDocument = (asset: MaterialAsset): MaterialAssetDocument => ({
     id: asset.id,
     name: asset.name,
@@ -72,6 +81,8 @@ interface Binding {
 }
 
 class MaterialLibrary {
+    /** Counts changes to the assets, for subscribers that compare snapshots. */
+    version = 0;
     private readonly assets = new Map<string, MaterialAsset>();
     private readonly listeners = new Set<() => void>();
     private readonly bound = new Map<THREE.MeshStandardMaterial, Binding>();
@@ -116,6 +127,19 @@ class MaterialLibrary {
             unbindMaterialGraph(material);
         }
         this.emit();
+    }
+
+    /** Clears a deleted texture from every graph sampling it (the project has already). */
+    forgetTexture(textureId: string): void {
+        for (const [key, texture] of [...this.textures]) {
+            if (!key.endsWith(`:${textureId}`)) continue;
+            texture?.dispose();
+            this.textures.delete(key);
+        }
+        for (const asset of [...this.assets.values()]) {
+            const graph = withoutGraphTexture(asset.graph, textureId);
+            if (graph !== asset.graph) this.upsert({ ...asset, graph });
+        }
     }
 
     subscribe(listener: () => void): () => void {
@@ -176,6 +200,7 @@ class MaterialLibrary {
     }
 
     private emit(): void {
+        this.version++;
         for (const listener of this.listeners) listener();
     }
 }

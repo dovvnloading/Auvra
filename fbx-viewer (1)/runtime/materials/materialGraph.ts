@@ -7,8 +7,8 @@
  * into three's standard material, so lighting, shadows, fog, skinning and instancing stay three's.
  *
  * Values are float, vec2, vec3 or vec4. An input takes any of them: a float fills every component,
- * a wider vector is cut down to its first components, a narrower one is padded with zeros (and an
- * alpha of 1). Constants a node is set to (a colour, a number, a texture) become uniforms, so
+ * a wider vector is cut down to its first components, a narrower one is padded with zeros (and a
+ * colour becoming four components gets an alpha of 1). Constants a node is set to (a colour, a number, a texture) become uniforms, so
  * changing them does not rebuild the shader; only changing the graph's shape does.
  */
 
@@ -55,8 +55,8 @@ export interface MaterialPortDef {
 }
 
 export interface MaterialInputDef extends MaterialPortDef {
-    /** GLSL for the value an unconnected input takes (a param's uniform, or a constant). */
-    fallback: string | ((node: NodeEmitContext) => string);
+    /** The value an unconnected input takes: GLSL of the input's type, or one of the node's params. */
+    fallback: string | { param: string };
 }
 
 /** What a node definition sees while it is compiled. */
@@ -93,7 +93,7 @@ const componentCount: Record<MaterialValueType, number> = { float: 1, vec2: 2, v
 /** `expression` of type `from` as type `to`. */
 export const convertValue = (expression: string, from: MaterialValueType, to: MaterialValueType): string => {
     if (from === to) return expression;
-    if (from === 'float') return to === 'vec4' ? `vec4(vec3(${expression}), 1.0)` : `${to}(${expression})`;
+    if (from === 'float') return `${to}(${expression})`;
     const fromCount = componentCount[from];
     const toCount = componentCount[to];
     if (to === 'float') return `(${expression}).x`;
@@ -103,8 +103,11 @@ export const convertValue = (expression: string, from: MaterialValueType, to: Ma
     return `${to}(${expression}, ${pad.join(', ')})`;
 };
 
-const constant = (value: string) => () => value;
-const fromParam = (key: string) => (context: NodeEmitContext) => context.param(key);
+const constant = (value: string) => value;
+const fromParam = (key: string) => ({ param: key });
+
+/** The GLSL type a param's uniform has. */
+const PARAM_TYPES: Record<Exclude<MaterialParamKind, 'texture'>, MaterialValueType> = { float: 'float', color: 'vec3', vec2: 'vec2', vec3: 'vec3' };
 
 /** A node applying a GLSL function component-wise to vec4s (inputs widened, the result the widest input's type). */
 const binary = (type: string, label: string, description: string, glsl: (a: string, b: string) => string, defaults: [number, number] = [0, 0]): MaterialNodeDef => ({
@@ -613,8 +616,12 @@ export const compileMaterialGraph = (graph: MaterialGraph): CompiledMaterialGrap
                 }
             }
         }
-        const fallback = typeof input.fallback === 'string' ? input.fallback : input.fallback(contextFor(node));
-        return fallback;
+        if (typeof input.fallback === 'string') return input.fallback;
+        // A param's uniform, converted from its own type like a wired value.
+        const definition = DEFINITIONS.get(node.type)!;
+        const param = definition.params.find(candidate => candidate.key === (input.fallback as { param: string }).param);
+        if (!param || param.kind === 'texture') throw new Error(`Input ${input.key} of ${node.type} falls back to a param it does not have.`);
+        return convertValue(contextFor(node).param(param.key), PARAM_TYPES[param.kind], input.type);
     };
 
     /** Emits `node` once (after what it reads) and returns its outputs; null on a loop. */

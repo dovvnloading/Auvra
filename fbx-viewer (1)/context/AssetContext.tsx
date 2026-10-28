@@ -17,6 +17,8 @@ import { frontendDiagnostics } from '../diagnostics/runtime';
 import { projectService } from '../utils/projectService';
 import { emitDomainCascade, type DomainCascadeKind } from '../utils/domainCascade';
 import type { MaterialOverrides } from '../utils/materialOverrides';
+import { dbOperations } from '../utils/db';
+import { materialLibrary } from '../runtime/materials/materialLibrary';
 
 interface AssetContextType {
   // Models
@@ -60,6 +62,10 @@ interface AssetContextType {
   removeTexture: (id: string) => void;
   updateTexture: (id: string, updates: AssetInfoUpdate) => Promise<void>;
   setTextures: (textures: TextureData[]) => void;
+
+  // Material assets
+  /** Deletes a material asset; the model materials it shaded go back to their own. Rejects when it cannot be deleted. */
+  removeMaterialAsset: (id: string) => Promise<void>;
 
   // Audio
   audioAssets: AudioData[];
@@ -136,8 +142,16 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     modelManager.removeTextureReference(id);
     blueprintManager.removeTextureReference(id);
     socketManager.removeTextureReference(id);
+    materialLibrary.forgetTexture(id);
     emitCascade('texture', id);
   }, [blueprintManager, emitCascade, modelManager, socketManager, textureManager]);
+
+  const removeMaterialAsset = useCallback(async (id: string) => {
+    projectService.assertWritable();
+    await dbOperations.deleteMaterialAsset(id);
+    materialLibrary.remove(id);
+    modelManager.removeMaterialAssetReference(id);
+  }, [modelManager]);
 
   const removeAudio = useCallback(async (id: string) => {
     if (!await audioManager.removeAudio(id)) return;
@@ -198,6 +212,9 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     removeTexture,
     updateTexture: textureManager.updateTexture,
     setTextures: textureManager.setTextures,
+
+    // Material assets
+    removeMaterialAsset,
 
     // Audio
     audioAssets: audioManager.audioAssets,
