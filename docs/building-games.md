@@ -8,6 +8,7 @@ Open **Game Settings** in the header. The settings are stored in the project and
 - **Startup level**: the first level the game opens (defaults to the first level).
 - **Player blueprint**: the character the player controls.
 - **Window, quality and input defaults**: fullscreen, shadows, post-processing, maximum resolution scale, field of view, mouse sensitivity, invert Y and master volume. Players can change the input and volume settings in Options.
+- **Mesh detail levels** (on by default): every mesh with a few hundred triangles or more gets simpler versions of itself, made when its model loads, and draws the simplest one whose difference from the full mesh, in shape, texture placement and shading, stays under a pixel on the screen. It covers props, foliage, characters and what they carry, in play and in built games. In the starter level it cut the triangles drawn per frame from about 2.4 million to about 217 thousand.
 
 Each level should have a **Player Start**; without one the player spawns at the origin (in the editor, under the camera).
 

@@ -49,6 +49,7 @@ import { dialogueStore, useDialogueState } from './dialogue';
 import { DialogueOverlay } from './DialogueOverlay';
 import { LevelStreamingContext, streamedObjects, streamedRoots, type LevelStreaming } from './levelStreaming';
 import { PostProcessAllowedContext, usePostProcessClaimed } from './components/postProcess';
+import { MeshLodContext } from '../components/Scene/useMeshLod';
 import type { InputState } from './input';
 import { collectTimelineTargets } from './timeline/evaluate';
 import { TouchControls } from './TouchControls';
@@ -932,6 +933,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                 {/* --- GPU POST PROCESSING PIPELINE --- */}
                 {/* A level Post Process component replaces the default stack; the quality setting and the fallback gate both. */}
                 <PostProcessAllowedContext.Provider value={postProcessAllowed}>
+                <MeshLodContext.Provider value={settings.quality.meshLod !== false}>
                 {postProcessAllowed && <DefaultPostProcess />}
 
                 {/* Input, audio buses and player options live for the whole run; the session adds its prefab spawner. */}
@@ -960,6 +962,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                         </PhysicsWorld>
                     </TriggerEventsProvider>
                 </RuntimeServicesProvider>
+                </MeshLodContext.Provider>
                 </PostProcessAllowedContext.Provider>
             </AuvraCanvas>
 

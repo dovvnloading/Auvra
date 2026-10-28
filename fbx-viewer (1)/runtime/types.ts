@@ -42,7 +42,8 @@ export interface GameSettings {
     startupLevelId: string | null;
     playerBlueprintId: string | null;
     window: { fullscreen: boolean };
-    quality: { shadows: boolean; postProcessing: boolean; maxDpr: number; fov: number };
+    /** meshLod: meshes draw simpler levels of themselves as they get smaller on the screen (utils/meshLod.ts). */
+    quality: { shadows: boolean; postProcessing: boolean; maxDpr: number; fov: number; meshLod: boolean };
     input: { mouseSensitivity: number; invertY: boolean };
     audio: { masterVolume: number };
     /** Multiplayer through a relay server (runtime/net/protocol.ts). */
@@ -57,7 +58,7 @@ export const DEFAULT_GAME_SETTINGS: GameSettings = {
     startupLevelId: null,
     playerBlueprintId: null,
     window: { fullscreen: false },
-    quality: { shadows: true, postProcessing: true, maxDpr: 2, fov: 60 },
+    quality: { shadows: true, postProcessing: true, maxDpr: 2, fov: 60, meshLod: true },
     input: { mouseSensitivity: 0.002, invertY: false },
     audio: { masterVolume: 1 },
     network: DEFAULT_NETWORK_SETTINGS,
