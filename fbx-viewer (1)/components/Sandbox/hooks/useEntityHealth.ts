@@ -15,6 +15,13 @@ interface UseEntityHealthProps {
 /** A hit reaction snaps in and eases out, added to the pose so the character keeps moving. */
 export const HIT_REACTION_OPTIONS = { additive: true, blendIn: 0.05, blendOut: 0.25 } as const;
 
+/** A hit this soon after the last reaction started lets that one play on, so sustained fire staggers rather than shakes. */
+export const HIT_REACTION_RETRIGGER_SECONDS = 0.5;
+
+/** Whether a hit at `now` (seconds) starts a new reaction, the last having started at `last` (null when none has). */
+export const hitReactionDue = (last: number | null, now: number): boolean =>
+    last === null || now < last || now - last >= HIT_REACTION_RETRIGGER_SECONDS;
+
 /** Starting health: a saved value kept within 1..max (a save is never taken dead), else full. */
 export const startingHealth = (maxHealth: number, initialHealth?: number): number =>
     initialHealth !== undefined && Number.isFinite(initialHealth) ? Math.min(maxHealth, Math.max(1, initialHealth)) : maxHealth;
@@ -27,6 +34,8 @@ export const useEntityHealth = ({ maxHealth, initialHealth, onHealthChange, grap
     const healthRef = useRef(startingHealth(maxHealth, initialHealth));
     // The saved health applies to the session's first life only.
     const initialHealthRef = useRef(initialHealth);
+    // When the playing hit reaction started, in seconds.
+    const lastReactionRef = useRef<number | null>(null);
 
     // Sync Initial Health or Reset when maxHealth changes
     useEffect(() => {
@@ -48,7 +57,11 @@ export const useEntityHealth = ({ maxHealth, initialHealth, onHealthChange, grap
     const takeDamage = useCallback((amount: number) => {
         if (isDeadRef.current) return;
         healthRef.current = Math.max(0, healthRef.current - amount);
-        if (healthRef.current > 0 && hitReactClip) graphApiRef.current?.playMontage?.(hitReactClip, HIT_REACTION_OPTIONS);
+        const now = performance.now() / 1000;
+        if (healthRef.current > 0 && hitReactClip && hitReactionDue(lastReactionRef.current, now)
+            && graphApiRef.current?.playMontage?.(hitReactClip, HIT_REACTION_OPTIONS)) {
+            lastReactionRef.current = now;
+        }
 
         setCurrentHealth(prev => {
             const newVal = Math.max(0, prev - amount);
