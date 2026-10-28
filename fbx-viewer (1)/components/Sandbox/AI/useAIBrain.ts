@@ -3,7 +3,8 @@ import React, { useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { AI_CONFIG, AIState, AITuning, DEFAULT_AI_TUNING } from './AIConfig';
 import { GraphRuntimeAPI } from '../../AnimationGraph/GraphRuntime';
-import { OPEN_PERCEPTION, seesTarget, type Perception } from './AISenses';
+import { OPEN_PERCEPTION, perceive, type Perception } from './AISenses';
+import { Awareness, type AwarenessStage } from '../../../runtime/awareness';
 import { evaluateNextState, calculateNavigation, DecisionContext } from './AIStateMachine';
 import { useNavMeshContext } from '../../../runtime/navigation';
 
@@ -23,6 +24,9 @@ export interface BrainOutput {
   state: AIState;
   destination: THREE.Vector3;
   targetFocus: THREE.Vector3 | null; // What to look at
+  /** How aware it is of the target (runtime/awareness.ts), for a ? or ! over its head. */
+  awareness: AwarenessStage;
+  awarenessLevel: number;
 }
 
 export const useAIBrain = (
@@ -36,6 +40,8 @@ export const useAIBrain = (
   const lastKnownPos = useRef<THREE.Vector3 | null>(null);
   const patrolDest = useRef<THREE.Vector3 | null>(null);
   const damageDealtRef = useRef(false);
+  const awareness = useRef(new Awareness());
+  const lastHealth = useRef<number | null>(null);
 
   // Timers
   const timers = useRef({
@@ -75,14 +81,23 @@ export const useAIBrain = (
     }
 
     // --- 2. Senses (Perception) ---
-    // In range, and in the vision cone with nothing in the way or close enough to notice anyway.
+    // Hurt, it knows where the player is at once; otherwise seeing them builds awareness (AISenses.perceive).
+    const health = Number(graphApi.current?.getVariable('Health'));
+    if (Number.isFinite(health)) {
+        if (lastHealth.current !== null && health < lastHealth.current) awareness.current.alert();
+        lastHealth.current = health;
+    }
     const perception = input.perception ?? OPEN_PERCEPTION;
-    const canSee = seesTarget({ enemyPosition, enemyForward, targetPosition, distToTarget }, tuning.sightRange, perception);
+    const perceived = perceive(awareness.current, { enemyPosition, enemyForward, targetPosition, distToTarget }, tuning, perception, delta);
+    const { canSee, investigate } = perceived;
+    // For the enemy's graph: animation, blueprints and HUD can show what it has noticed.
+    graphApi.current?.setVariable('Awareness', perceived.level);
+    graphApi.current?.setVariable('Alerted', perceived.stage === 'alerted');
 
-    // Memory Update: where the player was last seen, or a noise was heard, is where to look.
-    if (canSee || perception.heard) {
+    // Memory Update: where the player was last seen, or glimpsed, or a noise was heard, is where to look.
+    if (canSee || investigate) {
         if (!lastKnownPos.current) lastKnownPos.current = new THREE.Vector3();
-        lastKnownPos.current.copy(canSee ? targetPosition : perception.heard!);
+        lastKnownPos.current.copy(canSee ? targetPosition : investigate!);
         timers.current.memory = SENSES.MEMORY_DURATION;
     } else {
         if (timers.current.memory > 0) timers.current.memory -= delta;
@@ -97,7 +112,7 @@ export const useAIBrain = (
         distFromCenter,
         boundarySize,
         canSee,
-        heard: perception.heard !== null,
+        heard: investigate !== null,
         timers: timers.current,
         patrolDest: patrolDest.current,
         enemyPosition
@@ -174,7 +189,9 @@ export const useAIBrain = (
     return {
         state: stateRef.current,
         destination,
-        targetFocus
+        targetFocus,
+        awareness: perceived.stage,
+        awarenessLevel: perceived.level
     };
   }, [graphApi, onAttack, tuning, navMesh]);
 

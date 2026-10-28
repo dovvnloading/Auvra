@@ -15,7 +15,8 @@ export const AI_CONFIG = {
   SENSES: {
     FOV_ANGLE: 120, // Degrees
     MEMORY_DURATION: 5.0, // Seconds AI remembers player location after losing sight
-    SEARCH_DURATION: 4.0 // Seconds AI waits at last known pos before giving up
+    SEARCH_DURATION: 4.0, // Seconds AI waits at last known pos before giving up
+    REACTION_TIME: 0.5 // Seconds to notice the player close by and straight ahead (runtime/awareness.ts)
   },
 
   // Locomotion & Physics
@@ -51,7 +52,8 @@ export const AI_STAT_NAMES = {
   SPEED: 'Speed',                     // Chase (top) speed, cm/s
   ATTACK_RANGE: 'Attack Range',       // cm
   ATTACK_COOLDOWN: 'Attack Cooldown', // Seconds from one attack's start to the next
-  SIGHT_RANGE: 'Sight Range'          // cm
+  SIGHT_RANGE: 'Sight Range',         // cm
+  REACTION_TIME: 'Reaction Time'      // Seconds to notice the player close by and straight ahead; farther or to the side takes longer
 } as const;
 
 const STAT_UNITS_PER_WORLD_UNIT = 100;
@@ -65,11 +67,12 @@ export interface AITuning {
   stopDistance: number;   // Distance at which a chase stops closing in (inside the attack range)
   attackCooldown: number;
   sightRange: number;     // Max distance the target can be seen at
+  reactionTime: number;   // Seconds to notice the target close by and straight ahead
 }
 
 const { PHYSICS, DISTANCES, COMBAT } = AI_CONFIG;
 
-const buildTuning = (runSpeed: number, attackRange: number, attackCooldown: number, sightRange: number): AITuning => ({
+const buildTuning = (runSpeed: number, attackRange: number, attackCooldown: number, sightRange: number, reactionTime = AI_CONFIG.SENSES.REACTION_TIME): AITuning => ({
   runSpeed,
   // Walk, strafe and stopping distance keep AI_CONFIG's proportions.
   walkSpeed: runSpeed * (PHYSICS.WALK_SPEED_MAX / PHYSICS.RUN_SPEED_MAX),
@@ -77,7 +80,8 @@ const buildTuning = (runSpeed: number, attackRange: number, attackCooldown: numb
   attackRange,
   stopDistance: attackRange * (DISTANCES.STOP / DISTANCES.ATTACK),
   attackCooldown,
-  sightRange
+  sightRange,
+  reactionTime
 });
 
 export const DEFAULT_AI_TUNING: AITuning = buildTuning(PHYSICS.RUN_SPEED_MAX, DISTANCES.ATTACK, COMBAT.ATTACK_COOLDOWN, DISTANCES.AGGRO);
@@ -96,7 +100,8 @@ export const resolveAITuning = (stats: readonly BlueprintStat[] | null | undefin
     inWorldUnits(AI_STAT_NAMES.SPEED, DEFAULT_AI_TUNING.runSpeed),
     inWorldUnits(AI_STAT_NAMES.ATTACK_RANGE, DEFAULT_AI_TUNING.attackRange),
     read(AI_STAT_NAMES.ATTACK_COOLDOWN, true) ?? DEFAULT_AI_TUNING.attackCooldown,
-    inWorldUnits(AI_STAT_NAMES.SIGHT_RANGE, DEFAULT_AI_TUNING.sightRange)
+    inWorldUnits(AI_STAT_NAMES.SIGHT_RANGE, DEFAULT_AI_TUNING.sightRange),
+    read(AI_STAT_NAMES.REACTION_TIME, true) ?? DEFAULT_AI_TUNING.reactionTime
   );
 };
 

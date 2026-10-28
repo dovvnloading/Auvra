@@ -1,6 +1,7 @@
 
 import * as THREE from 'three';
-import { AI_CONFIG } from './AIConfig';
+import { AI_CONFIG, type AITuning } from './AIConfig';
+import { DEFAULT_AWARENESS_TUNING, sightRate, type Awareness, type AwarenessStage, type AwarenessTuning } from '../../../runtime/awareness';
 
 export interface SensoryInput {
     enemyPosition: THREE.Vector3;
@@ -61,4 +62,36 @@ export const seesTarget = (input: SensoryInput, sightRange: number, perception: 
     if (distToTarget < AI_CONFIG.DISTANCES.HEARING) return true;
     const { canSee: inCone } = checkVisibility({ ...input, distToTarget: AI_CONFIG.DISTANCES.HEARING });
     return inCone && perception.lineOfSight;
+};
+
+/** An enemy's awareness tunables: its sight range and reaction time, AI_CONFIG's cones and near radius. */
+export const awarenessTuning = (tuning: AITuning): AwarenessTuning => ({
+    ...DEFAULT_AWARENESS_TUNING,
+    range: tuning.sightRange,
+    centralFov: AI_CONFIG.SENSES.FOV_ANGLE,
+    nearRadius: AI_CONFIG.DISTANCES.HEARING,
+    reactionSeconds: tuning.reactionTime,
+});
+
+/** What the AI makes of this frame once awareness has had its say. */
+export interface Perceived {
+    /** It sees the target and knows it is there: give chase. */
+    canSee: boolean;
+    /** Where it glimpsed the target without being sure yet, or heard a noise: go and look. */
+    investigate: THREE.Vector3 | null;
+    stage: AwarenessStage;
+    /** The awareness meter, 0 to 1. */
+    level: number;
+}
+
+/**
+ * Feeds this frame's sight and hearing to the AI's awareness (runtime/awareness.ts): it gives chase
+ * only once alerted, and investigates what it has glimpsed or heard until then.
+ */
+export const perceive = (awareness: Awareness, input: SensoryInput, tuning: AITuning, perception: Perception, delta: number): Perceived => {
+    const rate = sightRate(awarenessTuning(tuning), input.enemyPosition, input.enemyForward, input.targetPosition, perception.lineOfSight);
+    const stage = awareness.update(rate, perception.heard !== null, delta);
+    const canSee = rate > 0 && stage === 'alerted';
+    const investigate = canSee ? null : rate > 0 && stage === 'suspicious' ? input.targetPosition : perception.heard;
+    return { canSee, investigate, stage, level: awareness.level };
 };
