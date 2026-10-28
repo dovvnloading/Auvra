@@ -2200,7 +2200,9 @@ mod tests {
             CookWorker::new(CookConfig::new(&root, &derived).with_queue_capacity(1)).unwrap();
         let submission = worker.submit(&id).unwrap();
         let mut completed = false;
-        for _ in 0..100 {
+        // A deadline rather than a count of polls: a busy runner can take a while to cook it.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
             if let Some(status) = worker.status(submission.job_id) {
                 if matches!(status.state, JobState::Completed) {
                     assert!(status.result.is_some());
