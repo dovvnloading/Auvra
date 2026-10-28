@@ -9,7 +9,7 @@ import type { WeaponCarry, WeaponSettings } from '../types';
  */
 
 /** A weapon with every field filled in and kept in range. */
-type OptionalWeaponField = 'attachmentId' | 'muzzleSocket' | 'fireClip' | 'aimClip' | 'reloadClip' | 'carry' | 'supportGrip' | 'supportRotation' | 'gripPoint' | 'muzzlePoint' | MoveClipField;
+type OptionalWeaponField = 'attachmentId' | 'muzzleSocket' | 'fireClip' | 'aimClip' | 'reloadClip' | 'carry' | 'supportGrip' | 'supportRotation' | 'gripPoint' | 'muzzlePoint' | 'turnLeftClip' | 'turnRightClip' | MoveClipField;
 export type ResolvedWeapon = Required<Omit<WeaponSettings, OptionalWeaponField>> & Pick<WeaponSettings, OptionalWeaponField>;
 
 /** The weapon a blueprint without weapons fires: what the player always had. */
@@ -18,7 +18,7 @@ export const DEFAULT_WEAPON: ResolvedWeapon = {
     reloadSeconds: 1.5, spread: 0, pellets: 1, projectileSpeed: 60, startsOwned: true,
     attachmentId: null, muzzleSocket: null, fireClip: null, aimClip: null, reloadClip: null, carry: null,
     idleClip: null, walkClip: null, runClip: null, backClip: null, leftClip: null, rightClip: null, jumpClip: null, supportGrip: null,
-    supportRotation: null, gripPoint: null, muzzlePoint: null,
+    supportRotation: null, gripPoint: null, muzzlePoint: null, turnLeftClip: null, turnRightClip: null,
 };
 
 const number = (value: unknown, fallback: number, min: number, max: number): number =>
@@ -77,6 +77,8 @@ export const resolveWeapon = (weapon: WeaponSettings): ResolvedWeapon => ({
     leftClip: clip(weapon.leftClip),
     rightClip: clip(weapon.rightClip),
     jumpClip: clip(weapon.jumpClip),
+    turnLeftClip: clip(weapon.turnLeftClip),
+    turnRightClip: clip(weapon.turnRightClip),
     supportGrip: resolveWeaponPoint(weapon.supportGrip),
     supportRotation: resolveWeaponPoint(weapon.supportRotation),
     gripPoint: resolveWeaponPoint(weapon.gripPoint),

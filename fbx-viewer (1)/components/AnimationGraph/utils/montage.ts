@@ -55,6 +55,19 @@ export interface MontageOptions {
      */
     boneWeights?: readonly MontageBoneWeight[];
     /**
+     * The montage's slot: a montage interrupts only montages of its own slot (and kind), so a turn
+     * on the legs in one slot plays alongside an aim on the upper body in another. Default ''.
+     */
+    slot?: string;
+    /** With a mask bone, leaves out this bone and everything below it (the legs and hips, without the spine). */
+    excludeBone?: string;
+    /**
+     * Takes the mask bone's turn about the character's up out of the pose and reports it through
+     * consumeRootYaw(), for the character to turn by instead: a turn-in-place clip then turns the
+     * character itself, its feet stepping where the clip puts them. Needs a mask bone; not additive.
+     */
+    rootYaw?: boolean;
+    /**
      * Called once when the montage no longer affects the pose and its actions are gone, with
      * `interrupted` true when stop() or another play() ended it before the clip finished.
      */
@@ -82,9 +95,19 @@ interface MeshSpaceRoot {
     above: { node: THREE.Object3D; rotation: THREE.Interpolant | null }[];
 }
 
+/** A clip with its root bone's turn about the character's up taken out, and that turn over the clip's time. */
+interface RootYawClip {
+    clip: THREE.AnimationClip;
+    /** Radians turned since the first key, unwrapped (it can pass half a turn), at clip time. */
+    yaw: THREE.Interpolant;
+}
+
 interface MontageLayer {
     /** The clip as played, masked when a mask bone was given. */
     clip: THREE.AnimationClip;
+    slot: string;
+    /** Set for a montage whose root turn is reported (MontageOptions.rootYaw). */
+    rootYaw: THREE.Interpolant | null;
     /** Set for a mesh-space montage (MontageOptions.meshSpaceRotation). */
     meshSpace: MeshSpaceRoot | null;
     tracks: Set<string>;
@@ -154,8 +177,12 @@ export class MontagePlayer {
     private readonly mixer: THREE.AnimationMixer;
     private readonly root: THREE.Object3D;
     private layers: MontageLayer[] = [];
-    private current: MontageLayer | null = null;
+    /** The playing montage of each slot (not additive ones). */
+    private current = new Map<string, MontageLayer>();
+    /** Root turn reported by rootYaw montages and not yet consumed, in radians. */
+    private pendingYaw = 0;
     private maskedClips = new WeakMap<THREE.AnimationClip, Map<string, THREE.AnimationClip>>();
+    private rootYawClips = new WeakMap<THREE.AnimationClip, Map<string, RootYawClip | null>>();
     private additiveClips = new WeakMap<THREE.AnimationClip, THREE.AnimationClip>();
 
     /** `root` is where mask bones are looked up; actions bind to the mixer's root, like the base actions. */
@@ -166,20 +193,24 @@ export class MontagePlayer {
 
     /**
      * Plays `clip` once (or looping) over the base pose, fading in over `blendIn`. Montages of the
-     * same kind (additive or not) still playing or fading out crossfade out over the same time and
-     * end as interrupted. A mask bone that matches nothing leaves the pose untouched, though the
-     * montage still runs and ends.
+     * same kind (additive or not) and slot still playing or fading out crossfade out over the same
+     * time and end as interrupted. A mask bone that matches nothing leaves the pose untouched,
+     * though the montage still runs and ends.
      */
     play(clip: THREE.AnimationClip, options: MontageOptions = {}): void {
         const blendIn = seconds(options.blendIn, DEFAULT_MONTAGE_BLEND_IN);
         const additive = !!options.additive;
-        this.layers.filter(layer => layer.additive === additive).forEach(layer => this.fadeOut(layer, blendIn));
+        const slot = options.slot ?? '';
+        this.layers.filter(layer => layer.additive === additive && layer.slot === slot).forEach(layer => this.fadeOut(layer, blendIn));
 
-        const played = additive ? this.additiveClip(clip) : clip;
-        const source = options.maskBone ? this.maskedClip(played, options.maskBone) : played;
+        const turned = options.rootYaw && options.maskBone && !additive ? this.rootYawClip(clip, options.maskBone) : null;
+        const played = additive ? this.additiveClip(clip) : turned?.clip ?? clip;
+        const source = options.maskBone ? this.maskedClip(played, options.maskBone, options.excludeBone) : played;
         const rate = typeof options.rate === 'number' && Number.isFinite(options.rate) ? options.rate : 1;
         const layer: MontageLayer = {
             clip: source,
+            slot,
+            rootYaw: turned?.yaw ?? null,
             meshSpace: options.meshSpaceRotation && options.maskBone && !additive ? this.meshSpaceRoot(clip, options.maskBone) : null,
             tracks: new Set(source.tracks.map(track => track.name)),
             parts: [],
@@ -211,28 +242,41 @@ export class MontagePlayer {
         fading.forEach(other => this.splitLayer(other, layer));
 
         this.layers.push(layer);
-        if (!additive) this.current = layer;
-        this.applyWeights();
-    }
-
-    /** Fades every montage out over `blendOut` (default: each montage's own) and ends them as interrupted. */
-    stop(blendOut?: number): void {
-        this.layers.forEach(layer => this.fadeOut(layer, seconds(blendOut, layer.blendOut)));
-        this.current = null;
+        if (!additive) this.current.set(slot, layer);
         this.applyWeights();
     }
 
     /**
-     * True from play() until that montage finishes or is stopped; a stopped one may still be fading
-     * out. Additive montages play alongside and do not count.
+     * Fades montages out over `blendOut` (default: each montage's own) and ends them as
+     * interrupted: those of `slot` when given, else every montage.
      */
-    isPlaying(): boolean {
-        return this.current !== null;
+    stop(blendOut?: number, slot?: string): void {
+        this.layers
+            .filter(layer => slot === undefined || layer.slot === slot)
+            .forEach(layer => this.fadeOut(layer, seconds(blendOut, layer.blendOut)));
+        if (slot === undefined) this.current.clear();
+        else this.current.delete(slot);
+        this.applyWeights();
     }
 
-    /** Share of the pose the playing montage takes on its tracks, 0 to 1; 0 when none is playing. */
-    weight(): number {
-        return this.current ? this.current.weight : 0;
+    /**
+     * True from play() until that montage (of `slot`, default '') finishes or is stopped; a stopped
+     * one may still be fading out. Additive montages play alongside and do not count.
+     */
+    isPlaying(slot = ''): boolean {
+        return this.current.has(slot);
+    }
+
+    /** Share of the pose the playing montage of `slot` (default '') takes on its tracks, 0 to 1; 0 when none is playing. */
+    weight(slot = ''): number {
+        return this.current.get(slot)?.weight ?? 0;
+    }
+
+    /** The root turn rootYaw montages have reported since the last call, in radians (left positive), and resets it. */
+    consumeRootYaw(): number {
+        const yaw = this.pendingYaw;
+        this.pendingYaw = 0;
+        return yaw;
     }
 
     /**
@@ -255,6 +299,8 @@ export class MontagePlayer {
                 0,
                 layer.clip.duration
             );
+            // The root turn over the coming step, until the montage is interrupted.
+            if (layer.rootYaw && !layer.interrupted) this.pendingYaw += this.yawStep(layer, layer.parts[0].action.time, step * layer.rate);
             const end = endShare(layer, time);
             layer.weight = Math.min(layer.rise, layer.release, end);
             if (end <= 0 || layer.release <= 0) finished.push(layer);
@@ -263,7 +309,7 @@ export class MontagePlayer {
         if (finished.length) {
             const done = new Set(finished);
             this.layers = this.layers.filter(layer => !done.has(layer));
-            if (this.current && done.has(this.current)) this.current = null;
+            this.current.forEach((layer, slot) => { if (done.has(layer)) this.current.delete(slot); });
             finished.forEach((layer) => {
                 layer.weight = 0;
                 layer.parts.forEach(part => this.removePart(part));
@@ -304,8 +350,10 @@ export class MontagePlayer {
     dispose(): void {
         this.layers.forEach(layer => layer.parts.forEach(part => this.removePart(part)));
         this.layers = [];
-        this.current = null;
+        this.current.clear();
+        this.pendingYaw = 0;
         this.maskedClips = new WeakMap();
+        this.rootYawClips = new WeakMap();
         this.additiveClips = new WeakMap();
     }
 
@@ -366,18 +414,89 @@ export class MontagePlayer {
     }
 
     /** The clip limited to the mask bone's subtree, built once per (clip, mask bone). */
-    private maskedClip(clip: THREE.AnimationClip, maskBone: string): THREE.AnimationClip {
+    private maskedClip(clip: THREE.AnimationClip, maskBone: string, excludeBone?: string): THREE.AnimationClip {
         let byBone = this.maskedClips.get(clip);
         if (!byBone) {
             byBone = new Map();
             this.maskedClips.set(clip, byBone);
         }
-        let masked = byBone.get(maskBone);
+        const key = excludeBone ? `${maskBone}|${excludeBone}` : maskBone;
+        let masked = byBone.get(key);
         if (!masked) {
-            masked = maskClip(clip, boneNamesUnder(this.root, maskBone));
-            byBone.set(maskBone, masked);
+            const bones = boneNamesUnder(this.root, maskBone);
+            if (excludeBone) boneNamesUnder(this.root, excludeBone).forEach(name => bones.delete(name));
+            masked = maskClip(clip, bones);
+            byBone.set(key, masked);
         }
         return masked;
+    }
+
+    /** The root turn of `layer` over `span` seconds of clip time from `from`, wrapping round a loop. */
+    private yawStep(layer: MontageLayer, from: number, span: number): number {
+        const yaw = layer.rootYaw;
+        const duration = layer.clip.duration;
+        if (!yaw || !(duration > 0) || span === 0) return 0;
+        const at = (time: number) => yaw.evaluate(THREE.MathUtils.clamp(time, 0, duration))[0];
+        let to = from + span;
+        if (!layer.loop) return at(to) - at(from);
+        // A step past either end of a loop turns to that end, then on from the other end.
+        let turn = 0;
+        while (to > duration) { turn += at(duration) - at(from); from = 0; to -= duration; }
+        while (to < 0) { turn += at(0) - at(from); from = duration; to += duration; }
+        return turn + at(to) - at(from);
+    }
+
+    /**
+     * `clip` with `boneName`'s turn about the character's up (since its first key) taken out of its
+     * rotation track, and that turn over the clip's time; built once per clip and bone. Null when
+     * the bone or its rotation track is missing.
+     */
+    private rootYawClip(clip: THREE.AnimationClip, boneName: string): RootYawClip | null {
+        let byBone = this.rootYawClips.get(clip);
+        if (!byBone) {
+            byBone = new Map();
+            this.rootYawClips.set(clip, byBone);
+        }
+        if (byBone.has(boneName)) return byBone.get(boneName) ?? null;
+        let result: RootYawClip | null = null;
+        const bone = findBone(this.root, boneName);
+        const track = bone ? clip.tracks.find((candidate) => {
+            const node = trackNodeName(candidate);
+            return candidate.name.endsWith('.quaternion') && !!node && boneKey(node) === boneKey(bone.name);
+        }) : undefined;
+        if (bone && track && track.times.length) {
+            // The character's up, in the frame of the bone's parent.
+            const parentTurn = new THREE.Quaternion();
+            for (let node = bone.parent; node && node !== this.root; node = node.parent) parentTurn.premultiply(node.quaternion);
+            const up = new THREE.Vector3(0, 1, 0).applyQuaternion(parentTurn.invert()).normalize();
+            const first = new THREE.Quaternion().fromArray(track.values, 0);
+            const firstInverse = first.clone().invert();
+            const values = new Float32Array(track.values.length);
+            const yaws = new Float32Array(track.times.length);
+            const key = new THREE.Quaternion();
+            const turn = new THREE.Quaternion();
+            let previous = 0;
+            for (let index = 0; index < track.times.length; index++) {
+                key.fromArray(track.values, index * 4);
+                // The twist about up of the turn since the first key, unwrapped against the last.
+                turn.copy(key).multiply(firstInverse);
+                let angle = 2 * Math.atan2(turn.x * up.x + turn.y * up.y + turn.z * up.z, turn.w);
+                angle = Math.atan2(Math.sin(angle), Math.cos(angle));
+                while (angle - previous > Math.PI) angle -= Math.PI * 2;
+                while (angle - previous < -Math.PI) angle += Math.PI * 2;
+                previous = angle;
+                yaws[index] = angle;
+                turn.setFromAxisAngle(up, -angle).multiply(key).normalize();
+                turn.toArray(values, index * 4);
+            }
+            const stripped = new THREE.QuaternionKeyframeTrack(track.name, Array.from(track.times), Array.from(values));
+            result = {
+                clip: new THREE.AnimationClip(clip.name, clip.duration, clip.tracks.map(candidate => (candidate === track ? stripped : candidate)), clip.blendMode),
+                yaw: new THREE.LinearInterpolant(track.times, yaws, 1, new Float32Array(1)),
+            };
+        }
+        byBone.set(boneName, result);
+        return result;
     }
 
     /** Starts the fade-out, reaching zero within `duration` and never slower than one under way. */

@@ -129,7 +129,8 @@ export const useGraphRuntime = (
         montageRef.current.play(clip, options);
         return true;
     }, []);
-    const stopMontage = useCallback((blendOut?: number) => { montageRef.current?.stop(blendOut); }, []);
+    const stopMontage = useCallback((blendOut?: number, slot?: string) => { montageRef.current?.stop(blendOut, slot); }, []);
+    const consumeRootYaw = useCallback(() => montageRef.current?.consumeRootYaw() ?? 0, []);
 
     // -- Root motion: travel accumulates until the owner of the transform consumes it.
     const rootMotionRef = useRef(new THREE.Vector3());
@@ -178,5 +179,5 @@ export const useGraphRuntime = (
         return graph.states.find(state => state.id === id) ?? null;
     }, [activeStateRef, graph.states]);
 
-    return { setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, getActiveState };
+    return { setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, consumeRootYaw, getActiveState };
 };

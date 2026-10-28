@@ -419,7 +419,13 @@ export const usePlayerPhysics = (
      * given, it moves the character instead of the input direction and speed (rotation, stamina
      * and animation inputs still follow the input).
      */
-    const updatePhysics = (input: PlayerInputState, delta: number, rootTravel?: { readonly x: number; readonly z: number } | null) => {
+    const updatePhysics = (
+        input: PlayerInputState,
+        delta: number,
+        rootTravel?: { readonly x: number; readonly z: number } | null,
+        /** While a turn clip plays, the radians it turned the character this step: the turn in place follows it. */
+        clipTurn?: number | null,
+    ) => {
         const {
             ROTATION_SPEED, STAMINA_DRAIN, STAMINA_REGEN, MAX_STAMINA, EXHAUSTION_RECOVERY
         } = DEFAULT_CONFIG;
@@ -446,8 +452,12 @@ export const usePlayerPhysics = (
         // --- 3. Handle Rotation ---
         let targetRotation = modelObject.rotation.y;
 
+        // A turn in place starting this step: +1 to the left, -1 to the right.
+        let turnStarted = 0;
         if (input.isAiming) {
-            const facing = aimFacing(modelObject.rotation.y, Math.atan2(camForward.x, camForward.z), isMoving, turningInPlace.current);
+            const aimYaw = Math.atan2(camForward.x, camForward.z);
+            const facing = aimFacing(modelObject.rotation.y, aimYaw, isMoving, turningInPlace.current);
+            if (facing.turning && !turningInPlace.current) turnStarted = wrapAngle(aimYaw - modelObject.rotation.y) > 0 ? 1 : -1;
             turningInPlace.current = facing.turning;
             if (facing.target !== null) targetRotation = facing.target;
         } else {
@@ -458,8 +468,13 @@ export const usePlayerPhysics = (
         const rotDiff = wrapAngle(targetRotation - modelObject.rotation.y);
         const effectiveRotSpeed = input.isAiming ? ROTATION_SPEED * 2.0 : ROTATION_SPEED;
         let turn = rotDiff * Math.min(1, effectiveRotSpeed * delta);
-        // A turn in place steps round at a walking pace rather than snapping to the aim.
-        if (turningInPlace.current) turn = THREE.MathUtils.clamp(turn, -TURN_IN_PLACE_SPEED * delta, TURN_IN_PLACE_SPEED * delta);
+        // A turn in place steps round at a walking pace rather than snapping to the aim, or exactly
+        // as its turn clip turns the character while one plays.
+        if (turningInPlace.current) {
+            turn = typeof clipTurn === 'number'
+                ? clipTurn
+                : THREE.MathUtils.clamp(turn, -TURN_IN_PLACE_SPEED * delta, TURN_IN_PLACE_SPEED * delta);
+        }
         modelObject.rotation.y += turn;
 
         // --- 4. Stamina & Hysteresis Logic ---
@@ -519,6 +534,10 @@ export const usePlayerPhysics = (
 
         return {
             isMoving,
+            /** A turn in place started this step: +1 to the left, -1 to the right, 0 when none did. */
+            turnStarted,
+            /** A turn in place is under way. */
+            turningInPlace: turningInPlace.current,
             effectiveSprint,
             localInputX: localX,
             localInputY: localY,

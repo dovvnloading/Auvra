@@ -9,7 +9,10 @@ export interface GraphRuntimeAPI {
     getVariables: () => Record<string, number | boolean>;
     /** Plays a clip once over the graph (optionally on part of the skeleton); false when the clip is unknown. */
     playMontage?: (clipName: string, options?: PlayMontageOptions) => boolean;
-    stopMontage?: (blendOut?: number) => void;
+    /** Fades out the montages of `slot`, or every montage without one. */
+    stopMontage?: (blendOut?: number, slot?: string) => void;
+    /** Radians (left positive) a root-yaw montage turned the character since the last call; the caller turns it by that much. */
+    consumeRootYaw?: () => number;
     /** World-space root-motion travel since the last call; the caller moves the character by it. */
     consumeRootMotion?: (out?: THREE.Vector3) => THREE.Vector3;
     getActiveState?: () => GraphState | null;
@@ -56,14 +59,14 @@ export const GraphRuntime: React.FC<GraphRuntimeProps> = ({
         eventSource,
         lod
     );
-    const { setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, getActiveState } = runtime;
+    const { setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, consumeRootYaw, getActiveState } = runtime;
 
     // Expose API
     useEffect(() => {
         if (apiRef) {
-            apiRef.current = { setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, getActiveState };
+            apiRef.current = { setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, consumeRootYaw, getActiveState };
         }
-    }, [apiRef, setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, getActiveState]);
+    }, [apiRef, setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, consumeRootYaw, getActiveState]);
 
     return null;
 };
