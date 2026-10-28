@@ -371,7 +371,7 @@ export const resolveAutoTypes = (graph: MaterialGraph): Map<string, MaterialValu
 
     const portType = (node: MaterialGraphNode, type: MaterialPortType): MaterialValueType => (type === 'auto' ? resolve(node) : type);
 
-    const fallbackType = (node: MaterialGraphNode, definition: MaterialNodeDef, input: MaterialInputDef): MaterialValueType => {
+    const fallbackType = (definition: MaterialNodeDef, input: MaterialInputDef): MaterialValueType => {
         const fallback = input.fallback;
         if (typeof fallback === 'string' || 'value' in fallback) return 'float';
         if ('builtin' in fallback) return BUILTIN_TYPES[fallback.builtin];
@@ -395,7 +395,7 @@ export const resolveAutoTypes = (graph: MaterialGraph): Map<string, MaterialValu
                 const link = incoming.get(`${node.id}:${input.key}`);
                 const source = link && nodes.get(link.fromNode);
                 const port = source && DEFINITIONS.get(source.type)?.outputs.find(output => output.key === link!.fromOutput);
-                types.push(source && port ? portType(source, port.type) : fallbackType(node, definition, input));
+                types.push(source && port ? portType(source, port.type) : fallbackType(definition, input));
             }
             type = widest(types);
         }
