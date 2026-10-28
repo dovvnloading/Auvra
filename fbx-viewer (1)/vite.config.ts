@@ -141,6 +141,18 @@ export default defineConfig(({ command, mode }) => {
     },
   },
   ...(developmentNonce ? { html: { cspNonce: developmentNonce } } : {}),
+  // Packages imported only by workers: the dependency scan does not follow workers, so without these
+  // the first import of a model found them, re-optimized and reloaded the editor. The Basis and
+  // Draco decoders are also CommonJS, which only this conversion makes importable.
+  optimizeDeps: {
+    include: [
+      'three/examples/jsm/loaders/FBXLoader.js',
+      'three/examples/jsm/loaders/OBJLoader.js',
+      'three/examples/jsm/exporters/GLTFExporter.js',
+      'three/examples/jsm/libs/basis/basis_transcoder.js',
+      'three/examples/jsm/libs/draco/gltf/draco_wasm_wrapper.js',
+    ],
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, '.'),

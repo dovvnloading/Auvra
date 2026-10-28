@@ -144,9 +144,13 @@ const EXEMPT = new Map(Object.entries({
   'utils/textureUtils.ts': 'pure-utility',
   'utils/textureCompression/bcEncoder.ts': 'pure-utility',
   'utils/textureCompression/compressTextures.ts': 'import-child-phase',
+  'utils/gltfDecoders.ts': 'import-child-phase',
   'utils/thumbnailGenerator.ts': 'import-child-phase',
   'workers/fbxImport.worker.ts': 'worker-protocol',
   'workers/textureCompress.worker.ts': 'worker-protocol',
+  'workers/basisTranscode.worker.ts': 'worker-protocol',
+  'workers/dracoDecode.worker.ts': 'worker-protocol',
+  'workers/gltfDecoders.d.ts': 'type-declaration',
 }));
 
 const files = [];

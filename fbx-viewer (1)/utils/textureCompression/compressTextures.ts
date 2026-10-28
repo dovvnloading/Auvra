@@ -31,26 +31,38 @@ const MIN_COMPRESSED_SIZE = 64;
 /** Each compressed texture's source image, for editor tools that read a texture's pixels. */
 const sourceImages = new WeakMap<THREE.Texture, unknown>();
 
-/** The image a texture was made from: its own, or the source of a compressed texture. */
-export const textureSourceImage = (texture: THREE.Texture): unknown => sourceImages.get(texture) ?? texture.image;
+/**
+ * The image a texture was made from: its own, or the source of a texture compressed here. A texture
+ * that arrived compressed (a model's Basis textures) has no image to read, only GPU blocks.
+ */
+export const textureSourceImage = (texture: THREE.Texture): unknown =>
+    sourceImages.get(texture) ?? ((texture as THREE.CompressedTexture).isCompressedTexture ? null : texture.image);
 
-let support: { colour: boolean; normal: boolean } | null = null;
-/** Whether this device's GPU samples BC1/BC3 textures (in sRGB as well as linear), and BC5 for normal maps. */
-export const blockCompressionSupport = (): { colour: boolean; normal: boolean } => {
-    if (support) return support;
-    support = { colour: false, normal: false };
+let extensions: ReadonlySet<string> | null = null;
+/** The WebGL extensions this device offers, the compressed texture formats among them, probed once. */
+export const gpuExtensions = (): ReadonlySet<string> => {
+    if (extensions) return extensions;
+    extensions = new Set();
     try {
         const canvas = document.createElement('canvas');
         const gl = (canvas.getContext('webgl2') ?? canvas.getContext('webgl')) as WebGLRenderingContext | null;
-        support = {
-            colour: !!gl?.getExtension('WEBGL_compressed_texture_s3tc') && !!gl.getExtension('WEBGL_compressed_texture_s3tc_srgb'),
-            normal: !!gl?.getExtension('EXT_texture_compression_rgtc'),
-        };
-        gl?.getExtension('WEBGL_lose_context')?.loseContext();
+        if (gl) {
+            extensions = new Set(gl.getSupportedExtensions() ?? []);
+            gl.getExtension('WEBGL_lose_context')?.loseContext();
+        }
     } catch {
-        support = { colour: false, normal: false };
+        extensions = new Set();
     }
-    return support;
+    return extensions;
+};
+
+/** Whether this device's GPU samples BC1/BC3 textures (in sRGB as well as linear), and BC5 for normal maps. */
+export const blockCompressionSupport = (): { colour: boolean; normal: boolean } => {
+    const offered = gpuExtensions();
+    return {
+        colour: offered.has('WEBGL_compressed_texture_s3tc') && offered.has('WEBGL_compressed_texture_s3tc_srgb'),
+        normal: offered.has('EXT_texture_compression_rgtc'),
+    };
 };
 
 /** The shader line that reads a tangent-space normal, and its replacement that rebuilds z from a two-channel (BC5) map. */

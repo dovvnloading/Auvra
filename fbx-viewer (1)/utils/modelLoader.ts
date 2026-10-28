@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { LoadedModelData } from '../types';
 import { optimizeModelMaterials } from './processing/ModelMaterials';
 import { compressModelTextures } from './textureCompression/compressTextures';
+import { withGltfDecoders } from './gltfDecoders';
 import { normalizeModel } from './processing/ModelTransforms';
 import { disposeObject } from './processing/ModelLifecycle';
 import { UV_ORIGIN_TOP_LEFT_KEY } from './materialOverrides';
@@ -116,7 +117,7 @@ const throwIfAborted = (signal?: AbortSignal): void => {
  * disposed. `release` runs once the parser itself has settled.
  */
 const materializeGltf = async (data: ArrayBuffer | string, signal?: AbortSignal, release?: () => void): Promise<ParsedGltf> => {
-  const parsedPromise = new GLTFLoader().parseAsync(data, '').then((loaded) => {
+  const parsedPromise = withGltfDecoders(new GLTFLoader()).parseAsync(data, '').then((loaded) => {
     if (signal?.aborted) {
       try { disposeObject(loaded.scene); } catch { /* best effort on cancellation */ }
       throw abortError();
@@ -222,16 +223,6 @@ interface GltfDocument {
 const GLB_MAGIC = 0x46546c67; // 'glTF'
 const GLB_JSON_CHUNK = 0x4e4f534a; // 'JSON'
 
-// The decoders these extensions need are not bundled (they are WASM/JS
-// payloads the editor CSP does not load), so name the problem up front rather
-// than failing deep inside GLTFLoader. Draco fails even when merely used; the
-// others fall back to plain data unless they are required.
-const UNSUPPORTED_GLTF_EXTENSIONS: Record<string, string> = {
-  KHR_draco_mesh_compression: 'Draco mesh compression',
-  EXT_meshopt_compression: 'meshopt compression',
-  KHR_texture_basisu: 'KTX2/Basis textures',
-};
-
 const invalidGltf = (detail: string): Error => new Error(`This file is not a valid glTF 2.0 model: ${detail}.`);
 
 const parseGltfJson = (text: string): GltfDocument => {
@@ -241,11 +232,7 @@ const parseGltfJson = (text: string): GltfDocument => {
   const document = json as GltfDocument;
   const major = Number.parseInt(String(document.asset?.version ?? ''), 10);
   if (major !== 2) throw new Error('Only glTF 2.0 models are supported; re-export as glTF 2.0.');
-  for (const [extension, label] of Object.entries(UNSUPPORTED_GLTF_EXTENSIONS)) {
-    const required = document.extensionsRequired?.includes(extension);
-    const used = extension === 'KHR_draco_mesh_compression' && document.extensionsUsed?.includes(extension);
-    if (required || used) throw new Error(`This glTF uses ${label}, which Auvra cannot decode yet. Re-export it without that compression.`);
-  }
+  // Draco, meshopt and Basis compression are decoded as the model loads (utils/gltfDecoders.ts).
   return document;
 };
 
