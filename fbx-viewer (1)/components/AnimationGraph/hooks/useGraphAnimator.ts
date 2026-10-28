@@ -9,6 +9,7 @@ import { crossedNotifies } from '../utils/notifies';
 import { rootMotionDelta, type RootMotion } from '../utils/rootMotion';
 import { actionPhase, syncBlendActions, syncLeader } from '../utils/syncGroups';
 import { curveVariableValue } from '../utils/curves';
+import { clipGroundSpeed, groundSpeedRate } from '../utils/groundSpeed';
 
 /**
  * Animation runs before every other frame callback (priority -1), so IK, sockets and attachments
@@ -130,6 +131,10 @@ const _lodFrustum = new THREE.Frustum();
 const _lodMatrix = new THREE.Matrix4();
 
 const _rootDelta = new THREE.Vector3();
+const _groundAt = new THREE.Vector3();
+const _modelScale = new THREE.Vector3();
+/** How quickly the measured ground speed follows the character's movement, per second. */
+const GROUND_SPEED_RATE = 10;
 const _rootBasis = new THREE.Matrix3();
 
 const rootBoneParent = (modelObject: THREE.Object3D, motion: RootMotion): THREE.Object3D | null => {
@@ -170,6 +175,8 @@ export const useGraphAnimator = (
 
     // Time not yet given to the mixer by a character posed less often (extras.lod).
     const lodPending = useRef({ delta: 0, frames: 0 });
+    // How fast the character is moving over the ground (world units a second), for states that match it.
+    const ground = useRef({ speed: 0, last: null as THREE.Vector3 | null });
 
     // -- FRAME LOOP --
     useFrame((state, rawDelta) => {
@@ -228,8 +235,24 @@ export const useGraphAnimator = (
         // 2. Target weights and playback speed of the current state; a blend's samples run in step.
         const currentState = graph.states.find(s => s.id === activeStateRef.current);
         const targetWeights = currentState ? stateTargetWeights(currentState, variables, name => !!actionsMap[name]) : {};
+        if (modelObject) {
+            modelObject.getWorldPosition(_groundAt);
+            const last = ground.current.last;
+            if (last && delta > 0) {
+                const moved = Math.hypot(_groundAt.x - last.x, _groundAt.z - last.z) / delta;
+                ground.current.speed += (moved - ground.current.speed) * (1 - Math.exp(-GROUND_SPEED_RATE * delta));
+                last.copy(_groundAt);
+            } else {
+                ground.current.last = _groundAt.clone();
+            }
+        }
         if (currentState) {
-            const rate = statePlayRate(currentState, variables);
+            let rate = statePlayRate(currentState, variables);
+            if (currentState.matchSpeed && !currentState.rootMotion && modelObject) {
+                // Played at the rate that carries the character at the speed it is really moving.
+                const scale = modelObject.getWorldScale(_modelScale).x;
+                rate *= groundSpeedRate(ground.current.speed, targetWeights, name => clipGroundSpeed(modelObject, actionsMap[name].getClip()) * scale);
+            }
             if (currentState.stateType === 'Single') {
                 Object.keys(targetWeights).forEach(name => { actionsMap[name].timeScale = rate; });
             } else {

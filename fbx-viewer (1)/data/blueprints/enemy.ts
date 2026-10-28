@@ -23,7 +23,7 @@ export const ENEMY_GRAPH: AnimationGraphData = {
   ],
   states: [
     { id: 'es1', name: 'Idle', clipName: 'Idle', position: { x: 400, y: 300 }, loop: true, isRoot: true, stateType: 'Single', blendSamples: [], blendParamX: '', blendParamY: '' },
-    { id: 'es2', name: 'Chase', clipName: 'Run', position: { x: 700, y: 300 }, loop: true, stateType: 'Single', blendSamples: [], blendParamX: '', blendParamY: '' },
+    { id: 'es2', name: 'Chase', clipName: 'Run', position: { x: 700, y: 300 }, loop: true, matchSpeed: true, stateType: 'Single', blendSamples: [], blendParamX: '', blendParamY: '' },
     { id: 'es3', name: 'Attack', clipName: 'Attack', position: { x: 550, y: 100 }, loop: false, stateType: 'Single', blendSamples: [], blendParamX: '', blendParamY: '' },
     { id: 'es4', name: 'Death', clipName: 'Death', position: { x: 800, y: 500 }, loop: false, stateType: 'Single', blendSamples: [], blendParamX: '', blendParamY: '' },
     { id: 'es5', name: 'Strafe', clipName: 'Strafe', position: { x: 400, y: 500 }, loop: true, stateType: 'Single', blendSamples: [], blendParamX: '', blendParamY: '' }

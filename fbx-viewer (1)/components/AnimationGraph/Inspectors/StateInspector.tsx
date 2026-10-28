@@ -118,6 +118,21 @@ const curveVariableOptions = [
                     <p className="text-[10px] text-gray-600">States in one group carry their phase across transitions, so a run picks up the walk's stride.</p>
                 </div>}
 
+                {/* Match ground speed */}
+                {!machine && !conduit && <div className="space-y-1.5">
+                    <label className="flex items-center justify-between gap-2 cursor-pointer">
+                        <span className="text-[10px] uppercase text-gray-500 font-bold tracking-wider">Match Ground Speed</span>
+                        <input
+                            type="checkbox"
+                            checked={!!node.matchSpeed}
+                            onChange={(e) => updateState({ matchSpeed: e.target.checked || undefined })}
+                            aria-label="Match ground speed"
+                            className="accent-blue-500"
+                        />
+                    </label>
+                    <p className="text-[10px] text-gray-600">Plays the clips as fast as the character really moves, read from their feet, so planted feet do not slide. Not with root motion.</p>
+                </div>}
+
                 {/* Configuration based on Type */}
                 {conduit ? (
                     <div className="bg-gray-800 rounded-lg border border-gray-700 p-3 space-y-2">

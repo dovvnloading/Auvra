@@ -16,6 +16,7 @@ import { useGameContent } from '../../runtime/GameContentContext';
 import { ownClipsFirst } from '../../utils/animationBinding';
 import { generatedMuzzleSocketName, weaponMoveClips, weaponPlacements, type WeaponPose } from '../../runtime/weapons';
 import { weaponMuzzleSocket } from '../../runtime/weaponMuzzle';
+import { supportRotationFromClip } from '../../runtime/weaponFit';
 import { weaponLocomotionGraph } from '../AnimationGraph/utils/clipMatching';
 
 /** Seconds the death animation plays before the body starts fading. */
@@ -177,9 +178,17 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
     const heldAttachmentId = heldWeapon?.attachmentId ?? null;
     const heldInHands = !!heldAttachmentId && weaponPlacementsById.get(heldAttachmentId) === 'hand';
     const heldAttachment = heldInHands ? attachments.find(item => item.id === heldAttachmentId) ?? null : null;
+    // A weapon never fitted has no record of how the other hand is turned on it: it takes the turn
+    // from its own idle clip (else its aim clip), as Fit would, so that hand closes on it as the clip has it.
+    const supportRotation = useMemo(() => {
+        if (!heldWeapon?.supportGrip || heldWeapon.supportRotation || !heldAttachment) return heldWeapon?.supportRotation ?? null;
+        const name = heldWeapon.idleClip || heldWeapon.aimClip;
+        const clip = name ? clips.find(item => item.name === name) : undefined;
+        return clip ? supportRotationFromClip(model.object, clip, heldAttachment.boneName, heldAttachment.rotation) : null;
+    }, [heldWeapon, heldAttachment, clips, model.object]);
     const supportGrip = useMemo(
-        () => (weaponPose.reloading ? null : heldWeaponGrip(heldWeapon, heldAttachment)),
-        [heldAttachment, heldWeapon, weaponPose.reloading],
+        () => (weaponPose.reloading ? null : heldWeaponGrip(heldWeapon && { ...heldWeapon, supportRotation }, heldAttachment)),
+        [heldAttachment, heldWeapon, supportRotation, weaponPose.reloading],
     );
 
     // --- Configuration ---
