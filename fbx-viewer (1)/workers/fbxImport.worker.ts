@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
+import { writeOpacity } from '../utils/processing/opacityMaps';
 
 // Despite the file name this worker converts every format whose loader parses
 // synchronously (FBX and OBJ) into a GLB handoff for the renderer thread.
@@ -116,6 +117,62 @@ const replaceWorkerImages = (object: THREE.Object3D): ImageBitmap[] => {
 };
 
 /**
+ * glTF has no opacity map: a material's opacity lives in its base colour's alpha, so the GLB
+ * handoff would drop FBXLoader's alphaMap and draw cut-out cards (hair, eyelashes) as solid quads.
+ * Bake each opacity map into the alpha of a copy of the material's colour map. A material marked
+ * transparent with neither an opacity map nor partial opacity draws opaque (FBX often marks them).
+ */
+const bakeOpacityMaps = (object: THREE.Object3D, bitmaps: ImageBitmap[]): void => {
+  const baked = new Map<string, THREE.Texture>();
+  object.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    for (const material of (Array.isArray(mesh.material) ? mesh.material : [mesh.material]) as THREE.MeshPhongMaterial[]) {
+      const opacity = material.alphaMap;
+      const mask = opacity?.image as ImageBitmap | null | undefined;
+      if (!opacity || !mask) {
+        if (material.transparent && material.opacity >= 1) material.transparent = false;
+        continue;
+      }
+      const colour = material.map;
+      const key = `${colour?.uuid ?? ''}:${opacity.uuid}`;
+      let texture = baked.get(key);
+      if (!texture) {
+        const image = colour?.image as ImageBitmap | null | undefined;
+        const width = image?.width || mask.width;
+        const height = image?.height || mask.height;
+        const canvas = new OffscreenCanvas(width, height);
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        if (!context) continue;
+        context.drawImage(mask, 0, 0, width, height);
+        const maskPixels = context.getImageData(0, 0, width, height).data;
+        context.clearRect(0, 0, width, height);
+        if (image) {
+          context.drawImage(image, 0, 0, width, height);
+        } else {
+          context.fillStyle = '#ffffff';
+          context.fillRect(0, 0, width, height);
+        }
+        const pixels = context.getImageData(0, 0, width, height);
+        writeOpacity(pixels.data, maskPixels);
+        context.putImageData(pixels, 0, 0);
+        const bitmap = canvas.transferToImageBitmap();
+        bitmaps.push(bitmap);
+        // A clone shares its source image; the baked one gets its own.
+        texture = (colour ?? opacity).clone();
+        texture.source = new THREE.Source(bitmap);
+        if (!colour) texture.colorSpace = THREE.SRGBColorSpace;
+        texture.needsUpdate = true;
+        baked.set(key, texture);
+      }
+      material.map = texture;
+      material.alphaMap = null;
+      material.transparent = true;
+    }
+  });
+};
+
+/**
  * OBJ carries no PBR data (its .mtl sidecar is not part of a single-file
  * import), and GLTFExporter would write OBJLoader's Phong defaults as
  * half-metallic. Hand over matte Standard materials with smooth normals
@@ -163,6 +220,7 @@ scope.onmessage = async (event: MessageEvent<ImportRequest>) => {
       report(0.48, 'embedded_texture_decode', 'decoding');
       await Promise.all(pendingImages);
       bitmaps = replaceWorkerImages(object);
+      bakeOpacityMaps(object, bitmaps);
     }
     report(0.64, 'runtime_asset_construction', 'constructing');
     const exported = await new GLTFExporter().parseAsync(object, {

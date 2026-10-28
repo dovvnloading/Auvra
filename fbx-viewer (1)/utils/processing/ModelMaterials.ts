@@ -102,15 +102,12 @@ const processMaterial = (mat: THREE.Material): THREE.Material => {
     // 4. Geometry/Side Fixes
     standardMat.side = THREE.DoubleSide;
 
-    // 5. Transparency Heuristics
-    // If we have an alpha map, force transparency on
+    // 5. Transparency
+    // An alpha map makes it transparent. FBX and OBJ arrive through the import worker's GLB handoff,
+    // which has already baked opacity maps into the colour map's alpha and made opaque what has no
+    // opacity, so a transparent material here with full opacity is drawn through its colour map.
     if ((standardMat as any).alphaMap) {
         standardMat.transparent = true;
-    }
-    // FBX often sets transparency on opaque objects.
-    // If opacity is 1 and no alpha map, force opaque to avoid depth sorting issues.
-    else if (standardMat.opacity >= 1.0) {
-         standardMat.transparent = false;
     }
 
     // 6. Ensure Base Color is not tinting Texture incorrectly
