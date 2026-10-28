@@ -23,6 +23,7 @@ import {
   type HUDDocumentData,
   type LoadedGameContent,
 } from '../runtime/types';
+import { MATERIALS_DOMAIN, materialLibrary, readMaterialAsset, type MaterialAsset } from '../runtime/materials/materialLibrary';
 
 /** The HUD document in the project 'hud' domain. */
 export const HUD_DOCUMENT_ID = 'hud-main';
@@ -195,6 +196,9 @@ export async function loadGameContent(
       catch (error) { recordAssetFailure('texture_hydration_failed', error, 'source_read', diagnostic); }
       complete(`Loaded texture — ${item.name}`, diagnostic);
     }
+    // Material assets, before the models whose materials use them.
+    materialLibrary.setTextureSource((textureId) => textureAssetUrls.get(textureId));
+    materialLibrary.replaceAll(documents(MATERIALS_DOMAIN).map(readMaterialAsset).filter((asset): asset is MaterialAsset => asset !== null));
     for (const value of documents('audio')) {
       const item = value as Partial<AudioData> & { assetId?: string };
       if (!item.id || !item.name || !item.assetId) continue;

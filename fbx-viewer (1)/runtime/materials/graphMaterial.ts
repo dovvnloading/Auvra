@@ -21,8 +21,11 @@ import {
 /** Seconds of play, read by every graph material's Time node; whoever renders advances it. */
 export const MATERIAL_TIME = { value: 0 };
 
-/** The texture a Texture Sample or Normal Map node names, or null while it is missing or loading. */
-export type MaterialTextureLookup = (textureId: string) => THREE.Texture | null;
+/**
+ * The texture a Texture Sample ('map': colour) or Normal Map ('normal') node names, or null while it
+ * is missing or loading.
+ */
+export type MaterialTextureLookup = (textureId: string, slot?: 'map' | 'normal') => THREE.Texture | null;
 
 const solidTexture = (r: number, g: number, b: number): THREE.DataTexture => {
     const texture = new THREE.DataTexture(new Uint8Array([r, g, b, 255]), 1, 1);
@@ -113,7 +116,7 @@ const syncUniforms = (binding: GraphBinding): void => {
         const value = readParam(param, node.params[spec.param]);
         const uniform = binding.uniforms[spec.name] ?? (binding.uniforms[spec.name] = { value: null });
         if (spec.kind === 'texture') {
-            const texture = typeof value === 'string' && value ? binding.textures(value) : null;
+            const texture = typeof value === 'string' && value ? binding.textures(value, node.type === 'normalMap' ? 'normal' : 'map') : null;
             uniform.value = texture ?? (node.type === 'normalMap' ? FLAT_NORMAL : WHITE);
         } else if (spec.kind === 'float') {
             uniform.value = value as number;

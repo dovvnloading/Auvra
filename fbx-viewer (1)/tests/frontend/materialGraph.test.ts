@@ -11,6 +11,8 @@ import {
   type MaterialGraph,
 } from '../../runtime/materials/materialGraph';
 import { GraphMaterial, MATERIAL_TIME, bindMaterialGraph, boundMaterialGraph, unbindMaterialGraph } from '../../runtime/materials/graphMaterial';
+import { graphTextures, materialAssetDocument, materialLibrary, readMaterialAsset } from '../../runtime/materials/materialLibrary';
+import { applyMaterialOverrides } from '../../utils/materialOverrides';
 
 const node = (id: string, type: string, params: Record<string, unknown> = {}) => ({ id, type, x: 0, y: 0, params: { ...defaultParams(type), ...params } });
 const link = (fromNode: string, fromOutput: string, toNode: string, toInput: string) => ({ fromNode, fromOutput, toNode, toInput });
@@ -187,3 +189,49 @@ describe('graph materials', () => {
     expect(compiled.outputs.baseColor).toBe('mg_output_baseColor');
   });
 });
+
+describe('the material library', () => {
+  const asset = (id: string, graph: MaterialGraph) => ({ id, name: id, graph });
+
+  it('lists the textures a graph samples, as colour or normals, and keeps them with the asset', () => {
+    const graph = normalizeMaterialGraph({
+      nodes: [node('out', OUTPUT_NODE_TYPE), node('t1', 'texture', { texture: 'bricks' }), node('t2', 'texture', { texture: 'bricks' }), node('n', 'normalMap', { texture: 'bricks-n' })],
+      links: [],
+    });
+    expect(graphTextures(graph)).toEqual([{ textureId: 'bricks', slot: 'map' }, { textureId: 'bricks-n', slot: 'normal' }]);
+    expect(materialAssetDocument(asset('m', graph)).textureIds).toEqual(['bricks', 'bricks-n']);
+    expect(readMaterialAsset({ id: 'x', name: '  ', graph: null })).toMatchObject({ id: 'x', name: 'Material' });
+    expect(readMaterialAsset({ name: 'no id' })).toBeNull();
+  });
+
+  it('binds assigned materials, follows edits to the asset, and lets go when it is removed', () => {
+    materialLibrary.replaceAll([asset('glow', tintedGraph())]);
+    const material = new THREE.MeshStandardMaterial();
+    expect(materialLibrary.assign(material, 'glow')).toBe(true);
+    expect(boundMaterialGraph(material)?.nodes.map(n => n.id)).toContain('tex');
+
+    const plain = normalizeMaterialGraph(null);
+    materialLibrary.upsert(asset('glow', plain));
+    expect(boundMaterialGraph(material)?.nodes).toHaveLength(1);
+
+    materialLibrary.remove('glow');
+    expect(boundMaterialGraph(material)).toBeNull();
+    // An asset not loaded (yet) leaves the material as it is.
+    expect(materialLibrary.assign(material, 'nowhere')).toBe(false);
+    expect(boundMaterialGraph(material)).toBeNull();
+    materialLibrary.assign(material, null);
+  });
+
+  it('assigns an asset to a model material through its override, and unassigns it again', () => {
+    materialLibrary.replaceAll([asset('stone', tintedGraph())]);
+    const root = new THREE.Group();
+    const material = new THREE.MeshStandardMaterial({ name: 'Wall' });
+    root.add(new THREE.Mesh(new THREE.BoxGeometry(), material));
+    applyMaterialOverrides(root, { Wall: { materialId: 'stone' } });
+    expect(boundMaterialGraph(material)).not.toBeNull();
+    applyMaterialOverrides(root, {});
+    expect(boundMaterialGraph(material)).toBeNull();
+    materialLibrary.replaceAll([]);
+  });
+});
+
