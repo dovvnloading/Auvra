@@ -172,6 +172,7 @@ export const PlayerApp: React.FC = () => {
                 rotation: live?.rotation ?? start?.rotation ?? [0, 0, 0],
                 health: state.player.health,
                 stamina: state.player.stamina,
+                ...(live?.weapons ? { weapons: live.weapons } : {}),
             },
             destroyedObjectIds: live?.destroyedObjectIds ?? [],
             variables: { ...state.vars },

@@ -72,6 +72,10 @@ const fakeServices = (objects: LevelObject[] = []) => {
       return direction.z > 0 ? hit : null;
     },
     playPlayerAnimation: (clipName, maskBone) => { calls.push(['playPlayerAnimation', clipName, maskBone]); return true; },
+    damagePlayer: amount => { calls.push(['damagePlayer', amount]); return true; },
+    healPlayer: amount => { calls.push(['healPlayer', amount]); return true; },
+    addAmmo: (rounds, weapon) => { calls.push(['addAmmo', rounds, weapon]); return true; },
+    giveWeapon: weapon => { calls.push(['giveWeapon', weapon]); return true; },
     openLevel: record('openLevel'),
     log: record('log'),
   };
@@ -131,7 +135,7 @@ describe('buildScriptSnapshot', () => {
       liveIds: new Set(['moved', 'gone', 'spawned']),
       getObject: id => live[id] ?? null,
       hidden: new Set(['child']),
-      player: { position: [1, 0, 1], rotation: [0, Math.PI, 0] },
+      player: { position: [1, 0, 1], rotation: [0, Math.PI, 0], health: 80, maxHealth: 100, weapon: 'Pistol', ammo: 9, reserve: 36 },
       input: { Jump: { down: true, pressed: true, released: false, value: 1 } },
       variables: { score: 3 },
       events: [{ type: 'triggerEnter', triggerId: 'door', otherId: 'player' }],

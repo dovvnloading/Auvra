@@ -38,7 +38,12 @@ export type WorldNodeType =
     | 'RandomInt'
     | 'Print'
     | 'PlayPlayerAnimation'
-    | 'SetMorphTarget';
+    | 'SetMorphTarget'
+    | 'DamagePlayer'
+    | 'HealPlayer'
+    | 'AddAmmo'
+    | 'GiveWeapon'
+    | 'GetPlayerHealth';
 
 export type Vec3 = [number, number, number];
 
@@ -124,6 +129,16 @@ export interface WorldNodeServices {
     playPlayerAnimation?(clipName: string, options: PlayAnimationOptions): boolean;
     /** Sets the weight of a named morph target on an actor's meshes; returns how many meshes have it. Absent: nothing changes. */
     setMorphTarget?(objectId: string, morph: string, weight: number): number;
+    /** Hurts the player; false when there is no live player. Absent: nothing happens. */
+    damagePlayer?(amount: number): boolean;
+    /** Restores the player's health; false when full, dead or absent. */
+    healPlayer?(amount: number): boolean;
+    /** Adds rounds to a carried weapon's reserve (blank: the held one); false when it takes none. */
+    addAmmo?(rounds: number, weapon: string): boolean;
+    /** Gives the player a weapon by name or id (a magazine for one already carried); false when nothing changed. */
+    giveWeapon?(weapon: string): boolean;
+    /** The player's health and maximum; null without a player. */
+    playerHealth?(): { health: number; max: number } | null;
 }
 
 export interface WorldExecutionContext extends FlowExecutionContext {
@@ -296,6 +311,47 @@ export const WORLD_NODE_DEFINITIONS: readonly WorldNodeDefinition[] = [
         inputs: [exec('Exec', 'Input'), input('Clip', 'String'), input('Mask Bone', 'String'), input('Blend In', 'Float'), input('Rate', 'Float'), input('Additive', 'Boolean')],
         outputs: [exec('Out', 'Output'), output('Played', 'Boolean')],
         data: { default_Clip: '', 'default_Mask Bone': '', 'default_Blend In': DEFAULT_ANIMATION_BLEND_IN, default_Rate: 1, default_Additive: false },
+    },
+    {
+        type: 'DamagePlayer',
+        title: 'Damage Player',
+        description: 'Hurts the player by Amount, as a hit would: the hit reaction plays, and at 0 health the game is over. Damaged is false without a live player.',
+        inputs: [exec('Exec', 'Input'), input('Amount', 'Float')],
+        outputs: [exec('Out', 'Output'), output('Damaged', 'Boolean')],
+        data: { default_Amount: 10 },
+    },
+    {
+        type: 'HealPlayer',
+        title: 'Heal Player',
+        description: "Restores up to Amount of the player's health, never past the maximum. Healed is false when the player is already at full health or dead.",
+        inputs: [exec('Exec', 'Input'), input('Amount', 'Float')],
+        outputs: [exec('Out', 'Output'), output('Healed', 'Boolean')],
+        data: { default_Amount: 25 },
+    },
+    {
+        type: 'AddAmmo',
+        title: 'Add Ammo',
+        description: "Adds Rounds to the reserve of a weapon the player carries, by name; blank is the held weapon. Added is false for a weapon the player does not carry or that never runs out.",
+        inputs: [exec('Exec', 'Input'), input('Rounds', 'Integer'), input('Weapon', 'String')],
+        outputs: [exec('Out', 'Output'), output('Added', 'Boolean')],
+        data: { default_Rounds: 30, default_Weapon: '' },
+    },
+    {
+        type: 'GiveWeapon',
+        title: 'Give Weapon',
+        description: "Gives the player one of their blueprint's weapons, by name, and puts it in their hands. A weapon they already carry gets a magazine of rounds instead. Given is false when nothing changed.",
+        inputs: [exec('Exec', 'Input'), input('Weapon', 'String')],
+        outputs: [exec('Out', 'Output'), output('Given', 'Boolean')],
+        data: { default_Weapon: '' },
+    },
+    {
+        type: 'GetPlayerHealth',
+        title: 'Get Player Health',
+        description: "The player's health and its maximum, and Health / Max from 0 to 1. All are 0 without a player.",
+        pure: true,
+        inputs: [],
+        outputs: [output('Health', 'Float'), output('Max', 'Float'), output('Fraction', 'Float')],
+        data: {},
     },
     {
         type: 'SetMorphTarget',
@@ -574,6 +630,33 @@ const runSetMorphTarget: WorldNodeExecutor = (_node, ctx) => {
     finish(ctx, { 'Meshes Changed': changed });
 };
 
+// Player actions: a blank or non-positive amount does nothing.
+const runDamagePlayer: WorldNodeExecutor = (_node, ctx) => {
+    const amount = toNumber(ctx.evaluate('Amount'), 0);
+    finish(ctx, { Damaged: amount > 0 && ctx.services.damagePlayer?.(amount) === true });
+};
+
+const runHealPlayer: WorldNodeExecutor = (_node, ctx) => {
+    const amount = toNumber(ctx.evaluate('Amount'), 0);
+    finish(ctx, { Healed: amount > 0 && ctx.services.healPlayer?.(amount) === true });
+};
+
+const runAddAmmo: WorldNodeExecutor = (_node, ctx) => {
+    const rounds = toInteger(ctx.evaluate('Rounds'), 0);
+    finish(ctx, { Added: rounds > 0 && ctx.services.addAmmo?.(rounds, toText(ctx.evaluate('Weapon'))) === true });
+};
+
+const runGiveWeapon: WorldNodeExecutor = (_node, ctx) => {
+    const weapon = toText(ctx.evaluate('Weapon'));
+    finish(ctx, { Given: weapon !== '' && ctx.services.giveWeapon?.(weapon) === true });
+};
+
+const runGetPlayerHealth: WorldNodeExecutor = (_node, ctx) => {
+    const health = ctx.services.playerHealth?.() ?? null;
+    const max = health && health.max > 0 ? health.max : 0;
+    publish(ctx, { Health: health?.health ?? 0, Max: max, Fraction: max > 0 ? (health?.health ?? 0) / max : 0 });
+};
+
 const executors = {
     SpawnPrefab: runSpawnPrefab,
     GetActorTransform: runGetActorTransform,
@@ -589,6 +672,11 @@ const executors = {
     Print: runPrint,
     PlayPlayerAnimation: runPlayPlayerAnimation,
     SetMorphTarget: runSetMorphTarget,
+    DamagePlayer: runDamagePlayer,
+    HealPlayer: runHealPlayer,
+    AddAmmo: runAddAmmo,
+    GiveWeapon: runGiveWeapon,
+    GetPlayerHealth: runGetPlayerHealth,
 } satisfies Record<WorldNodeType, WorldNodeExecutor>;
 
 /** Executor per world node type; look up by `node.type` and treat a miss as "not a world node". */

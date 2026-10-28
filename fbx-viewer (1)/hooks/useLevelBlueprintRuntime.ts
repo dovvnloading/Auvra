@@ -16,6 +16,8 @@ import { cameraDirector } from '../runtime/cameraDirector';
 import type { NetPayload } from '../runtime/net/protocol';
 import type { RuntimeHost } from '../runtime/types';
 import { levelVariables } from '../runtime/levelVariables';
+import { gameState } from '../runtime/gameState';
+import { playerActions } from '../runtime/playerActions';
 import { RuntimeServices, useRuntimeServices } from '../runtime/RuntimeServicesContext';
 import { FLOW_NODE_EXECUTORS, flowNodeOutputValue } from './levelBlueprintNodes/flow';
 import { findActorObject3D, isPureWorldNodeType, PLAYER_ACTOR_ID, setActorMorphTarget, WORLD_NODE_EXECUTORS, WorldExecutionContext, WorldNodeServices } from './levelBlueprintNodes/world';
@@ -241,6 +243,15 @@ export const useLevelBlueprintRuntime = ({
         setMorphTarget: (objectId, morph, weight) => {
             const object = sessionObject3D(objectId);
             return object ? setActorMorphTarget(object, morph, weight) : 0;
+        },
+        damagePlayer: amount => playerActions.damage(amount),
+        healPlayer: amount => playerActions.heal(amount),
+        addAmmo: (rounds, weapon) => playerActions.addAmmo(rounds, weapon),
+        giveWeapon: weapon => playerActions.giveWeapon(weapon),
+        playerHealth: () => {
+            if (!world.current.playerEntityRef.current) return null;
+            const { health, maxHealth } = gameState.get().player;
+            return { health, max: maxHealth };
         },
     }), [sessionObject3D]);
 

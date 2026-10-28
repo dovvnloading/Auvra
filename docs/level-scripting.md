@@ -84,6 +84,16 @@ Pending delays are dropped when the level restarts or play stops.
 | Random Float / Random Integer | A random value from **Min** to **Max** (defaults 0 to 1 and 0 to 10; Random Integer can return Max). Pure |
 | Print (Format) | Shows **Format** with `{0}`, `{1}` and `{2}` replaced by **Arg 0** to **Arg 2**. `{{` and `}}` print braces; decimals are rounded to 3 places |
 
+## Player nodes
+
+| Node | Does |
+|---|---|
+| Damage Player | Hurts the player by **Amount**, as a hit does: the hit reaction plays, and at 0 health the game is over. **Damaged** is false without a live player |
+| Heal Player | Restores up to **Amount** health, never past the maximum. **Healed** is false at full health or when the player is dead |
+| Get Player Health | The player's **Health**, **Max**, and **Fraction** (Health / Max, 0 to 1). All 0 without a player. Pure |
+| Add Ammo | Adds **Rounds** to the reserve of a weapon the player carries, by name; blank is the held weapon. **Added** is false for a weapon the player does not carry or one that never runs out |
+| Give Weapon | Gives the player one of their blueprint's [weapons](characters.md#weapons) by name and puts it in their hands; a weapon they already carry gets a magazine of rounds instead. **Given** is false when nothing changed |
+
 **Input Action** compares the action with its state on the node's previous run, so drive it from **Event Tick** to catch every press. The actions are MoveForward, MoveBack, MoveLeft, MoveRight, Jump, Sprint, Fire, Aim, Interact, Reload, NextWeapon and Pause; see [Controls](building-games.md#controls) for their keys.
 
 ## Level variables

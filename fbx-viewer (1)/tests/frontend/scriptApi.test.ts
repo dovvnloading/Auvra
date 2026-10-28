@@ -101,7 +101,7 @@ describe('script host', () => {
     const reader = "function onUpdate(ctx) { ctx.log('reader', ctx.get('door').position, ctx.player.position); }";
     host.load([script('a', 'door', source), script('b', 'door', reader)], plain, snapshot());
 
-    const commands = host.frame(snapshot({ player: { position: [4, 0, 4], rotation: [0, 0, 0] } }));
+    const commands = host.frame(snapshot({ player: { position: [4, 0, 4], rotation: [0, 0, 0], health: 80, maxHealth: 100, weapon: 'Pistol', ammo: 9, reserve: 36 } }));
 
     expect(commands).toEqual([
       { type: 'setTransform', objectId: 'door', position: [2, 2, 3], rotation: [0, 1.5, 0] },

@@ -9,10 +9,17 @@ import { usePlayerControls } from './hooks/usePlayerControls';
 import { usePlayerPhysics } from './hooks/usePlayerPhysics';
 import { HIP_FIRE_DELAY, usePlayerCombat } from './hooks/usePlayerCombat';
 import { Blueprint, DEFAULT_UPPER_BODY_BONE, LevelObject, UpperBodySettings } from '../../types';
-import { createWeaponState, resolveWeapons, stepWeapons, type ResolvedWeapon } from '../../runtime/weapons';
+import {
+    addAmmo, createWeaponState, giveWeapon, isHoldingWeapon, resolveWeapons, restoreWeapons, saveWeapons, stepWeapons,
+    type ResolvedWeapon, type SavedWeapons,
+} from '../../runtime/weapons';
+import { playerActions } from '../../runtime/playerActions';
 import type { PlayerWeaponStatus } from '../../runtime/gameState';
 
 const _rootTravel = new THREE.Vector3();
+
+/** Seconds a weapon stays in hand after its last shot before going back to its carry placement. */
+const WEAPON_READY_AFTER_SHOT = 0.8;
 
 type WeaponClips = Pick<ResolvedWeapon, 'fireClip' | 'aimClip' | 'reloadClip'>;
 
@@ -49,6 +56,10 @@ interface PlayerControllerProps {
     onAimChange?: (isAiming: boolean) => void;
     /** The held weapon and its ammunition, each time any of it changes. */
     onWeaponChange?: (status: PlayerWeaponStatus) => void;
+    /** Weapons as a loaded save left them; fresh magazines when left out. */
+    initialWeapons?: SavedWeapons | null;
+    /** Set to a function that reads the weapons for a save. */
+    weaponSaveRef?: React.MutableRefObject<(() => SavedWeapons) | null>;
     weaponSounds?: string[]; // Array of Audio URLs
     weaponVolume?: number;
 }
@@ -69,6 +80,8 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
     onStaminaChange,
     onAimChange,
     onWeaponChange,
+    initialWeapons,
+    weaponSaveRef,
     weaponSounds,
     weaponVolume = 1.0
 }) => {
@@ -111,21 +124,45 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
     // The blueprint's weapons and what each has left; a blueprint without any fires the default weapon.
     const weapons = useMemo(() => resolveWeapons(blueprint?.weapons), [blueprint?.weapons]);
     const weaponState = useRef(createWeaponState(weapons));
-    useEffect(() => { weaponState.current = createWeaponState(weapons); }, [weapons]);
-    const weaponReport = useRef({ held: -1, status: '' });
+    // A loaded save applies to the weapons the session starts with only.
+    const savedWeapons = useRef(initialWeapons ?? null);
+    useEffect(() => {
+        const state = createWeaponState(weapons);
+        if (savedWeapons.current) restoreWeapons(state, weapons, savedWeapons.current);
+        savedWeapons.current = null;
+        weaponState.current = state;
+    }, [weapons]);
+    // Pickups, Level Blueprint nodes and scripts give rounds and weapons through the player actions.
+    useEffect(() => playerActions.register({
+        addAmmo: (rounds, weapon) => addAmmo(weaponState.current, weapons, rounds, weapon),
+        giveWeapon: weapon => giveWeapon(weaponState.current, weapons, weapon),
+    }), [weapons]);
+    useEffect(() => {
+        if (!weaponSaveRef) return undefined;
+        weaponSaveRef.current = () => saveWeapons(weaponState.current, weapons);
+        return () => { weaponSaveRef.current = null; };
+    }, [weaponSaveRef, weapons]);
+    const weaponReport = useRef({ pose: '', status: '' });
+    // Seconds since the last shot; the weapon stays in hand (ready) for a moment after firing.
+    const sinceShot = useRef(Infinity);
 
-    /** Shows the held weapon on the character and reports its ammunition, when either changed. */
-    const reportWeapon = (held: number, weapon: ResolvedWeapon | undefined, reloading: boolean) => {
+    /**
+     * Places the weapon models on the character and reports the held weapon's ammunition, when either
+     * changed. `held` is -1 while the player carries no weapon: the HUD shows none.
+     */
+    const reportWeapon = (held: number, weapon: ResolvedWeapon | undefined, reloading: boolean, ready: boolean) => {
         const report = weaponReport.current;
-        if (held !== report.held) {
-            report.held = held;
-            entityRef.current?.holdWeapon?.(held);
+        const owned = weaponState.current.owned;
+        const pose = `${held}|${ready}|${owned.join(',')}`;
+        if (pose !== report.pose) {
+            report.pose = pose;
+            entityRef.current?.setWeaponPose?.({ held, ready, owned: [...owned] });
         }
-        if (!weapon || !onWeaponChange) return;
+        if (!onWeaponChange) return;
         const ammo = weaponState.current.ammo[held];
-        const status: PlayerWeaponStatus = {
-            weapon: weapon.name, ammo: ammo?.loaded ?? 0, magazine: weapon.magazine, reserve: ammo?.reserve ?? -1, reloading,
-        };
+        const status: PlayerWeaponStatus = weapon
+            ? { weapon: weapon.name, ammo: ammo?.loaded ?? 0, magazine: weapon.magazine, reserve: ammo?.reserve ?? -1, reloading }
+            : { weapon: '', ammo: 0, magazine: 0, reserve: -1, reloading: false };
         const key = `${held}|${status.ammo}|${status.reserve}|${reloading}`;
         if (key === report.status) return;
         report.status = key;
@@ -156,13 +193,17 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
             nextWeaponPressed: input.nextWeaponPressed,
             firstShotDelay: input.isAiming ? 0 : HIP_FIRE_DELAY,
         }, delta);
-        const held = weaponState.current.active;
-        const weapon = weapons[held];
+        const holding = isHoldingWeapon(weaponState.current);
+        const held = holding ? weaponState.current.active : -1;
+        const weapon = holding ? weapons[held] : undefined;
         const reloading = weaponState.current.reloading > 0;
-        reportWeapon(held, weapon, reloading);
+        const firing = input.isFiring && holding;
+        sinceShot.current = weaponStep.shots > 0 ? 0 : sinceShot.current + delta;
+        const ready = holding && (input.isAiming || firing || reloading || sinceShot.current < WEAPON_READY_AFTER_SHOT);
+        reportWeapon(held, weapon, reloading, ready);
 
         // Fire, aim and reload clips play from the spine up, over whatever the legs are doing.
-        const upperBody = upperBodyClip(blueprint?.upperBody, input.isFiring, input.isAiming, weapon, reloading);
+        const upperBody = upperBodyClip(blueprint?.upperBody, firing, input.isAiming, weapon, reloading);
         if (upperBody !== upperBodyPlaying.current || weaponStep.reloadStarted) {
             upperBodyPlaying.current = upperBody;
             if (upperBody) {
@@ -198,7 +239,7 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
         apiRef.current.setVariable('IsGrounded', !isAirborne);
         apiRef.current.setVariable('IsFalling', isFalling);
         apiRef.current.setVariable('VerticalSpeed', verticalSpeed);
-        apiRef.current.setVariable('IsFiring', input.isFiring && !reloading);
+        apiRef.current.setVariable('IsFiring', firing && !reloading);
         apiRef.current.setVariable('IsAiming', input.isAiming);
         apiRef.current.setVariable('IsReloading', reloading);
     });

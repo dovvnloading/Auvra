@@ -1,3 +1,4 @@
+import { cloneCharacterModel } from '../../utils/mountedParts';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { createPortal, useFrame, useStore, useThree, type RootState } from '@react-three/fiber';
@@ -10,7 +11,7 @@ import { AnimationGraphData, GraphTransition, LoadedModelData } from '../../type
 import { GraphRuntime, type GraphRuntimeAPI } from './GraphRuntime';
 import { ANIMATION_FRAME_PRIORITY } from './hooks/useGraphAnimator';
 import { conditionsMet, transitionAppliesTo } from './utils/transitions';
-import { AttachmentController } from '../Scene/AttachmentController';
+import { AttachmentController, type AttachmentPlacement } from '../Scene/AttachmentController';
 import { SocketController, resolveSocketFlashTextureUrl } from '../Scene/SocketController';
 import { LocalEnvironment } from '../Scene/LocalEnvironment';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
@@ -132,7 +133,8 @@ export interface PreviewResources {
 /** Clone a model for the preview without sharing mutable material state. */
 export const clonePreviewResources = (source: THREE.Object3D): PreviewResources => {
     const resources: PreviewResources = {
-        object: cloneSkeleton(source) as THREE.Group,
+        // Without the editor's own attachments and sockets: the preview mounts copies it controls.
+        object: cloneCharacterModel(source) as THREE.Group,
         materials: new Set(),
         textures: new Set(),
         baseMaps: new Map(),
@@ -499,6 +501,8 @@ export interface GraphPreviewProps {
     onStatusChange?: (status: PreviewStatus) => void;
     /** Changing it starts a new run, e.g. when the editor opens another graph on the same model. */
     resetKey?: string;
+    /** Per attachment id: hidden, or moved to another bone (a weapon's carry placement); the rest as authored. */
+    attachmentPlacements?: ReadonlyMap<string, 'hand' | 'hidden' | AttachmentPlacement>;
 }
 
 export const GraphPreview: React.FC<GraphPreviewProps> = ({
@@ -512,7 +516,8 @@ export const GraphPreview: React.FC<GraphPreviewProps> = ({
     onActiveStateChange,
     onTransitionFired,
     onStatusChange,
-    resetKey = ''
+    resetKey = '',
+    attachmentPlacements
 }) => {
     const { models, selectedModelId, graphData, attachments, sockets, flashTriggers, textures } = useScene();
     
@@ -714,13 +719,18 @@ export const GraphPreview: React.FC<GraphPreviewProps> = ({
                     <primitive object={displayObject} scale={finalScale} />
 
                     {/* Render Attachments */}
-                    {modelAttachments.map(att => (
-                        <AttachmentController
-                            key={att.id}
-                            data={att}
-                            parentObject={displayObject}
-                        />
-                    ))}
+                    {modelAttachments.map(att => {
+                        const placement = attachmentPlacements?.get(att.id);
+                        return (
+                            <AttachmentController
+                                key={att.id}
+                                data={att}
+                                parentObject={displayObject}
+                                hidden={placement === 'hidden'}
+                                placement={placement && typeof placement === 'object' ? placement : null}
+                            />
+                        );
+                    })}
 
                     {/* Render Sockets (Always visible in Graph Preview for debugging) */}
                     {modelSockets.map(sock => (

@@ -209,8 +209,12 @@ const _rootMove = new THREE.Vector3();
 const hasPhysicsComponent = (obj: LevelObject) =>
     !!obj.components?.some(component => component.enabled !== false && (component.type === 'collider' || component.type === 'rigidBody'));
 
-/** Props without collider components still block the player with a circle footprint, as before physics. */
-const isLegacySolidProp = (obj: LevelObject) => obj.type === 'prop' && !!obj.modelId && !hasPhysicsComponent(obj);
+/** Objects the player walks into to collect never block them. */
+const isPickup = (obj: LevelObject) =>
+    !!obj.components?.some(component => component.enabled !== false && component.type === 'pickup');
+
+/** Props without collider components still block the player with a circle footprint, as before physics; pickups do not. */
+const isLegacySolidProp = (obj: LevelObject) => obj.type === 'prop' && !!obj.modelId && !hasPhysicsComponent(obj) && !isPickup(obj);
 
 /**
  * Circle push-out: moves `position` (XZ) out of every included object's footprint, whose radius is

@@ -1,10 +1,10 @@
+import { cloneCharacterModel } from '../utils/mountedParts';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { PerformanceMonitor } from '@react-three/drei';
 import { EffectComposer, Bloom, Vignette, ToneMapping } from '@react-three/postprocessing';
 import { ToneMappingMode } from 'postprocessing';
-import { SkeletonUtils } from 'three-stdlib';
 import { AuvraCanvas } from '../renderer/AuvraCanvas';
 import { ProfilerPanel, ProfilerProbe, useProfilerToggle } from './ProfilerOverlay';
 import { levelVariables } from './levelVariables';
@@ -32,6 +32,8 @@ import { aimCameraOffset, AttachmentData, Blueprint, LevelComponent, LevelObject
 import { instantiatePrefab } from '../utils/prefabs';
 import { useGameContent } from './GameContentContext';
 import { gameState, INITIAL_PLAYER_STATE, type PlayerWeaponStatus, useGameState } from './gameState';
+import { playerActions } from './playerActions';
+import type { SavedWeapons } from './weapons';
 import { FrameStepper, PauseActionWatcher, PauseController, SceneInspector } from './PauseController';
 import { PhysicsWorld } from './physics';
 import { TriggerEventsProvider } from './triggers';
@@ -366,7 +368,7 @@ const LevelObjectNode: React.FC<{ object: LevelObject; plan: LevelRenderPlan; mo
         if (!model) return null;
         try {
             // Keeps the model root's own (import normalisation) transform, like the instanced layers.
-            const clone = SkeletonUtils.clone(model.object);
+            const clone = cloneCharacterModel(model.object);
             clone.traverse(child => {
                 if ((child as THREE.Mesh).isMesh) {
                     child.castShadow = true;
@@ -518,6 +520,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
 
     // A save records the player's transform and the authored actors gone so far (those a loaded save
     // had already removed included), which is what loading it restores.
+    const weaponSaveRef = useRef<(() => SavedWeapons) | null>(null);
     const runtimeObjectsRef = useRef(runtimeLevelObjects);
     runtimeObjectsRef.current = runtimeLevelObjects;
     useEffect(() => {
@@ -530,10 +533,12 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
             const live = new Set(runtimeObjectsRef.current.map(object => object.id));
             const destroyed = new Set(sessionRestore?.destroyedObjectIds ?? []);
             for (const object of authoredObjects) if (!live.has(object.id)) destroyed.add(object.id);
+            const weapons = weaponSaveRef.current?.();
             return {
                 position: [position.x, position.y, position.z],
                 rotation: [rotation.x, rotation.y, rotation.z],
                 destroyedObjectIds: [...destroyed],
+                ...(weapons ? { weapons } : {}),
             };
         };
         return () => { saveStateRef.current = null; };
@@ -613,6 +618,17 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
         applyMeleeHit(playerEntityRef.current, damage);
     }, []);
 
+    // Pickups, Level Blueprint nodes and scripts hurt and heal the player through the player actions.
+    useEffect(() => playerActions.register({
+        damage: amount => {
+            const entity = playerEntityRef.current;
+            if (!entity || entity.isDead()) return false;
+            applyMeleeHit(entity, amount);
+            return true;
+        },
+        heal: amount => playerEntityRef.current?.heal(amount) ?? false,
+    }), []);
+
     // Stable, so a dead enemy's despawn timer is not restarted by unrelated re-renders.
     const handleEnemyDespawn = useCallback((instanceId: string) => {
         setSpawnedEnemies(prev => prev.filter(e => e.instanceId !== instanceId));
@@ -626,7 +642,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
     // --- PLAYER INSTANCING ---
     const runtimePlayerModel = useMemo(() => {
         try {
-            const clonedObject = SkeletonUtils.clone(player.model.object) as THREE.Group;
+            const clonedObject = cloneCharacterModel(player.model.object) as THREE.Group;
             clonedObject.position.set(0, 0, 0);
             clonedObject.rotation.set(0, 0, 0);
             clonedObject.scale.set(1, 1, 1);
@@ -671,7 +687,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
     return (
         <IKPlayerTargetContext.Provider value={playerTargetRef}>
         <LevelStreamingContext.Provider value={levelStreaming}>
-        <RuntimeSpawnerProvider spawnPrefab={spawnPrefab}>
+        <RuntimeSpawnerProvider spawnPrefab={spawnPrefab} destroyObject={destroyRuntimeObject}>
             {/* --- Replaced Hardcoded Lights with SkySystem --- */}
             <SkySystem levelObjects={runtimeLevelObjects} />
 
@@ -729,6 +745,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                 registerHittable={(t) => projectileManagerRef.current?.registerTarget(t)}
                 unregisterHittable={(id) => projectileManagerRef.current?.unregisterTarget(id)}
                 onHealthChange={handlePlayerHealthChange}
+                initialHealth={sessionRestore?.player.health}
                 onSpawnBlood={handleSpawnBlood}
             />
 
@@ -765,6 +782,8 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                 onStaminaChange={handleStaminaChange}
                 onAimChange={handleAimChange}
                 onWeaponChange={handleWeaponChange}
+                initialWeapons={sessionRestore?.player.weapons}
+                weaponSaveRef={weaponSaveRef}
                 weaponSounds={weaponSoundUrls}
                 weaponVolume={player.blueprint.weaponVolume ?? 1.0}
                 blueprint={player.blueprint}
@@ -982,7 +1001,7 @@ const RuntimeEnemyController: React.FC<{
 
     const instanceModel = useMemo(() => {
         try {
-            const clonedObject = SkeletonUtils.clone(assets.model.object) as THREE.Group;
+            const clonedObject = cloneCharacterModel(assets.model.object) as THREE.Group;
             clonedObject.position.set(0, 0, 0);
             clonedObject.rotation.set(0, 0, 0);
             clonedObject.scale.set(1, 1, 1);

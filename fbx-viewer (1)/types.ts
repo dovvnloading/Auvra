@@ -373,6 +373,8 @@ export interface LogicNode {
           'GetLevelVariable' | 'SetLevelVariable' | 'InputActionPressed' | 'RandomFloat' | 'RandomInt' | 'Print' |
           // Animation (hooks/levelBlueprintNodes/world.ts)
           'PlayPlayerAnimation' | 'SetMorphTarget' |
+          // Player (hooks/levelBlueprintNodes/world.ts)
+          'DamagePlayer' | 'HealPlayer' | 'AddAmmo' | 'GiveWeapon' | 'GetPlayerHealth' |
           // Multiplayer (hooks/useLevelBlueprintRuntime.ts)
           'SendNetworkEvent' | 'IsNetworkHost' |
           // Cameras (hooks/useLevelBlueprintRuntime.ts)
@@ -487,6 +489,13 @@ export interface CharacterIKSettings {
   aimPitch?: boolean;
 }
 
+/** Where a weapon's model sits while it is not in use: on a bone, offset as attachments are (degrees). */
+export interface WeaponCarry {
+  boneName: string;
+  position: [number, number, number];
+  rotation: [number, number, number];
+}
+
 /** One of a player's weapons. Missing numbers take runtime/weapons.ts DEFAULT_WEAPON's. */
 export interface WeaponSettings {
   id: string;
@@ -512,6 +521,14 @@ export interface WeaponSettings {
   pellets?: number;
   /** World units per second. */
   projectileSpeed?: number;
+  /** Carried from the start (default); otherwise the player gets it from a pickup, a Give Weapon node or a script. */
+  startsOwned?: boolean;
+  /**
+   * Where its model goes while the player is not aiming, firing or reloading it, and while another
+   * weapon is held: slung on the back, holstered at the hip. Without one it stays in the hand while
+   * held and is hidden while another is.
+   */
+  carry?: WeaponCarry | null;
   /** Upper-body clips while firing, aiming and reloading this weapon; the blueprint's Upper Body clips when unset. */
   fireClip?: string | null;
   aimClip?: string | null;

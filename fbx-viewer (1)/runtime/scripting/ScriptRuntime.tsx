@@ -10,6 +10,8 @@ import { AUDIO_BUSES, type AudioBus } from '../audioMixer';
 import { readScriptSource, SCRIPT_COMPONENT_TYPE } from '../components/scriptComponent';
 import { DEFAULT_INPUT_MAP, type InputState } from '../input';
 import { levelVariables } from '../levelVariables';
+import { gameState } from '../gameState';
+import { playerActions } from '../playerActions';
 import type { PhysicsRaycastHit, PhysicsRaycastOptions } from '../physics';
 import { useRuntimeServices, type RuntimeServices } from '../RuntimeServicesContext';
 import { useTriggerEvents } from '../triggers';
@@ -216,6 +218,10 @@ const isName = (value: unknown): value is string =>
 
 const isText = (value: unknown): value is string => typeof value === 'string' && value.length <= MAX_TEXT_LENGTH;
 
+/** A health or round count from a player command: above 0, at most a million. */
+const isAmount = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 1_000_000;
+
 const isVec3 = (value: unknown): value is ScriptVec3 =>
     Array.isArray(value) && value.length === 3 && value.every(axis => typeof axis === 'number' && Number.isFinite(axis));
 
@@ -285,6 +291,16 @@ export const parseScriptCommand = (value: unknown): ScriptCommand | null => {
             if (!hasKeys(v, ['type', 'clipName'], ['maskBone']) || !isName(v.clipName) || maskBone === false) return null;
             return maskBone ? { type: 'playPlayerAnimation', clipName: v.clipName, maskBone } : { type: 'playPlayerAnimation', clipName: v.clipName };
         }
+        case 'damagePlayer':
+        case 'healPlayer':
+            return hasKeys(v, ['type', 'amount']) && isAmount(v.amount) ? { type: v.type, amount: v.amount } : null;
+        case 'addAmmo': {
+            const weapon = optional(v.weapon, isName);
+            if (!hasKeys(v, ['type', 'rounds'], ['weapon']) || !isAmount(v.rounds) || weapon === false) return null;
+            return weapon ? { type: 'addAmmo', rounds: Math.round(v.rounds), weapon } : { type: 'addAmmo', rounds: Math.round(v.rounds) };
+        }
+        case 'giveWeapon':
+            return hasKeys(v, ['type', 'weapon']) && isName(v.weapon) ? { type: 'giveWeapon', weapon: v.weapon } : null;
         case 'openLevel':
             return hasKeys(v, ['type', 'levelId']) && isName(v.levelId) ? { type: 'openLevel', levelId: v.levelId } : null;
         case 'setCamera':
@@ -485,7 +501,15 @@ export const buildScriptSnapshot = (sources: ScriptSnapshotSources): ScriptSnaps
         time: finite(sources.time),
         delta: finite(sources.delta),
         objects,
-        player: sources.player ? { position: toScriptVec3(sources.player.position), rotation: toScriptVec3(sources.player.rotation) } : null,
+        player: sources.player ? {
+            position: toScriptVec3(sources.player.position),
+            rotation: toScriptVec3(sources.player.rotation),
+            health: finite(sources.player.health),
+            maxHealth: finite(sources.player.maxHealth),
+            weapon: sources.player.weapon,
+            ammo: finite(sources.player.ammo),
+            reserve: finite(sources.player.reserve),
+        } : null,
         input: { ...sources.input },
         variables: { ...sources.variables },
         events: [...sources.events],
@@ -527,12 +551,17 @@ const poseScale = new THREE.Vector3();
 const poseEuler = new THREE.Euler();
 
 /** World-space pose of the player character's model; rotation is Euler XYZ radians. */
-const readPlayerPose = (object: THREE.Object3D | null | undefined): ScriptSnapshot['player'] => {
+const readPlayerState = (object: THREE.Object3D | null | undefined): ScriptSnapshot['player'] => {
     if (!object) return null;
     object.updateWorldMatrix(true, false);
     object.matrixWorld.decompose(posePosition, poseQuaternion, poseScale);
     poseEuler.setFromQuaternion(poseQuaternion, 'XYZ');
-    return { position: [posePosition.x, posePosition.y, posePosition.z], rotation: [poseEuler.x, poseEuler.y, poseEuler.z] };
+    const { health, maxHealth, weapon, ammo, reserve } = gameState.get().player;
+    return {
+        position: [posePosition.x, posePosition.y, posePosition.z],
+        rotation: [poseEuler.x, poseEuler.y, poseEuler.z],
+        health, maxHealth, weapon, ammo, reserve,
+    };
 };
 
 // --- Commands -------------------------------------------------------------------------------------------
@@ -552,6 +581,11 @@ export interface ScriptCommandServices {
     raycast(origin: THREE.Vector3, direction: THREE.Vector3, maxDistance: number, options?: PhysicsRaycastOptions): PhysicsRaycastHit | null;
     /** False when the player character has no such clip. */
     playPlayerAnimation(clipName: string, maskBone?: string): boolean;
+    /** Player health, rounds and weapons; each false when nothing changed. */
+    damagePlayer(amount: number): boolean;
+    healPlayer(amount: number): boolean;
+    addAmmo(rounds: number, weapon?: string): boolean;
+    giveWeapon(weapon: string): boolean;
     openLevel(levelId: string): void;
     log(scriptId: string, level: CommandOf<'log'>['level'], message: string): void;
     /** Sends a multiplayer event; does nothing in a single-player game. */
@@ -634,6 +668,18 @@ export const applyScriptCommand = (command: ScriptCommand, services: ScriptComma
         }
         case 'playPlayerAnimation':
             services.playPlayerAnimation(command.clipName, command.maskBone);
+            return;
+        case 'damagePlayer':
+            services.damagePlayer(command.amount);
+            return;
+        case 'healPlayer':
+            services.healPlayer(command.amount);
+            return;
+        case 'addAmmo':
+            services.addAmmo(command.rounds, command.weapon);
+            return;
+        case 'giveWeapon':
+            services.giveWeapon(command.weapon);
             return;
         case 'openLevel':
             results.ended = true;
@@ -927,8 +973,16 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
                 if (!played) noteOnce(state, `clip:${clipName}`, `Play Player Animation: the player character has no clip "${clipName}".`);
                 return played;
             },
+            damagePlayer: amount => playerActions.damage(amount),
+            healPlayer: amount => playerActions.heal(amount),
+            addAmmo: (rounds, weapon) => playerActions.addAmmo(rounds, weapon),
+            giveWeapon: weapon => {
+                const given = playerActions.giveWeapon(weapon);
+                if (!given) noteOnce(state, `weapon:${weapon}`, `giveWeapon: the player has no weapon "${weapon}", or it changed nothing.`);
+                return given;
+            },
             openLevel: levelId => latest.current.openLevel(levelId),
-            sendNetEvent: (name, payload, to) => netRef.current?.sendEvent(name, payload, to),
+            sendNetEvent:(name, payload, to) => netRef.current?.sendEvent(name, payload, to),
             setCamera: (objectId, blend) => cameraDirector.setActive(objectId, blend),
             startDialogue: objectId => {
                 if (!dialogueSpeakers.has(objectId)) {
@@ -994,7 +1048,7 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
             getObject: id => latest.current.getObject(id),
             hidden: state.hidden,
             cache: state.objectStates,
-            player: readPlayerPose(latest.current.playerEntityRef.current?.object),
+            player: readPlayerState(latest.current.playerEntityRef.current?.object),
             input: readScriptInputActions(services.current.input, INPUT_ACTION_NAMES, state.edges),
             variables: levelVariables.all(),
             events: state.events,

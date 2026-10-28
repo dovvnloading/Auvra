@@ -1,7 +1,7 @@
+import { cloneCharacterModel } from '../../utils/mountedParts';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
-import { SkeletonUtils } from 'three-stdlib';
 import type { GraphRuntimeAPI } from '../../components/AnimationGraph/GraphRuntime';
 import { SandboxEntity } from '../../components/Sandbox/SandboxEntity';
 import type { AttachmentData, Blueprint, LoadedModelData, SocketData } from '../../types';
@@ -62,7 +62,7 @@ interface PlayerAssets {
 const RemoteAvatar: React.FC<{ buffer: InterpolationBuffer; player: PlayerAssets; allClips: THREE.AnimationClip[] }> = ({ buffer, player, allClips }) => {
     const session = useNetSession();
     const model = useMemo(() => {
-        const object = SkeletonUtils.clone(player.model.object) as THREE.Group;
+        const object = cloneCharacterModel(player.model.object) as THREE.Group;
         return { ...player.model, object, id: `remote_${object.uuid}` };
     }, [player.model]);
     const api = useRef<GraphRuntimeAPI | undefined>(undefined);
