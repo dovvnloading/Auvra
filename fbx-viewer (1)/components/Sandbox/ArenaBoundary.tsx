@@ -1,11 +1,12 @@
 import React from 'react';
 import { Line } from '@react-three/drei';
 
-interface NavMeshVisualizerProps {
+interface ArenaBoundaryProps {
     boundarySize: number;
 }
 
-export const NavMeshVisualizer: React.FC<NavMeshVisualizerProps> = ({ boundarySize }) => {
+/** The Sandbox arena's edge, which its enemies are kept inside (the Sandbox has no navmesh). */
+export const ArenaBoundary: React.FC<ArenaBoundaryProps> = ({ boundarySize }) => {
   const half = boundarySize;
   const points: [number, number, number][] = [
     [-half, 0.1, -half],

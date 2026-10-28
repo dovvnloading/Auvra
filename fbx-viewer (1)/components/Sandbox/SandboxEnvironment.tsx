@@ -1,7 +1,7 @@
 
 import React, { useMemo } from 'react';
 import { Grid } from '@react-three/drei';
-import { NavMeshVisualizer } from './NavMeshVisualizer';
+import { ArenaBoundary } from './ArenaBoundary';
 import { useScene } from '../../context/SceneContext';
 import { LevelObjectRenderer } from '../Environment/LevelObjectRenderer';
 
@@ -42,7 +42,7 @@ export const SandboxEnvironment: React.FC<SandboxEnvironmentProps> = ({ boundary
                 cellColor="#111" 
             />
             
-            <NavMeshVisualizer boundarySize={boundarySize} />
+            <ArenaBoundary boundarySize={boundarySize} />
 
             {/* RENDER PLACED ENVIRONMENT OBJECTS */}
             {levelObjects.map(obj => {

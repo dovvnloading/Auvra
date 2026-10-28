@@ -8,7 +8,9 @@ import { ToneMappingMode } from 'postprocessing';
 import { AuvraCanvas } from '../renderer/AuvraCanvas';
 import { ProfilerPanel, ProfilerProbe, useProfilerToggle } from './ProfilerOverlay';
 import { levelVariables } from './levelVariables';
-import { NavGridContext, useNavGrid } from './navigation';
+import { NavMeshContext, useLevelNavMesh, type LevelNavMesh, type NavSettings } from './navigation';
+import { modelTriangles } from './navGeometry';
+import type { HostGeometry } from './components/physicsComponents';
 import { usePhysicsQueries } from './physics';
 import { LevelGroundColliders } from './terrainPhysics';
 import { InstancedLevelLayer } from '../components/Environment/InstancedLevelLayer';
@@ -431,6 +433,8 @@ const FallbackHud: React.FC<{
 
 interface LevelSessionProps {
     level: RuntimeLevel;
+    /** The agent the level's navmesh is baked for. */
+    navigation: NavSettings;
     content: GameContent;
     player: ActorAssetBundle;
     start: PlayerStart;
@@ -447,7 +451,16 @@ interface LevelSessionProps {
  * One play session of a level. Mounted under a group keyed by the session key, so a restart or a load
  * starts from a fresh runtime copy: BeginPlay, overlaps, spawner counts and spawned enemies all reset.
  */
-const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, start, restore, host, sessionKey, isGameOver, paused, onGameOver, saveStateRef }) => {
+/** Applies moving obstacles to the navmesh each frame. */
+const NavMeshUpdater: React.FC<{ navMesh: LevelNavMesh | null }> = ({ navMesh }) => {
+    useFrame(() => { navMesh?.update(); });
+    return null;
+};
+
+// A model's triangles, gathered once per loaded model.
+const modelTriangleCache = new WeakMap<THREE.Object3D, HostGeometry | null>();
+
+const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content, player, start, restore, host, sessionKey, isGameOver, paused, onGameOver, saveStateRef }) => {
     const { models, audioAssets } = content;
     // Fixed for the session: a host that rebuilds these objects must not teleport the player mid-session.
     const [sessionStart] = useState(start);
@@ -671,14 +684,16 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
     // Hierarchy and components render as transform groups; gameplay systems read world-space copies.
     const renderPlan = useMemo(() => planLevelRender(runtimeLevelObjects), [runtimeLevelObjects]);
     const worldLevelObjects = renderPlan.worldObjects;
-    // Enemies path around the level's static colliders; the hierarchy stays intact so moving parents are detected.
-    // Mesh colliders and auto hulls bake from the model's real bounds; memoized, since a new function re-bakes the grid.
-    const navShapeBounds = useCallback((object: LevelObject) => {
+    // Enemies walk the level's navmesh; the hierarchy stays intact so moving parents are detected.
+    // Mesh colliders and auto hulls bake from the model's own triangles; memoized, since a new function re-bakes the navmesh.
+    const navShapeGeometry = useCallback((object: LevelObject) => {
         const model = models.find(m => m.id === object.modelId);
-        return model ? new THREE.Box3().setFromObject(model.object) : null;
+        if (!model) return null;
+        if (!modelTriangleCache.has(model.object)) modelTriangleCache.set(model.object, modelTriangles(model.object));
+        return modelTriangleCache.get(model.object) ?? null;
     }, [models]);
-    const navOptions = useMemo(() => ({ shapeBounds: navShapeBounds }), [navShapeBounds]);
-    const navGrid = useNavGrid(runtimeLevelObjects, navOptions);
+    const navOptions = useMemo(() => ({ settings: navigation, shapeGeometry: navShapeGeometry }), [navigation, navShapeGeometry]);
+    const navMesh = useLevelNavMesh(runtimeLevelObjects, navOptions);
 
     // Look-at IK aimed at 'player' (level components and enemy blueprints) follows the player's model.
     const playerTargetRef = useMemo(() => ({ current: runtimePlayerModel?.object ?? null }), [runtimePlayerModel]);
@@ -688,6 +703,8 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
     const controlsEnabled = !isGameOver && !paused && !talking;
 
     return (
+        <NavMeshContext.Provider value={navMesh}>
+        <NavMeshUpdater navMesh={navMesh} />
         <IKPlayerTargetContext.Provider value={playerTargetRef}>
         <LevelStreamingContext.Provider value={levelStreaming}>
         <RuntimeSpawnerProvider spawnPrefab={spawnPrefab} destroyObject={destroyRuntimeObject}>
@@ -752,7 +769,6 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                 onSpawnBlood={handleSpawnBlood}
             />
 
-            <NavGridContext.Provider value={navGrid}>
             {spawnedEnemies.map((enemyData) => {
                 const assets = resolveEnemyAssets(enemyData.blueprintId);
                 if (!assets) return null;
@@ -773,7 +789,6 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
                     />
                 );
             })}
-            </NavGridContext.Provider>
 
             <PlayerController
                 apiRef={playerApiRef}
@@ -828,6 +843,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, content, player, sta
         </RuntimeSpawnerProvider>
         </LevelStreamingContext.Provider>
         </IKPlayerTargetContext.Provider>
+        </NavMeshContext.Provider>
     );
 };
 
@@ -947,6 +963,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                             <group key={sessionKey}>
                                 <LevelSession
                                     level={level}
+                                    navigation={settings.navigation}
                                     content={content}
                                     player={player}
                                     start={start}

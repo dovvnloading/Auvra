@@ -7,6 +7,7 @@ import type {
 import type { PlayerOptionsStore } from './playerOptions';
 import { DEFAULT_NETWORK_SETTINGS, normalizeNetworkSettings, type NetworkSettings } from './net/protocol';
 import type { SavedWeapons } from './weapons';
+import { DEFAULT_NAV_SETTINGS, resolveNavSettings, type NavSettings } from './navSettings';
 
 /** Everything the gameplay runtime needs from loaded content, whether it came from the editor or a game pack. */
 export interface GameContent {
@@ -51,6 +52,8 @@ export interface GameSettings {
     audio: { masterVolume: number };
     /** Multiplayer through a relay server (runtime/net/protocol.ts). */
     network: NetworkSettings;
+    /** The agent levels' navmeshes are baked for (runtime/navigation.ts). */
+    navigation: NavSettings;
 }
 
 export const GAME_SETTINGS_DOCUMENT_ID = 'game-settings';
@@ -65,6 +68,7 @@ export const DEFAULT_GAME_SETTINGS: GameSettings = {
     input: { mouseSensitivity: 0.002, invertY: false },
     audio: { masterVolume: 1 },
     network: DEFAULT_NETWORK_SETTINGS,
+    navigation: DEFAULT_NAV_SETTINGS,
 };
 
 /** Merges a stored (possibly partial or older) settings object over the defaults. */
@@ -79,6 +83,7 @@ export const normalizeGameSettings = (value: unknown): GameSettings => {
         input: { ...DEFAULT_GAME_SETTINGS.input, ...(stored.input ?? {}) },
         audio: { ...DEFAULT_GAME_SETTINGS.audio, ...(stored.audio ?? {}) },
         network: normalizeNetworkSettings(stored.network),
+        navigation: resolveNavSettings(stored.navigation),
     };
 };
 

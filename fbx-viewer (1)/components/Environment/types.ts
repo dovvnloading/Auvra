@@ -47,4 +47,6 @@ export interface EditorState {
     layout: ViewportLayout;
     cameraSpeed: number;
     isMuted: boolean;
+    /** The level's navmesh is drawn over the scene. */
+    showNavigation: boolean;
 }

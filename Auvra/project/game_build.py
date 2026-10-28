@@ -70,8 +70,9 @@ DEFAULT_GAME_SETTINGS: dict[str, Any] = {
     "input": {"mouseSensitivity": 0.002, "invertY": False},
     "audio": {"masterVolume": 1},
     "network": {"enabled": False, "serverUrl": "ws://127.0.0.1:7777", "room": "main", "maxPlayers": 8},
+    "navigation": {"agentRadius": 0.4, "agentHeight": 1.8, "maxSlopeDegrees": 40, "maxStepHeight": 0.35},
 }
-_NESTED_SETTINGS = ("window", "quality", "input", "audio", "network")
+_NESTED_SETTINGS = ("window", "quality", "input", "audio", "network", "navigation")
 
 # A multiplayer build talks to its relay: the player CSP's connect-src gains that one origin, and the
 # relay script ships beside the game.

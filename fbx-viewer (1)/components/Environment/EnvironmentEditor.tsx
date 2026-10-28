@@ -125,6 +125,7 @@ export const EnvironmentEditor: React.FC = () => {
                     layout={state.layout}
                     cameraSpeed={state.cameraSpeed}
                     isMuted={state.isMuted}
+                    showNavigation={state.showNavigation}
                 />
             </div>
 

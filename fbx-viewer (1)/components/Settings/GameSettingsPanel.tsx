@@ -10,6 +10,7 @@ import {
   normalizeGameSettings,
 } from '../../runtime/types';
 import { normalizeNetworkSettings } from '../../runtime/net/protocol';
+import { NAV_SETTING_LIMITS, resolveNavSettings } from '../../runtime/navSettings';
 
 interface GameSettingsDocument {
   id: string;
@@ -99,6 +100,7 @@ const sanitizeGameSettings = (value: GameSettings): GameSettings => {
       masterVolume: clamp(settings.audio.masterVolume, LIMITS.masterVolume.min, LIMITS.masterVolume.max, defaults.audio.masterVolume),
     },
     network: normalizeNetworkSettings(settings.network),
+    navigation: resolveNavSettings(settings.navigation),
   };
 };
 
@@ -274,6 +276,17 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
             <div className="grid grid-cols-2 gap-2">
               <NumberField label="Max pixel ratio" value={draft.quality.maxDpr} limits={LIMITS.maxDpr} disabled={disabled} onChange={(maxDpr) => update((current) => ({ ...current, quality: { ...current.quality, maxDpr } }))} />
               <NumberField label="Field of view" value={draft.quality.fov} limits={LIMITS.fov} disabled={disabled} onChange={(fov) => update((current) => ({ ...current, quality: { ...current.quality, fov } }))} />
+            </div>
+          </div>
+
+          <div className={sectionClass}>
+            <div className={sectionTitleClass}>Navigation</div>
+            <p className="text-[10px] text-gray-500">The agent each level's navmesh is baked for: enemies keep to it.</p>
+            <div className="grid grid-cols-2 gap-2">
+              <NumberField label="Agent radius (m)" value={draft.navigation.agentRadius} limits={NAV_SETTING_LIMITS.agentRadius} disabled={disabled} onChange={(agentRadius) => update((current) => ({ ...current, navigation: { ...current.navigation, agentRadius } }))} />
+              <NumberField label="Agent height (m)" value={draft.navigation.agentHeight} limits={NAV_SETTING_LIMITS.agentHeight} disabled={disabled} onChange={(agentHeight) => update((current) => ({ ...current, navigation: { ...current.navigation, agentHeight } }))} />
+              <NumberField label="Max slope (°)" value={draft.navigation.maxSlopeDegrees} limits={NAV_SETTING_LIMITS.maxSlopeDegrees} disabled={disabled} onChange={(maxSlopeDegrees) => update((current) => ({ ...current, navigation: { ...current.navigation, maxSlopeDegrees } }))} />
+              <NumberField label="Max step (m)" value={draft.navigation.maxStepHeight} limits={NAV_SETTING_LIMITS.maxStepHeight} disabled={disabled} onChange={(maxStepHeight) => update((current) => ({ ...current, navigation: { ...current.navigation, maxStepHeight } }))} />
             </div>
           </div>
 

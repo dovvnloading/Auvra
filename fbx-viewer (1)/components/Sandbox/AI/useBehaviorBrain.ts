@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { useThree } from '@react-three/fiber';
 import type { BehaviorTreeData } from '../../../types';
 import { createBehaviorMemory, tickBehaviorTree, type BehaviorEffects, type BehaviorWorld } from '../../../runtime/behaviorTree';
-import { planPath, useNavGridContext } from '../../../runtime/navigation';
+import { useNavMeshContext } from '../../../runtime/navigation';
 import type { GraphRuntimeAPI } from '../../AnimationGraph/GraphRuntime';
 import { AI_CONFIG, DEFAULT_AI_TUNING, type AITuning } from './AIConfig';
 import { checkVisibility } from './AISenses';
@@ -40,7 +40,7 @@ export const useBehaviorBrain = (
     onFire?: EnemyFireHandler,
 ) => {
     const scene = useThree(state => state.scene);
-    const navGrid = useNavGridContext();
+    const navMesh = useNavMeshContext();
     const memory = useMemo(() => createBehaviorMemory(), [tree]);
     const home = useRef<THREE.Vector3 | null>(null);
     const lastKnown = useRef<THREE.Vector3 | null>(null);
@@ -105,9 +105,9 @@ export const useBehaviorBrain = (
                 return object ? (object as THREE.Object3D).getWorldPosition(new THREE.Vector3()) : null;
             },
             reachable: (point) => {
-                const plan = navGrid ? planPath(navGrid, enemyPosition, point, { partial: true }) : null;
+                const plan = navMesh ? navMesh.planPath(enemyPosition, point, { partial: true }) : null;
                 const end = plan?.points[plan.points.length - 1];
-                return end ? new THREE.Vector3(end.x, 0, end.z) : point;
+                return end ? end.clone() : point;
             },
         };
         // A Shoot action holds the trigger for this frame only.
@@ -140,7 +140,7 @@ export const useBehaviorBrain = (
             onFire?.(step.shots, triggerHeld);
         }
         return { state: intent.state, destination: intent.destination, targetFocus: intent.focus };
-    }, [graphApi, memory, navGrid, onAttack, onFire, scene, tree, tuning, weapon, weaponState]);
+    }, [graphApi, memory, navMesh, onAttack, onFire, scene, tree, tuning, weapon, weaponState]);
 
     return { updateState };
 };
