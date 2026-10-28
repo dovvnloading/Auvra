@@ -6,13 +6,15 @@ import {
   convertValue,
   createMaterialGraph,
   defaultParams,
+  materialGraphParameters,
   normalizeMaterialGraph,
+  withMaterialParameters,
   wouldCreateCycle,
   type MaterialGraph,
 } from '../../runtime/materials/materialGraph';
 import { GraphMaterial, MATERIAL_TIME, bindMaterialGraph, boundMaterialGraph, unbindMaterialGraph } from '../../runtime/materials/graphMaterial';
 import { graphTextures, materialAssetDocument, materialLibrary, readMaterialAsset } from '../../runtime/materials/materialLibrary';
-import { applyMaterialOverrides } from '../../utils/materialOverrides';
+import { applyMaterialOverrides, materialParameterValues, normalizeMaterialOverride } from '../../utils/materialOverrides';
 
 const node = (id: string, type: string, params: Record<string, unknown> = {}) => ({ id, type, x: 0, y: 0, params: { ...defaultParams(type), ...params } });
 const link = (fromNode: string, fromOutput: string, toNode: string, toInput: string) => ({ fromNode, fromOutput, toNode, toInput });
@@ -127,6 +129,78 @@ describe('material graphs', () => {
     const compiled = compileMaterialGraph(graph);
     expect(compiled.unused).toEqual(['lonely']);
     expect(compiled.statements).toEqual([]);
+  });
+});
+
+describe('material parameters', () => {
+  /** A tint and a strength exposed by name, and a constant that is not. */
+  const exposed = () => normalizeMaterialGraph({
+    nodes: [
+      node('out', OUTPUT_NODE_TYPE),
+      { ...node('tint', 'color', { value: [1, 0.5, 0.25] }), parameter: '  Tint ' },
+      { ...node('tint2', 'color', { value: [0, 0, 0] }), parameter: 'Tint' },
+      { ...node('k', 'float', { value: 2 }), parameter: 'Strength' },
+      { ...node('n', 'noise'), parameter: 'Not a value node' },
+      node('plain', 'float', { value: 9 }),
+    ],
+    links: [link('tint', 'out', 'out', 'baseColor'), link('k', 'out', 'out', 'roughness')],
+  });
+
+  it('keeps the names of value nodes, trimmed, and lists each name once with its value', () => {
+    const graph = exposed();
+    expect(graph.nodes.find(n => n.id === 'tint')?.parameter).toBe('Tint');
+    expect(graph.nodes.find(n => n.id === 'n')?.parameter).toBeUndefined();
+    expect(materialGraphParameters(graph).map(p => [p.name, p.param.kind, p.value])).toEqual([
+      ['Strength', 'float', 2],
+      ['Tint', 'color', [1, 0.5, 0.25]],
+    ]);
+  });
+
+  it('sets every node of a name to the value, keeps the rest, and changes only constants', () => {
+    const graph = exposed();
+    expect(withMaterialParameters(graph, undefined)).toBe(graph);
+    expect(withMaterialParameters(graph, { Missing: 1 })).toBe(graph);
+    const set = withMaterialParameters(graph, { Tint: [0, 1, 0], Strength: 'loud' as unknown as number });
+    expect(set.nodes.find(n => n.id === 'tint')?.params.value).toEqual([0, 1, 0]);
+    expect(set.nodes.find(n => n.id === 'tint2')?.params.value).toEqual([0, 1, 0]);
+    // A malformed value falls back to the node's default, and the graph keeps its wiring and shader.
+    expect(set.nodes.find(n => n.id === 'k')?.params.value).toBe(defaultParams('float').value);
+    expect(set.nodes.find(n => n.id === 'plain')?.params.value).toBe(9);
+    expect(compileMaterialGraph(set).key).toBe(compileMaterialGraph(graph).key);
+  });
+
+  it('stores the settings of a material as a sorted list of names and values', () => {
+    const override = normalizeMaterialOverride({
+      materialId: 'm',
+      parameters: [
+        { name: 'Tint', value: [1, 0, 0] },
+        { name: 'Strength', value: 3 },
+        { name: 'Tint', value: [0, 0, 1] },
+        { name: ' padded', value: 1 },
+        { name: 'Pair', value: [1, 2] },
+        { name: 'Word', value: 'x' },
+      ],
+    });
+    expect(override?.parameters).toEqual([{ name: 'Strength', value: 3 }, { name: 'Tint', value: [1, 0, 0] }]);
+    expect(materialParameterValues(override?.parameters)).toEqual({ Strength: 3, Tint: [1, 0, 0] });
+    expect(normalizeMaterialOverride({ parameters: { Tint: 1 } })).toBeNull();
+  });
+
+  it('gives each material using an asset its own values, on the same shader', () => {
+    materialLibrary.replaceAll([{ id: 'paint', name: 'Paint', graph: exposed() }]);
+    const red = new THREE.MeshStandardMaterial({ name: 'Red' });
+    const blue = new THREE.MeshStandardMaterial({ name: 'Blue' });
+    const root = new THREE.Group().add(new THREE.Mesh(new THREE.BoxGeometry(), [red, blue]));
+    applyMaterialOverrides(root, {
+      Red: { materialId: 'paint', parameters: [{ name: 'Tint', value: [1, 0, 0] }] },
+      Blue: { materialId: 'paint', parameters: [{ name: 'Tint', value: [0, 0, 1] }] },
+    });
+    const tint = (material: THREE.Material) => boundMaterialGraph(material)?.nodes.find(n => n.id === 'tint')?.params.value;
+    expect(tint(red)).toEqual([1, 0, 0]);
+    expect(tint(blue)).toEqual([0, 0, 1]);
+    expect(red.customProgramCacheKey()).toBe(blue.customProgramCacheKey());
+    applyMaterialOverrides(root, {});
+    materialLibrary.replaceAll([]);
   });
 });
 

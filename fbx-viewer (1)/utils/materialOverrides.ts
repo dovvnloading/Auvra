@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { materialLibrary } from '../runtime/materials/materialLibrary';
+import { MAX_PARAMETER_NAME_LENGTH, type MaterialParameterValues } from '../runtime/materials/materialGraph';
 
 /**
  * Per-model material overrides, keyed by material name. Every field is
@@ -27,6 +28,16 @@ export interface MaterialOverride {
   normalTextureId?: string;
   /** A material asset (materials domain) whose node graph shades the material instead. */
   materialId?: string;
+  /**
+   * Values for the material asset's parameters: a number, or an RGB / XYZ triple. A list, not a
+   * map by name, so no parameter name ever becomes a document key.
+   */
+  parameters?: MaterialParameterSetting[];
+}
+
+export interface MaterialParameterSetting {
+  name: string;
+  value: number | number[];
 }
 
 export type MaterialOverrides = Record<string, MaterialOverride>;
@@ -56,6 +67,43 @@ const normalizeColor = (value: unknown): string | undefined =>
 const normalizeTextureId = (value: unknown): string | undefined =>
   typeof value === 'string' && value.length > 0 && value.length <= MAX_TEXTURE_ID_LENGTH ? value : undefined;
 
+/** Parameters kept per material, at most. */
+export const MAX_MATERIAL_PARAMETERS = 64;
+/** Parameter values stay within this magnitude (colours and vectors are not clamped to 0..1). */
+const MAX_PARAMETER_MAGNITUDE = 1e6;
+
+const parameterNumber = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) ? clamp(value, -MAX_PARAMETER_MAGNITUDE, MAX_PARAMETER_MAGNITUDE) : undefined;
+
+const normalizeParameterValue = (value: unknown): number | number[] | undefined => {
+  const single = parameterNumber(value);
+  if (single !== undefined) return single;
+  if (!Array.isArray(value) || value.length !== 3) return undefined;
+  const triple = value.map(parameterNumber);
+  return triple.every((component): component is number => component !== undefined) ? triple : undefined;
+};
+
+const normalizeParameters = (value: unknown): MaterialParameterSetting[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const result: MaterialParameterSetting[] = [];
+  for (const entry of value) {
+    if (result.length >= MAX_MATERIAL_PARAMETERS) break;
+    if (!entry || typeof entry !== 'object') continue;
+    const { name, value: raw } = entry as { name?: unknown; value?: unknown };
+    if (typeof name !== 'string' || !name || name.length > MAX_PARAMETER_NAME_LENGTH || name !== name.trim()) continue;
+    if (result.some(setting => setting.name === name)) continue;
+    const parsed = normalizeParameterValue(raw);
+    if (parsed !== undefined) result.push({ name, value: parsed });
+  }
+  // By name, so the same settings always compare (and save) the same.
+  result.sort((a, b) => a.name.localeCompare(b.name));
+  return result.length ? result : undefined;
+};
+
+/** A material's parameter settings by name, as its asset's graph takes them. */
+export const materialParameterValues = (settings: readonly MaterialParameterSetting[] | undefined): MaterialParameterValues | undefined =>
+  settings?.length ? Object.fromEntries(settings.map(setting => [setting.name, setting.value])) : undefined;
+
 /** A clean override with only valid fields (numbers clamped), or null when nothing valid remains. */
 export const normalizeMaterialOverride = (value: unknown): MaterialOverride | null => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -70,6 +118,7 @@ export const normalizeMaterialOverride = (value: unknown): MaterialOverride | nu
     mapTextureId: normalizeTextureId(source.mapTextureId),
     normalTextureId: normalizeTextureId(source.normalTextureId),
     materialId: normalizeTextureId(source.materialId),
+    parameters: normalizeParameters(source.parameters),
   };
   const result = Object.fromEntries(Object.entries(candidate).filter(([, field]) => field !== undefined)) as MaterialOverride;
   return Object.keys(result).length > 0 ? result : null;
@@ -317,7 +366,7 @@ export const applyMaterialOverrides = (
       }
     }
     // An assigned material asset shades it by its graph instead (or no longer, once unassigned).
-    materialLibrary.assign(material, override?.materialId ?? null, overrideTextureFlipY(root));
+    materialLibrary.assign(material, override?.materialId ?? null, overrideTextureFlipY(root), materialParameterValues(override?.parameters));
     baseline.appliedMap = material.map ?? null;
     baseline.appliedNormalMap = material.normalMap ?? null;
     baseline.appliedTransparent = material.transparent;

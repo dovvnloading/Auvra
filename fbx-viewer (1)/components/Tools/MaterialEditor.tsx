@@ -4,6 +4,7 @@ import { AlertTriangle, ChevronDown, ChevronRight, Palette, RotateCcw, Save, Sea
 import type { LoadedModelData, TextureData } from '../../types';
 import { Select } from '../UI/Select';
 import { materialLibrary } from '../../runtime/materials/materialLibrary';
+import { materialGraphParameters, type MaterialParameter } from '../../runtime/materials/materialGraph';
 import {
   MAX_EMISSIVE_INTENSITY,
   applyMaterialOverrides,
@@ -20,6 +21,7 @@ import {
   type MaterialOverrides,
   type MaterialTextureSlot,
   type ModelMaterialInfo,
+  type MaterialParameterSetting,
 } from '../../utils/materialOverrides';
 
 export interface MaterialEditorProps {
@@ -172,6 +174,82 @@ const MaterialAssetField: React.FC<{ value: string | undefined; onChange: (value
   );
 };
 
+const toHex = (rgb: number[]): string =>
+  `#${rgb.map(channel => Math.round(Math.min(1, Math.max(0, channel)) * 255).toString(16).padStart(2, '0')).join('')}`;
+const fromHex = (hex: string): number[] => [1, 3, 5].map(at => parseInt(hex.slice(at, at + 2), 16) / 255);
+
+const NumberInput: React.FC<{ label: string; value: number; step: number; onChange: (value: number) => void; id?: string }> = ({ label, value, step, onChange, id }) => (
+  <input
+    id={id}
+    type="number"
+    aria-label={label}
+    step={step}
+    value={Number.isFinite(value) ? Number(value.toFixed(4)) : 0}
+    onChange={(event) => { const next = Number(event.target.value); if (Number.isFinite(next)) onChange(next); }}
+    className="w-full min-w-0 bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-[11px] text-gray-200"
+  />
+);
+
+/** One parameter of the assigned material asset: this material's value, or the asset's when unset. */
+const ParameterField: React.FC<{ parameter: MaterialParameter; value: number | number[] | undefined; onChange: (value: number | number[] | undefined) => void }> = ({ parameter, value, onChange }) => {
+  const id = useId();
+  const { name, param } = parameter;
+  const current = value ?? parameter.value;
+  const overridden = value !== undefined;
+  const reset = () => onChange(undefined);
+  if (param.kind === 'color') {
+    return <ColorField label={name} value={toHex(current as number[])} overridden={overridden} onChange={(hex) => onChange(fromHex(hex))} onReset={reset} />;
+  }
+  if (param.kind === 'float') {
+    if (param.min !== undefined && param.max !== undefined) {
+      return <SliderField label={name} value={current as number} min={param.min} max={param.max} step={param.step ?? 0.01} overridden={overridden} onChange={onChange} onReset={reset} />;
+    }
+    return (
+      <FieldRow label={name} htmlFor={id} overridden={overridden} onReset={reset}>
+        <NumberInput id={id} label={name} value={current as number} step={param.step ?? 0.05} onChange={onChange} />
+      </FieldRow>
+    );
+  }
+  const components = current as number[];
+  return (
+    <FieldRow label={name} overridden={overridden} onReset={reset}>
+      {components.map((component, index) => (
+        <NumberInput key={index} label={`${name} ${'XYZ'[index]}`} value={component} step={0.05}
+          onChange={(next) => onChange(components.map((old, at) => (at === index ? next : old)))} />
+      ))}
+    </FieldRow>
+  );
+};
+
+/** The assigned material asset's parameters (named in its graph), each set for this material or left at the asset's value. */
+const MaterialParameterFields: React.FC<{
+  materialId: string;
+  values: MaterialParameterSetting[] | undefined;
+  onChange: (values: MaterialParameterSetting[] | undefined) => void;
+}> = ({ materialId, values, onChange }) => {
+  const version = useSyncExternalStore((listener) => materialLibrary.subscribe(listener), () => materialLibrary.version);
+  const parameters = useMemo(() => {
+    const asset = materialLibrary.get(materialId);
+    return asset ? materialGraphParameters(asset.graph) : [];
+  }, [materialId, version]);
+  if (!parameters.length) return null;
+  const set = (name: string, value: number | number[] | undefined) => {
+    const next = (values ?? []).filter(setting => setting.name !== name);
+    if (value !== undefined) next.push({ name, value });
+    next.sort((a, b) => a.name.localeCompare(b.name));
+    onChange(next.length ? next : undefined);
+  };
+  return (
+    <div className="space-y-1 pl-2 border-l border-gray-800">
+      <p className="text-[9px] uppercase font-bold text-gray-500">Material parameters</p>
+      {parameters.map((parameter) => (
+        <ParameterField key={parameter.name} parameter={parameter} value={values?.find(setting => setting.name === parameter.name)?.value}
+          onChange={(value) => set(parameter.name, value)} />
+      ))}
+    </div>
+  );
+};
+
 export const MaterialEditor: React.FC<MaterialEditorProps> = (props) => (
   // A different model (or a reloaded one) starts a fresh editing session.
   <MaterialEditorSession key={`${props.model.id}:${props.model.object.uuid}`} {...props} />
@@ -313,6 +391,10 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
     return (
       <div className="px-3 pb-3 pt-1 space-y-1 border-t border-gray-800/80">
         <MaterialAssetField value={override.materialId} onChange={(value) => editField(material.name, 'materialId', value)} />
+        {override.materialId && (
+          <MaterialParameterFields materialId={override.materialId} values={override.parameters}
+            onChange={(value) => editField(material.name, 'parameters', value)} />
+        )}
         {override.materialId && <p className="text-[9px] text-gray-500">Shaded by the material asset; the fields below apply again without one.</p>}
         {base.color !== null && (
           <ColorField label="Color" value={override.color ?? base.color} overridden={override.color !== undefined}

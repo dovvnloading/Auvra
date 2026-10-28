@@ -22,6 +22,11 @@ export interface MaterialGraphNode {
     y: number;
     /** The node's own settings (constant values, texture id, ...), by the names its definition gives. */
     params: Record<string, unknown>;
+    /**
+     * Exposes the node's value as a material parameter by this name (Number, Color and Vector
+     * nodes): each model material using the asset may set its own value (see withMaterialParameters).
+     */
+    parameter?: string;
 }
 
 export interface MaterialGraphLink {
@@ -452,6 +457,68 @@ const DEFINITIONS = new Map(MATERIAL_NODE_DEFINITIONS.map(definition => [definit
 export const getMaterialNodeDefinition = (type: string): MaterialNodeDef | undefined => DEFINITIONS.get(type);
 
 // ---------------------------------------------------------------------------
+// Parameters
+// ---------------------------------------------------------------------------
+
+/** Node types whose value can be a material parameter, and the param holding it. */
+export const PARAMETER_NODE_PARAMS: Readonly<Record<string, string>> = { float: 'value', color: 'value', vector: 'value' };
+export const MAX_PARAMETER_NAME_LENGTH = 64;
+
+/** A parameter name trimmed and within its length, or undefined (not exposed). */
+export const normalizeParameterName = (value: unknown): string | undefined => {
+    if (typeof value !== 'string') return undefined;
+    const name = value.trim().slice(0, MAX_PARAMETER_NAME_LENGTH);
+    return name || undefined;
+};
+
+/** A graph's exposed value, as a material using it may set it. */
+export interface MaterialParameter {
+    name: string;
+    /** The value's param definition (kind, range) on the first node exposing the name. */
+    param: MaterialParamDef;
+    /** The value set in the graph, used where a material sets none. */
+    value: number | number[];
+}
+
+/** Parameter values by name, as a model material sets them. */
+export type MaterialParameterValues = Record<string, number | number[]>;
+
+const parameterParam = (node: MaterialGraphNode): MaterialParamDef | undefined => {
+    const key = PARAMETER_NODE_PARAMS[node.type];
+    return key ? DEFINITIONS.get(node.type)?.params.find(param => param.key === key) : undefined;
+};
+
+/** The graph's parameters by name (nodes sharing a name share the value), sorted by name. */
+export const materialGraphParameters = (graph: MaterialGraph): MaterialParameter[] => {
+    const found = new Map<string, MaterialParameter>();
+    for (const node of graph.nodes) {
+        const param = parameterParam(node);
+        const name = normalizeParameterName(node.parameter);
+        if (!param || !name || found.has(name)) continue;
+        found.set(name, { name, param, value: readParam(param, node.params[param.key]) as number | number[] });
+    }
+    return [...found.values()].sort((a, b) => a.name.localeCompare(b.name));
+};
+
+/**
+ * The graph with its parameters set to `values` (missing or malformed ones keep the graph's
+ * own); the same graph when nothing changes. Only constants change, so the material keeps its
+ * shader and only its uniforms differ.
+ */
+export const withMaterialParameters = (graph: MaterialGraph, values: MaterialParameterValues | null | undefined): MaterialGraph => {
+    if (!values || !Object.keys(values).length) return graph;
+    let changed = false;
+    const nodes = graph.nodes.map((node) => {
+        const param = parameterParam(node);
+        const name = normalizeParameterName(node.parameter);
+        if (!param || !name || !Object.hasOwn(values, name)) return node;
+        changed = true;
+        return { ...node, params: { ...node.params, [param.key]: readParam(param, values[name]) } };
+    });
+    return changed ? { ...graph, nodes } : graph;
+};
+
+// ---------------------------------------------------------------------------
 // Graphs
 // ---------------------------------------------------------------------------
 
@@ -503,6 +570,7 @@ export const normalizeMaterialGraph = (value: unknown): MaterialGraph => {
             x: finiteNumber(node.x) ? node.x : 0,
             y: finiteNumber(node.y) ? node.y : 0,
             params: Object.fromEntries(definition.params.map(param => [param.key, readParam(param, params[param.key])])),
+            ...(PARAMETER_NODE_PARAMS[definition.type] && normalizeParameterName(node.parameter) ? { parameter: normalizeParameterName(node.parameter) } : {}),
         });
     }
     if (!nodes.some(node => node.type === OUTPUT_NODE_TYPE)) nodes.unshift(createMaterialGraph().nodes[0]);
