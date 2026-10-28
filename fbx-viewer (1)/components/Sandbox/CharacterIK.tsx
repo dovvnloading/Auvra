@@ -43,7 +43,10 @@ interface CharacterIKProps {
     settings?: CharacterIKSettings;
     /** The character's own physics id, so its capsule is not taken for ground. */
     physicsId?: string;
-    /** The player is aiming: with aimPitch on, the spine follows the camera up and down. */
+    /**
+     * The player is aiming: the spine turns toward the camera's heading when the body faces away
+     * from it (a turn in place has not caught up), and with aimPitch on it follows the camera up and down.
+     */
     aiming?: boolean;
     /** A weapon held in one hand: the other hand takes hold of it (WeaponSettings.supportGrip). */
     supportGrip?: HeldWeaponGrip | null;
@@ -86,6 +89,19 @@ const AIM_SPINE = ['Spine', 'Spine1', 'Spine2'];
 const MAX_AIM_PITCH = THREE.MathUtils.degToRad(60);
 /** How quickly the lean comes in and goes, per second. */
 const AIM_BLEND_RATE = 8;
+/** The furthest the spine turns to follow the aim's heading. */
+const MAX_AIM_YAW = THREE.MathUtils.degToRad(100);
+const UP = new THREE.Vector3(0, 1, 0);
+const _bodyForward = new THREE.Vector3();
+
+/**
+ * The turn that brings a body facing `forward` round to the heading of the aim `direction` (both
+ * world space, turning about world up, left positive), at most MAX_AIM_YAW, scaled by `weight`.
+ */
+export const aimYaw = (direction: THREE.Vector3, forward: THREE.Vector3, weight: number): number => {
+    const turn = Math.atan2(direction.x, direction.z) - Math.atan2(forward.x, forward.z);
+    return THREE.MathUtils.clamp(Math.atan2(Math.sin(turn), Math.cos(turn)), -MAX_AIM_YAW, MAX_AIM_YAW) * weight;
+};
 
 /** Turns `bone` by `angle` radians about the world-space `axis`, keeping its parent where it is. */
 export const turnBoneAboutWorldAxis = (bone: THREE.Object3D, axis: THREE.Vector3, angle: number): void => {
@@ -124,8 +140,8 @@ export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physi
     const rig = useMemo(() => (resolved.footIK ? resolveFootIKRig(model, ['LeftFoot', 'RightFoot']) : null), [model, resolved.footIK]);
     const lookBone = useMemo(() => (resolved.lookAt !== 'none' ? findBone(model, resolved.lookAtBone) : null), [model, resolved.lookAt, resolved.lookAtBone]);
     const spine = useMemo(
-        () => (resolved.aimPitch ? AIM_SPINE.map(name => findBone(model, name)).filter((bone): bone is THREE.Object3D => !!bone) : []),
-        [model, resolved.aimPitch],
+        () => AIM_SPINE.map(name => findBone(model, name)).filter((bone): bone is THREE.Object3D => !!bone),
+        [model],
     );
     // The hand holding the weapon, and the other arm that takes hold of it.
     const gripBone = supportGrip?.boneName ?? gripState.grip?.boneName ?? null;
@@ -156,9 +172,16 @@ export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physi
             // The lean eases in and out with aiming, and is shared by the spine bones bottom up.
             aimState.weight += ((aiming ? 1 : 0) - aimState.weight) * (1 - Math.exp(-AIM_BLEND_RATE * delta));
             if (aimState.weight > 1e-3) {
-                const lean = aimPitch(camera.getWorldDirection(_aimDirection), aimState.weight);
-                _aimRight.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
-                for (const bone of spine) turnBoneAboutWorldAxis(bone, _aimRight, lean / spine.length);
+                camera.getWorldDirection(_aimDirection);
+                // The body's own heading: the model's forward (+Z) on the ground.
+                _bodyForward.set(0, 0, 1).transformDirection(model.matrixWorld);
+                const turn = aimYaw(_aimDirection, _bodyForward, aimState.weight);
+                if (Math.abs(turn) > 1e-4) for (const bone of spine) turnBoneAboutWorldAxis(bone, UP, turn / spine.length);
+                if (resolved.aimPitch) {
+                    const lean = aimPitch(_aimDirection, aimState.weight);
+                    _aimRight.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+                    for (const bone of spine) turnBoneAboutWorldAxis(bone, _aimRight, lean / spine.length);
+                }
             }
         }
         if (supportArm) {
