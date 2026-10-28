@@ -56,7 +56,8 @@ const CLIP_FIELDS = [
     ['fireClip', 'Fire clip'], ['aimClip', 'Aim clip'], ['reloadClip', 'Reload clip'],
     // How the character moves while holding it: these stand in for the graph's own locomotion.
     ['idleClip', 'Idle while held'], ['walkClip', 'Walk while held'], ['runClip', 'Run while held'],
-    ['backClip', 'Walk back while held'], ['jumpClip', 'Jump while held'],
+    ['backClip', 'Walk back while held'], ['leftClip', 'Step left while held'], ['rightClip', 'Step right while held'],
+    ['jumpClip', 'Jump while held'],
 ] as const;
 
 const UPPER_BODY_CLIPS: ReadonlySet<string> = new Set(['fireClip', 'aimClip']);

@@ -17,7 +17,7 @@ export const DEFAULT_WEAPON: ResolvedWeapon = {
     id: 'default', name: 'Weapon', fireMode: 'auto', fireRate: 1 / 0.15, damage: 10, magazine: 0, reserve: -1,
     reloadSeconds: 1.5, spread: 0, pellets: 1, projectileSpeed: 60, startsOwned: true,
     attachmentId: null, muzzleSocket: null, fireClip: null, aimClip: null, reloadClip: null, carry: null,
-    idleClip: null, walkClip: null, runClip: null, backClip: null, jumpClip: null, supportGrip: null,
+    idleClip: null, walkClip: null, runClip: null, backClip: null, leftClip: null, rightClip: null, jumpClip: null, supportGrip: null,
     supportRotation: null, gripPoint: null, muzzlePoint: null,
 };
 
@@ -66,6 +66,8 @@ export const resolveWeapon = (weapon: WeaponSettings): ResolvedWeapon => ({
     walkClip: clip(weapon.walkClip),
     runClip: clip(weapon.runClip),
     backClip: clip(weapon.backClip),
+    leftClip: clip(weapon.leftClip),
+    rightClip: clip(weapon.rightClip),
     jumpClip: clip(weapon.jumpClip),
     supportGrip: resolveWeaponPoint(weapon.supportGrip),
     supportRotation: resolveWeaponPoint(weapon.supportRotation),
@@ -74,9 +76,11 @@ export const resolveWeapon = (weapon: WeaponSettings): ResolvedWeapon => ({
 });
 
 /** The locomotion a weapon is held with, by what each clip stands in for. */
-export type MoveRole = 'idle' | 'walk' | 'run' | 'back' | 'jump';
-type MoveClipField = 'idleClip' | 'walkClip' | 'runClip' | 'backClip' | 'jumpClip';
-const MOVE_CLIP_FIELDS: Record<MoveRole, MoveClipField> = { idle: 'idleClip', walk: 'walkClip', run: 'runClip', back: 'backClip', jump: 'jumpClip' };
+export type MoveRole = 'idle' | 'walk' | 'run' | 'back' | 'left' | 'right' | 'jump';
+type MoveClipField = 'idleClip' | 'walkClip' | 'runClip' | 'backClip' | 'leftClip' | 'rightClip' | 'jumpClip';
+const MOVE_CLIP_FIELDS: Record<MoveRole, MoveClipField> = {
+    idle: 'idleClip', walk: 'walkClip', run: 'runClip', back: 'backClip', left: 'leftClip', right: 'rightClip', jump: 'jumpClip',
+};
 
 /** Every clip a weapon is held with: its locomotion, aim, fire and reload clips. */
 export const weaponClipNames = (weapon: Pick<WeaponSettings, MoveClipField | 'aimClip' | 'fireClip' | 'reloadClip'>): string[] =>

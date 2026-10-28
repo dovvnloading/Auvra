@@ -139,22 +139,28 @@ export const matchUpperBodyClips = (
 };
 
 /** The locomotion a held weapon's own clips stand in for (WeaponSettings.idleClip and the rest). */
-export type MoveClipRole = 'idle' | 'walk' | 'run' | 'back' | 'jump';
+export type MoveClipRole = 'idle' | 'walk' | 'run' | 'back' | 'left' | 'right' | 'jump';
 
-/** Most specific first: "Walking Backwards" backs up before it walks. */
-const MOVE_ROLE_ORDER: readonly MoveClipRole[] = ['jump', 'back', 'run', 'walk', 'idle'];
+/** Each locomotion role's clip-name tests. */
+const MOVE_ROLE_TESTS: Record<MoveClipRole, RegExp[]> = {
+    idle: CLIP_TESTS.idle, walk: CLIP_TESTS.walk, run: CLIP_TESTS.run, back: CLIP_TESTS.back,
+    left: CLIP_TESTS.strafeLeft, right: CLIP_TESTS.strafeRight, jump: CLIP_TESTS.jump,
+};
+
+/** Most specific first: "Walking Backwards" backs up and "Strafe Left" steps left before either walks. */
+const MOVE_ROLE_ORDER: readonly MoveClipRole[] = ['jump', 'back', 'left', 'right', 'run', 'walk', 'idle'];
 
 /** What a clip is for among the locomotion roles, read from its name; null for any other clip. */
 export const moveClipRole = (clip: string): MoveClipRole | null => {
     const name = words(clip);
-    return MOVE_ROLE_ORDER.find(role => CLIP_TESTS[role].some(test => test.test(name))) ?? null;
+    return MOVE_ROLE_ORDER.find(role => MOVE_ROLE_TESTS[role].some(test => test.test(name))) ?? null;
 };
 
-/** The locomotion role a blend sample plays, from where it sits (sideways steps walk). */
+/** The locomotion role a blend sample plays, from where it sits: ahead walks, behind backs up, sideways steps that way. */
 const sampleMoveRole = (state: GraphState, sample: BlendSample): MoveClipRole => {
     if (state.stateType === 'Blend2D') {
         const role = sampleRole2D(sample.position);
-        return role === 'idle' || role === 'back' ? role : 'walk';
+        return role === 'strafeLeft' ? 'left' : role === 'strafeRight' ? 'right' : role === 'idle' || role === 'back' ? role : 'walk';
     }
     const xs = state.blendSamples.map(item => item.position[0]);
     const x = sample.position[0];
@@ -174,7 +180,8 @@ export const weaponLocomotionGraph = (
     available: ReadonlySet<string>,
 ): AnimationGraphData => {
     const standIn = (role: MoveClipRole | null, current: string): string => {
-        const clip = role ? moves[role] ?? (role === 'back' ? moves.walk : undefined) : undefined;
+        // Backing up and stepping sideways walk when the weapon has no clip of its own for them.
+        const clip = role ? moves[role] ?? (role === 'back' || role === 'left' || role === 'right' ? moves.walk : undefined) : undefined;
         return clip && available.has(clip) ? clip : current;
     };
     let changed = false;

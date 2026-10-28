@@ -21,7 +21,7 @@ const _rootTravel = new THREE.Vector3();
 /** Seconds a weapon stays in hand after its last shot before going back to its carry placement. */
 const WEAPON_READY_AFTER_SHOT = 0.8;
 
-type WeaponClips = Partial<Pick<ResolvedWeapon, 'idleClip' | 'walkClip' | 'runClip' | 'backClip' | 'jumpClip'>> & Pick<ResolvedWeapon, 'fireClip' | 'aimClip' | 'reloadClip'>;
+type WeaponClips = Partial<Pick<ResolvedWeapon, 'idleClip' | 'walkClip' | 'runClip' | 'backClip' | 'leftClip' | 'rightClip' | 'jumpClip'>> & Pick<ResolvedWeapon, 'fireClip' | 'aimClip' | 'reloadClip'>;
 
 /**
  * The upper-body clip for this frame: the reload clip while reloading, else the fire clip while

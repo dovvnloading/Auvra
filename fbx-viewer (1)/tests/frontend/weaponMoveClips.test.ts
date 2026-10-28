@@ -40,8 +40,8 @@ const rifle: WeaponSettings = {
 
 describe('a held weapon\'s locomotion', () => {
   it('reads what each of the graph\'s clips is for from its name', () => {
-    expect(['Idle', 'Walk', 'Run', 'Jump', 'Walking Backwards', 'Falling', 'Death', 'Punch'].map(moveClipRole))
-      .toEqual(['idle', 'walk', 'run', 'jump', 'back', null, null, null]);
+    expect(['Idle', 'Walk', 'Run', 'Jump', 'Walking Backwards', 'Strafe Left', 'Right Strafe', 'Falling', 'Death', 'Punch'].map(moveClipRole))
+      .toEqual(['idle', 'walk', 'run', 'jump', 'back', 'left', 'right', null, null, null]);
   });
 
   it("plays the weapon's clips for the graph's idle, walk, run and jump, by where each blend sample sits", () => {
@@ -72,6 +72,9 @@ describe('a held weapon\'s locomotion', () => {
     expect(weaponLocomotionGraph(blend, weaponMoveClips(rifle), all).states[0].blendSamples.map(sample => sample.clipName))
       .toEqual(['Rifle Idle', 'Rifle Walk', 'Rifle Walk Backward', 'Rifle Walk', 'Wave']);
     expect(weaponLocomotionGraph(blend, weaponMoveClips({ ...rifle, backClip: null }), all).states[0].blendSamples[2].clipName).toBe('Rifle Walk');
+    // With its own strafe clips, a side sample steps that way.
+    const strafing = new Set([...all, 'Rifle Strafe Left']);
+    expect(weaponLocomotionGraph(blend, weaponMoveClips({ ...rifle, leftClip: 'Rifle Strafe Left' }), strafing).states[0].blendSamples[3].clipName).toBe('Rifle Strafe Left');
   });
 
   it('leaves the graph as it is without stand-ins the model has', () => {
