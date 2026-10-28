@@ -137,3 +137,69 @@ export const matchUpperBodyClips = (
     }
     return { settings: next, assigned };
 };
+
+/** The locomotion a held weapon's own clips stand in for (WeaponSettings.idleClip and the rest). */
+export type MoveClipRole = 'idle' | 'walk' | 'run' | 'back' | 'jump';
+
+/** Most specific first: "Walking Backwards" backs up before it walks. */
+const MOVE_ROLE_ORDER: readonly MoveClipRole[] = ['jump', 'back', 'run', 'walk', 'idle'];
+
+/** What a clip is for among the locomotion roles, read from its name; null for any other clip. */
+export const moveClipRole = (clip: string): MoveClipRole | null => {
+    const name = words(clip);
+    return MOVE_ROLE_ORDER.find(role => CLIP_TESTS[role].some(test => test.test(name))) ?? null;
+};
+
+/** The locomotion role a blend sample plays, from where it sits (sideways steps walk). */
+const sampleMoveRole = (state: GraphState, sample: BlendSample): MoveClipRole => {
+    if (state.stateType === 'Blend2D') {
+        const role = sampleRole2D(sample.position);
+        return role === 'idle' || role === 'back' ? role : 'walk';
+    }
+    const xs = state.blendSamples.map(item => item.position[0]);
+    const x = sample.position[0];
+    return x <= 0 ? 'idle' : x >= Math.max(...xs) && xs.length > 2 ? 'run' : 'walk';
+};
+
+/**
+ * `graph` as it plays while a weapon with its own locomotion (`moves`, by role) is held: each state
+ * whose clip idles, walks, runs, backs up or jumps plays the weapon's clip for that instead, and each
+ * blend sample that plays locomotion takes the weapon's clip for where it sits (behind backs up,
+ * sideways walks). A stand-in the model does not have (`available`) leaves the graph's clip, and a
+ * weapon without one for backing up walks. Returns `graph` itself when nothing changes.
+ */
+export const weaponLocomotionGraph = (
+    graph: AnimationGraphData,
+    moves: Partial<Record<MoveClipRole, string>>,
+    available: ReadonlySet<string>,
+): AnimationGraphData => {
+    const standIn = (role: MoveClipRole | null, current: string): string => {
+        const clip = role ? moves[role] ?? (role === 'back' ? moves.walk : undefined) : undefined;
+        return clip && available.has(clip) ? clip : current;
+    };
+    let changed = false;
+    const mapState = (state: GraphState): GraphState => {
+        if (state.stateType === 'StateMachine') {
+            const sub = state.subGraph;
+            if (!sub) return state;
+            const states = sub.states.map(mapState);
+            return states.some((next, index) => next !== sub.states[index]) ? { ...state, subGraph: { ...sub, states } } : state;
+        }
+        if (state.stateType === 'Single' || !state.stateType) {
+            const clip = state.clipName ? standIn(moveClipRole(state.clipName), state.clipName) : state.clipName;
+            if (clip === state.clipName) return state;
+            changed = true;
+            return { ...state, clipName: clip };
+        }
+        const blendSamples = state.blendSamples.map(sample => {
+            // Only samples that play locomotion are swapped; an attack or wave in a blend stays.
+            const clip = sample.clipName && moveClipRole(sample.clipName) ? standIn(sampleMoveRole(state, sample), sample.clipName) : sample.clipName;
+            return clip === sample.clipName ? sample : { ...sample, clipName: clip };
+        });
+        if (blendSamples.every((sample, index) => sample === state.blendSamples[index])) return state;
+        changed = true;
+        return { ...state, blendSamples };
+    };
+    const states = graph.states.map(mapState);
+    return changed ? { ...graph, states } : graph;
+};

@@ -107,6 +107,7 @@ export const ContentBrowser: React.FC = () => {
         selectedModelId,
         selectModel,
         placeInScene,
+        removeFromScene,
         isLoading,
         blueprints,
         isCreatingPlayerBlueprint,
@@ -496,6 +497,7 @@ export const ContentBrowser: React.FC = () => {
                     model={item.model}
                     onSelect={() => selectModel(item.id)}
                     onPlaceInScene={() => placeInScene(item.id)}
+                    onRemoveFromScene={() => removeFromScene(item.id)}
                     onHoverStart={handleHoverStart}
                     onHoverEnd={handleHoverEnd}
                     nameEditor={nameEditorFor(item)}

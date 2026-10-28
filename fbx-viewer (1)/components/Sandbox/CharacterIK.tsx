@@ -2,7 +2,8 @@ import React, { useContext, useEffect, useMemo, useState } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import type { CharacterIKSettings } from '../../types';
-import { findBone, IKPoseGuard } from '../../runtime/ik';
+import { findBone, IKPoseGuard, reachWithHand, supportGripPoint, type SupportGrip } from '../../runtime/ik';
+import { mirrorBoneName } from '../../utils/retargeting';
 import { usePhysicsQueries } from '../../runtime/physics';
 import {
     createFootIKState,
@@ -43,7 +44,18 @@ interface CharacterIKProps {
     physicsId?: string;
     /** The player is aiming: with aimPitch on, the spine follows the camera up and down. */
     aiming?: boolean;
+    /** A weapon held in one hand: the other hand takes hold of it (WeaponSettings.supportGrip). */
+    supportGrip?: HeldWeaponGrip | null;
 }
+
+/** A held weapon's support grip, with the bone of the hand that holds the weapon. */
+export interface HeldWeaponGrip extends SupportGrip {
+    boneName: string;
+}
+
+/** How fast the other hand takes hold of and lets go of a weapon (per second). */
+const GRIP_BLEND_RATE = 14;
+const _gripTarget = new THREE.Vector3();
 
 const _lookTarget = new THREE.Vector3();
 const _aimDirection = new THREE.Vector3();
@@ -81,7 +93,7 @@ export const aimPitch = (direction: THREE.Vector3, weight: number): number =>
  * priority -1, this runs at the default priority): foot planting on the ground under each foot and
  * a look-at toward the camera or the player.
  */
-export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physicsId, aiming = false }) => {
+export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physicsId, aiming = false, supportGrip = null }) => {
     const resolved = resolveCharacterIK(settings);
     const physics = usePhysicsQueries();
     const playerRef = useContext(IKPlayerTargetContext);
@@ -89,6 +101,7 @@ export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physi
     const [footState] = useState(createFootIKState);
     const [lookState] = useState(createLookAtIKState);
     const [aimState] = useState(() => ({ weight: 0 }));
+    const [gripState] = useState(() => ({ weight: 0, grip: null as HeldWeaponGrip | null }));
     useEffect(() => () => guard.release(), [guard, model]);
     useRestoreBeforeAnimation(guard);
 
@@ -98,9 +111,25 @@ export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physi
         () => (resolved.aimPitch ? AIM_SPINE.map(name => findBone(model, name)).filter((bone): bone is THREE.Object3D => !!bone) : []),
         [model, resolved.aimPitch],
     );
+    // The hand holding the weapon, and the other arm that takes hold of it.
+    const gripBone = supportGrip?.boneName ?? gripState.grip?.boneName ?? null;
+    const supportArm = useMemo(() => {
+        const gripHand = gripBone ? findBone(model, gripBone) : null;
+        const otherName = gripBone ? mirrorBoneName(gripBone) : null;
+        const hand = otherName ? findBone(model, otherName) : null;
+        const forearm = hand?.parent;
+        const arm = forearm?.parent;
+        if (!gripHand || !hand || hand === gripHand || !forearm || !arm) return null;
+        let palm: THREE.Object3D | null = null;
+        hand.traverse(bone => { if (!palm && /middle1$/i.test(bone.name)) palm = bone; });
+        return { gripHand, arm, forearm, hand, palm: palm as THREE.Object3D | null };
+    }, [model, gripBone]);
     const bones = useMemo(
-        () => [...(rig ? footIKBones(rig) : []), ...spine, ...(lookBone ? [lookBone] : [])],
-        [rig, spine, lookBone],
+        () => [
+            ...(rig ? footIKBones(rig) : []), ...spine, ...(lookBone ? [lookBone] : []),
+            ...(supportArm ? [supportArm.arm, supportArm.forearm, supportArm.hand] : []),
+        ],
+        [rig, spine, lookBone, supportArm],
     );
 
     useFrame(({ camera }, delta) => {
@@ -116,6 +145,16 @@ export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physi
                 const lean = aimPitch(camera.getWorldDirection(_aimDirection), aimState.weight);
                 _aimRight.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
                 for (const bone of spine) turnBoneAboutWorldAxis(bone, _aimRight, lean / spine.length);
+            }
+        }
+        if (supportArm) {
+            // Eases in when a weapon is taken up and out when it is put away or reloaded.
+            if (supportGrip) gripState.grip = supportGrip;
+            gripState.weight += ((supportGrip ? 1 : 0) - gripState.weight) * (1 - Math.exp(-GRIP_BLEND_RATE * delta));
+            if (!supportGrip && gripState.weight < 1e-3) gripState.grip = null;
+            if (gripState.grip && gripState.weight > 1e-3) {
+                supportGripPoint(supportArm.gripHand, gripState.grip, _gripTarget);
+                reachWithHand(supportArm.arm, supportArm.forearm, supportArm.hand, supportArm.palm, _gripTarget, gripState.weight);
             }
         }
         if (lookBone) {

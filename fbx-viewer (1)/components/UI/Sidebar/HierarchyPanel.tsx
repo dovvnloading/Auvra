@@ -1,12 +1,15 @@
 import React from 'react';
 import { Layers, ChevronDown, EyeOff, User, Image, Component, Paperclip, Film } from 'lucide-react';
 import { useScene } from '../../../context/SceneContext';
+import { viewerModel } from '../../../utils/viewerModel';
 
 export const HierarchyPanel: React.FC = () => {
     const { models, attachments, selectedModelId, selectModel, removeFromScene, removeAttachment } = useScene();
 
     // Only show models that are placed in the scene
-    const placedModels = models.filter(m => m.isPlacedInScene);
+    // The viewer shows one model; the hierarchy lists that one.
+    const shown = viewerModel(models, selectedModelId);
+    const placedModels = shown ? [shown] : [];
 
     return (
         <div className="p-2 space-y-1">

@@ -48,7 +48,7 @@ Enemy blueprints made before these stats were used have Speed 350, so their enem
 
 ## Enemy behavior
 
-An enemy blueprint either uses the built-in AI (attack the player in range, chase what it sees, search where it last saw the player, otherwise patrol) or a behavior tree you author on its **Behavior** tab. **Start from the built-in AI** creates a tree that behaves the same, to change from there; **Start empty** begins with one selector.
+An enemy blueprint either uses the built-in AI (attack the player in range, chase what it sees, search where it last saw the player, otherwise patrol) or a behavior tree you author on its **Behavior** tab. **Start from the built-in AI** creates a tree that behaves the same, to change from there; **Start from a gunner** creates the same tree with a Shoot action in place of the melee attack; **Start empty** begins with one selector.
 
 The tree is evaluated from the top every frame. Each node succeeds, fails or is still running:
 
@@ -60,9 +60,9 @@ The tree is evaluated from the top every frame. Each node succeeds, fails or is 
 | Succeeder | Succeeds even when its child fails |
 | Cooldown | Lets its child succeed at most once every Value seconds |
 | Condition | Succeeds when its test holds: can see the player, saw the player recently, player within a distance, health below a percent, a random chance (rolled once a second), or a graph variable is on |
-| Action | Chase the player (until in attack range), attack, strafe for some seconds, search where the player was last seen, patrol to a random point, wait, move to an object (by id), flee to a safe distance, return to the spawn point, set a graph variable, or play an animation |
+| Action | Chase the player (until in attack range), attack, shoot at the player for some seconds (while in attack range and in sight), strafe for some seconds,search where the player was last seen, patrol to a random point, wait, move to an object (by id), flee to a safe distance, return to the spawn point, set a graph variable, or play an animation |
 
-Actions use the enemy's Speed, Attack Range, Attack Cooldown and Sight Range stats like the built-in AI, and attacks deal damage at the same moment of the attack. An action that is interrupted by another branch starts over the next time it runs. Problems such as a decorator without its one child show under the tree. Use **Delete** on the top node to go back to the built-in AI.
+Actions use the enemy's Speed, Attack Range, Attack Cooldown and Sight Range stats like the built-in AI, and attacks deal damage at the same moment of the attack. **Shoot** fires the enemy blueprint's first weapon carried from the start, as the player's weapons fire: its rate, spread, magazine and reloads, at the player's chest from the weapon's muzzle socket, with its fire clip and the blueprint's weapon sounds. It holds the trigger only after a short moment of taking aim, and fails without a weapon, out of range or out of sight, so the tree moves on to chasing.An action that is interrupted by another branch starts over the next time it runs. Problems such as a decorator without its one child show under the tree. Use **Delete** on the top node to go back to the built-in AI.
 
 ## Enemy navigation
 
@@ -154,6 +154,10 @@ A player blueprint's **Weapons** section, under Details, lists the player's weap
 - **Damage** per projectile, **Pellets** per shot (more than one for a shotgun), projectile **Speed**, and **Spread**: the largest angle, in degrees, a shot strays from the aim. Aiming cuts the spread to a quarter.
 - **Mag**, **Reserve** and **Reload**: the rounds a magazine holds, the rounds carried besides (-1 is unlimited) and how long a reload takes. Firing with an empty magazine starts a reload; a magazine of 0 never runs out. Each weapon keeps its own rounds when you switch away, and switching cancels a reload.
 - **Fire clip**, **Aim clip** and **Reload clip**: upper-body clips for this weapon, in place of the blueprint's Upper Body clips. The reload clip plays once, from the same bone, when a reload starts.
+- **Idle**, **Walk**, **Run**, **Walk back** and **Jump while held**: how the character moves while holding this weapon, such as a rifle's or a pistol's animation set from Mixamo. Each plays in place of the graph's own clip for that movement: a state whose clip idles, walks, runs, backs up or jumps plays the weapon's instead, and in a blend each sample takes the clip for where it sits (behind backs up, to the sides walks). Clips left on **Graph clip** keep the graph's. A weapon with its own idle stays in the hands the whole time it is held, so its carry placement is used only while another weapon is.
+- **Other hand holds it** and **Support hand point**: where the other hand holds the weapon, such as a rifle's handguard, in the weapon model's own units. While the weapon is held, that hand takes hold of the point from wherever the clip has it: only the arm's reach changes, with the elbow bent and the hand turned as the clip has them. It lets go during a reload, for the reload clip.
+
+To set up a long gun, import the rifle clips onto the character model (Idle, Walk, Run, Aiming Idle, Firing, Reloading), pick them in the weapon's clips, then place the weapon's attachment so the grip sits in the right palm and the barrel points through the left hand in the rifle idle. Check it in Play from several sides, then set the support hand point on the handguard where the left palm rests.
 
 On touch screens a player with weapons also gets Reload and Next weapon buttons. The graph's **IsReloading** variable is on during a reload, and **IsFiring** is off then. A blueprint without weapons fires an automatic with unlimited rounds from its Muzzle socket, as before. The HUD can show the held weapon and its rounds through the `player.weapon`, `player.ammo` and `player.reserve` bindings (see [HUD and menus](hud-and-menus.md)); the built-in HUD shows them at the bottom left.
 

@@ -7,6 +7,8 @@ interface ModelCardProps {
     model: LoadedModelData;
     onSelect: () => void;
     onPlaceInScene: () => void;
+    /** Takes the model out of the Scene viewer. */
+    onRemoveFromScene?: () => void;
     onHoverStart: (model: LoadedModelData) => void;
     onHoverEnd: () => void;
     /** Replaces the name label while the asset is being renamed. */
@@ -18,6 +20,7 @@ export const ModelCard: React.FC<ModelCardProps> = ({
     model,
     onSelect,
     onPlaceInScene,
+    onRemoveFromScene,
     onHoverStart,
     onHoverEnd,
     nameEditor,
@@ -62,11 +65,17 @@ export const ModelCard: React.FC<ModelCardProps> = ({
                     {getIcon(model.category)}
                 </div>
 
-                {/* Placed Indicator */}
+                {/* In the viewer: the eye takes it out again */}
                 {model.isPlacedInScene && (
-                    <div className="absolute top-1 left-1 p-1 bg-blue-900/80 backdrop-blur rounded text-blue-400 border border-blue-800">
+                    <button
+                        type="button"
+                        aria-label={`Hide ${model.name} from the viewer`}
+                        title="Shown in the viewer. Click to hide it."
+                        onClick={(e) => { e.stopPropagation(); onRemoveFromScene?.(); }}
+                        className="absolute top-1 left-1 z-10 p-1 bg-blue-900/80 backdrop-blur rounded text-blue-400 border border-blue-800 hover:bg-blue-800 hover:text-white"
+                    >
                         <Eye size={10} />
-                    </div>
+                    </button>
                 )}
 
                 {/* Add To Scene Overlay (Hidden for Animations) */}

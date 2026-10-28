@@ -9,7 +9,7 @@ import type { WeaponCarry, WeaponSettings } from '../types';
  */
 
 /** A weapon with every field filled in and kept in range. */
-type OptionalWeaponField = 'attachmentId' | 'muzzleSocket' | 'fireClip' | 'aimClip' | 'reloadClip' | 'carry';
+type OptionalWeaponField = 'attachmentId' | 'muzzleSocket' | 'fireClip' | 'aimClip' | 'reloadClip' | 'carry' | 'supportGrip' | MoveClipField;
 export type ResolvedWeapon = Required<Omit<WeaponSettings, OptionalWeaponField>> & Pick<WeaponSettings, OptionalWeaponField>;
 
 /** The weapon a blueprint without weapons fires: what the player always had. */
@@ -17,6 +17,7 @@ export const DEFAULT_WEAPON: ResolvedWeapon = {
     id: 'default', name: 'Weapon', fireMode: 'auto', fireRate: 1 / 0.15, damage: 10, magazine: 0, reserve: -1,
     reloadSeconds: 1.5, spread: 0, pellets: 1, projectileSpeed: 60, startsOwned: true,
     attachmentId: null, muzzleSocket: null, fireClip: null, aimClip: null, reloadClip: null, carry: null,
+    idleClip: null, walkClip: null, runClip: null, backClip: null, jumpClip: null, supportGrip: null,
 };
 
 const number = (value: unknown, fallback: number, min: number, max: number): number =>
@@ -28,6 +29,12 @@ const vector = (value: unknown): [number, number, number] =>
     (Array.isArray(value) && value.length === 3 && value.every(item => typeof item === 'number' && Number.isFinite(item))
         ? [value[0], value[1], value[2]]
         : [0, 0, 0]);
+
+/** Three finite numbers, or null. */
+const point = (value: unknown): [number, number, number] | null =>
+    (Array.isArray(value) && value.length === 3 && value.every(item => typeof item === 'number' && Number.isFinite(item))
+        ? [value[0], value[1], value[2]]
+        : null);
 
 /** A carry placement with a bone and finite offsets, or null (stay in the hand). */
 export const resolveCarry = (carry: WeaponCarry | null | undefined): WeaponCarry | null =>
@@ -54,7 +61,29 @@ export const resolveWeapon = (weapon: WeaponSettings): ResolvedWeapon => ({
     aimClip: clip(weapon.aimClip),
     reloadClip: clip(weapon.reloadClip),
     carry: resolveCarry(weapon.carry),
+    idleClip: clip(weapon.idleClip),
+    walkClip: clip(weapon.walkClip),
+    runClip: clip(weapon.runClip),
+    backClip: clip(weapon.backClip),
+    jumpClip: clip(weapon.jumpClip),
+    supportGrip: point(weapon.supportGrip),
 });
+
+/** The locomotion a weapon is held with, by what each clip stands in for. */
+export type MoveRole = 'idle' | 'walk' | 'run' | 'back' | 'jump';
+type MoveClipField = 'idleClip' | 'walkClip' | 'runClip' | 'backClip' | 'jumpClip';
+const MOVE_CLIP_FIELDS: Record<MoveRole, MoveClipField> = { idle: 'idleClip', walk: 'walkClip', run: 'runClip', back: 'backClip', jump: 'jumpClip' };
+
+/** A weapon's own locomotion clips (see WeaponSettings.idleClip), by role; empty when it has none. */
+export const weaponMoveClips = (weapon: Pick<WeaponSettings, MoveClipField> | null | undefined): Partial<Record<MoveRole, string>> => {
+    const clips: Partial<Record<MoveRole, string>> = {};
+    if (!weapon) return clips;
+    (Object.keys(MOVE_CLIP_FIELDS) as MoveRole[]).forEach(role => {
+        const name = clip(weapon[MOVE_CLIP_FIELDS[role]]);
+        if (name) clips[role] = name;
+    });
+    return clips;
+};
 
 /** A blueprint's weapons, resolved; the default weapon when it has none. */
 export const resolveWeapons = (weapons: readonly WeaponSettings[] | undefined): ResolvedWeapon[] =>
@@ -213,6 +242,8 @@ export interface WeaponPose {
     held: number;
     ready: boolean;
     owned: readonly boolean[];
+    /** The held weapon is being reloaded: the reload clip has the other hand. */
+    reloading?: boolean;
 }
 
 /** Where a weapon's model is drawn: in the hand (its attachment as authored), at its carry placement, or not at all. */
@@ -229,7 +260,8 @@ export const weaponPlacements = (weapons: readonly WeaponSettings[], pose: Weapo
         if (!weapon.attachmentId || placements.get(weapon.attachmentId) === 'hand') return;
         const carry = resolveCarry(weapon.carry);
         let placement: WeaponPlacement;
-        if (index === pose.held) placement = pose.ready || !carry ? 'hand' : carry;
+        // A weapon with its own locomotion is carried in the hands the whole time it is held.
+        if (index === pose.held) placement = pose.ready || !carry || clip(weapon.idleClip) ? 'hand' : carry;
         else if (pose.owned[index] && carry) placement = carry;
         else placement = 'hidden';
         // Two weapons sharing one model: the held one decides.

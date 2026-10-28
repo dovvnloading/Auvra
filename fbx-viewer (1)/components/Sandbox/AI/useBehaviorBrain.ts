@@ -8,6 +8,13 @@ import type { GraphRuntimeAPI } from '../../AnimationGraph/GraphRuntime';
 import { AI_CONFIG, DEFAULT_AI_TUNING, type AITuning } from './AIConfig';
 import { checkVisibility } from './AISenses';
 import type { BrainOutput } from './useAIBrain';
+import { createWeaponState, stepWeapons, type ResolvedWeapon } from '../../../runtime/weapons';
+
+/** Seconds an enemy takes to bring its weapon up before the first shot of a burst. */
+const ENEMY_AIM_DELAY = 0.3;
+
+/** What the enemy's weapon does in a frame: shots fired, and whether its trigger is held. */
+export type EnemyFireHandler = (shots: number, triggerHeld: boolean) => void;
 
 interface BehaviorBrainInput {
     enemyPosition: THREE.Vector3;
@@ -29,6 +36,8 @@ export const useBehaviorBrain = (
     graphApi: React.RefObject<GraphRuntimeAPI | undefined>,
     onAttack?: () => void,
     tuning: AITuning = DEFAULT_AI_TUNING,
+    weapon: ResolvedWeapon | null = null,
+    onFire?: EnemyFireHandler,
 ) => {
     const scene = useThree(state => state.scene);
     const navGrid = useNavGridContext();
@@ -37,6 +46,9 @@ export const useBehaviorBrain = (
     const lastKnown = useRef<THREE.Vector3 | null>(null);
     const clock = useRef({ time: 0, memory: 0, cooldown: 0, attack: 0, damageDealt: false });
     const objects = useRef(new Map<string, { object: THREE.Object3D | null; foundAt: number }>());
+    // The weapon a Shoot action fires: its own rate, magazine and reload, as for the player.
+    const weaponState = useMemo(() => (weapon ? createWeaponState([weapon]) : null), [weapon]);
+    const triggerWasHeld = useRef(false);
 
     const updateState = useCallback((input: BehaviorBrainInput): BrainOutput => {
         const { delta, enemyPosition, enemyForward, targetPosition, distToTarget } = input;
@@ -98,6 +110,8 @@ export const useBehaviorBrain = (
                 return end ? new THREE.Vector3(end.x, 0, end.z) : point;
             },
         };
+        // A Shoot action holds the trigger for this frame only.
+        let triggerHeld = false;
         const effects: BehaviorEffects = {
             attackReady: () => timers.cooldown <= 0 && timers.attack <= 0,
             startAttack: () => {
@@ -109,11 +123,24 @@ export const useBehaviorBrain = (
             attacking: () => timers.attack > 0,
             setVariable: (name, value) => graphApi.current?.setVariable(name, value),
             playAnimation: clipName => graphApi.current?.playMontage?.(clipName) ?? false,
+            canShoot: () => weapon !== null,
+            holdTrigger: () => { triggerHeld = true; },
         };
 
         const { intent } = tree ? tickBehaviorTree(tree, memory, world, effects) : { intent: { state: 'IDLE' as const, destination: enemyPosition.clone(), focus: null } };
+        if (weapon && weaponState) {
+            const step = stepWeapons(weaponState, [weapon], {
+                firing: triggerHeld,
+                firePressed: triggerHeld && !triggerWasHeld.current,
+                reloadPressed: false,
+                nextWeaponPressed: false,
+                firstShotDelay: ENEMY_AIM_DELAY,
+            }, delta);
+            triggerWasHeld.current = triggerHeld;
+            onFire?.(step.shots, triggerHeld);
+        }
         return { state: intent.state, destination: intent.destination, targetFocus: intent.focus };
-    }, [graphApi, memory, navGrid, onAttack, scene, tree, tuning]);
+    }, [graphApi, memory, navGrid, onAttack, onFire, scene, tree, tuning, weapon, weaponState]);
 
     return { updateState };
 };

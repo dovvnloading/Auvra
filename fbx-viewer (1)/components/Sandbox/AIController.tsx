@@ -6,7 +6,8 @@ import { GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
 import { AI_CONFIG, resolveAITuning } from './AI/AIConfig';
 import type { BehaviorTreeData, BlueprintStat } from '../../types';
 import { useAIBrain } from './AI/useAIBrain';
-import { useBehaviorBrain } from './AI/useBehaviorBrain';
+import { useBehaviorBrain, type EnemyFireHandler } from './AI/useBehaviorBrain';
+import type { ResolvedWeapon } from '../../runtime/weapons';
 import { useAILocomotion } from './AI/useAILocomotion';
 
 interface AIControllerProps {
@@ -20,6 +21,9 @@ interface AIControllerProps {
     stats?: readonly BlueprintStat[];
     /** The blueprint's authored behavior; without one the built-in AI decides. */
     behaviorTree?: BehaviorTreeData;
+    /** The weapon a Shoot action fires, and what to do with its shots each frame. */
+    weapon?: ResolvedWeapon | null;
+    onFire?: EnemyFireHandler;
 }
 
 export const AIController: React.FC<AIControllerProps> = ({
@@ -30,7 +34,9 @@ export const AIController: React.FC<AIControllerProps> = ({
     enabled,
     onDealDamage,
     stats,
-    behaviorTree
+    behaviorTree,
+    weapon = null,
+    onFire
 }) => {
     // Callback wrapper
     const handleAttack = useCallback(() => {
@@ -40,7 +46,7 @@ export const AIController: React.FC<AIControllerProps> = ({
     // --- Systems ---
     const tuning = useMemo(() => resolveAITuning(stats), [stats]);
     const builtIn = useAIBrain(enemyApi, handleAttack, tuning);
-    const authored = useBehaviorBrain(behaviorTree, enemyApi, handleAttack, tuning);
+    const authored = useBehaviorBrain(behaviorTree, enemyApi, handleAttack, tuning, weapon, onFire);
     const brain = behaviorTree && behaviorTree.behaviorNodes.length > 0 ? authored : builtIn;
     const locomotion = useAILocomotion();
 
