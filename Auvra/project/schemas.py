@@ -33,6 +33,9 @@ _NESTED_KEYS = {
     "terrainData": {"resolution", "width", "depth", "heights", "heightfield", "textureId", "textureLayers", "splatmap"},
     "heightfield": {"assetId", "encoding", "columns", "rows"},
     "splatmap": {"assetId", "encoding", "columns", "rows"},
+    # A level's baked lighting: bake settings and the light probe volume asset.
+    "bakedLighting": {"spacing", "bounces", "intensity", "probes"},
+    "probes": {"assetId", "encoding", "origin", "spacing", "counts", "bakedAt", "signature"},
     "textureLayers": {"textureId", "tiling"},
     "skyConfig": {"timeOfDay", "sunIntensity", "ambienceIntensity", "sunColor", "fogColor", "fogDensity", "turbidity", "rayleigh", "mieCoefficient", "mieDirectionalG", "inclination", "azimuth"},
     "dimensions": {"width", "height"},

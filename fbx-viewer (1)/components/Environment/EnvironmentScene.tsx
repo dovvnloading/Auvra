@@ -13,6 +13,8 @@ import { TerrainSculptor } from './Terrain/TerrainSculptor';
 import { InstancedLevelLayer } from './InstancedLevelLayer';
 import { LodEditorPreviewContext, useLodEditorPreview } from '../../runtime/components/lodComponents';
 import { AudioSystem } from './AudioSystem';
+import { LevelLightVolume, LightBakeRunner } from '../../runtime/lighting/LevelLightVolume';
+import { useLevel } from '../../context/LevelContext';
 import { SkySystem } from './SkySystem';
 import { useAssets } from '../../context/AssetContext';
 import { getWorldMatrix, toLocalTransform } from '../../utils/sceneGraph';
@@ -495,6 +497,8 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
 }) => {
     const { camera, controls } = useThree();
     const { audioAssets } = useAssets();
+    const { levels, currentLevelId } = useLevel();
+    const bakedLighting = levels.find(level => level.id === currentLevelId)?.bakedLighting;
     const [isTransforming, setIsTransforming] = useState(false);
     const [transformTarget, setTransformTarget] = useState<THREE.Object3D | null>(null);
 
@@ -743,6 +747,8 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
         <LodEditorPreviewContext.Provider value={lodPreview}>
             {/* Dynamic Sky System */}
             <SkySystem levelObjects={resolvedObjects} />
+            <LevelLightVolume bakedLighting={bakedLighting} />
+            <LightBakeRunner />
 
             {/* Grid */}
             <Grid

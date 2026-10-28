@@ -12,6 +12,7 @@ import { isTerrainHeightfieldPending, TerrainHeightfieldEncodingError } from '..
 import { resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplatEditor';
 import { isTerrainSplatPending, terrainLayersReferenceTexture, withoutTerrainLayerTexture } from '../components/Environment/Terrain/terrainSplatCodec';
 import { collectSubtree, sortByHierarchy } from '../utils/sceneGraph';
+import type { LevelBakedLighting } from '../runtime/lighting/bakedLighting';
 
 const DEFAULT_LEVEL_ID = 'default_level';
 const EMPTY_BLUEPRINT: LevelBlueprintData = { nodes: [], connections: [], variables: [] };
@@ -200,6 +201,8 @@ export const useLevelManager = (models: LoadedModelData[]) => {
   const { levels, currentLevelId, levelObjects, activeLevelBlueprint } = workingState;
   const levelObjectsRef = useRef(levelObjects);
   levelObjectsRef.current = levelObjects;
+  const levelsRef = useRef(levels);
+  levelsRef.current = levels;
   const currentLevelIdRef = useRef<string | null>(null);
   const getCurrentLevelId = useCallback(() => currentLevelIdRef.current, []);
 
@@ -945,7 +948,8 @@ export const useLevelManager = (models: LoadedModelData[]) => {
               if (!session.isSameSession(origin)) continue;
               const lease = session.captureReady() ?? origin;
               try {
-                  await dbOperations.addLevel({ ...level, blueprint }, lease);
+                  const latest = levelsRef.current.find(item => item.id === level.id) ?? level;
+                  await dbOperations.addLevel({ ...latest, blueprint }, lease);
                   writes.saved = blueprint;
               } catch (error) {
                   // A newer edit is written next and carries this one's changes.
@@ -988,6 +992,26 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       }
   }, [activeLevelBlueprint, currentLevelId, drainBlueprintWrites, levels, session]);
 
+  /** Stores a level's baked lighting (its settings and, once baked, the volume); null clears it. Rejects when it cannot be saved. */
+  const updateLevelBakedLighting = useCallback(async (levelId: string, bakedLighting: LevelBakedLighting | null): Promise<void> => {
+      const lease = session.requireCurrent(session.captureReady());
+      projectService.assertWritable();
+      const level = levelsRef.current.find(item => item.id === levelId);
+      if (!level) throw new Error('The level is no longer open.');
+      const { bakedLighting: _previous, ...rest } = level;
+      const next: LevelData = bakedLighting ? { ...rest, bakedLighting } : rest;
+      await dbOperations.addLevel(next, lease);
+      session.requireSameSession(lease);
+      setWorkingState(prev => ({
+          ...prev,
+          levels: prev.levels.map(item => {
+              if (item.id !== levelId) return item;
+              const { bakedLighting: _old, ...others } = item;
+              return bakedLighting ? { ...others, bakedLighting } : others;
+          }),
+      }));
+  }, [session]);
+
   const hydrateProjectState = useCallback((nextLevels: LevelData[], nextObjects: LevelObject[], nextCurrentLevelId?: string | null) => {
       const selected = nextCurrentLevelId || nextLevels[0]?.id || null;
       const level = nextLevels.find((item) => item.id === selected);
@@ -1024,6 +1048,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       flushPendingLevelEdits,
       activeLevelBlueprint,
       updateLevelBlueprint,
+      updateLevelBakedLighting,
       hydrateProjectState,
       undo,
       redo,

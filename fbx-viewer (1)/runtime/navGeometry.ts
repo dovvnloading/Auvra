@@ -3,6 +3,7 @@ import { ConvexGeometry } from 'three-stdlib';
 import type { LevelComponent, LevelObject } from '../types';
 import { planHull, type HostGeometry } from './components/physicsComponents';
 import { resolveNavSettings, type NavSettings } from './navSettings';
+import { isDynamicObject } from './levelObjectMotion';
 import { flatGroundHeight, terrainHeightfieldShape, terrainSurfaceHeight } from './terrainPhysics';
 
 /**
@@ -62,7 +63,6 @@ const PADDING = 10;
 const MAX_HALF_EXTENT = 2000;
 // The flat ground is laid in runs of square cells, at most this many to a side.
 const FLAT_GROUND_CELLS = 256;
-const DYNAMIC_COMPONENT_TYPES: ReadonlySet<string> = new Set(['mover', 'rotator']);
 // Smallest collider dimension physics builds (physicsComponents MIN_EXTENT).
 const MIN_COLLIDER_EXTENT = 0.01;
 
@@ -107,25 +107,6 @@ const createWorldMatrixResolver = (index: ReadonlyMap<string, LevelObject>): Wor
 
 const enabledComponents = (object: LevelObject): LevelComponent[] =>
     (object.components ?? []).filter(component => component.enabled !== false);
-
-const isDynamicComponent = (component: LevelComponent): boolean => {
-    if (DYNAMIC_COMPONENT_TYPES.has(component.type)) return true;
-    // A rigid body is static only when it is explicitly fixed (Rapier bodies default to dynamic).
-    return component.type === 'rigidBody' && component.props?.type !== 'fixed';
-};
-
-/** True when the object or one of its ancestors moves at runtime. */
-const isDynamicObject = (object: LevelObject, index: ReadonlyMap<string, LevelObject>): boolean => {
-    const visited = new Set<string>();
-    let current: LevelObject | undefined = object;
-    while (current && !visited.has(current.id)) {
-        visited.add(current.id);
-        if (enabledComponents(current).some(isDynamicComponent)) return true;
-        const parentId: string | null | undefined = current.parentId;
-        current = parentId ? index.get(parentId) : undefined;
-    }
-    return false;
-};
 
 const finite = (value: unknown, fallback: number): number =>
     typeof value === 'number' && Number.isFinite(value) ? value : fallback;

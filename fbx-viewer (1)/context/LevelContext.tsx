@@ -2,6 +2,7 @@
 import React, { createContext, useContext, ReactNode } from 'react';
 import { LevelData, LevelObject, LevelObjectType } from '../types';
 import { useLevelManager } from '../hooks/useLevelManager';
+import type { LevelBakedLighting } from '../runtime/lighting/bakedLighting';
 import { useAssets } from './AssetContext';
 
 interface LevelContextType {
@@ -41,6 +42,8 @@ interface LevelContextType {
   
   activeLevelBlueprint: any;
   updateLevelBlueprint: (data: any) => void;
+  /** Stores a level's baked lighting (its settings and, once baked, the volume); null clears it. */
+  updateLevelBakedLighting: (levelId: string, bakedLighting: LevelBakedLighting | null) => Promise<void>;
 }
 
 const LevelContext = createContext<LevelContextType | undefined>(undefined);

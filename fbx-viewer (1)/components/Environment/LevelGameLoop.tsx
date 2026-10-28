@@ -132,6 +132,7 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
         name: levels.find(l => l.id === currentLevelId)?.name ?? 'Untitled Level',
         objects: levelObjects,
         blueprint: activeLevelBlueprint,
+        bakedLighting: levels.find(l => l.id === currentLevelId)?.bakedLighting,
     }), [activeLevelBlueprint, currentLevelId, levelObjects, levels]);
 
     // Play starts at the level's Player Start (null lets the runtime use it). "Play from here", or a

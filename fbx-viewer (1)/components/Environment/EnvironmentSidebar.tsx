@@ -879,9 +879,9 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                 </div>
             )}
 
-            {/* Lights (outliner tab) */}
+            {/* Lights and baked lighting (outliner tab) */}
             {activeTab === 'outliner' && (
-                <div className="h-48 shrink-0 border-t border-gray-800 flex flex-col min-h-0">
+                <div className="h-80 shrink-0 border-t border-gray-800 flex flex-col min-h-0">
                     <LightingPanel
                         levelId={currentLevelId}
                         selectedObjectId={selectedObjectId}

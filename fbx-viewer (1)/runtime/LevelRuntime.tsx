@@ -12,6 +12,7 @@ import { NavMeshContext, useLevelNavMesh, type LevelNavMesh, type NavSettings } 
 import { modelTriangles } from './navGeometry';
 import type { HostGeometry } from './components/physicsComponents';
 import { usePhysicsQueries } from './physics';
+import { LevelLightVolume } from './lighting/LevelLightVolume';
 import { LevelGroundColliders } from './terrainPhysics';
 import { InstancedLevelLayer } from '../components/Environment/InstancedLevelLayer';
 import { AudioSystem } from '../components/Environment/AudioSystem';
@@ -710,6 +711,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
         <RuntimeSpawnerProvider spawnPrefab={spawnPrefab} destroyObject={destroyRuntimeObject}>
             {/* --- Replaced Hardcoded Lights with SkySystem --- */}
             <SkySystem levelObjects={runtimeLevelObjects} />
+            <LevelLightVolume bakedLighting={level.bakedLighting} />
 
             <LevelGroundColliders terrains={renderPlan.terrains} />
 

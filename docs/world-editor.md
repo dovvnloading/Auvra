@@ -67,6 +67,7 @@ Objects can carry components that add behaviour. Select an object and use **Add 
 | Decal | Projects a texture onto the object or onto any surface under it |
 | Water | An animated water surface with waves, reflections and foam; dynamic rigid bodies float in it and are slowed by it |
 | Reflection Probe | Captures its surroundings into a reflection map for shiny materials within its radius; the nearest probe wins where probes overlap. Updates once at start, at an interval, or every frame |
+| Light Bake Volume | A box (centred on the object, drawn in the editor) where [baked lighting](#baked-lighting) puts its light probes |
 | Post Process | Bloom, ambient occlusion, tone mapping, vignette, depth of field, colour grading and antialiasing for the whole level |
 | LOD Group | Shows one of the object's children by camera distance (LOD 0, 1, 2) and hides all of them past the last distance |
 | Level Streaming | Loads another level's objects while the player is inside its box and unloads them after the player leaves (see [Level streaming](#level-streaming)) |
@@ -133,6 +134,19 @@ The **Lights** panel in the **Outliner** tab (under the prefab list) lists every
 - Each row selects its light and has an on/off toggle, a colour swatch and an intensity field (**Int**).
 
 The light's other settings are on its component in the inspector.
+
+## Baked lighting
+
+Unbaked, a level's shaded sides get the same sky fill everywhere (the sky sphere's ambience and the environment light), so a room under a roof is as bright as open ground. **Baked Lighting**, under the Lights panel, bakes the light that really reaches each place into a grid of light probes:
+
+1. Set **Gap** (world units between probes; smaller catches small rooms and tight corners but takes longer), **Bnc** (bounces: 1 lights surfaces with the open sky only, each more carries light further into enclosed spaces) and **Int** (strength of the baked light).
+2. Click **Bake**. The bake runs in the viewport with a progress bar; **Cancel** stops it. A level the probes would not cover at the chosen gap within 16,384 probes gets a wider gap, shown under the buttons.
+
+Without a **Light Bake Volume** the probes cover all of the level's static geometry, so a large terrain spreads them thin. Add the component to an object and size its box around where players go: the probes then fill the smallest box around all of the level's volumes, at the chosen gap, while geometry outside still blocks and bounces light.
+
+The bake sees the level's static geometry (props, foliage and terrain without a Mover, Rotator or non-fixed Rigid Body, and not under one), its lights and the sky. Coloured surfaces tint the light they bounce, emissive materials give off light, and probes buried inside geometry take their neighbours' light. Characters, enemies and other moving objects are not part of the bake but are lit by it wherever they stand, in the editor and in play. Outside the probe grid the unbaked fill applies.
+
+The bake is stored with the level and goes into every build. It shows **Out of date** once static objects, their lights, the sky or the Gap and Bnc settings change; **Int** changes show without baking again. **Clear** removes the bake.
 
 ## Particles
 

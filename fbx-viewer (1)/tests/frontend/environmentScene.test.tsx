@@ -19,6 +19,7 @@ vi.mock('@react-three/drei', () => ({
   TransformControls: () => null,
 }));
 vi.mock('../../context/AssetContext', () => ({ useAssets: () => ({ audioAssets: [] }) }));
+vi.mock('../../context/LevelContext', () => ({ useLevel: () => ({ levels: [], currentLevelId: null }) }));
 vi.mock('../../components/Environment/Terrain/TerrainObject', () => ({
   TerrainObject: (props: { onClick: (event: { stopPropagation: () => void }) => void }) => {
     terrain.onClick = props.onClick;
@@ -29,6 +30,7 @@ vi.mock('../../components/Environment/Terrain/TerrainSculptor', () => ({ Terrain
 vi.mock('../../components/Environment/InstancedLevelLayer', () => ({ InstancedLevelLayer: () => null }));
 vi.mock('../../components/Environment/AudioSystem', () => ({ AudioSystem: () => null }));
 vi.mock('../../components/Environment/SkySystem', () => ({ SkySystem: () => null }));
+vi.mock('../../runtime/lighting/LevelLightVolume', () => ({ LevelLightVolume: () => null, LightBakeRunner: () => null }));
 vi.mock('../../components/Environment/FoliageBrushTool', () => ({ FoliageBrushTool: () => null }));
 
 const levelObject = (id: string, type: LevelObject['type']): LevelObject => ({

@@ -33,6 +33,16 @@ SPLATMAP_MAGIC = b"AUVRASP1"
 SPLATMAP_ENCODING = "rgba8"
 _SPLATMAP_CHANNELS = 4
 
+# Baked light volumes (a level's light probes): a 20-byte header (magic, uint32
+# x, y and z probe counts) followed by 12 float32 spherical harmonics
+# coefficients per probe (four RGB bands), x fastest, all little-endian.
+LIGHT_VOLUME_MIME = "application/vnd.auvra.lightvolume"
+LIGHT_VOLUME_MAGIC = b"AUVRALV1"
+MAX_LIGHT_VOLUME_PROBES_PER_AXIS = 256
+MAX_LIGHT_VOLUME_PROBES = 65536
+_LIGHT_VOLUME_FLOATS_PER_PROBE = 12
+_LIGHT_VOLUME_HEADER = struct.Struct("<8sIII")
+
 # Model formats.  Binary glTF carries the ``glTF`` magic; glTF JSON and
 # Wavefront OBJ are text without a signature, so they are accepted by their
 # declared MIME after a content sanity check (text, and a JSON object for
@@ -103,7 +113,7 @@ class AssetStore:
             if size is not None and total != size:
                 raise ValueError("asset size does not match declared size")
             detected = sniff_mime(bytes(prefix))
-            known_media = {"image/png", "image/jpeg", "image/webp", "audio/wav", "audio/ogg", GLB_MIME, HEIGHTFIELD_MIME, SPLATMAP_MIME}
+            known_media = {"image/png", "image/jpeg", "image/webp", "audio/wav", "audio/ogg", GLB_MIME, HEIGHTFIELD_MIME, SPLATMAP_MIME, LIGHT_VOLUME_MIME}
             if mime in known_media and detected != mime:
                 raise ValueError("asset MIME does not match its content")
             declared = mime.lower() if isinstance(mime, str) else None
@@ -114,6 +124,8 @@ class AssetStore:
                 validate_heightfield_file(tmp)
             elif mime == SPLATMAP_MIME:
                 validate_splatmap_file(tmp)
+            elif mime == LIGHT_VOLUME_MIME:
+                validate_light_volume_file(tmp)
             asset_id = digest.hexdigest(); target = self.path_for(asset_id)
             target.parent.mkdir(parents=True, exist_ok=True)
             # Serialize same-digest ingestion with manifest publication.  An
@@ -286,6 +298,7 @@ def sniff_mime(prefix: bytes) -> str | None:
     if prefix.startswith(b"glTF"): return "model/gltf-binary"
     if prefix.startswith(HEIGHTFIELD_MAGIC): return HEIGHTFIELD_MIME
     if prefix.startswith(SPLATMAP_MAGIC): return SPLATMAP_MIME
+    if prefix.startswith(LIGHT_VOLUME_MAGIC): return LIGHT_VOLUME_MIME
     return None
 
 def text_model_matches(mime: str, prefix: bytes) -> bool:
@@ -399,6 +412,28 @@ def validate_splatmap_file(path: Path) -> None:
                 raise ValueError("terrain splat map dimensions are out of range")
         if os.fstat(stream.fileno()).st_size != _HEIGHTFIELD_HEADER.size + _SPLATMAP_CHANNELS * columns * rows:
             raise ValueError("terrain splat map asset size does not match its dimensions")
+
+def validate_light_volume_file(path: Path, *, chunk_size: int = 1024 * 1024) -> None:
+    """Structurally validate a baked light volume: header, dimensions, size and finite samples."""
+
+    with path.open("rb") as stream:
+        header = stream.read(_LIGHT_VOLUME_HEADER.size)
+        if len(header) != _LIGHT_VOLUME_HEADER.size:
+            raise ValueError("light volume asset is truncated")
+        magic, *counts = _LIGHT_VOLUME_HEADER.unpack(header)
+        if magic != LIGHT_VOLUME_MAGIC:
+            raise ValueError("light volume asset has an unknown format")
+        if not all(1 <= count <= MAX_LIGHT_VOLUME_PROBES_PER_AXIS for count in counts):
+            raise ValueError("light volume dimensions are out of range")
+        probes = counts[0] * counts[1] * counts[2]
+        if probes > MAX_LIGHT_VOLUME_PROBES:
+            raise ValueError("light volume has too many probes")
+        if os.fstat(stream.fileno()).st_size != _LIGHT_VOLUME_HEADER.size + 4 * _LIGHT_VOLUME_FLOATS_PER_PROBE * probes:
+            raise ValueError("light volume asset size does not match its dimensions")
+        chunk_size -= chunk_size % 4
+        for block in iter(lambda: stream.read(chunk_size), b""):
+            if not all(map(math.isfinite, _float32_samples(block))):
+                raise ValueError("light volume samples must be finite")
 
 def _is_reparse(path: Path) -> bool:
     try: return bool(getattr(path.stat(), "st_file_attributes", 0) & 0x400)
