@@ -403,4 +403,16 @@ describe('additive montages', () => {
     expect(hips.position.y).toBeCloseTo(0, 3);
     expect(flinch.blendMode).toBe(THREE.NormalAnimationBlendMode);
   });
+
+  it('takes the share each listed bone gives its subtree, the deepest listed bone winning', () => {
+    const { hips, chest, hand, leg, player, frame } = makeScene();
+    // A flinch from y = 5 to y = 6 over its second: +0 to +1 in y as additive motion.
+    const flinch = new THREE.AnimationClip('Flinch', 1, BONES.map(bone => new THREE.VectorKeyframeTrack(`${bone}.position`, [0, 1], [0, 5, 0, 0, 6, 0])));
+    player.play(flinch, { additive: true, blendIn: 0, blendOut: 0, boneWeights: [{ bone: 'Spine', weight: 0.25 }, { bone: 'LeftHand', weight: 0 }] });
+    frame(16);
+    expect(hips.position.y).toBeCloseTo(0.5, 3);
+    expect(leg.position.y).toBeCloseTo(0.5, 3);
+    expect(chest.position.y).toBeCloseTo(0.125, 3);
+    expect(hand.position.y).toBeCloseTo(0, 3);
+  });
 });

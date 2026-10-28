@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GraphRuntimeAPI } from '../../AnimationGraph/GraphRuntime';
+import type { MontageBoneWeight } from '../../AnimationGraph/utils/montage';
 
 interface UseEntityHealthProps {
     maxHealth: number;
@@ -10,10 +11,15 @@ interface UseEntityHealthProps {
     graphApiRef: React.MutableRefObject<GraphRuntimeAPI | undefined>;
     /** Played additively on each hit the character survives. */
     hitReactClip?: string | null;
+    /** The share of the hit reaction parts of the body take as of the hit (MontageOptions.boneWeights); all of it when empty. */
+    hitReactWeights?: React.MutableRefObject<readonly MontageBoneWeight[] | null>;
 }
 
 /** A hit reaction snaps in and eases out, added to the pose so the character keeps moving. */
 export const HIT_REACTION_OPTIONS = { additive: true, blendIn: 0.05, blendOut: 0.25 } as const;
+
+/** The upper body's share of a hit reaction while the weapon is held ready, when the blueprint sets none. */
+export const DEFAULT_HIT_REACT_AIMED = 0.2;
 
 /** A hit this soon after the last reaction started lets that one play on, so sustained fire staggers rather than shakes. */
 export const HIT_REACTION_RETRIGGER_SECONDS = 0.5;
@@ -26,7 +32,7 @@ export const hitReactionDue = (last: number | null, now: number): boolean =>
 export const startingHealth = (maxHealth: number, initialHealth?: number): number =>
     initialHealth !== undefined && Number.isFinite(initialHealth) ? Math.min(maxHealth, Math.max(1, initialHealth)) : maxHealth;
 
-export const useEntityHealth = ({ maxHealth, initialHealth, onHealthChange, graphApiRef, hitReactClip }: UseEntityHealthProps) => {
+export const useEntityHealth = ({ maxHealth, initialHealth, onHealthChange, graphApiRef, hitReactClip, hitReactWeights }: UseEntityHealthProps) => {
     const [currentHealth, setCurrentHealth] = useState(() => startingHealth(maxHealth, initialHealth));
     const [isDead, setIsDead] = useState(false);
     const isDeadRef = useRef(false);
@@ -59,7 +65,7 @@ export const useEntityHealth = ({ maxHealth, initialHealth, onHealthChange, grap
         healthRef.current = Math.max(0, healthRef.current - amount);
         const now = performance.now() / 1000;
         if (healthRef.current > 0 && hitReactClip && hitReactionDue(lastReactionRef.current, now)
-            && graphApiRef.current?.playMontage?.(hitReactClip, HIT_REACTION_OPTIONS)) {
+            && graphApiRef.current?.playMontage?.(hitReactClip, { ...HIT_REACTION_OPTIONS, boneWeights: hitReactWeights?.current ?? undefined })) {
             lastReactionRef.current = now;
         }
 
@@ -76,7 +82,7 @@ export const useEntityHealth = ({ maxHealth, initialHealth, onHealthChange, grap
             }
             return newVal;
         });
-    }, [graphApiRef, hitReactClip]);
+    }, [graphApiRef, hitReactClip, hitReactWeights]);
 
     /** Restores up to `amount` health; false when dead or already full. */
     const heal = useCallback((amount: number): boolean => {

@@ -443,6 +443,11 @@ export interface Blueprint {
   upperBody?: UpperBodySettings;
   /** Added on top of whatever the character is doing each time it is hurt (not by the hit that kills it). */
   hitReactClip?: string | null;
+  /**
+   * How much of the hit reaction the upper body takes while the character's weapon is held ready
+   * (aimed, firing or just fired), 0 to 1 (default 0.2): the body still flinches, the weapon stays on target.
+   */
+  hitReactAimed?: number;
   /** A player's weapons, held one at a time (runtime/weapons.ts); without any it fires a default weapon. */
   weapons?: WeaponSettings[];
   /** An enemy's authored behavior (runtime/behaviorTree.ts); without one it uses the built-in AI. */
