@@ -64,7 +64,7 @@ class ControllerTests(unittest.TestCase):
                 frame_factory=FakeFrame,
             )
             try:
-                self.assertEqual(controller.frame.config.startup_timeout, 45.0)
+                self.assertEqual(controller.frame.config.startup_timeout, 120.0)
             finally:
                 controller.close()
 

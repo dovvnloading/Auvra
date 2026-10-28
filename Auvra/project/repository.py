@@ -472,38 +472,40 @@ class ProjectRepository:
     def recovery_points(self, kind: str | None = None) -> list[dict[str, Any]]:
         kinds = [kind] if kind in ("manual", "autosave") else ["manual", "autosave"]
         output = []
+        # A finished recovery point never changes, so each is checked and measured once (keyed by its
+        # modification time, in case one is replaced under the same name). Every host reply that
+        # carries the project status lists the points, so a rescan of each snapshot's files there
+        # would slow every request.
+        sizes: dict[tuple[str, str, int], int] = self.__dict__.setdefault("_recovery_sizes", {})
         for selected in kinds:
             root = self.path / ".auvra" / ("autosaves" if selected == "autosave" else "backups")
             if not root.exists(): continue
             cutoff = time.time() - RECOVERY_MAX_AGE_SECONDS
-            for point in sorted((p for p in root.iterdir() if p.is_dir()), key=lambda p:p.stat().st_mtime, reverse=True):
-                if point.name.startswith("."):
-                    continue
-                marker = point / _RECOVERY_COMPLETE
-                if not marker.is_file() or _is_reparse(marker):
-                    continue
-                if any(not _recovery_domain_absent(point, domain) and
-                       (not (point / f"{domain}.json").is_file() or _is_reparse(point / f"{domain}.json"))
-                       for domain in DOMAIN_NAMES):
-                    continue
-                snapshot_content = point / "Content" / "sha256"
-                snapshot_manifest = point / "Content" / "manifest.json"
-                if (not snapshot_content.is_dir() or _is_reparse(snapshot_content) or
-                        not snapshot_manifest.is_file() or _is_reparse(snapshot_manifest)):
-                    continue
+            stamped: list[tuple[int, str]] = []
+            with os.scandir(root) as listing:
+                names = [entry.name for entry in listing if not entry.name.startswith(".") and entry.is_dir()]
+            for name in names:
+                # The folder's own time, not the listing's copy (NTFS updates that one lazily): it
+                # changes when anything is added to or removed from the point.
                 try:
-                    if point.stat().st_mtime < cutoff:
-                        continue
+                    stamped.append((os.stat(root / name).st_mtime_ns, name))
                 except OSError:
                     continue
-                output.append({
-                    "kind": selected,
-                    "name": point.name,
-                    "size": sum(
+            for mtime_ns, name in sorted(stamped, reverse=True):
+                if mtime_ns / 1e9 < cutoff:
+                    continue
+                key = (selected, name, mtime_ns)
+                size = sizes.get(key)
+                if size is None:
+                    point = root / name
+                    if not _recovery_point_complete(point):
+                        continue
+                    size = sum(
                         f.stat().st_size for f in point.rglob("*")
                         if f.is_file() and not _is_reparse(f)
-                    ),
-                })
+                    )
+                    sizes[key] = size
+                output.append({"kind": selected, "name": name, "size": size})
         return output
     def restore_recovery(self, kind: str, name: str) -> int:
         if self.read_only: raise ReadOnlyError("project is read-only")
@@ -827,6 +829,21 @@ def _destination_is_inside(source: Path, destination: Path) -> bool:
         return True
     except (OSError, ValueError):
         return False
+
+def _recovery_point_complete(point: Path) -> bool:
+    """Whether a recovery point finished writing and holds every domain and its content."""
+    marker = point / _RECOVERY_COMPLETE
+    if not marker.is_file() or _is_reparse(marker):
+        return False
+    if any(not _recovery_domain_absent(point, domain) and
+           (not (point / f"{domain}.json").is_file() or _is_reparse(point / f"{domain}.json"))
+           for domain in DOMAIN_NAMES):
+        return False
+    snapshot_content = point / "Content" / "sha256"
+    snapshot_manifest = point / "Content" / "manifest.json"
+    return (snapshot_content.is_dir() and not _is_reparse(snapshot_content) and
+            snapshot_manifest.is_file() and not _is_reparse(snapshot_manifest))
+
 
 def _validate_open_boundaries(root: Path) -> None:
     """Reject linked project authority before opening the lock itself."""

@@ -406,8 +406,9 @@ class AssetTransferRegistry:
                         raise AssetTransportError("asset_too_large", 413)
                     output.write(chunk)
                     digest.update(chunk)
+                # A staged download is read back once and deleted, so it is not forced to disk:
+                # flushing every asset the editor loads made each one wait on the drive.
                 output.flush()
-                os.fsync(output.fileno())
             if not secrets.compare_digest(digest.hexdigest(), expected_hash):
                 raise AssetTransportError("asset_hash_mismatch", 409)
             return self._issue_download_path(
