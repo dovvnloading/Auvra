@@ -142,8 +142,11 @@ const EXEMPT = new Map(Object.entries({
   'utils/processing/ModelTransforms.ts': 'import-child-phase',
   'utils/terrainHeightfieldCodec.ts': 'pure-utility',
   'utils/textureUtils.ts': 'pure-utility',
+  'utils/textureCompression/bcEncoder.ts': 'pure-utility',
+  'utils/textureCompression/compressTextures.ts': 'import-child-phase',
   'utils/thumbnailGenerator.ts': 'import-child-phase',
   'workers/fbxImport.worker.ts': 'worker-protocol',
+  'workers/textureCompress.worker.ts': 'worker-protocol',
 }));
 
 const files = [];

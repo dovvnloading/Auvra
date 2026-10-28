@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { LoadedModelData } from '../types';
 import { optimizeModelMaterials } from './processing/ModelMaterials';
+import { compressModelTextures } from './textureCompression/compressTextures';
 import { normalizeModel } from './processing/ModelTransforms';
 import { disposeObject } from './processing/ModelLifecycle';
 import { UV_ORIGIN_TOP_LEFT_KEY } from './materialOverrides';
@@ -87,6 +88,8 @@ export interface ModelLoadOptions {
   signal?: AbortSignal;
   onProgress?: (progress: number, phase: ImportPhase) => void;
   diagnostics?: { operationId: string; traceId: string; spanId?: string; assetAlias: string };
+  /** Swap colour and material maps for GPU-compressed textures (the game's Texture compression setting); on by default. */
+  compressTextures?: boolean;
 }
 
 type WorkerFormat = 'fbx' | 'obj';
@@ -438,6 +441,7 @@ export const loadModelFile = async (file: File, options: ModelLoadOptions = { no
     options.onProgress?.(0.91, 'material_optimization_normalization');
     if (format === 'glb' || format === 'gltf') prepareNativeGltfMaterials(object);
     else optimizeModelMaterials(object);
+    if (options.compressTextures !== false) await compressModelTextures(object);
 
     // --- RENAME ANIMATIONS ---
     nameAnimations(object.animations || [], file.name, format);

@@ -210,6 +210,8 @@ export async function loadGameContent(
       complete(`Loaded audio — ${item.name}`, diagnostic);
     }
     const animationDocuments = documents('animations') as Array<{ assetId?: string; modelId?: string; name?: string; clipNames?: unknown }>;
+    // Models and attachments load with GPU-compressed textures unless the game turns that off.
+    const compressTextures = normalizeGameSettings(documents('metadata').find((doc) => doc?.id === GAME_SETTINGS_DOCUMENT_ID)?.settings).quality.textureCompression;
     for (const value of documents('models')) {
       const item = value as Record<string, any>;
       if (!item.id || !item.name || !item.assetId) continue;
@@ -225,6 +227,7 @@ export async function loadGameContent(
         const loaded = await loadFBXFile(sourceFile, {
           normalize: item.category !== 'Animation',
           manualId: item.id,
+          compressTextures,
           signal,
           diagnostics: traceAsset(assetAlias),
           onProgress: (progress, phase) => {
@@ -353,6 +356,7 @@ export async function loadGameContent(
         const loaded = await loadFBXFile(sourceFile, {
           normalize: false,
           manualId: item.id,
+          compressTextures,
           signal,
           diagnostics: traceAsset(assetAlias),
           onProgress: (progress, phase) => {

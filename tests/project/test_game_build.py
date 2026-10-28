@@ -102,7 +102,7 @@ class GameBuildTests(unittest.TestCase):
         self.assertEqual((manifest["gameId"], manifest["buildId"], manifest["name"]), ("game-1", "build-1", "Demo"))
         self.assertEqual(manifest["startupLevelId"], "level-1")
         self.assertEqual(manifest["settings"]["startupLevelId"], "level-1")
-        self.assertEqual(manifest["settings"]["quality"], {"shadows": True, "postProcessing": True, "maxDpr": 2, "fov": 75, "meshLod": True})
+        self.assertEqual(manifest["settings"]["quality"], {"shadows": True, "postProcessing": True, "maxDpr": 2, "fov": 75, "meshLod": True, "textureCompression": True})
         self.assertEqual(manifest["levels"], [{"id": "level-1", "name": "First"}, {"id": "level-2", "name": "Second"}])
         self.assertEqual(manifest["domains"], list(DOMAIN_NAMES))
         self.assertEqual(manifest["assets"], [
