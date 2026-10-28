@@ -66,7 +66,7 @@ Actions use the enemy's Speed, Attack Range, Attack Cooldown and Sight Range sta
 
 ## What enemies notice
 
-An enemy sees the player within its **Sight Range** and its 120° field of view, unless something solid stands between its eyes and the player: anything with a collider (walls, crates and rocks with a Collider component) hides the player. Within 4 m it notices the player whichever way it faces.
+An enemy sees the player within its **Sight Range** and its 120° field of view, unless something solid stands between its eyes and the player: anything with a collider (walls, crates and rocks with a Collider component, and the terrain's hills) hides the player. Within 4 m it notices the player whichever way it faces.
 
 Enemies also hear. The player's gunshots carry 40 m, an enemy's shots carry 40 m to the other enemies, and a level's **Make Noise** node carries as far as its radius (see [Level scripting](level-scripting.md#world-nodes)). An enemy that hears a noise goes to look where it came from, as it does where it last saw the player, and gives up after searching a while. A behavior tree treats the noise as where the player was last seen, so **Saw the player recently** turns true and chasing the last known position goes to the noise.
 

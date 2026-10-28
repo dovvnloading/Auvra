@@ -77,7 +77,7 @@ Pending delays are dropped when the level restarts or play stops.
 | Get Actor Transform | Outputs an actor's position, rotation (degrees) and scale. **Found** is false when the actor is gone. Pure |
 | Set Actor Transform | Moves, rotates (degrees) or scales an actor. Only axes that are wired or filled in change; blank ones keep their value |
 | Apply Impulse | Pushes an actor that has a dynamic Rigid Body by **Impulse X/Y/Z** |
-| Raycast | Casts a ray from **Origin** along **Direction** (default straight down) up to **Max Distance** (default 100). Outputs **Hit**, **Hit Actor**, **Hit Position**, **Hit Normal** and **Distance**. Triggers are ignored, and terrain is not hit |
+| Raycast | Casts a ray from **Origin** along **Direction** (default straight down) up to **Max Distance** (default 100). Outputs **Hit**, **Hit Actor**, **Hit Position**, **Hit Normal** and **Distance**. Triggers are ignored |
 | Play Sound | Plays an audio asset once, in 2D, on a mixer bus (default sfx) |
 | Make Noise | Makes a noise at **Position X/Y/Z** that enemies within **Radius** (default 20) hear and come to look at: an alarm, a thrown bottle, a slammed door. It plays no sound; add a Play Sound for that |
 | Input Action | Reads an input action (default Jump). Fires **Pressed** or **Released** when its state changes, then always **Out**. **Is Down** is the current state |
