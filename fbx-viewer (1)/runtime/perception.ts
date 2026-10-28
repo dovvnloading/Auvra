@@ -96,13 +96,14 @@ export const characterHeight = (object: THREE.Object3D): number => {
 
 /**
  * Whether nothing solid stands between `eye` and `target`: a physics ray from one to the other
- * hits nothing short of it, or hits the player. Without physics (an inert world) everything is in
- * sight, as before perception took walls into account.
+ * hits nothing short of it, or hits the player. `ignore` is an object the ray passes through (the
+ * one a sound plays from). Without physics (an inert world) everything is in sight, as before
+ * perception took walls into account.
  */
-export const lineOfSight = (physics: Pick<PhysicsQueries, 'raycast'>, eye: THREE.Vector3, target: THREE.Vector3): boolean => {
+export const lineOfSight = (physics: Pick<PhysicsQueries, 'raycast'>, eye: THREE.Vector3, target: THREE.Vector3, ignore: string | null = null): boolean => {
     const direction = target.clone().sub(eye);
     const distance = direction.length();
     if (distance < 1e-3) return true;
-    const hit = physics.raycast(eye, direction, distance);
+    const hit = physics.raycast(eye, direction, distance, ignore ? { excludeObjectId: ignore } : undefined);
     return !hit || hit.objectId === PLAYER_PHYSICS_ID || hit.distance >= distance - SIGHT_TOLERANCE;
 };

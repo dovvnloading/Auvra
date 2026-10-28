@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { useThree } from '@react-three/fiber';
 import { LevelObject, AudioData, AudioConfig } from '../../types';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
+import { useAudioOcclusion } from '../../runtime/audioOcclusion';
 import {
     Sound, acquireAudioListener, releaseSound, resolveEmitterBus, routeSoundToBus, useRuntimeMixer
 } from '../../runtime/components/audioComponents';
@@ -26,6 +27,8 @@ export const AudioSystem: React.FC<AudioSystemProps> = ({ levelObjects, audioAss
     // PositionalAudio specializes THREE.Audio with a PannerNode output.  The
     // map intentionally stores both variants behind the common Audio API.
     const sourcesRef = useRef<Map<string, Sound>>(new Map());
+    // 3D emitters the level hides from the listener are muffled.
+    useAudioOcclusion(() => [...sourcesRef.current.values()].filter((sound): sound is THREE.PositionalAudio => sound instanceof THREE.PositionalAudio));
     
     // Store latest config per object ID to access inside async callbacks (avoiding stale closures)
     const latestConfigsRef = useRef<Map<string, AudioConfig>>(new Map());
