@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { getMaterialNodeDefinition, normalizeMaterialGraph, withMaterialParameters, type MaterialGraph, type MaterialParameterValues } from './materialGraph';
+import { getMaterialNodeDefinition, normalizeMaterialGraph, textureSlot, withMaterialParameters, type MaterialGraph, type MaterialParameterValues, type TextureSlot } from './materialGraph';
 import { bindMaterialGraph, canBindMaterialGraph, unbindMaterialGraph, type MaterialTextureLookup } from './graphMaterial';
 
 /**
@@ -28,16 +28,16 @@ export interface MaterialAssetDocument {
     textureIds: string[];
 }
 
-/** The textures a graph samples, and whether each holds colour or normals. */
-export const graphTextures = (graph: MaterialGraph): Array<{ textureId: string; slot: 'map' | 'normal' }> => {
+/** The textures a graph samples, and whether each holds colour, data or normals. */
+export const graphTextures = (graph: MaterialGraph): Array<{ textureId: string; slot: TextureSlot }> => {
     const seen = new Set<string>();
-    const result: Array<{ textureId: string; slot: 'map' | 'normal' }> = [];
+    const result: Array<{ textureId: string; slot: TextureSlot }> = [];
     for (const node of graph.nodes) {
         const textureId = node.params.texture;
         // Texture Sample, Normal Map and Triplanar Sample: every node whose 'texture' param picks one.
         const picksTexture = getMaterialNodeDefinition(node.type)?.params.some(param => param.key === 'texture' && param.kind === 'texture');
         if (!picksTexture || typeof textureId !== 'string' || !textureId) continue;
-        const slot = node.type === 'normalMap' ? 'normal' : 'map';
+        const slot = textureSlot(node);
         if (seen.has(`${slot}:${textureId}`)) continue;
         seen.add(`${slot}:${textureId}`);
         result.push({ textureId, slot });
@@ -186,14 +186,15 @@ class MaterialLibrary {
     }
 
     /** The texture, loading it the first time it is asked for; null until it has loaded. */
-    private texture(textureId: string, slot: 'map' | 'normal', flipY: boolean): THREE.Texture | null {
+    private texture(textureId: string, slot: TextureSlot, flipY: boolean): THREE.Texture | null {
         const key = `${slot}:${flipY ? 1 : 0}:${textureId}`;
         if (this.textures.has(key)) return this.textures.get(key) ?? null;
         this.textures.set(key, null);
         const url = this.resolveUrl(textureId);
         if (!url) return null;
         this.loadTexture(url).then((texture) => {
-            texture.colorSpace = slot === 'normal' ? THREE.NoColorSpace : THREE.SRGBColorSpace;
+            // Only colour is decoded from sRGB; normals and data are read as stored.
+            texture.colorSpace = slot === 'map' ? THREE.SRGBColorSpace : THREE.NoColorSpace;
             texture.wrapS = THREE.RepeatWrapping;
             texture.wrapT = THREE.RepeatWrapping;
             // Sharp at grazing angles; three caps it at what the GPU supports.

@@ -237,6 +237,13 @@ describe('graph materials', () => {
     material.onBeforeCompile(shader, {} as THREE.WebGLRenderer);
     expect(shader.fragmentShader).toMatch(/vec3 mg_nm_out_out_\d+ = normalize\(mg_nm_normal\);/);
     expect(shader.fragmentShader).toMatch(/vec3 mapN = mg_nm_out_out_\d+;/);
+    expect(shader.fragmentShader).not.toContain('mg_nm_normal.y = -mg_nm_normal.y;');
+    // A DirectX normal map has its green flipped.
+    const directX = compileMaterialGraph(normalizeMaterialGraph({
+      nodes: [node('out', OUTPUT_NODE_TYPE), node('nm', 'normalMap', { flipGreen: true })],
+      links: [link('nm', 'out', 'out', 'normal')],
+    }));
+    expect(directX.statements).toContain('mg_nm_normal.y = -mg_nm_normal.y;');
   });
 
   it('updates constants in place, and rebuilds only when the wiring changes', () => {
@@ -427,6 +434,12 @@ describe('the material library', () => {
       links: [],
     });
     expect(graphTextures(graph)).toEqual([{ textureId: 'bricks', slot: 'map' }, { textureId: 'bricks-n', slot: 'normal' }]);
+    // A mask read as data, and a triplanar texture, are textures of the asset too.
+    const masks = normalizeMaterialGraph({
+      nodes: [node('out', OUTPUT_NODE_TYPE), node('m', 'texture', { texture: 'mask', space: 'data' }), node('t', 'triplanar', { texture: 'rock' })],
+      links: [],
+    });
+    expect(graphTextures(masks)).toEqual([{ textureId: 'mask', slot: 'data' }, { textureId: 'rock', slot: 'map' }]);
     expect(materialAssetDocument(asset('m', graph)).textureIds).toEqual(['bricks', 'bricks-n']);
     expect(readMaterialAsset({ id: 'x', name: '  ', graph: null })).toMatchObject({ id: 'x', name: 'Material' });
     expect(readMaterialAsset({ name: 'no id' })).toBeNull();

@@ -7,12 +7,14 @@ import {
     materialGraphSettings,
     normalizeMaterialGraph,
     readParam,
+    textureSlot,
     type CompiledMaterialGraph,
     type MaterialBuiltin,
     type MaterialGraph,
     type MaterialGraphSettings,
     type MaterialRamp,
     type MaterialUniformSpec,
+    type TextureSlot,
 } from './materialGraph';
 import { helperSource } from './materialGlsl';
 
@@ -35,10 +37,10 @@ import { helperSource } from './materialGlsl';
 export const MATERIAL_TIME = { value: 0 };
 
 /**
- * The texture a Texture Sample ('map': colour) or Normal Map ('normal') node names, or null while it
- * is missing or loading.
+ * The texture a node names, read as colour ('map'), data or a normal map (textureSlot), or null
+ * while it is missing or loading.
  */
-export type MaterialTextureLookup = (textureId: string, slot?: 'map' | 'normal') => THREE.Texture | null;
+export type MaterialTextureLookup = (textureId: string, slot?: TextureSlot) => THREE.Texture | null;
 
 const solidTexture = (r: number, g: number, b: number): THREE.DataTexture => {
     const texture = new THREE.DataTexture(new Uint8Array([r, g, b, 255]), 1, 1);
@@ -154,9 +156,9 @@ const syncUniforms = (binding: GraphBinding): void => {
         const value = readParam(param, node.params[spec.param]);
         const uniform = binding.uniforms[spec.name] ?? (binding.uniforms[spec.name] = { value: null });
         if (spec.kind === 'texture') {
-            const normal = node.type === 'normalMap';
-            const texture = typeof value === 'string' && value ? binding.textures(value, normal ? 'normal' : 'map') : null;
-            uniform.value = texture ?? (normal ? FLAT_NORMAL : WHITE);
+            const slot = textureSlot(node);
+            const texture = typeof value === 'string' && value ? binding.textures(value, slot) : null;
+            uniform.value = texture ?? (slot === 'normal' ? FLAT_NORMAL : WHITE);
         } else if (spec.kind === 'float') {
             uniform.value = value as number;
         } else if (spec.kind === 'color') {

@@ -167,6 +167,19 @@ export const defaultParams = (type: string): Record<string, unknown> => {
     return Object.fromEntries((definition?.params ?? []).map(param => [param.key, structuredClone(param.default)]));
 };
 
+/**
+ * How a node's texture is read: colour (decoded from sRGB), data (as stored: masks, roughness,
+ * height) or a normal map.
+ */
+export type TextureSlot = 'map' | 'normal' | 'data';
+
+/** The way `node` reads the texture its 'texture' param picks. */
+export const textureSlot = (node: MaterialGraphNode): TextureSlot => {
+    if (node.type === 'normalMap') return 'normal';
+    const space = DEFINITIONS.get(node.type)?.params.find(param => param.key === 'space');
+    return space && readParam(space, node.params.space) === 'data' ? 'data' : 'map';
+};
+
 // ---------------------------------------------------------------------------
 // Parameters
 // ---------------------------------------------------------------------------

@@ -364,8 +364,8 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
         type: 'texture',
         label: 'Texture Sample',
         category: 'Texture',
-        description: 'Reads a texture at UV. Colour textures read in linear light.',
-        keywords: ['image', 'sampler', 'map'],
+        description: 'Reads a texture at UV. Colour textures are decoded from sRGB to linear light; read masks, roughness, metalness and height as Data, which keeps the values as stored.',
+        keywords: ['image', 'sampler', 'map', 'mask'],
         inputs: [{ key: 'uv', label: 'UV', type: 'vec2', fallback: builtin('uv') }],
         outputs: [
             { key: 'rgb', label: 'RGB', type: 'vec3' },
@@ -374,7 +374,7 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
             { key: 'g', label: 'G', type: 'float' },
             { key: 'b', label: 'B', type: 'float' },
         ],
-        params: [{ key: 'texture', label: 'Texture', kind: 'texture', default: '' }],
+        params: [{ key: 'texture', label: 'Texture', kind: 'texture', default: '' }, select('space', 'Read As', [['color', 'Colour (sRGB)'], ['data', 'Data (masks, roughness, height)']])],
         emit: (inputs, context) => {
             const sample = context.local('sample');
             return {
@@ -388,18 +388,20 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
         preview: 'normal',
         label: 'Normal Map',
         category: 'Texture',
-        description: 'Reads a tangent-space normal map at UV, with a strength, for the Normal input.',
+        description: 'Reads a tangent-space normal map at UV, with a strength, for the Normal input. Maps baked for DirectX (green pointing down) need Flip Green.',
         inputs: [{ key: 'uv', label: 'UV', type: 'vec2', fallback: builtin('uv') }],
         outputs: [{ key: 'out', label: 'Normal', type: 'vec3' }],
         params: [
             { key: 'texture', label: 'Texture', kind: 'texture', default: '' },
             float('strength', 'Strength', 1, { min: 0, max: 4, step: 0.05 }),
+            { key: 'flipGreen', label: 'Flip Green (DirectX)', kind: 'boolean', default: false },
         ],
         emit: (inputs, context) => {
             const normal = context.local('normal');
             return {
                 statements: [
                     `vec3 ${normal} = texture(${context.param('texture')}, ${inputs.uv}).xyz * 2.0 - 1.0;`,
+                    ...(context.static('flipGreen') === true ? [`${normal}.y = -${normal}.y;`] : []),
                     `${normal}.xy *= ${context.param('strength')};`,
                 ],
                 outputs: { out: `normalize(${normal})` },
@@ -424,6 +426,7 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
             { key: 'texture', label: 'Texture', kind: 'texture', default: '' },
             float('tiling', 'Tiling (per unit)', 0.5, { min: 0.001, max: 100, step: 0.01 }),
             float('sharpness', 'Blend Sharpness', 4, { min: 1, max: 32, step: 0.5 }),
+            select('space', 'Read As', [['color', 'Colour (sRGB)'], ['data', 'Data (masks, roughness, height)']]),
         ],
         emit: (inputs, context) => {
             const texture = context.param('texture');
