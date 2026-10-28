@@ -37,6 +37,7 @@ export const useEnvironmentState = () => {
     const [layout, setLayout] = useState<ViewportLayout>('single');
     const [cameraSpeed, setCameraSpeed] = useState<number>(1);
     const [isMuted, setIsMuted] = useState(false);
+    const [showNavigation, setShowNavigation] = useState(false);
     
     // Play Mode Camera persistence
     const editorCameraPos = useRef<THREE.Vector3 | undefined>(undefined);
@@ -171,6 +172,7 @@ export const useEnvironmentState = () => {
     };
 
     const toggleMute = () => setIsMuted(prev => !prev);
+    const toggleNavigation = () => setShowNavigation(prev => !prev);
 
     // Helper setters for deep state
     const updateTransformSettings = (updates: Partial<TransformSettings>) => 
@@ -192,7 +194,8 @@ export const useEnvironmentState = () => {
             layout,
             editorCameraPos,
             cameraSpeed,
-            isMuted
+            isMuted,
+            showNavigation
         },
         actions: frontendDiagnostics.traceActions('environment_editor', {
             setInteractionMode,
@@ -210,7 +213,8 @@ export const useEnvironmentState = () => {
             setSculptSettings,
             setLayout,
             setCameraSpeed,
-            toggleMute
+            toggleMute,
+            toggleNavigation
         })
     };
 };

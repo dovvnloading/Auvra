@@ -15,6 +15,7 @@ import { raycastPlacement } from '../../utils/surfacePlacement';
 import { getWorldMatrix } from '../../utils/sceneGraph';
 import { MODEL_DRAG_TYPE } from '../UI/Browser/browserFolders';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
+import { useEditorNavMesh } from './hooks/useEditorNavMesh';
 
 type FocusRequest = { id: string; nonce: number };
 
@@ -37,6 +38,8 @@ interface EnvironmentViewportProps {
     /** Frame this object in every view; a new request (nonce) re-frames the same object. */
     focusRequest?: FocusRequest | null;
     isMuted: boolean;
+    /** Bake the level's navmesh and draw it in every view. */
+    showNavigation?: boolean;
 }
 
 /** What a drop needs from a view: the camera that looks through it and the scene it renders. */
@@ -412,10 +415,12 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
     layout = 'single',
     cameraSpeed = 1.0,
     focusRequest = null,
-    isMuted
+    isMuted,
+    showNavigation = false
 }) => {
     const { models } = useAssets();
     const { levelObjects, addLevelObject, addLevelObjects, removeLevelObjects, updateLevelObject, snapshotHistory } = useLevel();
+    const navMesh = useEditorNavMesh(showNavigation ? levelObjects : null, models);
     const containerRef = useRef<HTMLDivElement>(null);
 
     // Active View State (the selection itself lives in the editor state)
@@ -549,7 +554,8 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
         onSnapshot: () => { if (canEdit()) snapshotHistory(); },
         selectedId: showsSelection ? selectedObjectId : null,
         selectedIds: showsSelection ? selectedObjectIds : undefined,
-        isMuted
+        isMuted,
+        navMesh: showNavigation ? navMesh : null
     };
 
     // --- Control Configuration ---

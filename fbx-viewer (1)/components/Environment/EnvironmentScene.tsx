@@ -18,6 +18,8 @@ import { useAssets } from '../../context/AssetContext';
 import { getWorldMatrix, toLocalTransform } from '../../utils/sceneGraph';
 import type { LocalTransform } from '../../utils/sceneGraph';
 import { raycastPlacement } from '../../utils/surfacePlacement';
+import { NavMeshOverlay } from './NavMeshOverlay';
+import type { LevelNavMesh } from '../../runtime/navigation';
 
 type Vec3 = [number, number, number];
 type RegisterNode = (id: string, node: THREE.Object3D | null, owner?: THREE.Object3D | null) => void;
@@ -451,6 +453,8 @@ interface EnvironmentSceneProps {
     isOrthographic?: boolean;
     isMuted: boolean;
     enableAudio?: boolean;
+    /** The level's navmesh, drawn over the scene (Show navigation); null draws nothing. */
+    navMesh?: LevelNavMesh | null;
 }
 
 interface DragState {
@@ -487,6 +491,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
     isOrthographic = false,
     isMuted,
     enableAudio = true,
+    navMesh = null,
 }) => {
     const { camera, controls } = useThree();
     const { audioAssets } = useAssets();
@@ -750,6 +755,8 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                 sectionColor="#444"
                 cellColor="#222"
             />
+
+            <NavMeshOverlay navMesh={navMesh} />
 
             {/* Audio System */}
             {enableAudio && <AudioSystem

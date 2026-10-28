@@ -103,6 +103,7 @@ class GameBuildTests(unittest.TestCase):
         self.assertEqual(manifest["startupLevelId"], "level-1")
         self.assertEqual(manifest["settings"]["startupLevelId"], "level-1")
         self.assertEqual(manifest["settings"]["quality"], {"shadows": True, "postProcessing": True, "maxDpr": 2, "fov": 75, "meshLod": True, "textureCompression": True})
+        self.assertEqual(manifest["settings"]["navigation"], {"agentRadius": 0.4, "agentHeight": 1.8, "maxSlopeDegrees": 40, "maxStepHeight": 0.35})
         self.assertEqual(manifest["levels"], [{"id": "level-1", "name": "First"}, {"id": "level-2", "name": "Second"}])
         self.assertEqual(manifest["domains"], list(DOMAIN_NAMES))
         self.assertEqual(manifest["assets"], [

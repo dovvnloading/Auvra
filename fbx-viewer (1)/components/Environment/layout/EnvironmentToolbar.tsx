@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { 
     MousePointer2, Box, Brush, Eraser, Move, RotateCw, 
-    Scaling, Globe, Magnet, Grid as GridIcon, Undo, Redo, Play, ChevronDown, LayoutTemplate, Square, Video, Network, Volume2, VolumeX, Mountain
+    Scaling, Globe, Magnet, Grid as GridIcon, Undo, Redo, Play, ChevronDown, LayoutTemplate, Square, Video, Network, Volume2, VolumeX, Mountain, Route
 } from 'lucide-react';
 import { EditorState } from '../types';
 
@@ -15,6 +15,7 @@ interface EnvironmentToolbarProps {
         setLayout: (layout: 'single' | 'quad') => void;
         setCameraSpeed: (speed: number) => void;
         toggleMute: () => void;
+        toggleNavigation: () => void;
     };
     history: {
         undo: () => void;
@@ -26,8 +27,8 @@ interface EnvironmentToolbarProps {
 }
 
 export const EnvironmentToolbar: React.FC<EnvironmentToolbarProps> = ({ state, actions, history, hasActiveBrush }) => {
-    const { interactionMode, transformSettings, layout, cameraSpeed, isMuted } = state;
-    const { updateTransformSettings, setInteractionMode, setLayout, setCameraSpeed, toggleMute } = actions;
+    const { interactionMode, transformSettings, layout, cameraSpeed, isMuted, showNavigation } = state;
+    const { updateTransformSettings, setInteractionMode, setLayout, setCameraSpeed, toggleMute, toggleNavigation } = actions;
     const [showGridMenu, setShowGridMenu] = useState(false);
     const [showSpeedMenu, setShowSpeedMenu] = useState(false);
 
@@ -150,6 +151,16 @@ export const EnvironmentToolbar: React.FC<EnvironmentToolbarProps> = ({ state, a
                         </>
                     )}
                 </div>
+
+                <button
+                    onClick={toggleNavigation}
+                    className={`p-1.5 rounded-lg border mr-2 transition-all ${showNavigation ? 'bg-emerald-900/40 border-emerald-700 text-emerald-300' : 'bg-gray-900 border-gray-800 text-gray-500 hover:text-white'}`}
+                    title="Show navigation: where enemies can walk"
+                    aria-label="Show navigation"
+                    aria-pressed={showNavigation}
+                >
+                    <Route size={14} />
+                </button>
 
                 <div className="flex items-center gap-1 bg-gray-900 p-0.5 rounded-lg border border-gray-800 mr-2">
                     <button 
