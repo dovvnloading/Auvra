@@ -6,6 +6,7 @@ import { resolveWeaponPoint } from '../../runtime/weapons';
 import { findBone, IKPoseGuard, reachWithHand, supportGripPoint, type SupportGrip } from '../../runtime/ik';
 import { mirrorBoneName } from '../../utils/retargeting';
 import { usePhysicsQueries } from '../../runtime/physics';
+import { crosshairTarget } from '../../runtime/aimTarget';
 import {
     createFootIKState,
     createLookAtIKState,
@@ -50,6 +51,8 @@ interface CharacterIKProps {
     aiming?: boolean;
     /** A weapon held in one hand: the other hand takes hold of it (WeaponSettings.supportGrip). */
     supportGrip?: HeldWeaponGrip | null;
+    /** The held weapon's muzzle (+Z along the barrel): while aiming, the spine turns it onto what the crosshair is on. */
+    muzzle?: () => THREE.Object3D | null;
 }
 
 /** A held weapon's support grip, with the bone of the hand that holds the weapon. */
@@ -77,6 +80,7 @@ const _gripTarget = new THREE.Vector3();
 const _gripRotation = new THREE.Quaternion();
 
 const _lookTarget = new THREE.Vector3();
+const _crosshair = new THREE.Vector3();
 const _aimDirection = new THREE.Vector3();
 const _aimRight = new THREE.Vector3();
 const _turn = new THREE.Quaternion();
@@ -103,6 +107,58 @@ export const aimYaw = (direction: THREE.Vector3, forward: THREE.Vector3, weight:
     return THREE.MathUtils.clamp(Math.atan2(Math.sin(turn), Math.cos(turn)), -MAX_AIM_YAW, MAX_AIM_YAW) * weight;
 };
 
+/** The furthest the spine turns to bring the barrel onto the crosshair, each way. */
+const MAX_AIM_CONVERGE = THREE.MathUtils.degToRad(30);
+const _muzzleAt = new THREE.Vector3();
+const _barrel = new THREE.Vector3();
+const _toTarget = new THREE.Vector3();
+const _pitchAxis = new THREE.Vector3();
+
+/**
+ * Turns the `spine` bones (shared bottom up) so the barrel of `muzzle` (its +Z) points at
+ * `target`: about world up, and when `pitch` is set up and down too, each by at most
+ * MAX_AIM_CONVERGE in all, scaled by `weight`. Two passes, since turning the spine also moves the muzzle.
+ */
+export const aimMuzzleAt = (
+    spine: readonly THREE.Object3D[],
+    muzzle: THREE.Object3D,
+    target: THREE.Vector3,
+    pitch: boolean,
+    weight: number,
+): void => {
+    if (!spine.length || !(weight > 0)) return;
+    const heading = (v: THREE.Vector3) => Math.atan2(v.x, v.z);
+    const elevation = (v: THREE.Vector3) => Math.asin(THREE.MathUtils.clamp(v.y / (v.length() || 1), -1, 1));
+    const limit = MAX_AIM_CONVERGE * weight;
+    // Each pass's turn, scaled by `weight`, keeping the passes' total within the limit.
+    const clampTurn = (angle: number, total: number) =>
+        THREE.MathUtils.clamp(Math.atan2(Math.sin(angle), Math.cos(angle)) * weight, -limit - total, limit - total);
+    let yawTotal = 0;
+    let liftTotal = 0;
+    for (let pass = 0; pass < 2; pass++) {
+        muzzle.updateWorldMatrix(true, false);
+        muzzle.getWorldPosition(_muzzleAt);
+        _barrel.set(0, 0, 1).transformDirection(muzzle.matrixWorld);
+        _toTarget.copy(target).sub(_muzzleAt);
+        if (_toTarget.lengthSq() < 1e-8) return;
+        const yaw = clampTurn(heading(_toTarget) - heading(_barrel), yawTotal);
+        yawTotal += yaw;
+        if (Math.abs(yaw) > 1e-5) for (const bone of spine) turnBoneAboutWorldAxis(bone, UP, yaw / spine.length);
+        if (!pitch) continue;
+        muzzle.updateWorldMatrix(true, false);
+        muzzle.getWorldPosition(_muzzleAt);
+        _barrel.set(0, 0, 1).transformDirection(muzzle.matrixWorld);
+        _toTarget.copy(target).sub(_muzzleAt);
+        // Up about the barrel's right (barrel x up), so a positive turn raises it.
+        _pitchAxis.crossVectors(_barrel, UP);
+        if (_pitchAxis.lengthSq() < 1e-8) continue;
+        _pitchAxis.normalize();
+        const lift = clampTurn(elevation(_toTarget) - elevation(_barrel), liftTotal);
+        liftTotal += lift;
+        if (Math.abs(lift) > 1e-5) for (const bone of spine) turnBoneAboutWorldAxis(bone, _pitchAxis, lift / spine.length);
+    }
+};
+
 /** Turns `bone` by `angle` radians about the world-space `axis`, keeping its parent where it is. */
 export const turnBoneAboutWorldAxis = (bone: THREE.Object3D, axis: THREE.Vector3, angle: number): void => {
     bone.updateWorldMatrix(true, false);
@@ -125,7 +181,7 @@ export const aimPitch = (direction: THREE.Vector3, weight: number): number =>
  * priority -1, this runs at the default priority): foot planting on the ground under each foot and
  * a look-at toward the camera or the player.
  */
-export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physicsId, aiming = false, supportGrip = null }) => {
+export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physicsId, aiming = false, supportGrip = null, muzzle }) => {
     const resolved = resolveCharacterIK(settings);
     const physics = usePhysicsQueries();
     const playerRef = useContext(IKPlayerTargetContext);
@@ -181,6 +237,12 @@ export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physi
                     const lean = aimPitch(_aimDirection, aimState.weight);
                     _aimRight.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
                     for (const bone of spine) turnBoneAboutWorldAxis(bone, _aimRight, lean / spine.length);
+                }
+                // Then the barrel itself onto what the crosshair is on (the aim clip holds it a little off).
+                const barrel = muzzle?.();
+                if (barrel) {
+                    crosshairTarget(camera, physics.raycast, physicsId, _crosshair);
+                    aimMuzzleAt(spine, barrel, _crosshair, resolved.aimPitch, aimState.weight);
                 }
             }
         }

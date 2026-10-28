@@ -43,6 +43,13 @@ export const resolveCarry = (carry: WeaponCarry | null | undefined): WeaponCarry
         ? { boneName: carry.boneName.trim(), position: vector(carry.position), rotation: vector(carry.rotation) }
         : null;
 
+/**
+ * The name of the socket the engine gives a weapon that has a model but no muzzle socket, at the
+ * model's muzzle (runtime/weaponMuzzle.ts). It does not start with "Muzzle", so looking up an
+ * authored muzzle socket by that prefix never finds it.
+ */
+export const generatedMuzzleSocketName = (weaponId: string): string => `weapon-muzzle:${weaponId}`;
+
 export const resolveWeapon = (weapon: WeaponSettings): ResolvedWeapon => ({
     id: weapon.id,
     name: typeof weapon.name === 'string' && weapon.name.trim() ? weapon.name.trim() : DEFAULT_WEAPON.name,
@@ -57,7 +64,8 @@ export const resolveWeapon = (weapon: WeaponSettings): ResolvedWeapon => ({
     projectileSpeed: number(weapon.projectileSpeed, DEFAULT_WEAPON.projectileSpeed, 1, 1000),
     startsOwned: weapon.startsOwned !== false,
     attachmentId: weapon.attachmentId ?? null,
-    muzzleSocket: clip(weapon.muzzleSocket),
+    // Without a socket of its own, a weapon with a model fires from the one the engine puts at its muzzle.
+    muzzleSocket: clip(weapon.muzzleSocket) ?? (weapon.attachmentId ? generatedMuzzleSocketName(weapon.id) : null),
     fireClip: clip(weapon.fireClip),
     aimClip: clip(weapon.aimClip),
     reloadClip: clip(weapon.reloadClip),
