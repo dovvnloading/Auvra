@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flowNodeOutputValue, type FlowNode } from '../../hooks/levelBlueprintNodes/flow';
 import { WORLD_NODE_DEFINITIONS, WORLD_NODE_EXECUTORS, type WorldNodeServices, type WorldNodeType } from '../../hooks/levelBlueprintNodes/world';
-import { startingHealth } from '../../components/Sandbox/hooks/useEntityHealth';
+import { HIT_REACTION_RETRIGGER_SECONDS, hitReactionDue, startingHealth } from '../../components/Sandbox/hooks/useEntityHealth';
 import { applyPickup, readPickupSettings } from '../../runtime/components/pickupComponent';
 import { createLevelVariablesStore } from '../../runtime/levelVariables';
 import { playerActions } from '../../runtime/playerActions';
@@ -168,5 +168,18 @@ describe('saved player state', () => {
 
   it('starts from saved health kept within 1 and the maximum', () => {
     expect([startingHealth(100), startingHealth(100, 40), startingHealth(100, 0), startingHealth(100, 500)]).toEqual([100, 40, 1, 100]);
+  });
+});
+
+describe('hit reactions', () => {
+  it('lets a reaction play on through hits that come sooner than the retrigger time, then reacts again', () => {
+    expect(hitReactionDue(null, 3)).toBe(true);
+    expect(hitReactionDue(3, 3 + 0.15)).toBe(false);
+    expect(hitReactionDue(3, 3 + HIT_REACTION_RETRIGGER_SECONDS - 0.01)).toBe(false);
+    expect(hitReactionDue(3, 3 + HIT_REACTION_RETRIGGER_SECONDS)).toBe(true);
+  });
+
+  it('reacts when the clock went back (a new session)', () => {
+    expect(hitReactionDue(10, 2)).toBe(true);
   });
 });
