@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from Auvra.project import ProjectRepository
 from Auvra.project.errors import InvalidProjectError
@@ -43,6 +44,16 @@ class RecoveryPointsBeforePrefabsTests(unittest.TestCase):
 
         self.assertEqual(self.repo.get_domain("prefabs")["documents"], [])
         self.assertEqual(self.repo.get_domain("metadata")["documents"][0]["id"], "snapshot")
+
+    def test_listing_measures_each_finished_point_once(self):
+        point = self._point_without("prefabs")
+        # Taking the file out changed the point, so this listing measures it again; later ones do not.
+        self.repo.recovery_points("manual")
+        original = Path.rglob
+        with mock.patch.object(Path, "rglob", autospec=True, side_effect=original) as walked:
+            for _ in range(3):
+                self.assertIn(point, {item["name"] for item in self.repo.recovery_points("manual")})
+        self.assertEqual(walked.call_count, 0)
 
     def test_other_missing_domains_still_fail(self):
         point = self._point_without("hud")

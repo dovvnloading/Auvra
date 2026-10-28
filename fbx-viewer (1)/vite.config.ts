@@ -84,6 +84,9 @@ export default defineConfig(({ command, mode }) => {
     host: '127.0.0.1',
     strictPort: true,
     open: false,
+    // Transform the editor's whole import graph as soon as the server starts, rather than module
+    // by module as the window first asks for them: the window then boots from a warm server.
+    warmup: { clientFiles: ['./index.tsx'] },
   },
   plugins: [
     react(),

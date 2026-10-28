@@ -46,7 +46,9 @@ from .webview2 import WebView2Frame
 from .webview2 import MESSAGE_MAX_BYTES
 
 
-_DEVELOPMENT_FRAME_STARTUP_TIMEOUT = 45.0
+# A cold development server transforms the whole editor before the window can boot, which can
+# take most of a minute on a slow disk; the frame contract allows up to 120 seconds.
+_DEVELOPMENT_FRAME_STARTUP_TIMEOUT = 120.0
 
 
 class FrameProcessExitedError(RuntimeError):
