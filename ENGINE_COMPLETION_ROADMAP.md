@@ -4,7 +4,7 @@
 > **Date:** 2026-10-26. **Revision:** `48d7d7c` (branch `codex/fix-stage9-foundation-blockers`).
 > **Method:** five independent static audits (native runtime, editor core and rendering, gameplay framework, platform and shipping, and a repo-wide capability sweep). Each was paired with an adversarial verifier that tried to refute every blocker, major, missing and claim-mismatch gap, corrected its severity and added gaps the auditor missed. A sixth agent re-checked the status of every finding in `findings.md` and the ranked gaps in `CHARACTER_ANIMATION_UNREAL_GAP_AUDIT.md`. The headline claims were then spot-checked by hand (see §1).
 
-## Progress (updated 2026-10-27)
+## Progress (updated 2026-10-28)
 
 | Phase | Status | Merged in |
 |---|---|---|
@@ -12,9 +12,9 @@
 | 1 — Make a game shippable | Done: standalone web player, Windows exe player, Build Game, game settings, title/pause/save/load | #21, #22 |
 | 2 — Core engine model | Done: hierarchy, components, prefabs, gizmo for all objects, outliner tree, multi-select, copy/paste/duplicate, fly camera, surface placement, glTF/GLB/OBJ import, import options, reimport, folders, undo in all editors, migrations, faster edits | #23 |
 | 3 — Game framework | Done: Rapier physics (collider/rigidBody components, raycasts), character controller, triggers and On Overlap, input actions + gamepad + rebinding, audio buses and audioSource component, particles, flow and world visual-scripting nodes, level variables, grid navigation for enemies, blueprint-driven AI and player stats, animation crossfades and exit time, material overrides, terrain paint layers, lighting panel, authored title/pause menus with button actions, localization | #24 |
-| 4 — Release quality | In progress. Done: F3 performance overlay, third-party notices in builds, user docs (docs/), Starter, Arena, Courtyard and Outpost samples with a template picker (Outpost's characters and scenery are made in-repo, so it can be shared), first gameplay tests, and the fixes from play-testing them in the editor and in built games. Left: repeatable gameplay playthrough tests, smoke runs of the web, Linux and macOS players, signed releases (needs the publisher's code-signing certificate) | #24, #26–#29, #37–#39 |
+| 4 — Release quality | In progress. Done: F3 performance overlay, third-party notices in builds, user docs (docs/), Starter, Arena, Courtyard and Outpost samples with a template picker (Outpost's characters and scenery are made in-repo, so it can be shared), first gameplay tests, the fixes from play-testing them in the editor and in built games, and the partly-fixed findings closed (F-009, F-070, F-077) with graph writes fenced to their project. Left: signed releases (needs the publisher's code-signing certificate) and the signed install/upgrade/rollback check that comes with them (F-072) | #24, #26–#29, #37–#39, #43, #46 |
 | Beyond the bar | Done: animation, scripting, timeline and rendering components; play tools (pause, step, inspect); live prefabs; ragdolls; water; reflection probes; terrain LOD; level cameras and camera cuts; behavior trees; level streaming; NPC dialogue; online multiplayer through a relay server | #30–#36 |
-| Character and animation depth | Done: Mixamo character pipeline (clip matching, jump/fall/land, upper-body fire and aim); natural-looking levels by default (sky, fog, ground, shadows that follow the view); animation LOD for distant characters; retargeting onto any humanoid rig (Unreal, Rigify, Biped and plain bone names, A-pose or T-pose); blend sync and sync groups; additive montages and hit reactions; nested state machines; animation curves | #39–#42 |
+| Character and animation depth | Done: Mixamo character pipeline (clip matching, jump/fall/land, upper-body fire and aim); natural-looking levels by default (sky, fog, ground, shadows that follow the view); animation LOD for distant characters; retargeting onto any humanoid rig (Unreal, Rigify, Biped and plain bone names, A-pose or T-pose); blend sync and sync groups; additive montages and hit reactions; nested state machines; animation curves; mirrored clips; over-the-shoulder aiming; Reach IK; conduit states; player weapons with magazines, reloads and switching | #39–#42, #44, #45 |
 
 ## 0. TL;DR
 
@@ -75,7 +75,7 @@ Gap IDs in parentheses refer to §7. Complexity is relative: S < M < L < XL.
 - **The packaged editor likely lacks the protocol and project schemas** it loads at startup. (PLAT-08)
 - **Level edits are lost.** Debounced edits are dropped on Save, close or project switch, and failed persists revert silently. Terrain heightfields exceed the 256 KiB host message limit, so sculpted terrain fails to save, or saves but cannot be reopened. (EDIT-09, EDIT-10, PLAT-M2)
 - **Documentation overclaims.** README/REFACTOR still describe native PBR, shadows, IBL, animation, picking and gizmos as a production baseline. Correct the claims, and remove misleading or dead scaffolding. (NATI-20, CAPA-11, GAME-22, EDIT-20)
-- **Open items from `findings.md`:** the HUD execution guard's 50 ms wall-clock budget regression (F-009); the signed install/upgrade/rollback smoke never runs in CI (F-072); README renderer claims (F-077). See §6.
+- **Open items from `findings.md`:** the signed install/upgrade/rollback smoke never runs in CI (F-072); it needs the code-signing certificate. F-009 and F-077 are fixed. See §6.
 
 ### Phase 1 — Make a game shippable
 
@@ -152,22 +152,22 @@ AI providers (fal.ai and the text/code providers) are optional add-ons used only
 
 ### 6.1 `findings.md` (F-001..F-080)
 
-`findings.md` holds 80 findings, all marked *Completed*. Checked against current code: **75 fixed**, **5 partially fixed**, 0 open, 0 unclear. Critical and High items were verified in code, not from commit messages.
+`findings.md` holds 80 findings, all marked *Completed*. Checked against current code (re-checked 2026-10-28): **78 fixed**, **2 partially fixed**, 0 open, 0 unclear. Critical and High items were verified in code, not from commit messages.
 
-Partially fixed:
+The five that were partly fixed, and where each stands now:
 
-- **F-009** (High) — Custom HUD code can freeze the editor. a1bcd01. The freeze is now bounded by a Babel-injected guard (DynamicHUDComponent.tsx:20-48, hud-frame.tsx:46-56), but the fix has regressions. (1) createExecutionGuard runs once per render message with a wall-clock start (hud-frame.tsx:47, 63-64; MAX_EXECUTION_MS=50 at :9). Any guarded function that runs more than 50 ms later, such as an onClick, a timer callback or a state-driven re-render, throws 'HUD execution exceeded the sandbox budget'. (2) guardBody wraps concise arrow bodies as blockStatement([tick(), expr]) (DynamicHUDComponent.tsx:27-33, 44). Babel's builder rejects an expression inside a BlockStatement, and if it did not, the arrow would lose its return value, so code like items.map(i => <li/>) fails. This is a static reading; the code was not executed. There is still no memory isolation.
-- **F-044** (High) — Native extraction discards authored renderer data. f9f3a4f. Fixed: authored data now crosses into native (main.rs:2108 animations, :2142 materials, :2289 worlds/scenes/levels/environment/lights). Still open: the GPU still draws one 2D triangle per entity in clip space with no mesh data (gpu.rs:1021-1050 projected_triangle; z is clamped to [-1,1], rotation is Z-only, and animation is an x offset). The PBR vertex shader passes positions straight through (gpu.rs:1131-1137: output.position = vec4(input.position, 1.0)), so there is no camera or view-projection (grep -i 'camera|view_proj' in gpu.rs: no hits). The fragment shader multiplies light counts by constants, with no normals or BRDF (gpu.rs:1140-1152). Real 3D project content cannot render natively.
-- **F-070** (Medium) — Frontend lacks unit coverage / relaxed compiler. e4c2b2b. tsconfig.json now sets strict and noImplicitAny and allowJs:false, and CI runs typecheck:strict and npm test (verify.yml:58, 61). The suite is 5 files and 109 lines total (tests/frontend/*), covering HUD types, Select, ScrubbableInput, renderer recovery and editorSession. The unused-checks config only includes 7 files (tsconfig.strict.json include). None of the interleaving, hydration, disposal or level-history fixes have unit tests; they rely on the custom verify.mjs gates.
+- **F-009** (High) — Custom HUD code can freeze the editor. Fixed (1709c68). The guard budgets each synchronous slice of the code (hudExecutionGuard.ts): a slice opens at the first guard tick and closes when the task and its microtasks finish, so handlers, timers and re-renders that run later start with a full budget, while a loop or promise chain that never yields is still stopped. Concise arrow bodies keep their return value (DynamicHUDComponent.tsx guardBody wraps them in a return). Covered by tests/frontend/hudSandbox.test.tsx and checked in the editor: a Custom element mapping a list with concise arrows renders it, and a 300 ms timer that updates its state keeps counting long after the render slice. There is still no memory isolation beyond the sandboxed iframe.
+- **F-044** (High) — Native extraction discards authored renderer data. f9f3a4f. Fixed: authored data now crosses into native (main.rs:2108 animations, :2142 materials, :2289 worlds/scenes/levels/environment/lights). Still open: the GPU still draws one 2D triangle per entity in clip space with no mesh data (gpu.rs:1021-1050 projected_triangle; z is clamped to [-1,1], rotation is Z-only, and animation is an x offset). The PBR vertex shader passes positions straight through (gpu.rs:1131-1137: output.position = vec4(input.position, 1.0)), so there is no camera or view-projection (grep -i 'camera|view_proj' in gpu.rs: no hits). The fragment shader multiplies light counts by constants, with no normals or BRDF (gpu.rs:1140-1152). Real 3D project content cannot render natively. This only matters on the native route (§4): games ship on the Three.js runtime, so it stays open until native becomes the game runtime.
+- **F-070** (Medium) — Frontend lacks unit coverage / relaxed compiler. Fixed. tsconfig.json sets strict, noImplicitAny and allowJs:false; CI runs typecheck:strict over every test file and npm test. tests/frontend holds 137 files (about 22,800 lines) covering hydration, editor sessions, level history, persistence ordering, the runtime systems and the editors.
 - **F-072** (Medium) — Release lifecycle verification is in-memory only. 791e860 adds release/windows_lifecycle.py (286 LOC install, upgrade, rollback and uninstall smoke). It is opt-in only: grep 'LIFECYCLE_SMOKE' .github/workflows/*.yml returns no hits, so CI never runs it and there is still no recorded evidence of signed install, upgrade or uninstall.
-- **F-077** (Medium) — Renderer docs ahead of implementation. f1c9cad rescoped the wording, but README.md:130-134 still advertises native 'metallic-roughness PBR, animation, ... directional/point/spot lights, shadows, image-based lighting'. The code has no normals, light directions or BRDF (gpu.rs:1140-1152); its shadow UV is the vertex's own clip xy (gpu.rs:1136); and animation is an x offset on a debug triangle (gpu.rs:1022-1025). The README still claims more than the code does.
+- **F-077** (Medium) — Renderer docs ahead of implementation. Fixed (e1d51cf). README.md describes the native wgpu renderer as a pass-structure scaffold, lists what is real and what is placeholder (one projected triangle per entity, no camera, no PBR, stand-in shadows, IBL, animation, picking and gizmos), and names WebGL2 as the editor and play path.
 
 Smaller residuals on findings marked fixed:
 
-- F-003: a level switch discards level edits from the last 1.5 s (`useLevelManager.ts:370-374`).
+- F-003: fixed. A level switch awaits `flushPendingLevelEdits()` before it begins (`useLevelManager.ts`).
 - F-010: replay and extract are still unpaged and return an error for large worlds.
-- F-002: lease fencing is optional in `db.ts:133`, and graph writes are not fenced.
-- F-069: the AnimationGraph input hook (`AnimationGraph/hooks/useInputHandler.ts:27-28`) still adds unguarded window key listeners.
+- F-002: lease fencing is still optional in `db.ts` (`requireEditorLease`), though every World Editor write passes one. Animation graph writes are now fenced to the project they were made in: one still queued when another project opens is dropped (`useGraphManager.ts`, tests/frontend/graphManagerProjectFence.test.ts).
+- F-069: fixed. The AnimationGraph key listeners ignore keys typed into text fields (`useInputHandler.ts` isEditableTarget).
 
 <details><summary>All findings and their current status</summary>
 
@@ -181,7 +181,7 @@ Smaller residuals on findings marked fixed:
 | F-006 | High | fixed | Level rotations stored in degrees, rendered as radians |
 | F-007 | High | fixed | Quad view creates four audio systems |
 | F-008 | High | fixed | Cyclic blueprint graphs recurse until crash |
-| F-009 | High | partially-fixed | Custom HUD code can freeze the editor |
+| F-009 | High | fixed | Custom HUD code can freeze the editor |
 | F-010 | High | fixed | Oversized native responses terminate native engine |
 | F-011 | High | fixed | Timed-out native call desynchronizes responses |
 | F-012 | High | fixed | Host queue saturation silently drops requests |
@@ -242,14 +242,14 @@ Smaller residuals on findings marked fixed:
 | F-067 | Medium | fixed | Renderer recovery limits lifetime losses |
 | F-068 | Medium | fixed | HUD coordinates not scaled to editing surface |
 | F-069 | Medium | fixed | Keyboard/pointer/a11y incomplete |
-| F-070 | Medium | partially-fixed | Frontend lacks unit coverage / relaxed compiler |
+| F-070 | Medium | fixed | Frontend lacks unit coverage / relaxed compiler |
 | F-071 | Medium | fixed | Default local release discovery uses placeholders |
 | F-072 | Medium | partially-fixed | Release lifecycle verification is in-memory only |
 | F-073 | Medium | fixed | Windows security boundaries lack production-path tests |
 | F-074 | Medium | fixed | Tests don't exercise implied boundary |
 | F-075 | Medium | fixed | Diagnostics follow state unbounded / token-based trace gates |
 | F-076 | Low to Medium | fixed | Tests can hang/false-pass/skip |
-| F-077 | Medium | partially-fixed | Renderer docs ahead of implementation |
+| F-077 | Medium | fixed | Renderer docs ahead of implementation |
 | F-078 | Medium | fixed | Diagnostics marks run clean while writer active |
 | F-079 | Medium | fixed | Output callback exception stops pipe draining |
 | F-080 | Medium | fixed | Frontend port bind race / weak readiness identity |

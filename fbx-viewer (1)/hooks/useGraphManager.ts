@@ -11,9 +11,14 @@ export const useGraphManager = () => {
   const [graphData, setGraphData] = useState<Record<string, AnimationGraphData>>({});
   const graphDataRef = useRef(graphData);
   useEffect(() => { graphDataRef.current = graphData; }, [graphData]);
-  // Every edit writes the whole graph; quick edits (typing) are written latest-wins.
-  const [writeGraph] = useState(() => createLatestWriter<AnimationGraphData>((modelId, graph) =>
-    projectService.applyChanges([{ domain: 'graphs', operation: 'upsert', id: modelId, value: { id: modelId, modelId, ...graph } }])));
+  // Every edit writes the whole graph; quick edits (typing) are written latest-wins. A write still
+  // queued when another project opens belongs to the old one, so it is dropped, not written there.
+  const [writeGraph] = useState(() => createLatestWriter<{ graph: AnimationGraphData; projectId: string | null }>((modelId, { graph, projectId }) => {
+    if (projectService.getStatus().projectId !== projectId) {
+      return Promise.reject(new Error('The project changed before the animation graph was saved.'));
+    }
+    return projectService.applyChanges([{ domain: 'graphs', operation: 'upsert', id: modelId, value: { id: modelId, modelId, ...graph } }]);
+  }));
 
   const updateGraph = useCallback(async (modelId: string, data: Partial<AnimationGraphData>) => {
     projectService.assertWritable();
@@ -23,7 +28,7 @@ export const useGraphManager = () => {
     graphDataRef.current = { ...graphDataRef.current, [modelId]: next };
     setGraphData(prev => ({ ...prev, [modelId]: next }));
     try {
-      await writeGraph(modelId, next);
+      await writeGraph(modelId, { graph: next, projectId: projectService.getStatus().projectId });
     } catch (error) {
       if (graphDataRef.current[modelId] === next) {
         const restored = previous === undefined
