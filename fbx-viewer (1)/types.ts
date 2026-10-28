@@ -538,6 +538,9 @@ export interface WeaponSettings {
   walkClip?: string | null;
   runClip?: string | null;
   backClip?: string | null;
+  /** Stepping sideways while held (a 2D blend's side samples); the weapon's walk when unset. */
+  leftClip?: string | null;
+  rightClip?: string | null;
   jumpClip?: string | null;
   /**
    * Where the other hand holds it (a rifle's handguard), in the weapon model's own units: while it is
