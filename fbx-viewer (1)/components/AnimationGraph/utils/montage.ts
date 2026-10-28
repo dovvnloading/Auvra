@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { boneNamesUnder, maskClip } from './boneMask';
+import { boneKey, boneNamesUnder, findBone, maskClip, trackNodeName } from './boneMask';
 
 /** Default fade-in of a montage, and of the crossfade from the montage it interrupts, in seconds. */
 export const DEFAULT_MONTAGE_BLEND_IN = 0.15;
@@ -13,6 +13,11 @@ export const DEFAULT_MONTAGE_BLEND_OUT = 0.2;
  * w = s / (1 - s); this is the least share left to the base pose, which keeps w finite.
  */
 const MIN_BASE_SHARE = 1e-4;
+
+const _poseAbove = new THREE.Quaternion();
+const _clipAbove = new THREE.Quaternion();
+const _clipRotation = new THREE.Quaternion();
+const _turn = new THREE.Quaternion();
 
 /** Options for {@link MontagePlayer.play}. */
 export interface MontageOptions {
@@ -31,6 +36,12 @@ export interface MontageOptions {
      * it: a flinch over a run keeps the legs running. Additive montages interrupt only each other.
      */
     additive?: boolean;
+    /**
+     * Keep the mask bone turned as the clip turns it relative to the character, not relative to the
+     * bones above it (a mesh-space rotation blend): an aim held over a strafe still points where the
+     * aim clip points, whatever the legs' clip does with the hips. Needs a mask bone; not additive.
+     */
+    meshSpaceRotation?: boolean;
     /**
      * Called once when the montage no longer affects the pose and its actions are gone, with
      * `interrupted` true when stop() or another play() ended it before the clip finished.
@@ -51,9 +62,17 @@ interface MontagePart extends PartPlan {
     clip: THREE.AnimationClip;
 }
 
+/** A mesh-space montage's mask bone and the nodes above it, top first, with the clip's rotation of each it animates. */
+interface MeshSpaceRoot {
+    bone: THREE.Object3D;
+    above: { node: THREE.Object3D; rotation: THREE.Interpolant | null }[];
+}
+
 interface MontageLayer {
     /** The clip as played, masked when a mask bone was given. */
     clip: THREE.AnimationClip;
+    /** Set for a mesh-space montage (MontageOptions.meshSpaceRotation). */
+    meshSpace: MeshSpaceRoot | null;
     tracks: Set<string>;
     parts: MontagePart[];
     blendIn: number;
@@ -147,6 +166,7 @@ export class MontagePlayer {
         const rate = typeof options.rate === 'number' && Number.isFinite(options.rate) ? options.rate : 1;
         const layer: MontageLayer = {
             clip: source,
+            meshSpace: options.meshSpaceRotation && options.maskBone && !additive ? this.meshSpaceRoot(clip, options.maskBone) : null,
             tracks: new Set(source.tracks.map(track => track.name)),
             parts: [],
             blendIn,
@@ -242,6 +262,28 @@ export class MontagePlayer {
         finished.forEach(layer => layer.onEnd?.(layer.interrupted));
     }
 
+    /**
+     * Turns the mask bone of each mesh-space montage by its share of the pose, so it keeps the
+     * clip's rotation relative to the character. Call right after mixer.update(): it corrects the
+     * pose the mixer just wrote, whose bones above the mask bone are the base pose's.
+     */
+    applyMeshSpaceRotation(): void {
+        this.layers.forEach((layer) => {
+            const space = layer.meshSpace;
+            if (!space || layer.weight <= 0 || !layer.parts.length) return;
+            const time = layer.parts[0].action.time;
+            _poseAbove.identity();
+            _clipAbove.identity();
+            space.above.forEach(({ node, rotation }) => {
+                _poseAbove.multiply(node.quaternion);
+                _clipAbove.multiply(rotation ? _clipRotation.fromArray(rotation.evaluate(time) as unknown as number[]) : node.quaternion);
+            });
+            // From the frame the pose puts above the bone to the one the clip puts there.
+            _turn.copy(_poseAbove).invert().multiply(_clipAbove);
+            space.bone.quaternion.premultiply(_clipRotation.identity().slerp(_turn, layer.weight));
+        });
+    }
+
     /** Removes every montage action at once, without fading or calling onEnd, and drops the masked clips. */
     dispose(): void {
         this.layers.forEach(layer => layer.parts.forEach(part => this.removePart(part)));
@@ -249,6 +291,24 @@ export class MontagePlayer {
         this.current = null;
         this.maskedClips = new WeakMap();
         this.additiveClips = new WeakMap();
+    }
+
+    /** The mask bone and the nodes between it and the root, with `clip`'s rotation track for each; null when the bone is not under the root. */
+    private meshSpaceRoot(clip: THREE.AnimationClip, maskBone: string): MeshSpaceRoot | null {
+        const bone = findBone(this.root, maskBone);
+        if (!bone) return null;
+        const rotations = new Map<string, THREE.KeyframeTrack>();
+        clip.tracks.forEach((track) => {
+            const node = trackNodeName(track);
+            if (node && track.name.endsWith('.quaternion')) rotations.set(boneKey(node), track);
+        });
+        const above: MeshSpaceRoot['above'] = [];
+        let node = bone.parent;
+        for (; node && node !== this.root; node = node.parent) {
+            const track = rotations.get(boneKey(node.name));
+            above.unshift({ node, rotation: track ? new THREE.QuaternionLinearInterpolant(track.times, track.values, 4, new Float32Array(4)) : null });
+        }
+        return node === this.root ? { bone, above } : null;
     }
 
     /** The clip as motion relative to its first frame, which adds to the pose under it; built once per clip. */

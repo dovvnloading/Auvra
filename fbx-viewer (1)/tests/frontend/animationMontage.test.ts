@@ -346,6 +346,45 @@ describe('montage player', () => {
   });
 });
 
+describe('mesh-space montages', () => {
+  const UP = new THREE.Vector3(0, 1, 0);
+  const SIDE = new THREE.Vector3(1, 0, 0);
+  const turn = (axis: THREE.Vector3, degrees: number) => new THREE.Quaternion().setFromAxisAngle(axis, THREE.MathUtils.degToRad(degrees));
+  const hold = (bone: string, rotation: THREE.Quaternion) => new THREE.QuaternionKeyframeTrack(`${bone}.quaternion`, [0, 1], [...rotation.toArray(), ...rotation.toArray()]);
+  // The legs' clip turns and tips the hips (a strafe); the aim clip turns them the other way and the spine back.
+  const strafeHips = turn(UP, 40).multiply(turn(SIDE, 12));
+  const aimHips = turn(UP, -30);
+  const aimSpine = turn(UP, 25).multiply(turn(SIDE, -8));
+  const aimChest = turn(SIDE, 5);
+  const setup = (meshSpaceRotation: boolean) => {
+    const rig = makeRig();
+    const mixer = new THREE.AnimationMixer(rig.root);
+    const identity = new THREE.Quaternion();
+    mixer.clipAction(new THREE.AnimationClip('Strafe', 1, [hold('mixamorigHips', strafeHips), hold('mixamorigSpine', identity), hold('mixamorigChest', identity)])).play();
+    const player = new MontagePlayer(mixer, rig.root);
+    const aim = new THREE.AnimationClip('Aim', 1, [hold('mixamorigHips', aimHips), hold('mixamorigSpine', aimSpine), hold('mixamorigChest', aimChest)]);
+    player.play(aim, { maskBone: 'Spine', loop: true, blendIn: 0, meshSpaceRotation });
+    player.update(DT);
+    mixer.update(DT);
+    player.applyMeshSpaceRotation();
+    rig.root.updateMatrixWorld(true);
+    return rig;
+  };
+
+  it('keeps the upper body turned as the clip turns it relative to the character, whatever the legs do with the hips', () => {
+    const { hips, chest } = setup(true);
+    const asClipped = aimHips.clone().multiply(aimSpine).multiply(aimChest);
+    expect(chest.getWorldQuaternion(new THREE.Quaternion()).angleTo(asClipped)).toBeLessThan(1e-3);
+    expect(hips.quaternion.angleTo(strafeHips)).toBeLessThan(1e-3);
+  });
+
+  it('turns the upper body with the hips without it', () => {
+    const { chest } = setup(false);
+    const onTheHips = strafeHips.clone().multiply(aimSpine).multiply(aimChest);
+    expect(chest.getWorldQuaternion(new THREE.Quaternion()).angleTo(onTheHips)).toBeLessThan(1e-3);
+  });
+});
+
 describe('additive montages', () => {
   it('adds a clip\'s motion from its first frame on top of a montage that keeps playing', () => {
     const { hips, player, frame } = makeScene();

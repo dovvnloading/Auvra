@@ -208,7 +208,9 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
         const ready = holding && (input.isAiming || firing || reloading || sinceShot.current < WEAPON_READY_AFTER_SHOT);
         reportWeapon(held, weapon, reloading, ready);
 
-        // Fire, aim and reload clips play from the spine up, over whatever the legs are doing.
+        // Fire, aim and reload clips play from the spine up, over whatever the legs are doing. The spine
+        // keeps the clip's turn relative to the character, so the weapon points where the clip points
+        // whatever the legs' clip does with the hips.
         const bodyClip = holding ? apiRef.current.getActiveState?.()?.clipName ?? null : null;
         const upperBody = upperBodyClip(blueprint?.upperBody, firing, input.isAiming, weapon, reloading, bodyClip);
         if (upperBody !== upperBodyPlaying.current || weaponStep.reloadStarted) {
@@ -217,7 +219,7 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
                 // A reload plays once; fire and aim clips loop while their button is held.
                 const once = reloading && upperBody === weapon?.reloadClip;
                 apiRef.current.playMontage?.(upperBody, {
-                    maskBone: blueprint?.upperBody?.maskBone || DEFAULT_UPPER_BODY_BONE, loop: !once, blendIn: 0.12,
+                    maskBone: blueprint?.upperBody?.maskBone || DEFAULT_UPPER_BODY_BONE, loop: !once, blendIn: 0.12, meshSpaceRotation: true,
                 });
             } else {
                 apiRef.current.stopMontage?.(0.2);
