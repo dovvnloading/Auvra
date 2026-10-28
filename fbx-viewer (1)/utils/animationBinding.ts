@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { animatedSkeleton, humanoidRole, matchHumanoidBones, mirrorHumanoidClip, retargetHumanoidClip } from './retargeting';
+import { originalBone } from './partCopies';
 
 export class AnimationImportError extends Error {
   constructor(message: string) {
@@ -34,6 +35,52 @@ const skinnedMesh = (root: THREE.Object3D): THREE.SkinnedMesh | null => {
     if (candidate.isSkinnedMesh && (candidate.skeleton?.bones.length ?? 0) > (result?.skeleton.bones.length ?? 0)) result = candidate;
   });
   return result;
+};
+
+/**
+ * Puts every bone any part of `root` is bound to at its bind pose, parents before children, so a
+ * part's copy of a bone sits on the original with no offset again whatever pose the model was in.
+ */
+const poseAtBind = (root: THREE.Object3D): void => {
+  const bind = new Map<THREE.Object3D, THREE.Matrix4>();
+  root.traverse((child) => {
+    const mesh = child as THREE.SkinnedMesh;
+    if (!mesh.isSkinnedMesh) return;
+    mesh.skeleton.bones.forEach((bone, index) => {
+      const inverse = mesh.skeleton.boneInverses[index];
+      if (inverse && !bind.has(bone)) bind.set(bone, inverse.clone().invert());
+    });
+  });
+  // Bind matrices are in the skeleton's own space, as Skeleton.pose() reads them: a bone under
+  // another bone is offset from that bone's bind, and any other bone's bind is its own transform.
+  // A bone no part binds keeps its offset and passes its parent's bind on to its children.
+  root.updateMatrixWorld(true);
+  const posed = new Map<THREE.Object3D, THREE.Matrix4>();
+  root.traverse((node) => {
+    const parentBind = node.parent && (node.parent as THREE.Bone).isBone ? posed.get(node.parent) ?? null : null;
+    const own = bind.get(node);
+    if (own) {
+      node.matrix.copy(parentBind ? parentBind.clone().invert().multiply(own) : own);
+      node.matrix.decompose(node.position, node.quaternion, node.scale);
+      posed.set(node, own);
+    } else if ((node as THREE.Bone).isBone) {
+      posed.set(node, parentBind ? parentBind.clone().multiply(node.matrix) : node.matrix.clone());
+    }
+  });
+  root.updateMatrixWorld(true);
+};
+
+/**
+ * A copy of `object` at its bind pose and the bones clips are made for: the complete skeleton's,
+ * each as the original bone rather than a part's copy of it, so a clip turns the original and every
+ * part bound to a copy follows. Null without a bound skeleton.
+ */
+const bindPoseRig = (object: THREE.Object3D): { root: THREE.Object3D; bones: THREE.Bone[] } | null => {
+  const root = cloneSkeleton(object);
+  const mesh = skinnedMesh(root);
+  if (!mesh) return null;
+  poseAtBind(root);
+  return { root, bones: [...new Set(mesh.skeleton.bones.map(originalBone))] };
 };
 
 const bones = (root: THREE.Object3D): THREE.Bone[] => {
@@ -77,13 +124,8 @@ export const mirrorModelClips = (
 ): THREE.AnimationClip[] => {
   const wanted = names.filter((name) => clips.some((clip) => clip.name === name) && !clips.some((clip) => clip.name === mirroredClipName(name)));
   if (!wanted.length) return [];
-  const copy = cloneSkeleton(object);
-  const mesh = skinnedMesh(copy);
-  if (!mesh) throw new AnimationImportError('The model has no skeleton to mirror its clips on.');
-  copy.updateMatrixWorld(true);
-  mesh.skeleton.pose();
-  copy.updateMatrixWorld(true);
-  const rig = { root: copy, bones: mesh.skeleton.bones };
+  const rig = bindPoseRig(object);
+  if (!rig) throw new AnimationImportError('The model has no skeleton to mirror its clips on.');
   return wanted.map((name) => mirrorHumanoidClip(rig, clips.find((clip) => clip.name === name)!, mirroredClipName(name)));
 };
 
@@ -153,14 +195,11 @@ const retargetAnimations = (
   clips: THREE.AnimationClip[],
 ): PreparedAnimationClips => {
   // A copy at its bind pose, whatever pose the library model is in now.
-  const targetClone = cloneSkeleton(targetRoot);
-  const targetMesh = skinnedMesh(targetClone);
-  if (!targetMesh) {
+  const rig = bindPoseRig(targetRoot);
+  if (!rig) {
     throw new AnimationImportError('The target model does not contain a bound skeleton.');
   }
-  targetClone.updateMatrixWorld(true);
-  targetMesh.skeleton.pose();
-  targetClone.updateMatrixWorld(true);
+  const { root: targetClone, bones: targetBones } = rig;
 
   // Animation-only files often keep their skeleton as plain nodes, posed at the rig's rest pose.
   const sourceBones = animatedSkeleton(sourceRoot, clips);
@@ -168,7 +207,6 @@ const retargetAnimations = (
     throw new AnimationImportError('The animation FBX does not contain a skeleton.');
   }
 
-  const targetBones = targetMesh.skeleton.bones;
   const pairs = matchHumanoidBones(targetBones, sourceBones, targetClone, sourceRoot);
   const roleOf = new Map(targetBones.map((bone) => [bone, humanoidRole(bone.name)]));
   const core = targetBones.filter((bone) => CORE_ROLES.includes(roleOf.get(bone) ?? ''));
