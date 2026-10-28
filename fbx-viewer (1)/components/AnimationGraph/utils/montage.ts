@@ -19,6 +19,12 @@ const _clipAbove = new THREE.Quaternion();
 const _clipRotation = new THREE.Quaternion();
 const _turn = new THREE.Quaternion();
 
+/** A montage's share on one bone's subtree (MontageOptions.boneWeights). */
+export interface MontageBoneWeight {
+    bone: string;
+    weight: number;
+}
+
 /** Options for {@link MontagePlayer.play}. */
 export interface MontageOptions {
     /** Fade-in, and crossfade from an interrupted montage, in seconds (default 0.15). */
@@ -43,17 +49,25 @@ export interface MontageOptions {
      */
     meshSpaceRotation?: boolean;
     /**
+     * An additive montage's share on a bone and everything below it, 0 to 1: the deepest listed
+     * bone wins and the rest of the body takes it all. A hit reaction can then rock the body while
+     * barely moving the arms of an aimed weapon. Ignored for montages that replace the pose.
+     */
+    boneWeights?: readonly MontageBoneWeight[];
+    /**
      * Called once when the montage no longer affects the pose and its actions are gone, with
      * `interrupted` true when stop() or another play() ended it before the clip finished.
      */
     onEnd?: (interrupted: boolean) => void;
 }
 
-/** Tracks played by the same set of montages. */
+/** Tracks played by the same set of montages, at the same share of their montage. */
 interface PartPlan {
     tracks: string[];
     /** The other montages that play these tracks too. */
     overlaps: MontageLayer[];
+    /** How much of its montage's weight these tracks take (MontageOptions.boneWeights), 0 to 1. */
+    scale: number;
 }
 
 /** One mixer action playing part of a montage's tracks. */
@@ -108,10 +122,10 @@ const splitByLayer = (plan: PartPlan, other: MontageLayer): PartPlan[] => {
     const shared = plan.tracks.filter(name => other.tracks.has(name));
     if (!shared.length) return [plan];
     const overlaps = [...plan.overlaps, other];
-    if (shared.length === plan.tracks.length) return [{ tracks: plan.tracks, overlaps }];
+    if (shared.length === plan.tracks.length) return [{ ...plan, overlaps }];
     return [
-        { tracks: shared, overlaps },
-        { tracks: plan.tracks.filter(name => !other.tracks.has(name)), overlaps: plan.overlaps },
+        { ...plan, tracks: shared, overlaps },
+        { ...plan, tracks: plan.tracks.filter(name => !other.tracks.has(name)) },
     ];
 };
 
@@ -122,7 +136,7 @@ const splitByLayer = (plan: PartPlan, other: MontageLayer): PartPlan[] => {
 const mixerWeight = (layer: MontageLayer, part: MontagePart): number => {
     if (layer.weight <= 0) return 0;
     const mode = layer.clip.blendMode;
-    if (mode === THREE.AdditiveAnimationBlendMode) return layer.weight;
+    if (mode === THREE.AdditiveAnimationBlendMode) return layer.weight * part.scale;
     const shared = part.overlaps.reduce(
         (total, other) => (other.clip.blendMode === mode ? total + other.weight : total),
         layer.weight
@@ -187,7 +201,9 @@ export class MontagePlayer {
         // Each action covers tracks played by the same set of montages, so every track gets
         // exactly its share while montages with different masks crossfade.
         const fading = this.layers.filter(other => other.release > 0);
-        let plans: PartPlan[] = [{ tracks: [...layer.tracks], overlaps: [] }];
+        let plans: PartPlan[] = additive && options.boneWeights?.length
+            ? this.weightedPlans(source, options.boneWeights)
+            : [{ tracks: [...layer.tracks], overlaps: [], scale: 1 }];
         fading.forEach((other) => {
             plans = plans.flatMap(plan => splitByLayer(plan, other));
         });
@@ -293,6 +309,33 @@ export class MontagePlayer {
         this.additiveClips = new WeakMap();
     }
 
+    /** `clip`'s tracks grouped by the share `weights` gives them, the deepest listed bone winning. */
+    private weightedPlans(clip: THREE.AnimationClip, weights: readonly MontageBoneWeight[]): PartPlan[] {
+        const depth = (node: THREE.Object3D) => {
+            let count = 0;
+            for (let up = node.parent; up; up = up.parent) count++;
+            return count;
+        };
+        const subtrees = weights
+            .map(({ bone, weight }) => {
+                const node = findBone(this.root, bone);
+                if (!node) return null;
+                const keys = new Set<string>();
+                node.traverse(child => { if (child.name) keys.add(boneKey(child.name)); });
+                return { keys, depth: depth(node), scale: THREE.MathUtils.clamp(Number.isFinite(weight) ? weight : 1, 0, 1) };
+            })
+            .filter((subtree): subtree is { keys: Set<string>; depth: number; scale: number } => !!subtree)
+            .sort((a, b) => b.depth - a.depth);
+        const groups = new Map<number, string[]>();
+        clip.tracks.forEach((track) => {
+            const node = trackNodeName(track);
+            const key = node ? boneKey(node) : '';
+            const scale = subtrees.find(subtree => subtree.keys.has(key))?.scale ?? 1;
+            groups.set(scale, [...(groups.get(scale) ?? []), track.name]);
+        });
+        return [...groups].map(([scale, tracks]) => ({ tracks, overlaps: [], scale }));
+    }
+
     /** The mask bone and the nodes between it and the root, with `clip`'s rotation track for each; null when the bone is not under the root. */
     private meshSpaceRoot(clip: THREE.AnimationClip, maskBone: string): MeshSpaceRoot | null {
         const bone = findBone(this.root, maskBone);
@@ -382,7 +425,7 @@ export class MontagePlayer {
         action.time = time;
         action.setEffectiveWeight(0);
         action.play();
-        return { tracks: plan.tracks, overlaps: plan.overlaps, action, clip };
+        return { ...plan, action, clip };
     }
 
     private removePart(part: MontagePart): void {

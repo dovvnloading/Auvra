@@ -166,7 +166,7 @@ On touch screens a player with weapons also gets Reload and Next weapon buttons.
 
 ## Hit reactions
 
-A character blueprint's **Hit Reaction** clip is added on top of whatever the character is doing each time it is hurt and survives, so it flinches without stopping. The clip's first frame counts as its neutral pose: only its movement away from that frame is added.
+A character blueprint's **Hit Reaction** clip is added on top of whatever the character is doing each time it is hurt and survives, so it flinches without stopping. The clip's first frame counts as its neutral pose: only its movement away from that frame is added. A hit that comes within half a second of the last reaction lets that reaction play on, so sustained fire staggers the character instead of shaking it. While the character's weapon is held ready (aimed, firing or just fired), the upper body takes only **Upper body while aiming** of the flinch (0.2 by default), so the body still reacts but the weapon stays on target.
 
 ## One-shot animations on part of the body
 

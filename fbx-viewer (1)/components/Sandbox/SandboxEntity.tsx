@@ -2,14 +2,15 @@
 import React, { useEffect, forwardRef, useImperativeHandle, useRef, useMemo, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
-import { LoadedModelData, Blueprint, AttachmentData, SocketData, Hittable, Hitbox } from '../../types';
+import { LoadedModelData, Blueprint, AttachmentData, SocketData, Hittable, Hitbox, DEFAULT_UPPER_BODY_BONE } from '../../types';
 import { GraphRuntime, GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
 import { PLAYER_PHYSICS_ID } from '../../runtime/physics';
 import { CharacterIK, heldWeaponGrip } from './CharacterIK';
 import { CharacterRagdoll } from './CharacterRagdoll';
 import { AttachmentController } from '../Scene/AttachmentController';
 import { SocketController, resolveSocketFlashTextureUrl } from '../Scene/SocketController'; // Using Visual Controller now
-import { useEntityHealth } from './hooks/useEntityHealth';
+import { DEFAULT_HIT_REACT_AIMED, useEntityHealth } from './hooks/useEntityHealth';
+import type { MontageBoneWeight } from '../AnimationGraph/utils/montage';
 import { WorldHealthBar } from './UI/WorldHealthBar';
 import { useGameContent } from '../../runtime/GameContentContext';
 import { ownClipsFirst } from '../../utils/animationBinding';
@@ -228,12 +229,21 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
     }, [model.object, model.id, effectivePosition, startRotation]);
 
     // --- Logic Hooks ---
+    // While its weapon is held ready, a hit rocks the body but barely moves the upper body holding the weapon.
+    const hitReactWeights = useRef<MontageBoneWeight[] | null>(null);
+    const upperBodyBone = blueprint.upperBody?.maskBone || DEFAULT_UPPER_BODY_BONE;
+    useEffect(() => {
+        hitReactWeights.current = heldWeapon && weaponPose.ready
+            ? [{ bone: upperBodyBone, weight: blueprint.hitReactAimed ?? DEFAULT_HIT_REACT_AIMED }]
+            : null;
+    }, [heldWeapon, weaponPose.ready, upperBodyBone, blueprint.hitReactAimed]);
     const { currentHealth, isDead, takeDamage: applyHealthDamage, heal } = useEntityHealth({
         maxHealth,
         initialHealth,
         onHealthChange,
         graphApiRef: internalApiRef,
-        hitReactClip: blueprint.hitReactClip
+        hitReactClip: blueprint.hitReactClip,
+        hitReactWeights,
     });
 
     // --- Stats to Runtime Sync ---

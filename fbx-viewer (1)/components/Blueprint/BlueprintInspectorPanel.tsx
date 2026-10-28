@@ -5,6 +5,7 @@ import { FileText, Database, Tag, Plus, Trash2, Zap, Scaling, Camera, Crosshair,
 import { BehaviorTreeEditor } from './BehaviorTreeEditor';
 import { WeaponsPanel, type WeaponFocus } from './WeaponsPanel';
 import { fitWeaponToHands, seatCarryOnBody } from '../../runtime/weaponFit';
+import { DEFAULT_HIT_REACT_AIMED } from '../Sandbox/hooks/useEntityHealth';
 import { findClipForRole } from '../AnimationGraph/utils/clipMatching';
 import { aimCameraOffset, AimView, Blueprint, BlueprintStat, CharacterIKSettings, DEFAULT_UPPER_BODY_BONE, UpperBodySettings, type WeaponSettings } from '../../types';
 import { ownClipsFirst } from '../../utils/animationBinding';
@@ -417,6 +418,26 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                     <p className="text-[9px] text-gray-500 leading-tight">
                                         Added on top of the current animation each time the character is hurt, so it flinches without stopping. The clip&apos;s first frame is its neutral pose.
                                     </p>
+                                    {blueprint.hitReactClip && (
+                                        <>
+                                            <div className="flex items-center justify-between gap-4">
+                                                <span className="text-xs text-gray-400 shrink-0">Upper body while aiming</span>
+                                                <div className="w-28">
+                                                    <ScrubbableInput
+                                                        label="Share"
+                                                        value={blueprint.hitReactAimed ?? DEFAULT_HIT_REACT_AIMED}
+                                                        onChange={(val) => onUpdate(blueprint.id, { hitReactAimed: Math.max(0, Math.min(1, val)) }, { coalesce: 'hitReactAimed' })}
+                                                        step={0.05}
+                                                        labelColor="text-blue-400"
+                                                        labelWidth="w-10"
+                                                    />
+                                                </div>
+                                            </div>
+                                            <p className="text-[9px] text-gray-500 leading-tight">
+                                                How much of the flinch the upper body takes while a weapon is held ready, from 0 (none) to 1 (all of it), so an aimed weapon stays on target.
+                                            </p>
+                                        </>
+                                    )}
                                 </div>
                             </div>
 
