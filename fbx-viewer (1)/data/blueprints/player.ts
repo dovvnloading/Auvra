@@ -52,8 +52,8 @@ export const PLAYER_GRAPH: AnimationGraphData = {
   ],
   states: [
     { id: 's1', name: 'Idle', clipName: null, position: { x: 400, y: 300 }, loop: true, isRoot: true, stateType: 'Single', blendSamples: [], blendParamX: '', blendParamY: '' },
-    { id: 's2', name: 'Walk', clipName: null, position: { x: 700, y: 300 }, loop: true, stateType: 'Single', blendSamples: [], blendParamX: '', blendParamY: '' },
-    { id: 's3', name: 'Run', clipName: null, position: { x: 1000, y: 300 }, loop: true, stateType: 'Single', blendSamples: [], blendParamX: '', blendParamY: '' },
+    { id: 's2', name: 'Walk', clipName: null, position: { x: 700, y: 300 }, loop: true, matchSpeed: true, stateType: 'Single', blendSamples: [], blendParamX: '', blendParamY: '' },
+    { id: 's3', name: 'Run', clipName: null, position: { x: 1000, y: 300 }, loop: true, matchSpeed: true, stateType: 'Single', blendSamples: [], blendParamX: '', blendParamY: '' },
     { id: 's4', name: 'Jump', clipName: null, position: { x: 700, y: 100 }, loop: false, stateType: 'Single', blendSamples: [], blendParamX: '', blendParamY: '' },
     { id: 's5', name: 'Falling', clipName: null, position: { x: 1000, y: 100 }, loop: true, stateType: 'Single', blendSamples: [], blendParamX: '', blendParamY: '' },
     { id: 's6', name: 'Land', clipName: null, position: { x: 1300, y: 100 }, loop: false, stateType: 'Single', blendSamples: [], blendParamX: '', blendParamY: '' },
@@ -64,6 +64,7 @@ export const PLAYER_GRAPH: AnimationGraphData = {
         clipName: null, 
         position: { x: 400, y: 550 }, 
         loop: true, 
+        matchSpeed: true,
         stateType: 'Blend2D', 
         blendParamX: 'v4', // InputX
         blendParamY: 'v5', // InputY
