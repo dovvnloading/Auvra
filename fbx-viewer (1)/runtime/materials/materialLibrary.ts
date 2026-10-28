@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { normalizeMaterialGraph, withMaterialParameters, type MaterialGraph, type MaterialParameterValues } from './materialGraph';
-import { bindMaterialGraph, canBindMaterialGraph, unbindMaterialGraph } from './graphMaterial';
+import { getMaterialNodeDefinition, normalizeMaterialGraph, withMaterialParameters, type MaterialGraph, type MaterialParameterValues } from './materialGraph';
+import { bindMaterialGraph, canBindMaterialGraph, unbindMaterialGraph, type MaterialTextureLookup } from './graphMaterial';
 
 /**
  * THE MATERIAL LIBRARY
@@ -34,7 +34,9 @@ export const graphTextures = (graph: MaterialGraph): Array<{ textureId: string; 
     const result: Array<{ textureId: string; slot: 'map' | 'normal' }> = [];
     for (const node of graph.nodes) {
         const textureId = node.params.texture;
-        if ((node.type !== 'texture' && node.type !== 'normalMap') || typeof textureId !== 'string' || !textureId) continue;
+        // Texture Sample, Normal Map and Triplanar Sample: every node whose 'texture' param picks one.
+        const picksTexture = getMaterialNodeDefinition(node.type)?.params.some(param => param.key === 'texture' && param.kind === 'texture');
+        if (!picksTexture || typeof textureId !== 'string' || !textureId) continue;
         const slot = node.type === 'normalMap' ? 'normal' : 'map';
         if (seen.has(`${slot}:${textureId}`)) continue;
         seen.add(`${slot}:${textureId}`);
@@ -164,6 +166,11 @@ class MaterialLibrary {
         return this.bindNow(material, binding);
     }
 
+    /** The library's textures for graphs bound outside it (the editor's node previews); each loads when first asked for. */
+    textureLookup(flipY = true): MaterialTextureLookup {
+        return (textureId, slot) => this.texture(textureId, slot ?? 'map', flipY);
+    }
+
     private bindNow(material: THREE.MeshStandardMaterial, binding: Binding): boolean {
         const asset = this.assets.get(binding.materialId);
         if (!asset) {
@@ -189,6 +196,8 @@ class MaterialLibrary {
             texture.colorSpace = slot === 'normal' ? THREE.NoColorSpace : THREE.SRGBColorSpace;
             texture.wrapS = THREE.RepeatWrapping;
             texture.wrapT = THREE.RepeatWrapping;
+            // Sharp at grazing angles; three caps it at what the GPU supports.
+            texture.anisotropy = 8;
             texture.flipY = flipY;
             texture.needsUpdate = true;
             this.textures.set(key, texture);
