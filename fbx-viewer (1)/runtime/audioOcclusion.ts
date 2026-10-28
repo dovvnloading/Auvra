@@ -7,9 +7,11 @@ import { lineOfSight } from './perception';
 /**
  * AUDIO OCCLUSION
  *
- * A 3D sound the level hides from the listener is muffled: a physics ray from the listener to the
- * sound (the same test enemies see by, runtime/perception.ts) that something solid stops lowers
- * the sound's high frequencies and its volume, easing in and out as the way opens and closes.
+ * A 3D sound the level hides from the listener is muffled: physics rays from the listener (the
+ * same test enemies see by, runtime/perception.ts) to the sound and to points around it, as a
+ * sound comes from an area rather than a point. The share of them something solid stops lowers
+ * the sound's high frequencies and its volume, so a sound around a corner opens up gradually as
+ * the listener steps out, and the change eases in rather than jumping.
  */
 
 /** Low-pass cutoff with nothing in the way (above hearing: no change) and behind a wall. */
@@ -30,7 +32,8 @@ export type OccludableSound = Pick<THREE.PositionalAudio, 'context' | 'getFilter
 interface OcclusionFilters {
     lowpass: BiquadFilterNode;
     gain: GainNode;
-    occluded: boolean;
+    /** 0 (clear) to 1 (fully behind something). */
+    amount: number;
 }
 
 const attached = new WeakMap<OccludableSound, OcclusionFilters>();
@@ -45,24 +48,73 @@ export const occlusionFilters = (sound: OccludableSound): OcclusionFilters => {
         const gain = sound.context.createGain();
         gain.gain.value = 1;
         sound.setFilters([...sound.getFilters(), lowpass, gain]);
-        filters = { lowpass, gain, occluded: false };
+        filters = { lowpass, gain, amount: 0 };
         attached.set(sound, filters);
     }
     return filters;
 };
 
-/** Eases a sound towards muffled (something is in the way) or clear. */
-export const setOccluded = (sound: OccludableSound, occluded: boolean): void => {
+/** Changes of the amount smaller than this are not worth rescheduling the filters for. */
+const AMOUNT_STEP = 0.02;
+
+/** The low-pass cutoff for an occlusion amount: from open to occluded evenly in pitch (octaves), not in hertz. */
+export const occlusionCutoff = (amount: number): number => OPEN_CUTOFF_HZ * (OCCLUDED_CUTOFF_HZ / OPEN_CUTOFF_HZ) ** amount;
+export const occlusionGain = (amount: number): number => 1 - (1 - OCCLUDED_GAIN) * amount;
+
+/** Eases a sound towards `amount` occluded: 0 clear, 1 fully behind something, partly in between. */
+export const setOcclusion = (sound: OccludableSound, amount: number): void => {
     const filters = occlusionFilters(sound);
-    if (filters.occluded === occluded) return;
-    filters.occluded = occluded;
+    const clamped = Math.min(1, Math.max(0, amount));
+    if (Math.abs(filters.amount - clamped) < AMOUNT_STEP && (clamped === 0) === (filters.amount === 0)) return;
+    filters.amount = clamped;
     const now = sound.context.currentTime;
-    filters.lowpass.frequency.setTargetAtTime(occluded ? OCCLUDED_CUTOFF_HZ : OPEN_CUTOFF_HZ, now, EASE_SECONDS);
-    filters.gain.gain.setTargetAtTime(occluded ? OCCLUDED_GAIN : 1, now, EASE_SECONDS);
+    filters.lowpass.frequency.setTargetAtTime(occlusionCutoff(clamped), now, EASE_SECONDS);
+    filters.gain.gain.setTargetAtTime(occlusionGain(clamped), now, EASE_SECONDS);
 };
 
-/** Whether a sound is muffled now (tests). */
-export const isOccluded = (sound: OccludableSound): boolean => attached.get(sound)?.occluded ?? false;
+/** Eases a sound towards muffled (something is in the way) or clear. */
+export const setOccluded = (sound: OccludableSound, occluded: boolean): void => setOcclusion(sound, occluded ? 1 : 0);
+
+/** How occluded a sound is now, 0 to 1 (tests). */
+export const occlusionAmount = (sound: OccludableSound): number => attached.get(sound)?.amount ?? 0;
+
+/** Whether a sound is muffled at all now (tests). */
+export const isOccluded = (sound: OccludableSound): boolean => occlusionAmount(sound) > 0;
+
+/** How far around the sound the side rays aim, in world units. */
+const SOURCE_SPREAD = 0.6;
+/** The ray to the sound itself counts this much; the four around it share the rest. */
+const CENTER_WEIGHT = 0.5;
+
+const _direction = new THREE.Vector3();
+const _side = new THREE.Vector3();
+const _up = new THREE.Vector3();
+const _point = new THREE.Vector3();
+
+/**
+ * How much of a sound at `source` the level hides from `listener`, 0 to 1: the ray to the sound
+ * counts half, rays to four points around it (across the line between them) an eighth each.
+ */
+export const measureOcclusion = (
+    physics: Parameters<typeof lineOfSight>[0],
+    listener: THREE.Vector3,
+    source: THREE.Vector3,
+    ignore: string | null = null,
+): number => {
+    let amount = lineOfSight(physics, listener, source, ignore) ? 0 : CENTER_WEIGHT;
+    _direction.subVectors(source, listener);
+    if (_direction.lengthSq() < 1e-8) return amount;
+    _direction.normalize();
+    _side.crossVectors(_direction, THREE.Object3D.DEFAULT_UP);
+    if (_side.lengthSq() < 1e-6) _side.set(1, 0, 0);
+    _side.normalize();
+    _up.crossVectors(_side, _direction).normalize();
+    for (const [axis, sign] of [[_side, 1], [_side, -1], [_up, 1], [_up, -1]] as const) {
+        _point.copy(source).addScaledVector(axis, sign * SOURCE_SPREAD);
+        if (!lineOfSight(physics, listener, _point, ignore)) amount += (1 - CENTER_WEIGHT) / 4;
+    }
+    return amount;
+};
 
 const _listener = new THREE.Vector3();
 const _source = new THREE.Vector3();
@@ -85,7 +137,7 @@ export const useAudioOcclusion = (sounds: () => Iterable<THREE.PositionalAudio>,
             if (!sound.isPlaying) continue;
             sound.getWorldPosition(_source);
             if (_listener.distanceTo(_source) > MAX_CHECK_DISTANCE) continue;
-            setOccluded(sound, !lineOfSight(physics, _listener, _source, ignore));
+            setOcclusion(sound, measureOcclusion(physics, _listener, _source, ignore));
         }
     });
 };
