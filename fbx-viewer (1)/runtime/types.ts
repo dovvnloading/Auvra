@@ -42,8 +42,11 @@ export interface GameSettings {
     startupLevelId: string | null;
     playerBlueprintId: string | null;
     window: { fullscreen: boolean };
-    /** meshLod: meshes draw simpler levels of themselves as they get smaller on the screen (utils/meshLod.ts). */
-    quality: { shadows: boolean; postProcessing: boolean; maxDpr: number; fov: number; meshLod: boolean };
+    /**
+     * meshLod: meshes draw simpler levels of themselves as they get smaller on the screen (utils/meshLod.ts).
+     * textureCompression: colour and material maps load GPU-compressed (utils/textureCompression).
+     */
+    quality: { shadows: boolean; postProcessing: boolean; maxDpr: number; fov: number; meshLod: boolean; textureCompression: boolean };
     input: { mouseSensitivity: number; invertY: boolean };
     audio: { masterVolume: number };
     /** Multiplayer through a relay server (runtime/net/protocol.ts). */
@@ -58,7 +61,7 @@ export const DEFAULT_GAME_SETTINGS: GameSettings = {
     startupLevelId: null,
     playerBlueprintId: null,
     window: { fullscreen: false },
-    quality: { shadows: true, postProcessing: true, maxDpr: 2, fov: 60, meshLod: true },
+    quality: { shadows: true, postProcessing: true, maxDpr: 2, fov: 60, meshLod: true, textureCompression: true },
     input: { mouseSensitivity: 0.002, invertY: false },
     audio: { masterVolume: 1 },
     network: DEFAULT_NETWORK_SETTINGS,

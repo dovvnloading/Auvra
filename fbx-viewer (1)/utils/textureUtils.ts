@@ -1,6 +1,7 @@
 
 import * as THREE from 'three';
 import { frontendDiagnostics } from '../diagnostics/runtime';
+import { textureSourceImage } from './textureCompression/compressTextures';
 
 export interface ExtractedTexture {
     uuid: string;
@@ -36,10 +37,12 @@ export const extractTextureFromModel = (object: THREE.Object3D): string | null =
   });
 
   const texture = foundTexture as THREE.Texture | null;
-  if (!texture || !texture.image) return null;
+  // A compressed texture keeps the image it was made from; that is what is read here.
+  const source = texture ? textureSourceImage(texture) : null;
+  if (!texture || !source) return null;
 
   try {
-    const image = texture.image as HTMLImageElement | HTMLCanvasElement | ImageBitmap;
+    const image = source as HTMLImageElement | HTMLCanvasElement | ImageBitmap;
     const canvas = document.createElement('canvas');
     canvas.width = image.width;
     canvas.height = image.height;
@@ -68,11 +71,11 @@ export const extractAllTexturesFromModel = (object: THREE.Object3D): ExtractedTe
 
             materials.forEach(mat => {
                 const map = (mat as any).map as THREE.Texture;
-                if (map && map.image) {
+                if (map && textureSourceImage(map)) {
                     // Avoid duplicates
                     if (!uniqueTextures.has(map.uuid)) {
                         try {
-                            const image = map.image as HTMLImageElement;
+                            const image = textureSourceImage(map) as HTMLImageElement;
                             const canvas = document.createElement('canvas');
                             canvas.width = image.width;
                             canvas.height = image.height;
