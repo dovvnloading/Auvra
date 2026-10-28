@@ -171,6 +171,8 @@ Add an **Audio Source** component to play a sound from an object during play. In
 | Full-Volume Distance | 1 | 3D only: the sound starts fading beyond this distance |
 | Mixer Bus | SFX | SFX, Music, UI or Master |
 
+A 3D sound the level hides from the listener is muffled: when something solid (anything with a collider, or the terrain's hills) stands between the camera and an Audio Source or 3D Audio Emitter, its high frequencies drop and it plays at half volume, easing back as the way opens. The object a sound plays from does not hide it. 2D sounds are never muffled.
+
 All game sound plays through four mixer buses (Master, Music, Effects and Interface), and players set each one's volume in the game's Options screen. Weapon sounds use Effects. **Audio Emitter** objects use Music when they are 2D and looping, and Effects otherwise. The **Play Sound** blueprint node chooses its bus.
 
 ## Level streaming

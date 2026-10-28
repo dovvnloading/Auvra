@@ -7,6 +7,7 @@ import { AUDIO_BUSES, type AudioBus, type AudioMixer } from '../audioMixer';
 import { useGameContent } from '../GameContentContext';
 import { useRuntimeServices } from '../RuntimeServicesContext';
 import type { ComponentDefinition, ComponentRenderProps } from './types';
+import { useAudioOcclusion } from '../audioOcclusion';
 
 // --- SHARED AUDIO PLUMBING (level emitters, weapon sounds and the audioSource component) ---
 
@@ -131,7 +132,7 @@ export const readAudioSourceSettings = (component: LevelComponent): typeof AUDIO
 };
 
 /** Plays the asset from the owner's origin; mounted in the owner's group, so a 3D source follows it. */
-const AudioSourcePlayback: React.FC<ComponentRenderProps> = ({ component }) => {
+const AudioSourcePlayback: React.FC<ComponentRenderProps> = ({ component, object }) => {
     const camera = useThree(state => state.camera);
     const { audioAssets } = useGameContent();
     const mixer = useRuntimeMixer();
@@ -140,6 +141,8 @@ const AudioSourcePlayback: React.FC<ComponentRenderProps> = ({ component }) => {
     const [sound, setSound] = useState<Sound | null>(null);
     const autoplayRef = useRef(autoplay);
     autoplayRef.current = autoplay;
+    // A 3D sound the level hides from the listener is muffled; its own object does not hide it.
+    useAudioOcclusion(() => (sound instanceof THREE.PositionalAudio ? [sound] : []), object.id);
 
     useEffect(() => {
         const { listener, release } = acquireAudioListener(camera);

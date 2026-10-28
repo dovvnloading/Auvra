@@ -101,6 +101,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/navGeometry.ts': 'pure-utility',
   'runtime/levelObjectMotion.ts': 'pure-utility',
   'runtime/perception.ts': 'context-adapter',
+  'runtime/audioOcclusion.ts': 'hot-loop',
   'runtime/lighting/bakedLighting.ts': 'pure-utility',
   'runtime/lighting/lightBaker.ts': 'hot-loop',
   'runtime/lighting/lightBakeJobs.ts': 'data-model',
