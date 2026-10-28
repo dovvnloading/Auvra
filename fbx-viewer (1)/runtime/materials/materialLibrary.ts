@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { normalizeMaterialGraph, type MaterialGraph } from './materialGraph';
+import { normalizeMaterialGraph, withMaterialParameters, type MaterialGraph, type MaterialParameterValues } from './materialGraph';
 import { bindMaterialGraph, canBindMaterialGraph, unbindMaterialGraph } from './graphMaterial';
 
 /**
@@ -78,6 +78,8 @@ interface Binding {
     materialId: string;
     /** Texture coordinates with the glTF top-left origin (flipY false), else the FBX/OBJ bottom-left. */
     flipY: boolean;
+    /** This material's own values for the asset's parameters. */
+    parameters?: MaterialParameterValues;
 }
 
 class MaterialLibrary {
@@ -151,13 +153,13 @@ class MaterialLibrary {
      * Shades `material` by asset `materialId` from now on (null gives it back its own shading).
      * False when there is no such asset (yet) or the material cannot take a graph.
      */
-    assign(material: THREE.Material, materialId: string | null, flipY = true): boolean {
+    assign(material: THREE.Material, materialId: string | null, flipY = true, parameters?: MaterialParameterValues): boolean {
         if (!canBindMaterialGraph(material)) return false;
         if (!materialId) {
             if (this.bound.delete(material)) unbindMaterialGraph(material);
             return false;
         }
-        const binding = { materialId, flipY };
+        const binding = { materialId, flipY, parameters };
         this.bound.set(material, binding);
         return this.bindNow(material, binding);
     }
@@ -168,7 +170,7 @@ class MaterialLibrary {
             unbindMaterialGraph(material);
             return false;
         }
-        bindMaterialGraph(material, asset.graph, (textureId, slot) => this.texture(textureId, slot ?? 'map', binding.flipY));
+        bindMaterialGraph(material, withMaterialParameters(asset.graph, binding.parameters), (textureId, slot) => this.texture(textureId, slot ?? 'map', binding.flipY));
         return true;
     }
 

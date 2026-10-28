@@ -8,7 +8,9 @@ import { projectService } from '../../utils/projectService';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import {
     MATERIAL_NODE_DEFINITIONS,
+    MAX_PARAMETER_NAME_LENGTH,
     OUTPUT_NODE_TYPE,
+    PARAMETER_NODE_PARAMS,
     createMaterialGraph,
     defaultParams,
     getMaterialNodeDefinition,
@@ -320,7 +322,10 @@ const MaterialGraphCanvas: React.FC<CanvasProps> = ({ graph, selectedNodeId, onS
                             }}
                         >
                             <div className={`flex h-7 items-center justify-between rounded-t-md px-2 text-[11px] font-bold ${node.type === OUTPUT_NODE_TYPE ? 'bg-emerald-900/60 text-emerald-200' : 'bg-gray-800 text-gray-200'}`} title={definition.description}>
-                                <span>{definition.label}</span>
+                                <span className="truncate">
+                                    {definition.label}
+                                    {node.parameter && <span className="ml-1 font-normal text-amber-300" title="Material parameter">· {node.parameter}</span>}
+                                </span>
                                 {node.type !== OUTPUT_NODE_TYPE && (
                                     <button aria-label={`Remove ${definition.label}`} onMouseDown={(event) => event.stopPropagation()} onClick={() => removeNode(node.id)} className="text-gray-500 hover:text-red-400"><Trash2 size={11} /></button>
                                 )}
@@ -491,6 +496,27 @@ export const MaterialGraphEditor: React.FC = () => {
                                         }, true)}
                                     />
                                 ))}
+                                {PARAMETER_NODE_PARAMS[selectedNode.type] && (
+                                    <label className="block space-y-1" title="Name this value to let each model material using the asset set its own">
+                                        <span className="text-[10px] uppercase text-gray-500">Parameter name</span>
+                                        <input
+                                            aria-label="Parameter name"
+                                            value={selectedNode.parameter ?? ''}
+                                            placeholder="Not a parameter"
+                                            maxLength={MAX_PARAMETER_NAME_LENGTH}
+                                            onChange={(event) => update({
+                                                ...asset.graph,
+                                                nodes: asset.graph.nodes.map((node) => {
+                                                    if (node.id !== selectedNode.id) return node;
+                                                    const { parameter: _previous, ...rest } = node;
+                                                    // Kept as typed (a trailing space included) and trimmed when read back.
+                                                    return event.target.value ? { ...rest, parameter: event.target.value } : rest;
+                                                }),
+                                            }, true)}
+                                            className="w-full rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white"
+                                        />
+                                    </label>
+                                )}
                             </div>
                         ) : (
                             <p className="text-[11px] text-gray-500">Select a node to set it. Drag from an output to an input to wire them; click a wire to remove it.</p>

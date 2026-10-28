@@ -62,6 +62,22 @@ class MaterialOverrideSchemaTests(unittest.TestCase):
         materials = validate_domain("materials", domain_document("materials", [{"id": "mat-glow", "name": "Glow", "graph": graph, "textureIds": ["tex-albedo"]}]))
         self.assertEqual(materials["documents"][0]["graph"], graph)
 
+    def test_accepts_material_parameter_settings(self):
+        override = {"materialId": "mat-glow", "parameters": [{"name": "Tint", "value": [1, 0.5, 0]}, {"name": "token", "value": 2}]}
+        document = validate_domain("models", _models(_model({"Body": override})))
+        self.assertEqual(document["documents"][0]["materialOverrides"]["Body"], override)
+        # A parameter is a name and a number or a triple, nothing more.
+        for bad in (
+            [{"name": "Tint"}],
+            [{"name": "Tint", "value": [1, 2]}],
+            [{"name": "Tint", "value": "red"}],
+            [{"name": "", "value": 1}],
+            [{"name": "Tint", "value": 1, "unit": "m"}],
+            {"Tint": 1},
+        ):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                validate_domain("models", _models(_model({"Body": {"materialId": "mat-glow", "parameters": bad}})))
+
     def test_rejects_a_missing_material_asset(self):
         models = _models(_model({"Body": {"materialId": "mat-missing"}}))
         domains = {"models": models, "textures": _textures(), "materials": domain_document("materials", [])}
