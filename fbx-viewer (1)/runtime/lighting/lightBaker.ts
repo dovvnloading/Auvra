@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { LightProbeGenerator } from 'three/examples/jsm/lights/LightProbeGenerator.js';
 import {
     fillInvalidProbes,
     isStaticLightingLight,
@@ -25,10 +24,6 @@ import {
  * neighbours' light instead of the dark they see.
  */
 
-/** The installed three (0.164) reads a probe synchronously; the type package describes the later, async one. */
-const probeFromCube = LightProbeGenerator.fromCubeRenderTarget as unknown as
-    (renderer: THREE.WebGLRenderer, target: THREE.WebGLCubeRenderTarget) => THREE.LightProbe;
-
 /** Side of each cube face the probes see, in pixels. */
 const CAPTURE_SIZE = 16;
 const CAPTURE_NEAR = 0.05;
@@ -36,6 +31,10 @@ const CAPTURE_FAR = 5000;
 const SKY_RADIUS = 4000;
 /** A probe that sees more back faces than this share of the geometry around it is inside geometry. */
 const INSIDE_BACK_FACE_SHARE = 0.25;
+/** Probes captured before their results are read back, and at most captured in one step. */
+const BATCH = 64;
+/** Pixels each probe's result takes in the read-back strip: one per spherical harmonics band. */
+const SLOT = 4;
 
 export interface LightBakeOptions {
     /** Level objects that never move (see staticLightingObjectIds). */
@@ -100,6 +99,62 @@ const faceMaterial = (side: THREE.Side): THREE.ShaderMaterial => new THREE.Shade
         : 'void main() { gl_FragColor = vec4( 1.0, 0.0, 0.0, 1.0 ); }',
 });
 
+const REDUCE_VERTEX = /* glsl */`
+void main() {
+	gl_Position = vec4( position.xy, 0.0, 1.0 );
+}
+`;
+
+/**
+ * Reduces a probe's cube map to its slot of the read-back strip. Light: the first-order spherical
+ * harmonics of what it sees, one band per pixel, each texel weighted by its solid angle (as three's
+ * LightProbeGenerator does on the CPU). Faces: in the first pixel, how many texels show a front
+ * face (red) and how many a back face (green).
+ */
+const REDUCE_FRAGMENT = /* glsl */`
+uniform samplerCube cube;
+uniform float slot;
+uniform float faces;
+const int SIZE = ${CAPTURE_SIZE};
+const float PI = 3.141592653589793;
+vec3 texelDirection( const in int face, const in vec2 uv ) {
+	if ( face == 0 ) return vec3( 1.0, - uv.y, - uv.x );
+	if ( face == 1 ) return vec3( - 1.0, - uv.y, uv.x );
+	if ( face == 2 ) return vec3( uv.x, 1.0, uv.y );
+	if ( face == 3 ) return vec3( uv.x, - 1.0, - uv.y );
+	if ( face == 4 ) return vec3( uv.x, - uv.y, 1.0 );
+	return vec3( - uv.x, - uv.y, - 1.0 );
+}
+void main() {
+	int band = int( gl_FragCoord.x - slot );
+	vec3 sum = vec3( 0.0 );
+	float total = 0.0;
+	float front = 0.0;
+	float back = 0.0;
+	for ( int face = 0; face < 6; face ++ ) {
+		for ( int j = 0; j < SIZE; j ++ ) {
+			for ( int i = 0; i < SIZE; i ++ ) {
+				vec3 direction = texelDirection( face, ( vec2( float( i ), float( j ) ) + 0.5 ) / float( SIZE ) * 2.0 - 1.0 );
+				float lengthSq = dot( direction, direction );
+				direction = normalize( direction );
+				vec3 seen = textureCube( cube, direction ).rgb;
+				if ( faces > 0.5 ) {
+					float isFront = step( 0.5, seen.r );
+					front += isFront;
+					back += step( 0.5, seen.g ) * ( 1.0 - isFront );
+				} else {
+					float weight = 4.0 / ( sqrt( lengthSq ) * lengthSq );
+					float basis = band == 0 ? 0.282095 : 0.488603 * ( band == 1 ? direction.y : band == 2 ? direction.z : direction.x );
+					sum += seen * basis * weight;
+					total += weight;
+				}
+			}
+		}
+	}
+	gl_FragColor = faces > 0.5 ? vec4( front, back, 0.0, 1.0 ) : vec4( sum * ( 4.0 * PI / total ), 1.0 );
+}
+`;
+
 const isRenderable = (object: THREE.Object3D): boolean => {
     const candidate = object as THREE.Object3D & { isMesh?: boolean; isLine?: boolean; isPoints?: boolean; isSprite?: boolean };
     return Boolean(candidate.isMesh || candidate.isLine || candidate.isPoints || candidate.isSprite);
@@ -134,7 +189,19 @@ export class LightBaker {
     private readonly sky: THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMaterial>;
     private readonly frontFaces = faceMaterial(THREE.FrontSide);
     private readonly anyFaces = faceMaterial(THREE.DoubleSide);
-    private readonly pixels = new Uint16Array(CAPTURE_SIZE * CAPTURE_SIZE * 4);
+    /** Each captured probe's result, SLOT pixels apiece, read back a batch at a time. */
+    private readonly strip = new THREE.WebGLRenderTarget(BATCH * SLOT, 1, { type: THREE.HalfFloatType, depthBuffer: false });
+    private readonly reducer = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+        vertexShader: REDUCE_VERTEX,
+        fragmentShader: REDUCE_FRAGMENT,
+        uniforms: { cube: { value: this.target.texture }, slot: { value: 0 }, faces: { value: 0 } },
+        depthTest: false,
+        depthWrite: false,
+    }));
+    private readonly reducerCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    private readonly pixels = new Uint16Array(BATCH * SLOT * 4);
+    /** The probes in the strip, by slot. */
+    private readonly pending: number[] = [];
     /** Probes done in the current pass; passes are the inside test, then each bounce. */
     private next = 0;
     private bounce = 0;
@@ -185,23 +252,31 @@ export class LightBaker {
         return { fraction: Math.min(1, (this.bounce * this.probes + this.next) / (passes * this.probes)), bounce: this.bounce };
     }
 
-    /** Bakes probes for about `budgetMs`; returns true once the bake is finished. */
+    /** Bakes probes for about `budgetMs` (at most a batch); returns true once the bake is finished. */
     step(budgetMs: number): boolean {
         if (this.finished) return true;
         const start = performance.now();
         const state = this.prepare();
+        let showLight = this.bounce === 0 ? this.showFaces() : null;
         try {
-            while (performance.now() - start < budgetMs && !this.finished) {
-                if (this.bounce === 0) this.findInside(this.next);
-                else this.capture(this.next);
+            for (let captured = 0; captured < BATCH && performance.now() - start < budgetMs && !this.finished; captured++) {
+                this.capture(this.next);
                 this.next++;
+                if (this.pending.length === BATCH) this.flush();
                 if (this.next < this.probes) continue;
+                this.flush();
                 this.next = 0;
                 if (this.bounce > 0) this.keepBounce();
+                else {
+                    showLight?.();
+                    showLight = null;
+                }
                 this.bounce++;
                 if (this.bounce > this.options.bounces) this.finished = true;
             }
+            this.flush();
         } finally {
+            showLight?.();
             this.restore(state);
         }
         return this.finished;
@@ -221,6 +296,9 @@ export class LightBaker {
         this.sky.material.dispose();
         this.frontFaces.dispose();
         this.anyFaces.dispose();
+        this.strip.dispose();
+        this.reducer.geometry.dispose();
+        this.reducer.material.dispose();
     }
 
     /**
@@ -249,20 +327,49 @@ export class LightBaker {
         this.sky.updateMatrixWorld();
     }
 
+    /** Captures a probe and reduces what it sees into its slot of the strip, without waiting on the GPU. */
     private capture(index: number): void {
         this.placeCamera(index);
         this.camera.update(this.renderer, this.scene);
-        const coefficients = probeFromCube(this.renderer, this.target).sh.coefficients;
-        const offset = index * SH_FLOATS_PER_PROBE;
-        for (let band = 0; band < 4; band++) {
-            this.sh[offset + band * 3] = coefficients[band].x;
-            this.sh[offset + band * 3 + 1] = coefficients[band].y;
-            this.sh[offset + band * 3 + 2] = coefficients[band].z;
-        }
+        const x = this.pending.length * SLOT;
+        const uniforms = this.reducer.material.uniforms;
+        uniforms.slot.value = x;
+        uniforms.faces.value = this.bounce === 0 ? 1 : 0;
+        this.strip.viewport.set(x, 0, SLOT, 1);
+        this.strip.scissor.set(x, 0, SLOT, 1);
+        this.strip.scissorTest = true;
+        const previous = this.renderer.getRenderTarget();
+        this.renderer.setRenderTarget(this.strip);
+        this.renderer.render(this.reducer, this.reducerCamera);
+        this.renderer.setRenderTarget(previous);
+        this.pending.push(index);
     }
 
-    private findInside(index: number): void {
-        this.placeCamera(index);
+    /** Reads the strip back and stores each pending probe's result. */
+    private flush(): void {
+        const count = this.pending.length;
+        if (!count) return;
+        this.renderer.readRenderTargetPixels(this.strip, 0, 0, count * SLOT, 1, this.pixels);
+        const half = THREE.DataUtils.fromHalfFloat;
+        this.pending.forEach((probe, slot) => {
+            const base = slot * SLOT * 4;
+            if (this.bounce === 0) {
+                const front = half(this.pixels[base]);
+                const back = half(this.pixels[base + 1]);
+                this.inside[probe] = back > 0 && back / (front + back) > INSIDE_BACK_FACE_SHARE ? 1 : 0;
+                return;
+            }
+            for (let band = 0; band < SLOT; band++) {
+                for (let channel = 0; channel < 3; channel++) {
+                    this.sh[probe * SH_FLOATS_PER_PROBE + band * 3 + channel] = half(this.pixels[base + band * 4 + channel]);
+                }
+            }
+        });
+        this.pending.length = 0;
+    }
+
+    /** Draws the static geometry as front (red) and back (green) faces on blue, for the inside test; returns the undo. */
+    private showFaces(): () => void {
         const swapped = this.statics.map(mesh => {
             const material = mesh.material;
             const face = (m: THREE.Material) => (m.side === THREE.FrontSide ? this.frontFaces : this.anyFaces);
@@ -275,24 +382,12 @@ export class LightBaker {
         this.sky.visible = false;
         this.scene.background = null;
         this.renderer.setClearColor(0x0000ff, 1);
-        let front = 0;
-        let back = 0;
-        try {
-            this.camera.update(this.renderer, this.scene);
-            for (let face = 0; face < 6; face++) {
-                this.renderer.readRenderTargetPixels(this.target, 0, 0, CAPTURE_SIZE, CAPTURE_SIZE, this.pixels, face);
-                for (let pixel = 0; pixel < this.pixels.length; pixel += 4) {
-                    if (THREE.DataUtils.fromHalfFloat(this.pixels[pixel]) > 0.5) front++;
-                    else if (THREE.DataUtils.fromHalfFloat(this.pixels[pixel + 1]) > 0.5) back++;
-                }
-            }
-        } finally {
+        return () => {
             for (const [mesh, material] of swapped) mesh.material = material;
             this.renderer.setClearColor(clearColor, clearAlpha);
             this.scene.background = background;
             this.sky.visible = true;
-        }
-        this.inside[index] = back > 0 && back / (front + back) > INSIDE_BACK_FACE_SHARE ? 1 : 0;
+        };
     }
 
     /** Shows only static geometry and its lights, under the bake sky, with shadows over the whole level. */

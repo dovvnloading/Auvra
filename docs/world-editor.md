@@ -139,7 +139,7 @@ The light's other settings are on its component in the inspector.
 Unbaked, a level's shaded sides get the same sky fill everywhere (the sky sphere's ambience and the environment light), so a room under a roof is as bright as open ground. **Baked Lighting**, under the Lights panel, bakes the light that really reaches each place into a grid of light probes:
 
 1. Set **Gap** (world units between probes; smaller catches small rooms and tight corners but takes longer), **Bnc** (bounces: 1 lights surfaces with the open sky only, each more carries light further into enclosed spaces) and **Int** (strength of the baked light).
-2. Click **Bake**. The bake runs in the viewport with a progress bar; **Cancel** stops it. A level the probes would not cover at the chosen gap within 8,192 probes gets a wider gap, shown under the buttons.
+2. Click **Bake**. The bake runs in the viewport with a progress bar; **Cancel** stops it. A level the probes would not cover at the chosen gap within 16,384 probes gets a wider gap, shown under the buttons.
 
 The bake sees the level's static geometry (props, foliage and terrain without a Mover, Rotator or non-fixed Rigid Body, and not under one), its lights and the sky. Coloured surfaces tint the light they bounce, emissive materials give off light, and probes buried inside geometry take their neighbours' light. Characters, enemies and other moving objects are not part of the bake but are lit by it wherever they stand, in the editor and in play. Outside the probe grid the unbaked fill applies.
 

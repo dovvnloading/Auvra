@@ -156,7 +156,7 @@ export interface ProbeGrid {
 }
 
 /** How many probes a bake places at most; a level larger than that gets wider spacing. */
-export const MAX_BAKE_PROBES = 8192;
+export const MAX_BAKE_PROBES = 16384;
 
 /** Probes from a little above the bottom of `bounds` to a spacing above its top, `spacing` apart. */
 export const planProbeGrid = (bounds: THREE.Box3, spacing: number, maxProbes = MAX_BAKE_PROBES): ProbeGrid => {
@@ -394,7 +394,8 @@ const AFTER_MAPS = /* glsl */`
 #endif
 `;
 
-let installed = false;
+/** Marks the patched chunks, so a second load of this module (a hot reload) does not patch them again. */
+const INSTALLED_MARK = '// auvra baked lighting';
 
 /**
  * Teaches three's lit materials (standard, physical, lambert, phong, toon) to read the volume.
@@ -404,10 +405,12 @@ let installed = false;
  * each draw with their own.
  */
 export const installBakedLighting = (): void => {
-    if (installed) return;
-    installed = true;
-    THREE.ShaderChunk.lights_pars_begin += PARS;
-    THREE.ShaderChunk.lights_fragment_maps = BEFORE_MAPS + THREE.ShaderChunk.lights_fragment_maps + AFTER_MAPS;
+    if (!THREE.ShaderChunk.lights_pars_begin.includes(INSTALLED_MARK)) {
+        THREE.ShaderChunk.lights_pars_begin += `
+${INSTALLED_MARK}
+${PARS}`;
+        THREE.ShaderChunk.lights_fragment_maps = BEFORE_MAPS + THREE.ShaderChunk.lights_fragment_maps + AFTER_MAPS;
+    }
     for (const name of ['standard', 'physical', 'lambert', 'phong', 'toon'] as const) {
         Object.assign(THREE.ShaderLib[name].uniforms, BAKED_LIGHTING_UNIFORMS);
     }
