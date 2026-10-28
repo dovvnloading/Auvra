@@ -11,6 +11,14 @@ const CDN_URL = /https?:\/\/(cdn\.jsdelivr\.net|unpkg\.com|esm\.sh|fonts\.google
 
 const readJson = (file) => JSON.parse(readFileSync(file, 'utf8'));
 
+// Libraries bundled from inside another package rather than as packages of their own: the
+// decoders three carries for compressed glTF, which the editor and player bundle
+// (utils/gltfDecoders.ts). Their license texts are kept beside this script.
+const VENDORED_LIBRARIES = [
+  { name: 'Basis Universal transcoder', package: 'three', folder: 'examples/jsm/libs/basis', copyright: 'Copyright Binomial LLC', project: 'github.com/BinomialLLC/basis_universal', license: 'Apache-2.0' },
+  { name: 'Draco 3D decoder', package: 'three', folder: 'examples/jsm/libs/draco/gltf', copyright: 'Copyright The Draco Authors', project: 'github.com/google/draco', license: 'Apache-2.0' },
+];
+
 export const productionPackages = (root) => {
   const lock = readJson(path.join(root, 'package-lock.json'));
   return Object.entries(lock.packages ?? {})
@@ -39,6 +47,15 @@ export const collectThirdPartyNotices = (root) => {
     const body = texts.length ? texts.join('\n\n') : `(No license file shipped; declared license: ${license})`;
     return `${'='.repeat(78)}\n${name}@${version} (${license})\n${'='.repeat(78)}\n\n${body}\n`;
   });
+  // The copy the app imports: the top-level one, not one nested under another package.
+  const installed = new Map(productionPackages(root).filter(({ dir, name }) => dir === `node_modules/${name}`).map(({ dir, name, version }) => [name, { dir, version }]));
+  for (const library of VENDORED_LIBRARIES) {
+    const owner = installed.get(library.package);
+    if (!owner || !existsSync(path.join(root, owner.dir, library.folder))) continue;
+    const text = readFileSync(path.join(root, 'scripts', 'licenses', `${library.license}.txt`), 'utf8').replace(/\r\n/g, '\n').trim();
+    sections.push(`${'='.repeat(78)}\n${library.name} (${library.license}), inside ${library.package}@${owner.version} (${library.folder})\n${'='.repeat(78)}\n\n`
+      + `${library.copyright}. ${library.project}\n\n${text}\n`);
+  }
   const header = 'Third-party software notices\n\nThis software includes the following open-source packages. '
     + 'Each is used under the license reproduced below.\n\n';
   return (header + sections.join('\n')).replace(CDN_URL, '$1');
