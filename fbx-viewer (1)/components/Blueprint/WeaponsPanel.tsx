@@ -58,6 +58,8 @@ const CLIP_FIELDS = [
     ['idleClip', 'Idle while held'], ['walkClip', 'Walk while held'], ['runClip', 'Run while held'],
     ['backClip', 'Walk back while held'], ['leftClip', 'Step left while held'], ['rightClip', 'Step right while held'],
     ['jumpClip', 'Jump while held'],
+    // Played on the legs when the aim swings too far round: the character turns as the clip turns.
+    ['turnLeftClip', 'Turn left while aiming'], ['turnRightClip', 'Turn right while aiming'],
 ] as const;
 
 const UPPER_BODY_CLIPS: ReadonlySet<string> = new Set(['fireClip', 'aimClip']);

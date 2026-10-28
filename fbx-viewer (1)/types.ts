@@ -554,6 +554,12 @@ export interface WeaponSettings {
   rightClip?: string | null;
   jumpClip?: string | null;
   /**
+   * Turning in place while aimed, left and right: played on the legs (the hips without the spine)
+   * when the aim swings too far from where the feet point, the character turning as the clip turns.
+   */
+  turnLeftClip?: string | null;
+  turnRightClip?: string | null;
+  /**
    * Where the other hand holds it (a rifle's handguard), in the weapon model's own units: while it is
    * held, that hand takes hold there from wherever the animation has it, except while reloading.
    */

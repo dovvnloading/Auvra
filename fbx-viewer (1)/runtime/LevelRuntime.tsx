@@ -1032,7 +1032,7 @@ const RuntimeEnemyController: React.FC<{
         if (clip !== state.clip) {
             state.clip = clip;
             if (clip) apiRef.current?.playMontage?.(clip, { maskBone: assets.blueprint.upperBody?.maskBone || DEFAULT_UPPER_BODY_BONE, loop: true, blendIn: 0.12, meshSpaceRotation: true });
-            else apiRef.current?.stopMontage?.(0.2);
+            else apiRef.current?.stopMontage?.(0.2, '');
         }
         const manager = projectileManagerRef.current;
         if (!shots || !manager) return;

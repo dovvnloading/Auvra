@@ -21,7 +21,12 @@ const _rootTravel = new THREE.Vector3();
 /** Seconds a weapon stays in hand after its last shot before going back to its carry placement. */
 const WEAPON_READY_AFTER_SHOT = 0.8;
 
-type WeaponClips = Partial<Pick<ResolvedWeapon, 'idleClip' | 'walkClip' | 'runClip' | 'backClip' | 'leftClip' | 'rightClip' | 'jumpClip'>> & Pick<ResolvedWeapon, 'fireClip' | 'aimClip' | 'reloadClip'>;
+type WeaponClips = Partial<Pick<ResolvedWeapon, 'idleClip' | 'walkClip' | 'runClip' | 'backClip' | 'leftClip' | 'rightClip' | 'jumpClip' | 'turnLeftClip' | 'turnRightClip'>> & Pick<ResolvedWeapon, 'fireClip' | 'aimClip' | 'reloadClip'>;
+
+/** The montage slot turn-in-place clips play in, alongside the upper-body clips of the default slot. */
+const TURN_SLOT = 'turn';
+/** The bone the legs hang from: a turn clip plays on it and below it, without the spine. */
+const LOWER_BODY_BONE = 'Hips';
 
 /**
  * The upper-body clip for this frame: the reload clip while reloading, else the fire clip while
@@ -177,6 +182,8 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
 
     // The upper-body clip playing now, so it starts and stops only when firing or aiming changes.
     const upperBodyPlaying = useRef<string | null>(null);
+    // A turn-in-place clip is playing on the legs.
+    const turnPlaying = useRef(false);
 
     useFrame((_, delta) => {
         if (!enabled || !modelObject || !apiRef.current) return;
@@ -222,7 +229,7 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
                     maskBone: blueprint?.upperBody?.maskBone || DEFAULT_UPPER_BODY_BONE, loop: !once, blendIn: 0.12, meshSpaceRotation: true,
                 });
             } else {
-                apiRef.current.stopMontage?.(0.2);
+                apiRef.current.stopMontage?.(0.2, '');
             }
         }
 
@@ -231,7 +238,29 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
         // A state with root motion moves the character by the clip's own travel (taken every frame so none piles up).
         const travel = apiRef.current.consumeRootMotion?.(_rootTravel);
         const rootMotion = apiRef.current.getActiveState?.()?.rootMotion ? travel : null;
-        const { isMoving, effectiveSprint, localInputX, localInputY, isAirborne, isFalling, verticalSpeed } = updatePhysics(input, delta, rootMotion);
+        // A turn clip on the legs turns the character by its own turn (taken every frame so none piles up).
+        const clipYaw = apiRef.current.consumeRootYaw?.() ?? 0;
+        const {
+            isMoving, effectiveSprint, localInputX, localInputY, isAirborne, isFalling, verticalSpeed, turnStarted, turningInPlace,
+        } = updatePhysics(input, delta, rootMotion, turnPlaying.current ? clipYaw : null);
+
+        // Turning in place: the held weapon's turn clip steps the feet round on the legs while the
+        // upper body keeps its aim; without one the body turns on the spot.
+        if (turnStarted && weapon) {
+            const clip = turnStarted > 0 ? weapon.turnLeftClip : weapon.turnRightClip;
+            if (clip && apiRef.current.playMontage?.(clip, {
+                maskBone: LOWER_BODY_BONE, excludeBone: blueprint?.upperBody?.maskBone || DEFAULT_UPPER_BODY_BONE,
+                slot: TURN_SLOT, rootYaw: true, blendIn: 0.15, blendOut: 0.25,
+                onEnd: () => { turnPlaying.current = false; },
+            })) {
+                turnPlaying.current = true;
+            }
+        }
+        if (turnPlaying.current && !turningInPlace) {
+            // Facing the aim (or moving off): the rest of the turn clip blends away.
+            apiRef.current.stopMontage?.(0.25, TURN_SLOT);
+            turnPlaying.current = false;
+        }
 
         // --- Step C: Combat ---
         // Over the shoulder the character is in view while aiming, so its muzzle flashes then too.

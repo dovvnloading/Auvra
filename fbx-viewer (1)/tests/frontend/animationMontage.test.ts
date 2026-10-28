@@ -385,6 +385,65 @@ describe('mesh-space montages', () => {
   });
 });
 
+describe('montage slots and root turns', () => {
+  it('plays montages of different slots side by side, each interrupting only its own slot', () => {
+    const { hips, chest, leg, player, frame } = makeScene();
+    let aimEnded = false;
+    player.play(poseClip('Aim', [2, 0, 0]), { maskBone: 'Spine', loop: true, blendIn: 0, onEnd: () => { aimEnded = true; } });
+    // A turn on the legs: the hips and below, without the spine.
+    player.play(poseClip('Turn', [0, 3, 0]), { maskBone: 'Hips', excludeBone: 'Spine', loop: true, slot: 'turn', blendIn: 0 });
+    frame(4);
+    expect(aimEnded).toBe(false);
+    expect(player.isPlaying()).toBe(true);
+    expect(player.isPlaying('turn')).toBe(true);
+    expect(chest.position.x).toBeCloseTo(2, 3);
+    expect(chest.position.y).toBeCloseTo(0, 3);
+    expect(hips.position.y).toBeCloseTo(3, 3);
+    expect(leg.position.y).toBeCloseTo(3, 3);
+    // Stopping one slot leaves the other playing.
+    player.stop(0, 'turn');
+    frame(1);
+    expect(player.isPlaying('turn')).toBe(false);
+    expect(player.isPlaying()).toBe(true);
+    expect(chest.position.x).toBeCloseTo(2, 3);
+    expect(leg.position.y).toBeCloseTo(0, 3);
+  });
+
+  const turnClip = (axis: THREE.Vector3) => new THREE.AnimationClip('Turn Left', 1, [
+    new THREE.QuaternionKeyframeTrack('mixamorigHips.quaternion', [0, 0.5, 1], [
+      ...new THREE.Quaternion().toArray(),
+      ...new THREE.Quaternion().setFromAxisAngle(axis, Math.PI / 4).toArray(),
+      ...new THREE.Quaternion().setFromAxisAngle(axis, Math.PI / 2).toArray(),
+    ]),
+  ]);
+
+  it('takes the turn of the root bone out of the pose and reports it for the character to turn by', () => {
+    const { hips, player, frame } = makeScene();
+    player.play(turnClip(new THREE.Vector3(0, 1, 0)), { maskBone: 'Hips', rootYaw: true, slot: 'turn', blendIn: 0 });
+    frame(16);
+    expect(player.consumeRootYaw()).toBeCloseTo(Math.PI / 4, 3);
+    expect(player.consumeRootYaw()).toBe(0);
+    expect(hips.quaternion.angleTo(new THREE.Quaternion())).toBeLessThan(1e-3);
+    frame(8);
+    expect(player.consumeRootYaw()).toBeCloseTo(Math.PI / 8, 3);
+  });
+
+  it('reads the turn about the up of the character whatever frame the root bone hangs in', () => {
+    const rig = makeRig();
+    // An FBX armature turned to stand a Z-up rig upright: its Z is the character's up.
+    const armature = new THREE.Group();
+    armature.rotation.x = -Math.PI / 2;
+    rig.root.remove(rig.hips);
+    armature.add(rig.hips);
+    rig.root.add(armature);
+    const mixer = new THREE.AnimationMixer(rig.root);
+    const player = new MontagePlayer(mixer, rig.root);
+    player.play(turnClip(new THREE.Vector3(0, 0, 1)), { maskBone: 'Hips', rootYaw: true, blendIn: 0 });
+    for (let i = 0; i < 32; i++) { player.update(DT); mixer.update(DT); }
+    expect(player.consumeRootYaw()).toBeCloseTo(Math.PI / 2, 2);
+  });
+});
+
 describe('additive montages', () => {
   it('adds a clip\'s motion from its first frame on top of a montage that keeps playing', () => {
     const { hips, player, frame } = makeScene();
