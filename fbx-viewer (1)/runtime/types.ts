@@ -7,6 +7,7 @@ import type {
 import type { PlayerOptionsStore } from './playerOptions';
 import { DEFAULT_NETWORK_SETTINGS, normalizeNetworkSettings, type NetworkSettings } from './net/protocol';
 import type { SavedWeapons } from './weapons';
+import type { LevelBakedLighting } from './lighting/bakedLighting';
 import { DEFAULT_NAV_SETTINGS, resolveNavSettings, type NavSettings } from './navSettings';
 
 /** Everything the gameplay runtime needs from loaded content, whether it came from the editor or a game pack. */
@@ -29,6 +30,7 @@ export interface RuntimeLevel {
     name: string;
     objects: LevelObject[];
     blueprint: LevelBlueprintData;
+    bakedLighting?: LevelBakedLighting;
 }
 
 export interface PlayerStart {

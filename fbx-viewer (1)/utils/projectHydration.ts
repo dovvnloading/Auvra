@@ -24,6 +24,7 @@ import {
   type LoadedGameContent,
 } from '../runtime/types';
 import { MATERIALS_DOMAIN, materialLibrary, readMaterialAsset, type MaterialAsset } from '../runtime/materials/materialLibrary';
+import { setLightVolumeSource } from '../runtime/lighting/lightVolumeLoader';
 
 /** The HUD document in the project 'hud' domain. */
 export const HUD_DOCUMENT_ID = 'hud-main';
@@ -199,6 +200,8 @@ export async function loadGameContent(
     // Material assets, before the models whose materials use them.
     materialLibrary.setTextureSource((textureId) => textureAssetUrls.get(textureId));
     materialLibrary.replaceAll(documents(MATERIALS_DOMAIN).map(readMaterialAsset).filter((asset): asset is MaterialAsset => asset !== null));
+    // Levels' baked light volumes are read when a level is shown.
+    setLightVolumeSource((assetId) => resolveAssetUrl(assetId));
     for (const value of documents('audio')) {
       const item = value as Partial<AudioData> & { assetId?: string };
       if (!item.id || !item.name || !item.assetId) continue;

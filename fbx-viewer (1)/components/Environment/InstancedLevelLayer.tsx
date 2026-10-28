@@ -43,6 +43,8 @@ const SELECTION_MATERIAL = new THREE.MeshBasicMaterial({
 });
 
 const noRaycast = () => undefined;
+/** Marks the instanced meshes as level geometry for baked lighting (see runtime/lighting/bakedLighting.ts). */
+const STATIC_LIGHTING = { staticLighting: true };
 
 const InstancedModelGroup: React.FC<{
     model: LoadedModelData;
@@ -187,6 +189,8 @@ const LodPartInstancer: React.FC<{
                     castShadow
                     receiveShadow
                     raycast={noRaycast}
+                    // Instanced objects never move, so baked lighting sees them as level geometry.
+                    userData={STATIC_LIGHTING}
                 />
             ))}
         </>
@@ -279,6 +283,7 @@ const PartInstancer: React.FC<{
                 args={[part.geometry, part.material, instances.length]}
                 castShadow
                 receiveShadow
+                userData={STATIC_LIGHTING}
                 // Only bind events if interactive
                 onClick={interactive ? handleClick : undefined}
                 onPointerOver={interactive ? (e) => { e.stopPropagation(); setHoveredInstanceId(e.instanceId!); } : undefined}

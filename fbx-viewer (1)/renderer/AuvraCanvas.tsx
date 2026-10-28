@@ -3,6 +3,8 @@ import { Canvas, useFrame, useThree, type CanvasProps } from "@react-three/fiber
 import * as THREE from "three";
 import { rendererCoordinator, type RendererSurfaceRole } from "./registry";
 import { MaterialClock } from "../runtime/materials/MaterialClock";
+// Every scene draws with its baked light, or none (installs the shader hook on import).
+import "../runtime/lighting/bakedLighting";
 
 type AuvraCanvasGlOptions = Partial<THREE.WebGLRendererParameters> & Partial<Pick<THREE.WebGLRenderer, "outputColorSpace" | "toneMapping" | "toneMappingExposure">>;
 

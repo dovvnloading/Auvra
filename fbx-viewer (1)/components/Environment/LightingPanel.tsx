@@ -6,6 +6,7 @@ import { createComponent, getComponentDefinition } from '../../runtime/component
 import { editorSession } from '../../utils/editorSession';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
+import { BakedLightingSection } from './BakedLightingSection';
 
 type Vec3 = [number, number, number];
 
@@ -285,6 +286,7 @@ export const LightingPanel: React.FC<LightingPanelProps> = ({ levelId, onSelect,
                     );
                 })}
             </div>
+            <BakedLightingSection levelId={levelId} />
         </div>
     );
 };

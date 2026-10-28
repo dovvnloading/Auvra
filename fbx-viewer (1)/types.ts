@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import React from 'react';
 import type { ProjectStatus } from './utils/projectStatus';
 import type { MaterialOverrides } from './utils/materialOverrides';
+import type { LevelBakedLighting } from './runtime/lighting/bakedLighting';
 
 export type AssetCategory = 'Character' | 'Prop' | 'Environment' | 'Weapon' | 'Animation' | 'Audio' | 'Texture';
 
@@ -162,6 +163,8 @@ export interface LevelData {
   name: string;
   createdAt: number;
   blueprint?: LevelBlueprintData; // New: Level Logic
+  /** Baked light probes and their settings (see runtime/lighting/bakedLighting.ts). */
+  bakedLighting?: LevelBakedLighting;
 }
 
 export interface LevelObject {

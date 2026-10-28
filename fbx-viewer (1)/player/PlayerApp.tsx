@@ -124,6 +124,7 @@ export const PlayerApp: React.FC = () => {
                 name: level.name,
                 objects: loaded.objects.filter(object => object.levelId === level.id),
                 blueprint: level.blueprint ?? { nodes: [], connections: [], variables: [] },
+                bakedLighting: level.bakedLighting,
             });
         }
         return map;
