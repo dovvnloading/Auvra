@@ -12,6 +12,7 @@ import { PARTICLES_COMPONENT } from './particles';
 import { IK_COMPONENTS } from './ikComponents';
 import { JOINT_COMPONENTS } from './jointComponents';
 import { NAVIGATION_COMPONENTS } from './navigationComponents';
+import { LIGHTING_COMPONENTS } from './lightingComponents';
 import { NET_SYNC_COMPONENT } from './netSyncComponent';
 import { LOD_COMPONENTS } from './lodComponents';
 import { LEVEL_STREAMING_COMPONENT } from './levelStreamingComponent';
@@ -37,6 +38,7 @@ export const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
     ...AUDIO_ZONE_COMPONENTS,
     POST_PROCESS_COMPONENT,
     REFLECTION_PROBE_COMPONENT,
+    ...LIGHTING_COMPONENTS,
     ...LOD_COMPONENTS,
     LEVEL_STREAMING_COMPONENT,
     ANIMATION_COMPONENT,

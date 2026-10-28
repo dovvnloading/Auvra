@@ -20,7 +20,7 @@ describe('component registry', () => {
     expect(types).toEqual([
       'rotator', 'mover', 'pointLight', 'spotLight', 'camera', 'collider', 'rigidBody', 'joint', 'navLink', 'navObstacle', 'particles', 'decal', 'water', 'audioSource',
       'reverbZone', 'musicPlayer',
-      'postProcess', 'reflectionProbe', 'lodGroup', 'distanceCull', 'levelStreaming', 'animation', 'lookAtIK', 'footIK', 'twoBoneIK', 'script', 'netSync', 'timeline',
+      'postProcess', 'reflectionProbe', 'lightBakeVolume', 'lodGroup', 'distanceCull', 'levelStreaming', 'animation', 'lookAtIK', 'footIK', 'twoBoneIK', 'script', 'netSync', 'timeline',
       'dialogue', 'pickup',
     ]);
     for (const definition of COMPONENT_DEFINITIONS) {
@@ -31,6 +31,10 @@ describe('component registry', () => {
       expect(new Set(keys).size).toBe(keys.length);
     }
     expect(getComponentDefinition('missing')).toBeUndefined();
+  });
+
+  it('creates a light bake volume with its default box', () => {
+    expect(createComponent('lightBakeVolume').props).toEqual({ size: [20, 8, 20] });
   });
 
   it('creates navigation components with their defaults', () => {

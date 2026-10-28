@@ -222,7 +222,12 @@ export class LightBaker {
             }
         });
         if (!this.statics.length) throw new Error('The level has no static geometry to bake.');
-        this.grid = planProbeGrid(this.bounds, options.spacing, options.maxProbes);
+        // Light Bake Volumes, where there are any, say where the probes go.
+        const volumes = new THREE.Box3();
+        scene.traverse((object) => {
+            if (object.userData?.lightBakeVolume === true && effectivelyVisible(object)) volumes.expandByObject(object);
+        });
+        this.grid = planProbeGrid(volumes.isEmpty() ? this.bounds : volumes, options.spacing, options.maxProbes);
         this.probes = this.grid.counts[0] * this.grid.counts[1] * this.grid.counts[2];
         this.sh = new Float32Array(this.probes * SH_FLOATS_PER_PROBE);
         this.inside = new Uint8Array(this.probes);

@@ -170,6 +170,11 @@ describe('what a bake sees', () => {
         const pushed = levelObjects.map(item => (item.id === 'crate' ? { ...item, position: [1, 0, 0] as [number, number, number] } : item));
         expect(bakeSignature(pushed, settings)).not.toBe(before);
         expect(bakeSignature(levelObjects, { ...settings, spacing: 4 })).not.toBe(before);
+        // A Light Bake Volume, on any object, says where the probes go.
+        const volume = object('room', { type: 'spawn_point', components: [{ id: 'v', type: 'lightBakeVolume', enabled: true, props: { size: [10, 4, 10] } }] });
+        const bounded = bakeSignature([...levelObjects, volume], settings);
+        expect(bounded).not.toBe(before);
+        expect(bakeSignature([...levelObjects, { ...volume, position: [3, 0, 0] as [number, number, number] }], settings)).not.toBe(bounded);
     });
 });
 

@@ -228,6 +228,9 @@ export const fillInvalidProbes = (sh: Float32Array, valid: Uint8Array, counts: r
 // What a bake sees
 // ---------------------------------------------------------------------------
 
+/** A component whose box limits where the probes go (runtime/components/lightingComponents.tsx). */
+export const LIGHT_BAKE_VOLUME_COMPONENT_TYPE = 'lightBakeVolume';
+
 /** Level objects that can stand in the bake: the rest are markers, sounds and spawns. */
 const BAKED_OBJECT_TYPES = new Set<LevelObject['type']>(['prop', 'foliage', 'terrain']);
 
@@ -282,8 +285,10 @@ const fnv = (text: string, seed: number): string => {
 /** Sums up what a bake depends on: the static objects, their lights and the sky. Equal when nothing it saw changed. */
 export const bakeSignature = (levelObjects: readonly LevelObject[], settings: BakedLightingSettings): string => {
     const staticIds = staticLightingObjectIds(levelObjects);
+    const bakeVolume = (object: LevelObject) => (object.components ?? [])
+        .some(component => component.enabled !== false && component.type === LIGHT_BAKE_VOLUME_COMPONENT_TYPE);
     const seen = levelObjects
-        .filter(object => staticIds.has(object.id) || object.type === 'sky_sphere')
+        .filter(object => staticIds.has(object.id) || object.type === 'sky_sphere' || bakeVolume(object))
         .map(object => [
             object.id, object.type, object.modelId, object.parentId ?? null, object.position, object.rotation, object.scale,
             object.skyConfig ?? null, object.terrainData?.heightfield?.assetId ?? null, object.terrainData?.textureId ?? null,
