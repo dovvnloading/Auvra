@@ -304,6 +304,12 @@ export interface GraphState {
   playRate?: number;
   /** Variable ID whose value multiplies playRate each frame (e.g. a signed forward speed); unset leaves playRate alone. */
   playRateParam?: string;
+  /**
+   * Play the state's clips at the rate that carries the character at the speed it is really moving
+   * over the ground (each clip's own speed is read from its feet), so planted feet do not slide.
+   * Ignored with root motion, where the clip moves the character itself.
+   */
+  matchSpeed?: boolean;
   /** Events raised when playback crosses a time in the state's clip (Single states). */
   notifies?: AnimNotify[];
   /** Move the character by the clip's root-bone travel instead of leaving it in the pose. */
