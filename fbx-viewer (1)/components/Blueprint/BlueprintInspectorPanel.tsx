@@ -1,5 +1,6 @@
 
 import React, { useState, useMemo, useRef } from 'react';
+import type * as THREE from 'three';
 import { FileText, Database, Tag, Plus, Trash2, Zap, Scaling, Camera, Crosshair, Palette, Check, Box, Music, Play, Footprints, Brain } from 'lucide-react';
 import { BehaviorTreeEditor } from './BehaviorTreeEditor';
 import { WeaponsPanel } from './WeaponsPanel';
@@ -33,6 +34,14 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
         const linked = models.find(model => model.id === blueprint.linkedModelId);
         const ordered = ownClipsFirst(linked ? [linked] : undefined, models);
         return [...new Set(ordered.flatMap(model => (model.animations ?? []).map(clip => clip.name)))];
+    }, [models, blueprint.linkedModelId]);
+    // The linked model's bones, for weapons carried on the body.
+    const boneNames = useMemo(() => {
+        const names: string[] = [];
+        models.find(model => model.id === blueprint.linkedModelId)?.object.traverse(node => {
+            if ((node as THREE.Bone).isBone && node.name && !names.includes(node.name)) names.push(node.name);
+        });
+        return names;
     }, [models, blueprint.linkedModelId]);
     const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -332,6 +341,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                     weapons={blueprint.weapons ?? []}
                                     attachments={attachments.filter(attachment => attachment.parentModelId === blueprint.linkedModelId)}
                                     sockets={sockets.filter(socket => socket.parentModelId === blueprint.linkedModelId)}
+                                    boneNames={boneNames}
                                     clipNames={clipNames}
                                     onChange={(weapons, coalesce) => onUpdate(blueprint.id, { weapons }, coalesce ? { coalesce } : undefined)}
                                 />

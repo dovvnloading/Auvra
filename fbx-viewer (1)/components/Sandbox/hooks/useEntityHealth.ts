@@ -4,6 +4,8 @@ import { GraphRuntimeAPI } from '../../AnimationGraph/GraphRuntime';
 
 interface UseEntityHealthProps {
     maxHealth: number;
+    /** Health to start the session with (a loaded save); full when left out. */
+    initialHealth?: number;
     onHealthChange?: (current: number, max: number) => void;
     graphApiRef: React.MutableRefObject<GraphRuntimeAPI | undefined>;
     /** Played additively on each hit the character survives. */
@@ -13,19 +15,27 @@ interface UseEntityHealthProps {
 /** A hit reaction snaps in and eases out, added to the pose so the character keeps moving. */
 export const HIT_REACTION_OPTIONS = { additive: true, blendIn: 0.05, blendOut: 0.25 } as const;
 
-export const useEntityHealth = ({ maxHealth, onHealthChange, graphApiRef, hitReactClip }: UseEntityHealthProps) => {
-    const [currentHealth, setCurrentHealth] = useState(maxHealth);
+/** Starting health: a saved value kept within 1..max (a save is never taken dead), else full. */
+export const startingHealth = (maxHealth: number, initialHealth?: number): number =>
+    initialHealth !== undefined && Number.isFinite(initialHealth) ? Math.min(maxHealth, Math.max(1, initialHealth)) : maxHealth;
+
+export const useEntityHealth = ({ maxHealth, initialHealth, onHealthChange, graphApiRef, hitReactClip }: UseEntityHealthProps) => {
+    const [currentHealth, setCurrentHealth] = useState(() => startingHealth(maxHealth, initialHealth));
     const [isDead, setIsDead] = useState(false);
     const isDeadRef = useRef(false);
     // Health as of the last hit, read synchronously to tell whether a hit is survived.
-    const healthRef = useRef(maxHealth);
+    const healthRef = useRef(startingHealth(maxHealth, initialHealth));
+    // The saved health applies to the session's first life only.
+    const initialHealthRef = useRef(initialHealth);
 
     // Sync Initial Health or Reset when maxHealth changes
     useEffect(() => {
-        setCurrentHealth(maxHealth);
+        const start = startingHealth(maxHealth, initialHealthRef.current);
+        initialHealthRef.current = undefined;
+        setCurrentHealth(start);
         setIsDead(false);
         isDeadRef.current = false;
-        healthRef.current = maxHealth;
+        healthRef.current = start;
     }, [maxHealth]);
 
     // Report changes up to HUD
@@ -55,9 +65,18 @@ export const useEntityHealth = ({ maxHealth, onHealthChange, graphApiRef, hitRea
         });
     }, [graphApiRef, hitReactClip]);
 
+    /** Restores up to `amount` health; false when dead or already full. */
+    const heal = useCallback((amount: number): boolean => {
+        if (isDeadRef.current || !(amount > 0) || healthRef.current >= maxHealth) return false;
+        healthRef.current = Math.min(maxHealth, healthRef.current + amount);
+        setCurrentHealth(healthRef.current);
+        return true;
+    }, [maxHealth]);
+
     return {
         currentHealth,
         isDead,
-        takeDamage
+        takeDamage,
+        heal
     };
 };

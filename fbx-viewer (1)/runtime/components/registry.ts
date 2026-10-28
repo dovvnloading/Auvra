@@ -7,6 +7,7 @@ import { AUDIO_ZONE_COMPONENTS } from './audioZones';
 import { CAMERA_COMPONENT } from './cameraComponent';
 import { DECAL_COMPONENT } from './decalComponent';
 import { DIALOGUE_COMPONENT } from './dialogueComponent';
+import { PICKUP_COMPONENT } from './pickupComponent';
 import { PARTICLES_COMPONENT } from './particles';
 import { IK_COMPONENTS } from './ikComponents';
 import { JOINT_COMPONENTS } from './jointComponents';
@@ -42,6 +43,7 @@ export const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
     NET_SYNC_COMPONENT,
     TIMELINE_COMPONENT,
     DIALOGUE_COMPONENT,
+    PICKUP_COMPONENT,
 ];
 
 /** The definition for a stored component type, or undefined for a type this build does not know. */

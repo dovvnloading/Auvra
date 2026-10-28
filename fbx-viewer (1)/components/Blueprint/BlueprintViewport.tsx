@@ -7,6 +7,7 @@ import { GraphPreview } from '../AnimationGraph/GraphPreview';
 import { useScene } from '../../context/SceneContext';
 import { useNotification } from '../../context/NotificationContext';
 import { matchGraphClips, matchUpperBodyClips } from '../AnimationGraph/utils/clipMatching';
+import { weaponPlacements } from '../../runtime/weapons';
 
 interface BlueprintViewportProps {
     blueprint: Blueprint;
@@ -33,6 +34,16 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
     const { addNotification } = useNotification();
     const [isMeshSelectorOpen, setIsMeshSelectorOpen] = useState(false);
     const [meshSearch, setMeshSearch] = useState('');
+    // A player with weapons previews them as play shows them once every weapon is carried: the first
+    // one carried from the start held, at rest (carried) or in use (in hand), the others at their
+    // carry placements.
+    const [weaponsInUse, setWeaponsInUse] = useState(false);
+    const weapons = blueprint.weapons;
+    const attachmentPlacements = useMemo(() => {
+        if (!weapons?.length) return undefined;
+        const held = Math.max(0, weapons.findIndex(weapon => weapon.startsOwned !== false));
+        return weaponPlacements(weapons, { held, ready: weaponsInUse, owned: weapons.map(() => true) });
+    }, [weapons, weaponsInUse]);
 
     /**
      * Gives the graph's states, and a player's fire and aim clips, the model's clips whose names fit
@@ -141,6 +152,20 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
                 <div className="absolute top-4 left-4 z-10 bg-black/50 backdrop-blur px-3 py-1 rounded-full text-[10px] text-gray-400 border border-white/10 flex items-center gap-2">
                     <Eye size={10} /> Mesh Preview
                 </div>
+                {attachmentPlacements && (
+                    <div className="absolute top-4 right-4 z-10 flex rounded-full border border-white/10 bg-black/50 backdrop-blur text-[10px] overflow-hidden">
+                        {([[false, 'Weapons at rest'], [true, 'Weapon in use']] as const).map(([inUse, label]) => (
+                            <button
+                                key={label}
+                                type="button"
+                                onClick={() => setWeaponsInUse(inUse)}
+                                className={`px-3 py-1 ${weaponsInUse === inUse ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+                            >
+                                {label}
+                            </button>
+                        ))}
+                    </div>
+                )}
                 
                 {/* 3D Canvas */}
                 {visible && (
@@ -150,6 +175,7 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
                         model={linkedModel || undefined}
                         scale={blueprint.meshScale}
                         textureUrl={textureUrl}
+                        attachmentPlacements={attachmentPlacements}
                     />
                 )}
                 

@@ -1,4 +1,5 @@
 
+import { markMountedPart } from '../../utils/mountedParts';
 import React, { useEffect, useRef, useMemo } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
@@ -132,6 +133,7 @@ export const SocketController: React.FC<SocketControllerProps> = ({
         
         if (targetBone && objRef.current) {
             objRef.current.name = `Socket_${data.id}`;
+            markMountedPart(objRef.current);
             if (objRef.current.parent !== targetBone) {
                 targetBone.add(objRef.current);
             }

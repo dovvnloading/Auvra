@@ -13,6 +13,7 @@ import { useEntityHealth } from './hooks/useEntityHealth';
 import { WorldHealthBar } from './UI/WorldHealthBar';
 import { useGameContent } from '../../runtime/GameContentContext';
 import { ownClipsFirst } from '../../utils/animationBinding';
+import { weaponPlacements, type WeaponPose } from '../../runtime/weapons';
 
 /** Seconds the death animation plays before the body starts fading. */
 const DEATH_ANIM_DURATION = 3;
@@ -79,6 +80,8 @@ interface SandboxEntityProps {
     registerHittable?: (hittable: Hittable) => void;
     unregisterHittable?: (id: string) => void;
     onHealthChange?: (current: number, max: number) => void;
+    /** Health to start with, as a loaded save left it; full when left out. */
+    initialHealth?: number;
     onDespawn?: () => void;
     onSpawnBlood?: (position: THREE.Vector3) => void;
     /** Another peer's avatar in a multiplayer game: driven by the network, not this player. */
@@ -90,8 +93,13 @@ export interface SandboxEntityHandle extends Hittable {
     getSocketWorldPosition: (socketNamePrefix: string) => { position: THREE.Vector3, direction: THREE.Vector3 } | null;
     /** Flashes the socket whose name starts with `socketName`, else the first muzzle socket. */
     triggerMuzzleFlash: (socketName?: string | null) => void;
-    /** Shows weapon `index` of the blueprint's weapons and puts the others' attachments away. */
-    holdWeapon: (index: number) => void;
+    /** Restores up to `amount` health; false when dead or already full. */
+    heal: (amount: number) => boolean;
+    /**
+     * Places the blueprint's weapon models for a pose: the held one in the hand while in use, at its
+     * carry placement otherwise; other carried weapons at theirs; the rest hidden.
+     */
+    setWeaponPose: (pose: WeaponPose) => void;
 }
 
 export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>(({
@@ -108,6 +116,7 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
     registerHittable,
     unregisterHittable,
     onHealthChange,
+    initialHealth,
     onDespawn,
     onSpawnBlood,
     remote = false
@@ -115,13 +124,12 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
 
     const { textures } = useGameContent();
 
-    // Only the held weapon's attachment shows; the other weapons' are put away.
-    const [heldWeapon, setHeldWeapon] = useState(0);
-    const stowedAttachments = useMemo(() => {
-        const weapons = blueprint.weapons ?? [];
-        const held = weapons[heldWeapon]?.attachmentId;
-        return new Set(weapons.map(weapon => weapon.attachmentId).filter((id): id is string => !!id && id !== held));
-    }, [blueprint.weapons, heldWeapon]);
+    // Where each weapon's model goes; until the controller reports, the first carried weapon is held at rest.
+    const [weaponPose, setWeaponPose] = useState<WeaponPose>(() => {
+        const owned = (blueprint.weapons ?? []).map(weapon => weapon.startsOwned !== false);
+        return { held: owned.indexOf(true), ready: false, owned };
+    });
+    const weaponPlacementsById = useMemo(() => weaponPlacements(blueprint.weapons ?? [], weaponPose), [blueprint.weapons, weaponPose]);
 
     // --- Muzzle Flash (entity-local, one tick counter per socket) ---
     const [flashTicks, setFlashTicks] = useState<Record<string, number>>({});
@@ -204,8 +212,9 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
     }, [model.object, model.id, effectivePosition, startRotation]);
 
     // --- Logic Hooks ---
-    const { currentHealth, isDead, takeDamage: applyHealthDamage } = useEntityHealth({
+    const { currentHealth, isDead, takeDamage: applyHealthDamage, heal } = useEntityHealth({
         maxHealth,
+        initialHealth,
         onHealthChange,
         graphApiRef: internalApiRef,
         hitReactClip: blueprint.hitReactClip
@@ -319,7 +328,14 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
         
         isDead: () => isDead,
 
-        holdWeapon: setHeldWeapon,
+        heal,
+
+        setWeaponPose: (pose: WeaponPose) => setWeaponPose(previous => (
+            previous.held === pose.held && previous.ready === pose.ready
+                && previous.owned.length === pose.owned.length && previous.owned.every((owned, index) => owned === pose.owned[index])
+                ? previous
+                : pose
+        )),
     }));
 
     // --- Lifecycle ---
@@ -368,15 +384,19 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
                 />
             </primitive>
 
-            {attachments.map(att => (
-                <AttachmentController
-                    key={att.id}
-                    data={att}
-                    parentObject={model.object}
-                    cloneForInstance
-                    hidden={stowedAttachments.has(att.id)}
-                />
-            ))}
+            {attachments.map(att => {
+                const placement = weaponPlacementsById.get(att.id);
+                return (
+                    <AttachmentController
+                        key={att.id}
+                        data={att}
+                        parentObject={model.object}
+                        cloneForInstance
+                        hidden={placement === 'hidden'}
+                        placement={placement && typeof placement === 'object' ? placement : null}
+                    />
+                );
+            })}
 
             {/* Replaced SocketLogicController with SocketController for Visuals */}
             {sockets.map(sock => (

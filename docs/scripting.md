@@ -111,7 +111,7 @@ Transforms are relative to the object's parent, like the inspector's; for an obj
 
 | API | Does |
 |---|---|
-| `ctx.player` | `{ position, rotation }` of the player character as `[x, y, z]` arrays, or `null` when there is no player |
+| `ctx.player` | The player character, or `null` when there is no player: `position` and `rotation` as `[x, y, z]` arrays, `health`, `maxHealth`, the held `weapon`'s name (`''` for none), its `ammo` and the `reserve` carried (-1 for unlimited) |
 | `ctx.time` | Seconds since play started |
 | `ctx.delta` | Seconds since the previous frame (the same as `dt`) |
 | `ctx.frame` | The frame number |
@@ -120,7 +120,10 @@ Transforms are relative to the object's parent, like the inspector's; for an obj
 | `ctx.raycastResult(requestId)` | The answer, during the next frame only: `{ objectId, object, point, normal, distance }` (`object` is a handle, or `null`), or `null` when the ray hit nothing. In any other frame it is `undefined`, so keep what you need in `ctx.state` |
 | `ctx.playSound(audioId, bus)` | Plays a sound once, in 2D. `bus` is optional: `'sfx'` (the default), `'music'`, `'ui'` or `'master'` |
 | `ctx.playPlayerAnimation(clipName, maskBone)` | Plays a clip once on the player character, like the **Play Player Animation** node. `maskBone` is optional; see [One-shot animations](characters.md#one-shot-animations-on-part-of-the-body) |
-| `ctx.setCamera(objectId, blendSeconds)` | Shows the view of the object's Camera component, blending over `blendSeconds` (default 0); `null` gives the view back to the gameplay camera. See [Camera cuts](timelines.md#camera-cuts) |
+| `ctx.damagePlayer(amount)` / `ctx.healPlayer(amount)` | Hurts or heals the player, like the **Damage Player** and **Heal Player** nodes |
+| `ctx.addAmmo(rounds, weapon)` | Adds rounds to a weapon the player carries, by name; without `weapon`, the held one. Like the **Add Ammo** node |
+| `ctx.giveWeapon(weapon)` | Gives the player a weapon by name and puts it in their hands, like the **Give Weapon** node |
+| `ctx.setCamera(objectId, blendSeconds)` |Shows the view of the object's Camera component, blending over `blendSeconds` (default 0); `null` gives the view back to the gameplay camera. See [Camera cuts](timelines.md#camera-cuts) |
 | `ctx.startDialogue(objectId)` | Opens the conversation of the object's Dialogue component, like the **Start Dialogue** node; without an id, the one on the script's own object. Does nothing while another conversation is open. See [Dialogue](dialogue.md) |
 | `ctx.openLevel(levelId)` | Loads another level, like the **Open Level** node. Inside the editor it prints a note instead. Commands issued after it in the same frame are dropped |
 

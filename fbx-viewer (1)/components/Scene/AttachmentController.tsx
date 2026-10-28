@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { SkeletonUtils } from 'three-stdlib';
+import { markMountedPart } from '../../utils/mountedParts';
 import { AttachmentData } from '../../types';
 
 interface AttachmentControllerProps {
@@ -14,6 +15,15 @@ interface AttachmentControllerProps {
   cloneForInstance?: boolean;
   /** Kept on its bone but not drawn, such as a weapon the character is not holding. */
   hidden?: boolean;
+  /** Puts the attachment on another bone with other offsets, such as a weapon carried on the back; its scale stays. */
+  placement?: AttachmentPlacement | null;
+}
+
+export interface AttachmentPlacement {
+  boneName: string;
+  position: [number, number, number];
+  /** Degrees, as the attachment's own rotation. */
+  rotation: [number, number, number];
 }
 
 // Clones share geometry and materials with the source attachment, so only the
@@ -26,17 +36,32 @@ const disposeInstanceClone = (object: THREE.Object3D) => {
     });
 };
 
-export const AttachmentController: React.FC<AttachmentControllerProps> = ({ data, parentObject, cloneForInstance = false, hidden = false }) => {
-    const attachment = useMemo<THREE.Object3D>(
-        () => (cloneForInstance ? SkeletonUtils.clone(data.object) : data.object),
-        [cloneForInstance, data.object]
-    );
+export const AttachmentController: React.FC<AttachmentControllerProps> = ({ data, parentObject, cloneForInstance = false, hidden = false, placement = null }) => {
+    const attachment = useMemo<THREE.Object3D>(() => {
+        const object = cloneForInstance ? SkeletonUtils.clone(data.object) : data.object;
+        markMountedPart(object);
+        return object;
+    }, [cloneForInstance, data.object]);
+    const boneName = placement?.boneName ?? data.boneName;
+    const [px, py, pz] = placement?.position ?? data.position;
+    const [rx, ry, rz] = placement?.rotation ?? data.rotation;
+
+    // Clean up: remove from the bone when unmounting (e.g. switching views). In instance mode
+    // only this mount's clone is touched. Moving to another bone never disposes it.
+    useEffect(() => () => {
+        if (attachment.parent) {
+            attachment.parent.remove(attachment);
+        }
+        if (cloneForInstance) {
+            disposeInstanceClone(attachment);
+        }
+    }, [attachment, cloneForInstance]);
 
     useEffect(() => {
         let targetBone: THREE.Object3D | undefined;
 
-        if (data.boneName) {
-            targetBone = parentObject.getObjectByName(data.boneName);
+        if (boneName) {
+            targetBone = parentObject.getObjectByName(boneName);
         }
 
         // FIX: Removed fallback recursive search for arbitrary bones.
@@ -53,23 +78,10 @@ export const AttachmentController: React.FC<AttachmentControllerProps> = ({ data
                 targetBone.add(attachment);
             }
         }
-
-        return () => {
-            // Clean up: Remove from bone when unmounting (e.g. switching views).
-            // In instance mode only this mount's clone is touched.
-            if (attachment.parent) {
-                attachment.parent.remove(attachment);
-            }
-            if (cloneForInstance) {
-                disposeInstanceClone(attachment);
-            }
-        };
-    }, [data.boneName, parentObject, attachment, cloneForInstance]);
+    }, [boneName, parentObject, attachment]);
 
     useEffect(() => {
-        attachment.position.set(...data.position);
-
-        const [rx, ry, rz] = data.rotation;
+        attachment.position.set(px, py, pz);
         attachment.rotation.set(
             THREE.MathUtils.degToRad(rx),
             THREE.MathUtils.degToRad(ry),
@@ -78,7 +90,7 @@ export const AttachmentController: React.FC<AttachmentControllerProps> = ({ data
 
         attachment.scale.set(...data.scale);
         attachment.updateMatrix();
-    }, [data.position, data.rotation, data.scale, attachment]);
+    }, [px, py, pz, rx, ry, rz, data.scale, attachment]);
 
     useEffect(() => {
         attachment.visible = !hidden;

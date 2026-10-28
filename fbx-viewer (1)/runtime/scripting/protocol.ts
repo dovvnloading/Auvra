@@ -70,6 +70,19 @@ export interface ScriptNetState {
     peers: { id: string; name: string }[];
 }
 
+/** The player as scripts see it: where they are, their health and the held weapon (weapon '' when none). */
+export interface ScriptPlayerState {
+    position: ScriptVec3;
+    rotation: ScriptVec3;
+    health: number;
+    maxHealth: number;
+    weapon: string;
+    /** Rounds in the held weapon's magazine. */
+    ammo: number;
+    /** Rounds carried besides the magazine; -1 is unlimited. */
+    reserve: number;
+}
+
 /** The world as scripts see it for one frame. */
 export interface ScriptSnapshot {
     frame: number;
@@ -77,7 +90,7 @@ export interface ScriptSnapshot {
     time: number;
     delta: number;
     objects: ScriptObjectState[];
-    player: { position: ScriptVec3; rotation: ScriptVec3 } | null;
+    player: ScriptPlayerState | null;
     input: Record<string, ScriptInputAction>;
     variables: Record<string, ScriptValue>;
     /** Events since the previous snapshot, oldest first. */
@@ -97,6 +110,11 @@ export type ScriptCommand =
     | { type: 'playSound'; audioId: string; bus?: 'master' | 'music' | 'sfx' | 'ui' }
     | { type: 'raycast'; requestId: string; origin: ScriptVec3; direction: ScriptVec3; maxDistance: number; excludeObjectId?: string }
     | { type: 'playPlayerAnimation'; clipName: string; maskBone?: string }
+    /** Player health, rounds and weapons, as the Level Blueprint's Player nodes change them. */
+    | { type: 'damagePlayer'; amount: number }
+    | { type: 'healPlayer'; amount: number }
+    | { type: 'addAmmo'; rounds: number; weapon?: string }
+    | { type: 'giveWeapon'; weapon: string }
     | { type: 'openLevel'; levelId: string }
     /** Shows a level camera (objectId null: the gameplay camera), blending over `blend` seconds. */
     | { type: 'setCamera'; objectId: string | null; blend: number }

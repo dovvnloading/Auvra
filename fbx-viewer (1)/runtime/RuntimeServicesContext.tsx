@@ -22,6 +22,8 @@ export interface RuntimeServices {
     spawnPrefab(prefabId: string, position: SpawnPosition): string[];
     /** Plays an audio asset once, non-positional, on a mixer bus (default 'sfx'). In a play session it stops when the session ends. */
     playSound(audioId: string, bus?: AudioBus): void;
+    /** Removes an object (and its children) from the running session, never the project; a save remembers it is gone. */
+    destroyObject(objectId: string): void;
 }
 
 /** Outside a level runtime nothing is fed or played; reading input and calling services is harmless. */
@@ -31,6 +33,7 @@ const INERT_SERVICES: RuntimeServices = {
     options: defaultPlayerOptions(DEFAULT_GAME_SETTINGS),
     spawnPrefab: () => [],
     playSound: () => undefined,
+    destroyObject: () => undefined,
 };
 
 const RuntimeServicesContext = createContext<RuntimeServices | null>(null);
@@ -236,6 +239,7 @@ export const RuntimeServicesProvider: React.FC<RuntimeServicesProviderProps> = (
         options,
         spawnPrefab: spawnOutsideSession,
         playSound,
+        destroyObject: () => undefined,
     }), [input, mixer, options, playSound]);
 
     return (
@@ -250,7 +254,11 @@ export const RuntimeServicesProvider: React.FC<RuntimeServicesProviderProps> = (
  * voices belong to the session too: a restart or retry remounts it, which stops every sound the old session
  * started and drops any it asked for that is still loading.
  */
-export const RuntimeSpawnerProvider: React.FC<{ spawnPrefab: RuntimeServices['spawnPrefab']; children?: React.ReactNode }> = ({ spawnPrefab, children }) => {
+export const RuntimeSpawnerProvider: React.FC<{
+    spawnPrefab: RuntimeServices['spawnPrefab'];
+    destroyObject?: RuntimeServices['destroyObject'];
+    children?: React.ReactNode;
+}> = ({ spawnPrefab, destroyObject, children }) => {
     const services = useRuntimeServices();
     const playScopedSound = useContext(ScopedPlaySoundContext);
     const scope = useRef<VoiceScope>(newVoiceScope());
@@ -266,6 +274,9 @@ export const RuntimeSpawnerProvider: React.FC<{ spawnPrefab: RuntimeServices['sp
     const playSound = useMemo<RuntimeServices['playSound']>(() => (
         playScopedSound ? (audioId, bus) => playScopedSound(audioId, bus, scope.current) : services.playSound
     ), [playScopedSound, services.playSound]);
-    const value = useMemo<RuntimeServices>(() => ({ ...services, spawnPrefab, playSound }), [services, spawnPrefab, playSound]);
+    const value = useMemo<RuntimeServices>(
+        () => ({ ...services, spawnPrefab, playSound, destroyObject: destroyObject ?? services.destroyObject }),
+        [services, spawnPrefab, playSound, destroyObject],
+    );
     return <RuntimeServicesContext.Provider value={value}>{children}</RuntimeServicesContext.Provider>;
 };

@@ -33,6 +33,12 @@ const isVector3 = (value: unknown): value is [number, number, number] =>
 
 const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
 
+/** A saved weapon state: the held weapon's id and each weapon's ownership and rounds. */
+const isSavedWeapons = (value: unknown): boolean =>
+    isRecord(value) && typeof value.active === 'string' && Array.isArray(value.items) && value.items.length <= 64
+    && value.items.every(item => isRecord(item) && isNonEmptyString(item.id) && typeof item.owned === 'boolean'
+        && isFiniteNumber(item.loaded) && isFiniteNumber(item.reserve));
+
 /** Structural check for a SaveGameData written by this store (optionally pinned to a game and slot). */
 export function isSaveGameData(value: unknown, gameId?: string, slot?: string): value is SaveGameData {
     if (!isRecord(value) || value.schema !== 1) return false;
@@ -42,6 +48,7 @@ export function isSaveGameData(value: unknown, gameId?: string, slot?: string): 
     const player = value.player;
     if (!isRecord(player) || !isVector3(player.position) || !isVector3(player.rotation)) return false;
     if (!isFiniteNumber(player.health) || !isFiniteNumber(player.stamina)) return false;
+    if (player.weapons !== undefined && !isSavedWeapons(player.weapons)) return false;
     if (!Array.isArray(value.destroyedObjectIds) || !value.destroyedObjectIds.every(id => typeof id === 'string')) return false;
     if (!isRecord(value.variables)) return false;
     return Object.values(value.variables).every(entry =>

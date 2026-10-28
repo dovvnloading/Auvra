@@ -145,9 +145,10 @@ A player blueprint's **Upper Body (Fire & Aim)** section, under Details, picks a
 
 ## Weapons
 
-A player blueprint's **Weapons** section, under Details, lists the weapons the player carries. The player starts holding the first; **Next weapon** (Q) switches to the next and **Reload** (R) reloads. Each weapon has:
+A player blueprint's **Weapons** section, under Details, lists the player's weapons. Weapons **Carried from the start** are in hand from the beginning, and the player starts holding the first of them. The others come later, from a [Pickup](world-editor.md#components) component, a **Give Weapon** node or `ctx.giveWeapon` in a script. **Next weapon** (Q) switches between the weapons carried and **Reload** (R) reloads. Each weapon has:
 
-- **Model**: one of the character model's attachments, shown while the weapon is held. The other weapons' attachments are put away.
+- **Model**: one of the character model's attachments: the weapon in the hand, placed and scaled as the attachment is.
+- **When not in use**: where the model goes while the player is not aiming, firing or reloading it (it stays in hand for a moment after a shot), and while another weapon is held: on a bone of the character, such as a holster on the thigh or a sling across the back, with a **Carry position** and **Carry rotation** in that bone's space, as for attachments. **Stay in hand** keeps the held weapon in the hand at all times and hides the others. The Blueprint preview's **Weapons at rest** and **Weapon in use** buttons show every weapon where it goes, so you can tune the carry offsets there.
 - **Muzzle**: the socket its shots leave from and flash at during hip fire (and while aiming over the shoulder). Without one, the first socket named Muzzle is used.
 - **Fire mode**: **Automatic** fires while the button is held, **Semi-automatic** once per press. **Rate** sets how many shots a second it can fire.
 - **Damage** per projectile, **Pellets** per shot (more than one for a shotgun), projectile **Speed**, and **Spread**: the largest angle, in degrees, a shot strays from the aim. Aiming cuts the spread to a quarter.

@@ -6,6 +6,7 @@ import type {
 } from '../types';
 import type { PlayerOptionsStore } from './playerOptions';
 import { DEFAULT_NETWORK_SETTINGS, normalizeNetworkSettings, type NetworkSettings } from './net/protocol';
+import type { SavedWeapons } from './weapons';
 
 /** Everything the gameplay runtime needs from loaded content, whether it came from the editor or a game pack. */
 export interface GameContent {
@@ -116,6 +117,8 @@ export interface RuntimeSaveState {
     position: [number, number, number];
     rotation: [number, number, number];
     destroyedObjectIds: string[];
+    /** The player's weapons: which are carried, which is held and the rounds left. */
+    weapons?: SavedWeapons;
 }
 
 /** A saved play session: loading it starts the level with the player where they were and destroyed actors gone. */
@@ -130,6 +133,8 @@ export interface SaveGameData {
         rotation: [number, number, number];
         health: number;
         stamina: number;
+        /** Saves made before weapons were saved have none; loading one starts with fresh magazines. */
+        weapons?: SavedWeapons;
     };
     destroyedObjectIds: string[];
     variables: Record<string, number | boolean | string>;

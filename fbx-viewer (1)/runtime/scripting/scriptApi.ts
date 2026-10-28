@@ -23,6 +23,7 @@ import {
     type ScriptInputAction,
     type ScriptNetPayload,
     type ScriptObjectState,
+    type ScriptPlayerState,
     type ScriptRaycastHit,
     type ScriptSnapshot,
     type ScriptSource,
@@ -130,7 +131,8 @@ export interface ScriptContext {
     find(name: string): ObjectHandle | null;
     get(id: string): ObjectHandle | null;
     all(): ObjectHandle[];
-    readonly player: { position: ScriptVec3; rotation: ScriptVec3 } | null;
+    /** Where the player is, their health and the held weapon; null without a player. */
+    readonly player: ScriptPlayerState | null;
     readonly input: ScriptInput;
     readonly vars: ScriptVariables;
     /** Seconds since the play session started, and since the previous frame. */
@@ -145,6 +147,14 @@ export interface ScriptContext {
     raycastResult(requestId: string): ScriptRaycastResult | null | undefined;
     playSound(audioId: string, bus?: ScriptSoundBus): void;
     playPlayerAnimation(clipName: string, maskBone?: string): void;
+    /** Hurts the player, as a hit does. */
+    damagePlayer(amount: number): void;
+    /** Restores the player's health, never past the maximum. */
+    healPlayer(amount: number): void;
+    /** Adds rounds to a weapon the player carries, by name (default: the held one). */
+    addAmmo(rounds: number, weapon?: string): void;
+    /** Gives the player one of their blueprint's weapons by name and puts it in their hands (a magazine for one already carried). */
+    giveWeapon(weapon: string): void;
     openLevel(levelId: string): void;
     /** Switches the view to the camera component on object `objectId`, or back to the gameplay camera (null). */
     setCamera(objectId: string | null, blendSeconds?: number): void;
@@ -281,6 +291,12 @@ const readVec3 = (label: string, x: unknown, y?: unknown, z?: unknown): ScriptVe
     return [values[0] as number, values[1] as number, values[2] as number];
 };
 
+/** A health or round count a player command takes: a finite number above 0, at most a million. */
+const readAmount = (label: string, value: unknown): number => {
+    if (!isFiniteNumber(value) || value <= 0 || value > 1_000_000) throw new TypeError(`${label} needs a number above 0`);
+    return value;
+};
+
 const readId = (label: string, value: unknown): string => {
     if (typeof value !== 'string' || value.length === 0 || value.length > MAX_ID_CHARS) {
         throw new TypeError(`${label} expects a name of 1 to ${MAX_ID_CHARS} characters`);
@@ -373,11 +389,15 @@ const isRaycastHit = (value: unknown): value is ScriptRaycastHit | null => value
     && (value.objectId === null || typeof value.objectId === 'string')
     && isVec3(value.point) && isVec3(value.normal) && typeof value.distance === 'number');
 
+const isPlayerState = (value: unknown): boolean => isRecord(value) && isVec3(value.position) && isVec3(value.rotation)
+    && isFiniteNumber(value.health) && isFiniteNumber(value.maxHealth) && typeof value.weapon === 'string'
+    && isFiniteNumber(value.ammo) && isFiniteNumber(value.reserve);
+
 /** Whether a message's snapshot has the shape the host reads; values are not range checked. */
 export const isScriptSnapshot = (value: unknown): value is ScriptSnapshot => isRecord(value)
     && typeof value.frame === 'number' && typeof value.time === 'number' && typeof value.delta === 'number'
     && Array.isArray(value.objects) && value.objects.every(isObjectState)
-    && (value.player === null || (isRecord(value.player) && isVec3(value.player.position) && isVec3(value.player.rotation)))
+    && (value.player === null || isPlayerState(value.player))
     && everyValue(value.input, isInputAction) && everyValue(value.variables, isScriptValue)
     && Array.isArray(value.events) && value.events.every(isScriptEvent)
     && everyValue(value.raycasts, isRaycastHit)
@@ -733,7 +753,7 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
             all: () => [...world.views.values()].filter(view => !view.destroyed).map(view => handleFor(record, view.id)),
             get player() {
                 const player = world.snapshot.player;
-                return player ? { position: copy(player.position), rotation: copy(player.rotation) } : null;
+                return player ? { ...player, position: copy(player.position), rotation: copy(player.rotation) } : null;
             },
             input,
             vars,
@@ -784,6 +804,20 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
                 const clip = readId('playPlayerAnimation', clipName);
                 if (maskBone === undefined) queue(record, { type: 'playPlayerAnimation', clipName: clip });
                 else queue(record, { type: 'playPlayerAnimation', clipName: clip, maskBone: readId('playPlayerAnimation mask bone', maskBone) });
+            },
+            damagePlayer: (amount: number) => {
+                queue(record, { type: 'damagePlayer', amount: readAmount('damagePlayer', amount) });
+            },
+            healPlayer: (amount: number) => {
+                queue(record, { type: 'healPlayer', amount: readAmount('healPlayer', amount) });
+            },
+            addAmmo: (rounds: number, weapon?: string) => {
+                const count = Math.round(readAmount('addAmmo', rounds));
+                if (weapon === undefined) queue(record, { type: 'addAmmo', rounds: count });
+                else queue(record, { type: 'addAmmo', rounds: count, weapon: readId('addAmmo weapon', weapon) });
+            },
+            giveWeapon: (weapon: string) => {
+                queue(record, { type: 'giveWeapon', weapon: readId('giveWeapon', weapon) });
             },
             openLevel: (levelId: string) => {
                 queue(record, { type: 'openLevel', levelId: readId('openLevel', levelId) });

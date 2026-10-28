@@ -495,7 +495,9 @@ const mayBlock = (object: LevelObject): boolean => {
     const components = enabledComponents(object);
     const colliders = components.filter(component => component.type === 'collider');
     if (colliders.length > 0) return colliders.some(collider => collider.props?.isTrigger !== true);
-    return components.some(component => component.type === 'rigidBody') || (object.type === 'prop' && !!object.modelId);
+    if (components.some(component => component.type === 'rigidBody')) return true;
+    // A pickup is walked into, not around.
+    return object.type === 'prop' && !!object.modelId && !components.some(component => component.type === 'pickup');
 };
 
 const collectObstacles = (
