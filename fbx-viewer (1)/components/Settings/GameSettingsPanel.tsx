@@ -86,6 +86,7 @@ const sanitizeGameSettings = (value: GameSettings): GameSettings => {
     quality: {
       shadows: Boolean(settings.quality.shadows),
       postProcessing: Boolean(settings.quality.postProcessing),
+      meshLod: settings.quality.meshLod !== false,
       maxDpr: clamp(settings.quality.maxDpr, LIMITS.maxDpr.min, LIMITS.maxDpr.max, defaults.quality.maxDpr),
       fov: clamp(settings.quality.fov, LIMITS.fov.min, LIMITS.fov.max, defaults.quality.fov),
     },
@@ -267,6 +268,7 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
             <Toggle label="Fullscreen" checked={draft.window.fullscreen} disabled={disabled} onChange={(fullscreen) => update((current) => ({ ...current, window: { ...current.window, fullscreen } }))} />
             <Toggle label="Shadows" checked={draft.quality.shadows} disabled={disabled} onChange={(shadows) => update((current) => ({ ...current, quality: { ...current.quality, shadows } }))} />
             <Toggle label="Post-processing" checked={draft.quality.postProcessing} disabled={disabled} onChange={(postProcessing) => update((current) => ({ ...current, quality: { ...current.quality, postProcessing } }))} />
+            <Toggle label="Mesh detail levels" checked={draft.quality.meshLod} disabled={disabled} onChange={(meshLod) => update((current) => ({ ...current, quality: { ...current.quality, meshLod } }))} />
             <div className="grid grid-cols-2 gap-2">
               <NumberField label="Max pixel ratio" value={draft.quality.maxDpr} limits={LIMITS.maxDpr} disabled={disabled} onChange={(maxDpr) => update((current) => ({ ...current, quality: { ...current.quality, maxDpr } }))} />
               <NumberField label="Field of view" value={draft.quality.fov} limits={LIMITS.fov} disabled={disabled} onChange={(fov) => update((current) => ({ ...current, quality: { ...current.quality, fov } }))} />

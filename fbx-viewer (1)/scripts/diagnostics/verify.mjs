@@ -11,6 +11,7 @@ const generatedPrefixes = ['host/generated/'];
 // is exact so a new runtime module cannot silently inherit an exemption.
 const EXEMPT = new Map(Object.entries({
   'components/AnimationGraph/hooks/useAnimationMixer.ts': 'hot-loop',
+  'components/Scene/useMeshLod.ts': 'hot-loop',
   'components/AnimationGraph/GraphRuntime.tsx': 'hot-loop-controller',
   'components/AnimationGraph/hooks/useGraphAnimator.ts': 'hot-loop',
   'components/AnimationGraph/hooks/useGraphConnections.ts': 'pure-derived-state',
@@ -57,6 +58,7 @@ const EXEMPT = new Map(Object.entries({
   'utils/mountedParts.ts': 'pure-utility',
   'utils/viewerModel.ts': 'pure-utility',
   'utils/partCopies.ts': 'pure-utility',
+  'utils/meshLod.ts': 'pure-utility',
   'utils/processing/opacityMaps.ts': 'pure-utility',
   'components/Dialogue/dialogueEditing.ts': 'pure-utility',
   'runtime/timeline/types.ts': 'data-model',

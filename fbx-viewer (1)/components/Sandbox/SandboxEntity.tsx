@@ -17,6 +17,7 @@ import { ownClipsFirst } from '../../utils/animationBinding';
 import { generatedMuzzleSocketName, weaponMoveClips, weaponPlacements, type WeaponPose } from '../../runtime/weapons';
 import { weaponMuzzleSocket } from '../../runtime/weaponMuzzle';
 import { supportRotationFromClip } from '../../runtime/weaponFit';
+import { useMeshLod } from '../Scene/useMeshLod';
 import { weaponLocomotionGraph } from '../AnimationGraph/utils/clipMatching';
 
 /** Seconds the death animation plays before the body starts fading. */
@@ -252,6 +253,9 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
             initializedModelId.current = model.id;
         }
     }, [model.object, model.id, effectivePosition, startRotation]);
+
+    // The character and what it carries draw at the detail their size on the screen calls for.
+    useMeshLod(model.object);
 
     // --- Logic Hooks ---
     // While its weapon is held ready, a hit rocks the body but barely moves the upper body holding the weapon.

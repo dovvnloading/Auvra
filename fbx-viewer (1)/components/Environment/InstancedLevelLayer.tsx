@@ -1,8 +1,10 @@
 
-import React, { useMemo, useLayoutEffect, useRef, useState, useCallback } from 'react';
+import React, { useContext, useMemo, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
-import { ThreeEvent } from '@react-three/fiber';
+import { ThreeEvent, useFrame } from '@react-three/fiber';
 import { LoadedModelData, LevelObject } from '../../types';
+import { chooseLodLevel, lodPixelsPerUnit, meshLodChain, type MeshLodLevel } from '../../utils/meshLod';
+import { LOD_UPDATE_INTERVAL, MeshLodContext, useMeshLodReady } from '../Scene/useMeshLod';
 
 interface InstancedLevelLayerProps {
     models: LoadedModelData[];
@@ -48,6 +50,8 @@ const InstancedModelGroup: React.FC<{
     onSelect?: (id: string, event: ThreeEvent<MouseEvent>) => void;
     interactive: boolean;
 } & InstanceSelectionProps> = ({ model, instances, onSelect, interactive, hiddenIds, selectedIds }) => {
+    const lodReady = useMeshLodReady();
+    const lodAllowed = useContext(MeshLodContext);
 
     // 1. Decompose the model into renderable parts (Geometries + Materials)
     const parts = useMemo(() => {
@@ -83,7 +87,14 @@ const InstancedModelGroup: React.FC<{
 
     return (
         <group>
-            {parts.map(part => (
+            {parts.map((part) => {
+                // In play the instances draw at the detail their size on the screen calls for; the
+                // editor keeps one mesh per part, so its instance ids stay the objects' for picking.
+                const levels = !interactive && lodReady && lodAllowed ? meshLodChain(part.geometry) : null;
+                if (levels && levels.length > 1) {
+                    return <LodPartInstancer key={part.key} part={part} levels={levels} instances={instances} hiddenIds={hiddenIds} />;
+                }
+                return (
                 <PartInstancer
                     key={part.key}
                     part={part}
@@ -93,8 +104,92 @@ const InstancedModelGroup: React.FC<{
                     hiddenIds={hiddenIds}
                     selectedIds={selectedIds}
                 />
-            ))}
+                );
+            })}
         </group>
+    );
+};
+
+const _lodCamera = new THREE.Vector3();
+
+/**
+ * A part's instances drawn at their detail levels: one instanced mesh per level, the instances
+ * sorted into them by how large each shows on the screen (chooseLodLevel), every few frames.
+ */
+const LodPartInstancer: React.FC<{
+    part: MeshPart;
+    levels: MeshLodLevel[];
+    instances: LevelObject[];
+    hiddenIds?: ReadonlySet<string>;
+}> = ({ part, levels, instances, hiddenIds }) => {
+    const meshes = useRef<(THREE.InstancedMesh | null)[]>([]);
+    const frame = useRef(0);
+    // Each instance's world matrix, the middle of its bounds and its scale; null when hidden.
+    const placed = useMemo(() => {
+        const dummy = new THREE.Object3D();
+        const base = levels[0].geometry;
+        if (!base.boundingSphere) base.computeBoundingSphere();
+        return instances.map((data) => {
+            if (hiddenIds?.has(data.id)) return null;
+            dummy.position.set(data.position[0], data.position[1], data.position[2]);
+            dummy.rotation.set(data.rotation[0], data.rotation[1], data.rotation[2]);
+            dummy.scale.set(data.scale[0], data.scale[1], data.scale[2]);
+            dummy.updateMatrix();
+            const matrix = new THREE.Matrix4().multiplyMatrices(dummy.matrix, part.relativeMatrix);
+            return { matrix, centre: base.boundingSphere!.center.clone().applyMatrix4(matrix), scale: matrix.getMaxScaleOnAxis() };
+        });
+    }, [instances, hiddenIds, part.relativeMatrix, levels]);
+    // The level each instance was last drawn at (-1: not yet sorted).
+    const assigned = useMemo(() => new Int8Array(placed.length).fill(-1), [placed]);
+
+    useFrame(({ camera, size }) => {
+        const firstSort = assigned.length > 0 && assigned[0] === -1;
+        if (!firstSort && frame.current++ % LOD_UPDATE_INTERVAL !== 0) return;
+        const pixelsPerUnit = lodPixelsPerUnit(camera, size.height);
+        camera.getWorldPosition(_lodCamera);
+        let changed = firstSort;
+        placed.forEach((instance, index) => {
+            const level = instance ? chooseLodLevel(levels, instance.scale, instance.centre.distanceTo(_lodCamera), pixelsPerUnit) : -2;
+            if (assigned[index] !== level) {
+                assigned[index] = level;
+                changed = true;
+            }
+        });
+        if (!changed) return;
+        const counts = levels.map(() => 0);
+        placed.forEach((instance, index) => {
+            const level = assigned[index];
+            const mesh = meshes.current[level];
+            if (!instance || level < 0 || !mesh) return;
+            mesh.setMatrixAt(counts[level]++, instance.matrix);
+        });
+        meshes.current.forEach((mesh, level) => {
+            if (!mesh) return;
+            mesh.count = counts[level];
+            mesh.instanceMatrix.needsUpdate = true;
+            // The bounds follow the instances now drawn, so the whole set is culled correctly.
+            mesh.boundingSphere = null;
+            if (mesh.count) mesh.computeBoundingSphere();
+        });
+    });
+
+    return (
+        <>
+            {levels.map((level, index) => (
+                <instancedMesh
+                    key={index}
+                    ref={(mesh) => {
+                        meshes.current[index] = mesh;
+                        // Nothing draws until the first sort places the instances.
+                        if (mesh && assigned.length && assigned[0] === -1) mesh.count = 0;
+                    }}
+                    args={[level.geometry, part.material, Math.max(1, instances.length)]}
+                    castShadow
+                    receiveShadow
+                    raycast={noRaycast}
+                />
+            ))}
+        </>
     );
 };
 
