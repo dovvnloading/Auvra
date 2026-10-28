@@ -3,7 +3,7 @@ import React, { useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { AI_CONFIG, AIState, AITuning, DEFAULT_AI_TUNING } from './AIConfig';
 import { GraphRuntimeAPI } from '../../AnimationGraph/GraphRuntime';
-import { checkVisibility } from './AISenses';
+import { OPEN_PERCEPTION, seesTarget, type Perception } from './AISenses';
 import { evaluateNextState, calculateNavigation, DecisionContext } from './AIStateMachine';
 import { useNavMeshContext } from '../../../runtime/navigation';
 
@@ -15,6 +15,8 @@ interface BrainInput {
   distFromCenter: number;
   boundarySize: number;
   delta: number;
+  /** Line of sight and noises heard (AIController); without it everything is in sight and nothing heard. */
+  perception?: Perception;
 }
 
 export interface BrainOutput {
@@ -73,21 +75,14 @@ export const useAIBrain = (
     }
 
     // --- 2. Senses (Perception) ---
-    // checkVisibility gates on AI_CONFIG's fixed aggro range, so it gets the distance capped at the
-    // hearing radius (inside that range) and answers only "in the vision cone or heard?".
-    // The blueprint's sight range is applied here instead.
-    const { canSee: inConeOrHeard } = checkVisibility({
-        enemyPosition,
-        enemyForward,
-        targetPosition,
-        distToTarget: Math.min(distToTarget, DISTANCES.HEARING)
-    });
-    const canSee = distToTarget < tuning.sightRange && inConeOrHeard;
+    // In range, and in the vision cone with nothing in the way or close enough to notice anyway.
+    const perception = input.perception ?? OPEN_PERCEPTION;
+    const canSee = seesTarget({ enemyPosition, enemyForward, targetPosition, distToTarget }, tuning.sightRange, perception);
 
-    // Memory Update
-    if (canSee) {
+    // Memory Update: where the player was last seen, or a noise was heard, is where to look.
+    if (canSee || perception.heard) {
         if (!lastKnownPos.current) lastKnownPos.current = new THREE.Vector3();
-        lastKnownPos.current.copy(targetPosition);
+        lastKnownPos.current.copy(canSee ? targetPosition : perception.heard!);
         timers.current.memory = SENSES.MEMORY_DURATION;
     } else {
         if (timers.current.memory > 0) timers.current.memory -= delta;
@@ -102,6 +97,7 @@ export const useAIBrain = (
         distFromCenter,
         boundarySize,
         canSee,
+        heard: perception.heard !== null,
         timers: timers.current,
         patrolDest: patrolDest.current,
         enemyPosition

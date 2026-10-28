@@ -6,7 +6,7 @@ import { createBehaviorMemory, tickBehaviorTree, type BehaviorEffects, type Beha
 import { useNavMeshContext } from '../../../runtime/navigation';
 import type { GraphRuntimeAPI } from '../../AnimationGraph/GraphRuntime';
 import { AI_CONFIG, DEFAULT_AI_TUNING, type AITuning } from './AIConfig';
-import { checkVisibility } from './AISenses';
+import { OPEN_PERCEPTION, seesTarget, type Perception } from './AISenses';
 import type { BrainOutput } from './useAIBrain';
 import { createWeaponState, stepWeapons, type ResolvedWeapon } from '../../../runtime/weapons';
 
@@ -22,6 +22,8 @@ interface BehaviorBrainInput {
     targetPosition: THREE.Vector3;
     distToTarget: number;
     delta: number;
+    /** Line of sight and noises heard (AIController); without it everything is in sight and nothing heard. */
+    perception?: Perception;
 }
 
 /** How long a found level object position is trusted before it is looked up again (seconds). */
@@ -66,10 +68,12 @@ export const useBehaviorBrain = (
         }
         if (timers.attack <= 0 && graphApi.current?.getVariable('AttackIndex')) graphApi.current.setVariable('AttackIndex', 0);
 
-        const { canSee: inConeOrHeard } = checkVisibility({ enemyPosition, enemyForward, targetPosition, distToTarget: Math.min(distToTarget, DISTANCES.HEARING) });
-        const canSee = distToTarget < tuning.sightRange && inConeOrHeard;
-        if (canSee) {
-            lastKnown.current = (lastKnown.current ?? new THREE.Vector3()).copy(targetPosition);
+        // In range, and in the vision cone with nothing in the way or close enough to notice anyway.
+        // Where the player was last seen, or a noise was heard, is what the tree remembers.
+        const perception = input.perception ?? OPEN_PERCEPTION;
+        const canSee = seesTarget({ enemyPosition, enemyForward, targetPosition, distToTarget }, tuning.sightRange, perception);
+        if (canSee || perception.heard) {
+            lastKnown.current = (lastKnown.current ?? new THREE.Vector3()).copy(canSee ? targetPosition : perception.heard!);
             timers.memory = SENSES.MEMORY_DURATION;
         } else if (timers.memory > 0) {
             timers.memory -= delta;

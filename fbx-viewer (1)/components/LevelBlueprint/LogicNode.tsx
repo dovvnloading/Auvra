@@ -6,7 +6,7 @@ import {
     Plus, Minus, X, Divide, ChevronRight, ChevronLeft, Equal, Hash, Type as TypeIcon, ToggleLeft, ArrowRight,
     Skull, Shield, Clock, RefreshCcw, AlertTriangle,
     ListOrdered, Repeat, Repeat1, ArrowLeftRight, DoorClosed, PackagePlus, Move3d, Volume2, Zap, Crosshair,
-    Variable, Gamepad2, Dices, Film, Smile, Send, Crown, Video, HeartPulse, HeartCrack, Package
+    Variable, Gamepad2, Dices, Film, Smile, Send, Crown, Video, HeartPulse, HeartCrack, Package, Megaphone
 } from 'lucide-react';
 import { LogicNode, LogicPin, PinDataType, LevelObject } from '../../types';
 import { describeActor, isOverlapEvent, overlapEventName, overlapTargetWarning, resolveOverlapTarget, selectedOverlapActorId } from './overlapTargets';
@@ -95,6 +95,7 @@ const NODE_STYLES: Record<string, { border: string, bg: string, icon: React.Reac
     'GetActorTransform': { border: 'border-sky-800', bg: 'bg-sky-950/60', icon: <Move3d size={14} className="text-sky-400" /> },
     'SetActorTransform': { border: 'border-sky-800', bg: 'bg-sky-950/80', icon: <Move3d size={14} className="text-sky-400" /> },
     'ApplyImpulse': { border: 'border-sky-800', bg: 'bg-sky-950/80', icon: <Zap size={14} className="text-sky-400" /> },
+    'MakeNoise': { border: 'border-amber-800', bg: 'bg-amber-950/70', icon: <Megaphone size={14} className="text-amber-400" /> },
     'Raycast': { border: 'border-sky-800', bg: 'bg-sky-950/80', icon: <Crosshair size={14} className="text-sky-400" /> },
     'PlaySound': { border: 'border-amber-800', bg: 'bg-amber-950/70', icon: <Volume2 size={14} className="text-amber-400" /> },
     'PlayPlayerAnimation': { border: 'border-fuchsia-800', bg: 'bg-fuchsia-950/70', icon: <Film size={14} className="text-fuchsia-400" /> },

@@ -1,5 +1,5 @@
 
-import React, { useMemo, useCallback } from 'react';
+import React, { useMemo, useCallback, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import { GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
@@ -9,6 +9,12 @@ import { useAIBrain } from './AI/useAIBrain';
 import { useBehaviorBrain, type EnemyFireHandler } from './AI/useBehaviorBrain';
 import type { ResolvedWeapon } from '../../runtime/weapons';
 import { useAILocomotion } from './AI/useAILocomotion';
+import { usePhysicsQueries } from '../../runtime/physics';
+import { CHEST_HEIGHT, EYE_HEIGHT, characterHeight, lineOfSight, useNoiseBus } from '../../runtime/perception';
+import type { Perception } from './AI/AISenses';
+
+/** Seconds between line of sight checks (a physics ray each). */
+const SIGHT_CHECK_INTERVAL = 0.15;
 
 interface AIControllerProps {
     enemyApi: React.RefObject<GraphRuntimeAPI | undefined>;
@@ -24,6 +30,8 @@ interface AIControllerProps {
     /** The weapon a Shoot action fires, and what to do with its shots each frame. */
     weapon?: ResolvedWeapon | null;
     onFire?: EnemyFireHandler;
+    /** Who this enemy is to the noise bus: it does not hear its own shots. */
+    perceptionId?: string | null;
 }
 
 export const AIController: React.FC<AIControllerProps> = ({
@@ -36,7 +44,8 @@ export const AIController: React.FC<AIControllerProps> = ({
     stats,
     behaviorTree,
     weapon = null,
-    onFire
+    onFire,
+    perceptionId = null
 }) => {
     // Callback wrapper
     const handleAttack = useCallback(() => {
@@ -49,6 +58,11 @@ export const AIController: React.FC<AIControllerProps> = ({
     const authored = useBehaviorBrain(behaviorTree, enemyApi, handleAttack, tuning, weapon, onFire);
     const brain = behaviorTree && behaviorTree.behaviorNodes.length > 0 ? authored : builtIn;
     const locomotion = useAILocomotion();
+    const physics = usePhysicsQueries();
+    const noises = useNoiseBus();
+    const senses = useRef({ nextSight: 0, clock: 0, lineOfSight: true, heardSince: noises?.now() ?? 0 });
+    const vEye = useMemo(() => new THREE.Vector3(), []);
+    const vChest = useMemo(() => new THREE.Vector3(), []);
 
     // Reusable Vectors
     const vEnemy = useMemo(() => new THREE.Vector3(), []);
@@ -81,6 +95,22 @@ export const AIController: React.FC<AIControllerProps> = ({
 
         const distToTarget = vEnemy.distanceTo(vTarget);
         const distFromCenter = Math.max(Math.abs(vEnemy.x), Math.abs(vEnemy.z));
+
+        // Senses: whether walls hide the target (a ray now and then), and what was heard since last frame.
+        const sensed = senses.current;
+        sensed.clock += delta;
+        if (sensed.clock >= sensed.nextSight) {
+            sensed.nextSight = sensed.clock + SIGHT_CHECK_INTERVAL;
+            vEye.copy(vEnemy).setY(vEnemy.y + characterHeight(enemyObject) * EYE_HEIGHT);
+            vChest.copy(vTarget).setY(vTarget.y + characterHeight(targetObject) * CHEST_HEIGHT);
+            sensed.lineOfSight = lineOfSight(physics, vEye, vChest);
+        }
+        let heard: THREE.Vector3 | null = null;
+        if (noises) {
+            heard = noises.heardSince(vEnemy, sensed.heardSince, perceptionId)?.position ?? null;
+            sensed.heardSince = noises.now();
+        }
+        const perception: Perception = { lineOfSight: sensed.lineOfSight, heard };
         
         // 2. Think (Update Behavior Tree / State Machine)
         const brainOutput = brain.updateState({
@@ -90,7 +120,8 @@ export const AIController: React.FC<AIControllerProps> = ({
             targetPosition: vTarget,
             distToTarget,
             distFromCenter,
-            boundarySize
+            boundarySize,
+            perception
         });
 
         // 3. Act (Update Physics & Transform)

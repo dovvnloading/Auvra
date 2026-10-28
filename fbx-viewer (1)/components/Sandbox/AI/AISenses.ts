@@ -39,3 +39,26 @@ export const checkVisibility = (input: SensoryInput): SensoryOutput => {
 
     return { canSee, dirToTarget };
 };
+
+/** What the AI's surroundings tell it this frame, from the AI controller (see runtime/perception.ts). */
+export interface Perception {
+    /** Whether a ray from its eyes reaches the target: nothing solid stands in between. */
+    lineOfSight: boolean;
+    /** Where a noise it heard since the last frame came from, if it heard one. */
+    heard: THREE.Vector3 | null;
+}
+
+/** Everything in sight and nothing heard: an AI without a perception source (tests, inert physics). */
+export const OPEN_PERCEPTION: Perception = { lineOfSight: true, heard: null };
+
+/**
+ * Whether the AI sees the target: within `sightRange`, and either in its vision cone with nothing
+ * in the way, or close enough (AI_CONFIG's HEARING distance) to notice it whichever way it faces.
+ */
+export const seesTarget = (input: SensoryInput, sightRange: number, perception: Perception = OPEN_PERCEPTION): boolean => {
+    const { distToTarget } = input;
+    if (distToTarget >= sightRange) return false;
+    if (distToTarget < AI_CONFIG.DISTANCES.HEARING) return true;
+    const { canSee: inCone } = checkVisibility({ ...input, distToTarget: AI_CONFIG.DISTANCES.HEARING });
+    return inCone && perception.lineOfSight;
+};

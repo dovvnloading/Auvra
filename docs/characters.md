@@ -64,6 +64,12 @@ The tree is evaluated from the top every frame. Each node succeeds, fails or is 
 
 Actions use the enemy's Speed, Attack Range, Attack Cooldown and Sight Range stats like the built-in AI, and attacks deal damage at the same moment of the attack. **Shoot** fires the enemy blueprint's first weapon carried from the start, as the player's weapons fire: its rate, spread, magazine and reloads, at the player's chest from the weapon's muzzle socket, with its fire clip and the blueprint's weapon sounds. It holds the trigger only after a short moment of taking aim, and fails without a weapon, out of range or out of sight, so the tree moves on to chasing.An action that is interrupted by another branch starts over the next time it runs. Problems such as a decorator without its one child show under the tree. Use **Delete** on the top node to go back to the built-in AI.
 
+## What enemies notice
+
+An enemy sees the player within its **Sight Range** and its 120° field of view, unless something solid stands between its eyes and the player: anything with a collider (walls, crates and rocks with a Collider component, and the terrain's hills) hides the player. Within 4 m it notices the player whichever way it faces.
+
+Enemies also hear. The player's gunshots carry 40 m, an enemy's shots carry 40 m to the other enemies, and a level's **Make Noise** node carries as far as its radius (see [Level scripting](level-scripting.md#world-nodes)). An enemy that hears a noise goes to look where it came from, as it does where it last saw the player, and gives up after searching a while. A behavior tree treats the noise as where the player was last seen, so **Saw the player recently** turns true and chasing the last known position goes to the noise.
+
 ## Enemy navigation
 
 During level play, enemies walk a navmesh: the level's walkable surfaces, which Auvra bakes with Recast when play starts (in the background, so play does not wait for it) and bakes again when something it is made from changes.

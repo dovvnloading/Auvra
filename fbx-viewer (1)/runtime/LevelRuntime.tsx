@@ -12,6 +12,7 @@ import { NavMeshContext, useLevelNavMesh, type LevelNavMesh, type NavSettings } 
 import { modelTriangles } from './navGeometry';
 import type { HostGeometry } from './components/physicsComponents';
 import { usePhysicsQueries } from './physics';
+import { GUNSHOT_NOISE_RADIUS, NoiseBus, NoiseBusContext, useNoiseBus } from './perception';
 import { LevelLightVolume } from './lighting/LevelLightVolume';
 import { LevelGroundColliders } from './terrainPhysics';
 import { InstancedLevelLayer } from '../components/Environment/InstancedLevelLayer';
@@ -698,6 +699,8 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
 
     // Look-at IK aimed at 'player' (level components and enemy blueprints) follows the player's model.
     const playerTargetRef = useMemo(() => ({ current: runtimePlayerModel?.object ?? null }), [runtimePlayerModel]);
+    // What enemies hear this session: gunshots and the level's Make Noise nodes.
+    const noises = useMemo(() => new NoiseBus(), []);
 
     if (!runtimePlayerModel) return null;
 
@@ -705,6 +708,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
 
     return (
         <NavMeshContext.Provider value={navMesh}>
+        <NoiseBusContext.Provider value={noises}>
         <NavMeshUpdater navMesh={navMesh} />
         <IKPlayerTargetContext.Provider value={playerTargetRef}>
         <LevelStreamingContext.Provider value={levelStreaming}>
@@ -845,6 +849,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
         </RuntimeSpawnerProvider>
         </LevelStreamingContext.Provider>
         </IKPlayerTargetContext.Provider>
+        </NoiseBusContext.Provider>
         </NavMeshContext.Provider>
     );
 };
@@ -1024,6 +1029,7 @@ const RuntimeEnemyController: React.FC<{
 }> = ({ data, assets, playerObject, projectileManagerRef, boundarySize, enabled, onDespawn, allSceneClips, onSpawnBlood, onHitPlayer }) => {
     const apiRef = useRef<GraphRuntimeAPI | undefined>(undefined);
     const entityRef = useRef<SandboxEntityHandle>(null);
+    const noises = useNoiseBus();
     const damage = useMemo(() => resolveBlueprintDamage(assets.blueprint), [assets.blueprint]);
     const services = useRuntimeServices();
 
@@ -1065,6 +1071,8 @@ const RuntimeEnemyController: React.FC<{
         }
         const target = playerObject.getWorldPosition(new THREE.Vector3());
         target.y += state.aimHeight;
+        // Other enemies hear the shots (this one does not hear its own).
+        noises?.report(entity.object.getWorldPosition(new THREE.Vector3()), GUNSHOT_NOISE_RADIUS, data.instanceId);
         for (let shot = 0; shot < shots; shot += 1) {
             const muzzle = entity.getSocketWorldPosition(weapon.muzzleSocket || 'Muzzle');
             const origin = muzzle?.position ?? entity.object.getWorldPosition(new THREE.Vector3()).setY(target.y);
@@ -1076,7 +1084,7 @@ const RuntimeEnemyController: React.FC<{
             const sounds = assets.blueprint.weaponSounds ?? [];
             if (sounds.length) services.playSound(sounds[Math.floor(Math.random() * sounds.length)]);
         }
-    }, [weaponSlot, playerObject, projectileManagerRef, assets.blueprint, services]);
+    }, [weaponSlot, playerObject, projectileManagerRef, assets.blueprint, services, noises, data.instanceId]);
 
     const instanceModel = useMemo(() => {
         try {
@@ -1132,6 +1140,7 @@ const RuntimeEnemyController: React.FC<{
                 behaviorTree={assets.blueprint?.behaviorTree}
                 weapon={weaponSlot?.weapon ?? null}
                 onFire={handleFire}
+                perceptionId={data.instanceId}
             />
         </>
     );
