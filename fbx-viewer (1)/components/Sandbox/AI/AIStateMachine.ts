@@ -9,6 +9,8 @@ export interface DecisionContext {
     distFromCenter: number;
     boundarySize: number;
     canSee: boolean;
+    /** A noise reached it this frame: it goes to look where it came from. */
+    heard?: boolean;
     timers: {
         cooldown: number;
         attack: number;
@@ -60,6 +62,8 @@ export const evaluateNextState = (ctx: DecisionContext): DecisionResult => {
         case 'IDLE':
             if (canSee) {
                 nextState = 'CHASE';
+            } else if (ctx.heard) {
+                nextState = 'SEARCHING';
             } else if (timers.patrolWait <= 0) {
                 nextState = 'PATROL';
             }
@@ -68,6 +72,8 @@ export const evaluateNextState = (ctx: DecisionContext): DecisionResult => {
         case 'PATROL':
             if (canSee) {
                 nextState = 'CHASE';
+            } else if (ctx.heard) {
+                nextState = 'SEARCHING';
             } else if (patrolDest && enemyPosition.distanceTo(patrolDest) < 1.0) {
                 nextState = 'IDLE';
             }

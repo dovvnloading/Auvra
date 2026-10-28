@@ -29,6 +29,7 @@ export type WorldNodeType =
     | 'GetActorTransform'
     | 'SetActorTransform'
     | 'PlaySound'
+    | 'MakeNoise'
     | 'ApplyImpulse'
     | 'Raycast'
     | 'GetLevelVariable'
@@ -116,6 +117,8 @@ export interface WorldNodeServices {
     /** Instantiates a prefab in the session; returns the new object ids, root first. */
     spawnPrefab(prefabId: string, position: Vec3): string[];
     playSound(audioId: string, bus?: AudioBus): void;
+    /** Makes a noise enemies within `radius` hear and come to look at. Absent: nobody hears it. */
+    makeNoise?(position: Vec3, radius: number): void;
     getObject(id: string): WorldObjectTransform | null | undefined;
     setObjectTransform(id: string, partial: Partial<Pick<LevelObject, 'position' | 'rotation' | 'scale'>>): void;
     applyImpulse(id: string, impulse: Vec3): void;
@@ -220,6 +223,14 @@ export const WORLD_NODE_DEFINITIONS: readonly WorldNodeDefinition[] = [
         inputs: [exec('Exec', 'Input'), input('Sound', 'String'), input('Bus', 'String')],
         outputs: [exec('Out', 'Output')],
         data: { default_Sound: '', default_Bus: 'sfx' },
+    },
+    {
+        type: 'MakeNoise',
+        title: 'Make Noise',
+        description: 'Makes a noise at a point: enemies within its radius hear it and come to look (an alarm, a thrown bottle, a door slamming). It plays no sound; add a Play Sound for that.',
+        inputs: [exec('Exec', 'Input'), ...vectorPins('Position', input), input('Radius', 'Float')],
+        outputs: [exec('Out', 'Output')],
+        data: { ...vectorDefaults('Position', [0, 0, 0]), default_Radius: 20 },
     },
     {
         type: 'ApplyImpulse',
@@ -535,6 +546,12 @@ const runPlaySound: WorldNodeExecutor = (_node, ctx) => {
     finish(ctx);
 };
 
+const runMakeNoise: WorldNodeExecutor = (_node, ctx) => {
+    const radius = toNumber(ctx.evaluate('Radius'), 0);
+    if (radius > 0) ctx.services.makeNoise?.(readVector(ctx, 'Position', [0, 0, 0]), radius);
+    finish(ctx);
+};
+
 const runApplyImpulse: WorldNodeExecutor = (_node, ctx) => {
     const id = toActorId(ctx.evaluate('Actor'));
     const impulse = readVector(ctx, 'Impulse', [0, 0, 0]);
@@ -662,6 +679,7 @@ const executors = {
     GetActorTransform: runGetActorTransform,
     SetActorTransform: runSetActorTransform,
     PlaySound: runPlaySound,
+    MakeNoise: runMakeNoise,
     ApplyImpulse: runApplyImpulse,
     Raycast: runRaycast,
     GetLevelVariable: runGetLevelVariable,

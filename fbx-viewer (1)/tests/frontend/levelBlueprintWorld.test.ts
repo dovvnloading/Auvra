@@ -140,6 +140,18 @@ describe('level blueprint world nodes', () => {
     expect(missing.pins()).toEqual(['Out']);
   });
 
+  it('makes noises enemies hear, and none of no size', () => {
+    const services = { ...fakeServices().services, makeNoise: vi.fn() };
+    const alarm = harness('MakeNoise', { 'Position X': 4, 'Position Z': -2, Radius: 30 }, services);
+    alarm.run();
+    expect(services.makeNoise).toHaveBeenCalledWith([4, 0, -2], 30);
+    expect(alarm.pins()).toEqual(['Out']);
+    const quiet = harness('MakeNoise', { Radius: 0 }, services);
+    quiet.run();
+    expect(services.makeNoise).toHaveBeenCalledTimes(1);
+    expect(quiet.pins()).toEqual(['Out']);
+  });
+
   it('plays sounds on a valid bus and applies impulses', () => {
     const sound = harness('PlaySound', { Sound: 'boom', Bus: 'Music' });
     sound.run();

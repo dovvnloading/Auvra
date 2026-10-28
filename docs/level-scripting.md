@@ -79,6 +79,7 @@ Pending delays are dropped when the level restarts or play stops.
 | Apply Impulse | Pushes an actor that has a dynamic Rigid Body by **Impulse X/Y/Z** |
 | Raycast | Casts a ray from **Origin** along **Direction** (default straight down) up to **Max Distance** (default 100). Outputs **Hit**, **Hit Actor**, **Hit Position**, **Hit Normal** and **Distance**. Triggers are ignored, and terrain is not hit |
 | Play Sound | Plays an audio asset once, in 2D, on a mixer bus (default sfx) |
+| Make Noise | Makes a noise at **Position X/Y/Z** that enemies within **Radius** (default 20) hear and come to look at: an alarm, a thrown bottle, a slammed door. It plays no sound; add a Play Sound for that |
 | Input Action | Reads an input action (default Jump). Fires **Pressed** or **Released** when its state changes, then always **Out**. **Is Down** is the current state |
 | Get Level Variable / Set Level Variable | See [Level variables](#level-variables) |
 | Random Float / Random Integer | A random value from **Min** to **Max** (defaults 0 to 1 and 0 to 10; Random Integer can return Max). Pure |

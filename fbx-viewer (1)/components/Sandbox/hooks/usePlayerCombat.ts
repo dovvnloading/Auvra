@@ -7,6 +7,7 @@ import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { releaseSound, routeSoundToBus, useRuntimeMixer } from '../../../runtime/components/audioComponents';
 import type { ResolvedWeapon } from '../../../runtime/weapons';
 import { PLAYER_PHYSICS_ID, usePhysicsQueries } from '../../../runtime/physics';
+import { GUNSHOT_NOISE_RADIUS, useNoiseBus } from '../../../runtime/perception';
 import { crosshairTarget } from '../../../runtime/aimTarget';
 
 /** Seconds the first hip-fire shot of a press waits for the firing pose to come up. */
@@ -40,6 +41,7 @@ export const usePlayerCombat = (
     // Audio Buffers Cache
     const soundBuffers = useRef<AudioBuffer[]>([]);
     const physics = usePhysicsQueries();
+    const noises = useNoiseBus();
 
     // Gunshots play on the mixer's sfx bus in play (plain listener output without runtime services).
     const mixer = useRuntimeMixer();
@@ -108,6 +110,8 @@ export const usePlayerCombat = (
         const entity = entityRef.current;
         const manager = projectileManager.current;
         if (!entity || !manager) return;
+        // Enemies within earshot come to look.
+        if (shots > 0) noises?.report(entity.object.getWorldPosition(new THREE.Vector3()), GUNSHOT_NOISE_RADIUS, PLAYER_PHYSICS_ID);
         for (let shot = 0; shot < shots; shot += 1) {
             if ((!isAiming || flashWhileAiming) && entity.triggerMuzzleFlash) entity.triggerMuzzleFlash(weapon.muzzleSocket);
             for (let pellet = 0; pellet < weapon.pellets; pellet += 1) {

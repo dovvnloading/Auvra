@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { CharacterCameraRig } from './CharacterCameraRig';
 import { SandboxEnvironment } from './SandboxEnvironment';
 import { ProjectileManager, ProjectileManagerHandle } from './ProjectileManager';
+import { NoiseBus, NoiseBusContext } from '../../runtime/perception';
 import { SandboxEntity, SandboxEntityHandle } from './SandboxEntity';
 import { PlayerController } from './PlayerController';
 import { AIController } from './AIController';
@@ -63,6 +64,9 @@ export const SandboxWorld: React.FC<SandboxWorldProps> = ({
     // Stable, so the enemy's despawn timer is not restarted by unrelated re-renders.
     const handleEnemyDespawn = useCallback(() => setEnemyDespawned(true), []);
     
+    // What the enemy hears: the player's shots.
+    const noises = useMemo(() => new NoiseBus(), []);
+
     // VFX Systems
     const bloodSystemRef = useRef<BloodSystemHandle>(null);
 
@@ -97,7 +101,7 @@ export const SandboxWorld: React.FC<SandboxWorldProps> = ({
     if (!playerModel || !playerBlueprint) return null;
 
     return (
-        <>
+        <NoiseBusContext.Provider value={noises}>
             {/* Camera */}
             <CharacterCameraRig 
                 target={playerModel.object} 
@@ -193,6 +197,6 @@ export const SandboxWorld: React.FC<SandboxWorldProps> = ({
                     )}
                 </>
             )}
-        </>
+        </NoiseBusContext.Provider>
     );
 };

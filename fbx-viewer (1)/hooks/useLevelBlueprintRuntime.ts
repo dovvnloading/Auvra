@@ -19,6 +19,7 @@ import { levelVariables } from '../runtime/levelVariables';
 import { gameState } from '../runtime/gameState';
 import { playerActions } from '../runtime/playerActions';
 import { RuntimeServices, useRuntimeServices } from '../runtime/RuntimeServicesContext';
+import { useNoiseBus } from '../runtime/perception';
 import { FLOW_NODE_EXECUTORS, flowNodeOutputValue } from './levelBlueprintNodes/flow';
 import { findActorObject3D, isPureWorldNodeType, PLAYER_ACTOR_ID, setActorMorphTarget, WORLD_NODE_EXECUTORS, WorldExecutionContext, WorldNodeServices } from './levelBlueprintNodes/world';
 
@@ -204,8 +205,9 @@ export const useLevelBlueprintRuntime = ({
 
     // World node services. Stable, reading the latest props, so the graph callbacks do not churn with them.
     const runtimeServices: RuntimeServices | undefined = useRuntimeServices();
-    const world = useRef({ runtimeServices, getObject, setObjectTransform, applyImpulse, raycast, addNotification, playerApiRef, playerEntityRef });
-    world.current = { runtimeServices, getObject, setObjectTransform, applyImpulse, raycast, addNotification, playerApiRef, playerEntityRef };
+    const noises = useNoiseBus();
+    const world = useRef({ runtimeServices, noises, getObject, setObjectTransform, applyImpulse, raycast, addNotification, playerApiRef, playerEntityRef });
+    world.current = { runtimeServices, noises, getObject, setObjectTransform, applyImpulse, raycast, addNotification, playerApiRef, playerEntityRef };
 
     // Live THREE objects of the session, for nodes that change what is drawn (Set Morph Target): the player's
     // model, or an actor's transform group (tagged with its id) in the scene. The scene comes from the frame
@@ -229,6 +231,7 @@ export const useLevelBlueprintRuntime = ({
     const services = useMemo<WorldNodeServices>(() => ({
         spawnPrefab: (prefabId, position) => world.current.runtimeServices?.spawnPrefab(prefabId, position) ?? [],
         playSound: (audioId, bus) => world.current.runtimeServices?.playSound(audioId, bus),
+        makeNoise: (position, radius) => world.current.noises?.report(position, radius, null),
         getObject: id => world.current.getObject?.(id) ?? null,
         setObjectTransform: (id, partial) => world.current.setObjectTransform?.(id, partial),
         applyImpulse: (id, impulse) => world.current.applyImpulse?.(id, impulse),

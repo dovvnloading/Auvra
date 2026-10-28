@@ -378,7 +378,7 @@ export interface LogicNode {
           // Flow control (hooks/levelBlueprintNodes/flow.ts)
           'Sequence' | 'ForLoop' | 'Delay' | 'DoOnce' | 'FlipFlop' | 'Gate' |
           // World (hooks/levelBlueprintNodes/world.ts)
-          'SpawnPrefab' | 'GetActorTransform' | 'SetActorTransform' | 'PlaySound' | 'ApplyImpulse' | 'Raycast' |
+          'SpawnPrefab' | 'GetActorTransform' | 'SetActorTransform' | 'PlaySound' | 'MakeNoise' | 'ApplyImpulse' | 'Raycast' |
           'GetLevelVariable' | 'SetLevelVariable' | 'InputActionPressed' | 'RandomFloat' | 'RandomInt' | 'Print' |
           // Animation (hooks/levelBlueprintNodes/world.ts)
           'PlayPlayerAnimation' | 'SetMorphTarget' |
