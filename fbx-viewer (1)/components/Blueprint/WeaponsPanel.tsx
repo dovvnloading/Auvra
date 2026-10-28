@@ -19,6 +19,8 @@ interface WeaponsPanelProps {
     onFocus?: (focus: WeaponFocus | null) => void;
     /** Fits a weapon to the character's hands from its points; returns what happened, for the user. */
     onFit?: (weapon: WeaponSettings) => string;
+    /** Seats a weapon's carry placement against the body; returns what happened, for the user. */
+    onSeat?: (weapon: WeaponSettings) => string;
 }
 
 /** Points on a weapon model that fit it to the hands. */
@@ -62,7 +64,8 @@ const UPPER_BODY_CLIPS: ReadonlySet<string> = new Set(['fireClip', 'aimClip']);
 const selectClass = 'w-36 bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500';
 
 /** A player blueprint's weapons: what each fires, its ammunition, the model it shows and its clips. */
-export const WeaponsPanel: React.FC<WeaponsPanelProps> = ({ weapons, attachments, sockets, boneNames, clipNames, onChange, focus = null, onFocus, onFit }) => {
+export const WeaponsPanel: React.FC<WeaponsPanelProps> = ({ weapons, attachments, sockets, boneNames, clipNames, onChange, focus = null, onFocus, onFit, onSeat }) => {
+    const [seatStatus, setSeatStatus] = useState<Record<string, string>>({});
     const [fitStatus, setFitStatus] = useState<Record<string, string>>({});
     const update = (id: string, changes: Partial<WeaponSettings>, coalesce?: string) =>
         onChange(weapons.map(weapon => (weapon.id === id ? { ...weapon, ...changes } : weapon)), coalesce);
@@ -181,6 +184,19 @@ export const WeaponsPanel: React.FC<WeaponsPanelProps> = ({ weapons, attachments
                                     step={5}
                                     onChange={(rotation) => updateCarry(weapon, { rotation }, `weapon:${weapon.id}:carryRotation`)}
                                 />
+                                {onSeat && (
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => setSeatStatus(status => ({ ...status, [weapon.id]: onSeat(weapon) }))}
+                                            className="px-2 py-0.5 text-[10px] text-gray-200 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded"
+                                            title="Moves the carried weapon straight out from or in toward the bone until it rests against the body, keeping its rotation"
+                                        >
+                                            Seat on the body
+                                        </button>
+                                        {seatStatus[weapon.id] && <span className="text-[10px] text-gray-400 leading-tight">{seatStatus[weapon.id]}</span>}
+                                    </div>
+                                )}
                             </div>
                         )}
                         {onFocus && weapon.attachmentId && (
