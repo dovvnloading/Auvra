@@ -44,6 +44,15 @@ describe('the support hand on a held weapon', () => {
     expect(hand.getWorldQuaternion(new THREE.Quaternion()).angleTo(rotation)).toBeLessThan(1e-4);
   });
 
+  it('turns the hand to the rotation it holds the weapon with, its grip still on the point', () => {
+    const { upper, fore, hand } = arm();
+    const target = new THREE.Vector3(1.2, 0.6, 0.3);
+    const rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.4, 0.2, -0.6));
+    reachWithHand(upper, fore, hand, target, 1, rotation);
+    expect(hand.getWorldQuaternion(new THREE.Quaternion()).angleTo(rotation)).toBeLessThan(1e-4);
+    expect(handGripPoint(hand, new THREE.Vector3()).distanceTo(target)).toBeLessThan(1e-3);
+  });
+
   it('leaves the arm alone at no weight', () => {
     const { upper, fore, hand } = arm();
     const before = hand.getWorldPosition(new THREE.Vector3());

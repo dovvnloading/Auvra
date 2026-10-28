@@ -44,7 +44,10 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
             grip: weapon.gripPoint, support: weapon.supportGrip ?? null, muzzle: weapon.muzzlePoint ?? null,
         });
         if (!fit) return `The model has no ${attachment.boneName} to fit the weapon to.`;
-        updateAttachment(attachment.id, fit);
+        updateAttachment(attachment.id, { position: fit.position, rotation: fit.rotation });
+        onUpdate(blueprint.id, {
+            weapons: (blueprint.weapons ?? []).map(item => (item.id === weapon.id ? { ...item, supportRotation: fit.supportRotation } : item)),
+        });
         return `Fitted to ${clipName}.`;
     };
     const [activeTab, setActiveTab] = useState<'details' | 'stats' | 'tags' | 'materials' | 'audio' | 'behavior'>('details');

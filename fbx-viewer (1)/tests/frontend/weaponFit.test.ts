@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { handGripPoint } from '../../runtime/ik';
+import { handGripPoint, supportGripPoint } from '../../runtime/ik';
 import { fitWeaponToHands } from '../../runtime/weaponFit';
 
 /** A hand bone with middle, ring and little fingers curled round a hollow 3 cm in front of its palm. */
@@ -62,6 +62,19 @@ describe('fitting a weapon to the hands', () => {
     // Upright: the weapon's up stays as near world up as the barrel allows.
     const up = new THREE.Vector3(0, 1, 0).transformDirection(weapon.matrixWorld);
     expect(up.y).toBeGreaterThan(0.9);
+  });
+
+  it('records how the other hand is turned on the weapon, to hold it that way in any clip', () => {
+    const { root, right, left, clip } = rig();
+    left.quaternion.setFromEuler(new THREE.Euler(0.3, -0.5, 0.8));
+    root.updateMatrixWorld(true);
+    const points = { grip: [0.4, -0.1, 0] as [number, number, number], support: [-0.2, 0, 0] as [number, number, number] };
+    const fit = fitWeaponToHands(root, clip, 'mixamorigRightHand', [1, 1, 1], points)!;
+    expect(fit.supportRotation).not.toBeNull();
+    // Mounted as fitted, the recorded turn gives back the other hand's rotation in this pose.
+    const rotation = new THREE.Quaternion();
+    supportGripPoint(right, { position: fit.position, rotation: fit.rotation, scale: [1, 1, 1], point: points.support, handRotation: fit.supportRotation }, new THREE.Vector3(), rotation);
+    expect(rotation.angleTo(left.getWorldQuaternion(new THREE.Quaternion()))).toBeLessThan(1e-3);
   });
 
   it('points a one-handed weapon\'s muzzle the way the character faces', () => {

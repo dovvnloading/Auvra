@@ -56,18 +56,22 @@ export interface HeldWeaponGrip extends SupportGrip {
 
 /** The support grip of `weapon` held in the hands as `attachment` mounts it; null without a support point. */
 export const heldWeaponGrip = (
-    weapon: Pick<WeaponSettings, 'supportGrip'> | null | undefined,
+    weapon: Pick<WeaponSettings, 'supportGrip' | 'supportRotation'> | null | undefined,
     attachment: Pick<AttachmentData, 'boneName' | 'position' | 'rotation' | 'scale'> | null | undefined,
 ): HeldWeaponGrip | null => {
     const point = weapon ? resolveWeaponPoint(weapon.supportGrip) : null;
     return point && attachment
-        ? { boneName: attachment.boneName, position: attachment.position, rotation: attachment.rotation, scale: attachment.scale, point }
+        ? {
+            boneName: attachment.boneName, position: attachment.position, rotation: attachment.rotation, scale: attachment.scale, point,
+            handRotation: weapon ? resolveWeaponPoint(weapon.supportRotation) : null,
+        }
         : null;
 };
 
 /** How fast the other hand takes hold of and lets go of a weapon (per second). */
 const GRIP_BLEND_RATE = 14;
 const _gripTarget = new THREE.Vector3();
+const _gripRotation = new THREE.Quaternion();
 
 const _lookTarget = new THREE.Vector3();
 const _aimDirection = new THREE.Vector3();
@@ -163,8 +167,8 @@ export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physi
             gripState.weight += ((supportGrip ? 1 : 0) - gripState.weight) * (1 - Math.exp(-GRIP_BLEND_RATE * delta));
             if (!supportGrip && gripState.weight < 1e-3) gripState.grip = null;
             if (gripState.grip && gripState.weight > 1e-3) {
-                supportGripPoint(supportArm.gripHand, gripState.grip, _gripTarget);
-                reachWithHand(supportArm.arm, supportArm.forearm, supportArm.hand, _gripTarget, gripState.weight);
+                supportGripPoint(supportArm.gripHand, gripState.grip, _gripTarget, _gripRotation);
+                reachWithHand(supportArm.arm, supportArm.forearm, supportArm.hand, _gripTarget, gripState.weight, gripState.grip.handRotation ? _gripRotation : null);
             }
         }
         if (lookBone) {

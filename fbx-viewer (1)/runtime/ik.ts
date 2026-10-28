@@ -418,6 +418,12 @@ export interface SupportGrip {
     scale: readonly [number, number, number];
     /** Where the other hand holds it, in the weapon model's own units. */
     point: readonly [number, number, number];
+    /**
+     * How the other hand is turned on the weapon, in degrees in the weapon model's frame (Fit records
+     * it from the weapon's own clip), so it holds the weapon the same way whatever clip plays. Without
+     * it the hand keeps the clip's rotation.
+     */
+    handRotation?: readonly [number, number, number] | null;
 }
 
 const _gripEuler = new THREE.Euler();
@@ -426,8 +432,13 @@ const _gripMatrix = new THREE.Matrix4();
 const _gripPosition = new THREE.Vector3();
 const _gripScale = new THREE.Vector3();
 
-/** World position of the support point on a weapon mounted on `hand`. */
-export const supportGripPoint = (hand: THREE.Object3D, grip: SupportGrip, out: THREE.Vector3): THREE.Vector3 => {
+const _weaponTurn = new THREE.Quaternion();
+
+/**
+ * World position of the support point on a weapon mounted on `hand`. With `rotation`, also the
+ * world rotation the other hand holds the weapon with when the grip records one (else it is left as it is).
+ */
+export const supportGripPoint = (hand: THREE.Object3D, grip: SupportGrip, out: THREE.Vector3, rotation?: THREE.Quaternion): THREE.Vector3 => {
     _gripEuler.set(
         THREE.MathUtils.degToRad(grip.rotation[0]),
         THREE.MathUtils.degToRad(grip.rotation[1]),
@@ -439,10 +450,21 @@ export const supportGripPoint = (hand: THREE.Object3D, grip: SupportGrip, out: T
         _gripScale.set(grip.scale[0], grip.scale[1], grip.scale[2]),
     );
     hand.updateWorldMatrix(true, false);
+    if (rotation && grip.handRotation) {
+        // The weapon's world rotation (the hand's, then the attachment's own), then the hand's on it.
+        hand.getWorldQuaternion(rotation).multiply(_gripQuaternion);
+        _gripEuler.set(
+            THREE.MathUtils.degToRad(grip.handRotation[0]),
+            THREE.MathUtils.degToRad(grip.handRotation[1]),
+            THREE.MathUtils.degToRad(grip.handRotation[2]),
+        );
+        rotation.multiply(_weaponTurn.setFromEuler(_gripEuler));
+    }
     return out.set(grip.point[0], grip.point[1], grip.point[2]).applyMatrix4(_gripMatrix).applyMatrix4(hand.matrixWorld);
 };
 
 const _handRotation = new THREE.Quaternion();
+const _handTurn = new THREE.Quaternion();
 const _handParent = new THREE.Quaternion();
 const _gripOffset = new THREE.Vector3();
 const _wristGoal = new THREE.Vector3();
@@ -512,8 +534,9 @@ export const handGripPoint = (hand: THREE.Object3D, out: THREE.Vector3): THREE.V
 
 /**
  * Brings a hand onto `target` by two-bone IK of its arm (upper arm, forearm, hand): the point the
- * hand holds a grip at (handGripPoint) goes to `target`. Only the reach changes: the elbow bends
- * the way the animation bends it and the hand keeps the animation's rotation and finger curl.
+ * hand holds a grip at (handGripPoint) goes to `target`. The elbow bends the way the animation
+ * bends it and the fingers keep the animation's curl. The hand is turned to `rotation` (world) when
+ * given, else it keeps the animation's.
  */
 export const reachWithHand = (
     arm: THREE.Object3D,
@@ -521,19 +544,25 @@ export const reachWithHand = (
     hand: THREE.Object3D,
     target: THREE.Vector3,
     weight = 1,
+    rotation: THREE.Quaternion | null = null,
 ): void => {
     if (!(weight > 0) || !isFiniteVector(target)) return;
     hand.updateWorldMatrix(true, true);
     hand.getWorldQuaternion(_handRotation);
     // The grip point is held where it is on the hand, so the wrist goes that far short of the target.
     handGripPoint(hand, _gripOffset).sub(_wristGoal.setFromMatrixPosition(hand.matrixWorld));
+    if (rotation) {
+        // Turned to `rotation`, the grip point sits that much differently from the wrist.
+        _gripOffset.applyQuaternion(_handTurn.copy(_handRotation).invert().premultiply(rotation));
+        _handRotation.slerp(rotation, Math.min(1, weight));
+    }
     _wristGoal.copy(target).sub(_gripOffset);
     // The pole sits out past the animated elbow, away from the line the arm reaches along.
     _reachMiddle.setFromMatrixPosition(arm.matrixWorld).add(_wristGoal).multiplyScalar(0.5);
     _elbowPole.setFromMatrixPosition(forearm.matrixWorld);
     _elbowPole.add(_b.subVectors(_elbowPole, _reachMiddle));
     solveTwoBoneIK(arm, forearm, hand, _wristGoal, _elbowPole, weight);
-    // The hand keeps the rotation the animation gave it, now on the moved forearm.
+    // The hand keeps its rotation (the animation's, or the one asked for), now on the moved forearm.
     if (hand.parent) hand.parent.getWorldQuaternion(_handParent).invert();
     else _handParent.identity();
     hand.quaternion.copy(_handParent.multiply(_handRotation));

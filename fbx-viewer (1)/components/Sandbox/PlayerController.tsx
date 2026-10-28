@@ -10,7 +10,7 @@ import { usePlayerPhysics } from './hooks/usePlayerPhysics';
 import { HIP_FIRE_DELAY, usePlayerCombat } from './hooks/usePlayerCombat';
 import { Blueprint, DEFAULT_UPPER_BODY_BONE, LevelObject, UpperBodySettings } from '../../types';
 import {
-    addAmmo, createWeaponState, giveWeapon, isHoldingWeapon, resolveWeapons, restoreWeapons, saveWeapons, stepWeapons,
+    addAmmo, createWeaponState, giveWeapon, isHoldingWeapon, resolveWeapons, restoreWeapons, saveWeapons, stepWeapons, weaponClipNames,
     type ResolvedWeapon, type SavedWeapons,
 } from '../../runtime/weapons';
 import { playerActions } from '../../runtime/playerActions';
@@ -21,11 +21,13 @@ const _rootTravel = new THREE.Vector3();
 /** Seconds a weapon stays in hand after its last shot before going back to its carry placement. */
 const WEAPON_READY_AFTER_SHOT = 0.8;
 
-type WeaponClips = Pick<ResolvedWeapon, 'fireClip' | 'aimClip' | 'reloadClip'>;
+type WeaponClips = Partial<Pick<ResolvedWeapon, 'idleClip' | 'walkClip' | 'runClip' | 'backClip' | 'jumpClip'>> & Pick<ResolvedWeapon, 'fireClip' | 'aimClip' | 'reloadClip'>;
 
 /**
  * The upper-body clip for this frame: the reload clip while reloading, else the fire clip while
- * firing, else the aim clip while aiming, else none. The held weapon's clips come before the
+ * firing, else the aim clip while aiming. Otherwise, a weapon held with its own idle keeps the arms
+ * on it while the body plays a clip that is none of the weapon's own (`bodyClip`: falling, landing,
+ * a hit): its idle plays from the spine up. Else none. The held weapon's clips come before the
  * blueprint's.
  */
 export const upperBodyClip = (
@@ -34,13 +36,17 @@ export const upperBodyClip = (
     aiming: boolean,
     weapon?: WeaponClips,
     reloading = false,
+    bodyClip: string | null = null,
 ): string | null => {
     if (reloading && weapon?.reloadClip) return weapon.reloadClip;
     if (firing && !reloading) {
         const fire = weapon?.fireClip || settings?.fireClip;
         if (fire) return fire;
     }
-    return (aiming && (weapon?.aimClip || settings?.aimClip)) || null;
+    const aim = aiming ? weapon?.aimClip || settings?.aimClip : null;
+    if (aim) return aim;
+    if (weapon?.idleClip && bodyClip && !weaponClipNames(weapon).includes(bodyClip)) return weapon.idleClip;
+    return null;
 };
 
 interface PlayerControllerProps {
@@ -203,7 +209,8 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
         reportWeapon(held, weapon, reloading, ready);
 
         // Fire, aim and reload clips play from the spine up, over whatever the legs are doing.
-        const upperBody = upperBodyClip(blueprint?.upperBody, firing, input.isAiming, weapon, reloading);
+        const bodyClip = holding ? apiRef.current.getActiveState?.()?.clipName ?? null : null;
+        const upperBody = upperBodyClip(blueprint?.upperBody, firing, input.isAiming, weapon, reloading, bodyClip);
         if (upperBody !== upperBodyPlaying.current || weaponStep.reloadStarted) {
             upperBodyPlaying.current = upperBody;
             if (upperBody) {

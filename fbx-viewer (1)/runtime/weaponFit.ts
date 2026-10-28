@@ -28,6 +28,8 @@ export interface WeaponFitPoints {
 export interface WeaponFit {
     position: Vec3;
     rotation: Vec3;
+    /** How the other hand is turned on the weapon in the clip, in degrees in the weapon's frame; null when it has no other hand. */
+    supportRotation: Vec3 | null;
 }
 
 const UP = new THREE.Vector3(0, 1, 0);
@@ -90,9 +92,15 @@ export const fitWeaponToHands = (
         local.decompose(position, localRotation, new THREE.Vector3());
         const euler = new THREE.Euler().setFromQuaternion(localRotation, 'XYZ');
         const round = (value: number) => Math.round(value * 1000) / 1000;
+        const degrees = (e: THREE.Euler) => [e.x, e.y, e.z].map(angle => round(THREE.MathUtils.radToDeg(angle))) as Vec3;
+        // The other hand's turn on the weapon in this pose, so it holds the weapon this way in any clip.
+        const supportRotation = points.support && other && other !== hand
+            ? degrees(new THREE.Euler().setFromQuaternion(rotation.clone().invert().multiply(other.getWorldQuaternion(new THREE.Quaternion())), 'XYZ'))
+            : null;
         return {
             position: [round(position.x), round(position.y), round(position.z)],
-            rotation: [euler.x, euler.y, euler.z].map(angle => round(THREE.MathUtils.radToDeg(angle))) as Vec3,
+            rotation: degrees(euler),
+            supportRotation,
         };
     } finally {
         mixer.stopAllAction();

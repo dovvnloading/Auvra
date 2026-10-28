@@ -9,7 +9,7 @@ import type { WeaponCarry, WeaponSettings } from '../types';
  */
 
 /** A weapon with every field filled in and kept in range. */
-type OptionalWeaponField = 'attachmentId' | 'muzzleSocket' | 'fireClip' | 'aimClip' | 'reloadClip' | 'carry' | 'supportGrip' | 'gripPoint' | 'muzzlePoint' | MoveClipField;
+type OptionalWeaponField = 'attachmentId' | 'muzzleSocket' | 'fireClip' | 'aimClip' | 'reloadClip' | 'carry' | 'supportGrip' | 'supportRotation' | 'gripPoint' | 'muzzlePoint' | MoveClipField;
 export type ResolvedWeapon = Required<Omit<WeaponSettings, OptionalWeaponField>> & Pick<WeaponSettings, OptionalWeaponField>;
 
 /** The weapon a blueprint without weapons fires: what the player always had. */
@@ -18,7 +18,7 @@ export const DEFAULT_WEAPON: ResolvedWeapon = {
     reloadSeconds: 1.5, spread: 0, pellets: 1, projectileSpeed: 60, startsOwned: true,
     attachmentId: null, muzzleSocket: null, fireClip: null, aimClip: null, reloadClip: null, carry: null,
     idleClip: null, walkClip: null, runClip: null, backClip: null, jumpClip: null, supportGrip: null,
-    gripPoint: null, muzzlePoint: null,
+    supportRotation: null, gripPoint: null, muzzlePoint: null,
 };
 
 const number = (value: unknown, fallback: number, min: number, max: number): number =>
@@ -68,6 +68,7 @@ export const resolveWeapon = (weapon: WeaponSettings): ResolvedWeapon => ({
     backClip: clip(weapon.backClip),
     jumpClip: clip(weapon.jumpClip),
     supportGrip: resolveWeaponPoint(weapon.supportGrip),
+    supportRotation: resolveWeaponPoint(weapon.supportRotation),
     gripPoint: resolveWeaponPoint(weapon.gripPoint),
     muzzlePoint: resolveWeaponPoint(weapon.muzzlePoint),
 });
@@ -78,7 +79,7 @@ type MoveClipField = 'idleClip' | 'walkClip' | 'runClip' | 'backClip' | 'jumpCli
 const MOVE_CLIP_FIELDS: Record<MoveRole, MoveClipField> = { idle: 'idleClip', walk: 'walkClip', run: 'runClip', back: 'backClip', jump: 'jumpClip' };
 
 /** Every clip a weapon is held with: its locomotion, aim, fire and reload clips. */
-export const weaponClipNames = (weapon: WeaponSettings): string[] =>
+export const weaponClipNames = (weapon: Pick<WeaponSettings, MoveClipField | 'aimClip' | 'fireClip' | 'reloadClip'>): string[] =>
     [...Object.values(weaponMoveClips(weapon)), weapon.aimClip, weapon.fireClip, weapon.reloadClip]
         .filter((name): name is string => !!clip(name));
 
