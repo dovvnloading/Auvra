@@ -4,7 +4,7 @@ Auvra is a game engine and editor for building 3D games and shipping them as web
 
 - [Getting started](getting-started.md): run the editor, create a project and a level, and play it.
 - [World Editor](world-editor.md): placing, transforming and organising objects, components, physics, lights, particles, audio, terrain painting, prefabs and shortcuts.
-- [Assets](assets.md): importing models, textures and audio, import options, material overrides, reimport and folders.
+- [Assets](assets.md): importing models, textures and audio, import options, material overrides, material graphs, reimport and folders.
 - [Level scripting](level-scripting.md): level blueprints, events, triggers, flow control, world nodes and level variables.
 - [Gameplay scripting](scripting.md): Script components, the script editor, templates, the ctx API, limits and errors.
 - [Multiplayer](multiplayer.md): playing together through a relay server, shared players, Network Sync objects, and network events in scripts and blueprints.

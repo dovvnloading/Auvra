@@ -32,6 +32,20 @@ Change how a model's materials look without editing its source file:
 
 Overrides are stored with the model, so every placed copy and every build uses them. They are matched by material name and survive **Reimport**; an override whose material no longer exists is flagged so you can remove it. Unnamed materials cannot be overridden, and Animation models have no overrides. Closing the section discards unsaved edits.
 
+## Material graphs
+
+A material asset describes a surface as a graph of nodes, so one material can be shared by many models and can animate, tile, blend and react to the view angle.
+
+1. Open the **Materials** tab and click **New**. The asset starts with a **Material Output** node; rename it in the field above the preview.
+2. Click **Add node** and pick a node. The palette groups them as **Input** (Number, Color, Vector, Time), **UV** (UV, Tiling and Offset, Panner), **Texture** (Texture Sample, Normal Map), **Surface** (Fresnel, World Position, Vertex Color), **Math** (Noise, Add, Subtract, Multiply, Divide, Min, Max, Power, Step, Lerp, Clamp, Smoothstep, One Minus, Abs, Saturate, Sine, Cosine, Fraction, Floor) and **Vector** (Split, Combine, Dot, Normalize, Length).
+3. Drag from an output pin on the right of a node to an input pin on the left of another. Pin colours show the value type; a value of another type is converted (a single number fills every component, a longer vector is cut down). Each input takes one wire, so a new wire replaces the old one, and a wire that would make a loop is refused. Click a wire to remove it.
+4. Select a node to change its settings below the preview. **Delete** removes the selected node; the Material Output cannot be removed.
+5. Connect the Material Output's **Base Color**, **Opacity**, **Metalness**, **Roughness**, **Normal (tangent space)**, **Emissive** and **Ambient Occlusion** inputs. An input with no wire uses the value set on the Material Output node.
+
+The preview sphere updates as you edit, and changes save on their own. Time nodes run in every viewport, in play and in builds.
+
+To use a material asset on a model, open the model's **Material Overrides**, expand a material and pick the asset in **Material asset**, then click **Save**. The model's material is then shaded by the graph, in every placed copy and every build; its own colour, map and PBR fields apply again when you set **Material asset** back to **(its own)**. Deleting a material asset returns every model that used it to its own material, and deleting a texture clears it from the Texture Sample and Normal Map nodes that read it.
+
 ## Textures and audio
 
 Images and audio files are imported from the Content Browser in the same way. Textures are used by material overrides, terrain layers and masks. Audio is used by audio emitters, Audio Source components, the **Play Sound** blueprint node and weapon sounds.

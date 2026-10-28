@@ -7,7 +7,7 @@ import { disposeModel, disposeObject } from '../utils/processing/ModelLifecycle'
 import { applyModelImportSettings, resolveImportSettings, stripGeometry } from '../utils/processing/ModelTransforms';
 import { applyStoredClipNames, mirrorModelClips, prepareAnimationClips, uniqueClipNames } from '../utils/animationBinding';
 import { generateThumbnail } from '../utils/thumbnailGenerator';
-import { dbOperations, normalizeAssetInfoUpdate, withoutMaterialOverrideTexture } from '../utils/db';
+import { dbOperations, normalizeAssetInfoUpdate, withoutMaterialOverrideAsset, withoutMaterialOverrideTexture } from '../utils/db';
 import { projectService } from '../utils/projectService';
 import { appAlert } from '../utils/appDialogs';
 import { isAbortError, useOperationActions } from '../context/OperationContext';
@@ -522,6 +522,16 @@ export const useModelManager = (
     }));
   }, []);
 
+  /** Gives the materials a deleted material asset shaded back their own shading. */
+  const removeMaterialAssetReference = useCallback((materialId: string) => {
+    setModels((previous) => previous.map((model) => {
+      const materialOverrides = model.materialOverrides && withoutMaterialOverrideAsset(model.materialOverrides, materialId);
+      if (!materialOverrides || materialOverrides === model.materialOverrides) return model;
+      attachMaterialOverrides(model.object, materialOverrides, collectOverrideTextures(model.object));
+      return { ...model, materialOverrides };
+    }));
+  }, []);
+
   const addAnimations = useCallback(async (files: File[], modelId: string) => {
     projectService.assertWritable();
     const aliases = files.map(() => frontendDiagnostics.nextAssetAlias());
@@ -779,6 +789,7 @@ export const useModelManager = (
     updateModel,
     removeModel,
     removeTextureReference,
+    removeMaterialAssetReference,
     updateModelMaterialOverrides,
     mirrorClip,
     placeInScene,

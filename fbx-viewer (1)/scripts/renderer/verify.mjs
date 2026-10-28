@@ -173,8 +173,8 @@ async function staticChecks(files) {
   check(reference.includes("createRenderPipeline") && reference.includes("onSubmittedWorkDone") && !reference.includes("WebGPURenderer"), "WebGPU reference probe must remain directly owned and compatible with the production build target");
   check(/runNativeReferenceGate/.test(nativeReference) && /referenceVersion\s*!==\s*1/.test(nativeReference) && /FEATURES/.test(nativeReference) && /entry\.feature\s*!==\s*FEATURES\[index\]/.test(nativeReference) && /REFERENCE_BASELINE/.test(nativeReference), "native cross-backend reference gate is incomplete");
   check(/runNativeReferenceGate/.test(diagnostics), "native reference gate is not exposed through renderer diagnostics");
-  const expectedSurfaceIds = new Set(["editor-scene-viewer", "preview-retexture-editor", "preview-animation-graph", "runtime-sandbox", "editor-environment-viewport", "runtime-level-game-loop"]);
-  check(surfaces.length === expectedSurfaceIds.size && surfaces.every(([id]) => expectedSurfaceIds.has(id)), "renderer surface IDs do not match the six stable editor/runtime surfaces");
+  const expectedSurfaceIds = new Set(["editor-scene-viewer", "preview-retexture-editor", "preview-animation-graph", "preview-material-graph", "runtime-sandbox", "editor-environment-viewport", "runtime-level-game-loop"]);
+  check(surfaces.length === expectedSurfaceIds.size && surfaces.every(([id]) => expectedSurfaceIds.has(id)), "renderer surface IDs do not match the seven stable editor/runtime surfaces");
 }
 
 const files = await rendererSources();

@@ -149,7 +149,7 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
     const entityId = useMemo(() => crypto.randomUUID(), []);
     
     // Track initialization to prevent resetting position on re-renders
-    const initializedModelId = useRef<string | null>(null);
+    const initializedObject = useRef<THREE.Object3D | null>(null);
 
     // A clip name another model shares resolves to this model's own clip.
     const clips = useMemo(() => ownClipsFirst(model.animations, allClips), [model.animations, allClips]);
@@ -245,14 +245,15 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
 
     // --- Physics Initialization ---
     useEffect(() => {
-        if (model.object && initializedModelId.current !== model.id) {
+        // Placed once per object: a new copy of the model (the enemy's, rebuilt) starts at the spawn too.
+        if (model.object && initializedObject.current !== model.object) {
             model.object.position.set(...effectivePosition);
             model.object.rotation.set(startRotation[0], startRotation[1], startRotation[2]);
             model.object.updateMatrixWorld();
-            
-            initializedModelId.current = model.id;
+
+            initializedObject.current = model.object;
         }
-    }, [model.object, model.id, effectivePosition, startRotation]);
+    }, [model.object, effectivePosition, startRotation]);
 
     // The character and what it carries draw at the detail their size on the screen calls for.
     useMeshLod(model.object);

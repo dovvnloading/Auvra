@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { materialLibrary } from '../runtime/materials/materialLibrary';
 
 /**
  * Per-model material overrides, keyed by material name. Every field is
@@ -24,6 +25,8 @@ export interface MaterialOverride {
   mapTextureId?: string;
   /** Logical texture id (textures domain) replacing the normal map. */
   normalTextureId?: string;
+  /** A material asset (materials domain) whose node graph shades the material instead. */
+  materialId?: string;
 }
 
 export type MaterialOverrides = Record<string, MaterialOverride>;
@@ -66,6 +69,7 @@ export const normalizeMaterialOverride = (value: unknown): MaterialOverride | nu
     opacity: normalizeNumber(source.opacity, 0, 1),
     mapTextureId: normalizeTextureId(source.mapTextureId),
     normalTextureId: normalizeTextureId(source.normalTextureId),
+    materialId: normalizeTextureId(source.materialId),
   };
   const result = Object.fromEntries(Object.entries(candidate).filter(([, field]) => field !== undefined)) as MaterialOverride;
   return Object.keys(result).length > 0 ? result : null;
@@ -312,6 +316,8 @@ export const applyMaterialOverrides = (
         if (normalMap) material.normalMap = normalMap;
       }
     }
+    // An assigned material asset shades it by its graph instead (or no longer, once unassigned).
+    materialLibrary.assign(material, override?.materialId ?? null, overrideTextureFlipY(root));
     baseline.appliedMap = material.map ?? null;
     baseline.appliedNormalMap = material.normalMap ?? null;
     baseline.appliedTransparent = material.transparent;

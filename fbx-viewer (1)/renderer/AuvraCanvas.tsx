@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Canvas, useFrame, useThree, type CanvasProps } from "@react-three/fiber";
 import * as THREE from "three";
 import { rendererCoordinator, type RendererSurfaceRole } from "./registry";
+import { MaterialClock } from "../runtime/materials/MaterialClock";
 
 type AuvraCanvasGlOptions = Partial<THREE.WebGLRendererParameters> & Partial<Pick<THREE.WebGLRenderer, "outputColorSpace" | "toneMapping" | "toneMappingExposure">>;
 
@@ -128,7 +129,7 @@ export const AuvraCanvas: React.FC<AuvraCanvasProps> = ({
   const nativeFallback = fallbackReason ?? (requestedBackend === "native"
     ? "This surface is not owned by the separate native viewport; using the web compatibility renderer"
     : null);
-  return <Canvas key={`${surfaceId}:${generation}`} {...props} gl={gl}><RendererLifecycleBridge surfaceId={surfaceId} role={role} requestedBackend={webBackend} fallbackReasonOverride={nativeFallback} recoveryTimeoutMs={recoveryTimeoutMs} remount={remount} />{children}</Canvas>;
+  return <Canvas key={`${surfaceId}:${generation}`} {...props} gl={gl}><RendererLifecycleBridge surfaceId={surfaceId} role={role} requestedBackend={webBackend} fallbackReasonOverride={nativeFallback} recoveryTimeoutMs={recoveryTimeoutMs} remount={remount} /><MaterialClock />{children}</Canvas>;
 };
 
 export default AuvraCanvas;
