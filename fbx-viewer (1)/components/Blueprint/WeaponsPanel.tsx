@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Crosshair, Plus, Trash2 } from 'lucide-react';
 import type { AttachmentData, SocketData, WeaponCarry, WeaponSettings } from '../../types';
 import { DEFAULT_WEAPON } from '../../runtime/weapons';
@@ -14,7 +14,28 @@ interface WeaponsPanelProps {
     clipNames: string[];
     /** `coalesce` groups typing in one field into one undo step. */
     onChange: (weapons: WeaponSettings[], coalesce?: string) => void;
+    /** The weapon being fitted, shown in the preview with its points, and the point being picked on it. */
+    focus?: WeaponFocus | null;
+    onFocus?: (focus: WeaponFocus | null) => void;
+    /** Fits a weapon to the character's hands from its points; returns what happened, for the user. */
+    onFit?: (weapon: WeaponSettings) => string;
 }
+
+/** Points on a weapon model that fit it to the hands. */
+export type WeaponPointField = 'gripPoint' | 'supportGrip' | 'muzzlePoint';
+
+/** The weapon being fitted in the preview, and the point being picked on it (null: none). */
+export interface WeaponFocus {
+    weaponId: string;
+    field: WeaponPointField | null;
+}
+
+/** Each fitting point: its field, its label, its marker colour in the preview and what it is. */
+export const WEAPON_POINTS: readonly [WeaponPointField, string, string, string][] = [
+    ['gripPoint', 'Grip', '#22c55e', 'The middle of the grip the hand holding the weapon closes round'],
+    ['supportGrip', 'Other hand', '#3b82f6', "Where the other hand holds it, such as a rifle's handguard: the barrel runs from the grip through it"],
+    ['muzzlePoint', 'Muzzle', '#ef4444', 'The end of the barrel: a one-handed weapon is fitted pointing it ahead'],
+];
 
 type NumberField = 'fireRate' | 'damage' | 'magazine' | 'reserve' | 'reloadSeconds' | 'spread' | 'pellets' | 'projectileSpeed';
 
@@ -41,7 +62,8 @@ const UPPER_BODY_CLIPS: ReadonlySet<string> = new Set(['fireClip', 'aimClip']);
 const selectClass = 'w-36 bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500';
 
 /** A player blueprint's weapons: what each fires, its ammunition, the model it shows and its clips. */
-export const WeaponsPanel: React.FC<WeaponsPanelProps> = ({ weapons, attachments, sockets, boneNames, clipNames, onChange }) => {
+export const WeaponsPanel: React.FC<WeaponsPanelProps> = ({ weapons, attachments, sockets, boneNames, clipNames, onChange, focus = null, onFocus, onFit }) => {
+    const [fitStatus, setFitStatus] = useState<Record<string, string>>({});
     const update = (id: string, changes: Partial<WeaponSettings>, coalesce?: string) =>
         onChange(weapons.map(weapon => (weapon.id === id ? { ...weapon, ...changes } : weapon)), coalesce);
     const updateCarry = (weapon: WeaponSettings, changes: Partial<WeaponCarry>, coalesce?: string) => {
@@ -161,21 +183,69 @@ export const WeaponsPanel: React.FC<WeaponsPanelProps> = ({ weapons, attachments
                                 />
                             </div>
                         )}
-                        <label className="flex items-center gap-2 text-xs text-gray-400" title="The other hand takes hold of the weapon at a point on it, such as a rifle's handguard">
-                            <input
-                                type="checkbox"
-                                checked={!!weapon.supportGrip}
-                                onChange={(event) => update(weapon.id, { supportGrip: event.target.checked ? [0, 0, 0] : null })}
-                            />
-                            Other hand holds it
-                        </label>
-                        {weapon.supportGrip && (
-                            <TransformInputGroup
-                                label="Support hand point"
-                                values={weapon.supportGrip}
-                                step={0.01}
-                                onChange={(supportGrip) => update(weapon.id, { supportGrip }, `weapon:${weapon.id}:supportGrip`)}
-                            />
+                        {onFocus && weapon.attachmentId && (
+                            <div className="space-y-1.5 rounded border border-gray-800 bg-gray-950/50 p-2">
+                                <div className="flex items-center justify-between gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => onFocus(focus?.weaponId === weapon.id ? null : { weaponId: weapon.id, field: null })}
+                                        className={`text-xs ${focus?.weaponId === weapon.id ? 'text-blue-300' : 'text-gray-300 hover:text-white'}`}
+                                        title="Shows this weapon in the hands in the preview, with its points"
+                                    >
+                                        Fit to the hands
+                                    </button>
+                                    {onFit && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setFitStatus(status => ({ ...status, [weapon.id]: onFit(weapon) }))}
+                                            className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white bg-blue-600 hover:bg-blue-500 rounded"
+                                            title="Places the weapon in the hands as its Idle while held clip (else its Aim clip) poses them: its grip where the fingers close, its barrel through the other hand, or ahead"
+                                        >
+                                            Fit
+                                        </button>
+                                    )}
+                                </div>
+                                {WEAPON_POINTS.map(([field, label, color, title]) => {
+                                    const point = weapon[field];
+                                    const picking = focus?.weaponId === weapon.id && focus.field === field;
+                                    return (
+                                        <div key={field} className="space-y-1" title={title}>
+                                            <div className="flex items-center gap-2">
+                                                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
+                                                <span className="text-[10px] text-gray-400 w-16 shrink-0">{label}</span>
+                                                <span className="flex-1 text-[10px] font-mono text-gray-500 truncate">{point ? point.map(value => value.toFixed(3)).join(', ') : 'not set'}</span>
+                                                <button
+                                                    type="button"
+                                                    aria-label={`Pick the ${label.toLowerCase()} point on the weapon`}
+                                                    onClick={() => onFocus(picking ? { weaponId: weapon.id, field: null } : { weaponId: weapon.id, field })}
+                                                    className={`px-1.5 py-0.5 text-[10px] rounded border ${picking ? 'border-blue-500 text-blue-300' : 'border-gray-700 text-gray-300 hover:text-white'}`}
+                                                >
+                                                    {picking ? 'Click the weapon' : 'Pick'}
+                                                </button>
+                                                {point && (
+                                                    <button
+                                                        type="button"
+                                                        aria-label={`Clear the ${label.toLowerCase()} point`}
+                                                        onClick={() => update(weapon.id, { [field]: null })}
+                                                        className="text-gray-500 hover:text-red-400"
+                                                    >
+                                                        <Trash2 size={11} />
+                                                    </button>
+                                                )}
+                                            </div>
+                                            {point && focus?.weaponId === weapon.id && (
+                                                <TransformInputGroup
+                                                    label={`${label} point`}
+                                                    values={point}
+                                                    step={0.01}
+                                                    onChange={(value) => update(weapon.id, { [field]: value }, `weapon:${weapon.id}:${field}`)}
+                                                />
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                                {fitStatus[weapon.id] && <p className="text-[10px] text-gray-400 leading-tight">{fitStatus[weapon.id]}</p>}
+                            </div>
                         )}
 <div className="flex items-center justify-between gap-4">
                             <span className="text-xs text-gray-400 shrink-0">Fire mode</span>

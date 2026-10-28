@@ -9,7 +9,7 @@ import type { WeaponCarry, WeaponSettings } from '../types';
  */
 
 /** A weapon with every field filled in and kept in range. */
-type OptionalWeaponField = 'attachmentId' | 'muzzleSocket' | 'fireClip' | 'aimClip' | 'reloadClip' | 'carry' | 'supportGrip' | MoveClipField;
+type OptionalWeaponField = 'attachmentId' | 'muzzleSocket' | 'fireClip' | 'aimClip' | 'reloadClip' | 'carry' | 'supportGrip' | 'gripPoint' | 'muzzlePoint' | MoveClipField;
 export type ResolvedWeapon = Required<Omit<WeaponSettings, OptionalWeaponField>> & Pick<WeaponSettings, OptionalWeaponField>;
 
 /** The weapon a blueprint without weapons fires: what the player always had. */
@@ -18,6 +18,7 @@ export const DEFAULT_WEAPON: ResolvedWeapon = {
     reloadSeconds: 1.5, spread: 0, pellets: 1, projectileSpeed: 60, startsOwned: true,
     attachmentId: null, muzzleSocket: null, fireClip: null, aimClip: null, reloadClip: null, carry: null,
     idleClip: null, walkClip: null, runClip: null, backClip: null, jumpClip: null, supportGrip: null,
+    gripPoint: null, muzzlePoint: null,
 };
 
 const number = (value: unknown, fallback: number, min: number, max: number): number =>
@@ -30,8 +31,8 @@ const vector = (value: unknown): [number, number, number] =>
         ? [value[0], value[1], value[2]]
         : [0, 0, 0]);
 
-/** Three finite numbers, or null. */
-const point = (value: unknown): [number, number, number] | null =>
+/** Three finite numbers, or null: a point on a weapon model. */
+export const resolveWeaponPoint = (value: unknown): [number, number, number] | null =>
     (Array.isArray(value) && value.length === 3 && value.every(item => typeof item === 'number' && Number.isFinite(item))
         ? [value[0], value[1], value[2]]
         : null);
@@ -66,7 +67,9 @@ export const resolveWeapon = (weapon: WeaponSettings): ResolvedWeapon => ({
     runClip: clip(weapon.runClip),
     backClip: clip(weapon.backClip),
     jumpClip: clip(weapon.jumpClip),
-    supportGrip: point(weapon.supportGrip),
+    supportGrip: resolveWeaponPoint(weapon.supportGrip),
+    gripPoint: resolveWeaponPoint(weapon.gripPoint),
+    muzzlePoint: resolveWeaponPoint(weapon.muzzlePoint),
 });
 
 /** The locomotion a weapon is held with, by what each clip stands in for. */

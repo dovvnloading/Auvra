@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FileCode } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
 import { Blueprint } from '../../types';
@@ -6,6 +6,7 @@ import { useEditorHistory } from '../../utils/history';
 import { BlueprintListPanel } from './BlueprintListPanel';
 import { BlueprintViewport } from './BlueprintViewport';
 import { BlueprintInspectorPanel } from './BlueprintInspectorPanel';
+import type { WeaponFocus } from './WeaponsPanel';
 
 interface BlueprintEditorProps {
     visible: boolean;
@@ -69,6 +70,18 @@ export const BlueprintEditor: React.FC<BlueprintEditorProps> = ({ visible }) => 
         updateBlueprint(id, updates);
     }, [blueprints, selectedBlueprintId, record, updateBlueprint]);
 
+    // The weapon being fitted to the hands: shown in hand in the preview, where a click picks a point on it.
+    const [weaponFocus, setWeaponFocus] = useState<WeaponFocus | null>(null);
+    useEffect(() => setWeaponFocus(null), [selectedBlueprintId]);
+    const pickWeaponPoint = useCallback((point: [number, number, number]) => {
+        if (!weaponFocus?.field || !selectedBlueprint) return;
+        const { weaponId, field } = weaponFocus;
+        handleUpdate(selectedBlueprint.id, {
+            weapons: (selectedBlueprint.weapons ?? []).map(weapon => (weapon.id === weaponId ? { ...weapon, [field]: point } : weapon)),
+        });
+        setWeaponFocus({ weaponId, field: null });
+    }, [weaponFocus, selectedBlueprint, handleUpdate]);
+
     // Derived state for linked model
     const linkedModel = useMemo(() => 
         models.find(m => m.id === selectedBlueprint?.linkedModelId), 
@@ -115,12 +128,16 @@ export const BlueprintEditor: React.FC<BlueprintEditorProps> = ({ visible }) => 
                         onRemove={removeBlueprint}
                         visible={visible}
                         history={history}
+                        weaponFocus={weaponFocus}
+                        onWeaponPoint={pickWeaponPoint}
                     />
 
                     {/* RIGHT: Properties */}
                     <BlueprintInspectorPanel
                         blueprint={selectedBlueprint}
                         onUpdate={handleUpdate}
+                        weaponFocus={weaponFocus}
+                        onWeaponFocus={setWeaponFocus}
                     />
                 </div>
             ) : (

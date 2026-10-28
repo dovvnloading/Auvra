@@ -64,7 +64,7 @@ _NESTED_KEYS = {
     "ik": {"footIK", "footMaxStep", "lookAt", "lookAtBone", "lookAtMaxAngle", "aimPitch"},
     "upperBody": {"fireClip", "aimClip", "maskBone"},
     "carry": {"boneName", "position", "rotation"},
-    "weapons": {"id", "name", "attachmentId", "muzzleSocket", "startsOwned", "carry", "fireMode", "fireRate", "damage", "magazine", "reserve", "reloadSeconds", "spread", "pellets", "projectileSpeed", "fireClip", "aimClip", "reloadClip", "idleClip", "walkClip", "runClip", "backClip", "jumpClip", "supportGrip"},
+    "weapons": {"id", "name", "attachmentId", "muzzleSocket", "startsOwned", "carry", "fireMode", "fireRate", "damage", "magazine", "reserve", "reloadSeconds", "spread", "pellets", "projectileSpeed", "fireClip", "aimClip", "reloadClip", "idleClip", "walkClip", "runClip", "backClip", "jumpClip", "supportGrip", "gripPoint", "muzzlePoint"},
     "behaviorTree": {"rootId", "behaviorNodes"},
     "behaviorNodes": {"id", "type", "children", "condition", "action", "value", "text"},
 }

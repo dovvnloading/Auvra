@@ -9,6 +9,7 @@ import { AttachmentController } from './AttachmentController';
 import { SocketController, resolveSocketFlashTextureUrl } from './SocketController';
 import { previewHeldWeapon, weaponMoveClips, weaponPlacements } from '../../runtime/weapons';
 import { weaponLocomotionGraph } from '../AnimationGraph/utils/clipMatching';
+import { CharacterIK, heldWeaponGrip } from '../Sandbox/CharacterIK';
 
 interface ModelViewerProps {
   data: LoadedModelData;
@@ -66,6 +67,14 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
       : null),
     [weapons, heldWeapon, activeClip],
   );
+  // The other hand takes hold of the weapon in the hands, as in play.
+  const supportGrip = useMemo(() => {
+    const held = heldWeapon >= 0 ? weapons?.[heldWeapon] : null;
+    const attachment = held?.attachmentId && weaponPlacementsById?.get(held.attachmentId) === 'hand'
+      ? myAttachments.find(item => item.id === held.attachmentId)
+      : null;
+    return heldWeaponGrip(held, attachment);
+  }, [weapons, heldWeapon, weaponPlacementsById, myAttachments]);
   const previewGraph = useMemo(() => {
     if (!blueprint) return null;
     const held = heldWeapon >= 0 ? blueprint.weapons?.[heldWeapon] : null;
@@ -166,6 +175,8 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
                 flashTextureUrl={resolveSocketFlashTextureUrl(sock, textures)}
              />
          ))}
+
+         {supportGrip && <CharacterIK model={data.object} supportGrip={supportGrip} />}
 
          {/* Blueprint Runtime Engine */}
          {isBlueprintActive && blueprint && previewGraph && (

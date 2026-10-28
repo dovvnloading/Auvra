@@ -3,11 +3,13 @@ import React, { useState, useMemo } from 'react';
 import * as THREE from 'three';
 import { Shield, Skull, Box, Trash2, Eye, ChevronUp, Search, Check, Undo2, Redo2, Wand2 } from 'lucide-react';
 import { Blueprint, LoadedModelData } from '../../types';
-import { GraphPreview } from '../AnimationGraph/GraphPreview';
+import { GraphPreview, type AttachmentPointPick } from '../AnimationGraph/GraphPreview';
+import { WEAPON_POINTS, type WeaponFocus } from './WeaponsPanel';
+import { heldWeaponGrip } from '../Sandbox/CharacterIK';
 import { useScene } from '../../context/SceneContext';
 import { useNotification } from '../../context/NotificationContext';
-import { matchGraphClips, matchUpperBodyClips } from '../AnimationGraph/utils/clipMatching';
-import { weaponPlacements } from '../../runtime/weapons';
+import { matchGraphClips, matchUpperBodyClips, weaponLocomotionGraph } from '../AnimationGraph/utils/clipMatching';
+import { weaponMoveClips, weaponPlacements } from '../../runtime/weapons';
 
 interface BlueprintViewportProps {
     blueprint: Blueprint;
@@ -18,6 +20,9 @@ interface BlueprintViewportProps {
     onRemove: (id: string) => void;
     visible: boolean;
     history: { undo: () => void; redo: () => void; canUndo: boolean; canRedo: boolean };
+    /** The weapon being fitted to the hands, shown in hand with its points; a click on it picks `field`. */
+    weaponFocus?: WeaponFocus | null;
+    onWeaponPoint?: (point: [number, number, number]) => void;
 }
 
 export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
@@ -28,9 +33,11 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
     onUpdate,
     onRemove,
     visible,
-    history
+    history,
+    weaponFocus = null,
+    onWeaponPoint
 }) => {
-    const { textures } = useScene();
+    const { textures, attachments } = useScene();
     const { addNotification } = useNotification();
     const [isMeshSelectorOpen, setIsMeshSelectorOpen] = useState(false);
     const [meshSearch, setMeshSearch] = useState('');
@@ -39,11 +46,35 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
     // carry placements.
     const [weaponsInUse, setWeaponsInUse] = useState(false);
     const weapons = blueprint.weapons;
+    const focusIndex = weapons && weaponFocus ? weapons.findIndex(weapon => weapon.id === weaponFocus.weaponId) : -1;
     const attachmentPlacements = useMemo(() => {
         if (!weapons?.length) return undefined;
-        const held = Math.max(0, weapons.findIndex(weapon => weapon.startsOwned !== false));
-        return weaponPlacements(weapons, { held, ready: weaponsInUse, owned: weapons.map(() => true) });
-    }, [weapons, weaponsInUse]);
+        // A weapon being fitted is in use, so it is in the hands to pick points on.
+        const held = focusIndex >= 0 ? focusIndex : Math.max(0, weapons.findIndex(weapon => weapon.startsOwned !== false));
+        return weaponPlacements(weapons, { held, ready: weaponsInUse || focusIndex >= 0, owned: weapons.map(() => true) });
+    }, [weapons, weaponsInUse, focusIndex]);
+    const focusWeapon = focusIndex >= 0 ? weapons![focusIndex] : null;
+    const pointPick = useMemo((): AttachmentPointPick | null => {
+        if (!focusWeapon?.attachmentId) return null;
+        const markers = WEAPON_POINTS.flatMap(([field, , color]) => {
+            const point = focusWeapon[field];
+            return point ? [{ point, color }] : [];
+        });
+        return { attachmentId: focusWeapon.attachmentId, markers, onPoint: weaponFocus?.field ? onWeaponPoint ?? null : null };
+    }, [focusWeapon, weaponFocus?.field, onWeaponPoint]);
+    // The held weapon's support grip, so the other hand takes hold of it in the preview as in play.
+    const heldIndex = weapons?.length ? (focusIndex >= 0 ? focusIndex : Math.max(0, weapons.findIndex(weapon => weapon.startsOwned !== false))) : -1;
+    const heldWeapon = heldIndex >= 0 ? weapons![heldIndex] : null;
+    const heldAttachment = heldWeapon?.attachmentId && attachmentPlacements?.get(heldWeapon.attachmentId) === 'hand'
+        ? attachments.find(item => item.id === heldWeapon.attachmentId)
+        : null;
+    const supportGrip = useMemo(() => heldWeaponGrip(heldWeapon, heldAttachment), [heldWeapon, heldAttachment]);
+    // The held weapon's own locomotion plays in place of the graph's, as in play.
+    const previewGraph = useMemo(
+        () => weaponLocomotionGraph(blueprint.animationGraph, weaponMoveClips(heldWeapon), new Set(allClips.map(clip => clip.name))),
+        [blueprint.animationGraph, heldWeapon, allClips],
+    );
+    const pickLabel = weaponFocus?.field? WEAPON_POINTS.find(([field]) => field === weaponFocus.field)?.[1] : null;
 
     /**
      * Gives the graph's states, and a player's fire and aim clips, the model's clips whose names fit
@@ -152,8 +183,13 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
                 <div className="absolute top-4 left-4 z-10 bg-black/50 backdrop-blur px-3 py-1 rounded-full text-[10px] text-gray-400 border border-white/10 flex items-center gap-2">
                     <Eye size={10} /> Mesh Preview
                 </div>
+                {pickLabel && (
+                    <div className="absolute top-14 left-1/2 -translate-x-1/2 z-10 bg-blue-600/90 text-white text-xs px-3 py-1.5 rounded-full shadow">
+                        Click the {pickLabel.toLowerCase()} on the weapon
+                    </div>
+                )}
                 {attachmentPlacements && (
-                    <div className="absolute top-4 right-4 z-10 flex rounded-full border border-white/10 bg-black/50 backdrop-blur text-[10px] overflow-hidden">
+                    <div className="absolute top-4 right-4 z-10 flexrounded-full border border-white/10 bg-black/50 backdrop-blur text-[10px] overflow-hidden">
                         {([[false, 'Weapons at rest'], [true, 'Weapon in use']] as const).map(([inUse, label]) => (
                             <button
                                 key={label}
@@ -170,12 +206,14 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
                 {/* 3D Canvas */}
                 {visible && (
                     <GraphPreview 
-                        graph={blueprint.animationGraph}
+                        graph={previewGraph}
                         allClips={allClips}
                         model={linkedModel || undefined}
                         scale={blueprint.meshScale}
                         textureUrl={textureUrl}
                         attachmentPlacements={attachmentPlacements}
+                        pointPick={pointPick}
+                        supportGrip={supportGrip}
                     />
                 )}
                 
