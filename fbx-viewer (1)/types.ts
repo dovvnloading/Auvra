@@ -544,6 +544,12 @@ export interface WeaponSettings {
    * held, that hand takes hold there from wherever the animation has it, except while reloading.
    */
   supportGrip?: [number, number, number] | null;
+  /**
+   * How the other hand is turned on the weapon, in degrees in the weapon model's frame: recorded by
+   * Fit from the weapon's own clip, so the hand holds the weapon the same way in every clip (a jump,
+   * a fall). Without it the hand keeps the clip's rotation.
+   */
+  supportRotation?: [number, number, number] | null;
   /** The middle of the grip the gripping hand closes round, in the weapon model's own units (Fit to the hands). */
   gripPoint?: [number, number, number] | null;
   /** The end of the barrel, in the weapon model's own units: a one-handed weapon is fitted pointing it ahead. */

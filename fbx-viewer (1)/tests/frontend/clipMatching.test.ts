@@ -98,4 +98,17 @@ describe('upperBodyClip', () => {
     expect(upperBodyClip(settings, true, true, { ...rifle, reloadClip: null }, true)).toBe('Aim');
     expect(upperBodyClip(settings, true, false, { ...rifle, reloadClip: null }, true)).toBeNull();
   });
+
+  it('keeps a weapon held with its own idle in the arms while the body plays none of its clips', () => {
+    const rifle = { idleClip: 'Rifle Idle', walkClip: 'Rifle Walk', jumpClip: 'Rifle Jump', fireClip: 'Rifle Fire', aimClip: 'Rifle Aim', reloadClip: null };
+    // Falling or landing in a clip made for no weapon: the arms keep the rifle's idle.
+    expect(upperBodyClip(undefined, false, false, rifle, false, 'Falling')).toBe('Rifle Idle');
+    // The rifle's own clips, or a blend (no single clip), leave the body as it is.
+    expect(upperBodyClip(undefined, false, false, rifle, false, 'Rifle Jump')).toBeNull();
+    expect(upperBodyClip(undefined, false, false, rifle, false, null)).toBeNull();
+    // Aiming and firing come first.
+    expect(upperBodyClip(undefined, false, true, rifle, false, 'Falling')).toBe('Rifle Aim');
+    // A weapon without its own idle is posed by the body's clip.
+    expect(upperBodyClip(undefined, false, false, { ...rifle, idleClip: null }, false, 'Falling')).toBeNull();
+  });
 });
