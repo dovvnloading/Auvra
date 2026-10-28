@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { handGripPoint, supportGripPoint } from '../../runtime/ik';
-import { fitWeaponToHands } from '../../runtime/weaponFit';
+import { supportRotationFromClip, fitWeaponToHands } from '../../runtime/weaponFit';
 
 /** A hand bone with middle, ring and little fingers curled round a hollow 3 cm in front of its palm. */
 const curledHand = (name: string, parent: THREE.Object3D, position: THREE.Vector3) => {
@@ -62,6 +62,18 @@ describe('fitting a weapon to the hands', () => {
     // Upright: the weapon's up stays as near world up as the barrel allows.
     const up = new THREE.Vector3(0, 1, 0).transformDirection(weapon.matrixWorld);
     expect(up.y).toBeGreaterThan(0.9);
+  });
+
+  it('gives a weapon never fitted the turn of the other hand Fit would record, from its clip', () => {
+    const { root, left, clip } = rig();
+    left.quaternion.setFromEuler(new THREE.Euler(0.3, -0.5, 0.8));
+    root.updateMatrixWorld(true);
+    const points = { grip: [0.4, -0.1, 0] as [number, number, number], support: [-0.2, 0, 0] as [number, number, number] };
+    const fit = fitWeaponToHands(root, clip, 'mixamorigRightHand', [1, 1, 1], points)!;
+    const derived = supportRotationFromClip(root, clip, 'mixamorigRightHand', fit.rotation)!;
+    const asQuaternion = (degrees: readonly number[]) => new THREE.Quaternion().setFromEuler(new THREE.Euler(...degrees.map(value => THREE.MathUtils.degToRad(value)) as [number, number, number]));
+    expect(asQuaternion(derived).angleTo(asQuaternion(fit.supportRotation!))).toBeLessThan(1e-3);
+    expect(supportRotationFromClip(root, clip, 'mixamorigNoSuchHand', fit.rotation)).toBeNull();
   });
 
   it('records how the other hand is turned on the weapon, to hold it that way in any clip', () => {
