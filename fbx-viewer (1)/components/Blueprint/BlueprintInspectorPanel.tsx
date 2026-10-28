@@ -4,7 +4,8 @@ import type * as THREE from 'three';
 import { FileText, Database, Tag, Plus, Trash2, Zap, Scaling, Camera, Crosshair, Palette, Check, Box, Music, Play, Footprints, Brain } from 'lucide-react';
 import { BehaviorTreeEditor } from './BehaviorTreeEditor';
 import { WeaponsPanel, type WeaponFocus } from './WeaponsPanel';
-import { fitWeaponToHands } from '../../runtime/weaponFit';
+import { fitWeaponToHands, seatCarryOnBody } from '../../runtime/weaponFit';
+import { findClipForRole } from '../AnimationGraph/utils/clipMatching';
 import { aimCameraOffset, AimView, Blueprint, BlueprintStat, CharacterIKSettings, DEFAULT_UPPER_BODY_BONE, UpperBodySettings, type WeaponSettings } from '../../types';
 import { ownClipsFirst } from '../../utils/animationBinding';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
@@ -49,6 +50,22 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
             weapons: (blueprint.weapons ?? []).map(item => (item.id === weapon.id ? { ...item, supportRotation: fit.supportRotation } : item)),
         });
         return `Fitted to ${clipName}.`;
+    };
+
+    // Seats a weapon's carry placement on the body as the character stands at rest (its idle clip).
+    const seatWeapon = (weapon: WeaponSettings): string => {
+        const model = models.find(item => item.id === blueprint.linkedModelId);
+        const attachment = attachments.find(item => item.id === weapon.attachmentId);
+        if (!model || !attachment) return 'Choose the weapon\'s model first.';
+        if (!weapon.carry) return 'Choose where it is carried first.';
+        const idle = findClipForRole('idle', model.animations.map(clip => clip.name), false);
+        const clip = idle ? model.animations.find(item => item.name === idle) ?? null : null;
+        const position = seatCarryOnBody(model.object, clip, attachment.object, attachment.scale, weapon.carry);
+        if (!position) return `No body under the weapon on ${weapon.carry.boneName}.`;
+        onUpdate(blueprint.id, {
+            weapons: (blueprint.weapons ?? []).map(item => (item.id === weapon.id && item.carry ? { ...item, carry: { ...item.carry, position } } : item)),
+        });
+        return 'Seated.';
     };
     const [activeTab, setActiveTab] = useState<'details' | 'stats' | 'tags' | 'materials' | 'audio' | 'behavior'>('details');
     const ik: CharacterIKSettings = blueprint.ik ?? {};
@@ -375,6 +392,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                     focus={weaponFocus}
                                     onFocus={onWeaponFocus}
                                     onFit={fitWeapon}
+                                    onSeat={seatWeapon}
                                 />
                             )}
 
