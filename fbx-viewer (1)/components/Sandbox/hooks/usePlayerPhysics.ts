@@ -29,6 +29,29 @@ const DEFAULT_CONFIG: PhysicsConfig = {
     COLLISION_RADIUS: 0.5 // Player radius
 };
 
+/** Standing and aiming, the body keeps its facing until the aim swings this far from it (radians). */
+export const TURN_IN_PLACE_START = THREE.MathUtils.degToRad(70);
+/** A turn in place ends once the body faces the aim this closely (radians). */
+export const TURN_IN_PLACE_END = THREE.MathUtils.degToRad(4);
+/** The fastest a turn in place turns the body, in radians per second. */
+export const TURN_IN_PLACE_SPEED = THREE.MathUtils.degToRad(300);
+
+/** `angle` wrapped into -PI..PI. */
+const wrapAngle = (angle: number): number => Math.atan2(Math.sin(angle), Math.cos(angle));
+
+/**
+ * Where an aiming character faces. Moving, it faces the aim. Standing, its feet stay put while the
+ * upper body follows the aim (CharacterIK), until the aim is TURN_IN_PLACE_START away; then it
+ * turns in place until it faces the aim again. `target` is the yaw to turn toward (null holds the
+ * facing) and `turning` whether a turn in place is under way.
+ */
+export const aimFacing = (bodyYaw: number, aimYaw: number, moving: boolean, turning: boolean): { target: number | null; turning: boolean } => {
+    if (moving) return { target: aimYaw, turning: false };
+    const away = Math.abs(wrapAngle(aimYaw - bodyYaw));
+    if (turning ? away <= TURN_IN_PLACE_END : away < TURN_IN_PLACE_START) return { target: null, turning: false };
+    return { target: aimYaw, turning: true };
+};
+
 /** Character controller tuning. Ratios scale with the character's measured height. */
 export const CHARACTER = {
     RADIUS_RATIO: 0.12,      // Capsule radius
@@ -339,6 +362,7 @@ export const usePlayerPhysics = (
     const stamina = useRef(DEFAULT_CONFIG.MAX_STAMINA);
     const reportedStamina = useRef<number | null>(null);
     const isExhausted = useRef(false);
+    const turningInPlace = useRef(false);
     const rig = useRef<CharacterRig | null>(null);
 
     // Cache the terrain object reference to avoid searching every frame
@@ -423,17 +447,20 @@ export const usePlayerPhysics = (
         let targetRotation = modelObject.rotation.y;
 
         if (input.isAiming) {
-            targetRotation = Math.atan2(camForward.x, camForward.z);
-        } else if (isMoving) {
-            targetRotation = Math.atan2(worldMoveVec.x, worldMoveVec.z);
+            const facing = aimFacing(modelObject.rotation.y, Math.atan2(camForward.x, camForward.z), isMoving, turningInPlace.current);
+            turningInPlace.current = facing.turning;
+            if (facing.target !== null) targetRotation = facing.target;
+        } else {
+            turningInPlace.current = false;
+            if (isMoving) targetRotation = Math.atan2(worldMoveVec.x, worldMoveVec.z);
         }
 
-        let rotDiff = targetRotation - modelObject.rotation.y;
-        while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
-        while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
-
+        const rotDiff = wrapAngle(targetRotation - modelObject.rotation.y);
         const effectiveRotSpeed = input.isAiming ? ROTATION_SPEED * 2.0 : ROTATION_SPEED;
-        modelObject.rotation.y += rotDiff * effectiveRotSpeed * delta;
+        let turn = rotDiff * Math.min(1, effectiveRotSpeed * delta);
+        // A turn in place steps round at a walking pace rather than snapping to the aim.
+        if (turningInPlace.current) turn = THREE.MathUtils.clamp(turn, -TURN_IN_PLACE_SPEED * delta, TURN_IN_PLACE_SPEED * delta);
+        modelObject.rotation.y += turn;
 
         // --- 4. Stamina & Hysteresis Logic ---
         let effectiveSprint = false;
