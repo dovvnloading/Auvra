@@ -46,6 +46,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/timeline/evaluate.ts': 'pure-utility',
   'runtime/spawning.ts': 'pure-utility',
   'runtime/weapons.ts': 'pure-utility',
+  'runtime/weaponFit.ts': 'pure-utility',
   'runtime/playerActions.ts': 'pure-utility',
   'utils/appDialogs.ts': 'pure-utility',
   'utils/retargeting.ts': 'pure-utility',

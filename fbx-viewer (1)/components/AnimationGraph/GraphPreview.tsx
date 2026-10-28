@@ -12,6 +12,7 @@ import { GraphRuntime, type GraphRuntimeAPI } from './GraphRuntime';
 import { ANIMATION_FRAME_PRIORITY } from './hooks/useGraphAnimator';
 import { conditionsMet, transitionAppliesTo } from './utils/transitions';
 import { AttachmentController, type AttachmentPlacement } from '../Scene/AttachmentController';
+import { CharacterIK, type HeldWeaponGrip } from '../Sandbox/CharacterIK';
 import { SocketController, resolveSocketFlashTextureUrl } from '../Scene/SocketController';
 import { LocalEnvironment } from '../Scene/LocalEnvironment';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
@@ -479,6 +480,75 @@ export const PreviewTransport: React.FC<PreviewTransportProps> = ({
     </div>
 );
 
+type PointTuple = [number, number, number];
+
+/** Points shown on one of the preview's attachments, and a click on it picking another (in its own units). */
+export interface AttachmentPointPick {
+    attachmentId: string;
+    markers: { point: PointTuple; color: string }[];
+    /** While set, a click on the attachment reports the point under the cursor, midway through its thickness. */
+    onPoint?: ((point: PointTuple) => void) | null;
+}
+
+/** How big a point marker is drawn, in world units. */
+const MARKER_RADIUS = 0.04;
+const PICK_CLICK_SLOP = 4;
+
+const round3 = (value: number) => Math.round(value * 1000) / 1000;
+
+/** Markers on an attachment, and while picking, clicks on it reported as points in its own units. */
+const AttachmentPoints: React.FC<{ target: THREE.Object3D; pick: AttachmentPointPick }> = ({ target, pick }) => {
+    const camera = useThree(state => state.camera);
+    const gl = useThree(state => state.gl);
+    const onPoint = pick.onPoint;
+    useEffect(() => {
+        if (!onPoint) return;
+        const element = gl.domElement;
+        const raycaster = new THREE.Raycaster();
+        const pointer = new THREE.Vector2();
+        let downAt: [number, number] | null = null;
+        const down = (event: PointerEvent) => { downAt = [event.clientX, event.clientY]; };
+        const up = (event: PointerEvent) => {
+            // A drag orbits the camera; only a click picks.
+            if (!downAt || Math.hypot(event.clientX - downAt[0], event.clientY - downAt[1]) > PICK_CLICK_SLOP) return;
+            const rect = element.getBoundingClientRect();
+            pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
+            raycaster.setFromCamera(pointer, camera);
+            target.updateWorldMatrix(true, true);
+            const entry = raycaster.intersectObject(target, true)[0];
+            if (!entry) return;
+            // Cast back from beyond the attachment for where the ray leaves it: the point is midway through.
+            const span = new THREE.Box3().setFromObject(target).getSize(new THREE.Vector3()).length();
+            const back = new THREE.Raycaster(entry.point.clone().addScaledVector(raycaster.ray.direction, span), raycaster.ray.direction.clone().negate());
+            const exit = back.intersectObject(target, true)[0];
+            const point = exit ? entry.point.clone().lerp(exit.point, 0.5) : entry.point.clone();
+            target.worldToLocal(point);
+            onPoint([round3(point.x), round3(point.y), round3(point.z)]);
+        };
+        element.addEventListener('pointerdown', down);
+        element.addEventListener('pointerup', up);
+        const cursor = element.style.cursor;
+        element.style.cursor = 'crosshair';
+        return () => {
+            element.removeEventListener('pointerdown', down);
+            element.removeEventListener('pointerup', up);
+            element.style.cursor = cursor;
+        };
+    }, [camera, gl, target, onPoint]);
+    const radius = MARKER_RADIUS / Math.max(1e-6, target.getWorldScale(new THREE.Vector3()).x);
+    return createPortal(
+        <>
+            {pick.markers.map(({ point, color }) => (
+                <mesh key={`${color}:${point.join(',')}`} position={point} renderOrder={10}>
+                    <sphereGeometry args={[radius, 16, 12]} />
+                    <meshBasicMaterial color={color} depthTest={false} transparent opacity={0.9} />
+                </mesh>
+            ))}
+        </>,
+        target,
+    );
+};
+
 /** Props of the animation graph preview. */
 export interface GraphPreviewProps {
     graph?: AnimationGraphData;
@@ -503,6 +573,10 @@ export interface GraphPreviewProps {
     resetKey?: string;
     /** Per attachment id: hidden, or moved to another bone (a weapon's carry placement); the rest as authored. */
     attachmentPlacements?: ReadonlyMap<string, 'hand' | 'hidden' | AttachmentPlacement>;
+    /** Points marked on one attachment, and a pick on it (a weapon's grip, other hand and muzzle). */
+    pointPick?: AttachmentPointPick | null;
+    /** The other hand's hold on a weapon in the hands, as in play. */
+    supportGrip?: HeldWeaponGrip | null;
 }
 
 export const GraphPreview: React.FC<GraphPreviewProps> = ({
@@ -517,7 +591,9 @@ export const GraphPreview: React.FC<GraphPreviewProps> = ({
     onTransitionFired,
     onStatusChange,
     resetKey = '',
-    attachmentPlacements
+    attachmentPlacements,
+    pointPick = null,
+    supportGrip = null
 }) => {
     const { models, selectedModelId, graphData, attachments, sockets, flashTriggers, textures } = useScene();
     
@@ -731,6 +807,13 @@ export const GraphPreview: React.FC<GraphPreviewProps> = ({
                             />
                         );
                     })}
+
+                    {supportGrip && <CharacterIK model={displayObject} supportGrip={supportGrip} />}
+
+                    {pointPick && (() => {
+                        const target = modelAttachments.find(attachment => attachment.id === pointPick.attachmentId)?.object;
+                        return target ? <AttachmentPoints target={target} pick={pointPick} /> : null;
+                    })()}
 
                     {/* Render Sockets (Always visible in Graph Preview for debugging) */}
                     {modelSockets.map(sock => (

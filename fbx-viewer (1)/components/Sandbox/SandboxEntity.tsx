@@ -5,7 +5,7 @@ import { useFrame } from '@react-three/fiber';
 import { LoadedModelData, Blueprint, AttachmentData, SocketData, Hittable, Hitbox } from '../../types';
 import { GraphRuntime, GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
 import { PLAYER_PHYSICS_ID } from '../../runtime/physics';
-import { CharacterIK, type HeldWeaponGrip } from './CharacterIK';
+import { CharacterIK, heldWeaponGrip } from './CharacterIK';
 import { CharacterRagdoll } from './CharacterRagdoll';
 import { AttachmentController } from '../Scene/AttachmentController';
 import { SocketController, resolveSocketFlashTextureUrl } from '../Scene/SocketController'; // Using Visual Controller now
@@ -13,7 +13,7 @@ import { useEntityHealth } from './hooks/useEntityHealth';
 import { WorldHealthBar } from './UI/WorldHealthBar';
 import { useGameContent } from '../../runtime/GameContentContext';
 import { ownClipsFirst } from '../../utils/animationBinding';
-import { resolveWeapon, weaponMoveClips, weaponPlacements, type WeaponPose } from '../../runtime/weapons';
+import { weaponMoveClips, weaponPlacements, type WeaponPose } from '../../runtime/weapons';
 import { weaponLocomotionGraph } from '../AnimationGraph/utils/clipMatching';
 
 /** Seconds the death animation plays before the body starts fading. */
@@ -160,12 +160,10 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
     const heldAttachmentId = heldWeapon?.attachmentId ?? null;
     const heldInHands = !!heldAttachmentId && weaponPlacementsById.get(heldAttachmentId) === 'hand';
     const heldAttachment = heldInHands ? attachments.find(item => item.id === heldAttachmentId) ?? null : null;
-    const supportGrip = useMemo((): HeldWeaponGrip | null => {
-        const point = heldWeapon ? resolveWeapon(heldWeapon).supportGrip : null;
-        return heldAttachment && point && !weaponPose.reloading
-            ? { boneName: heldAttachment.boneName, position: heldAttachment.position, rotation: heldAttachment.rotation, scale: heldAttachment.scale, point }
-            : null;
-    }, [heldAttachment, heldWeapon, weaponPose.reloading]);
+    const supportGrip = useMemo(
+        () => (weaponPose.reloading ? null : heldWeaponGrip(heldWeapon, heldAttachment)),
+        [heldAttachment, heldWeapon, weaponPose.reloading],
+    );
 
     // --- Configuration ---
     const maxHealth = useMemo(() => {

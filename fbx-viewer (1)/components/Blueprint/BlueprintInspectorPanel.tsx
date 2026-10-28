@@ -3,8 +3,9 @@ import React, { useState, useMemo, useRef } from 'react';
 import type * as THREE from 'three';
 import { FileText, Database, Tag, Plus, Trash2, Zap, Scaling, Camera, Crosshair, Palette, Check, Box, Music, Play, Footprints, Brain } from 'lucide-react';
 import { BehaviorTreeEditor } from './BehaviorTreeEditor';
-import { WeaponsPanel } from './WeaponsPanel';
-import { aimCameraOffset, AimView, Blueprint, BlueprintStat, CharacterIKSettings, DEFAULT_UPPER_BODY_BONE, UpperBodySettings } from '../../types';
+import { WeaponsPanel, type WeaponFocus } from './WeaponsPanel';
+import { fitWeaponToHands } from '../../runtime/weaponFit';
+import { aimCameraOffset, AimView, Blueprint, BlueprintStat, CharacterIKSettings, DEFAULT_UPPER_BODY_BONE, UpperBodySettings, type WeaponSettings } from '../../types';
 import { ownClipsFirst } from '../../utils/animationBinding';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
 import { TransformInputGroup } from '../UI/Properties/TransformInputGroup';
@@ -15,13 +16,37 @@ interface BlueprintInspectorPanelProps {
     blueprint: Blueprint;
     /** `coalesce` groups a continuous edit (typing, scrubbing) of the same field into one undo step. */
     onUpdate: (id: string, updates: Partial<Blueprint>, options?: { coalesce?: string }) => void;
+    /** The weapon being fitted to the hands in the preview, and the point being picked on it. */
+    weaponFocus?: WeaponFocus | null;
+    onWeaponFocus?: (focus: WeaponFocus | null) => void;
 }
 
 export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = ({
     blueprint,
-    onUpdate
+    onUpdate,
+    weaponFocus = null,
+    onWeaponFocus
 }) => {
-    const { textures, audioAssets, models, attachments, sockets } = useScene();
+    const { textures, audioAssets, models, attachments, sockets, updateAttachment } = useScene();
+
+    // Places a weapon in the hands from its points, as its own idle (or aim) clip poses them.
+    const fitWeapon = (weapon: WeaponSettings): string => {
+        const model = models.find(item => item.id === blueprint.linkedModelId);
+        const attachment = attachments.find(item => item.id === weapon.attachmentId);
+        if (!model || !attachment) return 'Choose the weapon\'s model first.';
+        const clipName = weapon.idleClip || weapon.aimClip;
+        if (!clipName) return 'Give the weapon an Idle while held or Aim clip to fit it to.';
+        const clip = ownClipsFirst(model.animations, models.flatMap(item => item.animations)).find(item => item.name === clipName);
+        if (!clip) return `The model has no clip named ${clipName}.`;
+        if (!weapon.gripPoint) return 'Pick the grip point on the weapon first.';
+        if (!weapon.supportGrip && !weapon.muzzlePoint) return 'Pick the other hand point or the muzzle too: they give the barrel\'s direction.';
+        const fit = fitWeaponToHands(model.object, clip, attachment.boneName, attachment.scale, {
+            grip: weapon.gripPoint, support: weapon.supportGrip ?? null, muzzle: weapon.muzzlePoint ?? null,
+        });
+        if (!fit) return `The model has no ${attachment.boneName} to fit the weapon to.`;
+        updateAttachment(attachment.id, fit);
+        return `Fitted to ${clipName}.`;
+    };
     const [activeTab, setActiveTab] = useState<'details' | 'stats' | 'tags' | 'materials' | 'audio' | 'behavior'>('details');
     const ik: CharacterIKSettings = blueprint.ik ?? {};
     const updateIK = (changes: Partial<CharacterIKSettings>, coalesce?: string) =>
@@ -336,7 +361,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                 </div>
                             )}
 
-                            {blueprint.type === 'Player Character' && (
+                            {(blueprint.type === 'Player Character' || blueprint.type === 'Enemy Controller') && (
                                 <WeaponsPanel
                                     weapons={blueprint.weapons ?? []}
                                     attachments={attachments.filter(attachment => attachment.parentModelId === blueprint.linkedModelId)}
@@ -344,6 +369,9 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                     boneNames={boneNames}
                                     clipNames={clipNames}
                                     onChange={(weapons, coalesce) => onUpdate(blueprint.id, { weapons }, coalesce ? { coalesce } : undefined)}
+                                    focus={weaponFocus}
+                                    onFocus={onWeaponFocus}
+                                    onFit={fitWeapon}
                                 />
                             )}
 

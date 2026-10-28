@@ -444,29 +444,90 @@ export const supportGripPoint = (hand: THREE.Object3D, grip: SupportGrip, out: T
 
 const _handRotation = new THREE.Quaternion();
 const _handParent = new THREE.Quaternion();
-const _palmOffset = new THREE.Vector3();
+const _gripOffset = new THREE.Vector3();
 const _wristGoal = new THREE.Vector3();
 const _elbowPole = new THREE.Vector3();
 const _reachMiddle = new THREE.Vector3();
+const _fistSum = new THREE.Vector3();
+const _arcA = new THREE.Vector3();
+const _arcB = new THREE.Vector3();
+const _arcC = new THREE.Vector3();
+const _arcAB = new THREE.Vector3();
+const _arcAC = new THREE.Vector3();
+const _arcN = new THREE.Vector3();
+const _arcT1 = new THREE.Vector3();
+const _arcT2 = new THREE.Vector3();
+
+/** The fingers whose curl closes around a held grip; the index finger often lies along a trigger instead. */
+const GRIP_FINGERS = ['middle', 'ring', 'pinky'];
+
+/** The joints of `hand`'s finger named `finger`, base first (`...Middle1`, `...Middle2`, ...). */
+const fingerJoints = (hand: THREE.Object3D, finger: string): THREE.Object3D[] => {
+    const joints: THREE.Object3D[] = [];
+    let base = null as THREE.Object3D | null;
+    hand.traverse(node => { if (!base && node !== hand && new RegExp(`${finger}_?0*1$`, 'i').test(node.name)) base = node; });
+    for (let joint: THREE.Object3D | null = base; joint; joint = joint.children.find(child => (child as THREE.Bone).isBone) ?? null) joints.push(joint);
+    return joints;
+};
+
+/** The centre of the circle through three points, or false when they are in a line. */
+const circleCentre = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, out: THREE.Vector3): boolean => {
+    _arcAB.subVectors(b, a);
+    _arcAC.subVectors(c, a);
+    _arcN.crossVectors(_arcAB, _arcAC);
+    const d = 2 * _arcN.lengthSq();
+    if (d < 1e-12) return false;
+    _arcT1.crossVectors(_arcN, _arcAB).multiplyScalar(_arcAC.lengthSq());
+    _arcT2.crossVectors(_arcAC, _arcN).multiplyScalar(_arcAB.lengthSq());
+    out.copy(a).add(_arcT1.add(_arcT2).multiplyScalar(1 / d));
+    return true;
+};
 
 /**
- * Puts a hand's palm on `target` by two-bone IK of its arm (upper arm, forearm, hand). Only the reach
- * changes: the elbow bends the way the animation bends it and the hand keeps the animation's rotation.
- * The palm is midway from the wrist to `palm` (the middle finger's base); without it the wrist goes there.
+ * Where `hand` holds a grip, in world space: the centre of the hollow its curled fingers close
+ * around (each of the middle, ring and little fingers' joints lie on an arc round it), as the hand
+ * is posed now. A hand without curled finger joints holds at its palm: midway from the wrist to the
+ * middle finger's base, or the wrist itself.
+ */
+export const handGripPoint = (hand: THREE.Object3D, out: THREE.Vector3): THREE.Vector3 => {
+    hand.updateWorldMatrix(true, true);
+    _fistSum.set(0, 0, 0);
+    let arcs = 0;
+    for (const finger of GRIP_FINGERS) {
+        const joints = fingerJoints(hand, finger);
+        if (joints.length < 3) continue;
+        joints[0].getWorldPosition(_arcA);
+        joints[1].getWorldPosition(_arcB);
+        joints[joints.length - 1].getWorldPosition(_arcC);
+        // A finger lying straight has no hollow; its "centre" would be far off.
+        if (!circleCentre(_arcA, _arcB, _arcC, out) || out.distanceTo(_arcA) > 2 * _arcA.distanceTo(_arcC)) continue;
+        _fistSum.add(out);
+        arcs += 1;
+    }
+    if (arcs) return out.copy(_fistSum).multiplyScalar(1 / arcs);
+    const middle = fingerJoints(hand, 'middle')[0];
+    hand.getWorldPosition(out);
+    return middle ? out.lerp(middle.getWorldPosition(_arcA), 0.5) : out;
+};
+
+/**
+ * Brings a hand onto `target` by two-bone IK of its arm (upper arm, forearm, hand): the point the
+ * hand holds a grip at (handGripPoint) goes to `target`. Only the reach changes: the elbow bends
+ * the way the animation bends it and the hand keeps the animation's rotation and finger curl.
  */
 export const reachWithHand = (
     arm: THREE.Object3D,
     forearm: THREE.Object3D,
     hand: THREE.Object3D,
-    palm: THREE.Object3D | null,
     target: THREE.Vector3,
     weight = 1,
 ): void => {
     if (!(weight > 0) || !isFiniteVector(target)) return;
     hand.updateWorldMatrix(true, true);
     hand.getWorldQuaternion(_handRotation);
-    _wristGoal.copy(target);
-    if (palm) _wristGoal.sub(_palmOffset.setFromMatrixPosition(palm.matrixWorld).sub(_a.setFromMatrixPosition(hand.matrixWorld)).multiplyScalar(0.5));
+    // The grip point is held where it is on the hand, so the wrist goes that far short of the target.
+    handGripPoint(hand, _gripOffset).sub(_wristGoal.setFromMatrixPosition(hand.matrixWorld));
+    _wristGoal.copy(target).sub(_gripOffset);
     // The pole sits out past the animated elbow, away from the line the arm reaches along.
     _reachMiddle.setFromMatrixPosition(arm.matrixWorld).add(_wristGoal).multiplyScalar(0.5);
     _elbowPole.setFromMatrixPosition(forearm.matrixWorld);

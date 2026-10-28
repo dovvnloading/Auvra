@@ -1,7 +1,8 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
-import type { CharacterIKSettings } from '../../types';
+import type { AttachmentData, CharacterIKSettings, WeaponSettings } from '../../types';
+import { resolveWeaponPoint } from '../../runtime/weapons';
 import { findBone, IKPoseGuard, reachWithHand, supportGripPoint, type SupportGrip } from '../../runtime/ik';
 import { mirrorBoneName } from '../../utils/retargeting';
 import { usePhysicsQueries } from '../../runtime/physics';
@@ -52,6 +53,17 @@ interface CharacterIKProps {
 export interface HeldWeaponGrip extends SupportGrip {
     boneName: string;
 }
+
+/** The support grip of `weapon` held in the hands as `attachment` mounts it; null without a support point. */
+export const heldWeaponGrip = (
+    weapon: Pick<WeaponSettings, 'supportGrip'> | null | undefined,
+    attachment: Pick<AttachmentData, 'boneName' | 'position' | 'rotation' | 'scale'> | null | undefined,
+): HeldWeaponGrip | null => {
+    const point = weapon ? resolveWeaponPoint(weapon.supportGrip) : null;
+    return point && attachment
+        ? { boneName: attachment.boneName, position: attachment.position, rotation: attachment.rotation, scale: attachment.scale, point }
+        : null;
+};
 
 /** How fast the other hand takes hold of and lets go of a weapon (per second). */
 const GRIP_BLEND_RATE = 14;
@@ -120,9 +132,7 @@ export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physi
         const forearm = hand?.parent;
         const arm = forearm?.parent;
         if (!gripHand || !hand || hand === gripHand || !forearm || !arm) return null;
-        let palm: THREE.Object3D | null = null;
-        hand.traverse(bone => { if (!palm && /middle1$/i.test(bone.name)) palm = bone; });
-        return { gripHand, arm, forearm, hand, palm: palm as THREE.Object3D | null };
+        return { gripHand, arm, forearm, hand };
     }, [model, gripBone]);
     const bones = useMemo(
         () => [
@@ -154,7 +164,7 @@ export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physi
             if (!supportGrip && gripState.weight < 1e-3) gripState.grip = null;
             if (gripState.grip && gripState.weight > 1e-3) {
                 supportGripPoint(supportArm.gripHand, gripState.grip, _gripTarget);
-                reachWithHand(supportArm.arm, supportArm.forearm, supportArm.hand, supportArm.palm, _gripTarget, gripState.weight);
+                reachWithHand(supportArm.arm, supportArm.forearm, supportArm.hand, _gripTarget, gripState.weight);
             }
         }
         if (lookBone) {

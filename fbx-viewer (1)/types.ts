@@ -544,6 +544,10 @@ export interface WeaponSettings {
    * held, that hand takes hold there from wherever the animation has it, except while reloading.
    */
   supportGrip?: [number, number, number] | null;
+  /** The middle of the grip the gripping hand closes round, in the weapon model's own units (Fit to the hands). */
+  gripPoint?: [number, number, number] | null;
+  /** The end of the barrel, in the weapon model's own units: a one-handed weapon is fitted pointing it ahead. */
+  muzzlePoint?: [number, number, number] | null;
 /** Upper-body clips while firing, aiming and reloading this weapon; the blueprint's Upper Body clips when unset. */
   fireClip?: string | null;
   aimClip?: string | null;

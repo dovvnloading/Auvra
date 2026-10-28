@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { reachWithHand, supportGripPoint } from '../../runtime/ik';
+import { handGripPoint, reachWithHand, supportGripPoint } from '../../runtime/ik';
 import { resolveWeapon } from '../../runtime/weapons';
 
 /** A straight arm along +X from the origin: shoulder, elbow at 1, wrist at 2, palm bone at 2.2. */
@@ -10,6 +10,7 @@ const arm = () => {
   const fore = new THREE.Bone();
   const hand = new THREE.Bone();
   const middle = new THREE.Bone();
+  middle.name = 'mixamorigLeftHandMiddle1';
   fore.position.set(1, 0, 0);
   hand.position.set(1, 0, 0);
   middle.position.set(0.2, 0, 0);
@@ -36,7 +37,7 @@ describe('the support hand on a held weapon', () => {
     const { upper, fore, hand, middle } = arm();
     const rotation = hand.getWorldQuaternion(new THREE.Quaternion());
     const target = new THREE.Vector3(1.2, 0.6, 0.3);
-    reachWithHand(upper, fore, hand, middle, target);
+    reachWithHand(upper, fore, hand, target);
     const wrist = hand.getWorldPosition(new THREE.Vector3());
     const palm = wrist.clone().lerp(middle.getWorldPosition(new THREE.Vector3()), 0.5);
     expect(palm.distanceTo(target)).toBeLessThan(1e-3);
@@ -44,10 +45,43 @@ describe('the support hand on a held weapon', () => {
   });
 
   it('leaves the arm alone at no weight', () => {
-    const { upper, fore, hand, middle } = arm();
+    const { upper, fore, hand } = arm();
     const before = hand.getWorldPosition(new THREE.Vector3());
-    reachWithHand(upper, fore, hand, middle, new THREE.Vector3(0.5, 1, 0), 0);
+    reachWithHand(upper, fore, hand, new THREE.Vector3(0.5, 1, 0), 0);
     expect(hand.getWorldPosition(new THREE.Vector3()).distanceTo(before)).toBeLessThan(1e-9);
+  });
+
+  it('holds a grip in the hollow its curled fingers close around', () => {
+    // A hand at the origin; each finger's joints lie on a circle of radius 0.03 round (0.1, -0.03, z).
+    const hand = new THREE.Bone();
+    hand.name = 'mixamorigRightHand';
+    const centre = (z: number) => new THREE.Vector3(0.1, -0.03, z);
+    ['Middle', 'Ring', 'Pinky'].forEach((finger, index) => {
+      const z = (index - 1) * 0.02;
+      const angles = [Math.PI / 2, 0, -Math.PI / 2];
+      let parent: THREE.Object3D = hand;
+      let at = new THREE.Vector3();
+      angles.forEach((angle, joint) => {
+        const point = centre(z).add(new THREE.Vector3(Math.sin(angle) * 0.03 * 0 + Math.cos(angle) * 0.03, Math.sin(angle) * 0.03, 0));
+        const bone = new THREE.Bone();
+        bone.name = `mixamorigRightHand${finger}${joint + 1}`;
+        bone.position.copy(point.clone().sub(at));
+        parent.add(bone);
+        parent = bone;
+        at = point;
+      });
+    });
+    hand.updateMatrixWorld(true);
+    const grip = handGripPoint(hand, new THREE.Vector3());
+    expect(grip.distanceTo(new THREE.Vector3(0.1, -0.03, 0))).toBeLessThan(1e-6);
+  });
+
+  it('holds at the palm when the fingers are straight', () => {
+    const { hand } = arm();
+    const grip = handGripPoint(hand, new THREE.Vector3());
+    const wrist = hand.getWorldPosition(new THREE.Vector3());
+    expect(grip.distanceTo(wrist)).toBeGreaterThan(0.05);
+    expect(grip.distanceTo(wrist)).toBeLessThan(0.15);
   });
 
   it('keeps a support point only with three finite numbers', () => {
