@@ -13,10 +13,12 @@ const readJson = (file) => JSON.parse(readFileSync(file, 'utf8'));
 
 // Libraries bundled from inside another package rather than as packages of their own: the
 // decoders three carries for compressed glTF, which the editor and player bundle
-// (utils/gltfDecoders.ts). Their license texts are kept beside this script.
+// (utils/gltfDecoders.ts), and Recast. Their license texts are kept beside this script.
 const VENDORED_LIBRARIES = [
   { name: 'Basis Universal transcoder', package: 'three', folder: 'examples/jsm/libs/basis', copyright: 'Copyright Binomial LLC', project: 'github.com/BinomialLLC/basis_universal', license: 'Apache-2.0' },
   { name: 'Draco 3D decoder', package: 'three', folder: 'examples/jsm/libs/draco/gltf', copyright: 'Copyright The Draco Authors', project: 'github.com/google/draco', license: 'Apache-2.0' },
+  // The navmesh library (runtime/navMesh.ts) is Recast and Detour compiled to WebAssembly.
+  { name: 'Recast & Detour', package: '@recast-navigation/wasm', folder: 'dist', copyright: 'Copyright (c) 2009 Mikko Mononen', project: 'github.com/recastnavigation/recastnavigation', license: 'Zlib' },
 ];
 
 export const productionPackages = (root) => {

@@ -77,6 +77,8 @@ Objects can carry components that add behaviour. Select an object and use **Add 
 | Network Sync | In multiplayer games the host sends the object's position and rotation and the other players follow it (see [Multiplayer](multiplayer.md)) |
 | Timeline | Plays keyed tracks that move, show and hide objects, write level variables and raise events (see [Timelines](timelines.md)) |
 | Dialogue | A conversation the player opens with Interact when within reach: lines, choices, level variables and dialogue events (see [Dialogue](dialogue.md)) |
+| Nav Link | Lets enemies cross from the object to **End** (relative to the object) where the navmesh does not join up: a drop, a gap, a ladder. One-way links only go from the object to the end. Drawn in the editor as an arc (see [Enemy navigation](characters.md#enemy-navigation)) |
+| Nav Obstacle | Cuts a cylinder of **Radius** and **Height** around the object out of the navmesh and follows it as it moves, so enemies path around it: for crates that get pushed, vehicles and other moving objects |
 | Pickup | Health, rounds or a weapon the player collects by walking within **Reach** of the object. **Amount** is the health restored or the rounds added; **Weapon** names the weapon that gets the rounds (blank: the held one) or the weapon given. A pickup that would give nothing, such as health at full health, stays. Taken, it disappears and comes back after **Respawn** seconds; at 0 it is gone for the session, and a save remembers it. **Sound** plays when it is taken. Add a Rotator for a pickup that spins (see [Weapons](characters.md#weapons)) |
 
 Each component's settings appear in the inspector and can be toggled on and off.

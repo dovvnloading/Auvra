@@ -18,7 +18,7 @@ describe('component registry', () => {
   it('registers the built-in components once each, with a renderer and editable props', () => {
     const types = COMPONENT_DEFINITIONS.map(definition => definition.type);
     expect(types).toEqual([
-      'rotator', 'mover', 'pointLight', 'spotLight', 'camera', 'collider', 'rigidBody', 'joint', 'particles', 'decal', 'water', 'audioSource',
+      'rotator', 'mover', 'pointLight', 'spotLight', 'camera', 'collider', 'rigidBody', 'joint', 'navLink', 'navObstacle', 'particles', 'decal', 'water', 'audioSource',
       'reverbZone', 'musicPlayer',
       'postProcess', 'reflectionProbe', 'lodGroup', 'distanceCull', 'levelStreaming', 'animation', 'lookAtIK', 'footIK', 'twoBoneIK', 'script', 'netSync', 'timeline',
       'dialogue', 'pickup',
@@ -31,6 +31,11 @@ describe('component registry', () => {
       expect(new Set(keys).size).toBe(keys.length);
     }
     expect(getComponentDefinition('missing')).toBeUndefined();
+  });
+
+  it('creates navigation components with their defaults', () => {
+    expect(createComponent('navLink').props).toEqual({ end: [0, 0, 3], bidirectional: true, radius: 0.6 });
+    expect(createComponent('navObstacle').props).toEqual({ radius: 1, height: 2 });
   });
 
   it('creates enabled components with every prop at its default', () => {

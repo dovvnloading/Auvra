@@ -1,14 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import * as THREE from 'three';
 import { useAILocomotion } from '../../components/Sandbox/AI/useAILocomotion';
 import type { AIState } from '../../components/Sandbox/AI/AIConfig';
-import { buildNavGrid, type NavGrid, type NavGridOptions } from '../../runtime/navigation';
+import { LevelNavMesh, recastReady } from '../../runtime/navMesh';
+import { collectNavGeometry } from '../../runtime/navGeometry';
+import { resolveNavSettings } from '../../runtime/navSettings';
 import type { LevelComponent, LevelObject } from '../../types';
 
 type Vec3 = [number, number, number];
 
 const FRAME = 1 / 60;
+
+beforeAll(async () => {
+  await recastReady();
+});
 
 const levelObject = (id: string, overrides: Partial<LevelObject> = {}): LevelObject => ({
   id,
@@ -32,59 +38,166 @@ const boxCollider = (id: string, size: Vec3, offset: Vec3): LevelComponent => ({
 const wall = (id: string, position: Vec3, size: Vec3): LevelObject =>
   levelObject(id, { position, components: [boxCollider(id, size, [0, size[1] / 2, 0])] });
 
-/** Runs `frames` frames of locomotion toward a fixed destination and returns the enemy. */
-const simulate = (grid: NavGrid, start: Vec3, destination: Vec3, state: AIState, frames: number): THREE.Object3D => {
+const bake = (objects: LevelObject[]): LevelNavMesh => {
+  const geometry = collectNavGeometry(objects);
+  return LevelNavMesh.bake({ positions: geometry.positions, indices: geometry.indices, links: geometry.links, settings: resolveNavSettings(undefined) }, geometry.groundHeight);
+};
+
+/** Runs `frames` frames of locomotion toward a fixed destination; returns the enemy and where it was each frame. */
+const simulate = (navMesh: LevelNavMesh, start: Vec3, destination: Vec3, state: AIState, frames: number) => {
   const { result } = renderHook(() => useAILocomotion());
   const enemy = new THREE.Object3D();
   enemy.position.set(...start);
   const target = new THREE.Vector3(...destination);
+  const trail: THREE.Vector3[] = [];
   for (let frame = 0; frame < frames; frame++) {
+    // As the level's navmesh updater does: the crowd steps before the agents move.
+    navMesh.update(FRAME);
     result.current.updateLocomotion({
       enemyObject: enemy,
       destination: target.clone(),
       targetFocus: state === 'CHASE' ? target.clone() : null,
       state,
       delta: FRAME,
-      navGrid: grid,
+      navMesh,
     });
+    trail.push(enemy.position.clone());
   }
-  return enemy;
+  return { enemy, trail };
 };
 
-const BOUNDS: NavGridOptions = { bounds: { minX: -15, minZ: -15, maxX: 15, maxZ: 15 }, cellSize: 0.5, agentRadius: 0.4 };
-
-describe('AI locomotion over the nav grid', () => {
-  it('keeps chasing a target beyond the edge of the baked grid', () => {
-    const grid = buildNavGrid([], BOUNDS);
-    const enemy = simulate(grid, [12, 0, 0], [25, 0, 0], 'CHASE', 240);
-    // Off the grid is open ground: the enemy leaves the grid and closes in instead of holding at its edge.
-    expect(enemy.position.x).toBeGreaterThan(20);
+describe('AI locomotion over the navmesh', () => {
+  it('chases a target across open ground', () => {
+    const navMesh = bake([]);
+    const { enemy } = simulate(navMesh, [12, 0, 0], [25, 0, 0], 'CHASE', 240);
     expect(enemy.position.distanceTo(new THREE.Vector3(25, 0, 0))).toBeLessThan(2.2);
+    navMesh.dispose();
   });
 
-  it('keeps chasing a target standing on a raised platform', () => {
-    // A 10 x 10 m platform spanning y 0..1, which the single-layer grid bakes as blocked.
-    const platform = levelObject('platform', {
-      position: [0, 0.5, 0],
-      scale: [10, 1, 10],
-      components: [boxCollider('platform', [1, 1, 1], [0, 0, 0])],
-    });
-    const grid = buildNavGrid([platform], BOUNDS);
-    const enemy = simulate(grid, [12, 0, 0], [0, 1, 0], 'CHASE', 300);
-    expect(enemy.position.distanceTo(new THREE.Vector3(0, 1, 0))).toBeLessThan(2.2);
+  it('keeps to the navmesh when its target leaves it', () => {
+    // The flat ground covers the level and 10 m round it: ±60 m here.
+    const navMesh = bake([]);
+    const { enemy, trail } = simulate(navMesh, [40, 0, 0], [150, 0, 0], 'CHASE', 600);
+    expect(enemy.position.x).toBeGreaterThan(55);
+    for (const point of trail) expect(point.x).toBeLessThan(60);
+    navMesh.dispose();
   });
 
-  it('still holds outside a closed pen when its target is walled off at ground level', () => {
+  it('closes in on a target standing on a platform it cannot climb, staying on the ground', () => {
+    const platform = levelObject('platform', { position: [0, 0.5, 0], scale: [10, 1, 10], components: [boxCollider('platform', [1, 1, 1], [0, 0, 0])] });
+    const navMesh = bake([platform]);
+    const { enemy } = simulate(navMesh, [12, 0, 0], [0, 1, 0], 'CHASE', 300);
+    // At the navmesh's edge: the platform's half-width and the agent's radius, within Recast's contour error.
+    expect(Math.hypot(enemy.position.x, enemy.position.z)).toBeLessThan(6.1);
+    expect(Math.abs(enemy.position.y)).toBeLessThan(0.05);
+    navMesh.dispose();
+  });
+
+  it('holds outside a closed pen when its target is walled off at ground level', () => {
     const pen = [
       wall('north', [5, 0, 8], [7, 2, 1]),
       wall('south', [5, 0, 2], [7, 2, 1]),
       wall('east', [8, 0, 5], [1, 2, 7]),
       wall('west', [2, 0, 5], [1, 2, 7]),
     ];
-    const grid = buildNavGrid(pen, BOUNDS);
-    const enemy = simulate(grid, [-5, 0, -5], [5, 0, 5], 'CHASE', 600);
+    const navMesh = bake(pen);
+    const { enemy } = simulate(navMesh, [-5, 0, -5], [5, 0, 5], 'CHASE', 600);
     // Waits right outside the pen instead of walking through its wall.
     expect(Math.max(Math.abs(enemy.position.x - 5), Math.abs(enemy.position.z - 5))).toBeGreaterThan(3.5);
-    expect(Math.hypot(enemy.position.x - 5, enemy.position.z - 5)).toBeLessThan(5);
+    expect(Math.hypot(enemy.position.x - 5, enemy.position.z - 5)).toBeLessThan(5.5);
+    navMesh.dispose();
+  });
+
+  it('walks up a ramp onto a platform, at the surface height', () => {
+    // A 6 x 6 m platform, 1 m high, over x 1..7, and a ramp up to its west edge from the ground at x = -4.
+    const platform = wall('platform', [4, 0, 0], [6, 1, 6]);
+    const angle = Math.atan2(1, 5);
+    const ramp = levelObject('ramp', {
+      position: [-1.5 + Math.sin(angle) * 0.1, 0.5 - Math.cos(angle) * 0.1, 0],
+      rotation: [0, 0, angle],
+      components: [boxCollider('ramp', [Math.hypot(5, 1), 0.2, 2], [0, 0, 0])],
+    });
+    const navMesh = bake([platform, ramp]);
+    const { enemy, trail } = simulate(navMesh, [-8, 0, 0], [4, 1, 0], 'CHASE', 480);
+    expect(Math.hypot(enemy.position.x - 4, enemy.position.z)).toBeLessThan(2.2);
+    // Without a physics world the height is the navmesh's, true to within a cell height.
+    expect(Math.abs(enemy.position.y - 1)).toBeLessThan(0.1);
+    // Up the ramp, never through the platform's side: well above the ground only on the ramp or on top.
+    // (Off the ramp's foot the navmesh height leans a little toward it, so only clearly raised points count.)
+    for (const point of trail.filter(p => p.y > 0.5)) expect(point.x > 0.9 || (point.x > -4.1 && Math.abs(point.z) < 1.1)).toBe(true);
+    navMesh.dispose();
+  });
+
+  it('never walks through a wall, however its target lines up', () => {
+    const navMesh = bake([wall('wall', [0, 0, 0], [1, 2, 12])]);
+    const { enemy, trail } = simulate(navMesh, [-5, 0, 0], [5, 0, 0], 'CHASE', 600);
+    for (const point of trail) expect(Math.abs(point.x) > 0.5 || Math.abs(point.z) > 6).toBe(true);
+    expect(enemy.position.distanceTo(new THREE.Vector3(5, 0, 0))).toBeLessThan(2.2);
+    navMesh.dispose();
+  });
+
+  describe('in a crowd', () => {
+    /** Runs several agents together, each toward its own destination; returns where each was every frame. */
+    const simulateCrowd = (navMesh: LevelNavMesh, agents: { start: Vec3; destination: Vec3; state: AIState }[], frames: number) => {
+      const runs = agents.map(({ start, destination, state }) => {
+        const { result } = renderHook(() => useAILocomotion());
+        const enemy = new THREE.Object3D();
+        enemy.position.set(...start);
+        return { result, enemy, target: new THREE.Vector3(...destination), state, trail: [] as THREE.Vector3[] };
+      });
+      for (let frame = 0; frame < frames; frame++) {
+        navMesh.update(FRAME);
+        for (const run of runs) {
+          run.result.current.updateLocomotion({
+            enemyObject: run.enemy,
+            destination: run.target.clone(),
+            targetFocus: run.state === 'CHASE' ? run.target.clone() : null,
+            state: run.state,
+            delta: FRAME,
+            navMesh,
+          });
+          run.trail.push(run.enemy.position.clone());
+        }
+      }
+      return runs;
+    };
+    const apart = (a: THREE.Vector3, b: THREE.Vector3) => Math.hypot(a.x - b.x, a.z - b.z);
+
+    it('keeps agents heading for the same spot from standing in each other', () => {
+      const navMesh = bake([]);
+      // All from the same side: alone, each would stop on the same spot just short of it.
+      const [a, b, c] = simulateCrowd(navMesh, [
+        { start: [-6, 0, -0.3], destination: [0, 0, 0], state: 'PATROL' },
+        { start: [-7, 0, 0.3], destination: [0, 0, 0], state: 'PATROL' },
+        { start: [-8, 0, 0], destination: [0, 0, 0], state: 'PATROL' },
+      ], 600);
+      for (const [p, q] of [[a, b], [b, c], [a, c]]) expect(apart(p.enemy.position, q.enemy.position)).toBeGreaterThan(0.6);
+      for (const run of [a, b, c]) expect(apart(run.enemy.position, new THREE.Vector3())).toBeLessThan(2.5);
+      navMesh.dispose();
+    });
+
+    it('lets agents walking at each other pass without walking through each other', () => {
+      const navMesh = bake([]);
+      const [a, b] = simulateCrowd(navMesh, [
+        { start: [-8, 0, 0], destination: [8, 0, 0], state: 'PATROL' },
+        { start: [8, 0, 0], destination: [-8, 0, 0], state: 'PATROL' },
+      ], 900);
+      let closest = Infinity;
+      for (let i = 0; i < a.trail.length; i++) closest = Math.min(closest, apart(a.trail[i], b.trail[i]));
+      expect(closest).toBeGreaterThan(0.55);
+      expect(a.enemy.position.x).toBeGreaterThan(5);
+      expect(b.enemy.position.x).toBeLessThan(-5);
+      navMesh.dispose();
+    });
+
+    it('pushes an idle agent aside rather than letting others stand inside it', () => {
+      const navMesh = bake([]);
+      const [idle, walker] = simulateCrowd(navMesh, [
+        { start: [0, 0, 0], destination: [0, 0, 0], state: 'IDLE' },
+        { start: [-6, 0, 0], destination: [0, 0, 0], state: 'PATROL' },
+      ], 600);
+      expect(apart(idle.enemy.position, walker.enemy.position)).toBeGreaterThan(0.6);
+      navMesh.dispose();
+    });
   });
 });

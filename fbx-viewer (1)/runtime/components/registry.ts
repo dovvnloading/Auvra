@@ -11,6 +11,7 @@ import { PICKUP_COMPONENT } from './pickupComponent';
 import { PARTICLES_COMPONENT } from './particles';
 import { IK_COMPONENTS } from './ikComponents';
 import { JOINT_COMPONENTS } from './jointComponents';
+import { NAVIGATION_COMPONENTS } from './navigationComponents';
 import { NET_SYNC_COMPONENT } from './netSyncComponent';
 import { LOD_COMPONENTS } from './lodComponents';
 import { LEVEL_STREAMING_COMPONENT } from './levelStreamingComponent';
@@ -28,6 +29,7 @@ export const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
     CAMERA_COMPONENT,
     ...PHYSICS_COMPONENTS,
     ...JOINT_COMPONENTS,
+    ...NAVIGATION_COMPONENTS,
     PARTICLES_COMPONENT,
     DECAL_COMPONENT,
     WATER_COMPONENT,

@@ -5,7 +5,7 @@ import { AI_CONFIG, AIState, AITuning, DEFAULT_AI_TUNING } from './AIConfig';
 import { GraphRuntimeAPI } from '../../AnimationGraph/GraphRuntime';
 import { checkVisibility } from './AISenses';
 import { evaluateNextState, calculateNavigation, DecisionContext } from './AIStateMachine';
-import { planPath, useNavGridContext } from '../../../runtime/navigation';
+import { useNavMeshContext } from '../../../runtime/navigation';
 
 interface BrainInput {
   enemyPosition: THREE.Vector3;
@@ -45,7 +45,7 @@ export const useAIBrain = (
     strafe: 0
   });
 
-  const navGrid = useNavGridContext();
+  const navMesh = useNavMeshContext();
 
   const updateState = useCallback((input: BrainInput): BrainOutput => {
     const { delta, enemyPosition, enemyForward, targetPosition, distToTarget, distFromCenter, boundarySize } = input;
@@ -120,24 +120,18 @@ export const useAIBrain = (
 
         // State Entry Logic
         if (nextState === 'PATROL') {
-            // Generate new patrol point
-            const r = DISTANCES.PATROL_RADIUS * Math.sqrt(Math.random());
-            const theta = Math.random() * 2 * Math.PI;
-            patrolDest.current = new THREE.Vector3(
-                enemyPosition.x + r * Math.cos(theta),
-                0,
-                enemyPosition.z + r * Math.sin(theta)
-            );
-            // Clamp patrol point to arena
-            patrolDest.current.x = THREE.MathUtils.clamp(patrolDest.current.x, -boundarySize + 1, boundarySize - 1);
-            patrolDest.current.z = THREE.MathUtils.clamp(patrolDest.current.z, -boundarySize + 1, boundarySize - 1);
-            // A point inside or behind an obstacle moves to the closest reachable spot, so the enemy keeps to its path.
-            if (navGrid) {
-                const plan = planPath(navGrid, enemyPosition, patrolDest.current, { partial: true });
-                if (plan) {
-                    const end = plan.points[plan.points.length - 1];
-                    patrolDest.current.set(end.x, 0, end.z);
-                }
+            // On a navmesh, a random point the enemy can walk to; otherwise a random point in the arena.
+            const onNavMesh = navMesh?.randomPointAround(enemyPosition, DISTANCES.PATROL_RADIUS) ?? null;
+            if (onNavMesh) {
+                patrolDest.current = onNavMesh;
+            } else {
+                const r = DISTANCES.PATROL_RADIUS * Math.sqrt(Math.random());
+                const theta = Math.random() * 2 * Math.PI;
+                patrolDest.current = new THREE.Vector3(
+                    THREE.MathUtils.clamp(enemyPosition.x + r * Math.cos(theta), -boundarySize + 1, boundarySize - 1),
+                    0,
+                    THREE.MathUtils.clamp(enemyPosition.z + r * Math.sin(theta), -boundarySize + 1, boundarySize - 1)
+                );
             }
         }
         else if (nextState === 'IDLE' && stateRef.current === 'RETURNING') {
@@ -186,7 +180,7 @@ export const useAIBrain = (
         destination,
         targetFocus
     };
-  }, [graphApi, onAttack, tuning, navGrid]);
+  }, [graphApi, onAttack, tuning, navMesh]);
 
   return { updateState };
 };

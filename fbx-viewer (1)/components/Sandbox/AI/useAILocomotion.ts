@@ -1,8 +1,10 @@
-import { useRef, useMemo } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
 import * as THREE from 'three';
 import { AI_CONFIG, AIState, AITuning, DEFAULT_AI_TUNING } from './AIConfig';
 import { usesPathfinding } from './AIStateMachine';
-import { NavGrid, advanceWaypoint, isWalledOff, planPath, useNavGridContext } from '../../../runtime/navigation';
+import { advanceWaypoint, useNavMeshContext, type LevelNavMesh } from '../../../runtime/navigation';
+import type { NavAgent } from '../../../runtime/navMesh';
+import { PLAYER_PHYSICS_ID, usePhysicsQueries } from '../../../runtime/physics';
 
 interface LocomotionInput {
   enemyObject: THREE.Object3D;
@@ -10,13 +12,13 @@ interface LocomotionInput {
   targetFocus: THREE.Vector3 | null;
   state: AIState;
   delta: number;
-  /** Overrides the NavGridContext grid; null forces straight-line steering. */
-  navGrid?: NavGrid | null;
+  /** Overrides the NavMeshContext navmesh; null forces straight-line steering. */
+  navMesh?: LevelNavMesh | null;
   /** Per-enemy speeds and distances from blueprint stats. */
   tuning?: AITuning;
 }
 
-// Path following over the level nav grid (runtime/navigation.ts)
+// Path following over the level navmesh (runtime/navigation.ts)
 const NAVIGATION = {
   REPLAN_INTERVAL: 0.3,    // Seconds between replans while the destination moves
   REPLAN_JITTER: 0.15,     // Random extra so several agents do not replan on the same frame
@@ -25,7 +27,9 @@ const NAVIGATION = {
 };
 
 interface PathState {
-  grid: NavGrid | null;
+  navMesh: LevelNavMesh | null;
+  /** The navmesh's version the path was planned on: an obstacle moving since then re-plans it. */
+  version: number;
   state: AIState | null;
   path: THREE.Vector3[] | null;
   reachable: boolean;
@@ -44,7 +48,8 @@ interface Steering {
 }
 
 export const useAILocomotion = () => {
-  const contextGrid = useNavGridContext();
+  const contextNavMesh = useNavMeshContext();
+  const physicsQueries = usePhysicsQueries();
   const physics = useRef({
     currentSpeed: 0,
     stamina: AI_CONFIG.STAMINA.MAX,
@@ -56,9 +61,21 @@ export const useAILocomotion = () => {
   const vDir = useMemo(() => new THREE.Vector3(), []);
   const vLook = useMemo(() => new THREE.Vector3(), []);
   const vRight = useMemo(() => new THREE.Vector3(), []);
+  const vNext = useMemo(() => new THREE.Vector3(), []);
+  const vRay = useMemo(() => new THREE.Vector3(), []);
+  const vDown = useMemo(() => new THREE.Vector3(0, -1, 0), []);
+
+  // This agent in the navmesh's crowd, which keeps agents from walking into each other.
+  const crowd = useRef<{ navMesh: LevelNavMesh | null; agent: NavAgent | null; at: THREE.Vector3 }>({ navMesh: null, agent: null, at: new THREE.Vector3() });
+  useEffect(() => () => {
+    crowd.current.agent?.remove();
+    crowd.current.agent = null;
+    crowd.current.navMesh = null;
+  }, []);
 
   const navigation = useRef<PathState>({
-    grid: null,
+    navMesh: null,
+    version: -1,
     state: null,
     path: null,
     reachable: true,
@@ -68,9 +85,9 @@ export const useAILocomotion = () => {
   });
 
   // Picks the point to walk toward: the next path waypoint around obstacles, or the destination itself.
-  const steer = (grid: NavGrid | null, state: AIState, position: THREE.Vector3, destination: THREE.Vector3, delta: number): Steering => {
+  const steer = (navMesh: LevelNavMesh | null, state: AIState, position: THREE.Vector3, destination: THREE.Vector3, delta: number): Steering => {
     const nav = navigation.current;
-    if (!grid || !usesPathfinding(state)) {
+    if (!navMesh || !usesPathfinding(state)) {
         nav.path = null;
         nav.state = null;
         return { target: destination, detour: false, holding: false };
@@ -80,9 +97,10 @@ export const useAILocomotion = () => {
     const shiftX = destination.x - nav.goal.x;
     const shiftZ = destination.z - nav.goal.z;
     const goalMoved = shiftX * shiftX + shiftZ * shiftZ > NAVIGATION.REPLAN_GOAL_SHIFT * NAVIGATION.REPLAN_GOAL_SHIFT;
-    if (nav.grid !== grid || nav.state !== state || (nav.replanIn <= 0 && (goalMoved || !nav.path))) {
-        const plan = planPath(grid, position, destination, { partial: true });
-        nav.grid = grid;
+    if (nav.navMesh !== navMesh || nav.version !== navMesh.version || nav.state !== state || (nav.replanIn <= 0 && (goalMoved || !nav.path))) {
+        const plan = navMesh.planPath(position, destination, { partial: true });
+        nav.navMesh = navMesh;
+        nav.version = navMesh.version;
         nav.state = state;
         nav.goal.copy(destination);
         nav.replanIn = NAVIGATION.REPLAN_INTERVAL + Math.random() * NAVIGATION.REPLAN_JITTER;
@@ -92,15 +110,19 @@ export const useAILocomotion = () => {
     }
 
     const path = nav.path;
-    if (!path) return { target: destination, detour: false, holding: false }; // Off the grid: straight line
-    nav.waypoint = advanceWaypoint(path, nav.waypoint, position, NAVIGATION.WAYPOINT_REACH);
+    if (!path) return { target: destination, detour: false, holding: false }; // Off the navmesh: straight line
+    // A corner counts as passed once the leg after it is clear from here; until then the agent keeps
+    // heading for it, rather than cutting it into the wall it turns round.
+    let next = advanceWaypoint(path, nav.waypoint, position, NAVIGATION.WAYPOINT_REACH);
+    while (next > nav.waypoint && !navMesh.walkableLine(position, path[next])) next--;
+    nav.waypoint = next;
     const last = path.length - 1;
     if (nav.waypoint < last) return { target: path[nav.waypoint], detour: true, holding: false };
 
     // Chasing or searching a walled-off spot: stop at the closest reachable point. A target off the
-    // grid or up on a platform is not walled off, so the chase keeps closing in on it.
+    // navmesh, in the air or up on a platform is not walled off, so the chase keeps closing in on it.
     // Patrol/return keep heading on so the state machine can still reach its goal.
-    if (!nav.reachable && (state === 'CHASE' || state === 'SEARCHING') && isWalledOff(grid, destination)) {
+    if (!nav.reachable && (state === 'CHASE' || state === 'SEARCHING') && navMesh.isWalledOff(destination)) {
         const end = path[last];
         const dx = end.x - position.x;
         const dz = end.z - position.z;
@@ -117,7 +139,8 @@ export const useAILocomotion = () => {
     const tuning = input.tuning ?? DEFAULT_AI_TUNING;
 
     const distToDest = enemyObject.position.distanceTo(destination);
-    const steering = steer(input.navGrid !== undefined ? input.navGrid : contextGrid, state, enemyObject.position, destination, delta);
+    const navMesh = input.navMesh !== undefined ? input.navMesh : contextNavMesh;
+    const steering = steer(navMesh, state, enemyObject.position, destination, delta);
     const steerTarget = steering.target;
 
     // 1. Stamina Logic
@@ -206,6 +229,12 @@ export const useAILocomotion = () => {
              break;
     }
 
+    // On a navmesh the surface gives the height, so agents move across it, not up or down toward a target.
+    if (navMesh) {
+        moveVector.y = 0;
+        if (moveVector.lengthSq() > 1e-8) moveVector.normalize();
+    }
+
     // 3. Physics Integration (Smooth Speed)
     if (targetSpeed > physics.current.currentSpeed) {
         physics.current.currentSpeed += PHYSICS.ACCELERATION * delta;
@@ -244,9 +273,38 @@ export const useAILocomotion = () => {
     }
 
     // 5. Apply Position
-    if (physics.current.currentSpeed > 0.01) {
-        enemyObject.position.addScaledVector(moveVector, physics.current.currentSpeed * delta);
+    // On a navmesh the agent moves in its crowd: at the velocity asked for, bent away from other agents,
+    // sliding along walls and stopping at ledges (still standing, it keeps the agent on the surface).
+    // Without a place in the crowd it moves over the navmesh alone; off the navmesh, freely.
+    vNext.copy(enemyObject.position);
+    const speed = physics.current.currentSpeed > 0.01 ? physics.current.currentSpeed : 0;
+    if (speed > 0) vNext.addScaledVector(moveVector, speed * delta);
+    const place = crowd.current;
+    if (place.navMesh !== navMesh) {
+        place.agent?.remove();
+        place.agent = navMesh ? navMesh.addAgent(enemyObject.position, tuning.runSpeed * 1.5) : null;
+        place.navMesh = navMesh;
+        place.at.copy(enemyObject.position);
     }
+    let kept: THREE.Vector3 | null = null;
+    if (navMesh && place.agent) {
+        // Moved by something other than the crowd (spawned, knocked back): it carries on from there.
+        if (Math.hypot(enemyObject.position.x - place.at.x, enemyObject.position.z - place.at.z) > 0.5) place.agent.teleport(enemyObject.position);
+        kept = place.agent.position();
+        place.agent.move({ x: moveVector.x * speed, z: moveVector.z * speed }, tuning.runSpeed * 1.5);
+    } else if (navMesh) {
+        kept = navMesh.moveAlongSurface(enemyObject.position, vNext);
+    }
+    if (kept && navMesh) {
+        // The navmesh is only flat between its polygons' corners; the physics ground under the agent
+        // (terrain, floors, ramps, stairs) gives its exact height, a step up or down at most.
+        const reach = navMesh.settings.maxStepHeight + 0.3;
+        vRay.set(kept.x, enemyObject.position.y + reach, kept.z);
+        const ground = physicsQueries.raycast(vRay, vDown, reach * 2 + 0.5, { excludeObjectId: PLAYER_PHYSICS_ID });
+        if (ground) kept.y = ground.point.y;
+    }
+    enemyObject.position.copy(kept ?? vNext);
+    place.at.copy(enemyObject.position);
 
     // 6. Calculate Local Graph Variables (InputX / InputY)
     // Project world moveVector onto local Forward/Right axis

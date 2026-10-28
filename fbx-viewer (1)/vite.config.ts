@@ -151,6 +151,7 @@ export default defineConfig(({ command, mode }) => {
       'three/examples/jsm/exporters/GLTFExporter.js',
       'three/examples/jsm/libs/basis/basis_transcoder.js',
       'three/examples/jsm/libs/draco/gltf/draco_wasm_wrapper.js',
+      '@recast-navigation/wasm',
     ],
   },
   resolve: {

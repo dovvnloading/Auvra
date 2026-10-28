@@ -66,13 +66,15 @@ Actions use the enemy's Speed, Attack Range, Attack Cooldown and Sight Range sta
 
 ## Enemy navigation
 
-During level play, enemies find paths around obstacles when they patrol, chase, search and return. Auvra builds a walkable grid from the level when play starts:
+During level play, enemies walk a navmesh: the level's walkable surfaces, which Auvra bakes with Recast when play starts (in the background, so play does not wait for it) and bakes again when something it is made from changes.
 
-- Solid Colliders (box, sphere and capsule) are obstacles. Props without a Collider, or with a Mesh collider, block a circle about half their larger horizontal scale wide.
-- Objects that move are left out: anything with a Mover, Rotator or non-fixed Rigid Body, or a child of one.
-- Ground follows the terrain; slopes steeper than 40° are not walkable. Obstacles an enemy can walk under or step over do not block it.
+- **What it is baked from**: terrain and the flat ground around it; Colliders as they are shaped (boxes, spheres and capsules, Mesh colliders from the model's own triangles, a fixed Rigid Body without colliders from the hull physics gives it); and props without a Collider from their model, so enemies go round a tree's trunk and under its branches.
+- **What is left out**: objects that move (anything with a Mover, Rotator or non-fixed Rigid Body, or a child of one), triggers and pickups. Give a moving object a **Nav Obstacle** component and it cuts a hole in the navmesh that follows it.
+- **The agent**: enemies keep their radius away from walls and ledges, walk under anything at least their height above the ground, climb steps up to the step height and walk slopes up to the slope limit. Set these under **Game Settings > Navigation** (0.4 m, 1.8 m, 0.35 m and 40° by default). Platforms, ramps and stairs are walkable, so enemies climb a ramp onto a platform; a platform with no way up is not, unless a **Nav Link** joins it.
+- **Moving**: enemies follow the shortest path in straight legs, turning at corners, and stay on the navmesh: they slide along walls, stop at ledges and keep to the ground's height. Patrolling enemies pick points they can walk to.
+- **Crowds**: enemies steer round each other instead of walking through one another, and ones that bunch up are eased apart, standing still or not.
 
-When the player cannot be reached, a chasing enemy goes to the closest point it can reach. Enemies in the **Sandbox** tab still move in straight lines.
+When the player cannot be reached, a chasing enemy goes to the closest point it can reach and waits there if the player is shut in at ground level; if the player is up on a platform or in the air, it keeps closing in. To see the navmesh, turn on **Show navigation** in the World Editor toolbar: walkable ground is drawn in blue, and Nav Links as lines. Enemies in the **Sandbox** tab still move in straight lines inside its arena.
 
 ## Animation transitions
 

@@ -27,4 +27,10 @@ describe('third-party notices', () => {
       expect(section).toMatch(/^[^\n]+\n=+\n\nCopyright [^\n]+\n\n\s*Apache License\s+Version 2\.0/);
     }
   });
+
+  it('credits Recast and Detour, compiled into the navmesh library, under the zlib license', () => {
+    const notices = collectThirdPartyNotices(root);
+    const section = notices.slice(notices.indexOf('Recast & Detour (Zlib), inside @recast-navigation/wasm@'));
+    expect(section).toMatch(/^[^\n]+\n=+\n\nCopyright \(c\) 2009 Mikko Mononen[^\n]*\n\nThis software is provided 'as-is'/);
+  });
 });
