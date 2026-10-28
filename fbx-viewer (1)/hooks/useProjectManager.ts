@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CameraState, type ProjectTemplate } from '../types';
-import { ProjectHostError, ProjectStatus, projectService } from '../utils/projectService';
+import { ProjectStatus, projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
 import { dbOperations } from '../utils/db';
 import { OperationHandle, useOperationActions } from '../context/OperationContext';
@@ -117,7 +117,7 @@ export const useProjectManager = ({
       outcome = 'failure';
       failure = error;
       // Cancelling the file dialog leaves the host's project open: the editor goes back to it.
-      const cancelled = error instanceof ProjectHostError && error.code === 'cancelled';
+      const cancelled = (error as { code?: unknown } | null)?.code === 'cancelled';
       const status = projectService.getStatus();
       if (transition) {
         if (cancelled && previous && status.projectId === previous.projectId) editorSession.revert(transition, previous, status.revision);
