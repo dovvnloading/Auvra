@@ -13,7 +13,8 @@ import { useEntityHealth } from './hooks/useEntityHealth';
 import { WorldHealthBar } from './UI/WorldHealthBar';
 import { useGameContent } from '../../runtime/GameContentContext';
 import { ownClipsFirst } from '../../utils/animationBinding';
-import { weaponMoveClips, weaponPlacements, type WeaponPose } from '../../runtime/weapons';
+import { generatedMuzzleSocketName, weaponMoveClips, weaponPlacements, type WeaponPose } from '../../runtime/weapons';
+import { weaponMuzzleSocket } from '../../runtime/weaponMuzzle';
 import { weaponLocomotionGraph } from '../AnimationGraph/utils/clipMatching';
 
 /** Seconds the death animation plays before the body starts fading. */
@@ -156,6 +157,21 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
         () => weaponLocomotionGraph(blueprint.animationGraph, weaponMoveClips(heldWeapon), new Set(clips.map(clip => clip.name))),
         [blueprint.animationGraph, heldWeapon, clips],
     );
+    // Weapons with a model but no muzzle socket fire from one the engine places at the model's muzzle.
+    const allSockets = useMemo(() => [
+        ...sockets,
+        ...(blueprint.weapons ?? []).flatMap((weapon) => {
+            const socket = weaponMuzzleSocket(weapon, attachments.find(item => item.id === weapon.attachmentId));
+            return socket ? [socket] : [];
+        }),
+    ], [sockets, blueprint.weapons, attachments]);
+    // The held weapon's muzzle, which the aim points at the crosshair.
+    const heldMuzzleName = heldWeapon
+        ? heldWeapon.muzzleSocket?.trim() || (heldWeapon.attachmentId ? generatedMuzzleSocketName(heldWeapon.id) : null)
+        : null;
+    const heldMuzzleId = heldMuzzleName ? allSockets.find(socket => socket.name.startsWith(heldMuzzleName))?.id ?? null : null;
+    const heldMuzzle = useCallback(() => (heldMuzzleId ? socketRefs.current.get(heldMuzzleId) ?? null : null), [heldMuzzleId]);
+
     // The other hand on the held weapon, while it is in the hands and not being reloaded.
     const heldAttachmentId = heldWeapon?.attachmentId ?? null;
     const heldInHands = !!heldAttachmentId && weaponPlacementsById.get(heldAttachmentId) === 'hand';
@@ -299,7 +315,7 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
         object: model.object,
         
         getSocketWorldPosition: (namePrefix: string) => {
-            const socketData = sockets.find(s => s.name.startsWith(namePrefix));
+            const socketData = allSockets.find(s => s.name.startsWith(namePrefix));
             if (!socketData) return null;
 
             const socketObj = socketRefs.current.get(socketData.id);
@@ -316,8 +332,8 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
 
         triggerMuzzleFlash: (socketName) => {
             const muzzleSocket = socketName
-                ? sockets.find(s => s.name.startsWith(socketName))
-                : sockets.find(s => s.name.toLowerCase().includes('muzzle'));
+                ? allSockets.find(s => s.name.startsWith(socketName))
+                : allSockets.find(s => s.name.toLowerCase().includes('muzzle'));
             if (muzzleSocket) {
                 triggerSocketFlash(muzzleSocket.id);
             }
@@ -415,7 +431,7 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
             })}
 
             {/* Replaced SocketLogicController with SocketController for Visuals */}
-            {sockets.map(sock => (
+            {allSockets.map(sock => (
                 <SocketController
                     key={sock.id}
                     data={sock}
@@ -437,7 +453,7 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
                 eventSource={remote ? `remote:${entityId}` : team === 'Player' ? 'player' : entityId}
                 lod={remote || team !== 'Player'}
             />
-            <CharacterIK model={model.object} settings={blueprint.ik} physicsId={team === 'Player' && !remote ? PLAYER_PHYSICS_ID : undefined} aiming={isAiming} supportGrip={supportGrip} />
+            <CharacterIK model={model.object} settings={blueprint.ik} physicsId={team === 'Player' && !remote ? PLAYER_PHYSICS_ID : undefined} aiming={isAiming} supportGrip={supportGrip} muzzle={heldMuzzle} />
             {/* Enemies fall as ragdolls; the player's death ends the game, and its capsule would fight the bodies. */}
             {isDead && team === 'Enemy' && <CharacterRagdoll model={model.object} />}
         </group>

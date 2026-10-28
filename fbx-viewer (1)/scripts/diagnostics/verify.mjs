@@ -47,6 +47,8 @@ const EXEMPT = new Map(Object.entries({
   'runtime/spawning.ts': 'pure-utility',
   'runtime/weapons.ts': 'pure-utility',
   'runtime/weaponFit.ts': 'pure-utility',
+  'runtime/weaponMuzzle.ts': 'pure-utility',
+  'runtime/aimTarget.ts': 'pure-utility',
   'runtime/playerActions.ts': 'pure-utility',
   'utils/appDialogs.ts': 'pure-utility',
   'utils/retargeting.ts': 'pure-utility',

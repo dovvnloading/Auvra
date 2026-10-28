@@ -6,6 +6,8 @@ import { SandboxEntityHandle } from '../SandboxEntity';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { releaseSound, routeSoundToBus, useRuntimeMixer } from '../../../runtime/components/audioComponents';
 import type { ResolvedWeapon } from '../../../runtime/weapons';
+import { PLAYER_PHYSICS_ID, usePhysicsQueries } from '../../../runtime/physics';
+import { crosshairTarget } from '../../../runtime/aimTarget';
 
 /** Seconds the first hip-fire shot of a press waits for the firing pose to come up. */
 export const HIP_FIRE_DELAY = 0.1;
@@ -37,6 +39,7 @@ export const usePlayerCombat = (
 ) => {
     // Audio Buffers Cache
     const soundBuffers = useRef<AudioBuffer[]>([]);
+    const physics = usePhysicsQueries();
 
     // Gunshots play on the mixer's sfx bus in play (plain listener output without runtime services).
     const mixer = useRuntimeMixer();
@@ -108,7 +111,7 @@ export const usePlayerCombat = (
         for (let shot = 0; shot < shots; shot += 1) {
             if ((!isAiming || flashWhileAiming) && entity.triggerMuzzleFlash) entity.triggerMuzzleFlash(weapon.muzzleSocket);
             for (let pellet = 0; pellet < weapon.pellets; pellet += 1) {
-                spawnProjectile(entity, manager, modelObject, camera, isAiming, weapon);
+                spawnProjectile(entity, manager, modelObject, camera, isAiming, weapon, flashWhileAiming);
             }
             playGunshot(camera);
         }
@@ -120,12 +123,20 @@ export const usePlayerCombat = (
         model: THREE.Object3D,
         camera: THREE.Camera,
         isAiming: boolean,
-        weapon: ResolvedWeapon
+        weapon: ResolvedWeapon,
+        overShoulder = false,
     ) => {
         let origin: THREE.Vector3;
         let direction: THREE.Vector3;
 
-        if (isAiming) {
+        // Over the shoulder the weapon is in view: the shot leaves its muzzle for what the crosshair is on.
+        const muzzle = isAiming && overShoulder ? entity.getSocketWorldPosition(weapon.muzzleSocket || 'Muzzle') : null;
+        const toTarget = muzzle ? crosshairTarget(camera, physics.raycast, PLAYER_PHYSICS_ID).sub(muzzle.position) : null;
+        const cameraForward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+        if (muzzle && toTarget && toTarget.lengthSq() > 1e-6 && toTarget.dot(cameraForward) > 0) {
+            origin = muzzle.position;
+            direction = toTarget.normalize();
+        } else if (isAiming) {
             // FIRE FROM CAMERA CENTER (Accurate Scope Shot)
             origin = camera.position.clone();
             // Move origin slightly forward to avoid clipping with camera near plane or self
