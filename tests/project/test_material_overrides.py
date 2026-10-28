@@ -48,6 +48,28 @@ class MaterialOverrideSchemaTests(unittest.TestCase):
         self.assertNotIn("materialOverrides", document["documents"][0])
         validate_domain("models", _models(_model({})))
 
+    def test_accepts_a_material_asset_and_its_graph(self):
+        document = validate_domain("models", _models(_model({"Body": {"materialId": "mat-glow"}})))
+        self.assertEqual(document["documents"][0]["materialOverrides"], {"Body": {"materialId": "mat-glow"}})
+        # A graph's nodes carry params of their own type's; they are not the blueprint nodes of that name.
+        graph = {
+            "nodes": [
+                {"id": "output", "type": "output", "x": 480, "y": 120, "params": {"baseColor": [1, 0, 0], "roughness": 0.4}},
+                {"id": "tex", "type": "texture", "x": 0, "y": 0, "params": {"texture": "tex-albedo"}},
+            ],
+            "links": [{"fromNode": "tex", "fromOutput": "rgb", "toNode": "output", "toInput": "baseColor"}],
+        }
+        materials = validate_domain("materials", domain_document("materials", [{"id": "mat-glow", "name": "Glow", "graph": graph, "textureIds": ["tex-albedo"]}]))
+        self.assertEqual(materials["documents"][0]["graph"], graph)
+
+    def test_rejects_a_missing_material_asset(self):
+        models = _models(_model({"Body": {"materialId": "mat-missing"}}))
+        domains = {"models": models, "textures": _textures(), "materials": domain_document("materials", [])}
+        with self.assertRaisesRegex(ValueError, "model material asset"):
+            validate_project_references(domains)
+        domains["materials"] = domain_document("materials", [{"id": "mat-missing", "name": "Now here", "graph": {"nodes": [], "links": []}}])
+        validate_project_references(domains)
+
     def test_rejects_unknown_override_fields(self):
         with self.assertRaisesRegex(ValueError, "unknown fields in materialOverrides"):
             validate_domain("models", _models(_model({"Body": {"roughness": 0.5, "specular": 1}})))

@@ -68,10 +68,11 @@ _NESTED_KEYS = {
     "behaviorTree": {"rootId", "behaviorNodes"},
     "behaviorNodes": {"id", "type", "children", "condition", "action", "value", "text"},
 }
-_FREEFORM_KEYS = {"settings", "overrides", "style", "payload", "data", "customData", "props"}
+# ``graph`` is a material asset's node graph, whose node params belong to each node type.
+_FREEFORM_KEYS = {"settings", "overrides", "style", "payload", "data", "customData", "props", "graph"}
 # ``materialOverrides`` is keyed by authored material names, so its entries are
 # checked against the override fields instead of by their (arbitrary) key.
-_MATERIAL_OVERRIDE_KEYS = {"color", "roughness", "metalness", "emissive", "emissiveIntensity", "opacity", "mapTextureId", "normalTextureId"}
+_MATERIAL_OVERRIDE_KEYS = {"color", "roughness", "metalness", "emissive", "emissiveIntensity", "opacity", "mapTextureId", "normalTextureId", "materialId"}
 _MATERIAL_TEXTURE_KEYS = ("mapTextureId", "normalTextureId")
 # Material names are also the keys of ``materialOverrides`` and
 # ``textureOverrides``, but every document crosses two protocol key blocklists:
@@ -221,6 +222,7 @@ def validate_project_references(
         for override in (value.get("materialOverrides") or {}).values():
             for key in _MATERIAL_TEXTURE_KEYS:
                 require("textures", override.get(key), "model material texture", optional=True)
+            require("materials", override.get("materialId"), "model material asset", optional=True)
     for domain in ("attachments", "sockets"):
         for value in records[domain].values():
             require("models", value.get("parentModelId"), f"{domain} parent model")

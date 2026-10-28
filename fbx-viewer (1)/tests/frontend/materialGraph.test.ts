@@ -10,7 +10,7 @@ import {
   wouldCreateCycle,
   type MaterialGraph,
 } from '../../runtime/materials/materialGraph';
-import { GraphMaterial, MATERIAL_TIME } from '../../runtime/materials/graphMaterial';
+import { GraphMaterial, MATERIAL_TIME, bindMaterialGraph, boundMaterialGraph, unbindMaterialGraph } from '../../runtime/materials/graphMaterial';
 
 const node = (id: string, type: string, params: Record<string, unknown> = {}) => ({ id, type, x: 0, y: 0, params: { ...defaultParams(type), ...params } });
 const link = (fromNode: string, fromOutput: string, toNode: string, toInput: string) => ({ fromNode, fromOutput, toNode, toInput });
@@ -160,6 +160,25 @@ describe('graph materials', () => {
     expect((shader.uniforms.mg_out_roughness as THREE.IUniform<number>).value).toBeCloseTo(0.1);
     material.setGraph({ ...graph, links: [] });
     expect(material.version).toBeGreaterThan(version);
+  });
+
+  it('binds to an imported material in place, and gives it back its own shading when unbound', () => {
+    const imported = new THREE.MeshStandardMaterial({ name: 'Bricks' });
+    const ownKey = imported.customProgramCacheKey();
+    bindMaterialGraph(imported, tintedGraph());
+    expect(boundMaterialGraph(imported)).not.toBeNull();
+    expect(imported.customProgramCacheKey()).toContain('graph:');
+    expect(imported.defines?.USE_UV).toBe('');
+    const shader = standardShader();
+    imported.onBeforeCompile(shader, {} as THREE.WebGLRenderer);
+    expect(shader.fragmentShader).toContain('diffuseColor.rgb = (mg_mul_out_out_');
+    unbindMaterialGraph(imported);
+    expect(boundMaterialGraph(imported)).toBeNull();
+    expect(imported.customProgramCacheKey()).toBe(ownKey);
+    expect(imported.defines?.USE_UV).toBeUndefined();
+    const own = standardShader();
+    imported.onBeforeCompile(own, {} as THREE.WebGLRenderer);
+    expect(own.fragmentShader).toContain('#include <map_fragment>');
   });
 
   it('starts from a plain grey surface', () => {
