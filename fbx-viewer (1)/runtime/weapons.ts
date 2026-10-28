@@ -74,6 +74,21 @@ export type MoveRole = 'idle' | 'walk' | 'run' | 'back' | 'jump';
 type MoveClipField = 'idleClip' | 'walkClip' | 'runClip' | 'backClip' | 'jumpClip';
 const MOVE_CLIP_FIELDS: Record<MoveRole, MoveClipField> = { idle: 'idleClip', walk: 'walkClip', run: 'runClip', back: 'backClip', jump: 'jumpClip' };
 
+/** Every clip a weapon is held with: its locomotion, aim, fire and reload clips. */
+export const weaponClipNames = (weapon: WeaponSettings): string[] =>
+    [...Object.values(weaponMoveClips(weapon)), weapon.aimClip, weapon.fireClip, weapon.reloadClip]
+        .filter((name): name is string => !!clip(name));
+
+/**
+ * Which weapon a character previewed outside play holds: while `playing` is one of a weapon's own
+ * clips, that weapon (in use); while its animation graph plays, the first one carried from the
+ * start, as when play starts; otherwise none, every weapon at its carry placement. -1 for none.
+ */
+export const previewHeldWeapon = (weapons: readonly WeaponSettings[], playing: string | null): number =>
+    playing
+        ? weapons.findIndex(weapon => weaponClipNames(weapon).includes(playing))
+        : weapons.findIndex(weapon => weapon.startsOwned !== false);
+
 /** A weapon's own locomotion clips (see WeaponSettings.idleClip), by role; empty when it has none. */
 export const weaponMoveClips = (weapon: Pick<WeaponSettings, MoveClipField> | null | undefined): Partial<Record<MoveRole, string>> => {
     const clips: Partial<Record<MoveRole, string>> = {};

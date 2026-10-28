@@ -7,6 +7,8 @@ import { useScene } from '../../context/SceneContext';
 import { GraphRuntime, GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
 import { AttachmentController } from './AttachmentController';
 import { SocketController, resolveSocketFlashTextureUrl } from './SocketController';
+import { previewHeldWeapon, weaponMoveClips, weaponPlacements } from '../../runtime/weapons';
+import { weaponLocomotionGraph } from '../AnimationGraph/utils/clipMatching';
 
 interface ModelViewerProps {
   data: LoadedModelData;
@@ -49,6 +51,26 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
   // EXCEPTION: If activeClip is explicitly set (e.g. for Socket Preview), we override the blueprint
   // to allow the user to see the specific animation they selected.
   const isBlueprintActive = !!blueprint && !activeClip;
+
+  // Weapons go where play puts them, so a rifle never hangs from a hand in a pose made for no weapon:
+  // in the hands while one of a weapon's own clips plays (or the graph plays and it is the first
+  // carried, held with its own locomotion), at their carry placements otherwise.
+  const weapons = blueprint?.weapons;
+  const heldWeapon = useMemo(
+    () => (weapons?.length ? previewHeldWeapon(weapons, activeClip?.name ?? null) : -1),
+    [weapons, activeClip],
+  );
+  const weaponPlacementsById = useMemo(
+    () => (weapons?.length
+      ? weaponPlacements(weapons, { held: heldWeapon, ready: !!activeClip && heldWeapon >= 0, owned: weapons.map(() => true) })
+      : null),
+    [weapons, heldWeapon, activeClip],
+  );
+  const previewGraph = useMemo(() => {
+    if (!blueprint) return null;
+    const held = heldWeapon >= 0 ? blueprint.weapons?.[heldWeapon] : null;
+    return weaponLocomotionGraph(blueprint.animationGraph, weaponMoveClips(held), new Set(allSceneClips.map(clip => clip.name)));
+  }, [blueprint, heldWeapon, allSceneClips]);
 
   // --- Watch for External Fire Triggers (From Socket Panel Test) ---
   const lastFireTrigger = characterFireTriggers[data.id];
@@ -121,13 +143,18 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
          <primitive object={data.object} scale={finalScale} />
 
          {/* Attachments */}
-         {myAttachments.map(att => (
-             <AttachmentController 
-                key={att.id} 
-                data={att} 
-                parentObject={data.object} 
-             />
-         ))}
+         {myAttachments.map(att => {
+             const placement = weaponPlacementsById?.get(att.id);
+             return (
+                 <AttachmentController
+                    key={att.id}
+                    data={att}
+                    parentObject={data.object}
+                    hidden={placement === 'hidden'}
+                    placement={placement && typeof placement === 'object' ? placement : null}
+                 />
+             );
+         })}
 
          {/* Sockets (Visible when selected) */}
          {isSelected && mySockets.map(sock => (
@@ -141,10 +168,10 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
          ))}
 
          {/* Blueprint Runtime Engine */}
-         {isBlueprintActive && blueprint && (
+         {isBlueprintActive && blueprint && previewGraph && (
              <GraphRuntime 
                 modelObject={data.object}
-                graph={blueprint.animationGraph}
+                graph={previewGraph}
                 allClips={allSceneClips}
                 enableInputs={false} // Main scene viewer is passive
                 apiRef={runtimeApiRef}

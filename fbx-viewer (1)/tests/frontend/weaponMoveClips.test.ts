@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { moveClipRole, weaponLocomotionGraph } from '../../components/AnimationGraph/utils/clipMatching';
-import { resolveWeapon, weaponMoveClips, weaponPlacements } from '../../runtime/weapons';
+import { previewHeldWeapon, resolveWeapon, weaponClipNames, weaponMoveClips, weaponPlacements } from '../../runtime/weapons';
 import type { AnimationGraphData, GraphState, WeaponSettings } from '../../types';
 
 const single = (id: string, clipName: string | null): GraphState => ({
@@ -89,5 +89,29 @@ describe('a held weapon\'s locomotion', () => {
     const atRest = { held: 0, ready: false, owned: [true] };
     expect(weaponPlacements([rifle], atRest).get('rifle-model')).toBe('hand');
     expect(weaponPlacements([{ ...rifle, idleClip: null }], atRest).get('rifle-model')).toMatchObject({ boneName: 'Spine2' });
+  });
+});
+
+describe('weapons on a character previewed outside play', () => {
+  const pistol: WeaponSettings = { id: 'p', name: 'Pistol', attachmentId: 'pistol-model', idleClip: 'Pistol Idle', aimClip: 'Pistol Aiming Idle', carry: { boneName: 'RightUpLeg', position: [0, 0, 0], rotation: [0, 0, 0] } };
+  const weapons = [pistol, rifle];
+
+  it('holds the weapon whose own clip plays, and the first carried while the graph plays', () => {
+    expect(previewHeldWeapon(weapons, 'Rifle Idle')).toBe(1);
+    expect(previewHeldWeapon(weapons, 'Pistol Aiming Idle')).toBe(0);
+    expect(previewHeldWeapon(weapons, null)).toBe(0);
+    expect(previewHeldWeapon([{ ...pistol, startsOwned: false }, rifle], null)).toBe(1);
+  });
+
+  it('holds none during a clip made for no weapon, so every weapon is at its carry placement', () => {
+    const held = previewHeldWeapon(weapons, 'Idle');
+    expect(held).toBe(-1);
+    const placements = weaponPlacements(weapons, { held, ready: false, owned: [true, true] });
+    expect(placements.get('pistol-model')).toMatchObject({ boneName: 'RightUpLeg' });
+    expect(placements.get('rifle-model')).toMatchObject({ boneName: 'Spine2' });
+  });
+
+  it('lists every clip a weapon is held with', () => {
+    expect(weaponClipNames(pistol)).toEqual(['Pistol Idle', 'Pistol Aiming Idle']);
   });
 });
