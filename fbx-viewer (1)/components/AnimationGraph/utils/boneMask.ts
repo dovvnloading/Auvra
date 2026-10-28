@@ -11,7 +11,7 @@ export const boneKey = (name: string): string => {
 };
 
 /** The node a track animates ("mixamorigSpine.quaternion" -> "mixamorigSpine"), or null if unparsable. */
-const trackNodeName = (track: THREE.KeyframeTrack): string | null => {
+export const trackNodeName = (track: THREE.KeyframeTrack): string | null => {
     try {
         const parsed = THREE.PropertyBinding.parseTrackName(track.name);
         if (parsed.objectName === 'bones' && parsed.objectIndex) return String(parsed.objectIndex);

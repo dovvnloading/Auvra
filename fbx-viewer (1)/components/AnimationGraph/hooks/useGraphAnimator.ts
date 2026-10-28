@@ -264,6 +264,7 @@ export const useGraphAnimator = (
 
         extras.montage?.current?.update(delta);
         mixer.update(delta);
+        extras.montage?.current?.applyMeshSpaceRotation();
 
         if (!currentState || !tracked) return;
         const clipName = currentState.clipName as string;

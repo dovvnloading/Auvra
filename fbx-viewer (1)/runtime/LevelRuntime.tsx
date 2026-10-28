@@ -1031,7 +1031,7 @@ const RuntimeEnemyController: React.FC<{
         const clip = triggerHeld ? (weapon.fireClip || assets.blueprint.upperBody?.fireClip || weapon.aimClip || null) : null;
         if (clip !== state.clip) {
             state.clip = clip;
-            if (clip) apiRef.current?.playMontage?.(clip, { maskBone: assets.blueprint.upperBody?.maskBone || DEFAULT_UPPER_BODY_BONE, loop: true, blendIn: 0.12 });
+            if (clip) apiRef.current?.playMontage?.(clip, { maskBone: assets.blueprint.upperBody?.maskBone || DEFAULT_UPPER_BODY_BONE, loop: true, blendIn: 0.12, meshSpaceRotation: true });
             else apiRef.current?.stopMontage?.(0.2);
         }
         const manager = projectileManagerRef.current;
