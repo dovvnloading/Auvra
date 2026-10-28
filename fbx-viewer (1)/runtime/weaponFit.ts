@@ -109,6 +109,52 @@ export const fitWeaponToHands = (
     }
 };
 
+const supportRotationCache = new WeakMap<THREE.AnimationClip, Map<string, Vec3 | null>>();
+
+/**
+ * How the other hand is turned on a weapon held on `boneName` with the attachment's `rotation`
+ * (degrees), as `clip` poses the hands at `time`: degrees in the weapon's frame, what Fit records
+ * as the weapon's support rotation. A weapon never fitted takes it from its own clip this way.
+ * Null when the rig lacks the hand or its mirror. Cached per model, clip, bone and rotation.
+ */
+export const supportRotationFromClip = (
+    model: THREE.Object3D,
+    clip: THREE.AnimationClip,
+    boneName: string,
+    rotation: readonly number[],
+    time = 0,
+): Vec3 | null => {
+    const key = `${model.uuid}|${boneName}|${rotation.join(',')}|${time}`;
+    let byKey = supportRotationCache.get(clip);
+    if (!byKey) {
+        byKey = new Map();
+        supportRotationCache.set(clip, byKey);
+    }
+    if (byKey.has(key)) return byKey.get(key) ?? null;
+    const copy = cloneSkeleton(model);
+    const mixer = new THREE.AnimationMixer(copy);
+    let result: Vec3 | null = null;
+    try {
+        mixer.clipAction(clip).play();
+        mixer.setTime(Math.min(Math.max(0, time), clip.duration));
+        copy.updateMatrixWorld(true);
+        const hand = findBone(copy, boneName);
+        const otherName = mirrorBoneName(boneName);
+        const other = otherName ? findBone(copy, otherName) : null;
+        if (hand && other && other !== hand) {
+            const mounted = new THREE.Quaternion().setFromEuler(new THREE.Euler(...(rotation.map(value => THREE.MathUtils.degToRad(value)) as Vec3)));
+            const weapon = hand.getWorldQuaternion(new THREE.Quaternion()).multiply(mounted);
+            const turn = new THREE.Euler().setFromQuaternion(weapon.invert().multiply(other.getWorldQuaternion(new THREE.Quaternion())), 'XYZ');
+            result = [turn.x, turn.y, turn.z].map(angle => Math.round(THREE.MathUtils.radToDeg(angle) * 1000) / 1000) as Vec3;
+        }
+    } finally {
+        mixer.stopAllAction();
+        mixer.uncacheRoot(copy);
+    }
+    byKey.set(key, result);
+    return result;
+};
+
 /** How far a carried weapon rests off the body, as a share of the character's height: it touches without sinking in. */
 const SEAT_GAP = 0.003;
 
