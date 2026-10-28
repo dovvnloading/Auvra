@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CameraState, type ProjectTemplate } from '../types';
-import { ProjectStatus, projectService } from '../utils/projectService';
+import { ProjectHostError, ProjectStatus, projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
 import { dbOperations } from '../utils/db';
 import { OperationHandle, useOperationActions } from '../context/OperationContext';
 import { frontendDiagnostics, type DiagnosticAttributes, type DiagnosticContext } from '../diagnostics/runtime';
-import { editorSession, type EditorSessionTransition } from '../utils/editorSession';
+import { editorSession, type EditorSessionReadyLease, type EditorSessionTransition } from '../utils/editorSession';
 import { createEditorStateDocument, EDITOR_STATE_DOCUMENT_ID } from '../utils/editorState';
 
 type HydrationProgress = (
@@ -86,6 +86,7 @@ export const useProjectManager = ({
     let outcome: 'success' | 'failure' = 'success';
     let failure: unknown;
     let transition: EditorSessionTransition | null = null;
+    let previous: EditorSessionReadyLease | null = null;
     setIsLoading(true);
     try {
       // Debounced level edits belong to the current session: write them (and
@@ -95,6 +96,7 @@ export const useProjectManager = ({
       // The transition is begun before the operation's first host request. It
       // synchronously invalidates every old World Editor lease, including
       // delayed writes.
+      previous = transitionKind ? editorSession.captureReady() : null;
       transition = transitionKind ? editorSession.beginTransition() : null;
       await operation(handle, transition);
       if (transition) {
@@ -114,8 +116,14 @@ export const useProjectManager = ({
     } catch (error) {
       outcome = 'failure';
       failure = error;
-      if (transition) editorSession.fail(transition);
-      addNotification({ message: error instanceof Error ? error.message : 'Project operation failed.', type: 'error' });
+      // Cancelling the file dialog leaves the host's project open: the editor goes back to it.
+      const cancelled = error instanceof ProjectHostError && error.code === 'cancelled';
+      const status = projectService.getStatus();
+      if (transition) {
+        if (cancelled && previous && status.projectId === previous.projectId) editorSession.revert(transition, previous, status.revision);
+        else editorSession.fail(transition);
+      }
+      addNotification({ message: error instanceof Error ? error.message : 'Project operation failed.', type: cancelled ? 'info' : 'error' });
       throw error;
     } finally {
       const ownsLoadingState = activeOperation.current?.id === handle.id;

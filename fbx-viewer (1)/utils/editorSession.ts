@@ -105,6 +105,22 @@ export class EditorSessionOwner {
   }
 
   /**
+   * Ends a transition that replaced nothing, such as a file dialog the user
+   * cancelled: the project that was ready before it is ready again, at the
+   * host's revision. The generation still advances, so leases captured before
+   * or during the transition stay invalid. Without a previous project the
+   * transition closes.
+   */
+  revert(
+    transition: EditorSessionTransition,
+    previous: EditorSessionReadyLease | null,
+    revision: number,
+  ): EditorSessionLease | null {
+    if (!previous?.projectId) return this.close(transition);
+    return this.complete(transition, previous.projectId, previous.levelId, revision);
+  }
+
+  /**
    * Advance only the revision of the currently ready project. Host status
    * events can arrive while a replacement transition is in flight; those are
    * intentionally ignored because the project identity is not established

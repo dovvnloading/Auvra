@@ -50,6 +50,10 @@ export interface BehaviorEffects {
     attacking(): boolean;
     setVariable(name: string, value: number): void;
     playAnimation(clipName: string): boolean;
+    /** Whether the enemy has a weapon to shoot with (its blueprint's first weapon). */
+    canShoot(): boolean;
+    /** Holds the weapon's trigger this frame; its fire rate, magazine and reload decide the shots. */
+    holdTrigger(): void;
 }
 
 export interface BehaviorIntent {
@@ -79,6 +83,7 @@ export const createBehaviorMemory = (): BehaviorMemory => ({ nodes: new Map(), r
 export const ARRIVE_DISTANCE = 1;
 const DEFAULT_WAIT = 2;
 const DEFAULT_STRAFE = 2;
+const DEFAULT_SHOOT = 2;
 const DEFAULT_FLEE = 15;
 /** Chance conditions roll once per this many seconds, so a frame rate does not change their odds. */
 const CHANCE_INTERVAL = 1;
@@ -164,6 +169,19 @@ const evaluateAction = (node: BehaviorNode, tick: Tick): BehaviorStatus => {
             if (!player || !world.canSee || world.distToPlayer > world.attackRange + 0.5 || !effects.attackReady()) return 'failure';
             effects.startAttack();
             memory.started = true;
+            go(tick, 'ATTACKING', player, player);
+            return 'running';
+        }
+        case 'shoot': {
+            // Stands, faces the player and holds the trigger while it sees them within attack range.
+            if (!player || !world.canSee || world.distToPlayer > world.attackRange + 0.5 || !effects.canShoot()) return 'failure';
+            const memory = memoryOf(tick, node.id);
+            memory.elapsed = (memory.elapsed ?? 0) + world.delta;
+            effects.holdTrigger();
+            if (memory.elapsed >= (node.value ?? DEFAULT_SHOOT) - TIME_EPSILON) {
+                memory.elapsed = 0;
+                return 'success';
+            }
             go(tick, 'ATTACKING', player, player);
             return 'running';
         }
@@ -322,6 +340,29 @@ export const defaultBehaviorTree = (): BehaviorTreeData => ({
         node('sees', 'condition', { condition: 'canSeePlayer' }),
         node('engage', 'selector', { children: ['strike', 'close-in'] }),
         node('strike', 'action', { action: 'attack' }),
+        node('close-in', 'action', { action: 'chase' }),
+        node('hunt', 'sequence', { children: ['remembers', 'search'] }),
+        node('remembers', 'condition', { condition: 'remembersPlayer' }),
+        node('search', 'action', { action: 'search' }),
+        node('wander', 'sequence', { children: ['patrol', 'pause'] }),
+        node('patrol', 'action', { action: 'patrol' }),
+        node('pause', 'action', { action: 'wait', value: 3 }),
+    ],
+});
+
+/**
+ * A tree for an enemy with a weapon: shoot what it sees from attack range (set Attack Range to the
+ * distance it fights from), close in when out of range, search where it last saw the player,
+ * otherwise patrol.
+ */
+export const gunnerBehaviorTree = (): BehaviorTreeData => ({
+    rootId: 'root',
+    behaviorNodes: [
+        node('root', 'selector', { children: ['fight', 'hunt', 'wander'] }),
+        node('fight', 'sequence', { children: ['sees', 'engage'] }),
+        node('sees', 'condition', { condition: 'canSeePlayer' }),
+        node('engage', 'selector', { children: ['fire', 'close-in'] }),
+        node('fire', 'action', { action: 'shoot', value: 2 }),
         node('close-in', 'action', { action: 'chase' }),
         node('hunt', 'sequence', { children: ['remembers', 'search'] }),
         node('remembers', 'condition', { condition: 'remembersPlayer' }),

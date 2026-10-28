@@ -33,11 +33,13 @@ import { instantiatePrefab } from '../utils/prefabs';
 import { useGameContent } from './GameContentContext';
 import { gameState, INITIAL_PLAYER_STATE, type PlayerWeaponStatus, useGameState } from './gameState';
 import { playerActions } from './playerActions';
-import type { SavedWeapons } from './weapons';
+import { resolveWeapons, type ResolvedWeapon, type SavedWeapons } from './weapons';
+import { spreadDirection } from '../components/Sandbox/hooks/usePlayerCombat';
+import { DEFAULT_UPPER_BODY_BONE } from '../types';
 import { FrameStepper, PauseActionWatcher, PauseController, SceneInspector } from './PauseController';
 import { PhysicsWorld } from './physics';
 import { TriggerEventsProvider } from './triggers';
-import { RuntimeServicesProvider, RuntimeSpawnerProvider, type SpawnPosition, toSpawnPoint } from './RuntimeServicesContext';
+import { RuntimeServicesProvider, RuntimeSpawnerProvider, type SpawnPosition, toSpawnPoint, useRuntimeServices } from './RuntimeServicesContext';
 import { ComponentHostContext } from './components/builtins';
 import { getComponentDefinition } from './components/registry';
 import { IKPlayerTargetContext } from './components/ikComponents';
@@ -983,6 +985,9 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
 /** The game id the relay keeps rooms apart by: the game's name, lower-cased, letters and digits. */
 const netGameId = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'auvra-game';
 
+/** Milliseconds an enemy keeps its weapon in hand after its last shot before carrying it again. */
+const ENEMY_WEAPON_READY_MS = 800;
+
 const RuntimeEnemyController: React.FC<{
     data: SpawnedEnemy;
     assets: ActorAssetBundle;
@@ -998,6 +1003,58 @@ const RuntimeEnemyController: React.FC<{
     const apiRef = useRef<GraphRuntimeAPI | undefined>(undefined);
     const entityRef = useRef<SandboxEntityHandle>(null);
     const damage = useMemo(() => resolveBlueprintDamage(assets.blueprint), [assets.blueprint]);
+    const services = useRuntimeServices();
+
+    // The weapon a Shoot action fires: the blueprint's first weapon carried from the start.
+    const weaponSlot = useMemo(() => {
+        const settings = assets.blueprint.weapons ?? [];
+        const index = settings.findIndex(weapon => weapon.startsOwned !== false);
+        return index < 0 ? null : { index, weapon: resolveWeapons(settings)[index] as ResolvedWeapon, owned: settings.map(weapon => weapon.startsOwned !== false) };
+    }, [assets.blueprint.weapons]);
+    const firing = useRef({ lastShot: -Infinity, ready: false, clip: null as string | null, aimHeight: 0 });
+
+    const handleFire = useCallback((shots: number, triggerHeld: boolean) => {
+        const entity = entityRef.current;
+        const slot = weaponSlot;
+        if (!entity || !slot || !playerObject) return;
+        const { weapon } = slot;
+        const state = firing.current;
+        const now = performance.now();
+        if (shots > 0) state.lastShot = now;
+        // In hand while firing and a moment after; at its carry placement otherwise.
+        const ready = triggerHeld || now - state.lastShot < ENEMY_WEAPON_READY_MS;
+        if (ready !== state.ready) {
+            state.ready = ready;
+            entity.setWeaponPose({ held: slot.index, ready, owned: slot.owned });
+        }
+        // The fire clip, else the aim clip, from the spine up while the trigger is held.
+        const clip = triggerHeld ? (weapon.fireClip || assets.blueprint.upperBody?.fireClip || weapon.aimClip || null) : null;
+        if (clip !== state.clip) {
+            state.clip = clip;
+            if (clip) apiRef.current?.playMontage?.(clip, { maskBone: assets.blueprint.upperBody?.maskBone || DEFAULT_UPPER_BODY_BONE, loop: true, blendIn: 0.12 });
+            else apiRef.current?.stopMontage?.(0.2);
+        }
+        const manager = projectileManagerRef.current;
+        if (!shots || !manager) return;
+        // Aim at the player's chest: a little above the middle of their model.
+        if (!state.aimHeight) {
+            const box = new THREE.Box3().setFromObject(playerObject);
+            state.aimHeight = box.isEmpty() ? 1.2 : (box.max.y - box.min.y) * 0.6;
+        }
+        const target = playerObject.getWorldPosition(new THREE.Vector3());
+        target.y += state.aimHeight;
+        for (let shot = 0; shot < shots; shot += 1) {
+            const muzzle = entity.getSocketWorldPosition(weapon.muzzleSocket || 'Muzzle');
+            const origin = muzzle?.position ?? entity.object.getWorldPosition(new THREE.Vector3()).setY(target.y);
+            for (let pellet = 0; pellet < weapon.pellets; pellet += 1) {
+                const direction = spreadDirection(target.clone().sub(origin).normalize(), weapon.spread);
+                manager.fire(origin.clone(), direction, weapon.projectileSpeed, 'Enemy', weapon.damage);
+            }
+            entity.triggerMuzzleFlash(weapon.muzzleSocket);
+            const sounds = assets.blueprint.weaponSounds ?? [];
+            if (sounds.length) services.playSound(sounds[Math.floor(Math.random() * sounds.length)]);
+        }
+    }, [weaponSlot, playerObject, projectileManagerRef, assets.blueprint, services]);
 
     const instanceModel = useMemo(() => {
         try {
@@ -1051,6 +1108,8 @@ const RuntimeEnemyController: React.FC<{
                 onDealDamage={handleAttack}
                 stats={assets.blueprint?.stats}
                 behaviorTree={assets.blueprint?.behaviorTree}
+                weapon={weaponSlot?.weapon ?? null}
+                onFire={handleFire}
             />
         </>
     );

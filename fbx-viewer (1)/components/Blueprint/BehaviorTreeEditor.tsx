@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { AlertTriangle, ArrowDown, ArrowUp, Brain, Plus, Trash2 } from 'lucide-react';
 import type { BehaviorAction, BehaviorCondition, BehaviorNode, BehaviorNodeType, BehaviorTreeData } from '../../types';
-import { behaviorTreeProblems, defaultBehaviorTree } from '../../runtime/behaviorTree';
+import { behaviorTreeProblems, defaultBehaviorTree, gunnerBehaviorTree } from '../../runtime/behaviorTree';
 
 /** What each node type is called and whether it takes children (and how many). */
 export const NODE_TYPES: Record<BehaviorNodeType, { label: string; hint: string; children: 'many' | 'one' | 'none' }> = {
@@ -27,6 +27,7 @@ export const CONDITIONS: Record<BehaviorCondition, { label: string; value?: stri
 export const ACTIONS: Record<BehaviorAction, { label: string; value?: string; text?: string }> = {
     chase: { label: 'Chase the player (until in attack range)' },
     attack: { label: 'Attack the player' },
+    shoot: { label: 'Shoot at the player (in attack range)', value: 'Seconds' },
     strafe: { label: 'Strafe around the player', value: 'Seconds' },
     search: { label: 'Search where the player was last seen' },
     patrol: { label: 'Patrol to a random point', value: 'Radius (m)' },
@@ -114,6 +115,7 @@ export const BehaviorTreeEditor: React.FC<BehaviorTreeEditorProps> = ({ tree, on
                 <p className="text-xs text-gray-400">This enemy uses the built-in AI: it attacks the player in range, chases what it sees, searches where it last saw the player and otherwise patrols.</p>
                 <div className="grid grid-cols-2 gap-2">
                     <button type="button" onClick={() => onChange(defaultBehaviorTree())} className="py-1.5 rounded text-[11px] font-bold bg-blue-700 hover:bg-blue-600 text-white">Start from the built-in AI</button>
+                    <button type="button" onClick={() => onChange(gunnerBehaviorTree())} title="Shoots with the blueprint's first weapon from attack range" className="py-1.5 rounded text-[11px] font-bold bg-blue-900 hover:bg-blue-800 text-white">Start from a gunner</button>
                     <button type="button" onClick={() => onChange({ rootId: 'root', behaviorNodes: [{ id: 'root', type: 'selector', children: [] }] })} className="py-1.5 rounded text-[11px] font-bold bg-gray-800 hover:bg-gray-700 text-gray-200">Start empty</button>
                 </div>
             </div>

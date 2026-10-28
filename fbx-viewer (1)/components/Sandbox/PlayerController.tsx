@@ -153,10 +153,10 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
     const reportWeapon = (held: number, weapon: ResolvedWeapon | undefined, reloading: boolean, ready: boolean) => {
         const report = weaponReport.current;
         const owned = weaponState.current.owned;
-        const pose = `${held}|${ready}|${owned.join(',')}`;
+        const pose = `${held}|${ready}|${reloading}|${owned.join(',')}`;
         if (pose !== report.pose) {
             report.pose = pose;
-            entityRef.current?.setWeaponPose?.({ held, ready, owned: [...owned] });
+            entityRef.current?.setWeaponPose?.({ held, ready, owned: [...owned], reloading });
         }
         if (!onWeaponChange) return;
         const ammo = weaponState.current.ammo[held];

@@ -5,7 +5,7 @@ import { useFrame } from '@react-three/fiber';
 import { LoadedModelData, Blueprint, AttachmentData, SocketData, Hittable, Hitbox } from '../../types';
 import { GraphRuntime, GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
 import { PLAYER_PHYSICS_ID } from '../../runtime/physics';
-import { CharacterIK } from './CharacterIK';
+import { CharacterIK, type HeldWeaponGrip } from './CharacterIK';
 import { CharacterRagdoll } from './CharacterRagdoll';
 import { AttachmentController } from '../Scene/AttachmentController';
 import { SocketController, resolveSocketFlashTextureUrl } from '../Scene/SocketController'; // Using Visual Controller now
@@ -13,7 +13,8 @@ import { useEntityHealth } from './hooks/useEntityHealth';
 import { WorldHealthBar } from './UI/WorldHealthBar';
 import { useGameContent } from '../../runtime/GameContentContext';
 import { ownClipsFirst } from '../../utils/animationBinding';
-import { weaponPlacements, type WeaponPose } from '../../runtime/weapons';
+import { resolveWeapon, weaponMoveClips, weaponPlacements, type WeaponPose } from '../../runtime/weapons';
+import { weaponLocomotionGraph } from '../AnimationGraph/utils/clipMatching';
 
 /** Seconds the death animation plays before the body starts fading. */
 const DEATH_ANIM_DURATION = 3;
@@ -148,6 +149,23 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
 
     // A clip name another model shares resolves to this model's own clip.
     const clips = useMemo(() => ownClipsFirst(model.animations, allClips), [model.animations, allClips]);
+
+    // The held weapon's own locomotion (a rifle's or a pistol's) plays in place of the graph's.
+    const heldWeapon = (blueprint.weapons ?? [])[weaponPose.held] ?? null;
+    const animationGraph = useMemo(
+        () => weaponLocomotionGraph(blueprint.animationGraph, weaponMoveClips(heldWeapon), new Set(clips.map(clip => clip.name))),
+        [blueprint.animationGraph, heldWeapon, clips],
+    );
+    // The other hand on the held weapon, while it is in the hands and not being reloaded.
+    const heldAttachmentId = heldWeapon?.attachmentId ?? null;
+    const heldInHands = !!heldAttachmentId && weaponPlacementsById.get(heldAttachmentId) === 'hand';
+    const heldAttachment = heldInHands ? attachments.find(item => item.id === heldAttachmentId) ?? null : null;
+    const supportGrip = useMemo((): HeldWeaponGrip | null => {
+        const point = heldWeapon ? resolveWeapon(heldWeapon).supportGrip : null;
+        return heldAttachment && point && !weaponPose.reloading
+            ? { boneName: heldAttachment.boneName, position: heldAttachment.position, rotation: heldAttachment.rotation, scale: heldAttachment.scale, point }
+            : null;
+    }, [heldAttachment, heldWeapon, weaponPose.reloading]);
 
     // --- Configuration ---
     const maxHealth = useMemo(() => {
@@ -331,8 +349,8 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
         heal,
 
         setWeaponPose: (pose: WeaponPose) => setWeaponPose(previous => (
-            previous.held === pose.held && previous.ready === pose.ready
-                && previous.owned.length === pose.owned.length && previous.owned.every((owned, index) => owned === pose.owned[index])
+            previous.held === pose.held && previous.ready === pose.ready && !!previous.reloading === !!pose.reloading
+                && previous.owned.length=== pose.owned.length && previous.owned.every((owned, index) => owned === pose.owned[index])
                 ? previous
                 : pose
         )),
@@ -413,7 +431,7 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
 
             <GraphRuntime
                 modelObject={model.object}
-                graph={blueprint.animationGraph}
+                graph={animationGraph}
                 allClips={clips}
                 enableInputs={false}
                 driveLocomotion={false}
@@ -421,7 +439,7 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
                 eventSource={remote ? `remote:${entityId}` : team === 'Player' ? 'player' : entityId}
                 lod={remote || team !== 'Player'}
             />
-            <CharacterIK model={model.object} settings={blueprint.ik} physicsId={team === 'Player' && !remote ? PLAYER_PHYSICS_ID : undefined} aiming={isAiming} />
+            <CharacterIK model={model.object} settings={blueprint.ik} physicsId={team === 'Player' && !remote ? PLAYER_PHYSICS_ID : undefined} aiming={isAiming} supportGrip={supportGrip} />
             {/* Enemies fall as ragdolls; the player's death ends the game, and its capsule would fight the bodies. */}
             {isDead && team === 'Enemy' && <CharacterRagdoll model={model.object} />}
         </group>

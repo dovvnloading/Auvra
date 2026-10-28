@@ -5,6 +5,7 @@ import { EditorAuvraCanvas } from '../../renderer/EditorAuvraCanvas';
 import { Grid } from '@react-three/drei';
 import { useScene } from '../../context/SceneContext';
 import { ModelViewer } from './ModelViewer';
+import { viewerModel } from '../../utils/viewerModel';
 import { SceneCamera } from './SceneCamera';
 import { ProjectileManager, ProjectileManagerHandle } from '../Sandbox/ProjectileManager';
 import { LocalEnvironment } from './LocalEnvironment';
@@ -37,18 +38,10 @@ export const ViewerScene: React.FC<ViewerSceneProps> = ({
       }
   }, [debugProjectile]);
 
-  // Safety Check: Ensure models are unique by ID AND placed in scene
-  const uniqueVisibleModels = useMemo(() => {
-      const seen = new Set<string>();
-      return models.filter(m => {
-          if (!m.isPlacedInScene) return false; // Only show if placed
-          if (seen.has(m.id)) return false;
-          seen.add(m.id);
-          return true;
-      });
-  }, [models]);
+  // One model at a time, as an asset viewer shows one asset.
+  const shownModel = useMemo(() => viewerModel(models, selectedModelId), [models, selectedModelId]);
 
-  return (
+return (
     <div className="w-full h-full bg-gray-950 relative">
         <EditorAuvraCanvas
             surfaceId="editor-scene-viewer"
@@ -88,14 +81,10 @@ export const ViewerScene: React.FC<ViewerSceneProps> = ({
                 />
             </group>
                 
-            {uniqueVisibleModels.map((model) => {
+            {shownModel && [shownModel].map((model) => {
                 // Find if a blueprint controls this model
                 const controllingBlueprint = blueprints.find(bp => bp.linkedModelId === model.id);
-                const isVisible = selectedModelId === model.id || selectedModelId === null;
 
-                // STRICT: Return null if not visible. 
-                if (!isVisible) return null;
-                
                 return (
                     <group key={model.id}>
                             <ModelViewer 

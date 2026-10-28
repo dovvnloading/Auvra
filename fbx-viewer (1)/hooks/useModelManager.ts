@@ -399,14 +399,18 @@ export const useModelManager = (
     }
   }, [models, setIsLoading, startOperation, addNotification]);
 
+  /** Shows a model in the Scene viewer in place of the one shown there: the viewer shows one model. */
   const placeInScene = useCallback(async (id: string) => {
       projectService.assertWritable();
       try {
+          for (const other of models) {
+              if (other.id !== id && other.isPlacedInScene) await dbOperations.updateModelPlacement(other.id, false);
+          }
           await dbOperations.updateModelPlacement(id, true);
-          setModels(prev => prev.map(m => m.id === id ? { ...m, isPlacedInScene: true } : m));
+          setModels(prev => prev.map(m => ({ ...m, isPlacedInScene: m.id === id })));
           selectModel(id);
       } catch(e) { frontendDiagnostics.failure('model_placement_update_failed', e); }
-  }, [selectModel]);
+  }, [models, selectModel]);
 
   const removeFromScene = useCallback(async (id: string) => {
       projectService.assertWritable();

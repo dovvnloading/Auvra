@@ -454,7 +454,7 @@ export type BehaviorNodeType = 'selector' | 'sequence' | 'inverter' | 'succeeder
 
 export type BehaviorCondition = 'canSeePlayer' | 'remembersPlayer' | 'playerWithin' | 'healthBelow' | 'chance' | 'variableTrue';
 
-export type BehaviorAction = 'chase' | 'attack' | 'strafe' | 'search' | 'patrol' | 'wait' | 'moveTo' | 'flee' | 'returnHome' | 'setVariable' | 'playAnimation';
+export type BehaviorAction = 'chase' | 'attack' | 'shoot' | 'strafe' | 'search' | 'patrol' | 'wait' | 'moveTo' | 'flee' | 'returnHome' | 'setVariable' | 'playAnimation';
 
 export interface BehaviorNode {
   id: string;
@@ -529,7 +529,22 @@ export interface WeaponSettings {
    * held and is hidden while another is.
    */
   carry?: WeaponCarry | null;
-  /** Upper-body clips while firing, aiming and reloading this weapon; the blueprint's Upper Body clips when unset. */
+  /**
+   * How the character moves while holding it (a rifle's or a pistol's animation set): each stands in
+   * for the animation graph's own idle, walk, run, walking-backward and jump clips while this weapon
+   * is held, and a weapon with them stays in the hands. Unset ones leave the graph's clip.
+   */
+  idleClip?: string | null;
+  walkClip?: string | null;
+  runClip?: string | null;
+  backClip?: string | null;
+  jumpClip?: string | null;
+  /**
+   * Where the other hand holds it (a rifle's handguard), in the weapon model's own units: while it is
+   * held, that hand takes hold there from wherever the animation has it, except while reloading.
+   */
+  supportGrip?: [number, number, number] | null;
+/** Upper-body clips while firing, aiming and reloading this weapon; the blueprint's Upper Body clips when unset. */
   fireClip?: string | null;
   aimClip?: string | null;
   reloadClip?: string | null;

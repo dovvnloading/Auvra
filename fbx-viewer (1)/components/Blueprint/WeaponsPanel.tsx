@@ -29,7 +29,14 @@ const NUMBER_FIELDS: readonly { key: NumberField; label: string; step: number; m
     { key: 'projectileSpeed', label: 'Speed', step: 5, min: 1, title: 'Projectile speed, in world units per second' },
 ];
 
-const CLIP_FIELDS = [['fireClip', 'Fire clip'], ['aimClip', 'Aim clip'], ['reloadClip', 'Reload clip']] as const;
+const CLIP_FIELDS = [
+    ['fireClip', 'Fire clip'], ['aimClip', 'Aim clip'], ['reloadClip', 'Reload clip'],
+    // How the character moves while holding it: these stand in for the graph's own locomotion.
+    ['idleClip', 'Idle while held'], ['walkClip', 'Walk while held'], ['runClip', 'Run while held'],
+    ['backClip', 'Walk back while held'], ['jumpClip', 'Jump while held'],
+] as const;
+
+const UPPER_BODY_CLIPS: ReadonlySet<string> = new Set(['fireClip', 'aimClip']);
 
 const selectClass = 'w-36 bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500';
 
@@ -154,7 +161,23 @@ export const WeaponsPanel: React.FC<WeaponsPanelProps> = ({ weapons, attachments
                                 />
                             </div>
                         )}
-                        <div className="flex items-center justify-between gap-4">
+                        <label className="flex items-center gap-2 text-xs text-gray-400" title="The other hand takes hold of the weapon at a point on it, such as a rifle's handguard">
+                            <input
+                                type="checkbox"
+                                checked={!!weapon.supportGrip}
+                                onChange={(event) => update(weapon.id, { supportGrip: event.target.checked ? [0, 0, 0] : null })}
+                            />
+                            Other hand holds it
+                        </label>
+                        {weapon.supportGrip && (
+                            <TransformInputGroup
+                                label="Support hand point"
+                                values={weapon.supportGrip}
+                                step={0.01}
+                                onChange={(supportGrip) => update(weapon.id, { supportGrip }, `weapon:${weapon.id}:supportGrip`)}
+                            />
+                        )}
+<div className="flex items-center justify-between gap-4">
                             <span className="text-xs text-gray-400 shrink-0">Fire mode</span>
                             <select
                                 aria-label="Fire mode"
@@ -196,7 +219,7 @@ export const WeaponsPanel: React.FC<WeaponsPanelProps> = ({ weapons, attachments
                                         onChange={(event) => update(weapon.id, { [key]: event.target.value || null })}
                                         className={selectClass}
                                     >
-                                        <option value="">{key === 'reloadClip' ? 'None' : 'Upper Body clip'}</option>
+                                        <option value="">{UPPER_BODY_CLIPS.has(key) ? 'Upper Body clip' : key === 'reloadClip' ? 'None' : 'Graph clip'}</option>
                                         {clipNames.map(name => <option key={name} value={name}>{name}</option>)}
                                         {current && !clipNames.includes(current) && <option value={current}>{current} (missing)</option>}
                                     </select>

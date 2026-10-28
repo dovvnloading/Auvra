@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  behaviorTreeProblems, createBehaviorMemory, defaultBehaviorTree, tickBehaviorTree, type BehaviorEffects, type BehaviorWorld,
+  behaviorTreeProblems, createBehaviorMemory, defaultBehaviorTree, gunnerBehaviorTree, tickBehaviorTree, type BehaviorEffects, type BehaviorWorld,
 } from '../../runtime/behaviorTree';
 import { addBehaviorChild, createBehaviorNode, moveBehaviorNode, removeBehaviorNode } from '../../components/Blueprint/BehaviorTreeEditor';
 import type { BehaviorNode, BehaviorTreeData } from '../../types';
@@ -27,7 +27,8 @@ const world = (overrides: Partial<BehaviorWorld> = {}): BehaviorWorld => ({
 });
 
 const effects = (overrides: Partial<BehaviorEffects> = {}): BehaviorEffects => ({
-  attackReady: () => true, startAttack: vi.fn(), attacking: () => false, setVariable: vi.fn(), playAnimation: () => true, ...overrides,
+  attackReady: () => true, startAttack: vi.fn(), attacking: () => false, setVariable: vi.fn(), playAnimation: () => true,
+  canShoot: () => false, holdTrigger: vi.fn(), ...overrides,
 });
 
 const tree = (rootId: string, ...nodes: BehaviorNode[]): BehaviorTreeData => ({ rootId, behaviorNodes: nodes });
@@ -169,5 +170,36 @@ describe('behavior tree editing', () => {
       'An inverter needs exactly one child.',
       'An action has nothing chosen to do.',
     ]);
+  });
+});
+
+describe('shooting enemies', () => {
+  it('hold the trigger at a player in sight and in range, facing them, then succeed after the seconds', () => {
+    const holdTrigger = vi.fn();
+    const shoot = tree('fire', { id: 'fire', type: 'action', action: 'shoot', value: 0.25 });
+    const memory = createBehaviorMemory();
+    const near = world({ canSee: true, distToPlayer: 2, delta: 0.1 });
+    const first = tickBehaviorTree(shoot, memory, near, effects({ canShoot: () => true, holdTrigger }));
+    expect(first.status).toBe('running');
+    expect(first.intent).toMatchObject({ state: 'ATTACKING' });
+    tickBehaviorTree(shoot, memory, near, effects({ canShoot: () => true, holdTrigger }));
+    expect(tickBehaviorTree(shoot, memory, near, effects({ canShoot: () => true, holdTrigger })).status).toBe('success');
+    expect(holdTrigger).toHaveBeenCalledTimes(3);
+  });
+
+  it('fail without a weapon, out of sight or out of range, so the tree moves on', () => {
+    const shoot = tree('fire', { id: 'fire', type: 'action', action: 'shoot' });
+    const armed = effects({ canShoot: () => true });
+    expect(tickBehaviorTree(shoot, createBehaviorMemory(), world({ canSee: true, distToPlayer: 2 }), effects()).status).toBe('failure');
+    expect(tickBehaviorTree(shoot, createBehaviorMemory(), world({ canSee: false, distToPlayer: 2 }), armed).status).toBe('failure');
+    expect(tickBehaviorTree(shoot, createBehaviorMemory(), world({ canSee: true, distToPlayer: 9 }), armed).status).toBe('failure');
+  });
+
+  it('a gunner shoots in range and closes in from farther away', () => {
+    const gunner = gunnerBehaviorTree();
+    expect(behaviorTreeProblems(gunner)).toEqual([]);
+    const armed = effects({ canShoot: () => true });
+    expect(tickBehaviorTree(gunner, createBehaviorMemory(), world({ canSee: true, distToPlayer: 2 }), armed).intent.state).toBe('ATTACKING');
+    expect(tickBehaviorTree(gunner, createBehaviorMemory(), world({ canSee: true, distToPlayer: 10 }), armed).intent.state).toBe('CHASE');
   });
 });
