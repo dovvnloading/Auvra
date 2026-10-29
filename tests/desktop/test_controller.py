@@ -82,6 +82,7 @@ class ControllerTests(unittest.TestCase):
             controller.on_lifecycle("initialization_completed", {"success": True})
             controller.on_lifecycle("message_rejected", {"code": "invalid_message"})
             controller.on_lifecycle("process_failed", {"code": "renderer_process_failed"})
+            controller.on_lifecycle("process_failed", {"code": "process_recovered", "reason": "gpu_process_exited"})
             controller.close()
             records = session.snapshot()
             self.assertTrue(any(record["event"] == "webview.lifecycle"
@@ -89,6 +90,10 @@ class ControllerTests(unittest.TestCase):
                                 for record in records))
             self.assertTrue(any(record["event"] == "webview.message_rejected" for record in records))
             self.assertTrue(any(record["event"] == "webview.process_failed" for record in records))
+            self.assertTrue(any(record["event"] == "webview.process_recovered"
+                                and record.get("attributes", {}).get("reason") == "gpu_process_exited"
+                                and record.get("level") == "warning"
+                                for record in records))
             session.close(outcome="failure")
 
     def test_development_binds_supplied_native_owner_and_closes_it_once(self):

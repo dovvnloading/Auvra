@@ -4,6 +4,7 @@ import { addAfterEffect, useFrame, useThree } from '@react-three/fiber';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { AUDIO_BUSES, AudioMixer, type AudioBus, type AudioBusVolumes } from './audioMixer';
 import { useGameContent } from './GameContentContext';
+import { SpatialAudioListener } from './spatialAudio';
 import { applyBindingOverrides, DEFAULT_INPUT_MAP, InputState, useInputActions } from './input';
 import { defaultPlayerOptions, type PlayerOptions, type PlayerOptionsStore } from './playerOptions';
 import { DEFAULT_GAME_SETTINGS, type GameSettings } from './types';
@@ -91,7 +92,7 @@ interface AttachedMixer {
  */
 const attachMixer = (camera: THREE.Camera, volumes: AudioBusVolumes): AttachedMixer => {
     const existing = camera.children.find(child => child.type === 'AudioListener') as THREE.AudioListener | undefined;
-    const listener = existing ?? new THREE.AudioListener();
+    const listener = existing ?? new SpatialAudioListener();
     const context = listener.context;
     const mixer = new AudioMixer(context, context.destination, volumes);
     const output = listener.getInput();

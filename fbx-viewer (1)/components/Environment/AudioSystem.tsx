@@ -5,6 +5,7 @@ import { useThree } from '@react-three/fiber';
 import { LevelObject, AudioData, AudioConfig } from '../../types';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { useAudioOcclusion } from '../../runtime/audioOcclusion';
+import { SpatialPositionalAudio } from '../../runtime/spatialAudio';
 import {
     Sound, acquireAudioListener, releaseSound, resolveEmitterBus, routeSoundToBus, useRuntimeMixer
 } from '../../runtime/components/audioComponents';
@@ -95,7 +96,7 @@ export const AudioSystem: React.FC<AudioSystemProps> = ({ levelObjects, audioAss
 
                         // Setup new sound
                         if (config.isSpatial) {
-                            sound = new THREE.PositionalAudio(listener);
+                            sound = new SpatialPositionalAudio(listener);
                         } else {
                             sound = new THREE.Audio(listener);
                         }

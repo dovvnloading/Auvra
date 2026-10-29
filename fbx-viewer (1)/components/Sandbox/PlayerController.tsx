@@ -14,6 +14,7 @@ import {
     type ResolvedWeapon, type SavedWeapons,
 } from '../../runtime/weapons';
 import { playerActions } from '../../runtime/playerActions';
+import { SpatialAudioListener } from '../../runtime/spatialAudio';
 import type { PlayerWeaponStatus } from '../../runtime/gameState';
 
 const _rootTravel = new THREE.Vector3();
@@ -107,7 +108,7 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
         const existingListener = camera.children.find(c => c.type === 'AudioListener');
 
         if (!existingListener) {
-            const listener = new THREE.AudioListener();
+            const listener = new SpatialAudioListener();
             camera.add(listener);
 
             return () => {
