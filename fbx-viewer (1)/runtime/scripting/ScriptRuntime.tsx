@@ -31,6 +31,7 @@ import {
     type ScriptSplineState,
     type ScriptValue,
     type ScriptVec3,
+    type ScriptVehicleState,
 } from './protocol';
 import { isScriptNetPayload } from './scriptApi';
 import { MAX_SCRIPT_SPLINE_POINTS, SCRIPT_SPLINE_STEP } from './scriptSplines';
@@ -39,6 +40,7 @@ import type { Spline } from '../splines';
 import { useNetSession } from '../net/NetSessionContext';
 import { NET_LIMITS, type NetSession } from '../net/protocol';
 import { cameraDirector } from '../cameraDirector';
+import { KMH, vehicleSession, type VehicleSession } from '../vehicles';
 
 const OFFLINE_NET: ScriptNetState = { connected: false, isHost: true, selfId: null, peers: [] };
 
@@ -314,6 +316,18 @@ export const parseScriptCommand = (value: unknown): ScriptCommand | null => {
                 : null;
         case 'startDialogue':
             return hasKeys(v, ['type', 'objectId']) && isName(v.objectId) ? { type: 'startDialogue', objectId: v.objectId } : null;
+        case 'enterVehicle':
+        case 'releaseVehicleInput':
+            return hasKeys(v, ['type', 'objectId']) && isName(v.objectId) ? { type: v.type, objectId: v.objectId } : null;
+        case 'exitVehicle':
+            return hasKeys(v, ['type']) ? { type: 'exitVehicle' } : null;
+        case 'setVehicleInput': {
+            const unit = (value: unknown, min: number) => typeof value === 'number' && Number.isFinite(value) && value >= min && value <= 1;
+            return hasKeys(v, ['type', 'objectId', 'throttle', 'brake', 'steer', 'handbrake']) && isName(v.objectId)
+                && unit(v.throttle, 0) && unit(v.brake, 0) && unit(v.steer, -1) && typeof v.handbrake === 'boolean'
+                ? { type: 'setVehicleInput', objectId: v.objectId, throttle: v.throttle as number, brake: v.brake as number, steer: v.steer as number, handbrake: v.handbrake }
+                : null;
+        }
         case 'netSend': {
             const to = optional(v.to, isName);
             if (!hasKeys(v, ['type', 'name', 'payload'], ['to']) || !isName(v.name) || v.name.length > NET_LIMITS.maxEventNameLength
@@ -598,7 +612,29 @@ export interface ScriptCommandServices {
     setCamera(objectId: string | null, blend: number): void;
     /** False when the object has no Dialogue component in the session, or another conversation is open. */
     startDialogue(objectId: string): boolean;
+    /** False when the object is not a vehicle the player can drive. */
+    enterVehicle(objectId: string): boolean;
+    exitVehicle(): boolean;
+    /** Drives a vehicle until released (null); false when the object is not a vehicle. */
+    setVehicleInput(objectId: string, controls: { throttle: number; brake: number; steer: number; handbrake: boolean } | null): boolean;
 }
+
+/** The session's vehicles as scripts see them; undefined when there are none. */
+export const scriptVehicleStates = (session: Pick<VehicleSession, 'all' | 'state'>): Record<string, ScriptVehicleState> | undefined => {
+    const handles = session.all();
+    if (handles.length === 0) return undefined;
+    const driving = session.state().driving;
+    const states: Record<string, ScriptVehicleState> = {};
+    for (const handle of handles) {
+        const speed = handle.speed() / KMH;
+        states[handle.objectId] = {
+            speed: Number.isFinite(speed) ? Math.round(speed * 10) / 10 : 0,
+            gear: handle.gear(),
+            playerDriving: driving === handle.objectId,
+        };
+    }
+    return states;
+};
 
 /** What applying one frame's commands produced for the next snapshot. */
 export interface ScriptCommandResults {
@@ -697,6 +733,18 @@ export const applyScriptCommand = (command: ScriptCommand, services: ScriptComma
             return;
         case 'startDialogue':
             services.startDialogue(command.objectId);
+            return;
+        case 'enterVehicle':
+            services.enterVehicle(command.objectId);
+            return;
+        case 'exitVehicle':
+            services.exitVehicle();
+            return;
+        case 'setVehicleInput':
+            services.setVehicleInput(command.objectId, { throttle: command.throttle, brake: command.brake, steer: command.steer, handbrake: command.handbrake });
+            return;
+        case 'releaseVehicleInput':
+            services.setVehicleInput(command.objectId, null);
             return;
         case 'log':
             services.log(command.scriptId, command.level, command.message);
@@ -1065,6 +1113,21 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
                 }
                 return startDialogue(objectId);
             },
+            enterVehicle: objectId => {
+                if (vehicleSession.enter(objectId)) return true;
+                if (!vehicleSession.get(objectId)) noteOnce(state, `vehicle:${objectId}`, `vehicle: object "${objectId}" has no Vehicle component.`);
+                return false;
+            },
+            exitVehicle: () => vehicleSession.exit(),
+            setVehicleInput: (objectId, controls) => {
+                const handle = vehicleSession.get(objectId);
+                if (!handle) {
+                    noteOnce(state, `vehicle:${objectId}`, `vehicle: object "${objectId}" has no Vehicle component.`);
+                    return false;
+                }
+                handle.setScriptControls(controls);
+                return true;
+            },
             log: (scriptId, level, message) => {
                 if (logs >= MAX_LOGS_PER_FRAME) {
                     droppedLogs += 1;
@@ -1132,7 +1195,8 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
             raycasts: state.raycasts,
             net: scriptNetState(netRef.current),
         });
-        return splines ? { ...snapshot, splines } : snapshot;
+        const vehicles = scriptVehicleStates(vehicleSession);
+        return { ...snapshot, ...(splines ? { splines } : {}), ...(vehicles ? { vehicles } : {}) };
     };
 
     const post = (state: HostState) => {
@@ -1214,6 +1278,10 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
         type: 'dialogueEvent',
         objectId: event.objectId,
         name: event.name,
+    })), []);
+    useEffect(() => vehicleSession.onEvent(event => pushEvent(host.current, {
+        type: event.type === 'entered' ? 'vehicleEntered' : 'vehicleExited',
+        objectId: event.objectId,
     })), []);
     useEffect(() => netSession?.onEvent((from, name, payload) => pushEvent(host.current, {
         type: 'netEvent', from, name, payload: payload as ScriptNetPayload,

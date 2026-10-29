@@ -5,6 +5,7 @@ import { useThree, useFrame } from '@react-three/fiber';
 import { AnimationGraphData } from '../../types';
 import { useRuntimeServices } from '../../runtime/RuntimeServicesContext';
 import { cameraDirector } from '../../runtime/cameraDirector';
+import { vehicleSession } from '../../runtime/vehicles';
 
 interface CharacterCameraRigProps {
     target: THREE.Object3D;
@@ -25,6 +26,11 @@ interface CharacterCameraRigProps {
 const _targetWorldPos = new THREE.Vector3();
 const _finalPos = new THREE.Vector3();
 const _lookAtPos = new THREE.Vector3();
+const _blendQuaternion = new THREE.Quaternion();
+
+/** Seconds the rig takes to blend back from a vehicle's chase camera once the player is out. */
+const VEHICLE_HANDBACK_SECONDS = 0.6;
+const smoothStep = (t: number) => t * t * (3 - 2 * t);
 
 export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({ 
     target, 
@@ -117,7 +123,19 @@ export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({
     }, [defaultDistance]);
 
     // Frame Loop - Standard Priority
+    // While the player drives, the vehicle's chase camera has the view; on the way out the rig blends back from it.
+    const handback = useRef<{ driving: boolean; from: { position: THREE.Vector3; quaternion: THREE.Quaternion } | null; elapsed: number }>({ driving: false, from: null, elapsed: 0 });
+
     useFrame((_, delta) => {
+        if (vehicleSession.state().driving !== null) {
+            handback.current.driving = true;
+            return;
+        }
+        if (handback.current.driving) {
+            // Out of the vehicle: start behind the character, blending from where the chase camera left the view.
+            handback.current = { driving: false, from: { position: camera.position.clone(), quaternion: camera.quaternion.clone() }, elapsed: 0 };
+            state.current.theta = target.rotation.y + Math.PI;
+        }
         if (!target) return;
         // A level camera (timeline, Set Active Camera, script) owns the view; the rig resumes when it is released.
         if (cameraDirector.activeId() !== null) return;
@@ -211,6 +229,16 @@ export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({
         // 7. Apply to Camera
         camera.position.copy(_finalPos);
         camera.lookAt(_lookAtPos);
+
+        const from = handback.current.from;
+        if (from) {
+            handback.current.elapsed += delta;
+            const t = smoothStep(Math.min(1, handback.current.elapsed / VEHICLE_HANDBACK_SECONDS));
+            _blendQuaternion.copy(camera.quaternion);
+            camera.position.lerpVectors(from.position, _finalPos, t);
+            camera.quaternion.slerpQuaternions(from.quaternion, _blendQuaternion, t);
+            if (t >= 1) handback.current.from = null;
+        }
     });
 
     return null;

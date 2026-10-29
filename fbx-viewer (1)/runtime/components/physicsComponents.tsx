@@ -17,6 +17,7 @@ import type { LevelComponent, LevelObject } from '../../types';
 import { PhysicsFailureBoundary, objectIdFromRigidBody, physicsUserData, usePhysicsAvailable } from '../physics';
 import { useTriggerEvents } from '../triggers';
 import type { TriggerEvent } from '../triggers';
+import { findWheelNodes, readVehicleSettings, VEHICLE_COMPONENT_TYPE, VEHICLE_SHELL_MASS_SHARE } from '../vehicles';
 import { ComponentHostContext } from './builtins';
 import type { ComponentDefinition, ComponentRenderProps } from './types';
 
@@ -105,10 +106,12 @@ export const capsuleHalfHeight = (settings: ColliderSettings): number => Math.ma
 // --- BODY PLAN ---
 
 export interface PhysicsBodyPlan {
-    /** The component whose Render mounts the body: the first enabled rigidBody, else the first enabled collider. */
+    /** The component whose Render mounts the body: the first enabled rigidBody, else a vehicle, else the first enabled collider. */
     ownerId: string;
-    /** True when an enabled Rigid Body component sets the body; colliders alone make fixed scenery. */
+    /** True when an enabled Rigid Body (or Vehicle) component sets the body; colliders alone make fixed scenery. */
     rigidBody: boolean;
+    /** The object is a vehicle: its automatic hull leaves out the wheels, which ride on the suspension. */
+    vehicle: boolean;
     /** Colliders without a rigidBody make fixed scenery. */
     body: RigidBodySettings;
     colliders: { id: string; settings: ColliderSettings }[];
@@ -120,15 +123,23 @@ export interface PhysicsBodyPlan {
 export const planPhysicsBody = (object: LevelObject): PhysicsBodyPlan | null => {
     const enabled = (object.components ?? []).filter(component => component.enabled);
     const rigidBody = enabled.find(component => component.type === 'rigidBody');
+    // A Vehicle is a dynamic body of its own mass, unless a Rigid Body component on it sets the body.
+    const vehicle = enabled.find(component => component.type === VEHICLE_COMPONENT_TYPE);
     const colliders = enabled.filter(component => component.type === 'collider');
-    const owner = rigidBody ?? colliders[0];
+    const owner = rigidBody ?? vehicle ?? colliders[0];
     if (!owner) return null;
+    const body: RigidBodySettings = rigidBody
+        ? resolveRigidBodySettings(rigidBody)
+        : vehicle
+            ? { ...RIGID_BODY_DEFAULTS, type: 'dynamic', mass: readVehicleSettings(vehicle).mass * VEHICLE_SHELL_MASS_SHARE }
+            : { ...RIGID_BODY_DEFAULTS, type: 'fixed' };
     return {
         ownerId: owner.id,
-        rigidBody: Boolean(rigidBody),
-        body: rigidBody ? resolveRigidBodySettings(rigidBody) : { ...RIGID_BODY_DEFAULTS, type: 'fixed' },
+        rigidBody: Boolean(rigidBody ?? vehicle),
+        vehicle: Boolean(vehicle),
+        body,
         colliders: colliders.map(component => ({ id: component.id, settings: resolveColliderSettings(component) })),
-        autoHull: Boolean(rigidBody) && colliders.length === 0
+        autoHull: Boolean(rigidBody ?? vehicle) && colliders.length === 0
     };
 };
 
@@ -208,6 +219,9 @@ export const PHYSICS_IGNORED_USER_DATA: Readonly<Record<string, unknown>> = ANCH
 
 const isPhysicsAnchor = (node: THREE.Object3D): boolean => node.userData?.[PHYSICS_ANCHOR_FLAG] === true;
 
+/** True for a node carrying PHYSICS_IGNORED_USER_DATA (a physics anchor or an editor helper): not part of the object's model. */
+export const isPhysicsIgnored = isPhysicsAnchor;
+
 /**
  * A nested LevelObject is not part of this object's shape, which is built from the object's own
  * model (as the editor previews it); a child collides through Colliders of its own.
@@ -224,13 +238,14 @@ const hasVisibleMaterial = (mesh: THREE.Mesh): boolean => {
 
 /**
  * The visible meshes of the object's own model under `host` (the object's transform group). Nested
- * child objects, hidden hit volumes, instanced layers and physics previews are skipped.
+ * child objects, hidden hit volumes, instanced layers and physics previews are skipped, and so is
+ * anything under a node `skip` picks (a vehicle's wheels).
  */
-export const collectHostMeshes = (host: THREE.Object3D, objectId: string): THREE.Mesh[] => {
+export const collectHostMeshes = (host: THREE.Object3D, objectId: string, skip?: (node: THREE.Object3D) => boolean): THREE.Mesh[] => {
     const meshes: THREE.Mesh[] = [];
     const visit = (node: THREE.Object3D) => {
         for (const child of node.children) {
-            if (!child.visible || isPhysicsAnchor(child) || isNestedObject(child, objectId)) continue;
+            if (!child.visible || isPhysicsAnchor(child) || isNestedObject(child, objectId) || skip?.(child)) continue;
             const mesh = child as THREE.Mesh;
             if (mesh.isMesh && !(child as THREE.InstancedMesh).isInstancedMesh
                 && mesh.geometry?.getAttribute('position') && hasVisibleMaterial(mesh)) {
@@ -250,10 +265,10 @@ export interface HostGeometry {
     indices: Uint32Array;
 }
 
-/** Every mesh under `host` merged into one triangle soup in the host's local space, or null when it draws none. */
-export const collectHostGeometry = (host: THREE.Object3D, objectId: string): HostGeometry | null => {
+/** Every mesh under `host` (but those `skip` leaves out) merged into one triangle soup in the host's local space, or null when it draws none. */
+export const collectHostGeometry = (host: THREE.Object3D, objectId: string, skip?: (node: THREE.Object3D) => boolean): HostGeometry | null => {
     host.updateWorldMatrix(true, true);
-    const meshes = collectHostMeshes(host, objectId);
+    const meshes = collectHostMeshes(host, objectId, skip);
     let vertexCount = 0;
     let indexCount = 0;
     for (const mesh of meshes) {
@@ -850,8 +865,8 @@ const ObjectBody: React.FC<{ object: LevelObject; plan: PhysicsBodyPlan }> = ({ 
         const resolved = hostRef?.current ?? anchorRef.current?.parent ?? null;
         setHost(resolved);
         setOwner(resolved && !plan.rigidBody ? findCompoundOwner(resolved, object.id) : null);
-        setContent(resolved && needsContent ? collectHostGeometry(resolved, object.id) : null);
-    }, [hostRef, needsContent, object.id, plan.rigidBody]);
+        setContent(resolved && needsContent ? collectHostGeometry(resolved, object.id, plan.vehicle ? wheelSkip(resolved, object.id) : undefined) : null);
+    }, [hostRef, needsContent, object.id, plan.rigidBody, plan.vehicle]);
 
     return (
         <group ref={anchorRef} userData={anchorUserData}>
@@ -901,8 +916,14 @@ const FoldedIntoOwner: React.FC<FoldedIntoOwnerProps> = ({ owner, host, object, 
     return null;
 };
 
+/** Leaves out a vehicle's wheels (and nested objects' wheels) when its shape is built from its model. */
+const wheelSkip = (host: THREE.Object3D, objectId: string): ((node: THREE.Object3D) => boolean) => {
+    const wheels = new Set(findWheelNodes(host, node => isNestedObject(node, objectId) || isPhysicsAnchor(node)));
+    return node => wheels.has(node);
+};
+
 /** Mounts the object's body from whichever of its physics components owns it, so it is built once. */
-const PhysicsOwnerBody: React.FC<{ object: LevelObject; component: LevelComponent }> = ({ object, component }) => {
+export const PhysicsOwnerBody: React.FC<{ object: LevelObject; component: LevelComponent }> = ({ object, component }) => {
     const available = usePhysicsAvailable();
     const plan = useMemo(() => planPhysicsBody(object), [object]);
     if (!available || !plan || plan.ownerId !== component.id) return null;

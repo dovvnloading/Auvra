@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
-import { Send, Crown, Video, Play, GitBranch, CheckSquare, Database, Trash2, ArrowLeft, MessageSquare, Box, Shield, Skull, Calculator, Timer, Hash, Type, ToggleLeft, Activity, X, LayoutTemplate, RefreshCcw, DoorOpen, Save, FolderOpen, Undo2, Redo2 } from 'lucide-react';
+import { Send, Crown, Video, Play, GitBranch, CheckSquare, Database, Trash2, ArrowLeft, MessageSquare, Box, Shield, Skull, Calculator, Timer, Hash, Type, ToggleLeft, Activity, X, LayoutTemplate, RefreshCcw, DoorOpen, Save, FolderOpen, Undo2, Redo2, Car } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
 import { LogicCanvas, LogicGraphSnapshot } from './LogicCanvas';
 import { LevelBlueprintInspector } from './LevelBlueprintInspector';
@@ -26,6 +26,7 @@ const WORLD_PALETTE_GROUPS: { label: string, types: WorldNodeType[] }[] = [
     { label: 'Animation', types: ['PlayPlayerAnimation', 'SetMorphTarget'] },
     { label: 'Player', types: ['DamagePlayer', 'HealPlayer', 'GetPlayerHealth', 'AddAmmo', 'GiveWeapon'] },
     { label: 'Splines', types: ['GetSplineLength', 'GetSplinePoint', 'FindClosestOnSpline'] },
+    { label: 'Vehicles', types: ['EnterVehicle', 'ExitVehicle', 'GetVehicleState', 'GetPlayerVehicle', 'SetVehicleInput', 'ReleaseVehicleInput'] },
     { label: 'Level Variables', types: ['GetLevelVariable', 'SetLevelVariable'] },
     { label: 'Utilities', types: ['RandomFloat', 'RandomInt', 'Print'] },
 ];
@@ -248,6 +249,11 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
             addNode('Event', 'Event TimelineEvent', [], [{ name: 'Exec', dataType: 'Exec', direction: 'Output' }], { eventName: '' });
         } else if (type === 'DialogueEvent') {
             addNode('Event', 'Event DialogueEvent', [], [{ name: 'Exec', dataType: 'Exec', direction: 'Output' }], { eventName: '' });
+        } else if (type === 'VehicleEntered' || type === 'VehicleExited') {
+            addNode('Event', `Event ${type}`, [], [
+                { name: 'Exec', dataType: 'Exec', direction: 'Output' },
+                { name: 'Vehicle', dataType: 'Object', direction: 'Output' }
+            ], { vehicleId: '' });
         } else if (type === 'AnimNotify') {
             addNode('Event', 'Event AnimNotify', [], [{ name: 'Exec', dataType: 'Exec', direction: 'Output' }], { notifyName: '', notifySource: 'player' });
         } else if (type === 'Tick') {
@@ -629,6 +635,12 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                         </button>
                         <button onClick={() => handleAddEvent('DialogueEvent', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
                             <MessageSquare size={12} className="text-red-400 group-hover:text-red-300" /> Dialogue Event
+                        </button>
+                        <button onClick={() => handleAddEvent('VehicleEntered', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
+                            <Car size={12} className="text-red-400 group-hover:text-red-300" /> Vehicle Entered
+                        </button>
+                        <button onClick={() => handleAddEvent('VehicleExited', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
+                            <Car size={12} className="text-red-400 group-hover:text-red-300" /> Vehicle Exited
                         </button>
                         <button onClick={() => handleAddEvent('AnimNotify', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
                             <Activity size={12} className="text-red-400 group-hover:text-red-300" /> Animation Notify

@@ -170,6 +170,10 @@ export const BUILTIN_UI_STRINGS = {
     'ui.dialogue.title': 'Conversation',
     'ui.dialogue.continue': 'Continue',
     'ui.dialogue.end': 'End',
+    'ui.vehicle.drive': 'Drive',
+    'ui.vehicle.exit': 'Get out',
+    'ui.vehicle.speedUnit': 'km/h',
+    'ui.vehicle.speedometer': 'Speedometer',
 } as const satisfies StringTable;
 
 export type BuiltinUiKey = keyof typeof BUILTIN_UI_STRINGS;

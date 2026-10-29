@@ -30,6 +30,7 @@ import {
     type ScriptSplineState,
     type ScriptValue,
     type ScriptVec3,
+    type ScriptVehicleState,
 } from './protocol';
 import { createScriptSpline, type ScriptSpline } from './scriptSplines';
 
@@ -42,7 +43,7 @@ type TransformField = 'position' | 'rotation' | 'scale';
 export type ScriptSoundBus = NonNullable<Extract<ScriptCommand, { type: 'playSound' }>['bus']>;
 
 /** Every callback a script may define. */
-export const SCRIPT_CALLBACK_NAMES = ['onStart', 'onTriggerEnter', 'onTriggerExit', 'onAnimNotify', 'onTimelineEvent', 'onDialogueEvent', 'onNetEvent', 'onSpawned', 'onUpdate'] as const;
+export const SCRIPT_CALLBACK_NAMES = ['onStart', 'onTriggerEnter', 'onTriggerExit', 'onAnimNotify', 'onTimelineEvent', 'onDialogueEvent', 'onNetEvent', 'onVehicleEntered', 'onVehicleExited', 'onSpawned', 'onUpdate'] as const;
 export type ScriptCallbackName = typeof SCRIPT_CALLBACK_NAMES[number];
 
 /** Compiled scripts call `__auvraScriptGuard.tick()` on every loop iteration and function entry. */
@@ -125,6 +126,22 @@ export interface ScriptNet {
     send(name: string, payload?: ScriptNetPayload, toPeerId?: string): void;
 }
 
+/** ctx.vehicle(id): a vehicle as this frame sees it, and what a script may ask of it. */
+export interface ScriptVehicle {
+    readonly id: string;
+    /** km/h, negative going backwards. */
+    readonly speed: number;
+    /** 1-6, -1 in reverse. */
+    readonly gear: number;
+    readonly playerDriving: boolean;
+    /** Puts the player in it. */
+    enter(): void;
+    /** Drives it until released: throttle and brake 0-1 (the brake reverses once stopped), steer -1 (left) to 1 (right). */
+    setInput(input: { throttle?: number; brake?: number; steer?: number; handbrake?: boolean }): void;
+    /** Hands it back to its AI path, or parks it. */
+    release(): void;
+}
+
 /** What every callback receives first. One context per script, kept for its lifetime. */
 export interface ScriptContext {
     /** The object the script component is attached to. */
@@ -164,6 +181,12 @@ export interface ScriptContext {
     startDialogue(objectId?: string): void;
     /** The spline of the Spline component on object `objectId`, in world space and metres; null when it has none. */
     spline(objectId: string): ScriptSpline | null;
+    /** The vehicle on object `objectId` (its Vehicle component); null when it is not one. */
+    vehicle(objectId: string): ScriptVehicle | null;
+    /** The id of the vehicle the player drives, or null on foot. */
+    playerVehicle(): string | null;
+    /** Takes the player out of their vehicle at once, beside it. */
+    exitVehicle(): void;
     /** Multiplayer: who is here, who hosts, and events to the other players. */
     readonly net: ScriptNet;
     log(...values: unknown[]): void;
@@ -188,6 +211,10 @@ export interface ScriptCallbacks {
     onDialogueEvent?(ctx: ScriptContext, name: string, objectId: string): void;
     /** Fires for every script when another player's ctx.net.send arrives. */
     onNetEvent?(ctx: ScriptContext, name: string, payload: ScriptNetPayload, fromPeerId: string): void;
+    /** Fires for every script when the player gets into a vehicle. */
+    onVehicleEntered?(ctx: ScriptContext, vehicleId: string): void;
+    /** Fires for every script when the player gets out of a vehicle. */
+    onVehicleExited?(ctx: ScriptContext, vehicleId: string): void;
     /** Fires for the script that requested the spawn. */
     onSpawned?(ctx: ScriptContext, requestId: string, objectIds: string[]): void;
 }
@@ -361,6 +388,9 @@ const isSplineState = (value: unknown): value is ScriptSplineState | null => val
     && typeof value.closed === 'boolean' && isNumberList(value.points) && isNumberList(value.ups)
     && value.points.length % 3 === 0 && value.ups.length === value.points.length);
 
+const isVehicleState = (value: unknown): value is ScriptVehicleState => isRecord(value)
+    && isFiniteNumber(value.speed) && isFiniteNumber(value.gear) && typeof value.playerDriving === 'boolean';
+
 const isObjectState = (value: unknown): value is ScriptObjectState => isRecord(value)
     && typeof value.id === 'string' && typeof value.name === 'string'
     && isVec3(value.position) && isVec3(value.rotation) && isVec3(value.scale)
@@ -386,6 +416,9 @@ const isScriptEvent = (value: unknown): value is ScriptEvent => {
             return typeof value.name === 'string' && typeof value.objectId === 'string';
         case 'netEvent':
             return typeof value.name === 'string' && typeof value.from === 'string' && isScriptNetPayload(value.payload);
+        case 'vehicleEntered':
+        case 'vehicleExited':
+            return typeof value.objectId === 'string';
         case 'spawned':
             return typeof value.requestId === 'string' && Array.isArray(value.objectIds) && value.objectIds.every(id => typeof id === 'string');
         default:
@@ -410,7 +443,8 @@ export const isScriptSnapshot = (value: unknown): value is ScriptSnapshot => isR
     && Array.isArray(value.events) && value.events.every(isScriptEvent)
     && everyValue(value.raycasts, isRaycastHit)
     && isNetState(value.net)
-    && (value.splines === undefined || everyValue(value.splines, isSplineState));
+    && (value.splines === undefined || everyValue(value.splines, isSplineState))
+    && (value.vehicles === undefined || everyValue(value.vehicles, isVehicleState));
 
 /** Whether a message's script entry is exactly { id, objectId, source } with non-empty ids. */
 export const isScriptSource = (value: unknown): value is ScriptSource => isRecord(value)
@@ -854,6 +888,39 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
                 queue(record, { type: 'startDialogue', objectId: objectId === undefined ? record.objectId : readId('startDialogue', objectId) });
             },
             spline: (objectId: string) => splines.get(readId('spline', objectId)) ?? null,
+            vehicle: (objectId: string): ScriptVehicle | null => {
+                const id = readId('vehicle', objectId);
+                const state = world.snapshot.vehicles?.[id];
+                if (!state) return null;
+                return {
+                    id,
+                    speed: state.speed,
+                    gear: state.gear,
+                    playerDriving: state.playerDriving,
+                    enter: () => { queue(record, { type: 'enterVehicle', objectId: id }); },
+                    setInput: (input = {}) => {
+                        if (!isRecord(input)) throw new TypeError('vehicle.setInput expects { throttle, brake, steer, handbrake }');
+                        const unit = (name: string, value: unknown, min: number) => {
+                            if (value === undefined) return 0;
+                            if (!isFiniteNumber(value)) throw new TypeError(`vehicle.setInput ${name} must be a number`);
+                            return Math.min(1, Math.max(min, value));
+                        };
+                        if (input.handbrake !== undefined && typeof input.handbrake !== 'boolean') throw new TypeError('vehicle.setInput handbrake must be true or false');
+                        const command: ScriptCommand = {
+                            type: 'setVehicleInput', objectId: id,
+                            throttle: unit('throttle', input.throttle, 0), brake: unit('brake', input.brake, 0),
+                            steer: unit('steer', input.steer, -1), handbrake: input.handbrake === true,
+                        };
+                        // One input per vehicle per frame: the last one set wins.
+                        const pending = merged.get(`vehicleInput:${id}`);
+                        if (pending?.type === 'setVehicleInput') Object.assign(pending, command);
+                        else queue(record, command, `vehicleInput:${id}`);
+                    },
+                    release: () => { queue(record, { type: 'releaseVehicleInput', objectId: id }); },
+                };
+            },
+            playerVehicle: () => Object.entries(world.snapshot.vehicles ?? {}).find(([, state]) => state.playerDriving)?.[0] ?? null,
+            exitVehicle: () => { queue(record, { type: 'exitVehicle' }); },
             net: {
                 connected: () => world.snapshot.net.connected,
                 isHost: () => world.snapshot.net.isHost,
@@ -916,6 +983,11 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
         } else if (event.type === 'netEvent') {
             for (const record of scripts) {
                 if (record.started) run(record, 'onNetEvent', event.name, event.payload, event.from);
+            }
+        } else if (event.type === 'vehicleEntered' || event.type === 'vehicleExited') {
+            const name = event.type === 'vehicleEntered' ? 'onVehicleEntered' : 'onVehicleExited';
+            for (const record of scripts) {
+                if (record.started) run(record, name, event.objectId);
             }
         } else if (event.type === 'spawned') {
             const record = pendingSpawns.get(event.requestId);

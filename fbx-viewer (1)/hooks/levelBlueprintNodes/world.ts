@@ -48,7 +48,13 @@ export type WorldNodeType =
     | 'GetPlayerHealth'
     | 'GetSplineLength'
     | 'GetSplinePoint'
-    | 'FindClosestOnSpline';
+    | 'FindClosestOnSpline'
+    | 'EnterVehicle'
+    | 'ExitVehicle'
+    | 'GetVehicleState'
+    | 'GetPlayerVehicle'
+    | 'SetVehicleInput'
+    | 'ReleaseVehicleInput';
 
 export type Vec3 = [number, number, number];
 
@@ -148,6 +154,16 @@ export interface WorldNodeServices {
     playerHealth?(): { health: number; max: number } | null;
     /** The spline of the object `objectId` (its Spline component), in world space; null when it has none. */
     spline?(objectId: string): WorldSplineQuery | null;
+    /** A vehicle's speed (km/h, negative backwards), gear (-1 reverse) and whether the player drives it; null when the object is not a vehicle. */
+    vehicle?(objectId: string): { speed: number; gear: number; playerDriving: boolean } | null;
+    /** The vehicle the player drives, or null on foot. */
+    playerVehicle?(): string | null;
+    /** Puts the player in a vehicle; false when it is not one or the player cannot drive it. */
+    enterVehicle?(objectId: string): boolean;
+    /** Takes the player out of their vehicle at once, beside it; false on foot. */
+    exitVehicle?(): boolean;
+    /** Drives a vehicle from the level script until released (null): its AI path and parking brake wait. False when it is not a vehicle. */
+    setVehicleInput?(objectId: string, controls: { throttle: number; brake: number; steer: number; handbrake: boolean } | null): boolean;
 }
 
 export interface WorldExecutionContext extends FlowExecutionContext {
@@ -396,6 +412,56 @@ export const WORLD_NODE_DEFINITIONS: readonly WorldNodeDefinition[] = [
         inputs: [input('Spline', 'Object'), ...vectorPins('Position', input)],
         outputs: [output('Found', 'Boolean'), output('Distance', 'Float'), ...vectorPins('Closest', output)],
         data: { default_Spline: '', ...vectorDefaults('Position', [0, 0, 0]) },
+    },
+    {
+        type: 'EnterVehicle',
+        title: 'Enter Vehicle',
+        description: 'Puts the player in a vehicle (an actor with a Vehicle component) to drive it. Entered is false when the actor is not a vehicle the player can drive.',
+        inputs: [exec('Exec', 'Input'), input('Vehicle', 'Object')],
+        outputs: [exec('Out', 'Output'), output('Entered', 'Boolean')],
+        data: { default_Vehicle: '' },
+    },
+    {
+        type: 'ExitVehicle',
+        title: 'Exit Vehicle',
+        description: 'Takes the player out of the vehicle they drive at once, whatever its speed, beside it (or on top where there is no room). Exited is false on foot.',
+        inputs: [exec('Exec', 'Input')],
+        outputs: [exec('Out', 'Output'), output('Exited', 'Boolean')],
+        data: {},
+    },
+    {
+        type: 'GetVehicleState',
+        title: 'Get Vehicle State',
+        description: "A vehicle's speed in km/h (negative going backwards), its gear (-1 in reverse) and whether the player drives it. Found is false for an actor that is not a vehicle.",
+        pure: true,
+        inputs: [input('Vehicle', 'Object')],
+        outputs: [output('Found', 'Boolean'), output('Speed', 'Float'), output('Gear', 'Integer'), output('Player Driving', 'Boolean')],
+        data: { default_Vehicle: '' },
+    },
+    {
+        type: 'GetPlayerVehicle',
+        title: 'Get Player Vehicle',
+        description: 'The vehicle the player drives, and whether they drive one at all.',
+        pure: true,
+        inputs: [],
+        outputs: [output('Driving', 'Boolean'), output('Vehicle', 'Object')],
+        data: {},
+    },
+    {
+        type: 'SetVehicleInput',
+        title: 'Set Vehicle Input',
+        description: 'Drives a vehicle from the level script: Throttle and Brake from 0 to 1 (the brake reverses once it has stopped), Steer from -1 (left) to 1 (right). It holds them until set again or released; the player driving it overrides them.',
+        inputs: [exec('Exec', 'Input'), input('Vehicle', 'Object'), input('Throttle', 'Float'), input('Brake', 'Float'), input('Steer', 'Float'), input('Handbrake', 'Boolean')],
+        outputs: [exec('Out', 'Output'), output('Set', 'Boolean')],
+        data: { default_Vehicle: '', default_Throttle: 0, default_Brake: 0, default_Steer: 0, default_Handbrake: false },
+    },
+    {
+        type: 'ReleaseVehicleInput',
+        title: 'Release Vehicle Input',
+        description: 'Hands a vehicle back from Set Vehicle Input to its AI path, or parks it.',
+        inputs: [exec('Exec', 'Input'), input('Vehicle', 'Object')],
+        outputs: [exec('Out', 'Output')],
+        data: { default_Vehicle: '' },
     },
     {
         type: 'SetMorphTarget',
@@ -738,6 +804,46 @@ const runFindClosestOnSpline: WorldNodeExecutor = (_node, ctx) => {
     });
 };
 
+const vehicleOf = (ctx: WorldExecutionContext): string | null => toActorId(ctx.evaluate('Vehicle'));
+
+const runEnterVehicle: WorldNodeExecutor = (_node, ctx) => {
+    const id = vehicleOf(ctx);
+    finish(ctx, { Entered: id !== null && ctx.services.enterVehicle?.(id) === true });
+};
+
+const runExitVehicle: WorldNodeExecutor = (_node, ctx) => {
+    finish(ctx, { Exited: ctx.services.exitVehicle?.() === true });
+};
+
+const runGetVehicleState: WorldNodeExecutor = (_node, ctx) => {
+    const id = vehicleOf(ctx);
+    const state = id ? ctx.services.vehicle?.(id) ?? null : null;
+    publish(ctx, { Found: state !== null, Speed: state?.speed ?? 0, Gear: state?.gear ?? 0, 'Player Driving': state?.playerDriving ?? false });
+};
+
+const runGetPlayerVehicle: WorldNodeExecutor = (_node, ctx) => {
+    const id = ctx.services.playerVehicle?.() ?? null;
+    publish(ctx, { Driving: id !== null, Vehicle: id ?? '' });
+};
+
+const runSetVehicleInput: WorldNodeExecutor = (_node, ctx) => {
+    const id = vehicleOf(ctx);
+    const unit = (name: string) => Math.min(1, Math.max(0, toNumber(ctx.evaluate(name), 0)));
+    const controls = {
+        throttle: unit('Throttle'),
+        brake: unit('Brake'),
+        steer: Math.min(1, Math.max(-1, toNumber(ctx.evaluate('Steer'), 0))),
+        handbrake: ctx.evaluate('Handbrake') === true,
+    };
+    finish(ctx, { Set: id !== null && ctx.services.setVehicleInput?.(id, controls) === true });
+};
+
+const runReleaseVehicleInput: WorldNodeExecutor = (_node, ctx) => {
+    const id = vehicleOf(ctx);
+    if (id) ctx.services.setVehicleInput?.(id, null);
+    finish(ctx, {});
+};
+
 const executors = {
     SpawnPrefab: runSpawnPrefab,
     GetActorTransform: runGetActorTransform,
@@ -762,6 +868,12 @@ const executors = {
     GetSplineLength: runGetSplineLength,
     GetSplinePoint: runGetSplinePoint,
     FindClosestOnSpline: runFindClosestOnSpline,
+    EnterVehicle: runEnterVehicle,
+    ExitVehicle: runExitVehicle,
+    GetVehicleState: runGetVehicleState,
+    GetPlayerVehicle: runGetPlayerVehicle,
+    SetVehicleInput: runSetVehicleInput,
+    ReleaseVehicleInput: runReleaseVehicleInput,
 } satisfies Record<WorldNodeType, WorldNodeExecutor>;
 
 /** Executor per world node type; look up by `node.type` and treat a miss as "not a world node". */

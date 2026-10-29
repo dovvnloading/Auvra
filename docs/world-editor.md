@@ -82,6 +82,7 @@ Objects can carry components that add behaviour. Select an object and use **Add 
 | Spline Mesh | Bends a model along the object's spline: roads, rails, pipes, walls, river beds |
 | Spline Scatter | Places copies of a model along the object's spline: fence posts, lamps, trees along a road |
 | Follow Spline | Moves the object along another object's spline during play: platforms, carts, trains, cameras on rails |
+| Vehicle | A wheeled vehicle the player gets into and drives, or that drives itself along a spline (see [Vehicles](#vehicles)) |
 | Nav Link | Lets enemies cross from the object to **End** (relative to the object) where the navmesh does not join up: a drop, a gap, a ladder. One-way links only go from the object to the end. Drawn in the editor as an arc (see [Enemy navigation](characters.md#enemy-navigation)) |
 | Nav Obstacle | Cuts a cylinder of **Radius** and **Height** around the object out of the navmesh and follows it as it moves, so enemies path around it: for crates that get pushed, vehicles and other moving objects |
 | Pickup | Health, rounds or a weapon the player collects by walking within **Reach** of the object. **Amount** is the health restored or the rounds added; **Weapon** names the weapon that gets the rounds (blank: the held one) or the weapon given. A pickup that would give nothing, such as health at full health, stays. Taken, it disappears and comes back after **Respawn** seconds; at 0 it is gone for the session, and a save remembers it. **Sound** plays when it is taken. Add a Rotator for a pickup that spins (see [Weapons](characters.md#weapons)) |
@@ -141,6 +142,54 @@ The Spline inspector's **Terrain** tools shape every terrain the spline crosses:
 - **Snap points** sets each point's height to the terrain under it, so the spline lies on the ground.
 
 Each is one undo step.
+
+## Vehicles
+
+A **Vehicle** component turns an object into a wheeled vehicle: a car, truck, buggy or kart. During play the player walks up to it and presses **Interact** (F) to get in, drives it, and presses Interact again to get out once it has slowed to walking pace. A vehicle can also drive itself along a spline, and level scripts and gameplay scripts can drive it too.
+
+On its own the component makes the object a dynamic physics body of the vehicle's **Mass**, shaped by a convex hull around the model's body (without its wheels). Collider components on the object shape it instead; a Rigid Body component on it sets its mass and body type.
+
+### Wheels
+
+The vehicle uses the model's own wheels: nodes named like `Wheel_FL`, `FrontLeftTire`, `wheel_rr` or `Rim_RL` (a tyre and the rim, hub or brake disc sharing its centre turn as one wheel). Steering wheels, spares and wheel arches are left out. Which wheels are at the front and which on the left follows where they sit: the model's front is +Z. Each wheel is measured from its mesh, so its pivot does not have to be at its centre. A model that names fewer than three wheels gets four drawn at the corners of its body, so any model can be driven while you make a proper one.
+
+In the editor each vehicle shows a ring where each of its wheels is and an arrow along the way it drives.
+
+### Driving and handling
+
+| Control | Drives |
+|---|---|
+| Move forward (W) | Throttle |
+| Move back (S) | Brake; from a stop, reverse |
+| Move left / right (A, D) | Steer |
+| Jump (Space) | Handbrake: locks the rear wheels and lets the back slide |
+| Interact (F) | Get in, or get out when slow enough and there is room beside it |
+
+While driving, the view becomes a chase camera behind the vehicle (the mouse looks round it for a moment) and a speedometer shows the speed, gear and revs. The driver is out of reach of shots and blows. Getting out puts them beside the driver's door (the left), or the other side or behind when that is blocked.
+
+| Setting | What it does |
+|---|---|
+| Mass | Total mass in kilograms |
+| Drive | Which wheels the engine drives: rear, front or all |
+| Power | Engine power in kW. A launch is held to what road tyres put down (about 0.6 g); above that the engine's power sets the pull |
+| Top speed, Reverse speed | In km/h; the engine eases off as it nears them |
+| Braking | Deceleration at full brake, m/s² (9 is a road car) |
+| Steering lock, Steering at top speed | The front wheels' angle at full lock, and the share of it left at top speed. The inner wheel turns more than the outer one, so both roll round the same centre |
+| Tyre grip, Handbrake grip | Tyre friction, and the share of the rear grip left with the handbrake on |
+| Suspension travel, stiffness, damping | Spring length, how firm it is (the car sags 9.81 / (4 x stiffness) metres at rest) and how quickly bouncing dies away |
+| Anti-roll | Keeps the body flat in corners |
+| Downforce | Pushes it onto the road harder the faster it goes |
+| Centre of mass height | Above (or below) the wheel centres; lower is harder to roll over |
+| Wheel radius | Overrides the measured wheel size (0 measures) |
+| Player can drive | Off for vehicles only scripts or the AI drive |
+| AI path, AI cruise speed | A Spline object the vehicle drives along whenever the player is not driving it, and its speed there |
+| Engine sound, Engine volume | An audio asset of an engine loop, pitched up with the revs; without one the engine is synthesized. Tyres squeal when it slides |
+
+### AI driving
+
+With an **AI path**, the vehicle drives itself along the spline, round and round a closed one or to the end of an open one, where it stops. It steers for a point ahead on the path and slows for bends it could not take at its cruise speed, so a sharp corner is taken slowly and a gentle one flat out. Knocked well off the path, it heads back to the nearest stretch. When the player gets in, they drive; when they get out, the AI carries on.
+
+Vehicles count as moving objects: the navmesh and baked lighting leave them out.
 
 ## Physics
 

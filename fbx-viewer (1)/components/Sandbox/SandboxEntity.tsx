@@ -411,7 +411,9 @@ export const SandboxEntity = forwardRef<SandboxEntityHandle, SandboxEntityProps>
                     applyHealthDamage(amount);
                     if (onSpawnBlood) onSpawnBlood(point);
                 },
-                isDead: () => isDead
+                isDead: () => isDead,
+                // A hidden character (the player riding in a vehicle) is out of reach of shots.
+                isHittable: () => model.object?.visible !== false
             };
             
             registerHittable(handle);

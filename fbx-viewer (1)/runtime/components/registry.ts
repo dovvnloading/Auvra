@@ -22,6 +22,7 @@ import { REFLECTION_PROBE_COMPONENT } from './reflectionProbe';
 import { SCRIPT_COMPONENT } from './scriptComponent';
 import { SPLINE_COMPONENTS } from './splineComponents';
 import { TIMELINE_COMPONENT } from './timelineComponent';
+import { VEHICLE_COMPONENT } from './vehicleComponent';
 import { WATER_COMPONENT } from './waterComponent';
 import type { ComponentDefinition, ComponentInspectorProps } from './types';
 
@@ -33,6 +34,7 @@ export const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
     ...JOINT_COMPONENTS,
     ...NAVIGATION_COMPONENTS,
     ...SPLINE_COMPONENTS,
+    VEHICLE_COMPONENT,
     PARTICLES_COMPONENT,
     DECAL_COMPONENT,
     WATER_COMPONENT,

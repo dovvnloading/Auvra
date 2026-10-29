@@ -13,6 +13,7 @@ Nodes are added from the palette. Select a node to edit it in the inspector: dat
 | On Overlap | When the player enters the chosen actor (palette: **Actor Begin Overlap**) |
 | Network Event | When another player sends a network event with its name; provides Value (as text) and From (their player id). See [Multiplayer](multiplayer.md) |
 | Dialogue Event | When a dialogue line or choice raises an event with its name (empty: any). See [Dialogue](dialogue.md#dialogue-events) |
+| Vehicle Entered, Vehicle Exited | When the player gets into or out of the chosen [vehicle](world-editor.md#vehicles) (or any); provides the **Vehicle** |
 
 **On Overlap** targets a specific object, picked from a list showing its name, type and a short id. Renaming the object does not break the reference. Older graphs that referenced actors by name are converted automatically when the name is unique; ambiguous ones show a warning until you pick the actor.
 
@@ -104,6 +105,17 @@ Pending delays are dropped when the level restarts or play stops.
 | Find Closest On Spline | The **Closest** point on the spline to **Position**, and the **Distance** along the spline it is at: how far the player has come along a track, or where to rejoin a path. Pure |
 
 To move something along a spline at a speed, add a [Follow Spline](world-editor.md#follow-spline) component; these nodes are for placing, aiming and measuring.
+
+## Vehicle nodes
+
+| Node | Does |
+|---|---|
+| Enter Vehicle | Puts the player in the **Vehicle** (an actor with a [Vehicle](world-editor.md#vehicles) component) to drive it. **Entered** is false when it is not one the player can drive |
+| Exit Vehicle | Takes the player out of the vehicle they drive at once, whatever its speed, beside it (or on top where there is no room) |
+| Get Vehicle State | The vehicle's **Speed** in km/h (negative backwards), its **Gear** (-1 in reverse) and whether the **Player Driving** it. Pure |
+| Get Player Vehicle | Whether the player is **Driving**, and the **Vehicle**. Pure |
+| Set Vehicle Input | Drives a vehicle from the blueprint: **Throttle** and **Brake** from 0 to 1 (the brake reverses once stopped), **Steer** from -1 (left) to 1 (right) and the **Handbrake**. It holds them until set again or released; its AI path waits, and the player driving it overrides them |
+| Release Vehicle Input | Hands the vehicle back to its AI path, or parks it |
 
 **Input Action** compares the action with its state on the node's previous run, so drive it from **Event Tick** to catch every press. The actions are MoveForward, MoveBack, MoveLeft, MoveRight, Jump, Sprint, Fire, Aim, Interact, Reload, NextWeapon and Pause; see [Controls](building-games.md#controls) for their keys.
 

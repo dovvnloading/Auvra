@@ -703,6 +703,24 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                     </div>
                 )}
 
+                {node.type === 'Event' && (node.name === 'Event VehicleEntered' || node.name === 'Event VehicleExited') && (
+                    <div className="space-y-1">
+                        <label className="text-[10px] text-gray-400">Vehicle</label>
+                        <select
+                            aria-label="Event vehicle"
+                            value={typeof node.data?.vehicleId === 'string' ? node.data.vehicleId : ''}
+                            onChange={(e) => onUpdate({ data: { ...(node.data || {}), vehicleId: e.target.value } })}
+                            className="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-red-500"
+                        >
+                            <option value="">Any vehicle</option>
+                            {levelObjects.filter(obj => (obj.components ?? []).some(c => c.type === 'vehicle')).map(obj => (
+                                <option key={obj.id} value={obj.id}>{obj.name}</option>
+                            ))}
+                        </select>
+                        <p className="text-[10px] text-gray-500">Runs when the player gets {node.name === 'Event VehicleEntered' ? 'into' : 'out of'} this vehicle (or any). Vehicle is the one they {node.name === 'Event VehicleEntered' ? 'got into' : 'left'}.</p>
+                    </div>
+                )}
+
                 {node.type === 'Event' && node.name === 'Event NetworkEvent' && (
                     <div className="space-y-1">
                         <label className="text-[10px] text-gray-400">Event name (empty: any network event)</label>

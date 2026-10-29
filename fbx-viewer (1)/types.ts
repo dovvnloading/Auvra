@@ -387,6 +387,8 @@ export interface LogicNode {
           'DamagePlayer' | 'HealPlayer' | 'AddAmmo' | 'GiveWeapon' | 'GetPlayerHealth' |
           // Splines (hooks/levelBlueprintNodes/world.ts)
           'GetSplineLength' | 'GetSplinePoint' | 'FindClosestOnSpline' |
+          // Vehicles (hooks/levelBlueprintNodes/world.ts)
+          'EnterVehicle' | 'ExitVehicle' | 'GetVehicleState' | 'GetPlayerVehicle' | 'SetVehicleInput' | 'ReleaseVehicleInput' |
           // Multiplayer (hooks/useLevelBlueprintRuntime.ts)
           'SendNetworkEvent' | 'IsNetworkHost' |
           // Cameras (hooks/useLevelBlueprintRuntime.ts)
@@ -635,6 +637,8 @@ export interface Hittable {
     takeDamage: (amount: number, point: THREE.Vector3) => void;
     isDead: () => boolean;
     team: 'Player' | 'Enemy';
+    /** False while the character cannot be hit: hidden, as while riding in a vehicle. Absent: always. */
+    isHittable?: () => boolean;
 }
 
 /** Host project template ids accepted by project.create (protocol/v1 projectCreatePayload.template). */

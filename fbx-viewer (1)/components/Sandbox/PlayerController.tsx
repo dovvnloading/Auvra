@@ -15,9 +15,12 @@ import {
 } from '../../runtime/weapons';
 import { playerActions } from '../../runtime/playerActions';
 import { SpatialAudioListener } from '../../runtime/spatialAudio';
+import { vehicleSession } from '../../runtime/vehicles';
 import type { PlayerWeaponStatus } from '../../runtime/gameState';
 
 const _rootTravel = new THREE.Vector3();
+const _seat = new THREE.Vector3();
+const _facing = new THREE.Vector3();
 
 /** Seconds a weapon stays in hand after its last shot before going back to its carry placement. */
 const WEAPON_READY_AFTER_SHOT = 0.8;
@@ -121,7 +124,9 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
     const { getInputState } = usePlayerControls(enabled);
 
     // 2. Physics & Locomotion System
-    const { updatePhysics, hasPhysicsWorld } = usePlayerPhysics(modelObject, camera, onStaminaChange, levelObjects, blueprint?.stats);
+    const { updatePhysics, ride, hasPhysicsWorld } = usePlayerPhysics(modelObject, camera, onStaminaChange, levelObjects, blueprint?.stats);
+    // The vehicle the character rides in, while the player drives it.
+    const riding = useRef<string | null>(null);
 
     // 3. Combat System
     const { fireShots } = usePlayerCombat(
@@ -191,6 +196,35 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
 
         // Disable controls if dead
         if (entityRef.current?.isDead()) return;
+
+        // --- In a vehicle: the character rides in its seat, out of sight, until it gets out ---
+        const vehicleId = vehicleSession.state().driving;
+        if (vehicleId) {
+            const vehicle = vehicleSession.get(vehicleId);
+            if (!vehicle) return;
+            if (riding.current !== vehicleId) {
+                riding.current = vehicleId;
+                modelObject.visible = false;
+                upperBodyPlaying.current = null;
+                apiRef.current.stopMontage?.(0.1, '');
+                apiRef.current.setVariable('Speed', 0);
+                apiRef.current.setVariable('IsFiring', false);
+                apiRef.current.setVariable('IsAiming', false);
+                if (onAimChange) onAimChange(false);
+            }
+            vehicle.host.getWorldDirection(_facing);
+            ride(vehicle.seat(_seat), Math.atan2(_facing.x, _facing.z));
+            return;
+        }
+        if (riding.current) {
+            // Out beside the vehicle where there is room; with none (or the vehicle gone), up on top of where it was.
+            const vehicle = vehicleSession.get(riding.current);
+            const spot = vehicle?.exitPoint(_seat) ?? (vehicle ? vehicle.seat(_seat).setY(_seat.y + 2) : null);
+            if (spot) modelObject.position.copy(spot);
+            riding.current = null;
+            ride(null);
+            modelObject.visible = true;
+        }
 
         // --- Step A: Inputs ---
         const input = getInputState();
