@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { materialLibrary } from '../runtime/materials/materialLibrary';
+import { CARD_FRINGE_KEY } from './processing/ModelMaterials';
 import { MAX_PARAMETER_NAME_LENGTH, type MaterialParameterValues } from '../runtime/materials/materialGraph';
 
 /**
@@ -272,7 +273,8 @@ const collectMaterials = (root: THREE.Object3D): THREE.Material[] => {
     const material = (child as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
     if (!material) return;
     for (const candidate of Array.isArray(material) ? material : [material]) {
-      if (candidate) materials.add(candidate);
+      // A card fringe's stand-in for the parts it does not draw is no material of the model's.
+      if (candidate && !candidate.userData[CARD_FRINGE_KEY]) materials.add(candidate);
     }
   });
   return [...materials];

@@ -15,6 +15,8 @@ interface CharacterCameraRigProps {
     active: boolean;
     isAiming: boolean;
     aimOffset?: [number, number, number]; // Offset for Scope Mode
+    /** How far the orbit sits to the camera's right (default-size units), so the character stands beside the crosshair, not under it. */
+    shoulderOffset?: number;
     /** Radians per pixel of mouse movement; defaults to the player's options. */
     mouseSensitivity?: number;
     /** Mouse up looks down; defaults to the player's options. */
@@ -48,6 +50,7 @@ export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({
     active,
     isAiming,
     aimOffset = [0.5, 4.5, 1.0],
+    shoulderOffset = 1.0,
     mouseSensitivity,
     invertY,
     initialYaw = 0
@@ -182,21 +185,24 @@ export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({
         const sinTheta = Math.sin(state.current.theta);
         const cosTheta = Math.cos(state.current.theta);
 
-        // Standard Orbit Position
-        const orbitDist = state.current.currentDistance;
-        const orbitX = pivotX + orbitDist * sinPhi * sinTheta;
-        const orbitY = pivotY + orbitDist * cosPhi;
-        const orbitZ = pivotZ + orbitDist * sinPhi * cosTheta;
-
-        // 4. Calculate Aim View (Scope)
-        // Position is offset relative to character, rotated by camera angle
-        // Essentially placing the camera "at the shoulder" looking forward
-        
         // Forward vector based on camera angles
         const fwdX = sinTheta; // Using theta directly for simplified forward direction on XZ
         const fwdZ = cosTheta;
         const rightX = cosTheta;
         const rightZ = -sinTheta;
+
+        // Standard Orbit Position, moved over the shoulder: the camera and the point it looks at both
+        // sit to the right, so the view keeps its direction and the head is beside the crosshair.
+        const shoulderX = rightX * shoulderOffset * scale;
+        const shoulderZ = rightZ * shoulderOffset * scale;
+        const orbitDist = state.current.currentDistance;
+        const orbitX = pivotX + shoulderX + orbitDist * sinPhi * sinTheta;
+        const orbitY = pivotY + orbitDist * cosPhi;
+        const orbitZ = pivotZ + shoulderZ + orbitDist * sinPhi * cosTheta;
+
+        // 4. Calculate Aim View (Scope)
+        // Position is offset relative to character, rotated by camera angle
+        // Essentially placing the camera "at the shoulder" looking forward
 
         // Aim Position: Start at Head
         const aimX = pivotX 
@@ -233,7 +239,7 @@ export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({
         // FPS lookAt is "forward".
         // Let's blend the lookAt target.
         
-        const orbitLookAt = new THREE.Vector3(pivotX, pivotY, pivotZ);
+        const orbitLookAt = new THREE.Vector3(pivotX + shoulderX, pivotY, pivotZ + shoulderZ);
         const aimLookAt = new THREE.Vector3(lookX, lookY, lookZ);
         
         // Critical: As we transition to Aim, we switch from "Looking AT character" to "Looking OUT from character"
