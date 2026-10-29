@@ -1,5 +1,6 @@
 import type * as THREE from 'three';
 import type { DebrisOptions } from './debris';
+import type { ClothCollider } from './cloth';
 import type { FractureResult } from './fracture';
 import type { SurfaceKind } from './surfaces';
 
@@ -100,6 +101,8 @@ export interface CombatServices {
     breakEffect(centre: Vec3, radius: number, color: string): void;
     /** A loose body's velocity before this frame's physics step (by its physics handle); null if not moving. */
     velocityBefore(bodyHandle: number): Vec3 | null;
+    /** The characters (the player and enemies) as upright capsules, for cloth to rest against. */
+    characterCapsules(): ClothCollider[];
 }
 
 const NO_COMBAT: CombatServices = {
@@ -110,6 +113,7 @@ const NO_COMBAT: CombatServices = {
     spawnDebris: () => 0,
     breakEffect: () => undefined,
     velocityBefore: () => null,
+    characterCapsules: () => [],
 };
 
 const providers: Partial<CombatServices>[] = [];

@@ -39,6 +39,12 @@ export const ProjectileManager = forwardRef<ProjectileManagerHandle, {}>((_props
 
     // Explosions hurt every character in reach, the player included, less further out.
     useEffect(() => provideCombat({
+        characterCapsules: () => targetsRef.current
+            .filter(target => !target.isDead())
+            .map(target => {
+                const box = target.getHitbox();
+                return { x: box.center.x, y: box.center.y, z: box.center.z, height: box.height, radius: box.radius };
+            }),
         damageCharacters: (centre, radius, damage) => {
             let hit = 0;
             for (const target of [...targetsRef.current]) {

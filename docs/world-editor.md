@@ -268,6 +268,23 @@ Terrain is solid during play: it gets a matching physics shape, so dynamic bodie
 
 Turn on **Is Trigger** to make a volume the player can walk through, such as a checkpoint, pickup or door sensor. An **On Overlap** event in the level blueprint that targets the object fires once each time the player enters it. See [Level scripting](level-scripting.md#events).
 
+## Wind, cloth and swaying
+
+The wind is the weather's ([Sky, time of day and weather](#sky-time-of-day-and-weather)): its speed and direction, swelling and easing in gusts that roll across the ground and swirling a little from place to place. It blows in the editor too, so you see foliage and cloth move as they will in play.
+
+- **Foliage sways** by itself. Models whose materials are named for leaves, grass and the like (leaf, foliage, grass, bush, plant, needle, fern, flower, reed, hedge, ivy, vine...) bend from their base, more toward the top, and their leaves flutter. Woody parts (bark, trunk, branch, stem) bend a little and do not flutter. A tree's trunk and leaves bend together.
+- **Wind Sway** (component) sets how much an object's model sways: **Sway** (1 for a tree or grass; 0 keeps it still) and **Leaf flutter**. Use it for a model whose materials are not named that way, or to change or stop a plant's sway.
+- **Wind Zone** (component) adds wind of its own on top of the weather's. **Directional** blows along the object's forward (the blue arrow in the editor), everywhere or within **Radius**. **Radial** blows out from its middle, or draws in with a negative **Strength**. Both fade to nothing at their edge, and **Turbulence** makes them gust. Use one for a fan, a downdraft or a gap between buildings. Cloth, rain and snow feel it.
+- **Cloth** (component) is a sheet hanging from the object: a flag, a banner, a curtain, a sail, washing on a line. Its top middle is at the object and it hangs down across the object's X. **Held by** pins it:
+  - **Left edge**: a flag on a pole.
+  - **Top edge**: a banner or curtain.
+  - **Top corners**: washing or a hammock.
+  - **All four corners**: a tarp or sail.
+  - **Nothing**: it falls.
+
+  Moving the object carries the cloth with it. The wind catches each part by how square it faces it. **Weight**, **Stiffness**, **Fold resistance**, **Air damping** and **Catches the wind** set how it behaves. **Colour** or a **Texture** asset sets its look. In play it rests on the ground under it and, with **Rests against characters**, drapes against the player and enemies, so a character walking through a curtain parts it. Rain wets it like any other surface.
+- **Spring Bones** (component) makes the loose parts of a rigged model swing as it moves, sag and stream in the wind, then settle: hair, a ponytail, a tail, straps, a rope, a tassel. Bones whose names contain one of the **Bone names** words take part, with the bones below them. **Stiffness** is how firmly they hold the model's rest shape. **Damping** is how quickly a swing dies down. **Gravity** and **Wind** are how much those pull. A bone never bends more sharply from the one above it than a rope or lock of hair would, and bones an animation drives keep their animated pose underneath.
+
 ## Destruction
 
 Add a **Destructible** component to an object for it to break into pieces: a wall, a crate, a pillar, a pane of glass, a rock. Give it a **Collider** too, so shots and vehicles can reach it.
