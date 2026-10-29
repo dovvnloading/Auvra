@@ -116,7 +116,7 @@ describe('post process settings', () => {
     expect(POST_PROCESS_COMPONENT.props.map(prop => prop.key)).toEqual([
       'bloom', 'bloomIntensity', 'bloomThreshold', 'ambientOcclusion', 'aoIntensity', 'aoRadius', 'toneMapping', 'exposure',
       'autoExposure', 'exposureCompensation', 'adaptationSpeed', 'lightShafts', 'lightShaftsIntensity', 'sunHaze', 'sunHazeIntensity',
-      'motionBlur', 'motionBlurStrength', 'vignette', 'vignetteDarkness', 'depthOfField', 'focusDistance', 'bokehScale',
+      'globalIllumination', 'giIntensity', 'reflections', 'reflectionIntensity', 'motionBlur', 'motionBlurStrength', 'vignette', 'vignetteDarkness', 'depthOfField', 'focusDistance', 'bokehScale',
       'saturation', 'contrast', 'brightness', 'temperature', 'tint', 'look', 'lookStrength', 'filmGrain', 'chromaticAberration',
       'antialias',
     ]);
@@ -138,6 +138,7 @@ describe('post process settings', () => {
       saturation: 0, contrast: 0, brightness: 0,
       // The eye adapts and the sun lights the air by default; the camera's own effects are opt-in.
       autoExposure: true, exposureCompensation: 0, lightShafts: true, sunHaze: true, motionBlur: false,
+      globalIllumination: true, giIntensity: 1, reflections: true, reflectionIntensity: 1,
       temperature: 0, tint: 0, look: 'none', filmGrain: 0, chromaticAberration: 0,
     });
     expect(POST_PROCESS_DEFAULTS.bloomIntensity).toBeLessThan(1);
@@ -270,7 +271,10 @@ describe('post process ownership', () => {
 describe('post process stack', () => {
   it('builds the default stack in pipeline order with single-sampled buffers', () => {
     const view = render(stackElement(componentWith(defaults())));
-    expect(effectNames()).toEqual(['SunHaze', 'N8AO', 'LightShafts', 'AutoExposure', 'Bloom', 'ToneMapping', 'Vignette', 'SMAA']);
+    expect(effectNames()).toEqual([
+      'ScreenLighting', 'SunHaze', 'N8AO', 'LightShafts', 'AutoExposure', 'Bloom', 'ToneMapping', 'Vignette', 'SMAA',
+    ]);
+    expect(effectProps('ScreenLighting')).toMatchObject({ bounce: 1, reflections: 1 });
     expect(effectProps('SunHaze')).toMatchObject({ intensity: POST_PROCESS_DEFAULTS.sunHazeIntensity });
     expect(effectProps('LightShafts')).toMatchObject({ intensity: POST_PROCESS_DEFAULTS.lightShaftsIntensity });
     expect(effectProps('AutoExposure')).toMatchObject({ compensation: 0, speed: 1 });
@@ -288,8 +292,8 @@ describe('post process stack', () => {
       ...defaults(), depthOfField: true, focusDistance: 6, bokehScale: 3, saturation: -0.5, contrast: 0.25, brightness: 0,
     })));
     expect(effectNames()).toEqual([
-      'SunHaze', 'N8AO', 'DepthOfField', 'LightShafts', 'AutoExposure', 'Bloom', 'ToneMapping', 'HueSaturation', 'BrightnessContrast',
-      'Vignette', 'SMAA',
+      'ScreenLighting', 'SunHaze', 'N8AO', 'DepthOfField', 'LightShafts', 'AutoExposure', 'Bloom', 'ToneMapping', 'HueSaturation',
+      'BrightnessContrast', 'Vignette', 'SMAA',
     ]);
     expect(effectProps('DepthOfField')).toMatchObject({ worldFocusDistance: 6, bokehScale: 3 });
     expect(effectProps('HueSaturation')).toMatchObject({ saturation: -0.5 });
@@ -297,7 +301,7 @@ describe('post process stack', () => {
 
     view.rerender(stackElement(componentWith({
       ...defaults(), bloom: false, ambientOcclusion: false, vignette: false, antialias: 'none', toneMapping: 'none',
-      sunHaze: false, lightShafts: false, autoExposure: false,
+      sunHaze: false, lightShafts: false, autoExposure: false, globalIllumination: false, reflections: false,
     })));
     // Tone mapping always ends the HDR part; None is a linear clamp that still applies exposure.
     expect(effectNames()).toEqual(['ToneMapping']);
@@ -311,14 +315,20 @@ describe('post process stack', () => {
       temperature: 0.4, tint: -0.1, look: 'cinematic', lookStrength: 0.6, filmGrain: 0.5, chromaticAberration: 0.5,
     })));
     expect(effectNames()).toEqual([
-      'SunHaze', 'N8AO', 'LightShafts', 'MotionBlur', 'AutoExposure', 'WhiteBalance', 'Bloom', 'ToneMapping', 'Look', 'Vignette',
-      'ChromaticAberration', 'Noise', 'SMAA',
+      'ScreenLighting', 'SunHaze', 'N8AO', 'LightShafts', 'MotionBlur', 'AutoExposure', 'WhiteBalance', 'Bloom', 'ToneMapping', 'Look',
+      'Vignette', 'ChromaticAberration', 'Noise', 'SMAA',
     ]);
     expect(effectProps('MotionBlur')).toMatchObject({ strength: 0.8 });
     expect(effectProps('AutoExposure')).toMatchObject({ compensation: -1, speed: 2 });
     expect(effectProps('WhiteBalance')).toMatchObject({ temperature: 0.4, tint: -0.1 });
     expect(effectProps('Look')).toMatchObject({ look: 'cinematic', strength: 0.6 });
     expect(effectProps('Noise')).toMatchObject({ opacity: 0.3 });
+
+    // Bounced light alone keeps the effect, reflections at 0; with both off it goes.
+    view.rerender(stackElement(componentWith({ ...defaults(), reflections: false, giIntensity: 2 })));
+    expect(effectProps('ScreenLighting')).toMatchObject({ bounce: 2, reflections: 0 });
+    view.rerender(stackElement(componentWith({ ...defaults(), globalIllumination: false, reflectionIntensity: 0 })));
+    expect(effectNames()).not.toContain('ScreenLighting');
 
     // A look at no strength, and no grain or fringes, leave nothing in the stack.
     view.rerender(stackElement(componentWith({ ...defaults(), look: 'noir', lookStrength: 0 })));
