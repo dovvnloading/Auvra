@@ -2,9 +2,12 @@ import React, { createContext, useContext, useEffect, useLayoutEffect, useMemo, 
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import {
-    Bloom, BrightnessContrast, DepthOfField, EffectComposer, HueSaturation, N8AO, SMAA, ToneMapping, Vignette
+    Bloom, BrightnessContrast, ChromaticAberration, DepthOfField, EffectComposer, HueSaturation, N8AO, Noise, SMAA, ToneMapping, Vignette
 } from '@react-three/postprocessing';
-import { ToneMappingMode } from 'postprocessing';
+import { BlendFunction, LUT3DEffect, ToneMappingMode } from 'postprocessing';
+import {
+    AutoExposureEffect, COLOR_LOOKS, LightShaftsEffect, lookTexture, MotionBlurEffect, SunHazeEffect, WhiteBalanceEffect, type ColorLook,
+} from '../postEffects';
 import { RENDER_CONVENTIONS } from '../../renderer/conventions';
 import type { LevelComponent } from '../../types';
 import type { ComponentDefinition, ComponentPropSchema, ComponentRenderProps } from './types';
@@ -13,6 +16,7 @@ import type { ComponentDefinition, ComponentPropSchema, ComponentRenderProps } f
 
 export type PostProcessToneMapping = 'aces' | 'agx' | 'reinhard' | 'neutral' | 'none';
 export type PostProcessAntialias = 'smaa' | 'none';
+export type PostProcessLook = ColorLook;
 
 export const POST_PROCESS_TONE_MAPPINGS: readonly PostProcessToneMapping[] = ['aces', 'agx', 'reinhard', 'neutral', 'none'];
 export const POST_PROCESS_ANTIALIAS_MODES: readonly PostProcessAntialias[] = ['smaa', 'none'];
@@ -44,6 +48,30 @@ export interface PostProcessSettings {
     /** -1..1; 0 leaves the image unchanged. */
     brightness: number;
     antialias: PostProcessAntialias;
+    /** The eye adapting to the light: brighter in the dark, darker in glare. */
+    autoExposure: boolean;
+    /** Stops (EV) brighter or darker than auto exposure settles on. */
+    exposureCompensation: number;
+    /** How quickly it adapts: 1 is about a second in glare and two in the dark. */
+    adaptationSpeed: number;
+    /** Beams of sunlight through gaps against the sky. */
+    lightShafts: boolean;
+    lightShaftsIntensity: number;
+    /** Fog and mist glowing toward the sun. */
+    sunHaze: boolean;
+    sunHazeIntensity: number;
+    /** Blur from the camera's own motion; 1 is a full frame's worth (a 360-degree shutter). */
+    motionBlur: boolean;
+    motionBlurStrength: number;
+    /** -1..1: cooler to warmer, and green to magenta. */
+    temperature: number;
+    tint: number;
+    /** A colour grading look, and how much of it. */
+    look: PostProcessLook;
+    lookStrength: number;
+    /** 0..1: film grain and colour fringes toward the edges. */
+    filmGrain: number;
+    chromaticAberration: number;
 }
 
 type SettingKey<T> = { [K in keyof PostProcessSettings]: PostProcessSettings[K] extends T ? K : never }[keyof PostProcessSettings];
@@ -69,7 +97,22 @@ export const POST_PROCESS_DEFAULTS: PostProcessSettings = {
     saturation: 0,
     contrast: 0,
     brightness: 0,
-    antialias: 'smaa'
+    antialias: 'smaa',
+    autoExposure: true,
+    exposureCompensation: 0,
+    adaptationSpeed: 1,
+    lightShafts: true,
+    lightShaftsIntensity: 0.35,
+    sunHaze: true,
+    sunHazeIntensity: 0.5,
+    motionBlur: false,
+    motionBlurStrength: 0.5,
+    temperature: 0,
+    tint: 0,
+    look: 'none',
+    lookStrength: 1,
+    filmGrain: 0,
+    chromaticAberration: 0
 };
 
 /** Editable range of every numeric setting; stored values outside it clamp. */
@@ -84,7 +127,17 @@ export const POST_PROCESS_RANGES: Record<NumberSetting, { min: number; max: numb
     bokehScale: { min: 0, max: 10, step: 0.1 },
     saturation: { min: -1, max: 1, step: 0.01 },
     contrast: { min: -1, max: 1, step: 0.01 },
-    brightness: { min: -1, max: 1, step: 0.01 }
+    brightness: { min: -1, max: 1, step: 0.01 },
+    exposureCompensation: { min: -4, max: 4, step: 0.1 },
+    adaptationSpeed: { min: 0.1, max: 10, step: 0.1 },
+    lightShaftsIntensity: { min: 0, max: 3, step: 0.05 },
+    sunHazeIntensity: { min: 0, max: 3, step: 0.05 },
+    motionBlurStrength: { min: 0, max: 1, step: 0.05 },
+    temperature: { min: -1, max: 1, step: 0.01 },
+    tint: { min: -1, max: 1, step: 0.01 },
+    lookStrength: { min: 0, max: 1, step: 0.05 },
+    filmGrain: { min: 0, max: 1, step: 0.01 },
+    chromaticAberration: { min: 0, max: 1, step: 0.01 }
 };
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -123,7 +176,22 @@ export const resolvePostProcessSettings = (component: LevelComponent): PostProce
         saturation: readNumber(props, 'saturation'),
         contrast: readNumber(props, 'contrast'),
         brightness: readNumber(props, 'brightness'),
-        antialias: readChoice(props.antialias, POST_PROCESS_ANTIALIAS_MODES, POST_PROCESS_DEFAULTS.antialias)
+        antialias: readChoice(props.antialias, POST_PROCESS_ANTIALIAS_MODES, POST_PROCESS_DEFAULTS.antialias),
+        autoExposure: readBoolean(props, 'autoExposure'),
+        exposureCompensation: readNumber(props, 'exposureCompensation'),
+        adaptationSpeed: readNumber(props, 'adaptationSpeed'),
+        lightShafts: readBoolean(props, 'lightShafts'),
+        lightShaftsIntensity: readNumber(props, 'lightShaftsIntensity'),
+        sunHaze: readBoolean(props, 'sunHaze'),
+        sunHazeIntensity: readNumber(props, 'sunHazeIntensity'),
+        motionBlur: readBoolean(props, 'motionBlur'),
+        motionBlurStrength: readNumber(props, 'motionBlurStrength'),
+        temperature: readNumber(props, 'temperature'),
+        tint: readNumber(props, 'tint'),
+        look: readChoice(props.look, COLOR_LOOKS, POST_PROCESS_DEFAULTS.look),
+        lookStrength: readNumber(props, 'lookStrength'),
+        filmGrain: readNumber(props, 'filmGrain'),
+        chromaticAberration: readNumber(props, 'chromaticAberration')
     };
 };
 
@@ -273,14 +341,71 @@ const AO_QUALITY = { aoSamples: 16, denoiseSamples: 8, denoiseRadius: 12 };
 const FOCUS_RANGE_RATIO = 0.5;
 const VIGNETTE_OFFSET = 0.35;
 
+// --- CINEMATIC EFFECTS (runtime/postEffects.ts) ---
+
+/** Auto exposure; lives as long as the stack, its settings changed in place. */
+export const AutoExposure: React.FC<{ compensation: number; speed: number }> = ({ compensation, speed }) => {
+    const effect = useMemo(() => new AutoExposureEffect(), []);
+    useEffect(() => { effect.set({ compensation, brighten: 3 * speed, darken: 1.2 * speed }); }, [effect, compensation, speed]);
+    useEffect(() => () => effect.dispose(), [effect]);
+    return <primitive object={effect} />;
+};
+
+/** Light shafts round the sun; rebuilt for a new camera. */
+export const LightShafts: React.FC<{ intensity: number }> = ({ intensity }) => {
+    const camera = useThree(state => state.camera);
+    const effect = useMemo(() => new LightShaftsEffect(camera, intensity), [camera]);
+    useEffect(() => { effect.intensity = intensity; }, [effect, intensity]);
+    useEffect(() => () => effect.dispose(), [effect]);
+    return <primitive object={effect} />;
+};
+
+/** Fog glowing toward the sun; rebuilt for a new camera. */
+export const SunHaze: React.FC<{ intensity: number }> = ({ intensity }) => {
+    const camera = useThree(state => state.camera);
+    const effect = useMemo(() => new SunHazeEffect(camera, intensity), [camera]);
+    useEffect(() => { effect.intensity = intensity; }, [effect, intensity]);
+    useEffect(() => () => effect.dispose(), [effect]);
+    return <primitive object={effect} />;
+};
+
+const MotionBlur: React.FC<{ strength: number }> = ({ strength }) => {
+    const camera = useThree(state => state.camera);
+    const effect = useMemo(() => new MotionBlurEffect(camera, strength), [camera]);
+    useEffect(() => { effect.strength = strength; }, [effect, strength]);
+    useEffect(() => () => effect.dispose(), [effect]);
+    return <primitive object={effect} />;
+};
+
+const WhiteBalance: React.FC<{ temperature: number; tint: number }> = ({ temperature, tint }) => {
+    const effect = useMemo(() => new WhiteBalanceEffect(), []);
+    useEffect(() => { effect.set(temperature, tint); }, [effect, temperature, tint]);
+    useEffect(() => () => effect.dispose(), [effect]);
+    return <primitive object={effect} />;
+};
+
+const Look: React.FC<{ look: ColorLook; strength: number }> = ({ look, strength }) => {
+    const effect = useMemo(() => new LUT3DEffect(lookTexture(look), { blendFunction: BlendFunction.NORMAL }), [look]);
+    useEffect(() => { effect.blendMode.opacity.value = strength; }, [effect, strength]);
+    useEffect(() => () => effect.dispose(), [effect]);
+    return <primitive object={effect} />;
+};
+
 /**
- * One composer with the enabled effects, in pipeline order: occlusion on the lit scene, depth of field,
- * bloom on HDR values, tone mapping, colour grading and vignette on display values, then SMAA. MSAA stays
+ * One composer with the enabled effects, in pipeline order: sunlit haze and occlusion on the lit scene,
+ * depth of field, light shafts, motion blur, then auto exposure, white balance and bloom on HDR values;
+ * tone mapping, colour grading, look, vignette, fringes and grain on display values; then SMAA. MSAA stays
  * off: SMAA (or nothing) is the anti-aliasing, which keeps the HDR buffers single-sampled.
+ *
+ * Haze stays first: it reads depth in the composer's first effect pass, the one that reads the buffer the
+ * depth texture belongs to. Later effects that need depth read it into targets of their own.
  */
 const PostProcessStack = React.memo<{ settings: PostProcessSettings }>(({ settings }) => {
     const camera = useThree(state => state.camera);
     const effects: React.ReactElement[] = [];
+    // Light first: haze and shafts add to the lit scene, motion blur smears it, and the eye adapts to the result.
+    // Haze must lead (see above).
+    if (settings.sunHaze) effects.push(<SunHaze key="haze" intensity={settings.sunHazeIntensity} />);
     if (settings.ambientOcclusion) {
         // The pass keeps the camera it was built with, so a new default camera rebuilds it.
         effects.push(
@@ -303,6 +428,10 @@ const PostProcessStack = React.memo<{ settings: PostProcessSettings }>(({ settin
             />
         );
     }
+    if (settings.lightShafts) effects.push(<LightShafts key="shafts" intensity={settings.lightShaftsIntensity} />);
+    if (settings.motionBlur) effects.push(<MotionBlur key="motion" strength={settings.motionBlurStrength} />);
+    if (settings.autoExposure) effects.push(<AutoExposure key="exposure" compensation={settings.exposureCompensation} speed={settings.adaptationSpeed} />);
+    if (settings.temperature !== 0 || settings.tint !== 0) effects.push(<WhiteBalance key="balance" temperature={settings.temperature} tint={settings.tint} />);
     if (settings.bloom) {
         effects.push(
             <Bloom
@@ -320,8 +449,16 @@ const PostProcessStack = React.memo<{ settings: PostProcessSettings }>(({ settin
     if (settings.brightness !== 0 || settings.contrast !== 0) {
         effects.push(<BrightnessContrast key="grade" brightness={settings.brightness} contrast={settings.contrast} />);
     }
+    if (settings.look !== 'none' && settings.lookStrength > 0) effects.push(<Look key={`look-${settings.look}`} look={settings.look} strength={settings.lookStrength} />);
     if (settings.vignette) {
         effects.push(<Vignette key="vignette" eskil={false} offset={VIGNETTE_OFFSET} darkness={settings.vignetteDarkness} />);
+    }
+    if (settings.chromaticAberration > 0) {
+        const shift = settings.chromaticAberration * 0.004;
+        effects.push(<ChromaticAberration key="fringe" offset={new THREE.Vector2(shift, shift)} radialModulation modulationOffset={0.25} />);
+    }
+    if (settings.filmGrain > 0) {
+        effects.push(<Noise key="grain" premultiply blendFunction={BlendFunction.SOFT_LIGHT} opacity={settings.filmGrain * 0.6} />);
     }
     if (settings.antialias === 'smaa') effects.push(<SMAA key="smaa" />);
     return (
@@ -357,7 +494,8 @@ export const POST_PROCESS_COMPONENT: ComponentDefinition = {
     type: 'postProcess',
     label: 'Post Process',
     description: 'Post-processing for the whole view, in the editor and in play: bloom, ambient occlusion, tone mapping, '
-        + 'exposure, vignette, depth of field, colour grading and anti-aliasing. The object\'s transform is ignored; '
+        + 'exposure and auto exposure, light shafts, sunlit haze, motion blur, vignette, depth of field, white balance, '
+        + 'colour grading looks, film grain and anti-aliasing. The object\'s transform is ignored; '
         + 'when several objects carry one, the first mounted applies.',
     props: [
         booleanProp('bloom', 'Bloom'),
@@ -377,6 +515,15 @@ export const POST_PROCESS_COMPONENT: ComponentDefinition = {
             ]
         },
         numberProp('exposure', 'Exposure'),
+        booleanProp('autoExposure', 'Auto Exposure'),
+        numberProp('exposureCompensation', 'Exposure Compensation (EV)'),
+        numberProp('adaptationSpeed', 'Adaptation Speed'),
+        booleanProp('lightShafts', 'Light Shafts'),
+        numberProp('lightShaftsIntensity', 'Light Shafts Intensity'),
+        booleanProp('sunHaze', 'Sunlit Haze'),
+        numberProp('sunHazeIntensity', 'Haze Intensity'),
+        booleanProp('motionBlur', 'Motion Blur'),
+        numberProp('motionBlurStrength', 'Motion Blur Strength'),
         booleanProp('vignette', 'Vignette'),
         numberProp('vignetteDarkness', 'Vignette Darkness'),
         booleanProp('depthOfField', 'Depth of Field'),
@@ -385,6 +532,24 @@ export const POST_PROCESS_COMPONENT: ComponentDefinition = {
         numberProp('saturation', 'Saturation'),
         numberProp('contrast', 'Contrast'),
         numberProp('brightness', 'Brightness'),
+        numberProp('temperature', 'Temperature'),
+        numberProp('tint', 'Tint'),
+        {
+            key: 'look', label: 'Look', type: 'select', default: POST_PROCESS_DEFAULTS.look,
+            options: [
+                { label: 'None', value: 'none' },
+                { label: 'Warm', value: 'warm' },
+                { label: 'Cool', value: 'cool' },
+                { label: 'Cinematic (teal and orange)', value: 'cinematic' },
+                { label: 'Bleach bypass', value: 'bleach' },
+                { label: 'Noir', value: 'noir' },
+                { label: 'Vintage', value: 'vintage' },
+                { label: 'Night', value: 'night' }
+            ]
+        },
+        numberProp('lookStrength', 'Look Strength'),
+        numberProp('filmGrain', 'Film Grain'),
+        numberProp('chromaticAberration', 'Chromatic Aberration'),
         {
             key: 'antialias', label: 'Anti-aliasing', type: 'select', default: POST_PROCESS_DEFAULTS.antialias,
             options: [

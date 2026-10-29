@@ -134,6 +134,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/cloth.ts': 'hot-loop',
   'runtime/springBones.ts': 'hot-loop',
   'runtime/daylight.ts': 'pure-derived-state',
+  'runtime/postEffects.ts': 'hot-loop',
   'runtime/skidMarks.ts': 'hot-loop',
   'runtime/components/tyreEffects.ts': 'hot-loop',
   'runtime/components/vehicleAudio.ts': 'hot-loop',
