@@ -51,7 +51,10 @@ class TemplatePlacementTests(unittest.TestCase):
                 with self.subTest(template=template, sky=sky["id"]):
                     config = sky.get("skyConfig")
                     self.assertIsInstance(config, dict)
-                    self.assertEqual(set(config), _NESTED_KEYS["skyConfig"])
+                    # Every setting the sky inspector edits; day length, fog mode and weather are optional.
+                    optional = {"dayLength", "fogMode", "weather"}
+                    self.assertEqual(set(config) - optional, _NESTED_KEYS["skyConfig"] - optional)
+                    self.assertLessEqual(set(config), _NESTED_KEYS["skyConfig"])
                     self.assertNotEqual(config["fogColor"].lower(), "#050505")
                     self.assertGreater(sky["position"][1], 0.0)
 
