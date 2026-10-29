@@ -115,6 +115,7 @@ A state plays one of these:
 - **Blend 1D**: several clips placed along one variable, such as Idle at 0, Walk at 0.5 and Run at 1 on a Speed variable. The two clips either side of the value blend linearly; past the ends the end clip plays alone.
 - **Blend 2D**: clips placed on two variables, such as strafe directions on InputX and InputY. The samples are triangulated, so inside a triangle only its three corners contribute, exactly one clip plays at a sample's position, and outside the samples the nearest edge is used. The plot above the sample list shows where the samples sit.
 - **Machine**: a state machine of its own, with its own states and transitions, such as a Locomotion machine holding Idle, Walk and Run. Double-click it on the canvas (or click **Open State Machine**) to edit what is inside; the bar above the canvas leads back out. Entering it starts its entry state; its own transitions run while any state inside plays; transitions from the machine leave from whichever state inside is playing. The preview highlights the machine and, inside it, the state that is playing.
+- **Motion Match**: a set of locomotion clips (idle, walks, runs, strafes, starts, stops, turns) with no rules between them. Each moment it plays the part of one of them that best carries on how the character is moving; see [Motion matching](#motion-matching).
 - **Conduit**: a junction with no animation. A transition into it is taken only when one of the conduit's own transitions is ready too, and the character goes straight on to that state with that transition's crossfade. Use it to share exit rules: Walk and Run both go to an Airborne conduit that sends on to Jump or Fall.
 
 Blend samples run in step: they share one cycle length, weighted by how much each plays, and follow the heaviest sample's phase, so a walk and a run of different lengths keep their feet together. Give states the same **Sync Group** to carry that phase across transitions as well: a Run entered from a Walk in the same group starts mid-stride where the walk was, instead of from its first frame. Turn on a state's **Match Ground Speed** to play its clips as fast as the character really moves over the ground: the engine reads each clip's own speed from its feet (a planted foot passing under the body), so a walk clip slower or faster than the character's walking speed no longer slides its feet. The rate stays between half and twice the clip's own speed, and root-motion states, which move the character by their own travel, are left alone.
@@ -136,6 +137,17 @@ A Single state can have **Curves**: values keyed over its clip, in seconds, each
 ### Root motion
 
 Turn on **Root motion** for a Single state whose clip moves the character itself, such as a dodge roll, a vault or a scripted step. The hips' forward and sideways travel is taken out of the pose and moves the player's character controller instead, so the character collides as it moves and its feet do not slide. Vertical hip motion stays in the pose. In the Graph tab preview the model moves by the same travel. Root motion moves the player; enemies keep their AI movement.
+
+### Motion matching
+
+A **Motion Match** state replaces the transitions between idle, walk and run (and any other ways of moving you give it) with a search. Add its clips under **Clips to match from**; the canvas shows how many it has.
+
+- **What it reads from the clips:** each clip is sampled on the character's own model into frames. Each frame is described by where the character will be and which way it will face 0.2, 0.4 and 0.6 seconds later, where its feet are and how they move, and how its hips move. The course and facing are evened out over about a stride, so the sway of each step does not count as a change of direction.
+- **Clips that travel or stay in place:** a clip whose hips travel is played in place and its travel is read as it is. A clip made in place is given the travel its feet show: the standing foot slides back under the body as fast as the body would move forward.
+- **How it chooses:** ten times a second it builds the same description from the frame playing now and from how the character is really moving, and looks for the frame nearest it. It carries on when that frame is close to the one playing, and otherwise jumps there with a 0.2 second crossfade, only when the jump is clearly better, so it does not flicker between frames that are nearly as good.
+- **Match Ground Speed** on a Motion Match state plays the chosen clip as fast as the character really moves, from the clip's own travel; an idle is left at its own speed.
+
+Keep the state's other transitions for what it does not cover, such as jumping, aiming and dying. A transition back to the locomotion goes to the Motion Match state, and entering it searches afresh. Motion matching drives the player and enemies the same way, from how fast and which way they move over the ground.
 
 ## Jumping, falling and landing
 
@@ -198,6 +210,19 @@ These components adjust a placed character's pose after its animation:
 - **Look At IK** turns a bone (the head by default) toward the camera or the player, up to a maximum angle, with a weight to soften it.
 - **Foot IK** casts down from each foot and bends the leg so the foot sits on the ground under it, on slopes and steps up to **Max Step**. It needs colliders or terrain under the character.
 - **Reach IK** bends a limb so a bone (the right hand by default, with the forearm and upper arm above it) reaches another object in the level or the player, with an offset and a weight: a hand on a lever, a foot on a pedal, a greeting.
+
+## Procedural rig
+
+The **Procedural Rig** component lays a list of constraints on a placed character's bones after its animation, top to bottom, during play. Each names its bone (`Head` finds `mixamorig:Head`) and has a weight from 0 to 1:
+
+- **Aim at** points one of the bone's axes at the camera, the player (at their head), another object in the level, or a point, turning no more than **Up to** degrees away from the animation. It turns about the world's up first and then tips up or down, so a head tracks without rolling. Aim a spine bone at a small weight and the head after it at full weight for a look that involves the body.
+- **Copy rotation** takes another bone's rotation on the chosen axes, replacing the bone's own or added to it: a cape following the spine, one arm mirroring the other.
+- **Offset** turns the bone by fixed angles: a slouch, a tilt, a re-aimed hand.
+- **Limit** keeps the bone's rotation between angles on each axis, after everything above it.
+- **Lag behind** makes the bone follow its animated rotation late, like something loose or heavy (a tail, an antenna, a hanging lamp), with a **Stiffness** for how quickly it catches up and a **Bounce** for how much it overshoots.
+- **Twist from** spreads a share (the weight) of another bone's twist about an axis onto this one, as a forearm twists with the wrist so the skin does not pinch.
+
+Like the IK components, it starts again from the animated pose each frame, so nothing builds up on bones the animation does not move, and IK components after it in the list work on its result.
 
 A placed character stands in its rest pose unless something animates it: give it an **Animation** component to play one of its clips during play, looping or once, at a speed and from a point in the clip, such as an NPC idling, waving or working.
 
