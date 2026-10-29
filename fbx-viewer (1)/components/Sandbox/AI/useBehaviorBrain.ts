@@ -10,6 +10,7 @@ import { OPEN_PERCEPTION, perceive, type Perception } from './AISenses';
 import { Awareness } from '../../../runtime/awareness';
 import type { BrainOutput } from './useAIBrain';
 import { createWeaponState, stepWeapons, type ResolvedWeapon } from '../../../runtime/weapons';
+import type { SplinePatrol } from '../../../runtime/patrolPath';
 
 /** Seconds an enemy takes to bring its weapon up before the first shot of a burst. */
 const ENEMY_AIM_DELAY = 0.3;
@@ -41,6 +42,7 @@ export const useBehaviorBrain = (
     tuning: AITuning = DEFAULT_AI_TUNING,
     weapon: ResolvedWeapon | null = null,
     onFire?: EnemyFireHandler,
+    patrol: SplinePatrol | null = null,
 ) => {
     const scene = useThree(state => state.scene);
     const navMesh = useNavMeshContext();
@@ -124,6 +126,7 @@ export const useBehaviorBrain = (
                 const end = plan?.points[plan.points.length - 1];
                 return end ? end.clone() : point;
             },
+            patrolPoint: () => patrol?.next(enemyPosition)?.point ?? null,
         };
         // A Shoot action holds the trigger for this frame only.
         let triggerHeld = false;
@@ -155,7 +158,7 @@ export const useBehaviorBrain = (
             onFire?.(step.shots, triggerHeld);
         }
         return { state: intent.state, destination: intent.destination, targetFocus: intent.focus, awareness: perceived.stage, awarenessLevel: perceived.level };
-    }, [graphApi, memory, navMesh, onAttack, onFire, scene, tree, tuning, weapon, weaponState]);
+    }, [graphApi, memory, navMesh, onAttack, onFire, patrol, scene, tree, tuning, weapon, weaponState]);
 
     return { updateState };
 };

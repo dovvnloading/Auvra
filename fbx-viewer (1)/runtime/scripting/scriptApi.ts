@@ -27,9 +27,11 @@ import {
     type ScriptRaycastHit,
     type ScriptSnapshot,
     type ScriptSource,
+    type ScriptSplineState,
     type ScriptValue,
     type ScriptVec3,
 } from './protocol';
+import { createScriptSpline, type ScriptSpline } from './scriptSplines';
 
 type ScriptCompiler = Pick<typeof import('@babel/standalone'), 'transform'>;
 type AnyCallback = (...args: unknown[]) => unknown;
@@ -160,6 +162,8 @@ export interface ScriptContext {
     setCamera(objectId: string | null, blendSeconds?: number): void;
     /** Opens the conversation of the Dialogue component on object `objectId` (default: the script's own object). */
     startDialogue(objectId?: string): void;
+    /** The spline of the Spline component on object `objectId`, in world space and metres; null when it has none. */
+    spline(objectId: string): ScriptSpline | null;
     /** Multiplayer: who is here, who hosts, and events to the other players. */
     readonly net: ScriptNet;
     log(...values: unknown[]): void;
@@ -352,6 +356,10 @@ const formatValue = (value: unknown): string => {
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const isVec3 = (value: unknown): value is ScriptVec3 => Array.isArray(value) && value.length === 3 && value.every(item => typeof item === 'number');
 const everyValue = (value: unknown, check: (item: unknown) => boolean): boolean => isRecord(value) && Object.values(value).every(check);
+const isNumberList = (value: unknown): value is number[] => Array.isArray(value) && value.every(item => typeof item === 'number' && Number.isFinite(item));
+const isSplineState = (value: unknown): value is ScriptSplineState | null => value === null || (isRecord(value)
+    && typeof value.closed === 'boolean' && isNumberList(value.points) && isNumberList(value.ups)
+    && value.points.length % 3 === 0 && value.ups.length === value.points.length);
 
 const isObjectState = (value: unknown): value is ScriptObjectState => isRecord(value)
     && typeof value.id === 'string' && typeof value.name === 'string'
@@ -401,7 +409,8 @@ export const isScriptSnapshot = (value: unknown): value is ScriptSnapshot => isR
     && everyValue(value.input, isInputAction) && everyValue(value.variables, isScriptValue)
     && Array.isArray(value.events) && value.events.every(isScriptEvent)
     && everyValue(value.raycasts, isRaycastHit)
-    && isNetState(value.net);
+    && isNetState(value.net)
+    && (value.splines === undefined || everyValue(value.splines, isSplineState));
 
 /** Whether a message's script entry is exactly { id, objectId, source } with non-empty ids. */
 export const isScriptSource = (value: unknown): value is ScriptSource => isRecord(value)
@@ -509,6 +518,15 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
 
     let world = createWorld(EMPTY_SNAPSHOT);
     let scripts: LoadedScript[] = [];
+    // Splines are sent when they change; the latest of each is kept here between snapshots.
+    const splines = new Map<string, ScriptSpline>();
+    const takeSplines = (snapshot: ScriptSnapshot) => {
+        if (!snapshot.splines) return;
+        for (const [id, state] of Object.entries(snapshot.splines)) {
+            if (state) splines.set(id, createScriptSpline(state));
+            else splines.delete(id);
+        }
+    };
     let outbox: ScriptCommand[] = [];
     let owners: ScriptRecord[] = [];
     let merged = new Map<string, ScriptCommand>();
@@ -835,6 +853,7 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
             startDialogue: (objectId?: string) => {
                 queue(record, { type: 'startDialogue', objectId: objectId === undefined ? record.objectId : readId('startDialogue', objectId) });
             },
+            spline: (objectId: string) => splines.get(readId('spline', objectId)) ?? null,
             net: {
                 connected: () => world.snapshot.net.connected,
                 isHost: () => world.snapshot.net.isHost,
@@ -966,6 +985,7 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
             const errors: ScriptError[] = [];
             loadErrors = errors;
             try {
+                takeSplines(snapshot);
                 world = createWorld(snapshot);
                 const previous = new Map(scripts.map(record => [record.id, record]));
                 const next: LoadedScript[] = [];
@@ -998,6 +1018,7 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
             return errors;
         },
         frame(snapshot) {
+            takeSplines(snapshot);
             world = createWorld(snapshot);
             startScripts();
             for (const event of snapshot.events) dispatch(event);
@@ -1020,6 +1041,7 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
             owners = [];
             merged = new Map();
             pendingErrors = [];
+            splines.clear();
             world = createWorld(EMPTY_SNAPSHOT);
         },
     };

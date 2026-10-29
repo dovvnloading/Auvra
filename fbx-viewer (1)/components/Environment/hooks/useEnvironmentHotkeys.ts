@@ -6,6 +6,7 @@ import { editorSession } from '../../../utils/editorSession';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { collectSubtree } from '../../../utils/sceneGraph';
 import { copyLevelObjects, pasteLevelObjects, readLevelClipboard, writeLevelClipboard, type LevelClipboardPayload } from '../../../utils/levelClipboard';
+import { deleteSelectedSplinePoint, splineEditing } from '../splineEditing';
 
 interface HotkeyConfig {
     state: EditorState & { selectedObjectIds?: string[] };
@@ -147,6 +148,26 @@ export const useEnvironmentHotkeys = (config: HotkeyConfig) => {
                     place(readLevelClipboard(), [step, 0, step]);
                 }
                 // Other modified keys never fall through to the single-key tools below.
+                return;
+            }
+
+            // A selected spline point is deleted, or deselected, before its object.
+            const splinePoint = splineEditing.get();
+            const splineObject = splinePoint && selection.includes(splinePoint.objectId)
+                ? current.levelObjects.find((object) => object.id === splinePoint.objectId)
+                : undefined;
+            if (splineObject && (e.key === 'Backspace' || e.key === 'Delete')) {
+                e.preventDefault();
+                if (!canEdit()) return;
+                const components = deleteSelectedSplinePoint(splineObject);
+                if (components) {
+                    current.snapshotHistory();
+                    current.updateLevelObject(splineObject.id, { components });
+                }
+                return;
+            }
+            if (splineObject && e.key === 'Escape') {
+                splineEditing.set(null);
                 return;
             }
 

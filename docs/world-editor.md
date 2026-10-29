@@ -12,9 +12,9 @@ The **Environment** tab is where levels are built.
 | Terrain | — | Create, sculpt (raise, lower, flatten, smooth) and texture-paint terrain |
 | Mask | M | Create texture masks on objects |
 
-The left panel's **Logic Actors** add a Player Start, an Enemy Spawner, an Audio Emitter, a Sky Sphere and an **Empty Object**: an object with no model, drawn in the editor as a small marker, for components such as trigger colliders, timelines, cameras and level streaming, or as a parent to group other objects under.
+The left panel's **Logic Actors** add a Player Start, an Enemy Spawner, an Audio Emitter, a Sky Sphere, an **Empty Object** (an object with no model, drawn in the editor as a small marker, for components such as trigger colliders, timelines, cameras and level streaming, or as a parent to group other objects under) and a **Spline** (an empty object with a [Spline](#splines) component).
 
-Select an Enemy Spawner to set what it spawns: the **Enemy** blueprint, a new one **Every** so many seconds, and **Max** in all (0 for no limit). Enemies appear around the spawner. A spawner with no enemy chosen spawns nothing.
+Select an Enemy Spawner to set what it spawns: the **Enemy** blueprint, a new one **Every** so many seconds, and **Max** in all (0 for no limit). Enemies appear around the spawner. A spawner with no enemy chosen spawns nothing. With a **Patrol Path** (an object with a Spline component) its enemies patrol along the spline instead of wandering around where they spawned (see [Patrol paths](characters.md#patrol-paths)).
 
 The sun casts shadows around the point the camera looks at, in the editor and in play. They are sharpest up close and reach further as the camera pulls back, up to 400 units around that point; objects beyond that cast none.
 
@@ -78,11 +78,69 @@ Objects can carry components that add behaviour. Select an object and use **Add 
 | Network Sync | In multiplayer games the host sends the object's position and rotation and the other players follow it (see [Multiplayer](multiplayer.md)) |
 | Timeline | Plays keyed tracks that move, show and hide objects, write level variables and raise events (see [Timelines](timelines.md)) |
 | Dialogue | A conversation the player opens with Interact when within reach: lines, choices, level variables and dialogue events (see [Dialogue](dialogue.md)) |
+| Spline | A smooth curve through points, edited in the viewport (see [Splines](#splines)) |
+| Spline Mesh | Bends a model along the object's spline: roads, rails, pipes, walls, river beds |
+| Spline Scatter | Places copies of a model along the object's spline: fence posts, lamps, trees along a road |
+| Follow Spline | Moves the object along another object's spline during play: platforms, carts, trains, cameras on rails |
 | Nav Link | Lets enemies cross from the object to **End** (relative to the object) where the navmesh does not join up: a drop, a gap, a ladder. One-way links only go from the object to the end. Drawn in the editor as an arc (see [Enemy navigation](characters.md#enemy-navigation)) |
 | Nav Obstacle | Cuts a cylinder of **Radius** and **Height** around the object out of the navmesh and follows it as it moves, so enemies path around it: for crates that get pushed, vehicles and other moving objects |
 | Pickup | Health, rounds or a weapon the player collects by walking within **Reach** of the object. **Amount** is the health restored or the rounds added; **Weapon** names the weapon that gets the rounds (blank: the held one) or the weapon given. A pickup that would give nothing, such as health at full health, stays. Taken, it disappears and comes back after **Respawn** seconds; at 0 it is gone for the session, and a save remembers it. **Sound** plays when it is taken. Add a Rotator for a pickup that spins (see [Weapons](characters.md#weapons)) |
 
 Each component's settings appear in the inspector and can be toggled on and off.
+
+## Splines
+
+A spline is a smooth curve through points, in its object's space: moving, turning or scaling the object moves the whole curve. **Spline** under Logic Actors adds an empty object with a Spline component; the component can also be added to any object.
+
+### Editing points
+
+Select the object to edit its spline in the viewport. The curve is drawn with a handle on every point (the first one green) and an arrow at the end showing which way it runs.
+
+- **Click a handle** to select that point. The gizmo then edits the point instead of the object: **Move** moves it, **Rotate** turns the curve's direction through it (giving it a custom tangent) and rolls it, **Scale** sets its width and height (see Spline Mesh). Snapping (**X**) applies as it does to objects.
+- The selected point shows its two **tangent handles**. Drag one to shape the curve through the point; the other mirrors it.
+- **Alt-drag** a point to leave a copy of it behind and drag the new one: the quickest way to extend a spline.
+- **Ctrl-click** the curve to add a point there.
+- **Delete** removes the selected point (a spline keeps at least two), and **Escape** deselects it. With no point selected they act on objects as usual.
+
+The inspector lists the points (click one to select it), the spline's length and point count, and edits the selected point exactly: its position, its **Type**, its roll in degrees and its width and height scale. **Add at end** continues the curve past its last point, **Insert after** adds a point halfway to the next, **Delete point** removes the selected one and **Reverse** runs the spline the other way.
+
+Point types:
+
+| Type | The curve at the point |
+|---|---|
+| Smooth | Passes through smoothly, curving as its neighbours lead it (centripetal Catmull-Rom: no loops or overshoots however unevenly the points are spaced) |
+| Corner | Turns a corner and heads straight for each neighbour; a run of corner points gives straight lines |
+| Custom tangent | Leaves along the point's own **Tangent**: its direction and how far the curve holds it |
+
+**Closed loop** joins the last point back to the first. **Up** decides which way is up along the curve: **Level** keeps it upright (roads and fences do not bank, except where a point's roll banks them), **Least twist** turns it as little as the curve does, for loops, corkscrews and coasters.
+
+Everything along a spline goes by distance in metres, so spacing and speed stay even however the points are spread.
+
+### Spline Mesh
+
+Bends a model along the object's spline. Pick the **Model**, and which of its axes is its length (**Z**, its front, or **X**). **Tile end to end** repeats it along the spline, each copy stretched a little so a whole number fit; **Stretch once** draws it out over the whole length. **Scale** multiplies the model's width, height and length (the length sets how long one tile is), and each point's width and height scale apply on top, so a road can widen at a junction. **Offset right** and **Offset up** move it off the curve, **Gap between tiles** spaces the copies, and **Start trim** and **End trim** leave the ends bare.
+
+The model is cut across its length every **Bend detail** metres before it is bent, so even a road made of one long quad follows every curve; smaller is smoother. Normals and normal maps follow the bend. With **Collision** on, the bent mesh is solid in play: the player walks on a road or bridge and up a ramp, physics objects land on it, the enemies' navmesh includes it, and baked lighting sees it.
+
+### Spline Scatter
+
+Places copies of a model along the object's spline, a **Spacing** apart (from end to end of an open spline, evenly round a closed one), trimmed at either end like Spline Mesh. **Offset right** and **Offset up** move the row off the curve, and **Both sides** mirrors it across. **Turn copies** sets how they face: upright and facing along the curve, with the curve (tilting on slopes and rolling with the points), or not at all. **Random turn**, **Random size** and **Random shift** vary each copy so a row does not look stamped; the **Seed** picks the variation, and the same seed always gives the same row. Copies draw as one instanced mesh per material. **Collision (boxes)** makes each copy a solid box the size of the model.
+
+### Follow Spline
+
+Moves its object along another object's spline during play. Pick the **Spline to follow**. **Speed** is in metres per second (negative runs it backwards), **Start at** is where on the spline it begins (0 the start, 1 the end), and **At the end** loops back to the start, goes back the way it came (**ping-pong**), or stops (**once**); round a closed spline it keeps going. **Turn with it** faces it along the way it travels (upright, or fully following the curve) or keeps its own rotation. **Offset** moves it right of, above and ahead of the curve. With a **Play Variable** it moves only while that level variable is true or non-zero; otherwise **Autoplay** starts it. In the editor a dashed line runs from the object to where it starts.
+
+An object with a kinematic Rigid Body carries the player and physics objects standing on it, so Follow Spline makes moving platforms. Followers count as moving objects: the navmesh and baked lighting leave them out.
+
+### Terrain along a spline
+
+The Spline inspector's **Terrain** tools shape every terrain the spline crosses:
+
+- **Flatten under** brings the ground within half of **Width** of the curve to the curve's height, less **Depth** (to sink a river bed or a sunken road), and blends back to the terrain over **Falloff** metres on each side. The width follows each point's width scale.
+- **Paint under** paints the chosen texture **Layer** over the same strip (the terrain needs texture layers, see [Terrain painting](#terrain-painting)).
+- **Snap points** sets each point's height to the terrain under it, so the spline lies on the ground.
+
+Each is one undo step.
 
 ## Physics
 

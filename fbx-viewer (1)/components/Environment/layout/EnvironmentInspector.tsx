@@ -1,7 +1,7 @@
 
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { Box, Move, RotateCw, Scaling, Trash2, X, RotateCcw, Skull, Timer, Users, UserPlus, Hash, Music, Volume2, Radio, Ear, Repeat, VolumeX, Mountain, Layers, Plus, CircleDashed, Hammer, ArrowUp, ArrowDown, Minus, Activity, Wind, AlertTriangle, Grid, Sun, CloudFog, PersonStanding, Puzzle, GitBranch, Boxes, Brush } from 'lucide-react';
+import { Box, Move, RotateCw, Scaling, Trash2, X, RotateCcw, Skull, Timer, Users, UserPlus, Hash, Music, Volume2, Radio, Ear, Repeat, VolumeX, Mountain, Layers, Plus, CircleDashed, Hammer, ArrowUp, ArrowDown, Minus, Activity, Wind, AlertTriangle, Grid, Sun, CloudFog, PersonStanding, Puzzle, GitBranch, Boxes, Brush, Route } from 'lucide-react';
 import { EditorState } from '../types';
 import { PrefabInstanceSection } from '../PrefabInstanceSection';
 import { LevelComponent, LevelObject, SpawnConfig } from '../../../types';
@@ -18,6 +18,7 @@ import { appConfirm } from '../../../utils/appDialogs';
 import { collectSubtree, getWorldMatrix, reparentPreservingWorld, sortByHierarchy, toLocalTransform, wouldCreateCycle } from '../../../utils/sceneGraph';
 import { COMPONENT_DEFINITIONS, createComponent, getComponentDefinition } from '../../../runtime/components/registry';
 import type { ComponentPropSchema } from '../../../runtime/components/types';
+import { findSplineComponent } from '../../../runtime/splineRegistry';
 
 interface EnvironmentInspectorProps {
     /** selectedObjectIds is the multi-selection (primary stays selectedObjectId). */
@@ -1081,6 +1082,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                         {/* --- SPAWNER CONFIGURATION --- */}
                         {isSpawner && (() => {
                             const spawn = selectedObject.spawnConfig ?? DEFAULT_SPAWN_CONFIG;
+                            const splinePaths = levelObjects.filter(candidate => candidate.levelId === selectedObject.levelId && findSplineComponent(candidate) !== null);
                             const enemies = blueprints.filter(blueprint => blueprint.type === 'Enemy Controller');
                             const missing = !!spawn.blueprintId && !enemies.some(blueprint => blueprint.id === spawn.blueprintId);
                             return (
@@ -1126,6 +1128,22 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                                 onChange={(v) => scrubUpdate({ spawnConfig: { ...spawn, maxSpawns: Math.max(0, Math.round(v)) } })}
                                                 step={1} labelWidth="w-10"
                                             />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="text-[10px] font-medium text-gray-400 flex items-center gap-1.5">
+                                                <Route size={10} /> Patrol Path
+                                            </label>
+                                            <select
+                                                aria-label="Patrol Path"
+                                                value={spawn.patrolPath ?? ''}
+                                                onChange={(e) => commitUpdate({ spawnConfig: { ...spawn, patrolPath: e.target.value || undefined } })}
+                                                className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-white focus:outline-none focus:border-red-500"
+                                                title="An object with a Spline component the enemies patrol along, instead of wandering around where they spawned"
+                                            >
+                                                <option value="">None (wander)</option>
+                                                {spawn.patrolPath && !splinePaths.some(path => path.id === spawn.patrolPath) && <option value={spawn.patrolPath}>Missing path</option>}
+                                                {splinePaths.map(path => <option key={path.id} value={path.id}>{path.name}</option>)}
+                                            </select>
                                         </div>
                                         <p className="text-[10px] text-gray-500 leading-relaxed flex items-start gap-1.5">
                                             <Hash size={10} className="shrink-0 mt-0.5" />

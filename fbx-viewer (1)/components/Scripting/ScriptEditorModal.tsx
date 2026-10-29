@@ -78,6 +78,7 @@ export const SCRIPT_API_REFERENCE: ScriptApiSection[] = [
             { signature: 'ctx.playPlayerAnimation(clipName, maskBone?)', description: 'Plays a clip once on the player, optionally on one bone and the bones below it.' },
             { signature: 'ctx.openLevel(levelId)', description: 'Loads another level of the game.' },
             { signature: 'ctx.startDialogue(objectId?)', description: "Opens the conversation of the object's Dialogue component (default: this script's object). Does nothing while another is open." },
+            { signature: 'ctx.spline(objectId)', description: "The object's Spline in world space and metres: { length, closed, pointAt(distance) → { position, direction, up }, closest([x, y, z]) → { distance, position } }, or null." },
         ],
     },
     {

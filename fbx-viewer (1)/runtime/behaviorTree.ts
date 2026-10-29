@@ -40,6 +40,8 @@ export interface BehaviorWorld {
     objectPosition(objectId: string): THREE.Vector3 | null;
     /** The nearest reachable point to `point` (navigation), or the point itself. */
     reachable(point: THREE.Vector3): THREE.Vector3;
+    /** The next waypoint along the enemy's patrol path (runtime/patrolPath.ts); null or absent without one. */
+    patrolPoint?(): THREE.Vector3 | null;
 }
 
 /** What actions do besides choosing where to go. */
@@ -200,10 +202,16 @@ const evaluateAction = (node: BehaviorNode, tick: Tick): BehaviorStatus => {
         case 'patrol': {
             const memory = memoryOf(tick, node.id);
             if (!memory.point) {
-                const radius = Math.max(1, node.value ?? world.patrolRadius);
-                const r = radius * Math.sqrt(world.random());
-                const theta = world.random() * Math.PI * 2;
-                memory.point = world.reachable(new THREE.Vector3(world.home.x + r * Math.cos(theta), 0, world.home.z + r * Math.sin(theta)));
+                // Along the patrol path where the enemy has one, else a random point around home.
+                const along = world.patrolPoint?.() ?? null;
+                if (along) {
+                    memory.point = world.reachable(along);
+                } else {
+                    const radius = Math.max(1, node.value ?? world.patrolRadius);
+                    const r = radius * Math.sqrt(world.random());
+                    const theta = world.random() * Math.PI * 2;
+                    memory.point = world.reachable(new THREE.Vector3(world.home.x + r * Math.cos(theta), 0, world.home.z + r * Math.sin(theta)));
+                }
             }
             const status = moveTo(tick, 'PATROL', memory.point);
             if (status === 'success') memory.point = undefined;

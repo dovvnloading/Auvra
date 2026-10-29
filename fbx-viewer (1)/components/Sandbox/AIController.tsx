@@ -12,6 +12,8 @@ import { useAILocomotion } from './AI/useAILocomotion';
 import { usePhysicsQueries } from '../../runtime/physics';
 import { CHEST_HEIGHT, EYE_HEIGHT, characterHeight, lineOfSight, useNoiseBus } from '../../runtime/perception';
 import type { Perception } from './AI/AISenses';
+import { SplinePatrol } from '../../runtime/patrolPath';
+import { getLiveSpline } from '../../runtime/splineRegistry';
 
 /** Seconds between line of sight checks (a physics ray each). */
 const SIGHT_CHECK_INTERVAL = 0.15;
@@ -32,6 +34,8 @@ interface AIControllerProps {
     onFire?: EnemyFireHandler;
     /** Who this enemy is to the noise bus: it does not hear its own shots. */
     perceptionId?: string | null;
+    /** An object with a Spline component the enemy patrols along (its spawner's Patrol Path). */
+    patrolPath?: string;
 }
 
 export const AIController: React.FC<AIControllerProps> = ({
@@ -45,7 +49,8 @@ export const AIController: React.FC<AIControllerProps> = ({
     behaviorTree,
     weapon = null,
     onFire,
-    perceptionId = null
+    perceptionId = null,
+    patrolPath = ''
 }) => {
     // Callback wrapper
     const handleAttack = useCallback(() => {
@@ -54,8 +59,9 @@ export const AIController: React.FC<AIControllerProps> = ({
 
     // --- Systems ---
     const tuning = useMemo(() => resolveAITuning(stats), [stats]);
-    const builtIn = useAIBrain(enemyApi, handleAttack, tuning);
-    const authored = useBehaviorBrain(behaviorTree, enemyApi, handleAttack, tuning, weapon, onFire);
+    const patrol = useMemo(() => (patrolPath ? new SplinePatrol(() => getLiveSpline(patrolPath, 'runtime')) : null), [patrolPath]);
+    const builtIn = useAIBrain(enemyApi, handleAttack, tuning, patrol);
+    const authored = useBehaviorBrain(behaviorTree, enemyApi, handleAttack, tuning, weapon, onFire, patrol);
     const brain = behaviorTree && behaviorTree.behaviorNodes.length > 0 ? authored : builtIn;
     const locomotion = useAILocomotion();
     const physics = usePhysicsQueries();

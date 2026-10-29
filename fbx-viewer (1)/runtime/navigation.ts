@@ -67,6 +67,7 @@ export const bakeLevelNavMesh = async (levelObjects: readonly LevelObject[], opt
 interface BakedNavMesh {
     key: string | null;
     shapeGeometry: NavGeometryOptions['shapeGeometry'];
+    splineGeometry: NavGeometryOptions['splineGeometry'];
     propRadius: NavGeometryOptions['propRadius'];
     navMesh: LevelNavMesh | null;
 }
@@ -80,12 +81,13 @@ export function useLevelNavMesh(levelObjects: readonly LevelObject[] | null | un
     // levelObjects/options are keyed by signature and settings, so identity churn alone does not re-bake.
     const key = levelObjects ? `${navGeometrySignature(levelObjects)}#${JSON.stringify(resolveNavSettings(options?.settings))}` : null;
     const shapeGeometry = options?.shapeGeometry;
+    const splineGeometry = options?.splineGeometry;
     const propRadius = options?.propRadius;
     const latest = useRef({ levelObjects, options });
     useEffect(() => {
         latest.current = { levelObjects, options };
     });
-    const [baked, setBaked] = useState<BakedNavMesh>({ key: null, shapeGeometry: undefined, propRadius: undefined, navMesh: null });
+    const [baked, setBaked] = useState<BakedNavMesh>({ key: null, shapeGeometry: undefined, splineGeometry: undefined, propRadius: undefined, navMesh: null });
     const lastBakeStart = useRef(-Infinity);
     // Bakes are numbered as they start; one that finishes after a newer one is thrown away.
     const bakes = useRef({ started: 0, applied: 0, mounted: true });
@@ -95,7 +97,7 @@ export function useLevelNavMesh(levelObjects: readonly LevelObject[] | null | un
             bakes.current.mounted = false;
         };
     }, []);
-    const stale = baked.key !== key || baked.shapeGeometry !== shapeGeometry || baked.propRadius !== propRadius;
+    const stale = baked.key !== key || baked.shapeGeometry !== shapeGeometry || baked.splineGeometry !== splineGeometry || baked.propRadius !== propRadius;
 
     useEffect(() => {
         if (!stale || key === null) return undefined;
@@ -112,15 +114,15 @@ export function useLevelNavMesh(levelObjects: readonly LevelObject[] | null | un
                     return;
                 }
                 bakes.current.applied = bake;
-                setBaked({ key, shapeGeometry, propRadius, navMesh });
+                setBaked({ key, shapeGeometry, splineGeometry, propRadius, navMesh });
             }, (error: unknown) => {
                 frontendDiagnostics.failure('navmesh_bake_failed', error);
                 // Keep the previous navmesh; this key is marked done so it is not retried every render.
-                if (bakes.current.mounted && bake >= bakes.current.applied) setBaked(previous => ({ ...previous, key, shapeGeometry, propRadius }));
+                if (bakes.current.mounted && bake >= bakes.current.applied) setBaked(previous => ({ ...previous, key, shapeGeometry, splineGeometry, propRadius }));
             });
         }, Math.max(0, lastBakeStart.current + NAV_REBAKE_INTERVAL_MS - Date.now()));
         return () => clearTimeout(timer);
-    }, [stale, key, shapeGeometry, propRadius]);
+    }, [stale, key, shapeGeometry, splineGeometry, propRadius]);
 
     // A replaced navmesh is freed once nothing renders with it.
     const navMesh = baked.navMesh;

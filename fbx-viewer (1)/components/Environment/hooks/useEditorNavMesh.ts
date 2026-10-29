@@ -3,6 +3,7 @@ import type * as THREE from 'three';
 import type { LevelObject, LoadedModelData } from '../../../types';
 import { useLevelNavMesh, type LevelNavMesh } from '../../../runtime/navigation';
 import { modelTriangles } from '../../../runtime/navGeometry';
+import { splineObjectTriangles } from '../../../runtime/splineMesh';
 import type { HostGeometry } from '../../../runtime/components/physicsComponents';
 import { DEFAULT_GAME_SETTINGS, GAME_SETTINGS_DOCUMENT_ID, normalizeGameSettings, type GameSettings } from '../../../runtime/types';
 import { useNativeProjectDocument } from '../../../utils/useNativeProjectDocument';
@@ -30,6 +31,10 @@ export const useEditorNavMesh = (levelObjects: readonly LevelObject[] | null, mo
         if (!modelTriangleCache.has(model.object)) modelTriangleCache.set(model.object, modelTriangles(model.object));
         return modelTriangleCache.get(model.object) ?? null;
     }, [models]);
-    const options = useMemo(() => ({ settings: navigation, shapeGeometry }), [navigation, shapeGeometry]);
+    const splineGeometry = useCallback(
+        (object: LevelObject) => splineObjectTriangles(object, modelId => models.find(m => m.id === modelId)?.object ?? null),
+        [models],
+    );
+    const options = useMemo(() => ({ settings: navigation, shapeGeometry, splineGeometry }), [navigation, shapeGeometry, splineGeometry]);
     return useLevelNavMesh(levelObjects, options);
 };

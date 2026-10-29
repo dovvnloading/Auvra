@@ -10,6 +10,7 @@ import { ProfilerPanel, ProfilerProbe, useProfilerToggle } from './ProfilerOverl
 import { levelVariables } from './levelVariables';
 import { NavMeshContext, useLevelNavMesh, type LevelNavMesh, type NavSettings } from './navigation';
 import { modelTriangles } from './navGeometry';
+import { splineObjectTriangles } from './splineMesh';
 import type { HostGeometry } from './components/physicsComponents';
 import { usePhysicsQueries } from './physics';
 import { GUNSHOT_NOISE_RADIUS, NoiseBus, NoiseBusContext, useNoiseBus } from './perception';
@@ -80,6 +81,8 @@ interface SpawnRequest {
     position: Vec3;
     rotation: Vec3;
     spawnerId: string;
+    /** The spawner's patrol path: an object with a Spline component its enemies patrol along. */
+    patrolPath?: string;
 }
 
 interface SpawnedEnemy extends SpawnRequest {
@@ -159,7 +162,8 @@ const SpawnerSystem: React.FC<{
                         blueprintId: cfg.blueprintId,
                         position: spawnPositionAround(obj.position, index),
                         rotation: obj.rotation,
-                        spawnerId: obj.id
+                        spawnerId: obj.id,
+                        patrolPath: cfg.patrolPath || undefined
                     });
                 }
             }
@@ -694,7 +698,14 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
         if (!modelTriangleCache.has(model.object)) modelTriangleCache.set(model.object, modelTriangles(model.object));
         return modelTriangleCache.get(model.object) ?? null;
     }, [models]);
-    const navOptions = useMemo(() => ({ settings: navigation, shapeGeometry: navShapeGeometry }), [navigation, navShapeGeometry]);
+    const navSplineGeometry = useCallback(
+        (object: LevelObject) => splineObjectTriangles(object, modelId => models.find(m => m.id === modelId)?.object ?? null),
+        [models],
+    );
+    const navOptions = useMemo(
+        () => ({ settings: navigation, shapeGeometry: navShapeGeometry, splineGeometry: navSplineGeometry }),
+        [navigation, navShapeGeometry, navSplineGeometry],
+    );
     const navMesh = useLevelNavMesh(runtimeLevelObjects, navOptions);
 
     // Look-at IK aimed at 'player' (level components and enemy blueprints) follows the player's model.
@@ -1141,6 +1152,7 @@ const RuntimeEnemyController: React.FC<{
                 weapon={weaponSlot?.weapon ?? null}
                 onFire={handleFire}
                 perceptionId={data.instanceId}
+                patrolPath={data.patrolPath}
             />
         </>
     );

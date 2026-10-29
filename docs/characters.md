@@ -85,6 +85,13 @@ During level play, enemies walk a navmesh: the level's walkable surfaces, which 
 
 When the player cannot be reached, a chasing enemy goes to the closest point it can reach and waits there if the player is shut in at ground level; if the player is up on a platform or in the air, it keeps closing in. To see the navmesh, turn on **Show navigation** in the World Editor toolbar: walkable ground is drawn in blue, and Nav Links as lines. Enemies in the **Sandbox** tab still move in straight lines inside its arena.
 
+
+## Patrol paths
+
+An Enemy Spawner's **Patrol Path** names an object with a [Spline](world-editor.md#splines) component. Its enemies patrol along the spline instead of wandering around where they spawned: each joins the path where it is nearest, then walks it a waypoint every 3 m without stopping, round and round a closed spline, or to one end of an open one and back, pausing for a moment at each end. When an enemy has been chasing the player, or searching, it rejoins the path where it is nearest once it calms down. Waypoints are taken on the navmesh, so a path drawn a little off the ground is still walked.
+
+Behavior trees use the path too: their **Patrol** action walks to the next waypoint along it instead of a random point. Without a patrol path, enemies wander as before.
+
 ## Animation transitions
 
 In the **Graph** tab, select a transition between two states to edit it:

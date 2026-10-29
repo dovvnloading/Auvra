@@ -4,6 +4,7 @@ import { ScriptInspector } from '../Scripting/ScriptInspector';
 import { TimelineInspector } from '../Timeline/TimelineInspector';
 import { LevelStreamingInspector } from './LevelStreamingInspector';
 import { ReachIKInspector } from './ReachIKInspector';
+import { FollowSplineInspector, SplineInspector, SplineModelInspector } from './SplineInspectors';
 
 /**
  * Editor-only Inspectors for component settings a schema field cannot edit. Importing this module
@@ -15,3 +16,7 @@ registerComponentInspector('timeline', TimelineInspector);
 registerComponentInspector('levelStreaming', LevelStreamingInspector);
 registerComponentInspector('dialogue', DialogueInspector);
 registerComponentInspector('twoBoneIK', ReachIKInspector);
+registerComponentInspector('spline', SplineInspector);
+registerComponentInspector('splineMesh', SplineModelInspector);
+registerComponentInspector('splineScatter', SplineModelInspector);
+registerComponentInspector('followSpline', FollowSplineInspector);

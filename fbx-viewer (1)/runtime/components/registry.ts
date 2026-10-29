@@ -20,6 +20,7 @@ import { PHYSICS_COMPONENTS } from './physicsComponents';
 import { POST_PROCESS_COMPONENT } from './postProcess';
 import { REFLECTION_PROBE_COMPONENT } from './reflectionProbe';
 import { SCRIPT_COMPONENT } from './scriptComponent';
+import { SPLINE_COMPONENTS } from './splineComponents';
 import { TIMELINE_COMPONENT } from './timelineComponent';
 import { WATER_COMPONENT } from './waterComponent';
 import type { ComponentDefinition, ComponentInspectorProps } from './types';
@@ -31,6 +32,7 @@ export const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
     ...PHYSICS_COMPONENTS,
     ...JOINT_COMPONENTS,
     ...NAVIGATION_COMPONENTS,
+    ...SPLINE_COMPONENTS,
     PARTICLES_COMPONENT,
     DECAL_COMPONENT,
     WATER_COMPONENT,

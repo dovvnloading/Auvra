@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Trees, Box, Image, MousePointer2, Layers, Trash2, Plus, ChevronDown, ChevronRight, Crosshair, CornerLeftUp, Skull, Music, Sun, PersonStanding, Axis3d } from 'lucide-react';
+import { Search, Trees, Box, Image, MousePointer2, Layers, Trash2, Plus, ChevronDown, ChevronRight, Crosshair, CornerLeftUp, Skull, Music, Sun, PersonStanding, Axis3d, Spline } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
 import { LevelObject } from '../../types';
 import { editorSession } from '../../utils/editorSession';
 import { appAlert, appConfirm, appPrompt } from '../../utils/appDialogs';
 import { reparentPreservingWorld, wouldCreateCycle } from '../../utils/sceneGraph';
 import { uniqueObjectName } from '../../utils/levelClipboard';
+import { createComponent } from '../../runtime/components/registry';
+import { SPLINE_COMPONENT_TYPE } from '../../runtime/splines';
 import { PrefabPanel } from './PrefabPanel';
 import { LightingPanel } from './LightingPanel';
 
@@ -224,6 +226,28 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                 rotation: [0, 0, 0],
                 scale: [1, 1, 1],
                 parentId: null,
+            }]);
+            if (id) onSelectObject(id);
+        } catch {
+            // addLevelObjects has already reported the failure.
+        }
+    };
+
+    // A spline in front of the origin: an empty object carrying a Spline component.
+    const handleAddSpline = async () => {
+        if (!canEdit() || !currentLevelId) return;
+        try {
+            const [id] = await addLevelObjects([{
+                id: crypto.randomUUID(),
+                levelId: currentLevelId,
+                modelId: '',
+                name: uniqueObjectName('Spline', new Set(levelObjects.map(object => object.name))),
+                type: 'prop',
+                position: [0, 0, 0],
+                rotation: [0, 0, 0],
+                scale: [1, 1, 1],
+                parentId: null,
+                components: [createComponent(SPLINE_COMPONENT_TYPE)],
             }]);
             if (id) onSelectObject(id);
         } catch {
@@ -671,6 +695,16 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                     <Axis3d size={16} />
                                 </div>
                                 <div className="text-xs font-bold">Empty Object</div>
+                            </div>
+                            <div
+                                onClick={handleAddSpline}
+                                className="flex items-center gap-3 px-3 py-2.5 rounded-md cursor-pointer transition-all border border-transparent hover:bg-gray-800 hover:text-white text-gray-400 group"
+                                title="Add a spline: a curve to bend roads, rails and fences along (Spline Mesh), place copies along (Spline Scatter) or move objects along (Follow Spline)"
+                            >
+                                <div className="w-8 h-8 rounded bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0 text-fuchsia-400 group-hover:bg-fuchsia-900/20 group-hover:border-fuchsia-500/50">
+                                    <Spline size={16} />
+                                </div>
+                                <div className="text-xs font-bold">Spline</div>
                             </div>
                             <div
                                 onClick={handleAddSkySphere}

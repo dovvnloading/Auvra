@@ -3,6 +3,7 @@ import { AUDIO_BUSES, type AudioBus } from '../../runtime/audioMixer';
 import type { InputState } from '../../runtime/input';
 import type { LevelVariablesStore } from '../../runtime/levelVariables';
 import type { LevelObject } from '../../types';
+import type { WorldSplineQuery } from '../../runtime/splineRegistry';
 import type { FlowExecutionContext, FlowNode, FlowNodeDefinition, FlowPinDefinition } from './flow';
 
 /**
@@ -44,7 +45,10 @@ export type WorldNodeType =
     | 'HealPlayer'
     | 'AddAmmo'
     | 'GiveWeapon'
-    | 'GetPlayerHealth';
+    | 'GetPlayerHealth'
+    | 'GetSplineLength'
+    | 'GetSplinePoint'
+    | 'FindClosestOnSpline';
 
 export type Vec3 = [number, number, number];
 
@@ -142,6 +146,8 @@ export interface WorldNodeServices {
     giveWeapon?(weapon: string): boolean;
     /** The player's health and maximum; null without a player. */
     playerHealth?(): { health: number; max: number } | null;
+    /** The spline of the object `objectId` (its Spline component), in world space; null when it has none. */
+    spline?(objectId: string): WorldSplineQuery | null;
 }
 
 export interface WorldExecutionContext extends FlowExecutionContext {
@@ -363,6 +369,33 @@ export const WORLD_NODE_DEFINITIONS: readonly WorldNodeDefinition[] = [
         inputs: [],
         outputs: [output('Health', 'Float'), output('Max', 'Float'), output('Fraction', 'Float')],
         data: {},
+    },
+    {
+        type: 'GetSplineLength',
+        title: 'Get Spline Length',
+        description: "The length in metres of an actor's spline (its Spline component), and whether it is a closed loop. Found is false for an actor without one.",
+        pure: true,
+        inputs: [input('Spline', 'Object')],
+        outputs: [output('Found', 'Boolean'), output('Length', 'Float'), output('Closed', 'Boolean')],
+        data: { default_Spline: '' },
+    },
+    {
+        type: 'GetSplinePoint',
+        title: 'Get Spline Point',
+        description: "Where an actor's spline is Distance metres along it, the way it runs there and its up: for placing, aiming or moving things along a path. Distances wrap round a closed spline and stop at the ends of an open one.",
+        pure: true,
+        inputs: [input('Spline', 'Object'), input('Distance', 'Float')],
+        outputs: [output('Found', 'Boolean'), ...vectorPins('Position', output), ...vectorPins('Direction', output), ...vectorPins('Up', output)],
+        data: { default_Spline: '', default_Distance: 0 },
+    },
+    {
+        type: 'FindClosestOnSpline',
+        title: 'Find Closest On Spline',
+        description: "The point on an actor's spline nearest Position, and how many metres along the spline it is: how far the player has come along a race track, or where to rejoin a path.",
+        pure: true,
+        inputs: [input('Spline', 'Object'), ...vectorPins('Position', input)],
+        outputs: [output('Found', 'Boolean'), output('Distance', 'Float'), ...vectorPins('Closest', output)],
+        data: { default_Spline: '', ...vectorDefaults('Position', [0, 0, 0]) },
     },
     {
         type: 'SetMorphTarget',
@@ -674,6 +707,37 @@ const runGetPlayerHealth: WorldNodeExecutor = (_node, ctx) => {
     publish(ctx, { Health: health?.health ?? 0, Max: max, Fraction: max > 0 ? (health?.health ?? 0) / max : 0 });
 };
 
+const splineOf = (ctx: WorldExecutionContext): WorldSplineQuery | null => {
+    const id = toActorId(ctx.evaluate('Spline'));
+    return id ? ctx.services.spline?.(id) ?? null : null;
+};
+
+const runGetSplineLength: WorldNodeExecutor = (_node, ctx) => {
+    const spline = splineOf(ctx);
+    publish(ctx, { Found: spline !== null, Length: spline?.length ?? 0, Closed: spline?.closed ?? false });
+};
+
+const runGetSplinePoint: WorldNodeExecutor = (_node, ctx) => {
+    const spline = splineOf(ctx);
+    const sample = spline ? spline.sample(toNumber(ctx.evaluate('Distance'), 0)) : null;
+    publish(ctx, {
+        Found: sample !== null,
+        ...vectorOutputs('Position', sample?.position ?? [0, 0, 0]),
+        ...vectorOutputs('Direction', sample?.direction ?? [0, 0, 0]),
+        ...vectorOutputs('Up', sample?.up ?? [0, 0, 0]),
+    });
+};
+
+const runFindClosestOnSpline: WorldNodeExecutor = (_node, ctx) => {
+    const spline = splineOf(ctx);
+    const closest = spline ? spline.closest(readVector(ctx, 'Position', [0, 0, 0])) : null;
+    publish(ctx, {
+        Found: closest !== null,
+        Distance: closest?.distance ?? 0,
+        ...vectorOutputs('Closest', closest?.position ?? [0, 0, 0]),
+    });
+};
+
 const executors = {
     SpawnPrefab: runSpawnPrefab,
     GetActorTransform: runGetActorTransform,
@@ -695,6 +759,9 @@ const executors = {
     AddAmmo: runAddAmmo,
     GiveWeapon: runGiveWeapon,
     GetPlayerHealth: runGetPlayerHealth,
+    GetSplineLength: runGetSplineLength,
+    GetSplinePoint: runGetSplinePoint,
+    FindClosestOnSpline: runFindClosestOnSpline,
 } satisfies Record<WorldNodeType, WorldNodeExecutor>;
 
 /** Executor per world node type; look up by `node.type` and treat a miss as "not a world node". */
