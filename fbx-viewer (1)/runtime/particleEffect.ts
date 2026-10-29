@@ -7,8 +7,9 @@
  * gradient, size and speed curves), what moves it (gravity, drag, wind, turbulence, a vortex), what
  * it does when it hits the world, what it sets off (sub-emitters), and how it is drawn (sprite or
  * flipbook, billboard, stretched along its motion, flat, upright or as a ribbon, blended or added,
- * with an optional light). Stored props resolve to an effect here, every field defaulted and in
- * range; components saved before effects existed keep their look.
+ * with an optional light), and whether it runs on the CPU or the GPU. Stored props resolve to an
+ * effect here, every field defaulted and in range; components saved before effects existed keep
+ * their look.
  */
 
 export type Range = [number, number];
@@ -125,7 +126,17 @@ export interface ParticleLight {
 
 export type ParticleSpace = 'world' | 'local';
 
+/**
+ * CPU: up to RUNTIME_PARTICLE_LIMIT particles, with every feature. GPU: up to GPU_PARTICLE_LIMIT,
+ * simulated and drawn on the graphics card, without sub-emitters, ribbons or sorting, colliding with
+ * the ground under the emitter rather than with every surface.
+ */
+export type ParticleSimulationMode = 'cpu' | 'gpu';
+export const PARTICLE_SIMULATION_MODES: readonly ParticleSimulationMode[] = ['cpu', 'gpu'];
+
 export interface ParticleEffect {
+    /** Where the particles are simulated: see ParticleSimulationMode. */
+    simulation: ParticleSimulationMode;
     /** Seconds per cycle; bursts are timed within it. */
     duration: number;
     loop: boolean;
@@ -268,6 +279,7 @@ const DEFAULT_LIGHT: ParticleLight = { enabled: false, color: '#ffb060', intensi
 
 /** The default effect: a soft column of smoke. */
 export const DEFAULT_PARTICLE_EFFECT: ParticleEffect = {
+    simulation: 'cpu',
     duration: 3, loop: true, prewarm: false, delay: 0,
     rate: 20, rateOverDistance: 0, bursts: [], maxParticles: 400,
     shape: DEFAULT_SHAPE, space: 'world',
@@ -286,6 +298,13 @@ export const DEFAULT_PARTICLE_EFFECT: ParticleEffect = {
 /** Most particles one emitter keeps alive in play, and in the editor's preview of every emitter at once. */
 export const RUNTIME_PARTICLE_LIMIT = 20000;
 export const EDITOR_PARTICLE_LIMIT = 600;
+/** The same for GPU emitters: their particles live in textures up to 1024 × 1024. */
+export const GPU_PARTICLE_LIMIT = 1024 * 1024;
+export const EDITOR_GPU_PARTICLE_LIMIT = 131072;
+
+/** Most particles an emitter keeps, emits per second and in one burst, by where it simulates. */
+export const particleLimits = (simulation: ParticleSimulationMode): { particles: number; rate: number; burst: number } =>
+    simulation === 'gpu' ? { particles: GPU_PARTICLE_LIMIT, rate: 1000000, burst: GPU_PARTICLE_LIMIT } : { particles: RUNTIME_PARTICLE_LIMIT, rate: 5000, burst: 5000 };
 
 const num = (value: unknown, fallback: number, min: number, max: number): number =>
     clamp(typeof value === 'number' && Number.isFinite(value) ? value : fallback, min, max);
@@ -340,18 +359,21 @@ export const sanitizeParticleEffect = (value: unknown, base: ParticleEffect = DE
     const render = record(e.render);
     const light = record(e.light);
     const start = Array.isArray(e.startColor) ? e.startColor : [];
+    const simulation = choice(e.simulation, PARTICLE_SIMULATION_MODES, base.simulation);
+    const limits = particleLimits(simulation);
     return {
+        simulation,
         duration: num(e.duration, base.duration, 0.05, 120),
         loop: bool(e.loop, base.loop),
         prewarm: bool(e.prewarm, base.prewarm),
         delay: num(e.delay, base.delay, 0, 60),
-        rate: num(e.rate, base.rate, 0, 5000),
+        rate: num(e.rate, base.rate, 0, limits.rate),
         rateOverDistance: num(e.rateOverDistance, base.rateOverDistance, 0, 200),
         bursts: (Array.isArray(e.bursts) ? e.bursts : base.bursts).slice(0, 8).map(entry => {
             const burst = record(entry);
-            return { time: num(burst.time, 0, 0, 120), count: Math.round(num(burst.count, 10, 0, 5000)) };
+            return { time: num(burst.time, 0, 0, 120), count: Math.round(num(burst.count, 10, 0, limits.burst)) };
         }),
-        maxParticles: Math.round(num(e.maxParticles, base.maxParticles, 1, RUNTIME_PARTICLE_LIMIT)),
+        maxParticles: Math.round(num(e.maxParticles, base.maxParticles, 1, limits.particles)),
         shape: {
             kind: choice(shape.kind, PARTICLE_SHAPES, base.shape.kind),
             radius: num(shape.radius, base.shape.radius, 0, 1000),
@@ -563,6 +585,29 @@ export const PARTICLE_PRESETS = {
         collision: { mode: 'world', bounce: 0.35, friction: 0.5 },
         render: { sprite: 'debris', sort: false },
     }),
+    // Effects too big for the CPU, simulated on the GPU.
+    fountain: effect({
+        simulation: 'gpu', rate: 40000, maxParticles: 150000, lifetime: [2.5, 3.5], speed: [9, 11], size: [0.03, 0.05], rotation: [0, 0], spin: [0, 0],
+        shape: { kind: 'cone', radius: 0.15, angle: 8, volume: 1 }, gravity: 9.8, drag: 0.15, turbulence: 0.3, turbulenceScale: 2,
+        startColor: ['#bfe6ff', '#ffffff'], colorOverLife: { stops: [{ t: 0, color: '#ffffff', alpha: 0.9 }, { t: 0.8, color: '#a8d8ff', alpha: 0.7 }, { t: 1, color: '#80c0ff', alpha: 0 }] },
+        sizeOverLife: { points: [[0, 1], [1, 0.6]] },
+        collision: { mode: 'world', bounce: 0.3, friction: 0.2 },
+        render: { sprite: 'glow', blending: 'additive', emissive: 2, sort: false },
+    }),
+    swarm: effect({
+        simulation: 'gpu', rate: 50000, maxParticles: 250000, lifetime: [3, 5], speed: [0.5, 1.5], size: [0.03, 0.06], rotation: [0, 0], spin: [0, 0],
+        shape: { kind: 'sphere', radius: 3, volume: 1 }, gravity: 0, drag: 0.4, turbulence: 6, turbulenceScale: 1.5, orbit: 0.8,
+        startColor: ['#7fd6ff', '#d08cff'], colorOverLife: fade('#c8ecff', 1, '#a060ff'), sizeOverLife: { points: [[0, 0.3], [0.2, 1], [1, 0]] },
+        render: { sprite: 'glow', blending: 'additive', emissive: 3, sort: false },
+    }),
+    downpour: effect({
+        simulation: 'gpu', rate: 120000, maxParticles: 140000, lifetime: [0.9, 1.1], speed: [11, 13], size: [0.015, 0.025], gravity: 0, drag: 0, turbulence: 0,
+        shape: { kind: 'box', size: [60, 0.1, 60], angle: 2, axis: [0, -1, 0] }, startColor: ['#c0d4e8', '#a8c0d8'],
+        colorOverLife: { stops: [{ t: 0, color: '#c8dcf0', alpha: 0.45 }, { t: 1, color: '#c8dcf0', alpha: 0.45 }] },
+        sizeOverLife: { points: [[0, 1], [1, 1]] },
+        collision: { mode: 'world', kill: true },
+        render: { mode: 'stretched', sprite: 'droplet', stretch: 3, sort: false },
+    }),
 } satisfies Record<string, ParticleEffect>;
 
 export type ParticlePresetId = keyof typeof PARTICLE_PRESETS;
@@ -572,6 +617,7 @@ export const PARTICLE_PRESET_LABELS: Record<ParticlePresetId, string> = {
     smoke: 'Smoke', fire: 'Fire', sparks: 'Sparks', dust: 'Dust motes', explosion: 'Explosion', embers: 'Embers', magic: 'Magic',
     rain: 'Rain', snow: 'Snow', steam: 'Steam', leaves: 'Falling leaves', confetti: 'Confetti', fireflies: 'Fireflies',
     waterfall: 'Waterfall mist', muzzleFlash: 'Muzzle flash', shockwave: 'Shockwave', trail: 'Trail', debris: 'Debris',
+    fountain: 'Fountain (GPU)', swarm: 'Swarm (GPU)', downpour: 'Downpour (GPU)',
 };
 
 const isPreset = (value: unknown): value is ParticlePresetId =>

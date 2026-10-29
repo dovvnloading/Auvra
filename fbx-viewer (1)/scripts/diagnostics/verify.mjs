@@ -119,6 +119,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/particleEmitters.ts': 'pure-derived-state',
   'runtime/particleSimulation.ts': 'hot-loop',
   'runtime/particleRenderer.ts': 'hot-loop',
+  'runtime/gpuParticles.ts': 'hot-loop',
   'runtime/particleSprites.ts': 'pure-utility',
   'runtime/weather.ts': 'pure-derived-state',
   'runtime/weatherCover.ts': 'hot-loop',

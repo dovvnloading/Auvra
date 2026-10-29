@@ -11,7 +11,46 @@ import type { ParticleSimulation } from './particleSimulation';
  * they sit in the scene graph.
  */
 
-const MODE_DEFINE: Record<Exclude<ParticleRenderMode, 'ribbon'>, number> = { billboard: 0, stretched: 1, horizontal: 2, vertical: 3 };
+export const MODE_DEFINE: Record<Exclude<ParticleRenderMode, 'ribbon'>, number> = { billboard: 0, stretched: 1, horizontal: 2, vertical: 3 };
+
+/**
+ * Where one corner of a particle's quad goes, by the MODE define: facing the camera and turned by
+ * its rotation (0), stretched along its motion (1), flat facing up (2) or upright facing the camera (3).
+ */
+export const PARTICLE_CORNER = /* glsl */ `
+uniform float uStretch;
+vec3 particleCorner(vec3 center, vec3 velocity, vec2 corner, float size, float rotation) {
+#if MODE == 1
+    float speed = length(velocity);
+    vec3 axis = speed > 1e-4 ? velocity / speed : vec3(0.0, 1.0, 0.0);
+    vec3 side = cross(axis, normalize(cameraPosition - center));
+    float sideLength = length(side);
+    side = sideLength > 1e-4 ? side / sideLength : vec3(1.0, 0.0, 0.0);
+    return center + side * corner.x * size + axis * corner.y * size * (1.0 + uStretch * speed);
+#elif MODE == 2
+    float c = cos(rotation), s = sin(rotation);
+    vec2 turned = vec2(c * corner.x - s * corner.y, s * corner.x + c * corner.y) * size;
+    return center + vec3(turned.x, 0.0, turned.y);
+#elif MODE == 3
+    vec3 toCamera = cameraPosition - center;
+    vec3 right = normalize(vec3(toCamera.z, 0.0, -toCamera.x) + vec3(1e-5, 0.0, 0.0));
+    return center + right * corner.x * size + vec3(0.0, corner.y * size, 0.0);
+#else
+    vec3 right = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
+    vec3 up = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
+    float c = cos(rotation), s = sin(rotation);
+    vec2 turned = vec2(c * corner.x - s * corner.y, s * corner.x + c * corner.y) * size;
+    return center + right * turned.x + up * turned.y;
+#endif
+}
+
+/** The quad's texture coordinates for a flipbook frame of a uGrid sprite sheet. */
+vec2 particleFrameUv(float frame, vec2 corner, vec2 grid) {
+    float column = mod(frame, grid.x);
+    float row = floor(frame / grid.x);
+    return (vec2(column, grid.y - 1.0 - row) + corner) / grid;
+}
+`;
 
 const QUAD_VERTEX = /* glsl */ `
 #include <common>
@@ -24,42 +63,15 @@ attribute float iRotation;
 attribute float iFrame;
 uniform mat4 uEmitter;
 uniform vec2 uGrid;
-uniform float uStretch;
 varying vec2 vUv;
 varying vec4 vColor;
-
+${PARTICLE_CORNER}
 void main() {
     vec3 center = (uEmitter * vec4(iPosition, 1.0)).xyz;
-    vec2 corner = position.xy;
-    vec3 world;
-#if MODE == 1
-    vec3 velocity = mat3(uEmitter) * iVelocity;
-    float speed = length(velocity);
-    vec3 axis = speed > 1e-4 ? velocity / speed : vec3(0.0, 1.0, 0.0);
-    vec3 side = cross(axis, normalize(cameraPosition - center));
-    float sideLength = length(side);
-    side = sideLength > 1e-4 ? side / sideLength : vec3(1.0, 0.0, 0.0);
-    world = center + side * corner.x * iSize + axis * corner.y * iSize * (1.0 + uStretch * speed);
-#elif MODE == 2
-    float c = cos(iRotation), s = sin(iRotation);
-    vec2 turned = vec2(c * corner.x - s * corner.y, s * corner.x + c * corner.y) * iSize;
-    world = center + vec3(turned.x, 0.0, turned.y);
-#elif MODE == 3
-    vec3 toCamera = cameraPosition - center;
-    vec3 right = normalize(vec3(toCamera.z, 0.0, -toCamera.x) + vec3(1e-5, 0.0, 0.0));
-    world = center + right * corner.x * iSize + vec3(0.0, corner.y * iSize, 0.0);
-#else
-    vec3 right = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
-    vec3 up = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
-    float c = cos(iRotation), s = sin(iRotation);
-    vec2 turned = vec2(c * corner.x - s * corner.y, s * corner.x + c * corner.y) * iSize;
-    world = center + right * turned.x + up * turned.y;
-#endif
+    vec3 world = particleCorner(center, mat3(uEmitter) * iVelocity, position.xy, iSize, iRotation);
     vec4 mvPosition = viewMatrix * vec4(world, 1.0);
     gl_Position = projectionMatrix * mvPosition;
-    float column = mod(iFrame, uGrid.x);
-    float row = floor(iFrame / uGrid.x);
-    vUv = (vec2(column, uGrid.y - 1.0 - row) + uv) / uGrid;
+    vUv = particleFrameUv(iFrame, uv, uGrid);
     vColor = iColor;
     #include <fog_vertex>
 }
@@ -81,7 +93,8 @@ void main() {
 }
 `;
 
-const FRAGMENT = /* glsl */ `
+/** A particle's pixel: its sprite in its colour, brighter by uEmissive, fogged (added light fades out). */
+export const PARTICLE_FRAGMENT = /* glsl */ `
 #include <common>
 #include <fog_pars_fragment>
 uniform sampler2D uMap;
@@ -123,14 +136,14 @@ const createMaterial = (vertexShader: string): THREE.ShaderMaterial => new THREE
         },
     ]),
     vertexShader,
-    fragmentShader: FRAGMENT,
+    fragmentShader: PARTICLE_FRAGMENT,
     transparent: true,
     depthWrite: false,
     fog: true,
 });
 
 /** A mesh that stays at the world origin whatever its parent: its vertices are already in world space. */
-class WorldMesh extends THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial> {
+export class WorldMesh extends THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial> {
     constructor(geometry: THREE.BufferGeometry, material: THREE.ShaderMaterial) {
         super(geometry, material);
         this.matrixAutoUpdate = false;

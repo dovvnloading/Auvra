@@ -12,6 +12,7 @@ import {
     PARTICLE_PRESETS,
     PARTICLE_RENDER_MODES,
     PARTICLE_SHAPES,
+    PARTICLE_SIMULATION_MODES,
     resolveParticleEffect,
     sanitizeParticleEffect,
     SUB_EMITTER_TRIGGERS,
@@ -197,6 +198,8 @@ export const ParticlesInspector: React.FC<ComponentInspectorProps> = ({ object, 
             <p className="flex items-center gap-1 text-[10px] text-gray-500"><Sparkles size={10} /> A preset sets every module below; change any of them from there.</p>
 
             <Section title="Emission" open>
+                <Row label="Simulation"><Select label="Simulation" value={effect.simulation} options={PARTICLE_SIMULATION_MODES} labels={{ cpu: 'CPU (every feature)', gpu: 'GPU (up to a million)' }} onChange={(simulation) => update({ simulation })} /></Row>
+                {effect.simulation === 'gpu' && <p className="text-[10px] text-gray-500">On the GPU: no sub-emitters, ribbons draw as quads, particles are not sorted, and world collision is with the ground under the emitter.</p>}
                 <Row label="Rate (per s)"><NumberInput label="Rate" value={effect.rate} step={1} onCommit={(rate) => update({ rate })} /></Row>
                 <Row label="Per metre moved"><NumberInput label="Rate over distance" value={effect.rateOverDistance} step={0.5} onCommit={(rateOverDistance) => update({ rateOverDistance })} /></Row>
                 <Row label="Cycle (s)"><NumberInput label="Duration" value={effect.duration} onCommit={(duration) => update({ duration })} /></Row>
