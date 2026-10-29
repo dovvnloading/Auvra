@@ -15,6 +15,8 @@ Nodes are added from the palette. Select a node to edit it in the inspector: dat
 | Dialogue Event | When a dialogue line or choice raises an event with its name (empty: any). See [Dialogue](dialogue.md#dialogue-events) |
 | Vehicle Entered, Vehicle Exited | When the player gets into or out of the chosen [vehicle](world-editor.md#vehicles) (or any); provides the **Vehicle** |
 | Object Broken | When the chosen object with a [Destructible](world-editor.md#destruction) component (or any) breaks; provides the **Actor** that broke |
+| Ability Used | When the chosen actor (the player, an object with an [Abilities](world-editor.md#abilities) component, or any) uses the named ability (or any); provides the **Actor**, the **Ability** and its **Target** |
+| Actor Died | When the chosen actor with an [Abilities](world-editor.md#abilities) component (or any) loses all its health; provides the **Actor** |
 
 **On Overlap** targets a specific object, picked from a list showing its name, type and a short id. Renaming the object does not break the reference. Older graphs that referenced actors by name are converted automatically when the name is unique; ambiguous ones show a warning until you pick the actor.
 
@@ -157,6 +159,23 @@ These act on objects with a [Destructible](world-editor.md#destruction) componen
 | Get Object Health | The **Actor**'s **Health** and **Max Health**, and whether it is **Broken**. **Destructible** is false for an actor that cannot break. Pure |
 
 A charge the player sets off: **On Overlap** of a trigger, **Delay** 3, **Explode** at the charge's position. A gate that opens once its barricade is down: **Object Broken** for the barricade, then the gate's timeline.
+
+## Ability nodes
+
+These act on actors with an [Abilities](world-editor.md#abilities) component. The player is the actor named `player`.
+
+| Node | Does |
+|---|---|
+| Use Ability | Uses the **Actor**'s **Ability** (by its id). Its costs are paid, its cooldown starts and its effects land on the user and on **Target**. With no Target, an ability that has one takes what the actor aims at within its range. **Used**, and when it could not, the **Reason**: `cooldown`, `blocked`, `missingTags`, `cost`, `noTarget` or `unknown` |
+| Apply Effect | Applies an **Effect** (by its id) to **Target**, an actor or any character. The effect is looked up on **Source**'s Abilities first, then the target's own. **Applied** is false when it did not take |
+| Remove Effect | Ends a lasting effect on the **Actor**, every stack. **Removed** is false when it was not there |
+| Get Attribute | The **Actor**'s **Attribute**: its **Value** now, its **Base** value and its **Max**. **Has** is false when it has none. Pure |
+| Change Attribute | Adds **Amount** to the **Actor**'s **Attribute** (negative takes away), or sets it with **Set** on; within its bounds. **Value** is the attribute after |
+| Has Tag | Whether the **Actor** carries the **Tag** or one under it. Pure |
+| Add Tag, Remove Tag | Gives the **Actor** a tag until it is removed, or takes it away |
+| Get Ability Cooldown | Seconds before the **Actor**'s **Ability** can be used again, and whether it is **Ready**. Pure |
+
+A boss that enrages: **Actor Died** for each of its guards adds to a level variable, then **Apply Effect** of its own `enrage` effect on the boss. A trap that stuns: **On Overlap**, then **Apply Effect** `stun` on the player, with the trap as **Source**.
 
 ## Level variables
 

@@ -32,6 +32,7 @@ import {
     type ScriptVec3,
     type ScriptVehicleState,
     type ScriptEnvironmentState,
+    type ScriptActorState,
     type ScriptDestructibleState,
 } from './protocol';
 import { createScriptSpline, type ScriptSpline } from './scriptSplines';
@@ -145,6 +146,32 @@ export interface ScriptVehicle {
 }
 
 /** What every callback receives first. One context per script, kept for its lifetime. */
+/** ctx.abilities: actors with abilities. Reads are this frame's; changes take effect after the frame. */
+export interface ScriptAbilities {
+    /** The ids of the actors with abilities: objects with an Abilities component, and 'player'. */
+    actors(): string[];
+    /** Uses an actor's ability: on `targetId`, or (null) on what the actor aims at within the ability's range. */
+    use(actorId: string, abilityId: string, targetId?: string | null): void;
+    /** Applies an effect to an actor or any character; the effect is looked up on `sourceId`'s Abilities first. */
+    applyEffect(targetId: string, effectId: string, sourceId?: string | null): void;
+    removeEffect(actorId: string, effectId: string): void;
+    /** An attribute's value now (with lasting effects), and its upper bound; null when the actor has no such attribute. */
+    attribute(actorId: string, name: string): number | null;
+    maxAttribute(actorId: string, name: string): number | null;
+    /** Adds to an attribute's base value (negative takes away), or sets it; it stays within its bounds. */
+    addAttribute(actorId: string, name: string, amount: number): void;
+    setAttribute(actorId: string, name: string, value: number): void;
+    /** Whether the actor carries a tag, or one under it ('State.Stunned' counts as 'State'). */
+    hasTag(actorId: string, tag: string): boolean;
+    tags(actorId: string): string[];
+    addTag(actorId: string, tag: string): void;
+    removeTag(actorId: string, tag: string): void;
+    /** Seconds before the ability can be used again; null when the actor has no such ability. */
+    cooldown(actorId: string, abilityId: string): number | null;
+    /** The ids of the lasting effects on the actor. */
+    effects(actorId: string): string[];
+}
+
 export interface ScriptContext {
     /** The object the script component is attached to. */
     readonly self: ObjectHandle;
@@ -208,6 +235,8 @@ export interface ScriptContext {
     damageObject(objectId: string, amount: number): void;
     /** An object's health and whether it has broken; null for one that cannot break. */
     objectHealth(objectId: string): { health: number; maxHealth: number; broken: boolean } | null;
+    /** Abilities: actors (objects with an Abilities component; the player is 'player'), their attributes, effects and tags. */
+    readonly abilities: ScriptAbilities;
     /** Multiplayer: who is here, who hosts, and events to the other players. */
     readonly net: ScriptNet;
     log(...values: unknown[]): void;
@@ -447,6 +476,12 @@ const isEnvironmentState = (value: unknown): value is ScriptEnvironmentState => 
 const isDestructibleState = (value: unknown): value is ScriptDestructibleState => isRecord(value)
     && isFiniteNumber(value.health) && isFiniteNumber(value.maxHealth) && typeof value.broken === 'boolean';
 
+const isStringList = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string');
+
+const isActorState = (value: unknown): value is ScriptActorState => isRecord(value)
+    && everyValue(value.attributes, isFiniteNumber) && everyValue(value.max, isFiniteNumber) && everyValue(value.cooldowns, isFiniteNumber)
+    && isStringList(value.tags) && isStringList(value.effects);
+
 const isObjectState = (value: unknown): value is ScriptObjectState => isRecord(value)
     && typeof value.id === 'string' && typeof value.name === 'string'
     && isVec3(value.position) && isVec3(value.rotation) && isVec3(value.scale)
@@ -502,7 +537,8 @@ export const isScriptSnapshot = (value: unknown): value is ScriptSnapshot => isR
     && (value.splines === undefined || everyValue(value.splines, isSplineState))
     && (value.vehicles === undefined || everyValue(value.vehicles, isVehicleState))
     && (value.environment === undefined || isEnvironmentState(value.environment))
-    && (value.destructibles === undefined || everyValue(value.destructibles, isDestructibleState));
+    && (value.destructibles === undefined || everyValue(value.destructibles, isDestructibleState))
+    && (value.actors === undefined || everyValue(value.actors, isActorState));
 
 /** Whether a message's script entry is exactly { id, objectId, source } with non-empty ids. */
 export const isScriptSource = (value: unknown): value is ScriptSource => isRecord(value)
@@ -1030,6 +1066,44 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
                 const id = readId('damageObject', objectId);
                 if (!isFiniteNumber(amount) || amount < 0) throw new TypeError('damageObject expects an amount of 0 or more');
                 queue(record, { type: 'damageObject', objectId: id, amount });
+            },
+            abilities: {
+                actors: () => Object.keys(world.snapshot.actors ?? {}),
+                use: (actorId: string, abilityId: string, targetId: string | null = null) => {
+                    queue(record, {
+                        type: 'useAbility', actorId: readId('abilities.use', actorId), abilityId: readId('abilities.use', abilityId),
+                        targetId: targetId === null || targetId === undefined ? null : readId('abilities.use', targetId),
+                    });
+                },
+                applyEffect: (targetId: string, effectId: string, sourceId: string | null = null) => {
+                    queue(record, {
+                        type: 'applyEffect', targetId: readId('abilities.applyEffect', targetId), effectId: readId('abilities.applyEffect', effectId),
+                        sourceId: sourceId === null || sourceId === undefined ? null : readId('abilities.applyEffect', sourceId),
+                    });
+                },
+                removeEffect: (actorId: string, effectId: string) => {
+                    queue(record, { type: 'removeEffect', actorId: readId('abilities.removeEffect', actorId), effectId: readId('abilities.removeEffect', effectId) });
+                },
+                attribute: (actorId: string, name: string) => world.snapshot.actors?.[readId('abilities.attribute', actorId)]?.attributes[readId('abilities.attribute', name)] ?? null,
+                maxAttribute: (actorId: string, name: string) => world.snapshot.actors?.[readId('abilities.maxAttribute', actorId)]?.max[readId('abilities.maxAttribute', name)] ?? null,
+                addAttribute: (actorId: string, name: string, amount: number) => {
+                    if (!isFiniteNumber(amount)) throw new TypeError('abilities.addAttribute expects a finite amount');
+                    queue(record, { type: 'changeAttribute', actorId: readId('abilities.addAttribute', actorId), attribute: readId('abilities.addAttribute', name), amount, set: false });
+                },
+                setAttribute: (actorId: string, name: string, value: number) => {
+                    if (!isFiniteNumber(value)) throw new TypeError('abilities.setAttribute expects a finite value');
+                    queue(record, { type: 'changeAttribute', actorId: readId('abilities.setAttribute', actorId), attribute: readId('abilities.setAttribute', name), amount: value, set: true });
+                },
+                hasTag: (actorId: string, tag: string) => {
+                    const tags = world.snapshot.actors?.[readId('abilities.hasTag', actorId)]?.tags ?? [];
+                    const query = readId('abilities.hasTag', tag);
+                    return tags.some(owned => owned === query || owned.startsWith(`${query}.`));
+                },
+                tags: (actorId: string) => [...(world.snapshot.actors?.[readId('abilities.tags', actorId)]?.tags ?? [])],
+                addTag: (actorId: string, tag: string) => { queue(record, { type: 'setTag', actorId: readId('abilities.addTag', actorId), tag: readId('abilities.addTag', tag), on: true }); },
+                removeTag: (actorId: string, tag: string) => { queue(record, { type: 'setTag', actorId: readId('abilities.removeTag', actorId), tag: readId('abilities.removeTag', tag), on: false }); },
+                cooldown: (actorId: string, abilityId: string) => world.snapshot.actors?.[readId('abilities.cooldown', actorId)]?.cooldowns[readId('abilities.cooldown', abilityId)] ?? null,
+                effects: (actorId: string) => [...(world.snapshot.actors?.[readId('abilities.effects', actorId)]?.effects ?? [])],
             },
             objectHealth: (objectId: string) => {
                 const state = world.snapshot.destructibles?.[readId('objectHealth', objectId)];

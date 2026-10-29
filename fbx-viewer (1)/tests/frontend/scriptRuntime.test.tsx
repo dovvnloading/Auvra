@@ -77,6 +77,11 @@ const fakeServices = (objects: LevelObject[] = []) => {
     explode: (position, radius, damage, force) => { calls.push(['explode', position, radius, damage, force]); },
     breakObject: objectId => { calls.push(['breakObject', objectId]); return true; },
     damageObject: (objectId, amount) => { calls.push(['damageObject', objectId, amount]); return true; },
+    useAbility: (actorId, abilityId, targetId) => { calls.push(['useAbility', actorId, abilityId, targetId]); return true; },
+    applyEffect: (targetId, effectId, sourceId) => { calls.push(['applyEffect', targetId, effectId, sourceId]); return true; },
+    removeEffect: (actorId, effectId) => { calls.push(['removeEffect', actorId, effectId]); return true; },
+    changeAttribute: (actorId, attribute, amount, set) => { calls.push(['changeAttribute', actorId, attribute, amount, set]); return true; },
+    setTag: (actorId, tag, on) => { calls.push(['setTag', actorId, tag, on]); return true; },
     raycast: (origin, direction, maxDistance, options) => {
       calls.push(['raycast', origin.toArray(), direction.toArray(), maxDistance, options]);
       return direction.z > 0 ? hit : null;

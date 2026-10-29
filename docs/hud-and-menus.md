@@ -51,8 +51,10 @@ HUD elements can show live game values. A binding maps one of the element's attr
 | `player.weapon`, `player.ammo`, `player.magazine`, `player.reserve`, `player.reloading` | The held [weapon](characters.md#weapons): its name, the rounds in its magazine, the magazine size, the rounds carried (-1 for unlimited) and whether it is reloading |
 | `level.id` | The current level's id |
 | `vars.<name>` | A [level variable](level-scripting.md#level-variables), such as `vars.score` |
+| `abilities.<name>`, `abilityMax.<name>` | One of the player's [ability attributes](world-editor.md#abilities) and its maximum, such as `abilities.mana` and `abilityMax.mana` for a mana bar |
+| `cooldowns.<ability>` | Seconds before one of the player's abilities can be used again, such as `cooldowns.fireball` (0 when ready) |
 
-To bind an element to a live value, select it and use the **Bind** section of its properties: pick the property (for a Text Block, its text or colour) and the source, such as player health or **Game variable...** with a level variable's name (stored as `vars.<name>`). **Clear** removes the binding. Bound properties show a "Bound to ..." hint. Bindings apply only during play; the editor shows the authored value.
+To bind an element to a live value, select it and use the **Bind** section of its properties: pick the property (for a Text Block, its text or colour) and the source, such as player health, **Game variable...** with a level variable's name (stored as `vars.<name>`), or **Player attribute...**, **Player attribute maximum...** or **Ability cooldown (s)...** with the attribute or ability's name. **Clear** removes the binding. Bound properties show a "Bound to ..." hint. Bindings apply only during play; the editor shows the authored value.
 
 ## Localization
 

@@ -85,6 +85,7 @@ Objects can carry components that add behaviour. Select an object and use **Add 
 | Vehicle | A wheeled vehicle the player gets into and drives, or that drives itself along a spline (see [Vehicles](#vehicles)) |
 | Nav Link | Lets enemies cross from the object to **End** (relative to the object) where the navmesh does not join up: a drop, a gap, a ladder. One-way links only go from the object to the end. Drawn in the editor as an arc (see [Enemy navigation](characters.md#enemy-navigation)) |
 | Nav Obstacle | Cuts a cylinder of **Radius** and **Height** around the object out of the navmesh and follows it as it moves, so enemies path around it: for crates that get pushed, vehicles and other moving objects |
+| Abilities | Attributes (health, mana, stamina, armor...), effects and abilities with costs and cooldowns for the object, or for the player (see [Abilities](#abilities)) |
 | Pickup | Health, rounds or a weapon the player collects by walking within **Reach** of the object. **Amount** is the health restored or the rounds added; **Weapon** names the weapon that gets the rounds (blank: the held one) or the weapon given. A pickup that would give nothing, such as health at full health, stays. Taken, it disappears and comes back after **Respawn** seconds; at 0 it is gone for the session, and a save remembers it. **Sound** plays when it is taken. Add a Rotator for a pickup that spins (see [Weapons](characters.md#weapons)) |
 
 Each component's settings appear in the inspector and can be toggled on and off.
@@ -284,6 +285,29 @@ The wind is the weather's ([Sky, time of day and weather](#sky-time-of-day-and-w
 
   Moving the object carries the cloth with it. The wind catches each part by how square it faces it. **Weight**, **Stiffness**, **Fold resistance**, **Air damping** and **Catches the wind** set how it behaves. **Colour** or a **Texture** asset sets its look. In play it rests on the ground under it and, with **Rests against characters**, drapes against the player and enemies, so a character walking through a curtain parts it. Rain wets it like any other surface.
 - **Spring Bones** (component) makes the loose parts of a rigged model swing as it moves, sag and stream in the wind, then settle: hair, a ponytail, a tail, straps, a rope, a tassel. Bones whose names contain one of the **Bone names** words take part, with the bones below them. **Stiffness** is how firmly they hold the model's rest shape. **Damping** is how quickly a swing dies down. **Gravity** and **Wind** are how much those pull. A bone never bends more sharply from the one above it than a rope or lock of hair would, and bones an animation drives keep their animated pose underneath.
+
+## Abilities
+
+An **Abilities** component makes its object an actor with attributes, effects and abilities. Set **Belongs to** to **The player** to give the player theirs instead (put it on any object, such as the Player Start). Start from a **Preset** (Fighter, Mage, Training target) and change any part of it.
+
+- **Attributes** are named numbers: health, mana, stamina, armor, speed, or any of your own. Each has a **Base** value, a **Min** and **Max** (a number, or another attribute's name: health's maximum is `maxHealth`), and can **Regen** so many per second after a **Delay** since it last went down.
+- **Effects** change attributes and tags:
+  - **Instantly**: damage, healing, spending. They change base values for good.
+  - **For some seconds**: a speed boost, a weakness. They change the current value only while they last, then it returns.
+  - **Until removed**: a passive aura.
+  - **Every (s)**: a lasting effect applied over and over while it lasts, such as burning for 4 a second or healing over time.
+
+  Applied again while it lasts, an effect **starts over**, **stacks** (up to a number of stacks) or is **refused**. It can **grant tags** while it lasts, **need tags** to take, have the target be **immune** with certain tags, and **remove** the effects that grant certain tags (a cleanse, or water putting out fire).
+- **Abilities** have **costs** in attributes and a **cooldown**. They can **need tags**, be **blocked by** tags (no casting while State.Stunned), grant tags **while active** for some seconds, and **cancel** other active abilities by their tags. When used, they apply effects **on the user** and **on the target**. An ability with a **Range** and target effects takes the actor or character the user aims at within that range. The player's abilities bound to a **Key** are used with the number keys **1** to **4** (the left bumper and the d-pad on a gamepad).
+- **Tags** are dotted names such as `State.Stunned`, `Class.Mage` or `Element.Fire`. Carrying `State.Stunned` also counts as carrying `State`. The actor's own tags are set at the top.
+
+**What uses them:**
+
+- **Weapons and blasts:** an actor with health takes damage from them, less its armor (100 armor halves damage). At 0 health it carries `State.Dead` and the **Actor Died** event runs. `State.Invulnerable` turns damage away.
+- **The player:** health and max health are their own, so an ability's healing heals them and the HUD's health bar follows.
+- **Enemies without the component** can still be targets: an ability's damage and healing reach them, and its lasting effects run on them until they end.
+- **Scripts:** level scripts use them through the [ability nodes](level-scripting.md#ability-nodes), gameplay scripts through [`ctx.abilities`](scripting.md).
+- **The HUD:** a bound value can show the player's attributes, their maxima and ability cooldowns. In the HUD editor's **Bind** field, choose **Player attribute**, **Player attribute maximum** or **Ability cooldown** and type the name, such as `mana` or `fireball`.
 
 ## Destruction
 

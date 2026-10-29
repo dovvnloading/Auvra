@@ -1,6 +1,7 @@
 import type React from 'react';
 import type { LevelComponent } from '../../types';
 import { BUILTIN_COMPONENTS } from './builtins';
+import { ABILITIES_COMPONENT } from './abilitiesComponent';
 import { ANIMATION_COMPONENT } from './animationComponent';
 import { AUDIO_COMPONENTS } from './audioComponents';
 import { AUDIO_ZONE_COMPONENTS } from './audioZones';
@@ -56,6 +57,7 @@ export const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
     TIMELINE_COMPONENT,
     DIALOGUE_COMPONENT,
     PICKUP_COMPONENT,
+    ABILITIES_COMPONENT,
 ];
 
 /** The definition for a stored component type, or undefined for a type this build does not know. */

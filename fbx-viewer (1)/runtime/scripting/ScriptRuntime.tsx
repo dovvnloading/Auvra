@@ -33,6 +33,7 @@ import {
     type ScriptVec3,
     type ScriptVehicleState,
     type ScriptEnvironmentState,
+    type ScriptActorState,
     type ScriptDestructibleState,
 } from './protocol';
 import { isScriptNetPayload } from './scriptApi';
@@ -46,6 +47,8 @@ import { KMH, vehicleSession, type VehicleSession } from '../vehicles';
 import { particleEmitters } from '../particleEmitters';
 import { setWorldTime, setWorldWeather, weatherKindFromName, worldTime, worldWeather } from '../weather';
 import { destructibles, explode } from '../destructibles';
+import { abilityActors, isTag } from '../abilities';
+import { activateActorAbility, applyActorEffect, findActor } from '../abilityWorld';
 
 const OFFLINE_NET: ScriptNetState = { connected: false, isHost: true, selfId: null, peers: [] };
 
@@ -352,6 +355,27 @@ export const parseScriptCommand = (value: unknown): ScriptCommand | null => {
         case 'damageObject':
             return hasKeys(v, ['type', 'objectId', 'amount']) && isName(v.objectId) && typeof v.amount === 'number' && Number.isFinite(v.amount) && v.amount >= 0
                 ? { type: 'damageObject', objectId: v.objectId, amount: v.amount }
+                : null;
+        case 'useAbility':
+            return hasKeys(v, ['type', 'actorId', 'abilityId', 'targetId']) && isName(v.actorId) && isName(v.abilityId) && (v.targetId === null || isName(v.targetId))
+                ? { type: 'useAbility', actorId: v.actorId, abilityId: v.abilityId, targetId: v.targetId as string | null }
+                : null;
+        case 'applyEffect':
+            return hasKeys(v, ['type', 'targetId', 'effectId', 'sourceId']) && isName(v.targetId) && isName(v.effectId) && (v.sourceId === null || isName(v.sourceId))
+                ? { type: 'applyEffect', targetId: v.targetId, effectId: v.effectId, sourceId: v.sourceId as string | null }
+                : null;
+        case 'removeEffect':
+            return hasKeys(v, ['type', 'actorId', 'effectId']) && isName(v.actorId) && isName(v.effectId)
+                ? { type: 'removeEffect', actorId: v.actorId, effectId: v.effectId }
+                : null;
+        case 'changeAttribute':
+            return hasKeys(v, ['type', 'actorId', 'attribute', 'amount', 'set']) && isName(v.actorId) && isName(v.attribute)
+                && typeof v.amount === 'number' && Number.isFinite(v.amount) && typeof v.set === 'boolean'
+                ? { type: 'changeAttribute', actorId: v.actorId, attribute: v.attribute, amount: v.amount, set: v.set }
+                : null;
+        case 'setTag':
+            return hasKeys(v, ['type', 'actorId', 'tag', 'on']) && isName(v.actorId) && isTag(v.tag) && typeof v.on === 'boolean'
+                ? { type: 'setTag', actorId: v.actorId, tag: v.tag, on: v.on }
                 : null;
         case 'setWeather':
             return hasKeys(v, ['type', 'weather', 'seconds']) && typeof v.weather === 'string' && weatherKindFromName(v.weather) !== null
@@ -669,7 +693,26 @@ export interface ScriptCommandServices {
     explode(position: [number, number, number], radius: number, damage: number, force: number): void;
     breakObject(objectId: string): boolean;
     damageObject(objectId: string, amount: number): boolean;
+    /** Abilities (runtime/abilityWorld.ts); each false when nothing happened. */
+    useAbility(actorId: string, abilityId: string, targetId: string | null): boolean;
+    applyEffect(targetId: string, effectId: string, sourceId: string | null): boolean;
+    removeEffect(actorId: string, effectId: string): boolean;
+    changeAttribute(actorId: string, attribute: string, amount: number, set: boolean): boolean;
+    setTag(actorId: string, tag: string, on: boolean): boolean;
 }
+
+/** Actors with abilities, as scripts see them; undefined when there are none. */
+export const scriptActorStates = (): Record<string, ScriptActorState> | undefined => {
+    const all = abilityActors.all('runtime').slice(0, SCRIPT_LIMITS.maxActors);
+    if (all.length === 0) return undefined;
+    return Object.fromEntries(all.map(actor => [actor.id, {
+        attributes: Object.fromEntries(actor.attributeNames().map(name => [name, actor.get(name) ?? 0])),
+        max: Object.fromEntries(actor.attributeNames().map(name => [name, Math.min(Number.MAX_VALUE, actor.upperBound(name))])),
+        tags: actor.tags.list(),
+        cooldowns: Object.fromEntries(actor.abilityIds().map(id => [id, actor.cooldown(id)])),
+        effects: actor.activeEffects().map(effect => effect.id),
+    }]));
+};
 
 /** Objects that can break, as scripts see them; undefined when there are none. */
 export const scriptDestructibleStates = (): Record<string, ScriptDestructibleState> | undefined => {
@@ -842,6 +885,21 @@ export const applyScriptCommand = (command: ScriptCommand, services: ScriptComma
             return;
         case 'damageObject':
             services.damageObject(command.objectId, command.amount);
+            return;
+        case 'useAbility':
+            services.useAbility(command.actorId, command.abilityId, command.targetId);
+            return;
+        case 'applyEffect':
+            services.applyEffect(command.targetId, command.effectId, command.sourceId);
+            return;
+        case 'removeEffect':
+            services.removeEffect(command.actorId, command.effectId);
+            return;
+        case 'changeAttribute':
+            services.changeAttribute(command.actorId, command.attribute, command.amount, command.set);
+            return;
+        case 'setTag':
+            services.setTag(command.actorId, command.tag, command.on);
             return;
         case 'log':
             services.log(command.scriptId, command.level, command.message);
@@ -1233,6 +1291,23 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
             },
             breakObject: objectId => destructibles.get(objectId)?.breakApart(null, null) === true,
             damageObject: (objectId, amount) => destructibles.get(objectId)?.damage(amount, null, null) === true,
+            useAbility: (actorId, abilityId, targetId) => activateActorAbility(actorId, abilityId, targetId) === null,
+            applyEffect: (targetId, effectId, sourceId) => applyActorEffect(targetId, effectId, sourceId),
+            removeEffect: (actorId, effectId) => abilityActors.get('runtime', actorId)?.removeEffect(effectId) === true,
+            changeAttribute: (actorId, attribute, amount, set) => {
+                const actor = findActor(actorId);
+                if (!actor?.hasAttribute(attribute)) return false;
+                if (set) actor.setBase(attribute, amount);
+                else actor.addBase(attribute, amount);
+                return true;
+            },
+            setTag: (actorId, tag, on) => {
+                const actor = abilityActors.get('runtime', actorId);
+                if (!actor) return false;
+                if (on) actor.addTag(tag);
+                else actor.removeTag(tag);
+                return true;
+            },
             particles: (objectId, action) => {
                 const emitters = particleEmitters.forObject('runtime', objectId);
                 if (emitters.length === 0) {
@@ -1315,9 +1390,11 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
         });
         const vehicles = scriptVehicleStates(vehicleSession);
         const breakable = scriptDestructibleStates();
+        const actors = scriptActorStates();
         return {
             ...snapshot, ...(splines ? { splines } : {}), ...(vehicles ? { vehicles } : {}),
             environment: scriptEnvironmentState(), ...(breakable ? { destructibles: breakable } : {}),
+            ...(actors ? { actors } : {}),
         };
     };
 
