@@ -68,7 +68,7 @@ Objects can carry components that add behaviour. Select an object and use **Add 
 | Water | An animated water surface with waves, reflections and foam; dynamic rigid bodies float in it and are slowed by it |
 | Reflection Probe | Captures its surroundings into a reflection map for shiny materials within its radius; the nearest probe wins where probes overlap. Updates once at start, at an interval, or every frame |
 | Light Bake Volume | A box (centred on the object, drawn in the editor) where [baked lighting](#baked-lighting) puts its light probes |
-| Post Process | Bloom, ambient occlusion, tone mapping, vignette, depth of field, colour grading and antialiasing for the whole level |
+| Post Process | The level's screen effects: bloom, ambient occlusion, tone mapping, exposure and auto exposure, light shafts, sunlit haze, motion blur, vignette, depth of field, white balance, colour grading looks, film grain and antialiasing (see [Screen effects](#screen-effects)) |
 | LOD Group | Shows one of the object's children by camera distance (LOD 0, 1, 2) and hides all of them past the last distance |
 | Level Streaming | Loads another level's objects while the player is inside its box and unloads them after the player leaves (see [Level streaming](#level-streaming)) |
 | Distance Cull | Hides the object and its children beyond a distance |
@@ -330,6 +330,20 @@ What the weather does:
 - **Vehicles** lose grip on wet roads (about 70% of their dry grip; loose ground less affected) and much more under settled snow; under cover the road stays dry. Headlights in **Auto** come on in storms and thick fog as well as at night.
 
 In the editor the sky shows the level as it starts, everywhere (cover is worked out in play). In play, level scripts change the hour, the day length and the weather with the [Time and weather nodes](level-scripting.md#time-and-weather-nodes), and gameplay scripts with `ctx.setTimeOfDay`, `ctx.setWeather` and `ctx.setDayLength` ([scripting](scripting.md)).
+
+## Screen effects
+
+Every level gets sunlit haze, light shafts, auto exposure, bloom, a vignette and tone mapping in play. A **Post Process** component on any object replaces that with the level's own settings, in the editor and in play (its transform does not matter, and when several objects carry one, the first applies). The player's **Post-processing** quality setting turns all of them off.
+
+- **Auto exposure**: the eye adapting to the light. Looking into a bright sky dims the picture a little; dusk and dark interiors are lifted, night only so far that it stays night. It eases over about a second toward the light and two toward the dark. **Exposure Compensation** shifts where it settles, in stops; **Adaptation Speed** sets how fast. Turned off, **Exposure** alone sets the brightness.
+- **Light shafts**: beams of sunlight through the gaps in trees, buildings and anything else standing against the sky, when the sun is up and in view. **Light Shafts Intensity** sets their strength.
+- **Sunlit haze**: fog and mist glow toward the sun, by how much fog lies between the camera and each point. It follows the sky's fog and weather, so a clear day has almost none and a misty morning a lot. **Haze Intensity** sets its strength.
+- **Motion blur**: the blur of the camera's own motion as it turns and moves. What is close to the camera, such as the character it follows, stays sharp. **Motion Blur Strength** is the shutter: 0.5 blurs half a frame's motion, 1 a whole frame's.
+- **White balance**: **Temperature** warms (above 0) or cools the picture, and **Tint** pushes it toward magenta or green, without changing its brightness.
+- **Look**: a colour grade over the whole picture. **Warm** and **Cool**; **Cinematic** (teal shadows, orange highlights); **Bleach bypass** (low colour, hard contrast); **Noir** (black and white); **Vintage** (faded and warm); **Night** (blue moonlight). **Look Strength** blends it in.
+- **Film Grain** and **Chromatic Aberration** (colour fringes toward the edges of the picture) start at 0, which leaves them off.
+
+If the frame rate stays low, play first lowers the resolution, and turns these effects off only if that is not enough.
 
 ## Baked lighting
 

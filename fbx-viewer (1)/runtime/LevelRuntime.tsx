@@ -59,7 +59,7 @@ import { vehicleSession } from './vehicles';
 import { dialogueStore, useDialogueState } from './dialogue';
 import { DialogueOverlay } from './DialogueOverlay';
 import { LevelStreamingContext, streamedObjects, streamedRoots, type LevelStreaming } from './levelStreaming';
-import { PostProcessAllowedContext, usePostProcessClaimed } from './components/postProcess';
+import { AutoExposure, LightShafts, PostProcessAllowedContext, SunHaze, usePostProcessClaimed } from './components/postProcess';
 import { MeshLodContext } from '../components/Scene/useMeshLod';
 import type { InputState } from './input';
 import { collectTimelineTargets } from './timeline/evaluate';
@@ -880,11 +880,17 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
     );
 };
 
-/** The runtime's own bloom, vignette and tone mapping, standing down while a level Post Process component owns the canvas. */
+/**
+ * The runtime's own haze, light shafts, auto exposure, bloom, vignette and tone mapping, standing down
+ * while a level Post Process component owns the canvas.
+ */
 const DefaultPostProcess: React.FC = () => {
     if (usePostProcessClaimed()) return null;
     return (
         <EffectComposer enableNormalPass={false}>
+            <SunHaze intensity={0.5} />
+            <LightShafts intensity={0.35} />
+            <AutoExposure compensation={0} speed={1} />
             <Bloom luminanceThreshold={1.2} mipmapBlur intensity={0.6} />
             <Vignette eskil={false} offset={0.1} darkness={1.1} />
             {/* The composer bypasses the renderer's ACES tone mapping, so apply it as the final effect. */}
@@ -931,6 +937,21 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
     const maxDpr = Math.max(0.5, settings.quality.maxDpr);
     const dpr = Math.min(dprLevel, maxDpr);
     const toggleQuality = useCallback(() => setHighQuality(prev => !prev), []);
+    // A slow frame rate first lowers the resolution; still slow after that, post-processing goes.
+    // A steady frame rate never turns anything off (the monitor reports every check above its bound as a rise).
+    const slowChecks = useRef(0);
+    const handleIncline = useCallback(() => {
+        slowChecks.current = 0;
+        setDprLevel(2);
+    }, []);
+    const handleDecline = useCallback(() => {
+        setDprLevel(1);
+        slowChecks.current += 1;
+        if (slowChecks.current === 2) {
+            frontendDiagnostics.warning('renderer_quality_reduced');
+            setHighQuality(false);
+        }
+    }, []);
     const profilerVisible = useProfilerToggle();
     const postProcessAllowed = settings.quality.postProcessing && highQuality;
     const [touchInput, setTouchInput] = useState<InputState | null>(null);
@@ -959,15 +980,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                 gl={RUNTIME_GL}
             >
                 {/* AUTO-FALLBACK: Monitoring FPS to adjust quality */}
-                <PerformanceMonitor
-                    onIncline={() => setDprLevel(2)}
-                    onDecline={() => setDprLevel(1)}
-                    flipflops={3}
-                    onFallback={() => {
-                        frontendDiagnostics.warning('renderer_quality_reduced');
-                        setHighQuality(false); // Force low quality
-                    }}
-                />
+                <PerformanceMonitor onIncline={handleIncline} onDecline={handleDecline} />
 
                 <CameraSettings fov={settings.quality.fov} />
                 <ProfilerProbe enabled={profilerVisible} />

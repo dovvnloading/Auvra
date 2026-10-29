@@ -6,7 +6,7 @@ import { Sky } from '@react-three/drei';
 import type { Sky as SkyMesh } from 'three-stdlib';
 import { LevelObject, SkyConfig } from '../../types';
 import { LocalEnvironment } from '../Scene/LocalEnvironment';
-import { publishDaylight } from '../../runtime/daylight';
+import { publishDaylight, publishSkyLight } from '../../runtime/daylight';
 import { usePhysicsAvailable, usePhysicsQueries, type PhysicsQueries } from '../../runtime/physics';
 import { Precipitation } from '../../runtime/precipitation';
 import { createSkyLighting, sanitizeWeather, worldClock } from '../../runtime/weather';
@@ -169,6 +169,8 @@ const LIGHTNING_INTENSITY = 2.2;
 const SURFACE_SCAN_FRAMES = 30;
 
 const _sunColor = new THREE.Color();
+const _white = new THREE.Color(1, 1, 1);
+const _black = new THREE.Color(0, 0, 0);
 const _tint = new THREE.Color();
 const _authoredFog = new THREE.Color();
 const _weatherFog = new THREE.Color();
@@ -275,6 +277,7 @@ export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects, live = false
         if (!skyObject) {
             publishDaylight(1);
             setSurfaceWeather(0, 0, null);
+            publishSkyLight(FALLBACK_SUN_DIRECTION, _white, 0.6, 0, _black);
             return;
         }
         const now = worldClock.lighting(config.azimuth, lighting);
@@ -320,6 +323,8 @@ export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects, live = false
         background.copy(fog.color);
         if (scene.fog !== fog) scene.fog = fog;
         if (scene.background !== background) scene.background = background;
+        // For screen effects that work with the light: light shafts, sunlit haze.
+        publishSkyLight(now.sun, _sunColor, config.sunIntensity * now.sunIntensity, fog.density, fog.color);
 
         // Clouds, stars and moon, lightning, rain and snow.
         clouds.update(camera, now, state, worldClock.flash, delta);
