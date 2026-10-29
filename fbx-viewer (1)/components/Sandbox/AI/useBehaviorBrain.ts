@@ -6,7 +6,8 @@ import { createBehaviorMemory, tickBehaviorTree, type BehaviorEffects, type Beha
 import { useNavMeshContext } from '../../../runtime/navigation';
 import type { GraphRuntimeAPI } from '../../AnimationGraph/GraphRuntime';
 import { AI_CONFIG, DEFAULT_AI_TUNING, type AITuning } from './AIConfig';
-import { OPEN_PERCEPTION, seesTarget, type Perception } from './AISenses';
+import { OPEN_PERCEPTION, perceive, type Perception } from './AISenses';
+import { Awareness } from '../../../runtime/awareness';
 import type { BrainOutput } from './useAIBrain';
 import { createWeaponState, stepWeapons, type ResolvedWeapon } from '../../../runtime/weapons';
 
@@ -46,6 +47,8 @@ export const useBehaviorBrain = (
     const memory = useMemo(() => createBehaviorMemory(), [tree]);
     const home = useRef<THREE.Vector3 | null>(null);
     const lastKnown = useRef<THREE.Vector3 | null>(null);
+    const awareness = useRef(new Awareness());
+    const lastHealth = useRef<number | null>(null);
     const clock = useRef({ time: 0, memory: 0, cooldown: 0, attack: 0, damageDealt: false });
     const objects = useRef(new Map<string, { object: THREE.Object3D | null; foundAt: number }>());
     // The weapon a Shoot action fires: its own rate, magazine and reload, as for the player.
@@ -68,19 +71,27 @@ export const useBehaviorBrain = (
         }
         if (timers.attack <= 0 && graphApi.current?.getVariable('AttackIndex')) graphApi.current.setVariable('AttackIndex', 0);
 
-        // In range, and in the vision cone with nothing in the way or close enough to notice anyway.
-        // Where the player was last seen, or a noise was heard, is what the tree remembers.
+        // Hurt, it knows where the player is at once; otherwise seeing them builds awareness (AISenses.perceive).
+        // Where the player was last seen, or glimpsed, or a noise was heard, is what the tree remembers.
+        const health = Number(graphApi.current?.getVariable('Health'));
+        const maxHealth = Number(graphApi.current?.getVariable('MaxHealth'));
+        if (Number.isFinite(health)) {
+            if (lastHealth.current !== null && health < lastHealth.current) awareness.current.alert();
+            lastHealth.current = health;
+        }
         const perception = input.perception ?? OPEN_PERCEPTION;
-        const canSee = seesTarget({ enemyPosition, enemyForward, targetPosition, distToTarget }, tuning.sightRange, perception);
-        if (canSee || perception.heard) {
-            lastKnown.current = (lastKnown.current ?? new THREE.Vector3()).copy(canSee ? targetPosition : perception.heard!);
+        const perceived = perceive(awareness.current, { enemyPosition, enemyForward, targetPosition, distToTarget }, tuning, perception, delta);
+        const { canSee, investigate } = perceived;
+        // For the enemy's graph: animation, blueprints and HUD can show what it has noticed.
+        graphApi.current?.setVariable('Awareness', perceived.level);
+        graphApi.current?.setVariable('Alerted', perceived.stage === 'alerted');
+        if (canSee || investigate) {
+            lastKnown.current = (lastKnown.current ?? new THREE.Vector3()).copy(canSee ? targetPosition : investigate!);
             timers.memory = SENSES.MEMORY_DURATION;
         } else if (timers.memory > 0) {
             timers.memory -= delta;
         }
 
-        const health = Number(graphApi.current?.getVariable('Health'));
-        const maxHealth = Number(graphApi.current?.getVariable('MaxHealth'));
         const world: BehaviorWorld = {
             position: enemyPosition,
             home: home.current,
@@ -143,7 +154,7 @@ export const useBehaviorBrain = (
             triggerWasHeld.current = triggerHeld;
             onFire?.(step.shots, triggerHeld);
         }
-        return { state: intent.state, destination: intent.destination, targetFocus: intent.focus };
+        return { state: intent.state, destination: intent.destination, targetFocus: intent.focus, awareness: perceived.stage, awarenessLevel: perceived.level };
     }, [graphApi, memory, navMesh, onAttack, onFire, scene, tree, tuning, weapon, weaponState]);
 
     return { updateState };

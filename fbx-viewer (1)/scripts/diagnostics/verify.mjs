@@ -81,6 +81,7 @@ const EXEMPT = new Map(Object.entries({
   'components/Sandbox/AI/useAILocomotion.ts': 'hot-loop',
   'components/Sandbox/AI/useBehaviorBrain.ts': 'hot-loop',
   'runtime/behaviorTree.ts': 'hot-loop',
+  'runtime/awareness.ts': 'hot-loop',
   'components/Sandbox/hooks/useDamageFlash.ts': 'hot-loop',
   'components/Sandbox/hooks/useEntityHealth.ts': 'hot-loop',
   'components/Sandbox/combat.ts': 'hot-loop',

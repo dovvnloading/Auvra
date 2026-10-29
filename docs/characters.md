@@ -43,6 +43,7 @@ Speeds and distances are in centimetres: 100 is one world unit.
 | Attack Range | 220 | How close the enemy must be to attack, cm |
 | Attack Cooldown | 3 | Seconds between attacks (0 is allowed) |
 | Sight Range | 1500 | How far the enemy can see the player, cm |
+| Reaction Time | 0.5 | Seconds to notice the player close by and straight ahead; farther away or to the side takes longer, 0 notices at once |
 
 Enemy blueprints made before these stats were used have Speed 350, so their enemies chase at 3.5 instead of 6.5. Set Speed to 650 to restore the earlier pace.
 
@@ -67,6 +68,8 @@ Actions use the enemy's Speed, Attack Range, Attack Cooldown and Sight Range sta
 ## What enemies notice
 
 An enemy sees the player within its **Sight Range** and its 120° field of view, unless something solid stands between its eyes and the player: anything with a collider (walls, crates and rocks with a Collider component, and the terrain's hills) hides the player. Within 4 m it notices the player whichever way it faces.
+
+Seeing the player is not knowing at once that they are there. Every moment the player is in sight fills the enemy's awareness: in **Reaction Time** close by and straight ahead, up to five times slower at the edge of its Sight Range, and about three times slower out of the corner of its eye (up to 100° to either side, past the 120° field of view). Half aware, it is suspicious and goes to look where it glimpsed the player; fully aware, it is alerted and gives chase. Out of sight its awareness holds for a moment and then fades over a few seconds; an alerted enemy calms down once it has faded below suspicion. Being hurt alerts it at once, and a noise makes it at least suspicious. Each enemy's graph has an **Awareness** variable (0 to 1) and an **Alerted** variable, for animations, blueprints and HUD to show what it has noticed.
 
 Enemies also hear. The player's gunshots carry 40 m, an enemy's shots carry 40 m to the other enemies, and a level's **Make Noise** node carries as far as its radius (see [Level scripting](level-scripting.md#world-nodes)). An enemy that hears a noise goes to look where it came from, as it does where it last saw the player, and gives up after searching a while. A behavior tree treats the noise as where the player was last seen, so **Saw the player recently** turns true and chasing the last known position goes to the noise.
 
