@@ -17,6 +17,7 @@ import {
     planProbeGrid,
     readBakedProbeVolume,
     resolveBakedLightingSettings,
+    sampleLightVolume,
     setSceneLightVolume,
     SH_FLOATS_PER_PROBE,
     staticLightingObjectIds,
@@ -214,5 +215,30 @@ describe('drawing with a volume', () => {
         expect(lightVolumeFor(scene)).toBe(level);
         releaseLevel();
         expect(lightVolumeFor(scene)).toBeNull();
+    });
+});
+
+describe('reading the volume', () => {
+    /** Two probes a side, a spacing of 1: the x = 0 side lit (white), the x = 1 side dark. */
+    const lit = (): Pick<LightVolume, 'origin' | 'spacing' | 'counts' | 'sh'> => {
+        const sh = new Float32Array(8 * SH_FLOATS_PER_PROBE);
+        for (let probe = 0; probe < 8; probe++) {
+            if (probe % 2 === 0) sh.fill(1, probe * SH_FLOATS_PER_PROBE, probe * SH_FLOATS_PER_PROBE + 3);
+        }
+        return { origin: new THREE.Vector3(), spacing: 1, counts: [2, 2, 2], sh };
+    };
+
+    it('does not let light through a wall from probes behind the surface', () => {
+        const volume = lit();
+        // On the dark side of a wall between the probes, facing away from the lit ones.
+        const [dark] = sampleLightVolume(volume, new THREE.Vector3(0.4, 0.5, 0.5), new THREE.Vector3(1, 0, 0));
+        expect(dark).toBeLessThan(0.001);
+        // Facing the lit probes, it reads them.
+        const [bright] = sampleLightVolume(volume, new THREE.Vector3(0.6, 0.5, 0.5), new THREE.Vector3(-1, 0, 0));
+        expect(bright).toBeGreaterThan(0.8);
+        // Facing along the wall, it blends both sides as before.
+        const [between] = sampleLightVolume(volume, new THREE.Vector3(0.5, 0.5, 0.5), new THREE.Vector3(0, 1, 0));
+        expect(between).toBeGreaterThan(0.3);
+        expect(between).toBeLessThan(0.6);
     });
 });

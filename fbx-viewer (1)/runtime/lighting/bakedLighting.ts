@@ -332,6 +332,54 @@ const volumeTexture = (): SharedTexture3D => {
 const NORMAL_OFFSET = 0.35;
 /** Beyond the outer probes the baked light fades out over this many spacings. */
 const EDGE_FADE = 0.5;
+/**
+ * A probe's weight by the cosine between the surface normal and the way to the probe: full from
+ * FRONT_FACING up, fading to BEHIND_WEIGHT at BEHIND_FACING and below.
+ */
+const FRONT_FACING = 0.3;
+const BEHIND_FACING = -0.2;
+const BEHIND_WEIGHT = 0.001;
+
+const smoothstep = (edge0: number, edge1: number, x: number): number => {
+    const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+    return t * t * (3 - 2 * t);
+};
+
+/**
+ * The irradiance the shader reads from `volume` at `position` on a surface facing `normal`
+ * (bakedGiIrradiance, before intensity): for checks and for code that lights things on the CPU.
+ */
+export const sampleLightVolume = (volume: Pick<LightVolume, 'origin' | 'spacing' | 'counts' | 'sh'>, position: THREE.Vector3, normal: THREE.Vector3): [number, number, number] => {
+    const last = volume.counts.map(count => count - 1);
+    const offset = NORMAL_OFFSET * volume.spacing;
+    const point = [position.x, position.y, position.z];
+    const n = [normal.x, normal.y, normal.z];
+    const o = [volume.origin.x, volume.origin.y, volume.origin.z];
+    const cell = point.map((p, axis) => Math.min(last[axis], Math.max(0, (p + n[axis] * offset - o[axis]) / volume.spacing)));
+    const base = cell.map((c, axis) => Math.min(Math.floor(c), Math.max(last[axis] - 1, 0)));
+    const f = cell.map((c, axis) => c - base[axis]);
+    const coefficients = new Float64Array(SH_FLOATS_PER_PROBE);
+    let total = 0;
+    for (let i = 0; i < 8; i++) {
+        const corner = [i & 1, (i >> 1) & 1, (i >> 2) & 1];
+        const probe = corner.map((k, axis) => Math.min(base[axis] + k, last[axis]));
+        const near = corner.map((k, axis) => (k ? f[axis] : 1 - f[axis]));
+        const toProbe = probe.map((k, axis) => o[axis] + k * volume.spacing - point[axis]);
+        const length = Math.hypot(...toProbe);
+        const facing = (toProbe[0] * n[0] + toProbe[1] * n[1] + toProbe[2] * n[2]) / Math.max(length, 1e-4);
+        const weight = near[0] * near[1] * near[2] * Math.max(smoothstep(BEHIND_FACING, FRONT_FACING, facing), BEHIND_WEIGHT);
+        const from = (probe[0] + volume.counts[0] * (probe[1] + volume.counts[1] * probe[2])) * SH_FLOATS_PER_PROBE;
+        for (let k = 0; k < SH_FLOATS_PER_PROBE; k++) coefficients[k] += volume.sh[from + k] * weight;
+        total += weight;
+    }
+    const irradiance: [number, number, number] = [0, 0, 0];
+    for (let channel = 0; channel < 3; channel++) {
+        const c = (k: number) => coefficients[k * 3 + channel] / total;
+        // three's SH order: constant, then y, z, x.
+        irradiance[channel] = Math.max(0, c(0) * 0.886227 + 1.023328 * (c(1) * n[1] + c(2) * n[2] + c(3) * n[0]));
+    }
+    return irradiance;
+};
 
 const sh = [volumeTexture(), volumeTexture(), volumeTexture()] as const;
 const origin = new SharedVector3();
@@ -361,13 +409,35 @@ float bakedGiWeight( const in vec3 position ) {
 	vec3 outside = max( bakedGiOrigin - position, position - ( bakedGiOrigin + bakedGiExtent ) );
 	return 1.0 - smoothstep( 0.0, bakedGiParams.w, max( max( outside.x, outside.y ), outside.z ) );
 }
+// The eight probes around the point, each weighted by how near it is (trilinear) and by whether it
+// lies in front of the surface: one behind it (across a wall or floor) counts for next to nothing,
+// so light does not leak through. sampleLightVolume does the same on the CPU.
 vec3 bakedGiIrradiance( const in vec3 position, const in vec3 normal ) {
-	vec3 counts = vec3( textureSize( bakedGiSh0, 0 ) );
-	vec3 cell = clamp( ( position + normal * bakedGiParams.z - bakedGiOrigin ) / max( bakedGiExtent, vec3( 1e-4 ) ), 0.0, 1.0 ) * ( counts - 1.0 );
-	vec3 uvw = ( cell + 0.5 ) / counts;
-	vec4 a = texture( bakedGiSh0, uvw );
-	vec4 b = texture( bakedGiSh1, uvw );
-	vec4 c = texture( bakedGiSh2, uvw );
+	vec3 last = vec3( textureSize( bakedGiSh0, 0 ) - 1 );
+	vec3 spacing = bakedGiExtent / max( last, vec3( 1.0 ) );
+	vec3 cell = clamp( ( position + normal * bakedGiParams.z - bakedGiOrigin ) / max( bakedGiExtent, vec3( 1e-4 ) ), 0.0, 1.0 ) * last;
+	vec3 base = min( floor( cell ), max( last - 1.0, vec3( 0.0 ) ) );
+	vec3 f = cell - base;
+	vec4 a = vec4( 0.0 );
+	vec4 b = vec4( 0.0 );
+	vec4 c = vec4( 0.0 );
+	float total = 0.0;
+	for ( int i = 0; i < 8; i ++ ) {
+		vec3 corner = vec3( float( i & 1 ), float( ( i >> 1 ) & 1 ), float( ( i >> 2 ) & 1 ) );
+		vec3 probe = min( base + corner, last );
+		vec3 near = mix( 1.0 - f, f, corner );
+		vec3 toProbe = bakedGiOrigin + probe * spacing - position;
+		float facing = dot( toProbe, normal ) / max( length( toProbe ), 1e-4 );
+		float weight = near.x * near.y * near.z * max( smoothstep( ${BEHIND_FACING.toFixed(2)}, ${FRONT_FACING.toFixed(2)}, facing ), ${BEHIND_WEIGHT} );
+		ivec3 texel = ivec3( probe );
+		a += texelFetch( bakedGiSh0, texel, 0 ) * weight;
+		b += texelFetch( bakedGiSh1, texel, 0 ) * weight;
+		c += texelFetch( bakedGiSh2, texel, 0 ) * weight;
+		total += weight;
+	}
+	a /= total;
+	b /= total;
+	c /= total;
 	// three's SH order: constant, then y, z, x.
 	vec3 irradiance = a.rgb * 0.886227 + 1.023328 * ( vec3( a.a, b.rg ) * normal.y + vec3( b.ba, c.r ) * normal.z + c.gba * normal.x );
 	return max( irradiance, vec3( 0.0 ) ) * bakedGiParams.x;
