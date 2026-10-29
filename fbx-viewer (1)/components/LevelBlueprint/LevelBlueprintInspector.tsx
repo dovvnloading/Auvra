@@ -739,6 +739,38 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                     </div>
                 )}
 
+                {node.type === 'Event' && (node.name === 'Event AbilityUsed' || node.name === 'Event ActorDied') && (
+                    <div className="space-y-1">
+                        <label className="text-[10px] text-gray-400">Actor</label>
+                        <select
+                            aria-label="Event actor"
+                            value={typeof node.data?.actorId === 'string' ? node.data.actorId : ''}
+                            onChange={(e) => onUpdate({ data: { ...(node.data || {}), actorId: e.target.value } })}
+                            className="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-red-500"
+                        >
+                            <option value="">Any actor</option>
+                            <option value="player">The player</option>
+                            {levelObjects.filter(obj => (obj.components ?? []).some(c => c.type === 'abilities' && c.props?.owner !== 'player')).map(obj => (
+                                <option key={obj.id} value={obj.id}>{obj.name}</option>
+                            ))}
+                        </select>
+                        {node.name === 'Event AbilityUsed' && (
+                            <>
+                                <label className="text-[10px] text-gray-400">Ability id (empty: any ability)</label>
+                                <input
+                                    aria-label="Event ability"
+                                    value={typeof node.data?.abilityId === 'string' ? node.data.abilityId : ''}
+                                    onChange={(e) => onUpdate({ data: { ...(node.data || {}), abilityId: e.target.value } })}
+                                    className="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-red-500"
+                                />
+                            </>
+                        )}
+                        <p className="text-[10px] text-gray-500">{node.name === 'Event AbilityUsed'
+                            ? 'Runs when this actor (or any) uses this ability (or any). Actor is the user, Ability its id, Target what it was used on (none for an ability without one).'
+                            : 'Runs when this actor (or any with an Abilities component) loses all its health. Actor is the one that died.'}</p>
+                    </div>
+                )}
+
                 {node.type === 'Event' && node.name === 'Event NetworkEvent' && (
                     <div className="space-y-1">
                         <label className="text-[10px] text-gray-400">Event name (empty: any network event)</label>

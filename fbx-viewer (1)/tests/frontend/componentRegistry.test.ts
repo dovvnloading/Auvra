@@ -9,6 +9,7 @@ vi.mock('../../components/Environment/ReachIKInspector', () => ({ ReachIKInspect
 vi.mock('../../components/Environment/SplineInspectors', () => ({ SplineInspector: () => null, SplineModelInspector: () => null, FollowSplineInspector: () => null }));
 vi.mock('../../components/Environment/VehicleInspector', () => ({ VehicleInspector: () => null }));
 vi.mock('../../components/Environment/ParticlesInspector', () => ({ ParticlesInspector: () => null }));
+vi.mock('../../components/Environment/AbilitiesInspector', () => ({ AbilitiesInspector: () => null }));
 
 describe('component registry', () => {
   it('leaves editor inspectors out until the editor registers them', async () => {
@@ -25,7 +26,7 @@ describe('component registry', () => {
       'spline', 'splineMesh', 'splineScatter', 'followSpline', 'vehicle', 'destructible', 'cloth', 'windZone', 'windSway', 'springBones', 'particles', 'decal', 'water', 'audioSource',
       'reverbZone', 'musicPlayer',
       'postProcess', 'reflectionProbe', 'lightBakeVolume', 'lodGroup', 'distanceCull', 'levelStreaming', 'animation', 'lookAtIK', 'footIK', 'twoBoneIK', 'script', 'netSync', 'timeline',
-      'dialogue', 'pickup',
+      'dialogue', 'pickup', 'abilities',
     ]);
     for (const definition of COMPONENT_DEFINITIONS) {
       expect(getComponentDefinition(definition.type)).toBe(definition);

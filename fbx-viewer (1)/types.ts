@@ -403,6 +403,8 @@ export interface LogicNode {
           'SetTimeOfDay' | 'GetTimeOfDay' | 'SetDayLength' | 'SetWeather' | 'GetWeather' |
           // Destruction (hooks/levelBlueprintNodes/world.ts)
           'Explode' | 'BreakObject' | 'DamageObject' | 'GetObjectHealth' |
+          // Abilities (hooks/levelBlueprintNodes/world.ts)
+          'UseAbility' | 'ApplyEffect' | 'RemoveEffect' | 'GetAttribute' | 'ChangeAttribute' | 'HasTag' | 'AddTag' | 'RemoveTag' | 'GetAbilityCooldown' |
           // Multiplayer (hooks/useLevelBlueprintRuntime.ts)
           'SendNetworkEvent' | 'IsNetworkHost' |
           // Cameras (hooks/useLevelBlueprintRuntime.ts)

@@ -16,12 +16,25 @@ export interface PlayerGameState extends PlayerWeaponStatus {
     isAiming: boolean;
 }
 
+/** The player's ability attributes (see the Abilities component), as the HUD shows them. */
+export interface PlayerAbilityState {
+    /** Each attribute's current value. */
+    values: Record<string, number>;
+    /** Each attribute's upper bound (its maximum, or the attribute it is bound by). */
+    max: Record<string, number>;
+    /** Seconds of cooldown left on each ability, to a tenth. */
+    cooldowns: Record<string, number>;
+}
+
 /** Live values the HUD and menus read while a level runs. */
 export interface GameStateSnapshot {
     levelId: string | null;
     player: PlayerGameState;
     vars: Record<string, number | boolean | string>;
+    abilities: PlayerAbilityState;
 }
+
+const NO_ABILITIES: PlayerAbilityState = { values: {}, max: {}, cooldowns: {} };
 
 /** The player at the start of a session, before its stats and weapon report in. */
 export const INITIAL_PLAYER_STATE: PlayerGameState = {
@@ -33,6 +46,12 @@ const INITIAL: GameStateSnapshot = {
     levelId: null,
     player: INITIAL_PLAYER_STATE,
     vars: {},
+    abilities: NO_ABILITIES,
+};
+
+const sameRecord = (a: Record<string, number>, b: Record<string, number>): boolean => {
+    const keys = Object.keys(a);
+    return keys.length === Object.keys(b).length && keys.every(key => a[key] === b[key]);
 };
 
 let snapshot: GameStateSnapshot = INITIAL;
@@ -42,15 +61,18 @@ const emit = () => listeners.forEach(listener => listener());
 
 export const gameState = {
     get: (): GameStateSnapshot => snapshot,
-    /** Shallow-merges player and vars; skips the update when nothing changed. */
-    update(change: { levelId?: string | null; player?: Partial<GameStateSnapshot['player']>; vars?: GameStateSnapshot['vars'] }) {
+    /** Shallow-merges player and vars, replaces abilities; skips the update when nothing changed. */
+    update(change: { levelId?: string | null; player?: Partial<GameStateSnapshot['player']>; vars?: GameStateSnapshot['vars']; abilities?: PlayerAbilityState | null }) {
         const player = change.player ? { ...snapshot.player, ...change.player } : snapshot.player;
         const vars = change.vars ? { ...snapshot.vars, ...change.vars } : snapshot.vars;
         const levelId = change.levelId === undefined ? snapshot.levelId : change.levelId;
+        const abilities = change.abilities === undefined ? snapshot.abilities : change.abilities ?? NO_ABILITIES;
         const playerChanged = (Object.keys(player) as (keyof typeof player)[]).some(key => player[key] !== snapshot.player[key]);
         const varsChanged = Object.keys(vars).some(key => vars[key] !== snapshot.vars[key]);
-        if (!playerChanged && !varsChanged && levelId === snapshot.levelId) return;
-        snapshot = { levelId, player, vars };
+        const abilitiesChanged = abilities !== snapshot.abilities && !(sameRecord(abilities.values, snapshot.abilities.values)
+            && sameRecord(abilities.max, snapshot.abilities.max) && sameRecord(abilities.cooldowns, snapshot.abilities.cooldowns));
+        if (!playerChanged && !varsChanged && !abilitiesChanged && levelId === snapshot.levelId) return;
+        snapshot = { levelId, player, vars, abilities: abilitiesChanged ? abilities : snapshot.abilities };
         emit();
     },
     reset() {
@@ -63,7 +85,11 @@ export const gameState = {
     },
 };
 
-/** Reads a binding path: 'player.<field>' (health, maxHealth, stamina, isAiming, weapon, ammo, magazine, reserve, reloading), 'level.id', 'vars.<name>'. */
+/**
+ * Reads a binding path: 'player.<field>' (health, maxHealth, stamina, isAiming, weapon, ammo, magazine,
+ * reserve, reloading), 'level.id', 'vars.<name>', and the player's abilities: 'abilities.<attribute>',
+ * 'abilityMax.<attribute>' and 'cooldowns.<ability>'.
+ */
 const ownValue = (record: object, key: string): unknown =>
     (Object.prototype.hasOwnProperty.call(record, key) ? (record as Record<string, unknown>)[key] : undefined);
 
@@ -75,6 +101,9 @@ export const readGameStateBinding = (state: GameStateSnapshot, path: string): nu
     if (path === 'level.id') return state.levelId;
     if (path.startsWith('player.')) return bindingValue(ownValue(state.player, path.slice('player.'.length)));
     if (path.startsWith('vars.')) return bindingValue(ownValue(state.vars, path.slice('vars.'.length)));
+    if (path.startsWith('abilities.')) return bindingValue(ownValue(state.abilities.values, path.slice('abilities.'.length)));
+    if (path.startsWith('abilityMax.')) return bindingValue(ownValue(state.abilities.max, path.slice('abilityMax.'.length)));
+    if (path.startsWith('cooldowns.')) return bindingValue(ownValue(state.abilities.cooldowns, path.slice('cooldowns.'.length)));
     return null;
 };
 

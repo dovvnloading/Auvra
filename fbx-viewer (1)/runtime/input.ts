@@ -29,6 +29,11 @@ export const DEFAULT_INPUT_MAP: InputActionMap = [
     { name: 'Reload', label: 'Reload', bindings: [{ device: 'keyboard', code: 'KeyR' }, { device: 'gamepad', button: 1 }] },
     { name: 'NextWeapon', label: 'Next weapon', bindings: [{ device: 'keyboard', code: 'KeyQ' }, { device: 'gamepad', button: 3 }] },
     { name: 'Pause', label: 'Pause', bindings: [{ device: 'keyboard', code: 'Escape' }, { device: 'gamepad', button: 9 }] },
+    // Abilities (see the Abilities component): the number keys, and the left bumper and the d-pad.
+    { name: 'Ability1', label: 'Ability 1', bindings: [{ device: 'keyboard', code: 'Digit1' }, { device: 'gamepad', button: 4 }] },
+    { name: 'Ability2', label: 'Ability 2', bindings: [{ device: 'keyboard', code: 'Digit2' }, { device: 'gamepad', button: 12 }] },
+    { name: 'Ability3', label: 'Ability 3', bindings: [{ device: 'keyboard', code: 'Digit3' }, { device: 'gamepad', button: 15 }] },
+    { name: 'Ability4', label: 'Ability 4', bindings: [{ device: 'keyboard', code: 'Digit4' }, { device: 'gamepad', button: 13 }] },
     // Driving: the triggers are analog pedals; on a keyboard Move forward and Move back drive and brake.
     { name: 'Throttle', label: 'Throttle', bindings: [{ device: 'gamepad', button: 7 }] },
     { name: 'Brake', label: 'Brake / reverse', bindings: [{ device: 'gamepad', button: 6 }] },

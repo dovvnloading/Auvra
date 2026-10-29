@@ -133,6 +133,20 @@ export interface ScriptSnapshot {
     environment?: ScriptEnvironmentState;
     /** Objects that can break (a Destructible component), by id. Absent when the level has none. */
     destructibles?: Record<string, ScriptDestructibleState>;
+    /** Actors with abilities (an Abilities component; the player as 'player'), by id. Absent when there are none. */
+    actors?: Record<string, ScriptActorState>;
+}
+
+/** An actor with abilities, as scripts see it. */
+export interface ScriptActorState {
+    /** Each attribute's value now, and its upper bound. */
+    attributes: Record<string, number>;
+    max: Record<string, number>;
+    tags: string[];
+    /** Seconds of cooldown left on each ability. */
+    cooldowns: Record<string, number>;
+    /** Lasting effects on it, by id. */
+    effects: string[];
 }
 
 /** An object that can break, as scripts see it. */
@@ -200,6 +214,12 @@ export type ScriptCommand =
     | { type: 'explode'; position: ScriptVec3; radius: number; damage: number; force: number }
     | { type: 'breakObject'; objectId: string }
     | { type: 'damageObject'; objectId: string; amount: number }
+    /** Abilities (see the Abilities component): using one, applying and removing effects, changing attributes and tags. */
+    | { type: 'useAbility'; actorId: string; abilityId: string; targetId: string | null }
+    | { type: 'applyEffect'; targetId: string; effectId: string; sourceId: string | null }
+    | { type: 'removeEffect'; actorId: string; effectId: string }
+    | { type: 'changeAttribute'; actorId: string; attribute: string; amount: number; set: boolean }
+    | { type: 'setTag'; actorId: string; tag: string; on: boolean }
     /** A multiplayer event to every other player, or to one (`to`). */
     | { type: 'netSend'; name: string; payload: ScriptNetPayload; to?: string }
     | { type: 'log'; scriptId: string; level: 'info' | 'warn' | 'error'; message: string };
@@ -234,4 +254,6 @@ export const SCRIPT_LIMITS = {
     maxExplosionRadius: 500,
     maxExplosionDamage: 1e6,
     maxExplosionForce: 100,
+    /** Actors with abilities a snapshot carries at most. */
+    maxActors: 64,
 };

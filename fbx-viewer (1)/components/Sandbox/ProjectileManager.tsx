@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import { Hittable } from '../../types';
 import { combat, destructibles, explosionFalloff, provideCombat } from '../../runtime/destructibles';
+import { abilityActors, damageActor } from '../../runtime/abilities';
 import { PLAYER_PHYSICS_ID, usePhysicsQueries } from '../../runtime/physics';
 
 /** Push a round gives what it hits, N·s per point of damage. */
@@ -39,6 +40,22 @@ export const ProjectileManager = forwardRef<ProjectileManagerHandle, {}>((_props
 
     // Explosions hurt every character in reach, the player included, less further out.
     useEffect(() => provideCombat({
+        characters: () => targetsRef.current
+            .filter(target => !target.isDead())
+            .map(target => ({
+                id: target.id,
+                team: target.team,
+                centre: () => {
+                    const box = target.getHitbox();
+                    return { x: box.center.x, y: box.center.y + box.height * 0.5, z: box.center.z };
+                },
+                isDead: () => target.isDead(),
+                damage: (amount: number) => {
+                    const box = target.getHitbox();
+                    target.takeDamage(amount, new THREE.Vector3(box.center.x, box.center.y + box.height * 0.5, box.center.z));
+                },
+                heal: (amount: number) => { (target as Hittable & { heal?: (amount: number) => boolean }).heal?.(amount); },
+            })),
         characterCapsules: () => targetsRef.current
             .filter(target => !target.isDead())
             .map(target => {
@@ -140,6 +157,9 @@ export const ProjectileManager = forwardRef<ProjectileManagerHandle, {}>((_props
         if (wall.objectId && wall.objectId !== PLAYER_PHYSICS_ID) {
             physics.applyImpulse(wall.objectId, direction.clone().multiplyScalar(p.damage * IMPULSE_PER_DAMAGE));
             destructibles.get(wall.objectId)?.damage(p.damage, wall.point, direction);
+            // An object with an Abilities component and health takes the shot too.
+            const actor = abilityActors.get('runtime', wall.objectId);
+            if (actor) damageActor(actor, p.damage);
         }
         return true;
     };

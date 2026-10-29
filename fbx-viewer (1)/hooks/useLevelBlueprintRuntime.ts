@@ -27,6 +27,8 @@ import { KMH, vehicleSession, type VehicleSessionEvent } from '../runtime/vehicl
 import { particleEmitters } from '../runtime/particleEmitters';
 import { setWorldTime, setWorldWeather, worldTime, worldWeather } from '../runtime/weather';
 import { destructibles, explode } from '../runtime/destructibles';
+import { abilityActors, abilityBus, isTag, type AbilityBusEvent } from '../runtime/abilities';
+import { activateActorAbility, applyActorEffect, findActor } from '../runtime/abilityWorld';
 
 const MAX_BLUEPRINT_EVALUATION_DEPTH = 128;
 const MAX_BLUEPRINT_EXECUTION_DEPTH = 256;
@@ -116,6 +118,18 @@ export const dialogueEventMatches = (node: LogicNode, event: DialogueEvent): boo
 export const brokenEventMatches = (node: LogicNode, objectId: string): boolean => {
     const wanted = typeof node.data?.actorId === 'string' ? node.data.actorId.trim() : '';
     return !wanted || wanted === objectId;
+};
+
+/**
+ * Whether an Event AbilityUsed or Event ActorDied node handles an ability event: its actor (and, for
+ * Ability Used, its ability) match, or it names none and takes any.
+ */
+export const abilityEventMatches = (node: LogicNode, event: AbilityBusEvent): boolean => {
+    const actor = typeof node.data?.actorId === 'string' ? node.data.actorId.trim() : '';
+    if (actor && actor !== event.actor) return false;
+    if (event.type === 'died') return node.name === 'Event ActorDied';
+    const ability = typeof node.data?.abilityId === 'string' ? node.data.abilityId.trim() : '';
+    return node.name === 'Event AbilityUsed' && (!ability || ability === event.ability);
 };
 
 /** Whether an Event VehicleEntered/VehicleExited node handles a vehicle: its vehicle matches, or it names none and takes any. */
@@ -330,6 +344,33 @@ export const useLevelBlueprintRuntime = ({
             const handle = destructibles.get(objectId);
             return handle ? { health: handle.health(), maxHealth: handle.maxHealth(), broken: handle.broken() } : null;
         },
+        useAbility: (actorId, abilityId, targetId) => activateActorAbility(actorId, abilityId, targetId),
+        applyEffect: (targetId, effectId, sourceId) => applyActorEffect(targetId, effectId, sourceId),
+        removeEffect: (actorId, effectId) => abilityActors.get('runtime', actorId)?.removeEffect(effectId) === true,
+        attribute: (actorId, name) => {
+            const actor = abilityActors.get('runtime', actorId);
+            const value = actor?.get(name) ?? null;
+            return actor && value !== null ? { value, base: actor.getBase(name) ?? value, max: actor.upperBound(name) } : null;
+        },
+        changeAttribute: (actorId, name, amount, set) => {
+            const actor = findActor(actorId);
+            if (!actor?.hasAttribute(name)) return null;
+            if (set) actor.setBase(name, amount);
+            else actor.addBase(name, amount);
+            return actor.get(name);
+        },
+        hasTag: (actorId, tag) => abilityActors.get('runtime', actorId)?.tags.has(tag) === true,
+        setTag: (actorId, tag, on) => {
+            const actor = abilityActors.get('runtime', actorId);
+            if (!actor || !isTag(tag)) return false;
+            if (on) actor.addTag(tag);
+            else actor.removeTag(tag);
+            return true;
+        },
+        abilityCooldown: (actorId, abilityId) => {
+            const actor = abilityActors.get('runtime', actorId);
+            return actor?.ability(abilityId) ? actor.cooldown(abilityId) : null;
+        },
     }), [sessionObject3D]);
 
     // -------------------------------------------------------------------------
@@ -345,7 +386,7 @@ export const useLevelBlueprintRuntime = ({
      * @param context The running event's context; an overlap event's Other Actor output reads its otherActorId.
      * @returns The evaluated value (number, boolean, string, etc.) or null.
      */
-    const evaluateInput = useCallback((nodeId: string, inputPinId: string, context?: { otherActorId?: string; networkValue?: string; networkFrom?: string; vehicleId?: string; brokenId?: string }): any => {
+    const evaluateInput = useCallback((nodeId: string, inputPinId: string, context?: { otherActorId?: string; networkValue?: string; networkFrom?: string; vehicleId?: string; brokenId?: string; ability?: AbilityBusEvent }): any => {
         // Editor-made nodes start with an Exec pin, so data pins are found by name, then by data-pin order.
         const dataPin = (pins: LogicPin[], name: string, index: number): LogicPin | undefined =>
             pins.find(p => p.name === name) ?? pins.filter(p => p.dataType !== 'Exec')[index];
@@ -384,6 +425,13 @@ export const useLevelBlueprintRuntime = ({
                 if (sourceNode.name === 'Event NetworkEvent' && pin?.name === 'From') return context?.networkFrom ?? '';
                 if (pin?.name === 'Vehicle' && (sourceNode.name === 'Event VehicleEntered' || sourceNode.name === 'Event VehicleExited')) return context?.vehicleId ?? null;
                 if (pin?.name === 'Actor' && sourceNode.name === 'Event ObjectBroken') return context?.brokenId ?? null;
+                if (sourceNode.name === 'Event AbilityUsed' || sourceNode.name === 'Event ActorDied') {
+                    const event = context?.ability;
+                    if (!event) return null;
+                    if (pin?.name === 'Actor') return event.actor;
+                    if (pin?.name === 'Ability') return event.type === 'activated' ? event.ability : '';
+                    if (pin?.name === 'Target') return event.type === 'activated' ? event.target : null;
+                }
                 return null;
             }
 
@@ -783,6 +831,16 @@ export const useLevelBlueprintRuntime = ({
             .forEach(node => executeNode(node.id, { brokenId: objectId }));
     };
     useEffect(() => destructibles.onBroken(objectId => handleBrokenEvent.current(objectId)), []);
+
+    // --- Events: an ability used, an actor died (Abilities component) ---
+    const handleAbilityEvent = useRef<(event: AbilityBusEvent) => void>(() => undefined);
+    handleAbilityEvent.current = (event: AbilityBusEvent) => {
+        if (!hasBegunPlay.current || sessionEnded.current) return;
+        blueprint.nodes
+            .filter(n => n.type === 'Event' && abilityEventMatches(n, event))
+            .forEach(node => executeNode(node.id, { ability: event }));
+    };
+    useEffect(() => abilityBus.on(event => handleAbilityEvent.current(event)), []);
 
     // --- Event: Tick & Overlap Physics ---
     useFrame((state, delta) => {

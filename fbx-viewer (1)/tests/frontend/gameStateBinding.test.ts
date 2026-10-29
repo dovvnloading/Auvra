@@ -5,6 +5,7 @@ const state: GameStateSnapshot = {
   levelId: 'level-1',
   player: { health: 80, maxHealth: 100, stamina: 50, isAiming: true, weapon: 'Pistol', ammo: 7, magazine: 12, reserve: -1, reloading: false },
   vars: { score: 3, open: false, label: 'Gate' },
+  abilities: { values: { mana: 40 }, max: { mana: 100 }, cooldowns: { fireball: 1.5 } },
 };
 
 describe('game state bindings', () => {
@@ -17,6 +18,14 @@ describe('game state bindings', () => {
     expect(readGameStateBinding(state, 'vars.score')).toBe(3);
     expect(readGameStateBinding(state, 'vars.open')).toBe(false);
     expect(readGameStateBinding(state, 'vars.label')).toBe('Gate');
+  });
+
+  it("reads the player's ability attributes, their maxima and cooldowns", () => {
+    expect(readGameStateBinding(state, 'abilities.mana')).toBe(40);
+    expect(readGameStateBinding(state, 'abilityMax.mana')).toBe(100);
+    expect(readGameStateBinding(state, 'cooldowns.fireball')).toBe(1.5);
+    expect(readGameStateBinding(state, 'abilities.toString')).toBeNull();
+    expect(readGameStateBinding(state, 'cooldowns.missing')).toBeNull();
   });
 
   it('never resolves prototype members or unknown paths', () => {

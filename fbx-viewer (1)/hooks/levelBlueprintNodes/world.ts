@@ -67,7 +67,16 @@ export type WorldNodeType =
     | 'Explode'
     | 'BreakObject'
     | 'DamageObject'
-    | 'GetObjectHealth';
+    | 'GetObjectHealth'
+    | 'UseAbility'
+    | 'ApplyEffect'
+    | 'RemoveEffect'
+    | 'GetAttribute'
+    | 'ChangeAttribute'
+    | 'HasTag'
+    | 'AddTag'
+    | 'RemoveTag'
+    | 'GetAbilityCooldown';
 
 export type Vec3 = [number, number, number];
 
@@ -199,6 +208,20 @@ export interface WorldNodeServices {
     damageObject?(objectId: string, amount: number): boolean;
     /** An object's health; null when it cannot break. */
     objectHealth?(objectId: string): { health: number; maxHealth: number; broken: boolean } | null;
+    /** Uses an actor's ability (on a target, or on what it aims at); why it could not, or null when it was used. */
+    useAbility?(actorId: string, abilityId: string, targetId: string | null): string | null;
+    /** Applies an effect to an actor or character, looked up on the source first; whether it took. */
+    applyEffect?(targetId: string, effectId: string, sourceId: string | null): boolean;
+    removeEffect?(actorId: string, effectId: string): boolean;
+    /** An actor's attribute: its value now, its base value and its upper bound; null when it has none. */
+    attribute?(actorId: string, name: string): { value: number; base: number; max: number } | null;
+    /** Adds to (or sets) an attribute's base value; the value after, or null when it has none. */
+    changeAttribute?(actorId: string, name: string, amount: number, set: boolean): number | null;
+    hasTag?(actorId: string, tag: string): boolean;
+    /** Adds or removes a tag; false when there is no such actor or the tag is malformed. */
+    setTag?(actorId: string, tag: string, on: boolean): boolean;
+    /** Seconds of cooldown left; null when the actor has no such ability. */
+    abilityCooldown?(actorId: string, abilityId: string): number | null;
 }
 
 export interface WorldExecutionContext extends FlowExecutionContext {
@@ -608,6 +631,81 @@ export const WORLD_NODE_DEFINITIONS: readonly WorldNodeDefinition[] = [
         inputs: [input('Actor', 'Object')],
         outputs: [output('Destructible', 'Boolean'), output('Health', 'Float'), output('Max Health', 'Float'), output('Broken', 'Boolean')],
         data: { default_Actor: '' },
+    },
+    {
+        type: 'UseAbility',
+        title: 'Use Ability',
+        description: "Uses one of an actor's abilities (by its id; the player is the actor named player). Its costs are paid, its cooldown starts and its effects land on the user and on Target. With no Target, an ability that has one takes what the actor aims at within its range. Used is false and Reason says why when it could not: cooldown, blocked (by a tag), missingTags, cost, noTarget or unknown.",
+        inputs: [exec('Exec', 'Input'), input('Actor', 'Object'), input('Ability', 'String'), input('Target', 'Object')],
+        outputs: [exec('Out', 'Output'), output('Used', 'Boolean'), output('Reason', 'String')],
+        data: { default_Actor: '', default_Ability: '', default_Target: '' },
+    },
+    {
+        type: 'ApplyEffect',
+        title: 'Apply Effect',
+        description: "Applies an effect (by its id) to an actor, or to any character. The effect is looked up on Source's Abilities first, then on the target's own. Applied is false when it did not take: a tag it needs is missing, the target is immune, or it does not stack.",
+        inputs: [exec('Exec', 'Input'), input('Target', 'Object'), input('Effect', 'String'), input('Source', 'Object')],
+        outputs: [exec('Out', 'Output'), output('Applied', 'Boolean')],
+        data: { default_Target: '', default_Effect: '', default_Source: '' },
+    },
+    {
+        type: 'RemoveEffect',
+        title: 'Remove Effect',
+        description: 'Ends a lasting effect on an actor, every stack of it. Removed is false when it was not there.',
+        inputs: [exec('Exec', 'Input'), input('Actor', 'Object'), input('Effect', 'String')],
+        outputs: [exec('Out', 'Output'), output('Removed', 'Boolean')],
+        data: { default_Actor: '', default_Effect: '' },
+    },
+    {
+        type: 'GetAttribute',
+        title: 'Get Attribute',
+        description: "An actor's attribute: its value now (with lasting effects), its base value and its upper bound. Has is false when the actor has no such attribute.",
+        pure: true,
+        inputs: [input('Actor', 'Object'), input('Attribute', 'String')],
+        outputs: [output('Has', 'Boolean'), output('Value', 'Float'), output('Base', 'Float'), output('Max', 'Float')],
+        data: { default_Actor: '', default_Attribute: 'health' },
+    },
+    {
+        type: 'ChangeAttribute',
+        title: 'Change Attribute',
+        description: "Adds Amount to an actor's attribute (negative takes away), or sets it to Amount when Set is on. It stays within its bounds. Value is the attribute after.",
+        inputs: [exec('Exec', 'Input'), input('Actor', 'Object'), input('Attribute', 'String'), input('Amount', 'Float'), input('Set', 'Boolean')],
+        outputs: [exec('Out', 'Output'), output('Value', 'Float')],
+        data: { default_Actor: '', default_Attribute: 'health', default_Amount: -10, default_Set: false },
+    },
+    {
+        type: 'HasTag',
+        title: 'Has Tag',
+        description: 'Whether an actor carries a tag, or one under it (State.Stunned counts as State).',
+        pure: true,
+        inputs: [input('Actor', 'Object'), input('Tag', 'String')],
+        outputs: [output('Has Tag', 'Boolean')],
+        data: { default_Actor: '', default_Tag: '' },
+    },
+    {
+        type: 'AddTag',
+        title: 'Add Tag',
+        description: 'Gives an actor a tag (dotted names: State.Stunned) until it is removed.',
+        inputs: [exec('Exec', 'Input'), input('Actor', 'Object'), input('Tag', 'String')],
+        outputs: [exec('Out', 'Output')],
+        data: { default_Actor: '', default_Tag: '' },
+    },
+    {
+        type: 'RemoveTag',
+        title: 'Remove Tag',
+        description: 'Takes a tag away from an actor.',
+        inputs: [exec('Exec', 'Input'), input('Actor', 'Object'), input('Tag', 'String')],
+        outputs: [exec('Out', 'Output')],
+        data: { default_Actor: '', default_Tag: '' },
+    },
+    {
+        type: 'GetAbilityCooldown',
+        title: 'Get Ability Cooldown',
+        description: "Seconds before an actor's ability can be used again, and whether it is ready now (cooled down; costs and tags are not checked).",
+        pure: true,
+        inputs: [input('Actor', 'Object'), input('Ability', 'String')],
+        outputs: [output('Cooldown', 'Float'), output('Ready', 'Boolean')],
+        data: { default_Actor: '', default_Ability: '' },
     },
     {
         type: 'SetMorphTarget',
@@ -1076,6 +1174,63 @@ const runGetObjectHealth: WorldNodeExecutor = (_node, ctx) => {
     publish(ctx, { Destructible: state !== null, Health: state?.health ?? 0, 'Max Health': state?.maxHealth ?? 0, Broken: state?.broken ?? false });
 };
 
+const text = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+
+const runUseAbility: WorldNodeExecutor = (_node, ctx) => {
+    const actor = toActorId(ctx.evaluate('Actor'));
+    const ability = text(ctx.evaluate('Ability'));
+    const use = ctx.services.useAbility;
+    const reason = actor && ability && use ? use(actor, ability, toActorId(ctx.evaluate('Target'))) : 'unknown';
+    finish(ctx, { Used: reason === null, Reason: reason ?? '' });
+};
+
+const runApplyEffect: WorldNodeExecutor = (_node, ctx) => {
+    const target = toActorId(ctx.evaluate('Target'));
+    const effect = text(ctx.evaluate('Effect'));
+    finish(ctx, { Applied: target !== null && effect !== '' && ctx.services.applyEffect?.(target, effect, toActorId(ctx.evaluate('Source'))) === true });
+};
+
+const runRemoveEffect: WorldNodeExecutor = (_node, ctx) => {
+    const actor = toActorId(ctx.evaluate('Actor'));
+    const effect = text(ctx.evaluate('Effect'));
+    finish(ctx, { Removed: actor !== null && effect !== '' && ctx.services.removeEffect?.(actor, effect) === true });
+};
+
+const runGetAttribute: WorldNodeExecutor = (_node, ctx) => {
+    const actor = toActorId(ctx.evaluate('Actor'));
+    const name = text(ctx.evaluate('Attribute'));
+    const value = actor && name ? ctx.services.attribute?.(actor, name) ?? null : null;
+    publish(ctx, { Has: value !== null, Value: value?.value ?? 0, Base: value?.base ?? 0, Max: value?.max ?? 0 });
+};
+
+const runChangeAttribute: WorldNodeExecutor = (_node, ctx) => {
+    const actor = toActorId(ctx.evaluate('Actor'));
+    const name = text(ctx.evaluate('Attribute'));
+    const amount = toNumber(ctx.evaluate('Amount'), 0);
+    const value = actor && name ? ctx.services.changeAttribute?.(actor, name, amount, ctx.evaluate('Set') === true) ?? null : null;
+    finish(ctx, { Value: value ?? 0 });
+};
+
+const runHasTag: WorldNodeExecutor = (_node, ctx) => {
+    const actor = toActorId(ctx.evaluate('Actor'));
+    const tag = text(ctx.evaluate('Tag'));
+    publish(ctx, { 'Has Tag': actor !== null && tag !== '' && ctx.services.hasTag?.(actor, tag) === true });
+};
+
+const runSetTag = (on: boolean): WorldNodeExecutor => (_node, ctx) => {
+    const actor = toActorId(ctx.evaluate('Actor'));
+    const tag = text(ctx.evaluate('Tag'));
+    if (actor && tag) ctx.services.setTag?.(actor, tag, on);
+    finish(ctx, {});
+};
+
+const runGetAbilityCooldown: WorldNodeExecutor = (_node, ctx) => {
+    const actor = toActorId(ctx.evaluate('Actor'));
+    const ability = text(ctx.evaluate('Ability'));
+    const cooldown = actor && ability ? ctx.services.abilityCooldown?.(actor, ability) ?? null : null;
+    publish(ctx, { Cooldown: cooldown ?? 0, Ready: cooldown === 0 });
+};
+
 const executors = {
     SpawnPrefab: runSpawnPrefab,
     GetActorTransform: runGetActorTransform,
@@ -1119,6 +1274,15 @@ const executors = {
     BreakObject: runBreakObject,
     DamageObject: runDamageObject,
     GetObjectHealth: runGetObjectHealth,
+    UseAbility: runUseAbility,
+    ApplyEffect: runApplyEffect,
+    RemoveEffect: runRemoveEffect,
+    GetAttribute: runGetAttribute,
+    ChangeAttribute: runChangeAttribute,
+    HasTag: runHasTag,
+    AddTag: runSetTag(true),
+    RemoveTag: runSetTag(false),
+    GetAbilityCooldown: runGetAbilityCooldown,
 } satisfies Record<WorldNodeType, WorldNodeExecutor>;
 
 /** Executor per world node type; look up by `node.type` and treat a miss as "not a world node". */

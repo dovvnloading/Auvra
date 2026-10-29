@@ -18,13 +18,23 @@ export const HUD_BINDING_SOURCES: readonly { path: string; label: string }[] = [
 /** Level variables reach the game state as 'vars.<name>'. */
 export const HUD_VARIABLE_BINDING_PREFIX = 'vars.';
 
+/**
+ * Sources the author names: a level variable, one of the player's ability attributes (its value or
+ * its maximum) or an ability's cooldown, each a prefix and a name.
+ */
+export const HUD_NAMED_SOURCES: readonly { mode: string; prefix: string; label: string; field: string; placeholder: string }[] = [
+    { mode: '__variable__', prefix: HUD_VARIABLE_BINDING_PREFIX, label: 'Game variable...', field: 'Variable name', placeholder: 'score' },
+    { mode: '__attribute__', prefix: 'abilities.', label: 'Player attribute...', field: 'Attribute name', placeholder: 'mana' },
+    { mode: '__attributeMax__', prefix: 'abilityMax.', label: 'Player attribute maximum...', field: 'Attribute name', placeholder: 'mana' },
+    { mode: '__cooldown__', prefix: 'cooldowns.', label: 'Ability cooldown (s)...', field: 'Ability id', placeholder: 'fireball' },
+];
+
 /** Props that are never bound: code, the menu action, the binding map itself and string-table keys. */
 const UNBINDABLE_PROPS = new Set(['code', 'action', 'bind', 'textKey', 'labelKey']);
 // Names that would reach Object.prototype through a plain-object assignment.
 const RESERVED_PROPS = new Set(['__proto__', 'constructor', 'prototype']);
 
 const NONE = '';
-const VARIABLE = '__variable__';
 const UNKNOWN = '__unknown__';
 
 const FIELD_CLASS = 'w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-xs text-white focus:outline-none focus:border-blue-500';
@@ -85,22 +95,23 @@ export const HUDBindingField: React.FC<HUDBindingFieldProps> = ({ value, bindabl
     const isBound = (prop: string) => Object.prototype.hasOwnProperty.call(bindings, prop);
     const props = Array.from(new Set([...bindableProps, ...Object.keys(bindings)]));
     const [selectedProp, setSelectedProp] = useState(() => props.find(isBound) ?? props[0] ?? '');
-    // "Game variable" picked before a name is typed: the field stays open without writing 'vars.'.
-    const [variablePending, setVariablePending] = useState(false);
+    // A named source picked before a name is typed: the field stays open without writing its prefix.
+    const [pending, setPending] = useState<string | null>(null);
     // The name as typed, so spaces survive while the stored path is trimmed.
     const [nameDraft, setNameDraft] = useState<string | null>(null);
 
     if (props.length === 0) return null;
     const prop = props.includes(selectedProp) ? selectedProp : props[0];
     const path = isBound(prop) ? bindings[prop] : '';
-    const isVariable = path.startsWith(HUD_VARIABLE_BINDING_PREFIX) || (variablePending && !path);
-    const mode = isVariable ? VARIABLE
+    const named = HUD_NAMED_SOURCES.find(source => path.startsWith(source.prefix))
+        ?? (pending && !path ? HUD_NAMED_SOURCES.find(source => source.mode === pending) ?? null : null);
+    const mode = named ? named.mode
         : !path ? NONE
         : HUD_BINDING_SOURCES.some(source => source.path === path) ? path
         : UNKNOWN;
-    const variableName = path.startsWith(HUD_VARIABLE_BINDING_PREFIX) ? path.slice(HUD_VARIABLE_BINDING_PREFIX.length) : '';
+    const storedName = named && path.startsWith(named.prefix) ? path.slice(named.prefix.length) : '';
     // A draft that no longer matches the stored name (undo, redo) gives way to the stored one.
-    const shownName = nameDraft !== null && nameDraft.trim() === variableName ? nameDraft : variableName;
+    const shownName = nameDraft !== null && nameDraft.trim() === storedName ? nameDraft : storedName;
     const boundEntries = Object.entries(bindings);
 
     const write = (next: string | null, typing: boolean) => {
@@ -110,32 +121,33 @@ export const HUDBindingField: React.FC<HUDBindingFieldProps> = ({ value, bindabl
 
     const handlePropChange = (next: string) => {
         setSelectedProp(next);
-        setVariablePending(false);
+        setPending(null);
         setNameDraft(null);
     };
 
     const handleSourceChange = (next: string) => {
         if (next === mode || next === UNKNOWN) return;
         setNameDraft(null);
-        if (next === VARIABLE) {
-            setVariablePending(true);
-            // A different source no longer applies; the variable name decides the new one.
+        if (HUD_NAMED_SOURCES.some(source => source.mode === next)) {
+            setPending(next);
+            // A different source no longer applies; the name decides the new one.
             if (path) write(null, false);
             return;
         }
-        setVariablePending(false);
+        setPending(null);
         write(next === NONE ? null : next, false);
     };
 
     const handleNameChange = (raw: string) => {
+        if (!named) return;
         setNameDraft(raw);
-        setVariablePending(true);
+        setPending(named.mode);
         const name = raw.trim();
-        write(name ? `${HUD_VARIABLE_BINDING_PREFIX}${name}` : null, true);
+        write(name ? `${named.prefix}${name}` : null, true);
     };
 
     const handleClear = () => {
-        setVariablePending(false);
+        setPending(null);
         setNameDraft(null);
         write(null, false);
     };
@@ -161,9 +173,9 @@ export const HUDBindingField: React.FC<HUDBindingFieldProps> = ({ value, bindabl
                             <option value={NONE}>Not bound</option>
                             {mode === UNKNOWN && <option value={UNKNOWN} disabled>Unknown ({path})</option>}
                             {HUD_BINDING_SOURCES.map(source => <option key={source.path} value={source.path}>{source.label}</option>)}
-                            <option value={VARIABLE}>Game variable...</option>
+                            {HUD_NAMED_SOURCES.map(source => <option key={source.mode} value={source.mode}>{source.label}</option>)}
                         </select>
-                        {(path || variablePending) && (
+                        {(path || pending) && (
                             <button
                                 type="button"
                                 onClick={handleClear}
@@ -177,16 +189,16 @@ export const HUDBindingField: React.FC<HUDBindingFieldProps> = ({ value, bindabl
                     </div>
                 </div>
             </div>
-            {isVariable && (
+            {named && (
                 <div className="space-y-1">
-                    <label htmlFor={`${id}-variable`} className="text-[10px] text-gray-500 font-bold uppercase">Variable name</label>
+                    <label htmlFor={`${id}-variable`} className="text-[10px] text-gray-500 font-bold uppercase">{named.field}</label>
                     <div className="flex items-center rounded border border-gray-700 bg-gray-800 focus-within:border-blue-500">
-                        <span className="pl-1.5 text-xs font-mono text-gray-500">{HUD_VARIABLE_BINDING_PREFIX}</span>
+                        <span className="pl-1.5 text-xs font-mono text-gray-500">{named.prefix}</span>
                         <input
                             id={`${id}-variable`}
                             type="text"
                             value={shownName}
-                            placeholder="score"
+                            placeholder={named.placeholder}
                             spellCheck={false}
                             onChange={(event) => handleNameChange(event.target.value)}
                             onBlur={() => setNameDraft(null)}

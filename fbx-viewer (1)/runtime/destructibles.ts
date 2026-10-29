@@ -3,6 +3,7 @@ import type { DebrisOptions } from './debris';
 import type { ClothCollider } from './cloth';
 import type { FractureResult } from './fracture';
 import type { SurfaceKind } from './surfaces';
+import { abilityActors, damageActor, type AbilityCharacter } from './abilities';
 
 /**
  * DESTRUCTIBLES AND COMBAT
@@ -103,6 +104,8 @@ export interface CombatServices {
     velocityBefore(bodyHandle: number): Vec3 | null;
     /** The characters (the player and enemies) as upright capsules, for cloth to rest against. */
     characterCapsules(): ClothCollider[];
+    /** The living characters, for abilities to aim at and reach. */
+    characters(): AbilityCharacter[];
 }
 
 const NO_COMBAT: CombatServices = {
@@ -114,6 +117,7 @@ const NO_COMBAT: CombatServices = {
     breakEffect: () => undefined,
     velocityBefore: () => null,
     characterCapsules: () => [],
+    characters: () => [],
 };
 
 const providers: Partial<CombatServices>[] = [];
@@ -158,6 +162,13 @@ export const explode = (request: ExplosionRequest): { characters: number; bodies
         const length = Math.hypot(away.x, away.y, away.z) || 1;
         const direction = { x: away.x / length, y: away.y / length, z: away.z / length };
         if (handle.damage(request.damage * share, request.centre, direction)) broken++;
+    }
+    // Actors with health (an Abilities component) are hurt too, less their armour.
+    if (request.damage > 0) {
+        for (const { actor, distance } of abilityActors.within('runtime', request.centre, radius)) {
+            const share = explosionFalloff(distance, radius);
+            if (share > 0) damageActor(actor, request.damage * share);
+        }
     }
     // After breaking, so the new pieces are thrown too.
     const bodies = request.force > 0 ? world.pushBodies(request.centre, radius, request.force) : 0;
