@@ -131,6 +131,15 @@ export interface ScriptSnapshot {
     vehicles?: Record<string, ScriptVehicleState>;
     /** The hour and the weather. */
     environment?: ScriptEnvironmentState;
+    /** Objects that can break (a Destructible component), by id. Absent when the level has none. */
+    destructibles?: Record<string, ScriptDestructibleState>;
+}
+
+/** An object that can break, as scripts see it. */
+export interface ScriptDestructibleState {
+    health: number;
+    maxHealth: number;
+    broken: boolean;
 }
 
 /** The world's hour and weather as scripts see them. */
@@ -187,6 +196,10 @@ export type ScriptCommand =
     | { type: 'setTimeOfDay'; hours: number }
     | { type: 'setDayLength'; minutes: number }
     | { type: 'setWeather'; weather: string; seconds: number }
+    /** A blast (see the Explode node); breaks or damages an object with a Destructible component. */
+    | { type: 'explode'; position: ScriptVec3; radius: number; damage: number; force: number }
+    | { type: 'breakObject'; objectId: string }
+    | { type: 'damageObject'; objectId: string; amount: number }
     /** A multiplayer event to every other player, or to one (`to`). */
     | { type: 'netSend'; name: string; payload: ScriptNetPayload; to?: string }
     | { type: 'log'; scriptId: string; level: 'info' | 'warn' | 'error'; message: string };
@@ -217,4 +230,8 @@ export const SCRIPT_LIMITS = {
     maxParticleBurst: 5000,
     /** Longest weather change a script may ask for, s. */
     maxWeatherSeconds: 3600,
+    /** Largest blast a script may set off: reach (m), damage, and throw (m/s). */
+    maxExplosionRadius: 500,
+    maxExplosionDamage: 1e6,
+    maxExplosionForce: 100,
 };

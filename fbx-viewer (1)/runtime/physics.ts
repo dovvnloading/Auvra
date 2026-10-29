@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Physics, useRapier } from '@react-three/rapier';
 import type { RapierCollider, RapierContext, RapierRigidBody } from '@react-three/rapier';
 import { frontendDiagnostics } from '../diagnostics/runtime';
+import { surfaceOfHit, type SurfaceKind } from './surfaces';
 
 /**
  * The play session's physics world (Rapier through @react-three/rapier) and the queries gameplay
@@ -44,6 +45,8 @@ export interface PhysicsRaycastHit {
     normal: THREE.Vector3;
     /** Distance from the origin to the hit point. */
     distance: number;
+    /** What the surface hit is made of (its collider's or triangle's surface). */
+    surface?: SurfaceKind;
 }
 
 export interface PhysicsRaycastOptions {
@@ -55,6 +58,8 @@ export interface PhysicsRaycastOptions {
     includeTriggers?: boolean;
     /** Only fixed colliders (the level's static world): no characters, vehicles or other moving bodies. */
     fixedOnly?: boolean;
+    /** Skip kinematic bodies (characters): the world and loose objects only. */
+    excludeKinematic?: boolean;
 }
 
 /** A body's simulated pose in world space. */
@@ -87,7 +92,7 @@ export const createPhysicsQueries = (world: RapierWorld, rapier: RapierModule): 
         const dir = { x: direction.x / length, y: direction.y / length, z: direction.z / length };
         const ray = new rapier.Ray({ x: origin.x, y: origin.y, z: origin.z }, dir);
         const sensors = options.includeTriggers ? 0 : rapier.QueryFilterFlags.EXCLUDE_SENSORS;
-        const moving = options.fixedOnly ? rapier.QueryFilterFlags.ONLY_FIXED : 0;
+        const moving = options.fixedOnly ? rapier.QueryFilterFlags.ONLY_FIXED : options.excludeKinematic ? rapier.QueryFilterFlags.EXCLUDE_KINEMATIC : 0;
         const flags = sensors | moving || undefined;
         const excluded = [...(options.excludeObjectId === undefined ? [] : [options.excludeObjectId]), ...(options.excludeObjectIds ?? [])];
         const predicate = excluded.length === 0
@@ -110,11 +115,13 @@ export const createPhysicsQueries = (world: RapierWorld, rapier: RapierModule): 
         }
         if (!hit) return null;
         const distance = hit.timeOfImpact;
+        const point = new THREE.Vector3(origin.x + dir.x * distance, origin.y + dir.y * distance, origin.z + dir.z * distance);
         return {
             objectId: objectIdFromCollider(hit.collider),
-            point: new THREE.Vector3(origin.x + dir.x * distance, origin.y + dir.y * distance, origin.z + dir.z * distance),
+            point,
             normal: new THREE.Vector3(hit.normal.x, hit.normal.y, hit.normal.z),
-            distance
+            distance,
+            surface: surfaceOfHit(hit.collider, hit.featureId, point.x, point.z),
         };
     },
     applyImpulse(objectId, impulse) {

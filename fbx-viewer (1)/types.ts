@@ -401,6 +401,8 @@ export interface LogicNode {
           'PlayParticles' | 'StopParticles' | 'EmitParticles' | 'GetParticles' |
           // Time of day and weather (hooks/levelBlueprintNodes/world.ts)
           'SetTimeOfDay' | 'GetTimeOfDay' | 'SetDayLength' | 'SetWeather' | 'GetWeather' |
+          // Destruction (hooks/levelBlueprintNodes/world.ts)
+          'Explode' | 'BreakObject' | 'DamageObject' | 'GetObjectHealth' |
           // Multiplayer (hooks/useLevelBlueprintRuntime.ts)
           'SendNetworkEvent' | 'IsNetworkHost' |
           // Cameras (hooks/useLevelBlueprintRuntime.ts)

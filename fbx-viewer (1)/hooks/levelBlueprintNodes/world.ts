@@ -63,7 +63,11 @@ export type WorldNodeType =
     | 'GetTimeOfDay'
     | 'SetDayLength'
     | 'SetWeather'
-    | 'GetWeather';
+    | 'GetWeather'
+    | 'Explode'
+    | 'BreakObject'
+    | 'DamageObject'
+    | 'GetObjectHealth';
 
 export type Vec3 = [number, number, number];
 
@@ -188,6 +192,13 @@ export interface WorldNodeServices {
     setWeather?(name: string, seconds: number): boolean;
     /** The weather now: the preset it is heading for ('' for none or custom values), its values, and how wet and snowy the ground is. */
     weather?(): { preset: string; clouds: number; rain: number; snow: number; fog: number; wind: number; wetness: number; snowCover: number };
+    /** A blast: characters and breakable objects in reach are hurt, loose bodies thrown. */
+    explode?(centre: Vec3, radius: number, damage: number, force: number): { characters: number; broken: number };
+    /** Breaks or damages an object with a Destructible component; true when it broke (now). */
+    breakObject?(objectId: string): boolean;
+    damageObject?(objectId: string, amount: number): boolean;
+    /** An object's health; null when it cannot break. */
+    objectHealth?(objectId: string): { health: number; maxHealth: number; broken: boolean } | null;
 }
 
 export interface WorldExecutionContext extends FlowExecutionContext {
@@ -564,6 +575,39 @@ export const WORLD_NODE_DEFINITIONS: readonly WorldNodeDefinition[] = [
             output('Mist', 'Float'), output('Wind', 'Float'), output('Wetness', 'Float'), output('Snow Cover', 'Float'),
         ],
         data: {},
+    },
+    {
+        type: 'Explode',
+        title: 'Explode',
+        description: 'A blast at Position: characters (the player included) and breakable objects within Radius metres take up to Damage, less further out, and loose bodies are thrown at up to Force m/s. It shows a fireball, smoke and debris and is heard. It does not hurt anything outside its radius.',
+        inputs: [exec('Exec', 'Input'), ...vectorPins('Position', input), input('Radius', 'Float'), input('Damage', 'Float'), input('Force', 'Float')],
+        outputs: [exec('Out', 'Output'), output('Characters Hit', 'Integer'), output('Objects Broken', 'Integer')],
+        data: { ...vectorDefaults('Position', [0, 0, 0]), default_Radius: 6, default_Damage: 80, default_Force: 12 },
+    },
+    {
+        type: 'BreakObject',
+        title: 'Break Object',
+        description: 'Breaks an actor with a Destructible component into pieces at once. Broken is false for an actor that cannot break or is already broken.',
+        inputs: [exec('Exec', 'Input'), input('Actor', 'Object')],
+        outputs: [exec('Out', 'Output'), output('Broken', 'Boolean')],
+        data: { default_Actor: '' },
+    },
+    {
+        type: 'DamageObject',
+        title: 'Damage Object',
+        description: 'Takes Amount from the health of an actor with a Destructible component; at none it breaks. Broken is true when this broke it.',
+        inputs: [exec('Exec', 'Input'), input('Actor', 'Object'), input('Amount', 'Float')],
+        outputs: [exec('Out', 'Output'), output('Broken', 'Boolean')],
+        data: { default_Actor: '', default_Amount: 25 },
+    },
+    {
+        type: 'GetObjectHealth',
+        title: 'Get Object Health',
+        description: "An actor's health and the health it started with, and whether it has broken. Destructible is false for an actor without a Destructible component.",
+        pure: true,
+        inputs: [input('Actor', 'Object')],
+        outputs: [output('Destructible', 'Boolean'), output('Health', 'Float'), output('Max Health', 'Float'), output('Broken', 'Boolean')],
+        data: { default_Actor: '' },
     },
     {
         type: 'SetMorphTarget',
@@ -1007,6 +1051,31 @@ const runGetWeather: WorldNodeExecutor = (_node, ctx) => {
     });
 };
 
+const runExplode: WorldNodeExecutor = (_node, ctx) => {
+    const radius = Math.max(0, Math.min(500, toNumber(ctx.evaluate('Radius'), 0)));
+    const damage = Math.max(0, toNumber(ctx.evaluate('Damage'), 0));
+    const force = Math.max(0, Math.min(100, toNumber(ctx.evaluate('Force'), 0)));
+    const result = radius > 0 ? ctx.services.explode?.(readVector(ctx, 'Position', [0, 0, 0]), radius, damage, force) ?? null : null;
+    finish(ctx, { 'Characters Hit': result?.characters ?? 0, 'Objects Broken': result?.broken ?? 0 });
+};
+
+const runBreakObject: WorldNodeExecutor = (_node, ctx) => {
+    const id = toActorId(ctx.evaluate('Actor'));
+    finish(ctx, { Broken: id !== null && ctx.services.breakObject?.(id) === true });
+};
+
+const runDamageObject: WorldNodeExecutor = (_node, ctx) => {
+    const id = toActorId(ctx.evaluate('Actor'));
+    const amount = Math.max(0, toNumber(ctx.evaluate('Amount'), 0));
+    finish(ctx, { Broken: id !== null && amount > 0 && ctx.services.damageObject?.(id, amount) === true });
+};
+
+const runGetObjectHealth: WorldNodeExecutor = (_node, ctx) => {
+    const id = toActorId(ctx.evaluate('Actor'));
+    const state = id ? ctx.services.objectHealth?.(id) ?? null : null;
+    publish(ctx, { Destructible: state !== null, Health: state?.health ?? 0, 'Max Health': state?.maxHealth ?? 0, Broken: state?.broken ?? false });
+};
+
 const executors = {
     SpawnPrefab: runSpawnPrefab,
     GetActorTransform: runGetActorTransform,
@@ -1046,6 +1115,10 @@ const executors = {
     SetDayLength: runSetDayLength,
     SetWeather: runSetWeather,
     GetWeather: runGetWeather,
+    Explode: runExplode,
+    BreakObject: runBreakObject,
+    DamageObject: runDamageObject,
+    GetObjectHealth: runGetObjectHealth,
 } satisfies Record<WorldNodeType, WorldNodeExecutor>;
 
 /** Executor per world node type; look up by `node.type` and treat a miss as "not a world node". */

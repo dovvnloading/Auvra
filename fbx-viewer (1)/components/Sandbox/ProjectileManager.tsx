@@ -1,8 +1,15 @@
 
-import { useRef, useImperativeHandle, forwardRef, useMemo } from 'react';
+import { useEffect, useRef, useImperativeHandle, forwardRef, useMemo } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import { Hittable } from '../../types';
+import { combat, destructibles, explosionFalloff, provideCombat } from '../../runtime/destructibles';
+import { PLAYER_PHYSICS_ID, usePhysicsQueries } from '../../runtime/physics';
+
+/** Push a round gives what it hits, N·s per point of damage. */
+const IMPULSE_PER_DAMAGE = 0.25;
+/** Damage that makes a full-sized impact effect. */
+const FULL_IMPACT_DAMAGE = 40;
 
 interface ProjectileData {
     id: number;
@@ -27,6 +34,28 @@ export const ProjectileManager = forwardRef<ProjectileManagerHandle, {}>((_props
     const dummy = useMemo(() => new THREE.Object3D(), []);
     const rayStart = useMemo(() => new THREE.Vector3(), []);
     const rayEnd = useMemo(() => new THREE.Vector3(), []);
+    const rayDirection = useMemo(() => new THREE.Vector3(), []);
+    const physics = usePhysicsQueries();
+
+    // Explosions hurt every character in reach, the player included, less further out.
+    useEffect(() => provideCombat({
+        damageCharacters: (centre, radius, damage) => {
+            let hit = 0;
+            for (const target of [...targetsRef.current]) {
+                if (target.isDead() || target.isHittable?.() === false) continue;
+                const box = target.getHitbox();
+                const y = Math.min(box.center.y + box.height, Math.max(box.center.y, centre.y));
+                const dx = box.center.x - centre.x, dz = box.center.z - centre.z;
+                const across = Math.max(0, Math.hypot(dx, dz) - box.radius);
+                const distance = Math.hypot(across, y - centre.y);
+                const share = explosionFalloff(distance, radius);
+                if (share <= 0) continue;
+                target.takeDamage(damage * share, new THREE.Vector3(box.center.x, y, box.center.z));
+                hit++;
+            }
+            return hit;
+        },
+    }), []);
     
 
     useImperativeHandle(ref, () => ({
@@ -54,6 +83,16 @@ export const ProjectileManager = forwardRef<ProjectileManagerHandle, {}>((_props
     const checkCollision = (p: ProjectileData, delta: number): boolean => {
         rayStart.copy(p.position);
         rayEnd.copy(p.position).addScaledVector(p.velocity, delta);
+        const travel = rayStart.distanceTo(rayEnd);
+
+        // The world first (walls, the ground, props and loose bodies; characters are tested below):
+        // a character behind a wall is not hit.
+        rayDirection.subVectors(rayEnd, rayStart);
+        const wall = travel > 1e-6
+            ? physics.raycast(rayStart, rayDirection, travel, { excludeKinematic: true, excludeObjectIds: p.team === 'Player' ? [PLAYER_PHYSICS_ID] : [] })
+            : null;
+        const wallAt = wall ? wall.distance / travel : Infinity;
+        if (wall) rayEnd.copy(wall.point);
 
         for (const target of targetsRef.current) {
             if (target.team === p.team || target.isDead() || target.isHittable?.() === false) continue;
@@ -88,7 +127,15 @@ export const ProjectileManager = forwardRef<ProjectileManagerHandle, {}>((_props
                 }
             }
         }
-        return false;
+        if (!wall || wallAt > 1) return false;
+        // It struck the world: the impact, a push for a loose body, damage for something breakable.
+        const direction = rayDirection.clone().normalize();
+        combat().impact(wall.surface ?? 'default', wall.point, wall.normal, p.damage / FULL_IMPACT_DAMAGE);
+        if (wall.objectId && wall.objectId !== PLAYER_PHYSICS_ID) {
+            physics.applyImpulse(wall.objectId, direction.clone().multiplyScalar(p.damage * IMPULSE_PER_DAMAGE));
+            destructibles.get(wall.objectId)?.damage(p.damage, wall.point, direction);
+        }
+        return true;
     };
 
     useFrame((_, delta) => {
@@ -113,7 +160,8 @@ export const ProjectileManager = forwardRef<ProjectileManagerHandle, {}>((_props
 
             p.position.addScaledVector(p.velocity, delta);
             
-            if (p.position.y < 0) projectiles.splice(i, 1);
+            // Fallen out of the world.
+            if (p.position.y < -500) projectiles.splice(i, 1);
         }
 
         // Render Loop

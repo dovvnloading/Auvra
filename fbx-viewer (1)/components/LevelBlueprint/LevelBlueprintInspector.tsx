@@ -721,6 +721,24 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                     </div>
                 )}
 
+                {node.type === 'Event' && node.name === 'Event ObjectBroken' && (
+                    <div className="space-y-1">
+                        <label className="text-[10px] text-gray-400">Object</label>
+                        <select
+                            aria-label="Event object"
+                            value={typeof node.data?.actorId === 'string' ? node.data.actorId : ''}
+                            onChange={(e) => onUpdate({ data: { ...(node.data || {}), actorId: e.target.value } })}
+                            className="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-red-500"
+                        >
+                            <option value="">Any object</option>
+                            {levelObjects.filter(obj => (obj.components ?? []).some(c => c.type === 'destructible')).map(obj => (
+                                <option key={obj.id} value={obj.id}>{obj.name}</option>
+                            ))}
+                        </select>
+                        <p className="text-[10px] text-gray-500">Runs when this object (or any with a Destructible component) breaks. Actor is the one that broke.</p>
+                    </div>
+                )}
+
                 {node.type === 'Event' && node.name === 'Event NetworkEvent' && (
                     <div className="space-y-1">
                         <label className="text-[10px] text-gray-400">Event name (empty: any network event)</label>

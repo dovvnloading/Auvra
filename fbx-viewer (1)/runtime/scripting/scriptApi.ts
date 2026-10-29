@@ -32,6 +32,7 @@ import {
     type ScriptVec3,
     type ScriptVehicleState,
     type ScriptEnvironmentState,
+    type ScriptDestructibleState,
 } from './protocol';
 import { createScriptSpline, type ScriptSpline } from './scriptSplines';
 
@@ -200,6 +201,13 @@ export interface ScriptContext {
     weather(): ScriptWeather;
     /** Heads for a weather preset over `seconds` (default 10; 0: at once): 'clear', 'cloudy', 'overcast', 'fog', 'rain', 'storm', 'snow' or 'blizzard'. */
     setWeather(name: string, seconds?: number): void;
+    /** A blast at `position`: characters and breakable objects within `radius` m take up to `damage`, loose bodies are thrown at up to `force` m/s. */
+    explode(position: ScriptVec3, radius?: number, damage?: number, force?: number): void;
+    /** Breaks object `objectId` (one with a Destructible component) at once, or takes `amount` from its health. */
+    breakObject(objectId: string): void;
+    damageObject(objectId: string, amount: number): void;
+    /** An object's health and whether it has broken; null for one that cannot break. */
+    objectHealth(objectId: string): { health: number; maxHealth: number; broken: boolean } | null;
     /** Multiplayer: who is here, who hosts, and events to the other players. */
     readonly net: ScriptNet;
     log(...values: unknown[]): void;
@@ -436,6 +444,9 @@ const isEnvironmentState = (value: unknown): value is ScriptEnvironmentState => 
     && typeof value.night === 'boolean' && typeof value.weather === 'string'
     && ['hours', 'light', 'clouds', 'rain', 'snow', 'fog', 'wind', 'wetness', 'snowCover'].every(key => isFiniteNumber(value[key]));
 
+const isDestructibleState = (value: unknown): value is ScriptDestructibleState => isRecord(value)
+    && isFiniteNumber(value.health) && isFiniteNumber(value.maxHealth) && typeof value.broken === 'boolean';
+
 const isObjectState = (value: unknown): value is ScriptObjectState => isRecord(value)
     && typeof value.id === 'string' && typeof value.name === 'string'
     && isVec3(value.position) && isVec3(value.rotation) && isVec3(value.scale)
@@ -490,7 +501,8 @@ export const isScriptSnapshot = (value: unknown): value is ScriptSnapshot => isR
     && isNetState(value.net)
     && (value.splines === undefined || everyValue(value.splines, isSplineState))
     && (value.vehicles === undefined || everyValue(value.vehicles, isVehicleState))
-    && (value.environment === undefined || isEnvironmentState(value.environment));
+    && (value.environment === undefined || isEnvironmentState(value.environment))
+    && (value.destructibles === undefined || everyValue(value.destructibles, isDestructibleState));
 
 /** Whether a message's script entry is exactly { id, objectId, source } with non-empty ids. */
 export const isScriptSource = (value: unknown): value is ScriptSource => isRecord(value)
@@ -1000,6 +1012,28 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
                     preset: e?.weather ?? '', clouds: e?.clouds ?? 0, rain: e?.rain ?? 0, snow: e?.snow ?? 0,
                     fog: e?.fog ?? 0, wind: e?.wind ?? 0, wetness: e?.wetness ?? 0, snowCover: e?.snowCover ?? 0,
                 };
+            },
+            explode: (position: ScriptVec3, radius = 6, damage = 80, force = 12) => {
+                if (!isVec3(position)) throw new TypeError('explode expects a position [x, y, z]');
+                for (const [name, value] of [['radius', radius], ['damage', damage], ['force', force]] as const) {
+                    if (!isFiniteNumber(value) || value < 0) throw new TypeError(`explode expects ${name} of 0 or more`);
+                }
+                queue(record, {
+                    type: 'explode', position: [position[0], position[1], position[2]],
+                    radius: Math.min(SCRIPT_LIMITS.maxExplosionRadius, radius),
+                    damage: Math.min(SCRIPT_LIMITS.maxExplosionDamage, damage),
+                    force: Math.min(SCRIPT_LIMITS.maxExplosionForce, force),
+                });
+            },
+            breakObject: (objectId: string) => { queue(record, { type: 'breakObject', objectId: readId('breakObject', objectId) }); },
+            damageObject: (objectId: string, amount: number) => {
+                const id = readId('damageObject', objectId);
+                if (!isFiniteNumber(amount) || amount < 0) throw new TypeError('damageObject expects an amount of 0 or more');
+                queue(record, { type: 'damageObject', objectId: id, amount });
+            },
+            objectHealth: (objectId: string) => {
+                const state = world.snapshot.destructibles?.[readId('objectHealth', objectId)];
+                return state ? { ...state } : null;
             },
             setWeather: (name: string, seconds = 10) => {
                 if (typeof name !== 'string' || !SCRIPT_WEATHER_NAMES.includes(name.trim().toLowerCase())) {

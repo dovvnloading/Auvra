@@ -6,7 +6,7 @@ import {
     Plus, Minus, X, Divide, ChevronRight, ChevronLeft, Equal, Hash, Type as TypeIcon, ToggleLeft, ArrowRight,
     Skull, Shield, Clock, RefreshCcw, AlertTriangle,
     ListOrdered, Repeat, Repeat1, ArrowLeftRight, DoorClosed, PackagePlus, Move3d, Volume2, Zap, Crosshair,
-    Variable, Gamepad2, Dices, Film, Smile, Send, Crown, Video, HeartPulse, HeartCrack, Package, Megaphone, Route, Car, Sparkles, Sun, CloudRain
+    Variable, Gamepad2, Dices, Film, Smile, Send, Crown, Video, HeartPulse, HeartCrack, Package, Megaphone, Route, Car, Sparkles, Sun, CloudRain, Bomb
 } from 'lucide-react';
 import { LogicNode, LogicPin, PinDataType, LevelObject } from '../../types';
 import { describeActor, isOverlapEvent, overlapEventName, overlapTargetWarning, resolveOverlapTarget, selectedOverlapActorId } from './overlapTargets';
@@ -124,6 +124,10 @@ const NODE_STYLES: Record<string, { border: string, bg: string, icon: React.Reac
     'GetTimeOfDay': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <Sun size={14} className="text-sky-400" /> },
     'SetDayLength': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <Sun size={14} className="text-sky-400" /> },
     'SetWeather': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <CloudRain size={14} className="text-sky-400" /> },
+    'Explode': { border: 'border-rose-800', bg: 'bg-rose-950/50', icon: <Bomb size={14} className="text-rose-400" /> },
+    'BreakObject': { border: 'border-rose-800', bg: 'bg-rose-950/50', icon: <Bomb size={14} className="text-rose-400" /> },
+    'DamageObject': { border: 'border-rose-800', bg: 'bg-rose-950/50', icon: <Bomb size={14} className="text-rose-400" /> },
+    'GetObjectHealth': { border: 'border-rose-800', bg: 'bg-rose-950/50', icon: <Bomb size={14} className="text-rose-400" /> },
     'GetWeather': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <CloudRain size={14} className="text-sky-400" /> },
     'SendNetworkEvent': { border: 'border-teal-800', bg: 'bg-teal-950/70', icon: <Send size={14} className="text-teal-400" /> },
     'IsNetworkHost': { border: 'border-teal-800', bg: 'bg-teal-950/70', icon: <Crown size={14} className="text-teal-400" /> },

@@ -33,6 +33,7 @@ import {
     type ScriptVec3,
     type ScriptVehicleState,
     type ScriptEnvironmentState,
+    type ScriptDestructibleState,
 } from './protocol';
 import { isScriptNetPayload } from './scriptApi';
 import { MAX_SCRIPT_SPLINE_POINTS, SCRIPT_SPLINE_STEP } from './scriptSplines';
@@ -44,6 +45,7 @@ import { cameraDirector } from '../cameraDirector';
 import { KMH, vehicleSession, type VehicleSession } from '../vehicles';
 import { particleEmitters } from '../particleEmitters';
 import { setWorldTime, setWorldWeather, weatherKindFromName, worldTime, worldWeather } from '../weather';
+import { destructibles, explode } from '../destructibles';
 
 const OFFLINE_NET: ScriptNetState = { connected: false, isHost: true, selfId: null, peers: [] };
 
@@ -337,6 +339,19 @@ export const parseScriptCommand = (value: unknown): ScriptCommand | null => {
         case 'setDayLength':
             return hasKeys(v, ['type', 'minutes']) && typeof v.minutes === 'number' && Number.isFinite(v.minutes) && v.minutes >= 0
                 ? { type: 'setDayLength', minutes: v.minutes }
+                : null;
+        case 'explode': {
+            const within = (value: unknown, max: number) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= max;
+            return hasKeys(v, ['type', 'position', 'radius', 'damage', 'force']) && isVec3(v.position)
+                && within(v.radius, SCRIPT_LIMITS.maxExplosionRadius) && within(v.damage, SCRIPT_LIMITS.maxExplosionDamage) && within(v.force, SCRIPT_LIMITS.maxExplosionForce)
+                ? { type: 'explode', position: v.position, radius: v.radius as number, damage: v.damage as number, force: v.force as number }
+                : null;
+        }
+        case 'breakObject':
+            return hasKeys(v, ['type', 'objectId']) && isName(v.objectId) ? { type: 'breakObject', objectId: v.objectId } : null;
+        case 'damageObject':
+            return hasKeys(v, ['type', 'objectId', 'amount']) && isName(v.objectId) && typeof v.amount === 'number' && Number.isFinite(v.amount) && v.amount >= 0
+                ? { type: 'damageObject', objectId: v.objectId, amount: v.amount }
                 : null;
         case 'setWeather':
             return hasKeys(v, ['type', 'weather', 'seconds']) && typeof v.weather === 'string' && weatherKindFromName(v.weather) !== null
@@ -650,7 +665,18 @@ export interface ScriptCommandServices {
     setTimeOfDay(hours: number): void;
     setDayLength(minutes: number): void;
     setWeather(name: string, seconds: number): boolean;
+    /** A blast, and breaking or damaging an object that can break (runtime/destructibles.ts). */
+    explode(position: [number, number, number], radius: number, damage: number, force: number): void;
+    breakObject(objectId: string): boolean;
+    damageObject(objectId: string, amount: number): boolean;
 }
+
+/** Objects that can break, as scripts see them; undefined when there are none. */
+export const scriptDestructibleStates = (): Record<string, ScriptDestructibleState> | undefined => {
+    const all = destructibles.all();
+    if (all.length === 0) return undefined;
+    return Object.fromEntries(all.map(handle => [handle.objectId, { health: handle.health(), maxHealth: handle.maxHealth(), broken: handle.broken() }]));
+};
 
 /** The world's hour and weather as scripts see them. */
 export const scriptEnvironmentState = (): ScriptEnvironmentState => {
@@ -807,6 +833,15 @@ export const applyScriptCommand = (command: ScriptCommand, services: ScriptComma
             return;
         case 'setWeather':
             services.setWeather(command.weather, command.seconds);
+            return;
+        case 'explode':
+            services.explode(command.position, command.radius, command.damage, command.force);
+            return;
+        case 'breakObject':
+            services.breakObject(command.objectId);
+            return;
+        case 'damageObject':
+            services.damageObject(command.objectId, command.amount);
             return;
         case 'log':
             services.log(command.scriptId, command.level, command.message);
@@ -1193,6 +1228,11 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
             setTimeOfDay: hours => setWorldTime({ hours }),
             setDayLength: minutes => setWorldTime({ dayLength: minutes }),
             setWeather: (name, seconds) => setWorldWeather(name, seconds),
+            explode: (position, radius, damage, force) => {
+                explode({ centre: { x: position[0], y: position[1], z: position[2] }, radius, damage, force });
+            },
+            breakObject: objectId => destructibles.get(objectId)?.breakApart(null, null) === true,
+            damageObject: (objectId, amount) => destructibles.get(objectId)?.damage(amount, null, null) === true,
             particles: (objectId, action) => {
                 const emitters = particleEmitters.forObject('runtime', objectId);
                 if (emitters.length === 0) {
@@ -1274,7 +1314,11 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
             net: scriptNetState(netRef.current),
         });
         const vehicles = scriptVehicleStates(vehicleSession);
-        return { ...snapshot, ...(splines ? { splines } : {}), ...(vehicles ? { vehicles } : {}), environment: scriptEnvironmentState() };
+        const breakable = scriptDestructibleStates();
+        return {
+            ...snapshot, ...(splines ? { splines } : {}), ...(vehicles ? { vehicles } : {}),
+            environment: scriptEnvironmentState(), ...(breakable ? { destructibles: breakable } : {}),
+        };
     };
 
     const post = (state: HostState) => {
