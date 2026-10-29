@@ -25,6 +25,7 @@ import { findActorObject3D, isPureWorldNodeType, PLAYER_ACTOR_ID, setActorMorphT
 import { getLiveSpline, liveSplineQuery } from '../runtime/splineRegistry';
 import { KMH, vehicleSession, type VehicleSessionEvent } from '../runtime/vehicles';
 import { particleEmitters } from '../runtime/particleEmitters';
+import { setWorldTime, setWorldWeather, worldTime, worldWeather } from '../runtime/weather';
 
 const MAX_BLUEPRINT_EVALUATION_DEPTH = 128;
 const MAX_BLUEPRINT_EXECUTION_DEPTH = 256;
@@ -307,6 +308,11 @@ export const useLevelBlueprintRuntime = ({
                 emitters: emitters.length,
             };
         },
+        timeOfDay: worldTime,
+        setTimeOfDay: hours => setWorldTime({ hours }),
+        setDayLength: minutes => setWorldTime({ dayLength: minutes }),
+        setWeather: (name, seconds) => setWorldWeather(name, seconds),
+        weather: worldWeather,
     }), [sessionObject3D]);
 
     // -------------------------------------------------------------------------

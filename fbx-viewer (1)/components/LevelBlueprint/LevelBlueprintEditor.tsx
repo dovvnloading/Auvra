@@ -28,6 +28,7 @@ const WORLD_PALETTE_GROUPS: { label: string, types: WorldNodeType[] }[] = [
     { label: 'Splines', types: ['GetSplineLength', 'GetSplinePoint', 'FindClosestOnSpline'] },
     { label: 'Vehicles', types: ['EnterVehicle', 'ExitVehicle', 'GetVehicleState', 'GetPlayerVehicle', 'SetVehicleInput', 'ReleaseVehicleInput'] },
     { label: 'Particles', types: ['PlayParticles', 'StopParticles', 'EmitParticles', 'GetParticles'] },
+    { label: 'Time & Weather', types: ['SetTimeOfDay', 'GetTimeOfDay', 'SetDayLength', 'SetWeather', 'GetWeather'] },
     { label: 'Level Variables', types: ['GetLevelVariable', 'SetLevelVariable'] },
     { label: 'Utilities', types: ['RandomFloat', 'RandomInt', 'Print'] },
 ];

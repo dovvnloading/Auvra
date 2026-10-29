@@ -1,15 +1,18 @@
 
-import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Sky } from '@react-three/drei';
+import type { Sky as SkyMesh } from 'three-stdlib';
 import { LevelObject, SkyConfig } from '../../types';
 import { LocalEnvironment } from '../Scene/LocalEnvironment';
 import { publishDaylight } from '../../runtime/daylight';
-
-interface SkySystemProps {
-    levelObjects: LevelObject[];
-}
+import { usePhysicsAvailable, usePhysicsQueries, type PhysicsQueries } from '../../runtime/physics';
+import { Precipitation } from '../../runtime/precipitation';
+import { createSkyLighting, sanitizeWeather, worldClock } from '../../runtime/weather';
+import { COVER_SAMPLES_PER_FRAME, weatherCover, type CoverSampler } from '../../runtime/weatherCover';
+import { patchWeatherSurfaces, setSurfaceWeather } from '../../runtime/weatherSurfaces';
+import { CloudLayer, LightningBolt, NightSky } from './sky/skyObjects';
 
 export const DEFAULT_SKY_CONFIG: SkyConfig = {
     timeOfDay: 14, // 2 PM
@@ -48,6 +51,7 @@ const _camera = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _up = new THREE.Vector3();
 const _towardSun = new THREE.Vector3();
+const _cameraPosition = new THREE.Vector3();
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const WORLD_FORWARD = new THREE.Vector3(0, 0, 1);
 
@@ -95,11 +99,18 @@ export const sunShadowFocus = (camera: THREE.Camera, towardSun: THREE.Vector3, o
 /**
  * A directional light that casts shadows around what the camera looks at, as far as it can see
  * (see sunShadowFocus): the default shadow camera only covers a 10 x 10 square at the world
- * origin, so characters and props elsewhere cast none.
+ * origin, so characters and props elsewhere cast none. `direction` is read every frame, so the
+ * sky moves the sun by changing it; `light` lets the sky set its intensity and colour as it goes.
  */
-const SunLight: React.FC<{ direction: THREE.Vector3; intensity: number; color?: string }> = ({ direction, intensity, color }) => {
+const SunLight: React.FC<{
+    direction: THREE.Vector3;
+    intensity?: number;
+    color?: string;
+    light?: React.MutableRefObject<THREE.DirectionalLight | null>;
+}> = ({ direction, intensity, color, light: outer }) => {
     const camera = useThree(state => state.camera);
-    const light = useRef<THREE.DirectionalLight>(null);
+    const own = useRef<THREE.DirectionalLight | null>(null);
+    const light = outer ?? own;
     const target = useMemo(() => new THREE.Object3D(), []);
     const fitted = useRef(0);
 
@@ -109,7 +120,7 @@ const SunLight: React.FC<{ direction: THREE.Vector3; intensity: number; color?: 
         shadowCamera.near = 1;
         shadowCamera.far = SUN_DISTANCE * 2;
         fitted.current = 0;
-    }, []);
+    }, [light]);
 
     useFrame(() => {
         const sun = light.current;
@@ -132,8 +143,8 @@ const SunLight: React.FC<{ direction: THREE.Vector3; intensity: number; color?: 
             <directionalLight
                 ref={light}
                 target={target}
-                intensity={intensity}
-                color={color}
+                {...(intensity === undefined ? {} : { intensity })}
+                {...(color === undefined ? {} : { color })}
                 castShadow
                 shadow-bias={-0.0002}
                 shadow-normalBias={0.03}
@@ -144,15 +155,48 @@ const SunLight: React.FC<{ direction: THREE.Vector3; intensity: number; color?: 
 };
 
 const FALLBACK_SUN_DIRECTION = new THREE.Vector3(10, 20, 10);
-const SKY_FILL_COLOR = '#cfe0ff';
-const GROUND_FILL_COLOR = '#5a4a3a';
 /** A hemisphere light lights only half as much as an ambient one at the same intensity on average. */
 const HEMISPHERE_FILL_SCALE = 1.6;
 /** Sky fog density as authored (0.02 by default) to FogExp2's: half, so about a third of the way to
  * fully fogged at 100 units, where the old linear fog was already opaque. */
 const FOG_DENSITY_SCALE = 0.5;
+/** How far the sun and moon lights sit, for their direction. */
+const LIGHT_DISTANCE = 100;
+/** Lightning's light at its brightest, against the sky's Sun Intensity. */
+const LIGHTNING_INTENSITY = 2.2;
+/** How often (frames) the scene is looked over for new materials to wet, once the weather is wet. */
+const SURFACE_SCAN_FRAMES = 30;
 
-export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects }) => {
+const _sunColor = new THREE.Color();
+const _tint = new THREE.Color();
+const _authoredFog = new THREE.Color();
+const _weatherFog = new THREE.Color();
+const FLASH_FOG = new THREE.Color(0.75, 0.8, 0.95);
+
+/**
+ * Down from high above (x, z) to the first fixed surface: what covers that spot from the weather.
+ * Dynamic and kinematic bodies (characters, vehicles) are not cover.
+ */
+const coverSampler = (queries: PhysicsQueries, height: () => number): CoverSampler => {
+    const origin = new THREE.Vector3();
+    const down = new THREE.Vector3(0, -1, 0);
+    return (x, z) => {
+        origin.set(x, height(), z);
+        const hit = queries.raycast(origin, down, 600, { fixedOnly: true });
+        return hit ? hit.point.y : null;
+    };
+};
+
+interface SkySystemProps {
+    levelObjects: LevelObject[];
+    /**
+     * In play: time moves through the day and the weather changes (and the level's scripts may change
+     * them); rain and snow stop at what covers them. In the editor the sky shows the level as set.
+     */
+    live?: boolean;
+}
+
+export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects, live = false }) => {
     // 1. Find the Sky Sphere object (First one wins)
     const skyObject = useMemo(() => {
         return levelObjects.find(obj => obj.type === 'sky_sphere');
@@ -160,36 +204,140 @@ export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects }) => {
 
     // 2. Resolve Configuration
     const config: SkyConfig = skyObject?.skyConfig || DEFAULT_SKY_CONFIG;
+    const weather = useMemo(() => sanitizeWeather(config.weather), [config.weather]);
+    const camera = useThree(state => state.camera);
+    const scene = useThree(state => state.scene);
+    const physics = usePhysicsAvailable();
+    const queries = usePhysicsQueries();
 
-    // 3. Calculate Sun Position based on Time of Day (0-24)
-    const sunPosition = useMemo(() => {
-        const time = config.timeOfDay;
-        // 6AM = 0, 12PM = PI/2, 6PM = PI, 12AM = 3PI/2
-        // Map 0..24 to 0..2PI relative to sunrise at 6
-        const theta = ((time - 6) / 24) * Math.PI * 2;
-        
-        const r = 100;
-        const x = r * Math.cos(theta);
-        const y = r * Math.sin(theta);
-        const z = 0; // Keeping it simple on XY plane for Day/Night arc
+    // The clock starts from the sky as set: in the editor whenever it is edited, in play once.
+    const resetKey = live
+        ? `${skyObject?.id ?? ''}`
+        : JSON.stringify([skyObject ? config.timeOfDay : 14, config.dayLength ?? 0, skyObject ? weather : null]);
+    useLayoutEffect(() => {
+        if (!skyObject) worldClock.reset(14, 0, null, null);
+        else worldClock.reset(config.timeOfDay, live ? (config.dayLength ?? 0) : 0, weather, weather?.preset ?? null);
+        weatherCover.clear();
+        // Read when the effect runs; resetKey says when that is.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [resetKey]);
 
-        // Apply azimuth rotation
-        const pos = new THREE.Vector3(x, y, z);
-        pos.applyAxisAngle(new THREE.Vector3(0, 1, 0), config.azimuth * Math.PI * 2);
-        
-        return pos;
-    }, [config.timeOfDay, config.azimuth]);
+    const sunDirection = useMemo(() => new THREE.Vector3(0, LIGHT_DISTANCE, 0), []);
+    const lighting = useMemo(() => createSkyLighting(), []);
+    const sky = useRef<SkyMesh>(null);
+    const sun = useRef<THREE.DirectionalLight | null>(null);
+    const moon = useRef<THREE.DirectionalLight>(null);
+    const flash = useRef<THREE.DirectionalLight>(null);
+    const fill = useRef<THREE.HemisphereLight>(null);
+    const fog = useMemo(() => new THREE.FogExp2('#050505', 0.01), []);
+    const background = useMemo(() => new THREE.Color('#050505'), []);
+    const clouds = useMemo(() => new CloudLayer(), []);
+    const night = useMemo(() => new NightSky(), []);
+    const bolt = useMemo(() => new LightningBolt(), []);
+    const precipitation = useMemo(() => new Precipitation(), []);
+    const sampler = useMemo(
+        () => (live && physics ? coverSampler(queries, () => camera.getWorldPosition(_cameraPosition).y + 150) : null),
+        [live, physics, queries, camera],
+    );
+    const [isNight, setNight] = useState(false);
+    const [reflections, setReflections] = useState(0.8);
+    const frame = useRef(0);
+    const surfacesWet = useRef(false);
 
-    const isNight = config.timeOfDay < 6 || config.timeOfDay > 18;
-    // The sun dims through sunset and gives no light below the horizon, where it would light the scene
-    // from underneath; a faint moon opposite it keeps the night readable.
-    const daylight = THREE.MathUtils.smoothstep(sunPosition.y / 100, -0.05, 0.15);
-    const moonPosition = useMemo(() => sunPosition.clone().multiplyScalar(-1), [sunPosition]);
-    // For what reacts to the light, such as vehicle headlights.
-    useEffect(() => {
-        publishDaylight(skyObject ? daylight : 1);
-        return () => publishDaylight(null);
-    }, [skyObject, daylight]);
+    useEffect(() => () => {
+        clouds.dispose();
+        night.dispose();
+        bolt.dispose();
+        precipitation.dispose();
+    }, [clouds, night, bolt, precipitation]);
+
+    // What reacts to the light (vehicle headlights) and the weather (wet surfaces) goes back to normal without a sky.
+    useEffect(() => () => {
+        publishDaylight(null);
+        setSurfaceWeather(0, 0, null);
+    }, []);
+
+    // The sky's fog (exponential: it thickens with distance, leaving nearby objects clear) and the
+    // background behind it are set on the scene directly, every frame: attached as elements, the
+    // no-sky fallback's fog detaching after them would clear them.
+    useEffect(() => () => {
+        if (scene.fog === fog) scene.fog = null;
+        if (scene.background === background) scene.background = null;
+    }, [scene, fog, background]);
+
+    useFrame((_, delta) => {
+        if (live) worldClock.step(delta);
+        if (!skyObject) {
+            publishDaylight(1);
+            setSurfaceWeather(0, 0, null);
+            return;
+        }
+        const now = worldClock.lighting(config.azimuth, lighting);
+        const state = worldClock.weather;
+        sunDirection.set(now.sun.x, now.sun.y, now.sun.z).multiplyScalar(LIGHT_DISTANCE);
+        publishDaylight(now.light);
+
+        // The sky's own colour: the sun's place, hazier under cloud.
+        const skyMaterial = sky.current?.material;
+        if (skyMaterial?.uniforms) {
+            (skyMaterial.uniforms.sunPosition.value as THREE.Vector3).copy(sunDirection);
+            skyMaterial.uniforms.turbidity.value = config.turbidity + state.clouds * 6 + state.fog * 6;
+            skyMaterial.uniforms.rayleigh.value = config.rayleigh * (1 - 0.6 * state.clouds * state.clouds);
+        }
+
+        // Sun, moon, fill and lightning.
+        _sunColor.set(config.sunColor).multiply(_tint.setRGB(now.sunTint[0], now.sunTint[1], now.sunTint[2]));
+        if (sun.current) {
+            sun.current.intensity = config.sunIntensity * now.sunIntensity;
+            sun.current.color.copy(_sunColor);
+        }
+        if (moon.current) {
+            moon.current.position.copy(sunDirection).multiplyScalar(-1);
+            moon.current.intensity = config.sunIntensity * 0.12 * now.moonIntensity;
+        }
+        if (fill.current) {
+            fill.current.intensity = config.ambienceIntensity * HEMISPHERE_FILL_SCALE * now.ambient;
+            fill.current.color.setRGB(now.skyFill[0], now.skyFill[1], now.skyFill[2]);
+            fill.current.groundColor.setRGB(now.groundFill[0], now.groundFill[1], now.groundFill[2]);
+        }
+        const strike = worldClock.strike;
+        if (flash.current) {
+            flash.current.intensity = worldClock.flash * config.sunIntensity * LIGHTNING_INTENSITY;
+            if (strike) flash.current.position.set(Math.sin(strike.bearing) * 40, 80, Math.cos(strike.bearing) * 40);
+        }
+
+        // Fog: as set or the horizon's colour, greyed and thickened by the weather.
+        if ((config.fogMode ?? 'custom') === 'sky') _authoredFog.setRGB(now.horizon[0], now.horizon[1], now.horizon[2]);
+        else _authoredFog.set(config.fogColor);
+        _weatherFog.setRGB(now.weatherFog[0], now.weatherFog[1], now.weatherFog[2]);
+        fog.color.copy(_authoredFog).lerp(_weatherFog, now.weatherFogAmount).lerp(FLASH_FOG, worldClock.flash * 0.3);
+        fog.density = config.fogDensity * FOG_DENSITY_SCALE + now.fogDensity;
+        background.copy(fog.color);
+        if (scene.fog !== fog) scene.fog = fog;
+        if (scene.background !== background) scene.background = background;
+
+        // Clouds, stars and moon, lightning, rain and snow.
+        clouds.update(camera, now, state, worldClock.flash, delta);
+        night.update(camera, now, delta);
+        bolt.update(camera, strike, worldClock.flash);
+        if (sampler) {
+            camera.getWorldPosition(_cameraPosition);
+            weatherCover.centre(_cameraPosition.x, _cameraPosition.z);
+            weatherCover.refresh(COVER_SAMPLES_PER_FRAME, sampler);
+        }
+        precipitation.update(delta, camera, state, sampler ? weatherCover : null, Math.min(1, now.light + worldClock.flash));
+
+        // Wet and snowy surfaces: once the weather first wets anything, materials are patched as they appear.
+        if (worldClock.wetness > 0.001 || worldClock.snowCover > 0.001) surfacesWet.current = true;
+        if (surfacesWet.current && frame.current++ % SURFACE_SCAN_FRAMES === 0) patchWeatherSurfaces(scene);
+        setSurfaceWeather(worldClock.wetness, worldClock.snowCover, sampler ? weatherCover : null);
+
+        // Reflections dim with the light; the night rig takes over after dark.
+        const dark = now.daylight < 0.2;
+        if (dark !== isNight) setNight(dark);
+        const wanted = Math.round(0.8 * (0.3 + 0.7 * Math.max(now.light, 0.15)) * 20) / 20;
+        if (wanted !== reflections) setReflections(wanted);
+    }, -1);
 
     // Default Fallback if no sky object exists (Standard Editor Lighting)
     if (!skyObject) {
@@ -206,33 +354,33 @@ export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects }) => {
 
     return (
         <>
-            {/* Background Color Sync for Fog */}
-            <color attach="background" args={[config.fogColor]} />
-
-            {/* Atmosphere */}
-            <Sky 
-                distance={450000} 
-                sunPosition={sunPosition} 
-                inclination={config.inclination} 
-                azimuth={config.azimuth} 
+            {/* Atmosphere; the sun's place and haze are set every frame */}
+            <Sky
+                ref={sky}
+                distance={450000}
+                sunPosition={sunDirection}
+                inclination={config.inclination}
+                azimuth={config.azimuth}
                 turbidity={config.turbidity}
                 rayleigh={config.rayleigh}
                 mieCoefficient={config.mieCoefficient}
                 mieDirectionalG={config.mieDirectionalG}
             />
+            <primitive object={night.object} />
+            <primitive object={clouds.object} />
+            <primitive object={bolt.object} />
+            <primitive object={precipitation.object} />
 
-            {/* Main Sun Light */}
-            <SunLight direction={sunPosition} intensity={config.sunIntensity * daylight} color={config.sunColor} />
-            <directionalLight position={moonPosition} intensity={config.sunIntensity * 0.12 * (1 - daylight)} color="#9db4ff" />
+            {/* Sun, a faint moon opposite it, and lightning: always there, dark when idle, so lit materials never recompile */}
+            <SunLight direction={sunDirection} light={sun} />
+            <directionalLight ref={moon} color="#9db4ff" intensity={0} />
+            <directionalLight ref={flash} color="#c8d8ff" intensity={0} />
 
             {/* Fill: sky-coloured from above, earth-coloured from below, so shaded sides still read */}
-            <hemisphereLight args={[SKY_FILL_COLOR, GROUND_FILL_COLOR, config.ambienceIntensity * HEMISPHERE_FILL_SCALE]} />
+            <hemisphereLight ref={fill} />
 
             {/* Environment Reflections (Synced roughly to time) */}
-            <LocalEnvironment night={isNight} />
-
-            {/* Scene fog thickens with distance (exponential), leaving nearby objects clear */}
-            <fogExp2 attach="fog" args={[config.fogColor, config.fogDensity * FOG_DENSITY_SCALE]} />
+            <LocalEnvironment night={isNight} intensity={reflections} />
         </>
     );
 };

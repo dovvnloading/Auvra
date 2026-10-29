@@ -19,6 +19,12 @@ class FreeformNestedTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown fields in position"):
             _assert_known_nested({"elements": [{"id": "e", "position": {"x": 0, "y": 0, "time": 1}}]})
 
+    def test_a_sky_keeps_its_day_length_fog_mode_and_weather(self):
+        weather = {"preset": "storm", "clouds": 1, "rain": 1, "snow": 0, "fog": 0.25, "wind": 13, "windDirection": 60, "lightning": 8}
+        _assert_known_nested({"skyConfig": {"timeOfDay": 18, "dayLength": 24, "fogMode": "sky", "weather": weather}})
+        with self.assertRaisesRegex(ValueError, "unknown fields in weather"):
+            _assert_known_nested({"skyConfig": {"weather": {**weather, "hail": 1}}})
+
     def test_free_form_values_keep_their_size_limit(self):
         with self.assertRaisesRegex(ValueError, "props exceeds property limit"):
             _assert_known_nested({"props": {f"key{index}": index for index in range(129)}})

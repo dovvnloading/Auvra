@@ -154,6 +154,8 @@ export function createTerrainLayerMaterial(splat: THREE.DataTexture): TerrainLay
     side: THREE.DoubleSide,
   }) as TerrainLayerMaterial;
   material.name = 'TerrainLayerMaterial';
+  // Rain wets it and snow settles on it (runtime/weatherSurfaces.ts).
+  material.userData.weatherSurface = true;
   material.userData.terrainUniforms = uniforms;
   material.onBeforeCompile = (shader) => patchTerrainLayerShader(shader, uniforms);
   material.customProgramCacheKey = () => PROGRAM_KEY;
@@ -175,6 +177,8 @@ export function createTerrainGroundMaterial(): THREE.MeshStandardMaterial {
     side: THREE.DoubleSide,
   });
   material.name = 'TerrainGroundMaterial';
+  // Rain wets it and snow settles on it (runtime/weatherSurfaces.ts).
+  material.userData.weatherSurface = true;
   material.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vGroundWorld;\nvarying vec3 vGroundNormal;')

@@ -58,7 +58,12 @@ export type WorldNodeType =
     | 'PlayParticles'
     | 'StopParticles'
     | 'EmitParticles'
-    | 'GetParticles';
+    | 'GetParticles'
+    | 'SetTimeOfDay'
+    | 'GetTimeOfDay'
+    | 'SetDayLength'
+    | 'SetWeather'
+    | 'GetWeather';
 
 export type Vec3 = [number, number, number];
 
@@ -174,6 +179,15 @@ export interface WorldNodeServices {
     emitParticles?(objectId: string, count: number): number;
     /** Whether any of an object's emitters is emitting, and how many particles they have alive. */
     particles?(objectId: string): { playing: boolean; alive: number; emitters: number };
+    /** The hour (0-24), how light it is after the weather (0-1) and whether the sun is down. */
+    timeOfDay?(): { hours: number; light: number; night: boolean };
+    setTimeOfDay?(hours: number): void;
+    /** Real minutes a day takes; 0 stops the clock. */
+    setDayLength?(minutes: number): void;
+    /** Heads for a weather preset (by name) over `seconds`; false for a name that is none. */
+    setWeather?(name: string, seconds: number): boolean;
+    /** The weather now: the preset it is heading for ('' for none or custom values), its values, and how wet and snowy the ground is. */
+    weather?(): { preset: string; clouds: number; rain: number; snow: number; fog: number; wind: number; wetness: number; snowCover: number };
 }
 
 export interface WorldExecutionContext extends FlowExecutionContext {
@@ -505,6 +519,51 @@ export const WORLD_NODE_DEFINITIONS: readonly WorldNodeDefinition[] = [
         inputs: [input('Actor', 'Object')],
         outputs: [output('Playing', 'Boolean'), output('Alive', 'Integer'), output('Emitters', 'Integer')],
         data: { default_Actor: '' },
+    },
+    {
+        type: 'SetTimeOfDay',
+        title: 'Set Time of Day',
+        description: 'Sets the hour of the day, 0 to 24 (13.5 is half past one in the afternoon): the sun, sky and light move there at once.',
+        inputs: [exec('Exec', 'Input'), input('Hours', 'Float')],
+        outputs: [exec('Out', 'Output')],
+        data: { default_Hours: 12 },
+    },
+    {
+        type: 'GetTimeOfDay',
+        title: 'Get Time of Day',
+        description: 'The hour of the day (0 to 24), how light it is after the weather (0 dark to 1 full day) and whether it is night.',
+        pure: true,
+        inputs: [],
+        outputs: [output('Hours', 'Float'), output('Light', 'Float'), output('Is Night', 'Boolean')],
+        data: {},
+    },
+    {
+        type: 'SetDayLength',
+        title: 'Set Day Length',
+        description: 'How many real minutes a full day takes from now on; 0 stops the clock at the hour it is.',
+        inputs: [exec('Exec', 'Input'), input('Minutes', 'Float')],
+        outputs: [exec('Out', 'Output')],
+        data: { default_Minutes: 20 },
+    },
+    {
+        type: 'SetWeather',
+        title: 'Set Weather',
+        description: 'Changes the weather to a preset over Seconds (0: at once): Clear, Cloudy, Overcast, Fog, Rain, Storm (or Thunderstorm), Snow or Blizzard. Set is false for a name that is none of them.',
+        inputs: [exec('Exec', 'Input'), input('Weather', 'String'), input('Seconds', 'Float')],
+        outputs: [exec('Out', 'Output'), output('Set', 'Boolean')],
+        data: { default_Weather: 'Rain', default_Seconds: 20 },
+    },
+    {
+        type: 'GetWeather',
+        title: 'Get Weather',
+        description: 'The weather now: the preset it is heading for (empty for none), how cloudy, rainy, snowy and misty it is (0 to 1), the wind in m/s, and how wet the ground is and how much snow lies on it (0 to 1).',
+        pure: true,
+        inputs: [],
+        outputs: [
+            output('Weather', 'String'), output('Clouds', 'Float'), output('Rain', 'Float'), output('Snow', 'Float'),
+            output('Mist', 'Float'), output('Wind', 'Float'), output('Wetness', 'Float'), output('Snow Cover', 'Float'),
+        ],
+        data: {},
     },
     {
         type: 'SetMorphTarget',
@@ -911,6 +970,43 @@ const runGetParticles: WorldNodeExecutor = (_node, ctx) => {
     publish(ctx, { Playing: state?.playing ?? false, Alive: state?.alive ?? 0, Emitters: state?.emitters ?? 0 });
 };
 
+const runSetTimeOfDay: WorldNodeExecutor = (_node, ctx) => {
+    const hours = toNumber(ctx.evaluate('Hours'), Number.NaN);
+    if (Number.isFinite(hours)) ctx.services.setTimeOfDay?.(hours);
+    finish(ctx, {});
+};
+
+const runGetTimeOfDay: WorldNodeExecutor = (_node, ctx) => {
+    const time = ctx.services.timeOfDay?.() ?? { hours: 12, light: 1, night: false };
+    publish(ctx, { Hours: time.hours, Light: time.light, 'Is Night': time.night });
+};
+
+const runSetDayLength: WorldNodeExecutor = (_node, ctx) => {
+    const minutes = toNumber(ctx.evaluate('Minutes'), Number.NaN);
+    if (Number.isFinite(minutes)) ctx.services.setDayLength?.(Math.max(0, minutes));
+    finish(ctx, {});
+};
+
+const runSetWeather: WorldNodeExecutor = (_node, ctx) => {
+    const name = ctx.evaluate('Weather');
+    const seconds = Math.max(0, toNumber(ctx.evaluate('Seconds'), 0));
+    finish(ctx, { Set: typeof name === 'string' && ctx.services.setWeather?.(name, seconds) === true });
+};
+
+const runGetWeather: WorldNodeExecutor = (_node, ctx) => {
+    const weather = ctx.services.weather?.() ?? null;
+    publish(ctx, {
+        Weather: weather?.preset ?? '',
+        Clouds: weather?.clouds ?? 0,
+        Rain: weather?.rain ?? 0,
+        Snow: weather?.snow ?? 0,
+        Mist: weather?.fog ?? 0,
+        Wind: weather?.wind ?? 0,
+        Wetness: weather?.wetness ?? 0,
+        'Snow Cover': weather?.snowCover ?? 0,
+    });
+};
+
 const executors = {
     SpawnPrefab: runSpawnPrefab,
     GetActorTransform: runGetActorTransform,
@@ -945,6 +1041,11 @@ const executors = {
     StopParticles: runStopParticles,
     EmitParticles: runEmitParticles,
     GetParticles: runGetParticles,
+    SetTimeOfDay: runSetTimeOfDay,
+    GetTimeOfDay: runGetTimeOfDay,
+    SetDayLength: runSetDayLength,
+    SetWeather: runSetWeather,
+    GetWeather: runGetWeather,
 } satisfies Record<WorldNodeType, WorldNodeExecutor>;
 
 /** Executor per world node type; look up by `node.type` and treat a miss as "not a world node". */

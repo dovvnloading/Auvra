@@ -83,6 +83,8 @@ import { createTyreEffects, stepTyreEffects } from './tyreEffects';
 import { ENGINE_PARAMS, engineSoundValues, ROAD_PARAMS, roadSoundValues, synthesizeEngine, synthesizeRoad, type RoadVoice } from './vehicleAudio';
 import { buildVehicleLights, disposeVehicleLights, setVehicleLights, type VehicleLights } from './vehicleLights';
 import { sceneDaylight } from '../daylight';
+import { weatherGrip, worldClock } from '../weather';
+import { weatherCover } from '../weatherCover';
 import type { ComponentDefinition, ComponentRenderProps } from './types';
 
 /** Air drag, N per (m/s)²: about a road car's. */
@@ -789,7 +791,7 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
         const spin = driven.reduce((most, wheel) => Math.max(most, wheel.contact ? wheel.slipRatio * Math.sign(pedals.reverse ? -1 : 1) : 0), 0);
         // Stability control brakes one wheel against a slide and eases off the power.
         const yawRate = _angular.dot(_up);
-        const correction = s.stabilityControl ? stabilityCorrection(pedals.steer, speed, current.wheelbase, yawRate, s.grip) : null;
+        const correction = s.stabilityControl ? stabilityCorrection(pedals.steer, speed, current.wheelbase, yawRate, s.grip * weatherGrip('asphalt', worldClock.wetness, worldClock.snowCover)) : null;
         const traction = s.tractionControl ? stepTractionControl(current.traction, pedals.throttle, spin, dt) : pedals.throttle;
         const throttle = traction * (correction?.throttle ?? 1);
         stepTransmission(current.transmission, current.gearbox, current.engine, Math.abs(speed) / meanRadius, throttle, pedals.reverse, dt);
@@ -851,7 +853,10 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
             const lateral = _velocity.dot(_lateral);
             wheel.groundSpeed = Math.hypot(longitudinal, lateral);
             const ground = SURFACES[wheel.surface];
-            const mu = s.grip * ground.grip * (!wheel.front && pedals.handbrake ? s.handbrakeGrip : 1);
+            // A wet road holds less, settled snow far less; under cover the road stays dry.
+            const sheltered = weatherCover.sheltered(wheel.contactPoint.x, wheel.contactPoint.y, wheel.contactPoint.z);
+            const weather = sheltered ? 1 : weatherGrip(wheel.surface, worldClock.wetness, worldClock.snowCover);
+            const mu = s.grip * ground.grip * weather * (!wheel.front && pedals.handbrake ? s.handbrakeGrip : 1);
             stepWheel(wheel.dynamics, { longitudinal, lateral, load: wheel.load, mu, nominalLoad, rolling: ground.rolling }, torques.get(wheel) ?? 0, brake, dt, WHEEL_SUBSTEPS, _result);
             wheel.slipRatio = _result.slipRatio;
             wheel.slipAngle = _result.slipAngle;

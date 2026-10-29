@@ -129,6 +129,28 @@ export interface ScriptSnapshot {
     splines?: Record<string, ScriptSplineState | null>;
     /** The session's vehicles, by the id of their object. Absent when the level has none. */
     vehicles?: Record<string, ScriptVehicleState>;
+    /** The hour and the weather. */
+    environment?: ScriptEnvironmentState;
+}
+
+/** The world's hour and weather as scripts see them. */
+export interface ScriptEnvironmentState {
+    /** 0-24. */
+    hours: number;
+    /** How light it is after the weather, 0-1, and whether the sun is down. */
+    light: number;
+    night: boolean;
+    /** The weather preset it is heading for ('' for none or custom values) and its values. */
+    weather: string;
+    clouds: number;
+    rain: number;
+    snow: number;
+    fog: number;
+    /** m/s. */
+    wind: number;
+    /** How wet the ground is and how much snow lies on it, 0-1. */
+    wetness: number;
+    snowCover: number;
 }
 
 export type ScriptCommand =
@@ -161,6 +183,10 @@ export type ScriptCommand =
     | { type: 'playParticles'; objectId: string }
     | { type: 'stopParticles'; objectId: string; clear: boolean }
     | { type: 'emitParticles'; objectId: string; count: number }
+    /** Sets the hour (0-24), how many real minutes a day takes (0 stops the clock), or heads for a weather preset over `seconds`. */
+    | { type: 'setTimeOfDay'; hours: number }
+    | { type: 'setDayLength'; minutes: number }
+    | { type: 'setWeather'; weather: string; seconds: number }
     /** A multiplayer event to every other player, or to one (`to`). */
     | { type: 'netSend'; name: string; payload: ScriptNetPayload; to?: string }
     | { type: 'log'; scriptId: string; level: 'info' | 'warn' | 'error'; message: string };
@@ -189,4 +215,6 @@ export const SCRIPT_LIMITS = {
     maxMsPerCallback: 8,
     /** Particles one emitParticles command bursts at most. */
     maxParticleBurst: 5000,
+    /** Longest weather change a script may ask for, s. */
+    maxWeatherSeconds: 3600,
 };

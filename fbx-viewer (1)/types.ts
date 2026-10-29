@@ -5,6 +5,7 @@ import React from 'react';
 import type { ProjectStatus } from './utils/projectStatus';
 import type { MaterialOverrides } from './utils/materialOverrides';
 import type { LevelBakedLighting } from './runtime/lighting/bakedLighting';
+import type { WeatherSettings } from './runtime/weather';
 
 export type AssetCategory = 'Character' | 'Prop' | 'Environment' | 'Weapon' | 'Animation' | 'Audio' | 'Texture';
 
@@ -159,6 +160,12 @@ export interface SkyConfig {
     mieDirectionalG: number; // 0 - 1 (Sun glare size)
     inclination: number; // 0 - 1 (Sun path tilt)
     azimuth: number; // 0 - 1 (Sun path rotation)
+    /** Real minutes a full day takes in play (the hour moves from Time of Day); 0 or absent: time stands still. */
+    dayLength?: number;
+    /** The weather the level starts in; absent: none (a sky from before there was weather). */
+    weather?: WeatherSettings;
+    /** Fog colour: the Fog Color as set, or the sky's own at the horizon, which changes through the day. Absent: custom. */
+    fogMode?: 'custom' | 'sky';
 }
 
 export interface LevelData {
@@ -392,6 +399,8 @@ export interface LogicNode {
           // Vehicles (hooks/levelBlueprintNodes/world.ts)
           'EnterVehicle' | 'ExitVehicle' | 'GetVehicleState' | 'GetPlayerVehicle' | 'SetVehicleInput' | 'ReleaseVehicleInput' |
           'PlayParticles' | 'StopParticles' | 'EmitParticles' | 'GetParticles' |
+          // Time of day and weather (hooks/levelBlueprintNodes/world.ts)
+          'SetTimeOfDay' | 'GetTimeOfDay' | 'SetDayLength' | 'SetWeather' | 'GetWeather' |
           // Multiplayer (hooks/useLevelBlueprintRuntime.ts)
           'SendNetworkEvent' | 'IsNetworkHost' |
           // Cameras (hooks/useLevelBlueprintRuntime.ts)

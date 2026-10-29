@@ -12,6 +12,7 @@ import { ScrubbableInput } from '../../UI/Properties/ScrubbableInput';
 import { useScene } from '../../../context/SceneContext';
 import { WaveformEditor } from '../assets/WaveformEditor';
 import { DEFAULT_SKY_CONFIG } from '../SkySystem';
+import { SkyWeatherSection } from '../SkyWeatherSection';
 import { isTerrainHeightfieldPending } from '../../../utils/terrainHeightfieldCodec';
 import { editorSession } from '../../../utils/editorSession';
 import { appConfirm } from '../../../utils/appDialogs';
@@ -996,6 +997,13 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                         </div>
                                     </div>
                                 </div>
+
+                                {/* Day-night cycle and weather */}
+                                <SkyWeatherSection
+                                    config={selectedObject.skyConfig}
+                                    onScrub={(config) => scrubUpdate({ skyConfig: config })}
+                                    onCommit={(config) => commitUpdate({ skyConfig: config })}
+                                />
 
                                 {/* Atmosphere */}
                                 <div className="space-y-2">

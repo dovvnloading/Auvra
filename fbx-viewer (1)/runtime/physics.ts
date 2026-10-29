@@ -53,6 +53,8 @@ export interface PhysicsRaycastOptions {
     excludeObjectIds?: readonly string[];
     /** Trigger (sensor) colliders are ignored unless this is true. */
     includeTriggers?: boolean;
+    /** Only fixed colliders (the level's static world): no characters, vehicles or other moving bodies. */
+    fixedOnly?: boolean;
 }
 
 /** A body's simulated pose in world space. */
@@ -84,7 +86,9 @@ export const createPhysicsQueries = (world: RapierWorld, rapier: RapierModule): 
         if (!(length > 1e-9) || !Number.isFinite(length) || !(maxDistance > 0)) return null;
         const dir = { x: direction.x / length, y: direction.y / length, z: direction.z / length };
         const ray = new rapier.Ray({ x: origin.x, y: origin.y, z: origin.z }, dir);
-        const flags = options.includeTriggers ? undefined : rapier.QueryFilterFlags.EXCLUDE_SENSORS;
+        const sensors = options.includeTriggers ? 0 : rapier.QueryFilterFlags.EXCLUDE_SENSORS;
+        const moving = options.fixedOnly ? rapier.QueryFilterFlags.ONLY_FIXED : 0;
+        const flags = sensors | moving || undefined;
         const excluded = [...(options.excludeObjectId === undefined ? [] : [options.excludeObjectId]), ...(options.excludeObjectIds ?? [])];
         const predicate = excluded.length === 0
             ? undefined

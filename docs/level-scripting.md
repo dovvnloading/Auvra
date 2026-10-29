@@ -130,6 +130,20 @@ These act on every [Particles](world-editor.md#particles) component on the **Act
 
 **Input Action** compares the action with its state on the node's previous run, so drive it from **Event Tick** to catch every press. The actions are MoveForward, MoveBack, MoveLeft, MoveRight, Jump, Sprint, Fire, Aim, Interact, Reload, NextWeapon, Pause, Throttle, Brake, Handbrake, CameraView and LookBack; see [Controls](building-games.md#controls) for their keys.
 
+## Time and weather nodes
+
+These change and read the level's [time of day and weather](world-editor.md#sky-time-of-day-and-weather).
+
+| Node | Does |
+|---|---|
+| Set Time of Day | Moves the clock to **Hours** (0 to 24; 13.5 is half past one): the sun, sky and light go there at once |
+| Get Time of Day | The **Hours**, how much **Light** there is after the weather (0 dark to 1 full day) and whether it **Is Night**. Pure |
+| Set Day Length | How many real **Minutes** a full day takes from now on; 0 stops the clock where it is |
+| Set Weather | Changes the weather to a preset over **Seconds** (0: at once): Clear, Cloudy, Overcast, Fog, Rain, Storm (or Thunderstorm), Snow or Blizzard, in any case. **Set** is false for a name that is none of them |
+| Get Weather | The preset the weather is heading for (**Weather**, empty for none), how cloudy, rainy, snowy and misty it is, the **Wind** in m/s, and how wet the ground is (**Wetness**) and how much snow lies on it (**Snow Cover**), each 0 to 1. Pure |
+
+A storm that rolls in: **Event Begin Play**, **Delay** 60, **Set Weather** Storm over 45 seconds. Lights that come on at dusk: **Event Tick** into **Get Time of Day**, **Branch** on **Is Night**.
+
 ## Level variables
 
 Level variables hold values for the running level, such as a score, keys collected or whether a door is open.

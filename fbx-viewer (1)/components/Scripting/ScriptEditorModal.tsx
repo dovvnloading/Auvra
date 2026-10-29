@@ -85,6 +85,10 @@ export const SCRIPT_API_REFERENCE: ScriptApiSection[] = [
             { signature: 'ctx.playerVehicle()', description: 'The id of the vehicle the player drives, or null on foot.' },
             { signature: 'ctx.exitVehicle()', description: 'Takes the player out of their vehicle at once, beside it.' },
             { signature: 'ctx.particles(objectId?)', description: "The object's particle effects (default: this script's object): { play(), stop(clear?), emit(count?) }." },
+            { signature: 'ctx.timeOfDay()', description: 'The hour (0-24), how light it is after the weather (0-1) and whether it is night: { hours, light, night }.' },
+            { signature: 'ctx.setTimeOfDay(hours) / ctx.setDayLength(minutes)', description: 'Moves the clock to an hour; sets how many real minutes a day takes (0 stops it).' },
+            { signature: 'ctx.weather()', description: 'The weather now: { preset, clouds, rain, snow, fog, wind, wetness, snowCover }.' },
+            { signature: "ctx.setWeather(name, seconds?)", description: "Heads for a weather preset over seconds (default 10): 'clear', 'cloudy', 'overcast', 'fog', 'rain', 'storm', 'snow' or 'blizzard'." },
         ],
     },
     {
