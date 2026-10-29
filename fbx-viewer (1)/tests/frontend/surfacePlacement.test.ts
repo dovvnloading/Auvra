@@ -143,6 +143,20 @@ describe('raycastPlacement', () => {
     }
   });
 
+  it('can find nothing instead of the ground plane, and samples a chunked terrain through its hidden full mesh', () => {
+    expect(createPlacementQuery(new THREE.Scene(), [], { groundPlane: false })(down(3, -4))).toBeNull();
+    const heights = Array.from({ length: 16 }, (_, i) => (i % 3) - 1);
+    const terrain = levelObject({ id: 'terrain', type: 'terrain', terrainData: { resolution: 3, width: 12, depth: 9, heights } });
+    const { scene, mesh } = terrainScene(terrain);
+    const expected: THREE.Intersection[] = [];
+    mesh.raycast(down(1, 1), expected);
+    // Drawn in chunks: the full mesh is hidden, but it is still the shape of the ground.
+    mesh.visible = false;
+    const hit = createPlacementQuery(scene, [], { groundPlane: false })(down(1, 1));
+    expect(hit).not.toBeNull();
+    expect(hit!.point.distanceTo(expected[0].point)).toBeLessThan(1e-4);
+  });
+
   it('returns the nearest surface when a mesh stands on terrain', () => {
     const terrain = levelObject({ id: 'terrain', type: 'terrain', terrainData: { resolution: 4, width: 20, depth: 20 } });
     const { scene } = boxScene();

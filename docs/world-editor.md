@@ -81,6 +81,7 @@ Objects can carry components that add behaviour. Select an object and use **Add 
 | Spline | A smooth curve through points, edited in the viewport (see [Splines](#splines)) |
 | Spline Mesh | Bends a model along the object's spline: roads, rails, pipes, walls, river beds |
 | Spline Scatter | Places copies of a model along the object's spline: fence posts, lamps, trees along a road |
+| Procedural Scatter | Fills an area with layers of models by rule (forests, rocks, grass, ruins), drawn as impostors far away (see [Procedural scatter](#procedural-scatter)) |
 | Follow Spline | Moves the object along another object's spline during play: platforms, carts, trains, cameras on rails |
 | Vehicle | A wheeled vehicle the player gets into and drives, or that drives itself along a spline (see [Vehicles](#vehicles)) |
 | Nav Link | Lets enemies cross from the object to **End** (relative to the object) where the navmesh does not join up: a drop, a gap, a ladder. One-way links only go from the object to the end. Drawn in the editor as an arc (see [Enemy navigation](characters.md#enemy-navigation)) |
@@ -441,6 +442,25 @@ While the player is inside the box, every object of that level joins the play se
 ## Terrain detail in play
 
 In play and in built games, a terrain with a resolution of 64 or more is drawn in chunks of 32 by 32 cells. Chunks far from the camera use a half, a quarter or an eighth of the vertices per side, and short skirts under their edges hide the seams where chunks of different detail meet. The editor always shows the full-resolution terrain, which sculpting, painting and placement work on. Collisions always use the full-resolution heights.
+
+## Procedural scatter
+
+A **Procedural Scatter** component fills a box around its object with copies of models by rule instead of by hand. Put it on an empty object over the ground and set its **Area** (width, the height to search for ground within, depth).
+
+**Each layer places one model:**
+
+- **Per 100 m²**: how many copies.
+- **Spacing**: metres kept clear around each copy, from this layer's and every other layer's copies. Put big things (trees) in the first layers, small ones (rocks, grass) after.
+- **Clumping** and **Clump size**: 0 spreads copies evenly; 1 gathers them in patches about that many metres across.
+- **Scale**: a size picked between two values.
+- **Slope** and **Height**: the ground the layer grows on (no trees on cliffs, no reeds above the shore).
+- **Lean with ground**: 0 stands copies upright; 1 tilts them with the ground, for rocks.
+- **Sink**: metres up or down into the ground.
+- **Collision** in play: **A trunk** (a narrow column, for trees) or **The model's box**.
+
+Copies stand on the terrain and meshes in the area, never on other scatters. Where there is no ground, nothing is placed. They are placed again when a setting or the object changes, and the same **Seed** always gives the same placement; **New seed** tries another. Copies are drawn, not added to the level, so the Outliner stays short.
+
+**Large scatters stay cheap.** The area is cut into cells of **Cell size** metres, each drawn as one batch per model part. Beyond **Impostors beyond**, a cell draws each copy as a flat picture of the model, made from the model once and turned toward the camera; beyond **Hidden beyond** it draws nothing. In a forest seen from above, impostors cut the triangles drawn about six times.
 
 ## Terrain painting
 

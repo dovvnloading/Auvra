@@ -22,6 +22,7 @@ import { LEVEL_STREAMING_COMPONENT } from './levelStreamingComponent';
 import { PHYSICS_COMPONENTS } from './physicsComponents';
 import { POST_PROCESS_COMPONENT } from './postProcess';
 import { REFLECTION_PROBE_COMPONENT } from './reflectionProbe';
+import { SCATTER_COMPONENT } from './scatterComponent';
 import { SCRIPT_COMPONENT } from './scriptComponent';
 import { SPLINE_COMPONENTS } from './splineComponents';
 import { TIMELINE_COMPONENT } from './timelineComponent';
@@ -37,6 +38,7 @@ export const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
     ...JOINT_COMPONENTS,
     ...NAVIGATION_COMPONENTS,
     ...SPLINE_COMPONENTS,
+    SCATTER_COMPONENT,
     VEHICLE_COMPONENT,
     DESTRUCTIBLE_COMPONENT,
     ...WIND_COMPONENTS,
