@@ -34,17 +34,35 @@ Overrides are stored with the model, so every placed copy and every build uses t
 
 ## Material graphs
 
-A material asset describes a surface as a graph of nodes, so one material can be shared by many models and can animate, tile, blend and react to the view angle.
+A material asset describes a surface as a graph of nodes, so one material can be shared by many models and can animate, tile, blend, cut out, move its vertices and react to the view angle.
 
 1. Open the **Materials** tab and click **New**. The asset starts with a **Material Output** node; rename it in the field above the preview.
-2. Click **Add node** and pick a node. The palette groups them as **Input** (Number, Color, Vector, Time), **UV** (UV, Tiling and Offset, Panner), **Texture** (Texture Sample, Normal Map), **Surface** (Fresnel, World Position, Vertex Color), **Math** (Noise, Add, Subtract, Multiply, Divide, Min, Max, Power, Step, Lerp, Clamp, Smoothstep, One Minus, Abs, Saturate, Sine, Cosine, Fraction, Floor) and **Vector** (Split, Combine, Dot, Normalize, Length).
-3. Drag from an output pin on the right of a node to an input pin on the left of another. Pin colours show the value type; a value of another type is converted (a single number fills every component, a longer vector is cut down). Each input takes one wire, so a new wire replaces the old one, and a wire that would make a loop is refused. Click a wire to remove it.
-4. Select a node to change its settings below the preview. **Delete** removes the selected node; the Material Output cannot be removed.
-5. Connect the Material Output's **Base Color**, **Opacity**, **Metalness**, **Roughness**, **Normal (tangent space)**, **Emissive** and **Ambient Occlusion** inputs. An input with no wire uses the value set on the Material Output node.
+2. Right-click the canvas (or press **Space** or **Tab**, or click **Add node**) and type to find a node by name or keyword; arrow keys and **Enter** pick it, and it lands where the pointer is. With nothing typed the palette lists every node by category:
+   - **Input**: Number, Color, Vector 2, Vector, Time.
+   - **Geometry**: UV, World Position, Local Position, Object Position, World Normal, Local Normal, View Direction, Camera Position, Camera Distance, Vertex Color, Fresnel.
+   - **UV**: Tiling and Offset, Panner, Rotate UV, Polar Coordinates, Flipbook, Parallax Offset.
+   - **Texture**: Texture Sample, Normal Map, Triplanar Sample, Normal From Height, Normal Blend, Normal Strength. Set a Texture Sample or Triplanar Sample's **Read As** to **Data** for masks, roughness, metalness and height maps, so their values are not treated as sRGB colour; tick a Normal Map's **Flip Green (DirectX)** for maps baked with the green channel pointing down.
+   - **Procedural**: Noise, Fractal Noise (gradient, simplex or value noise; fractal, turbulence or ridged), Voronoi, Checker, Brick, Gradient.
+   - **Color**: Color Ramp, Blend (14 modes), Hue / Saturation / Value, RGB to HSV, HSV to RGB, Desaturate, Contrast, Posterize, Luminance.
+   - **Math**, **Vector** and **Logic**: arithmetic, trigonometry, Lerp, Clamp, Smoothstep, Remap, Split, Combine, Swizzle, Dot, Cross, Rotate About Axis, Branch and more.
+   - **Custom**: Custom GLSL, your own function of four inputs.
+   - **Utility**: Reroute.
+3. Drag from a pin to a pin of the other kind to wire them (outputs on the right, inputs on the left). Pin colours show the value type: grey a number, green a 2-vector, yellow a 3-vector or colour, purple a 4-vector. Math nodes take the widest type wired into them, so adding two colours gives a colour. A value of another type is converted (a single number fills every component, a longer vector is cut down). Each input takes one wire, so a new wire replaces the old one, and a wire that would make a loop is refused.
+4. Drop a wire on empty space to pick a node for it: the new node is wired to it. Drag a wire off an input to move it to another, or drop it on empty space. **Alt**-click or right-click a wire to cut it; double-click a wire to bend it through a **Reroute**.
+5. Every node shows its value as a small image as you edit (the eye button turns these previews off). Nodes that feed nothing the material reads are dimmed with a dashed border.
+6. Select nodes by clicking (**Shift** or **Ctrl** adds) or by dragging a box on empty space; drag a selected node to move them all. **Ctrl+C**, **Ctrl+X** and **Ctrl+V** copy, cut and paste nodes (between materials too, as text), **Ctrl+D** duplicates, **Delete** removes, **Ctrl+A** selects all, **Ctrl+Z** and **Ctrl+Y** undo and redo, **F** frames the selection (or everything) and **C** puts a comment box around the selection. A comment moves the nodes inside it; double-click its title to rename it and pick its colour in the inspector. Right- or middle-drag pans and the wheel zooms.
+7. Select a node to change its settings in the inspector. Drag a number's label sideways to change it (**Shift** for finer steps). A Color Ramp's stops are edited on its bar: drag a stop, double-click the bar to add one, pick its colour below. Custom GLSL is applied with **Apply** or **Ctrl+Enter**.
+8. Select nothing to set the material itself, on the Material Output:
+   - **Blend Mode**: **Opaque**; **Masked** (cut out where Opacity is below **Alpha Clip**, and the shadow has the same holes); **Translucent**; **Additive** (glows add to what is behind).
+   - **Two Sided** shades the back faces too; **Shading** **Unlit** shows the base colour and emissive without lighting.
+   - The values its unwired inputs take: Base Color, Opacity, Metalness, Roughness and Emissive.
+9. Connect the Material Output's **Base Color**, **Opacity**, **Metalness**, **Roughness**, **Normal (tangent space)**, **Emissive** and **Ambient Occlusion** inputs for the surface, and **World Position Offset** to move its vertices (in world units): the offset moves the shadow too, and works on skinned and instanced meshes.
 
-The preview sphere updates as you edit, and changes save on their own. Time nodes run in every viewport, in play and in builds.
+The preview shows the material on a sphere, cube, plane, cylinder or knot, lit by an environment that shows reflections and casting its shadow on a floor; drag it to turn it and scroll to zoom. A shader that does not compile (a mistake in Custom GLSL) is reported under the preview with the line it names. Changes save on their own. Time nodes run in every viewport, in play and in builds.
 
-To use a material asset on a model, open the model's **Material Overrides**, expand a material and pick the asset in **Material asset**, then click **Save**. The model's material is then shaded by the graph, in every placed copy and every build; its own colour, map and PBR fields apply again when you set **Material asset** back to **(its own)**. Deleting a material asset returns every model that used it to its own material, and deleting a texture clears it from the Texture Sample and Normal Map nodes that read it.
+To use a material asset on a model, open the model's **Material Overrides**, expand a material and pick the asset in **Material asset**, then click **Save**. The model's material is then shaded by the graph, in every placed copy and every build; its own colour, map and PBR fields apply again when you set **Material asset** back to **(its own)**. Deleting a material asset returns every model that used it to its own material, and deleting a texture clears it from the Texture Sample, Normal Map and Triplanar Sample nodes that read it.
+
+Materials made before blend modes keep their look: one whose opacity was set or wired is **Translucent**, any other **Opaque**.
 
 ### Material parameters
 

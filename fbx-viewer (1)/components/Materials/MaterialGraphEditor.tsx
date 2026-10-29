@@ -1,44 +1,40 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import * as THREE from 'three';
-import { useFrame } from '@react-three/fiber';
-import { Plus, Trash2, Search } from 'lucide-react';
-import { AuvraCanvas } from '../../renderer/AuvraCanvas';
+import { AlertTriangle, MessageSquarePlus, Plus, Trash2 } from 'lucide-react';
 import { useAssets } from '../../context/AssetContext';
 import { projectService } from '../../utils/projectService';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import {
-    MATERIAL_NODE_DEFINITIONS,
+    MAX_COMMENT_LENGTH,
     MAX_PARAMETER_NAME_LENGTH,
     OUTPUT_NODE_TYPE,
     PARAMETER_NODE_PARAMS,
+    compileMaterialGraph,
     createMaterialGraph,
-    defaultParams,
     getMaterialNodeDefinition,
-    readParam,
-    wouldCreateCycle,
+    materialGraphSettings,
     type MaterialGraph,
     type MaterialGraphNode,
-    type MaterialParamDef,
-    type MaterialValueType,
 } from '../../runtime/materials/materialGraph';
 import { MATERIALS_DOMAIN, materialAssetDocument, materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
-import { useGraphViewport } from '../AnimationGraph/hooks/useGraphViewport';
+import { MaterialGraphCanvas } from './MaterialGraphCanvas';
+import { MaterialPreview, clearMaterialShaderError, useMaterialShaderError } from './MaterialPreview';
+import { ParamField } from './MaterialParamField';
+import { GraphHistory, createComment, nodeRect, removeNodes, showsPreview, withComments } from './materialGraphEditing';
 
 /**
  * MATERIAL GRAPH EDITOR (the Materials tab)
  *
  * The project's material assets: each a node graph wired into a Material Output, edited on a canvas
- * and shown on a lit preview sphere as it changes. Models' materials take an asset in the Material
- * Editor (Retexture tab); every material using an asset follows edits to it straight away.
+ * (MaterialGraphCanvas.tsx) where every node shows its value, and shown on a lit, shadowed preview
+ * as it changes. With nothing selected the inspector shows the material's own settings (blend mode,
+ * alpha clip, two-sided, unlit). Models' materials take an asset in the Material Editor (Retexture
+ * tab); every material using an asset follows edits to it straight away.
  */
 
-const NODE_WIDTH = 190;
-const HEADER = 28;
-const ROW = 22;
 // Edits made in quick succession (dragging a slider) are saved together.
 const SAVE_DELAY_MS = 400;
-
-const PIN_COLORS: Record<MaterialValueType, string> = { float: '#9ca3af', vec2: '#4ade80', vec3: '#facc15', vec4: '#c084fc' };
+const COMMENT_COLORS = ['#3b4252', '#1e3a5f', '#14532d', '#713f12', '#7f1d1d', '#4c1d95', '#134e4a', '#57534e'];
+const PREVIEWS_KEY = 'auvra.materialNodePreviews';
 
 /** The material assets, re-rendering when they change. */
 const useMaterialAssets = (): MaterialAsset[] => {
@@ -46,344 +42,86 @@ const useMaterialAssets = (): MaterialAsset[] => {
     return useMemo(() => materialLibrary.list(), [version]);
 };
 
-/** Where a pin sits on the canvas: outputs on the right, one row each, then inputs on the left. */
-const pinPosition = (node: MaterialGraphNode, kind: 'in' | 'out', key: string): { x: number; y: number } => {
-    const definition = getMaterialNodeDefinition(node.type)!;
-    const index = kind === 'out'
-        ? definition.outputs.findIndex(port => port.key === key)
-        : definition.outputs.length + definition.inputs.findIndex(port => port.key === key);
-    return { x: node.x + (kind === 'out' ? NODE_WIDTH : 0), y: node.y + HEADER + index * ROW + ROW / 2 };
+const readPreviewsSetting = (): boolean => {
+    try { return localStorage.getItem(PREVIEWS_KEY) !== 'off'; } catch { return true; }
 };
 
-const nodeHeight = (node: MaterialGraphNode): number => {
-    const definition = getMaterialNodeDefinition(node.type)!;
-    return HEADER + (definition.outputs.length + definition.inputs.length) * ROW + 8;
-};
+/** The graph's identity apart from where its nodes sit, so moving nodes does not redraw previews. */
+const shadingSignature = (graph: MaterialGraph): string =>
+    JSON.stringify([graph.nodes.map(({ x: _x, y: _y, ...rest }) => rest), graph.links]);
 
-const wirePath = (from: { x: number; y: number }, to: { x: number; y: number }): string => {
-    const bend = Math.max(40, Math.abs(to.x - from.x) / 2);
-    return `M ${from.x} ${from.y} C ${from.x + bend} ${from.y}, ${to.x - bend} ${to.y}, ${to.x} ${to.y}`;
-};
-
-const toHex = (rgb: number[]): string => `#${rgb.map(value => Math.round(Math.min(1, Math.max(0, value)) * 255).toString(16).padStart(2, '0')).join('')}`;
-const fromHex = (hex: string): number[] => [1, 3, 5].map(at => parseInt(hex.slice(at, at + 2), 16) / 255);
-
-// ---------------------------------------------------------------------------
-// Preview
-// ---------------------------------------------------------------------------
-
-const PreviewSphere: React.FC<{ assetId: string }> = ({ assetId }) => {
-    const material = useMemo(() => new THREE.MeshStandardMaterial(), []);
-    const mesh = useRef<THREE.Mesh>(null);
-    useEffect(() => {
-        materialLibrary.assign(material, assetId);
-        return () => { materialLibrary.assign(material, null); };
-    }, [material, assetId]);
-    useEffect(() => () => material.dispose(), [material]);
-    useFrame((_state, delta) => {
-        if (mesh.current) mesh.current.rotation.y += delta * 0.3;
-    });
-    return (
-        <mesh ref={mesh} material={material}>
-            <sphereGeometry args={[1, 64, 48]} />
-        </mesh>
-    );
-};
-
-const MaterialPreview: React.FC<{ assetId: string }> = ({ assetId }) => (
-    <div className="relative h-56 w-full shrink-0 overflow-hidden rounded border border-gray-800 bg-gray-950">
-        <AuvraCanvas surfaceId="preview-material-graph" role="preview" camera={{ position: [0, 0, 3.2], fov: 40 }}>
-            <hemisphereLight args={['#dfe9ff', '#2a2420', 0.9]} />
-            <directionalLight position={[3, 4, 2]} intensity={2.4} />
-            <directionalLight position={[-3, -1, -2]} intensity={0.5} color="#9fb4ff" />
-            <PreviewSphere assetId={assetId} />
-        </AuvraCanvas>
-    </div>
-);
-
-// ---------------------------------------------------------------------------
-// Inspector
-// ---------------------------------------------------------------------------
-
-const ParamField: React.FC<{
-    param: MaterialParamDef;
-    value: unknown;
+const NodeInspector: React.FC<{
+    node: MaterialGraphNode;
     textures: { id: string; name: string }[];
-    onChange: (value: unknown) => void;
-}> = ({ param, value, textures, onChange }) => {
-    const current = readParam(param, value);
-    const label = <span className="text-[10px] uppercase text-gray-500">{param.label}</span>;
-    if (param.kind === 'texture') {
-        return (
-            <label className="block space-y-1">{label}
-                <select aria-label={param.label} value={current as string} onChange={(event) => onChange(event.target.value)} className="w-full rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white">
-                    <option value="">(none)</option>
-                    {textures.map(texture => <option key={texture.id} value={texture.id}>{texture.name}</option>)}
-                </select>
-            </label>
-        );
-    }
-    if (param.kind === 'color') {
-        return (
-            <label className="flex items-center justify-between gap-2">{label}
-                <input type="color" aria-label={param.label} value={toHex(current as number[])} onChange={(event) => onChange(fromHex(event.target.value))} className="h-6 w-12 rounded border border-gray-700 bg-transparent" />
-            </label>
-        );
-    }
-    if (param.kind === 'float') {
-        const number = current as number;
-        return (
-            <label className="block space-y-1">{label}
-                <div className="flex items-center gap-2">
-                    {param.min !== undefined && param.max !== undefined && (
-                        <input type="range" aria-label={`${param.label} slider`} min={param.min} max={param.max} step={param.step ?? 0.01} value={number} onChange={(event) => onChange(Number(event.target.value))} className="flex-1" />
-                    )}
-                    <input type="number" aria-label={param.label} step={param.step ?? 0.01} value={number} onChange={(event) => onChange(Number(event.target.value))} className="w-20 rounded border border-gray-700 bg-gray-950 px-1 py-0.5 text-xs text-white" />
-                </div>
-            </label>
-        );
-    }
-    const components = current as number[];
+    title?: string;
+    onChangeNode: (node: MaterialGraphNode, coalesce?: string) => void;
+}> = ({ node, textures, title, onChangeNode }) => {
+    const definition = getMaterialNodeDefinition(node.type)!;
+    // The Material Output's settings come first, then the values its unwired inputs take.
+    const params = node.type === OUTPUT_NODE_TYPE
+        ? [...definition.params.filter(param => ['blendMode', 'alphaClip', 'twoSided', 'shading'].includes(param.key)), ...definition.params.filter(param => !['blendMode', 'alphaClip', 'twoSided', 'shading'].includes(param.key))]
+        : definition.params;
+    const blendMode = node.type === OUTPUT_NODE_TYPE ? materialGraphSettings({ nodes: [node], links: [] }).blendMode : null;
     return (
-        <label className="block space-y-1">{label}
-            <div className="flex gap-1">
-                {components.map((component, index) => (
-                    <input key={index} type="number" aria-label={`${param.label} ${'XYZ'[index]}`} step={0.05} value={component} onChange={(event) => onChange(components.map((old, at) => (at === index ? Number(event.target.value) : old)))} className="w-full rounded border border-gray-700 bg-gray-950 px-1 py-0.5 text-xs text-white" />
-                ))}
-            </div>
-        </label>
-    );
-};
-
-// ---------------------------------------------------------------------------
-// Canvas
-// ---------------------------------------------------------------------------
-
-interface CanvasProps {
-    graph: MaterialGraph;
-    selectedNodeId: string | null;
-    onSelect: (nodeId: string | null) => void;
-    /** `commit` false: a step of a drag, saved when the drag ends. */
-    onChange: (graph: MaterialGraph, commit: boolean) => void;
-}
-
-const MaterialGraphCanvas: React.FC<CanvasProps> = ({ graph, selectedNodeId, onSelect, onChange }) => {
-    const container = useRef<HTMLDivElement>(null);
-    const { viewport, isPanning, handleWheel, beginPan, endPan, updatePan } = useGraphViewport();
-    const [drag, setDrag] = useState<{ nodeId: string; dx: number; dy: number } | null>(null);
-    const [linking, setLinking] = useState<{ fromNode: string; fromOutput: string; type: MaterialValueType; x: number; y: number } | null>(null);
-    const [paletteOpen, setPaletteOpen] = useState(false);
-    const [search, setSearch] = useState('');
-
-    const toGraph = useCallback((clientX: number, clientY: number) => {
-        const rect = container.current!.getBoundingClientRect();
-        return { x: (clientX - rect.left - viewport.x) / viewport.scale, y: (clientY - rect.top - viewport.y) / viewport.scale };
-    }, [viewport]);
-
-    const nodes = useMemo(() => new Map(graph.nodes.map(node => [node.id, node])), [graph.nodes]);
-
-    const addNode = (type: string) => {
-        const rect = container.current!.getBoundingClientRect();
-        const center = toGraph(rect.left + rect.width / 2, rect.top + rect.height / 2);
-        const node: MaterialGraphNode = { id: crypto.randomUUID(), type, x: center.x - NODE_WIDTH / 2, y: center.y - 40, params: defaultParams(type) };
-        onChange({ ...graph, nodes: [...graph.nodes, node] }, true);
-        onSelect(node.id);
-        setPaletteOpen(false);
-        setSearch('');
-    };
-
-    const removeNode = useCallback((nodeId: string) => {
-        const node = nodes.get(nodeId);
-        if (!node || node.type === OUTPUT_NODE_TYPE) return;
-        onChange({ nodes: graph.nodes.filter(other => other.id !== nodeId), links: graph.links.filter(link => link.fromNode !== nodeId && link.toNode !== nodeId) }, true);
-        onSelect(null);
-    }, [graph, nodes, onChange, onSelect]);
-
-    useEffect(() => {
-        const onKey = (event: KeyboardEvent) => {
-            const target = event.target as HTMLElement | null;
-            if (target && (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'TEXTAREA')) return;
-            if ((event.key === 'Delete' || event.key === 'Backspace') && selectedNodeId) removeNode(selectedNodeId);
-        };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
-    }, [removeNode, selectedNodeId]);
-
-    const onMouseMove = (event: React.MouseEvent) => {
-        if (isPanning) updatePan(event.movementX, event.movementY);
-        const point = toGraph(event.clientX, event.clientY);
-        if (drag) {
-            onChange({ ...graph, nodes: graph.nodes.map(node => (node.id === drag.nodeId ? { ...node, x: point.x - drag.dx, y: point.y - drag.dy } : node)) }, false);
-        }
-        if (linking) setLinking({ ...linking, x: point.x, y: point.y });
-    };
-
-    const onMouseUp = () => {
-        if (drag) onChange(graph, true);
-        setDrag(null);
-        setLinking(null);
-        endPan();
-    };
-
-    const connect = (toNode: string, toInput: string) => {
-        if (!linking) return;
-        const { fromNode, fromOutput } = linking;
-        setLinking(null);
-        if (wouldCreateCycle(graph, fromNode, toNode)) return;
-        // One wire into each input: a new one replaces the old.
-        const links = graph.links.filter(link => !(link.toNode === toNode && link.toInput === toInput));
-        onChange({ ...graph, links: [...links, { fromNode, fromOutput, toNode, toInput }] }, true);
-    };
-
-    const palette = MATERIAL_NODE_DEFINITIONS.filter(definition => definition.type !== OUTPUT_NODE_TYPE
-        && (!search || definition.label.toLowerCase().includes(search.toLowerCase()) || definition.category.toLowerCase().includes(search.toLowerCase())));
-
-    return (
-        <div
-            ref={container}
-            className="relative flex-1 overflow-hidden bg-[#0d0f12]"
-            style={{ backgroundImage: 'radial-gradient(#1f2937 1px, transparent 1px)', backgroundSize: `${20 * viewport.scale}px ${20 * viewport.scale}px`, backgroundPosition: `${viewport.x}px ${viewport.y}px` }}
-            onWheel={(event) => handleWheel(event, container.current)}
-            onMouseDown={(event) => {
-                if (event.button === 1 || event.button === 2 || event.target === container.current) {
-                    beginPan();
-                    if (event.button === 0) onSelect(null);
-                }
-            }}
-            onMouseMove={onMouseMove}
-            onMouseUp={onMouseUp}
-            onMouseLeave={onMouseUp}
-            onContextMenu={(event) => event.preventDefault()}
-        >
-            <div className="absolute left-3 top-3 z-20">
-                <button onClick={() => setPaletteOpen(open => !open)} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-xs font-bold text-white hover:bg-blue-500" aria-label="Add node">
-                    <Plus size={12} /> Add node
-                </button>
-                {paletteOpen && (
-                    <div className="mt-1 w-64 rounded border border-gray-700 bg-gray-900 p-2 shadow-xl">
-                        <div className="mb-2 flex items-center gap-1 rounded border border-gray-700 bg-gray-950 px-2">
-                            <Search size={12} className="text-gray-500" />
-                            <input autoFocus aria-label="Search nodes" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search nodes…" className="w-full bg-transparent py-1 text-xs text-white outline-none" />
-                        </div>
-                        <div className="max-h-72 overflow-y-auto">
-                            {palette.map(definition => (
-                                <button key={definition.type} onClick={() => addNode(definition.type)} title={definition.description} className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-800">
-                                    <span>{definition.label}</span>
-                                    <span className="text-[9px] uppercase text-gray-500">{definition.category}</span>
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                )}
-            </div>
-
-            <div className="absolute left-0 top-0" style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`, transformOrigin: '0 0' }}>
-                <svg className="pointer-events-none absolute left-0 top-0 overflow-visible" width={1} height={1}>
-                    {graph.links.map((link, index) => {
-                        const from = nodes.get(link.fromNode);
-                        const to = nodes.get(link.toNode);
-                        if (!from || !to) return null;
-                        const port = getMaterialNodeDefinition(from.type)!.outputs.find(output => output.key === link.fromOutput);
-                        return (
-                            <path
-                                key={index}
-                                d={wirePath(pinPosition(from, 'out', link.fromOutput), pinPosition(to, 'in', link.toInput))}
-                                stroke={port ? PIN_COLORS[port.type] : '#888'}
-                                strokeWidth={2.5}
-                                fill="none"
-                                className="pointer-events-auto cursor-pointer hover:opacity-60"
-                                onClick={() => onChange({ ...graph, links: graph.links.filter((_, at) => at !== index) }, true)}
-                            >
-                                <title>Click to remove</title>
-                            </path>
-                        );
-                    })}
-                    {linking && (() => {
-                        const from = nodes.get(linking.fromNode);
-                        return from ? <path d={wirePath(pinPosition(from, 'out', linking.fromOutput), linking)} stroke={PIN_COLORS[linking.type]} strokeWidth={2} strokeDasharray="5 4" fill="none" /> : null;
-                    })()}
-                </svg>
-
-                {graph.nodes.map(node => {
-                    const definition = getMaterialNodeDefinition(node.type)!;
-                    const selected = node.id === selectedNodeId;
-                    return (
-                        <div
-                            key={node.id}
-                            data-node-id={node.id}
-                            className={`absolute select-none rounded-md border bg-gray-900/95 shadow-lg ${selected ? 'border-blue-500' : node.type === OUTPUT_NODE_TYPE ? 'border-emerald-700' : 'border-gray-700'}`}
-                            style={{ left: node.x, top: node.y, width: NODE_WIDTH, height: nodeHeight(node) }}
-                            onMouseDown={(event) => {
-                                event.stopPropagation();
-                                onSelect(node.id);
-                                if (event.button !== 0) return;
-                                const point = toGraph(event.clientX, event.clientY);
-                                setDrag({ nodeId: node.id, dx: point.x - node.x, dy: point.y - node.y });
-                            }}
-                        >
-                            <div className={`flex h-7 items-center justify-between rounded-t-md px-2 text-[11px] font-bold ${node.type === OUTPUT_NODE_TYPE ? 'bg-emerald-900/60 text-emerald-200' : 'bg-gray-800 text-gray-200'}`} title={definition.description}>
-                                <span className="truncate">
-                                    {definition.label}
-                                    {node.parameter && <span className="ml-1 font-normal text-amber-300" title="Material parameter">· {node.parameter}</span>}
-                                </span>
-                                {node.type !== OUTPUT_NODE_TYPE && (
-                                    <button aria-label={`Remove ${definition.label}`} onMouseDown={(event) => event.stopPropagation()} onClick={() => removeNode(node.id)} className="text-gray-500 hover:text-red-400"><Trash2 size={11} /></button>
-                                )}
-                            </div>
-                            {definition.outputs.map(output => (
-                                <div key={output.key} className="relative flex items-center justify-end pr-3 text-[10px] text-gray-300" style={{ height: ROW }}>
-                                    {output.label}
-                                    <span
-                                        role="button"
-                                        aria-label={`${definition.label} ${output.label} output`}
-                                        className="absolute -right-[6px] h-3 w-3 cursor-crosshair rounded-full border border-gray-900"
-                                        style={{ background: PIN_COLORS[output.type] }}
-                                        onMouseDown={(event) => {
-                                            event.stopPropagation();
-                                            const at = pinPosition(node, 'out', output.key);
-                                            setLinking({ fromNode: node.id, fromOutput: output.key, type: output.type, x: at.x, y: at.y });
-                                        }}
-                                    />
-                                </div>
-                            ))}
-                            {definition.inputs.map(input => {
-                                const wired = graph.links.some(link => link.toNode === node.id && link.toInput === input.key);
-                                return (
-                                    <div key={input.key} className="relative flex items-center pl-3 text-[10px] text-gray-300" style={{ height: ROW }}>
-                                        <span
-                                            role="button"
-                                            aria-label={`${definition.label} ${input.label} input`}
-                                            className="absolute -left-[6px] h-3 w-3 rounded-full border border-gray-900"
-                                            style={{ background: wired ? PIN_COLORS[input.type] : '#374151' }}
-                                            onMouseUp={(event) => {
-                                                event.stopPropagation();
-                                                connect(node.id, input.key);
-                                            }}
-                                        />
-                                        {input.label}
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    );
-                })}
-            </div>
+        <div className="space-y-2 rounded border border-gray-800 bg-gray-900/60 p-2">
+            <div className="text-[11px] font-bold text-gray-200">{title ?? definition.label}</div>
+            <p className="text-[10px] leading-snug text-gray-500">{definition.description}</p>
+            {params.length === 0 && <p className="text-[10px] text-gray-500">No settings.</p>}
+            {params.map(param => {
+                // The clip only matters to a masked material.
+                if (param.key === 'alphaClip' && blendMode !== 'masked') return null;
+                return (
+                    <ParamField
+                        key={param.key}
+                        param={param}
+                        value={node.params[param.key]}
+                        textures={textures}
+                        onChange={(value) => onChangeNode({ ...node, params: { ...node.params, [param.key]: value } }, `${node.id}:${param.key}`)}
+                    />
+                );
+            })}
+            {PARAMETER_NODE_PARAMS[node.type] && (
+                <label className="block space-y-1" title="Name this value to let each model material using the asset set its own">
+                    <span className="text-[10px] uppercase text-gray-500">Parameter name</span>
+                    <input
+                        aria-label="Parameter name"
+                        value={node.parameter ?? ''}
+                        placeholder="Not a parameter"
+                        maxLength={MAX_PARAMETER_NAME_LENGTH}
+                        onChange={(event) => {
+                            const { parameter: _previous, ...rest } = node;
+                            // Kept as typed (a trailing space included) and trimmed when read back.
+                            onChangeNode(event.target.value ? { ...rest, parameter: event.target.value } : rest, `${node.id}:parameter`);
+                        }}
+                        className="w-full rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white"
+                    />
+                </label>
+            )}
         </div>
     );
 };
-
-// ---------------------------------------------------------------------------
-// Editor
-// ---------------------------------------------------------------------------
 
 export const MaterialGraphEditor: React.FC = () => {
     const assets = useMaterialAssets();
     const { textures, removeMaterialAsset } = useAssets();
     const [selectedId, setSelectedId] = useState<string | null>(null);
-    const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+    const [selection, setSelection] = useState<string[]>([]);
+    const [selectedComment, setSelectedComment] = useState<string | null>(null);
+    const [previews, setPreviews] = useState(readPreviewsSetting);
     const [error, setError] = useState<string | null>(null);
+    const [, setHistoryVersion] = useState(0);
+    const shaderError = useMaterialShaderError();
     const asset = assets.find(candidate => candidate.id === selectedId) ?? assets[0] ?? null;
     const pending = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+    const histories = useRef(new Map<string, GraphHistory>());
+    /** The graph before a drag began, recorded for undo when the drag ends. */
+    const dragBase = useRef(new Map<string, MaterialGraph>());
+
+    const history = useCallback((id: string) => {
+        let found = histories.current.get(id);
+        if (!found) histories.current.set(id, found = new GraphHistory());
+        return found;
+    }, []);
 
     const save = useCallback((next: MaterialAsset, immediately = false) => {
         const timers = pending.current;
@@ -408,19 +146,46 @@ export const MaterialGraphEditor: React.FC = () => {
         }
     }, []);
 
-    const update = useCallback((graph: MaterialGraph, commit: boolean) => {
+    const update = useCallback((graph: MaterialGraph, commit: boolean, coalesce?: string) => {
         if (!asset) return;
-        const next = { ...asset, graph };
+        const current = materialLibrary.get(asset.id) ?? asset;
+        if (graph !== current.graph) materialLibrary.upsert({ ...current, graph });
+        if (!commit) {
+            if (!dragBase.current.has(asset.id)) dragBase.current.set(asset.id, current.graph);
+            return;
+        }
+        const base = dragBase.current.get(asset.id) ?? current.graph;
+        dragBase.current.delete(asset.id);
+        if (base === graph) return;
+        history(asset.id).record(base, coalesce);
+        setHistoryVersion(version => version + 1);
+        save({ ...current, graph });
+    }, [asset, history, save]);
+
+    const travel = (direction: 'undo' | 'redo') => {
+        if (!asset) return;
+        const current = materialLibrary.get(asset.id) ?? asset;
+        const steps = history(asset.id);
+        const graph = direction === 'undo' ? steps.undo(current.graph) : steps.redo(current.graph);
+        if (!graph) return;
+        dragBase.current.delete(asset.id);
+        const next = { ...current, graph };
         materialLibrary.upsert(next);
-        if (commit) save(next);
-    }, [asset, save]);
+        save(next);
+        setHistoryVersion(version => version + 1);
+    };
+
+    const select = useCallback((nodeIds: string[], comment: string | null = null) => {
+        setSelection(nodeIds);
+        setSelectedComment(comment);
+    }, []);
 
     const create = () => {
         const next: MaterialAsset = { id: crypto.randomUUID(), name: `Material ${assets.length + 1}`, graph: createMaterialGraph() };
         materialLibrary.upsert(next);
         save(next, true);
         setSelectedId(next.id);
-        setSelectedNodeId(null);
+        select([]);
     };
 
     const rename = (name: string) => {
@@ -435,18 +200,65 @@ export const MaterialGraphEditor: React.FC = () => {
         // A save still waiting would bring it back.
         clearTimeout(pending.current.get(asset.id));
         pending.current.delete(asset.id);
+        histories.current.delete(asset.id);
         removeMaterialAsset(asset.id).then(() => {
             setError(null);
             setSelectedId(null);
-            setSelectedNodeId(null);
+            select([]);
         }, (failure: unknown) => {
             frontendDiagnostics.failure('material_remove_failed', failure);
             setError('The material could not be deleted.');
         });
     };
 
-    const selectedNode = asset?.graph.nodes.find(node => node.id === selectedNodeId) ?? null;
-    const selectedDefinition = selectedNode ? getMaterialNodeDefinition(selectedNode.type) : undefined;
+    const togglePreviews = () => {
+        setPreviews((value) => {
+            try { localStorage.setItem(PREVIEWS_KEY, value ? 'off' : 'on'); } catch { /* the choice just is not remembered */ }
+            return !value;
+        });
+    };
+
+    const graph = asset?.graph ?? null;
+
+    // Only a change to what the graph computes (not to where nodes sit) reaches the previews.
+    const signature = useMemo(() => (graph ? shadingSignature(graph) : ''), [graph]);
+    const shading = useRef<{ signature: string; graph: MaterialGraph | null }>({ signature: '', graph: null });
+    if (shading.current.signature !== signature || (graph && !shading.current.graph)) shading.current = { signature, graph };
+    const shadingGraph = shading.current.graph;
+
+    const analysis = useMemo(() => {
+        if (!shadingGraph) return null;
+        const fragment = compileMaterialGraph(shadingGraph);
+        const vertex = compileMaterialGraph(shadingGraph, { stage: 'vertex' });
+        const vertexUnused = new Set(vertex.unused);
+        return {
+            key: `${fragment.key}#${vertex.key}`,
+            unused: new Set(fragment.unused.filter(id => vertexUnused.has(id))),
+            statements: fragment.statements.length + (fragment.connected.has('worldPositionOffset') ? vertex.statements.length : 0),
+        };
+    }, [shadingGraph]);
+    // A change to the shader's shape compiles it afresh: forget the last error.
+    useEffect(() => { clearMaterialShaderError(); }, [analysis?.key]);
+
+    const previewIdsKey = shadingGraph && previews ? shadingGraph.nodes.filter(showsPreview).map(node => node.id).join(',') : '';
+    const previewNodeIds = useMemo(() => (previewIdsKey ? previewIdsKey.split(',') : []), [previewIdsKey]);
+
+    const nodeIds = new Set(graph?.nodes.map(node => node.id) ?? []);
+    const selected = new Set(selection.filter(id => nodeIds.has(id)));
+    const comment = graph?.comments?.find(candidate => candidate.id === selectedComment) ?? null;
+    const single = selected.size === 1 ? graph!.nodes.find(node => selected.has(node.id)) ?? null : null;
+    const outputNode = graph?.nodes.find(node => node.type === OUTPUT_NODE_TYPE) ?? null;
+    const steps = asset ? history(asset.id) : null;
+
+    const changeNode = (node: MaterialGraphNode, coalesce?: string) => {
+        if (!graph) return;
+        update({ ...graph, nodes: graph.nodes.map(candidate => (candidate.id === node.id ? node : candidate)) }, true, coalesce);
+    };
+
+    const changeComment = (changes: Partial<{ text: string; color: string }>) => {
+        if (!graph || !comment) return;
+        update(withComments(graph, (graph.comments ?? []).map(candidate => (candidate.id === comment.id ? { ...candidate, ...changes } : candidate))), true, `${comment.id}:${Object.keys(changes).join()}`);
+    };
 
     return (
         <div className="flex h-full min-h-0 w-full bg-gray-950 text-white">
@@ -460,7 +272,7 @@ export const MaterialGraphEditor: React.FC = () => {
                     {assets.map(candidate => (
                         <button
                             key={candidate.id}
-                            onClick={() => { setSelectedId(candidate.id); setSelectedNodeId(null); }}
+                            onClick={() => { setSelectedId(candidate.id); select([]); }}
                             className={`mb-1 w-full truncate rounded px-2 py-1.5 text-left text-xs ${candidate.id === asset?.id ? 'bg-blue-900/40 text-white' : 'text-gray-300 hover:bg-gray-800'}`}
                         >
                             {candidate.name}
@@ -469,58 +281,78 @@ export const MaterialGraphEditor: React.FC = () => {
                 </div>
             </aside>
 
-            {asset ? (
+            {asset && graph ? (
                 <>
-                    <MaterialGraphCanvas graph={asset.graph} selectedNodeId={selectedNodeId} onSelect={setSelectedNodeId} onChange={update} />
-                    <aside className="flex w-72 shrink-0 flex-col gap-3 overflow-y-auto border-l border-gray-800 p-3">
+                    <MaterialGraphCanvas
+                        key={asset.id}
+                        graph={graph}
+                        selection={selected}
+                        selectedComment={comment?.id ?? null}
+                        previews={previews}
+                        unused={analysis?.unused ?? new Set()}
+                        canUndo={!!steps?.canUndo}
+                        canRedo={!!steps?.canRedo}
+                        onSelect={select}
+                        onChange={update}
+                        onUndo={() => travel('undo')}
+                        onRedo={() => travel('redo')}
+                        onTogglePreviews={togglePreviews}
+                    />
+                    <aside className="flex w-80 shrink-0 flex-col gap-3 overflow-y-auto border-l border-gray-800 p-3">
                         <div className="flex items-center gap-2">
                             <input aria-label="Material name" value={asset.name} onChange={(event) => rename(event.target.value)} className="min-w-0 flex-1 rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white" />
                             <button onClick={remove} aria-label="Delete material" className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-red-400"><Trash2 size={14} /></button>
                         </div>
-                        <MaterialPreview assetId={asset.id} />
-                        {error && <p className="text-[11px] text-amber-400">{error}</p>}
-                        {selectedNode && selectedDefinition ? (
-                            <div className="space-y-2 rounded border border-gray-800 bg-gray-900/60 p-2">
-                                <div className="text-[11px] font-bold text-gray-200">{selectedDefinition.label}</div>
-                                <p className="text-[10px] text-gray-500">{selectedDefinition.description}</p>
-                                {selectedDefinition.params.length === 0 && <p className="text-[10px] text-gray-500">No settings.</p>}
-                                {selectedDefinition.params.map(param => (
-                                    <ParamField
-                                        key={param.key}
-                                        param={param}
-                                        value={selectedNode.params[param.key]}
-                                        textures={textures}
-                                        onChange={(value) => update({
-                                            ...asset.graph,
-                                            nodes: asset.graph.nodes.map(node => (node.id === selectedNode.id ? { ...node, params: { ...node.params, [param.key]: value } } : node)),
-                                        }, true)}
-                                    />
-                                ))}
-                                {PARAMETER_NODE_PARAMS[selectedNode.type] && (
-                                    <label className="block space-y-1" title="Name this value to let each model material using the asset set its own">
-                                        <span className="text-[10px] uppercase text-gray-500">Parameter name</span>
-                                        <input
-                                            aria-label="Parameter name"
-                                            value={selectedNode.parameter ?? ''}
-                                            placeholder="Not a parameter"
-                                            maxLength={MAX_PARAMETER_NAME_LENGTH}
-                                            onChange={(event) => update({
-                                                ...asset.graph,
-                                                nodes: asset.graph.nodes.map((node) => {
-                                                    if (node.id !== selectedNode.id) return node;
-                                                    const { parameter: _previous, ...rest } = node;
-                                                    // Kept as typed (a trailing space included) and trimmed when read back.
-                                                    return event.target.value ? { ...rest, parameter: event.target.value } : rest;
-                                                }),
-                                            }, true)}
-                                            className="w-full rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white"
-                                        />
-                                    </label>
-                                )}
+                        <MaterialPreview assetId={asset.id} graph={shadingGraph ?? graph} previewNodeIds={previewNodeIds} />
+                        {shaderError && (
+                            <div role="alert" className="rounded border border-red-900 bg-red-950/60 p-2">
+                                <div className="mb-1 flex items-center gap-1 text-[11px] font-bold text-red-300"><AlertTriangle size={12} /> The shader does not compile</div>
+                                <pre className="max-h-40 overflow-auto whitespace-pre-wrap font-mono text-[10px] leading-4 text-red-200">{shaderError}</pre>
                             </div>
-                        ) : (
-                            <p className="text-[11px] text-gray-500">Select a node to set it. Drag from an output to an input to wire them; click a wire to remove it.</p>
                         )}
+                        {error && <p className="text-[11px] text-amber-400">{error}</p>}
+                        {analysis && (
+                            <p className="text-[10px] text-gray-500">
+                                {graph.nodes.length} nodes · {analysis.statements} shader statements{analysis.unused.size ? ` · ${analysis.unused.size} unused` : ''}
+                            </p>
+                        )}
+
+                        {single ? (
+                            <NodeInspector key={single.id} node={single} textures={textures} onChangeNode={changeNode} />
+                        ) : selected.size > 1 ? (
+                            <div className="space-y-2 rounded border border-gray-800 bg-gray-900/60 p-2">
+                                <div className="text-[11px] font-bold text-gray-200">{selected.size} nodes selected</div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => { update(removeNodes(graph, selected), true); select([]); }} className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-[11px] text-gray-200 hover:bg-red-900"><Trash2 size={12} /> Delete</button>
+                                    <button
+                                        onClick={() => {
+                                            const created = createComment(graph.nodes.filter(node => selected.has(node.id)).map(node => nodeRect(node, previews)), { x: 0, y: 0 });
+                                            update(withComments(graph, [...(graph.comments ?? []), created]), true);
+                                            select([], created.id);
+                                        }}
+                                        className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-[11px] text-gray-200 hover:bg-gray-700"
+                                    >
+                                        <MessageSquarePlus size={12} /> Comment
+                                    </button>
+                                </div>
+                            </div>
+                        ) : comment ? (
+                            <div className="space-y-2 rounded border border-gray-800 bg-gray-900/60 p-2">
+                                <div className="text-[11px] font-bold text-gray-200">Comment</div>
+                                <textarea aria-label="Comment text" value={comment.text} maxLength={MAX_COMMENT_LENGTH} rows={2} onChange={(event) => changeComment({ text: event.target.value })} className="w-full rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white" />
+                                <div className="flex flex-wrap gap-1">
+                                    {COMMENT_COLORS.map(color => (
+                                        <button key={color} aria-label={`Comment colour ${color}`} aria-pressed={comment.color === color} onClick={() => changeComment({ color })}
+                                            className={`h-5 w-5 rounded border ${comment.color === color ? 'border-white' : 'border-gray-700'}`} style={{ background: color }} />
+                                    ))}
+                                </div>
+                            </div>
+                        ) : outputNode ? (
+                            <NodeInspector key={outputNode.id} node={outputNode} textures={textures} title="Material" onChangeNode={changeNode} />
+                        ) : null}
+                        <p className="text-[10px] leading-snug text-gray-600">
+                            Right-click the canvas (or press Space) to add a node where the pointer is. Drag from a pin to wire it, or drop a wire on empty space to pick a node for it. Select nothing to set the material itself.
+                        </p>
                     </aside>
                 </>
             ) : (
