@@ -6,6 +6,7 @@ import { AbilitiesInspector } from './AbilitiesInspector';
 import { LevelStreamingInspector } from './LevelStreamingInspector';
 import { ParticlesInspector } from './ParticlesInspector';
 import { ReachIKInspector } from './ReachIKInspector';
+import { ScatterInspector } from './ScatterInspector';
 import { FollowSplineInspector, SplineInspector, SplineModelInspector } from './SplineInspectors';
 import { VehicleInspector } from './VehicleInspector';
 
@@ -26,3 +27,4 @@ registerComponentInspector('followSpline', FollowSplineInspector);
 registerComponentInspector('vehicle', VehicleInspector);
 registerComponentInspector('particles', ParticlesInspector);
 registerComponentInspector('abilities', AbilitiesInspector);
+registerComponentInspector('proceduralScatter', ScatterInspector);

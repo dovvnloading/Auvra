@@ -25,6 +25,8 @@ export interface PlacementHit {
 export interface PlacementOptions {
     /** Objects (with their descendants) the ray must pass through, e.g. a brush cursor or placement ghost. */
     ignore?: THREE.Object3D[];
+    /** False: a ray that hits no terrain or mesh finds nothing, rather than the y = 0 ground plane. */
+    groundPlane?: boolean;
 }
 
 /** A prepared query that can be cast many times against one collected scene. */
@@ -303,7 +305,9 @@ export const createPlacementQuery = (
     const meshes: THREE.Object3D[] = [];
 
     const visit = (object: THREE.Object3D) => {
-        if (!object.visible || ignored.has(object) || isEditorHelper(object)) return;
+        // A chunked terrain draws its chunks and hides its full mesh, which is still the shape of the ground.
+        const terrainSource = (object as THREE.Mesh).isMesh === true && object.userData?.isTerrain === true;
+        if ((!object.visible && !terrainSource) || ignored.has(object) || isEditorHelper(object)) return;
         const levelObjectId = object.userData?.levelObjectId;
         const levelObjectType = typeof levelObjectId === 'string' ? typeById.get(levelObjectId) : undefined;
         if (levelObjectType && NON_SURFACE_TYPES.has(levelObjectType)) return;
@@ -346,6 +350,7 @@ export const createPlacementQuery = (
             nearest = { distance: hit.distance, point: hit.point.clone(), normal };
         }
         if (nearest) return { point: nearest.point, normal: nearest.normal };
+        if (options.groundPlane === false) return null;
 
         const point = new THREE.Vector3();
         if (!raycaster.ray.intersectPlane(GROUND_PLANE, point)) return null;
