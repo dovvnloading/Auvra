@@ -1,9 +1,13 @@
 import type { LevelComponent } from '../../types';
 import {
     EMPTY_TIMELINE,
+    TIMELINE_PLAYER_TARGET,
+    type TimelineClipValue,
     type TimelineData,
     type TimelineInterpolation,
     type TimelineKey,
+    type TimelineLineValue,
+    type TimelineSoundValue,
     type TimelineTrack,
     type TimelineTransformTrack,
     type TimelineVec3,
@@ -48,6 +52,30 @@ export interface TimelineVariableSample {
     value: number;
 }
 
+/** A clip playing on a character: where in the clip, and how much of the pose it gives (0..1). */
+export interface TimelineClipSample {
+    clip: string;
+    /** Seconds into the clip, before any wrapping (the runtime wraps a looping clip by its own length). */
+    time: number;
+    weight: number;
+    loop: boolean;
+}
+
+export interface TimelineAnimationSample {
+    /** A level object id, or TIMELINE_PLAYER_TARGET. */
+    objectId: string;
+    clips: TimelineClipSample[];
+}
+
+/** The subtitle on screen: its line, and which key it is (for its localization key). */
+export interface TimelineLineSample {
+    speaker: string;
+    text: string;
+    trackId: string;
+    /** The key's time, in whole milliseconds. */
+    at: number;
+}
+
 /** What a timeline sets at one time: at most one entry per object (or variable), later tracks winning per channel. */
 export interface TimelineEvaluation {
     transforms: TimelineTransformSample[];
@@ -55,6 +83,12 @@ export interface TimelineEvaluation {
     variables: TimelineVariableSample[];
     /** The shot of the last unmuted camera track: a camera object id, '' for the gameplay camera; absent without camera keys. */
     camera?: { objectId: string; blend: number };
+    /** Clips playing on each character, the tracks for one character together. */
+    animations: TimelineAnimationSample[];
+    /** The screen fade of the last unmuted fade track with keys. */
+    fade?: { amount: number; color: string };
+    /** The line on screen: of every subtitle key whose time span holds the time, the one that started last. */
+    subtitle?: TimelineLineSample;
 }
 
 // --- SAMPLING ---
@@ -120,6 +154,19 @@ export const sampleStepKeys = <T>(keys: readonly TimelineKey<T>[], time: number)
 };
 
 /**
+ * How much of the pose a clip key gives `local` seconds after its start: nothing outside its length,
+ * easing up over its blend-in and down over its blend-out (smoothly at both ends).
+ */
+export const clipWeight = (value: TimelineClipValue, local: number): number => {
+    if (local < 0 || local > value.length) return 0;
+    let weight = 1;
+    if (value.blendIn > 0) weight = Math.min(weight, local / value.blendIn);
+    if (value.blendOut > 0) weight = Math.min(weight, (value.length - local) / value.blendOut);
+    const u = Math.min(1, Math.max(0, weight));
+    return u * u * (3 - 2 * u);
+};
+
+/**
  * Everything the timeline's unmuted tracks set at `time` (seconds). Rotation keys are degrees and come
  * out as radians. Tracks without a target (blank object id or variable name) or without keys are skipped.
  */
@@ -128,7 +175,11 @@ export const evaluateTimeline = (data: TimelineData, time: number): TimelineEval
     const transforms = new Map<string, TimelineTransformSample>();
     const visibility = new Map<string, boolean>();
     const variables = new Map<string, number>();
+    const animations = new Map<string, TimelineClipSample[]>();
     let camera: TimelineEvaluation['camera'];
+    let fade: TimelineEvaluation['fade'];
+    let subtitle: TimelineLineSample | undefined;
+    let subtitleStart = -Infinity;
     for (const track of data.tracks) {
         if (track.muted) continue;
         if (track.kind === 'transform') {
@@ -152,6 +203,25 @@ export const evaluateTimeline = (data: TimelineData, time: number): TimelineEval
         } else if (track.kind === 'camera') {
             const shot = sampleStepKeys(track.keys, at);
             if (shot !== undefined) camera = { objectId: shot.trim(), blend: Math.max(0, track.blend ?? 0) };
+        } else if (track.kind === 'animation') {
+            if (!track.objectId) continue;
+            for (const key of track.keys) {
+                const local = at - key.time;
+                const weight = key.value.clip ? clipWeight(key.value, local) : 0;
+                if (weight <= 0) continue;
+                const clips = animations.get(track.objectId) ?? [];
+                clips.push({ clip: key.value.clip, time: key.value.offset + local * key.value.speed, weight, loop: key.value.loop });
+                animations.set(track.objectId, clips);
+            }
+        } else if (track.kind === 'fade') {
+            const amount = sampleNumberKeys(track.keys, at);
+            if (amount !== undefined) fade = { amount: Math.min(1, Math.max(0, amount)), color: track.color };
+        } else if (track.kind === 'subtitle') {
+            for (const key of track.keys) {
+                if (at < key.time || at > key.time + key.value.length || key.time < subtitleStart || !key.value.text.trim()) continue;
+                subtitleStart = key.time;
+                subtitle = { speaker: key.value.speaker.trim(), text: key.value.text.trim(), trackId: track.id, at: Math.round(key.time * 1000) };
+            }
         }
     }
     return {
@@ -159,7 +229,51 @@ export const evaluateTimeline = (data: TimelineData, time: number): TimelineEval
         visibility: [...visibility].map(([objectId, visible]) => ({ objectId, visible })),
         variables: [...variables].map(([name, value]) => ({ name, value })),
         ...(camera ? { camera } : {}),
+        animations: [...animations].map(([objectId, clips]) => ({ objectId, clips })),
+        ...(fade ? { fade } : {}),
+        ...(subtitle ? { subtitle } : {}),
     };
+};
+
+/** A sound playback passed the start of: what to play, from where, and for how long. */
+export interface TimelineSoundStart {
+    trackId: string;
+    /** The object it plays from ('' for 2D), and the bus it goes through. */
+    objectId: string;
+    bus: string;
+    sound: string;
+    volume: number;
+    /** Seconds into the sound to start at (playback may pass its start part-way through a step). */
+    from: number;
+    /** Timeline time it stops at. */
+    until: number;
+}
+
+/**
+ * The sounds whose start playback crossed moving from `previousTime` to `time` (as crossedTimelineEvents
+ * counts crossing, wrapping when `looped`), in time order, each to start the way it would had it started
+ * on time. A negative previousTime counts keys at the current time too.
+ */
+export const crossedTimelineSounds = (data: TimelineData, previousTime: number, time: number, looped: boolean): TimelineSoundStart[] => {
+    const starts: Array<TimelineSoundStart & { time: number; order: number }> = [];
+    const crossed = (keyTime: number) => (looped
+        ? (keyTime > previousTime && keyTime <= data.duration) || keyTime <= time
+        : keyTime > previousTime && keyTime <= time);
+    for (const track of data.tracks) {
+        if (track.kind !== 'audio' || track.muted) continue;
+        for (const key of track.keys) {
+            if (!key.value.sound.trim() || !crossed(key.time)) continue;
+            // Wrapped this step: a key before the loop point started a lap earlier than one after it.
+            const lapped = looped && key.time > previousTime;
+            const elapsed = lapped ? time + data.duration - key.time : time - key.time;
+            if (elapsed >= key.value.length) continue;
+            starts.push({
+                trackId: track.id, objectId: track.objectId, bus: track.bus, sound: key.value.sound.trim(), volume: key.value.volume,
+                from: Math.max(0, elapsed), until: time + key.value.length - Math.max(0, elapsed), time: key.time, order: lapped ? 0 : 1,
+            });
+        }
+    }
+    return starts.sort((a, b) => a.order - b.order || a.time - b.time).map(({ time: _time, order: _order, ...start }) => start);
 };
 
 /**
@@ -244,11 +358,16 @@ export const isTimelinePlayValue = (value: unknown): boolean => {
 
 // --- TARGETS ---
 
-/** Ids of the objects the timeline's unmuted transform and visibility tracks drive, once each. */
+/**
+ * Ids of the level objects the timeline's unmuted tracks drive or play from (transform, visibility,
+ * animation and audio tracks), once each; the player is not a level object and is left out.
+ */
 export const timelineTargetIds = (data: TimelineData): string[] => {
     const ids = new Set<string>();
     for (const track of data.tracks) {
-        if (!track.muted && (track.kind === 'transform' || track.kind === 'visibility') && track.objectId) ids.add(track.objectId);
+        if (track.muted) continue;
+        if (track.kind !== 'transform' && track.kind !== 'visibility' && track.kind !== 'animation' && track.kind !== 'audio') continue;
+        if (track.objectId && track.objectId !== TIMELINE_PLAYER_TARGET) ids.add(track.objectId);
     }
     return [...ids];
 };
@@ -283,6 +402,42 @@ const readNumber = (value: unknown): number | undefined => (isFiniteNumber(value
 const readBoolean = (value: unknown): boolean | undefined => (typeof value === 'boolean' ? value : undefined);
 
 const readText = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
+
+const bounded = (value: unknown, fallback: number, min: number, max: number): number =>
+    (isFiniteNumber(value) ? Math.min(max, Math.max(min, value)) : fallback);
+
+/** Longest a clip, sound or subtitle key lasts, in seconds. */
+export const MAX_TIMELINE_SPAN = 600;
+
+const readClip = (value: unknown): TimelineClipValue | undefined => {
+    if (!isRecord(value) || typeof value.clip !== 'string') return undefined;
+    return {
+        clip: value.clip,
+        length: bounded(value.length, 1, MIN_TIMELINE_DURATION, MAX_TIMELINE_SPAN),
+        offset: bounded(value.offset, 0, 0, MAX_TIMELINE_SPAN),
+        speed: bounded(value.speed, 1, -10, 10),
+        loop: typeof value.loop === 'boolean' ? value.loop : true,
+        blendIn: bounded(value.blendIn, 0.25, 0, MAX_TIMELINE_SPAN),
+        blendOut: bounded(value.blendOut, 0.25, 0, MAX_TIMELINE_SPAN),
+    };
+};
+
+const readSound = (value: unknown): TimelineSoundValue | undefined => {
+    if (!isRecord(value) || typeof value.sound !== 'string') return undefined;
+    return { sound: value.sound, length: bounded(value.length, 5, MIN_TIMELINE_DURATION, MAX_TIMELINE_SPAN), volume: bounded(value.volume, 1, 0, 2) };
+};
+
+const readLine = (value: unknown): TimelineLineValue | undefined => {
+    if (!isRecord(value) || typeof value.text !== 'string') return undefined;
+    return {
+        speaker: typeof value.speaker === 'string' ? value.speaker : '',
+        text: value.text,
+        length: bounded(value.length, 3, MIN_TIMELINE_DURATION, MAX_TIMELINE_SPAN),
+    };
+};
+
+const AUDIO_BUSES = ['sfx', 'music', 'ui', 'master'];
+const readColor = (value: unknown, fallback: string): string => (typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback);
 
 /**
  * Valid keys of a stored key list, sorted by time (stable for equal times); null when it is not a list.
@@ -339,6 +494,23 @@ const normalizeTrack = (value: unknown): TimelineTrack | null => {
             const keys = normalizeKeys(value.keys, readText, false);
             const blend = typeof value.blend === 'number' && Number.isFinite(value.blend) ? Math.min(30, Math.max(0, value.blend)) : undefined;
             return keys ? { ...base, kind: 'camera', keys, ...(blend !== undefined ? { blend } : {}) } : null;
+        }
+        case 'animation': {
+            const keys = normalizeKeys(value.keys, readClip, false);
+            return typeof value.objectId === 'string' && keys ? { ...base, kind: 'animation', objectId: value.objectId, keys } : null;
+        }
+        case 'audio': {
+            const keys = normalizeKeys(value.keys, readSound, false);
+            const bus = typeof value.bus === 'string' && AUDIO_BUSES.includes(value.bus) ? value.bus : 'sfx';
+            return keys ? { ...base, kind: 'audio', objectId: typeof value.objectId === 'string' ? value.objectId : '', bus, keys } : null;
+        }
+        case 'subtitle': {
+            const keys = normalizeKeys(value.keys, readLine, false);
+            return keys ? { ...base, kind: 'subtitle', keys } : null;
+        }
+        case 'fade': {
+            const keys = normalizeKeys(value.keys, (raw) => (isFiniteNumber(raw) ? Math.min(1, Math.max(0, raw)) : undefined), true);
+            return keys ? { ...base, kind: 'fade', color: readColor(value.color, '#000000'), keys } : null;
         }
         default:
             return null;

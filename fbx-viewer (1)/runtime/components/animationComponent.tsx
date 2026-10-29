@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import { ANIMATION_FRAME_PRIORITY } from '../../components/AnimationGraph/hooks/useGraphAnimator';
 import { useGameContent } from '../GameContentContext';
+import { findTimelineClip } from '../timeline/poser';
 import { ComponentHostContext } from './builtins';
 import type { LevelComponent } from '../../types';
 import type { ComponentDefinition, ComponentRenderProps } from './types';
@@ -34,14 +35,8 @@ export const readAnimationSettings = (component: LevelComponent): AnimationSetti
     };
 };
 
-/** The last part of a clip name: FBX takes are often named `Armature|Walk`. */
-const shortName = (name: string) => name.slice(name.lastIndexOf('|') + 1).trim().toLowerCase();
-
 /** The clip `name` asks for: the exact name, else the same name without an `Armature|` style prefix, ignoring case. */
-export const findAnimationClip = (clips: readonly THREE.AnimationClip[], name: string): THREE.AnimationClip | null => {
-    if (!name) return null;
-    return clips.find(clip => clip.name === name) ?? clips.find(clip => shortName(clip.name) === shortName(name)) ?? null;
-};
+export const findAnimationClip = findTimelineClip;
 
 const AnimationRuntime: React.FC<ComponentRenderProps> = ({ object, component }) => {
     const hostRef = useContext(ComponentHostContext);

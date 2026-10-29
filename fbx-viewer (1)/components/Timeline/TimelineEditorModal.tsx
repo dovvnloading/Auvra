@@ -1,16 +1,27 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, Crosshair, Eye, Film, Hash, Move3d, Plus, Trash2, Video, Volume2, VolumeX, X, Zap } from 'lucide-react';
+import { AlertTriangle, Captions, Crosshair, Eye, Film, Hash, Move3d, Music, PersonStanding, Plus, SunDim, Trash2, Video, Volume2, VolumeX, X, Zap } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { LevelObject } from '../../types';
-import type { TimelineData, TimelineInterpolation, TimelineKey, TimelineTrack, TimelineVec3 } from '../../runtime/timeline/types';
+import {
+    TIMELINE_PLAYER_TARGET,
+    type TimelineClipValue,
+    type TimelineData,
+    type TimelineInterpolation,
+    type TimelineKey,
+    type TimelineLineValue,
+    type TimelineSoundValue,
+    type TimelineTrack,
+    type TimelineVec3,
+} from '../../runtime/timeline/types';
 
 /**
  * TIMELINE EDITOR
  *
  * A dope sheet over a copy of one timeline: a ruler with a draggable playhead, one row per track with
- * its keys drawn as diamonds, and a panel for the selected key. Nothing reaches the level until Save,
- * which hands the edited TimelineData back in one piece; Cancel throws the copy away.
+ * its keys drawn as diamonds (clips, sounds and subtitle lines as bars as long as they last), and a
+ * panel for the selected key. Nothing reaches the level until Save, which hands the edited
+ * TimelineData back in one piece; Cancel throws the copy away.
  */
 
 export interface TimelineEditorModalProps {
@@ -24,6 +35,12 @@ export interface TimelineEditorModalProps {
     ownerId?: string;
     /** Shown under the title, e.g. the owning object's name. */
     subtitle?: string;
+    /** Clip names an animation track's target can play (a level object id, or TIMELINE_PLAYER_TARGET). */
+    clipsFor?: (objectId: string) => string[];
+    /** Audio assets sound keys can play. */
+    sounds?: { id: string; label: string }[];
+    /** Called with the timeline being edited and the playhead whenever either changes, for a preview in the viewport. */
+    onPreview?: (timeline: TimelineData, time: number) => void;
     /** Receives the edited timeline when Save is pressed with changes; onClose follows. */
     onSave: (timeline: TimelineData) => void;
     /** Closes the editor; unsaved changes are confirmed in the editor first. */
@@ -34,7 +51,7 @@ type TrackKind = TimelineTrack['kind'];
 type TransformChannel = 'position' | 'rotation' | 'scale';
 /** A key list of a track: one of the transform channels, or `keys` for the other kinds. */
 type Channel = TransformChannel | 'keys';
-type KeyValue = TimelineVec3 | boolean | number | string;
+type KeyValue = TimelineVec3 | boolean | number | string | TimelineClipValue | TimelineSoundValue | TimelineLineValue;
 type AnyKey = TimelineKey<KeyValue>;
 
 /** A key's place in the draft. The index follows the key when its list is re-sorted by time. */
@@ -75,7 +92,7 @@ const MIN_ROW_HEIGHT = 60;
 const DRAG_THRESHOLD = 3;
 const TIME_EPSILON = 1e-4;
 const TICK_STEPS = [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120];
-const TRACK_KINDS: TrackKind[] = ['transform', 'visibility', 'variable', 'event', 'camera'];
+const TRACK_KINDS: TrackKind[] = ['transform', 'visibility', 'variable', 'event', 'camera', 'animation', 'audio', 'subtitle', 'fade'];
 const TRANSFORM_CHANNELS: TransformChannel[] = ['position', 'rotation', 'scale'];
 const CHANNEL_LABELS: Record<TransformChannel, string> = { position: 'Position', rotation: 'Rotation', scale: 'Scale' };
 const AXES = ['X', 'Y', 'Z'] as const;
@@ -91,7 +108,26 @@ const KIND_INFO: Record<TrackKind, { label: string; icon: LucideIcon; text: stri
     variable: { label: 'Variable', icon: Hash, text: 'text-violet-400', fill: 'bg-violet-400' },
     event: { label: 'Event', icon: Zap, text: 'text-amber-400', fill: 'bg-amber-400' },
     camera: { label: 'Camera', icon: Video, text: 'text-pink-400', fill: 'bg-pink-400' },
+    animation: { label: 'Animation', icon: PersonStanding, text: 'text-orange-400', fill: 'bg-orange-400' },
+    audio: { label: 'Audio', icon: Music, text: 'text-cyan-400', fill: 'bg-cyan-400' },
+    subtitle: { label: 'Subtitles', icon: Captions, text: 'text-lime-300', fill: 'bg-lime-300' },
+    fade: { label: 'Fade', icon: SunDim, text: 'text-slate-300', fill: 'bg-slate-300' },
 };
+
+/** A clip, sound or subtitle key lasts a length and is drawn as a bar; other keys are instants. */
+const spanOf = (value: KeyValue): number | null =>
+    (typeof value === 'object' && !Array.isArray(value) && 'length' in value ? value.length : null);
+
+/** What a bar shows: the clip, the sound or the line. */
+const spanLabel = (value: KeyValue, sounds: readonly { id: string; label: string }[]): string => {
+    if (typeof value !== 'object' || Array.isArray(value)) return '';
+    if ('clip' in value) return value.clip || 'No clip';
+    if ('sound' in value) return sounds.find(sound => sound.id === value.sound)?.label ?? (value.sound || 'No sound');
+    return value.speaker ? `${value.speaker}: ${value.text}` : value.text;
+};
+
+/** Objects that can play clips: those with a model. */
+export const animatedObjects = (objects: readonly LevelObject[]): LevelObject[] => objects.filter(object => !!object.modelId);
 
 /** Objects that carry a Camera component, which camera keys can cut to. */
 export const cameraObjects = (objects: readonly LevelObject[]): LevelObject[] =>
@@ -129,6 +165,10 @@ const createTrack = (kind: TrackKind, id: string, objectId: string): TimelineTra
         case 'variable': return { id, kind, name: '', keys: [] };
         case 'event': return { id, kind, keys: [] };
         case 'camera': return { id, kind, keys: [], blend: 0 };
+        case 'animation': return { id, kind, objectId, keys: [] };
+        case 'audio': return { id, kind, objectId: '', bus: 'sfx', keys: [] };
+        case 'subtitle': return { id, kind, keys: [] };
+        case 'fade': return { id, kind, color: '#000000', keys: [] };
     }
 };
 
@@ -139,11 +179,15 @@ const lanesOf = (track: TimelineTrack): Lane[] => {
         case 'variable': return [{ channel: 'keys', label: 'Value' }];
         case 'event': return [{ channel: 'keys', label: 'Events' }];
         case 'camera': return [{ channel: 'keys', label: 'Shots' }];
+        case 'animation': return [{ channel: 'keys', label: 'Clips' }];
+        case 'audio': return [{ channel: 'keys', label: 'Sounds' }];
+        case 'subtitle': return [{ channel: 'keys', label: 'Lines' }];
+        case 'fade': return [{ channel: 'keys', label: 'Cover' }];
     }
 };
 
-/** Only transform and variable keys blend; visibility and event keys always step. */
-const blends = (track: TimelineTrack) => track.kind === 'transform' || track.kind === 'variable';
+/** Only transform, variable and fade keys blend; the others step (clips blend by their own fades). */
+const blends = (track: TimelineTrack) => track.kind === 'transform' || track.kind === 'variable' || track.kind === 'fade';
 
 const getKeys = (track: TimelineTrack, channel: Channel): AnyKey[] => {
     if (track.kind === 'transform') return channel === 'keys' ? [] : track[channel] ?? [];
@@ -164,6 +208,10 @@ const setKeys = (track: TimelineTrack, channel: Channel, keys: AnyKey[]): Timeli
         case 'variable': return { ...track, keys: keys as TimelineKey<number>[] };
         case 'event': return { ...track, keys: keys as TimelineKey<string>[] };
         case 'camera': return { ...track, keys: keys as TimelineKey<string>[] };
+        case 'animation': return { ...track, keys: keys as TimelineKey<TimelineClipValue>[] };
+        case 'audio': return { ...track, keys: keys as TimelineKey<TimelineSoundValue>[] };
+        case 'subtitle': return { ...track, keys: keys as TimelineKey<TimelineLineValue>[] };
+        case 'fade': return { ...track, keys: keys as TimelineKey<number>[] };
     }
 };
 
@@ -194,6 +242,7 @@ const upsertKey = (track: TimelineTrack, channel: Channel, key: AnyKey): { track
 };
 
 const copyValue = (value: KeyValue): KeyValue => {
+    if (typeof value === 'object' && !Array.isArray(value)) return { ...value };
     if (!Array.isArray(value)) return value;
     const vector: TimelineVec3 = [value[0], value[1], value[2]];
     return vector;
@@ -210,7 +259,13 @@ const objectChannelValue = (object: LevelObject, channel: TransformChannel): Tim
  * The key double-clicking a lane adds at `time`: transform keys copy the neighbouring key (or the target
  * object's current transform), visibility keys flip the key before them, other keys copy their neighbour.
  */
-const createKey = (track: TimelineTrack, channel: Channel, time: number, objects: LevelObject[]): AnyKey => {
+const createKey = (
+    track: TimelineTrack,
+    channel: Channel,
+    time: number,
+    objects: LevelObject[],
+    sources: { clipsFor?: (objectId: string) => string[]; sounds?: readonly { id: string }[] } = {},
+): AnyKey => {
     const keys = getKeys(track, channel);
     const previous = [...keys].reverse().find(key => key.time <= time);
     const neighbour = previous ?? keys.find(key => key.time > time);
@@ -227,6 +282,16 @@ const createKey = (track: TimelineTrack, channel: Channel, time: number, objects
         case 'variable': value = neighbour?.value ?? 0; break;
         case 'event': value = neighbour?.value ?? 'Event'; break;
         case 'camera': value = neighbour?.value ?? cameraObjects(objects)[0]?.id ?? ''; break;
+        case 'animation': value = neighbour ? copyValue(neighbour.value) : {
+            clip: sources.clipsFor?.(track.objectId)[0] ?? '', length: 2, offset: 0, speed: 1, loop: true, blendIn: 0.25, blendOut: 0.25,
+        }; break;
+        case 'audio': value = neighbour ? copyValue(neighbour.value) : { sound: sources.sounds?.[0]?.id ?? '', length: 3, volume: 1 }; break;
+        case 'subtitle': {
+            const speaker = neighbour && typeof neighbour.value === 'object' && 'speaker' in neighbour.value ? neighbour.value.speaker : '';
+            value = { speaker, text: 'Line', length: 3 };
+            break;
+        }
+        case 'fade': value = neighbour?.value ?? 1; break;
     }
     const key: AnyKey = { time, value };
     if (blends(track) && previous?.interpolation) key.interpolation = previous.interpolation;
@@ -252,6 +317,11 @@ const cleanTimeline = (data: TimelineData): TimelineData => ({
 
 const describeValue = (value: KeyValue) => {
     if (Array.isArray(value)) return `(${value.map(formatNumber).join(', ')})`;
+    if (typeof value === 'object') {
+        if ('clip' in value) return `${value.clip || 'No clip'}, ${formatNumber(value.length)} s`;
+        if ('sound' in value) return `${value.sound || 'No sound'}, ${formatNumber(value.length)} s`;
+        return `"${value.text}", ${formatNumber(value.length)} s`;
+    }
     if (typeof value === 'boolean') return value ? 'Visible' : 'Hidden';
     if (typeof value === 'number') return formatNumber(value);
     return `"${value}"`;
@@ -310,12 +380,64 @@ const KeyDetails: React.FC<{
     onDelete: () => void;
     /** Camera objects a camera key can cut to. */
     cameras?: { id: string; label: string }[];
-}> = ({ track, channel, trackName, timelineKey, duration, onChange, onDelete, cameras = [] }) => {
+    /** Clips the track's target has, and the sounds there are. */
+    clips?: string[];
+    sounds?: { id: string; label: string }[];
+}> = ({ track, channel, trackName, timelineKey, duration, onChange, onDelete, cameras = [], clips = [], sounds = [] }) => {
     const laneLabel = lanesOf(track).find(lane => lane.channel === channel)?.label ?? '';
     const { value } = timelineKey;
 
     let editor: React.ReactNode = null;
-    if (Array.isArray(value)) {
+    if (typeof value === 'object' && !Array.isArray(value) && 'clip' in value) {
+        const set = (change: Partial<TimelineClipValue>) => onChange({ ...timelineKey, value: { ...value, ...change } });
+        editor = (
+            <div className="space-y-1.5">
+                <select aria-label="Clip" value={value.clip} onChange={(event) => set({ clip: event.target.value })} className={`w-full ${FIELD_CLASS}`}>
+                    {!value.clip && <option value="">Pick a clip</option>}
+                    {value.clip && !clips.includes(value.clip) && <option value={value.clip}>{value.clip} (not on this model)</option>}
+                    {clips.map(clip => <option key={clip} value={clip}>{clip}</option>)}
+                </select>
+                <NumberField label="Length" ariaLabel="Clip length" value={value.length} min={MIN_DURATION} max={MAX_DURATION} suffix="s" onChange={(length) => set({ length: round3(length) })} />
+                <NumberField label="Start at" ariaLabel="Clip start" value={value.offset} min={0} max={MAX_DURATION} suffix="s" onChange={(offset) => set({ offset: round3(offset) })} />
+                <NumberField label="Speed" ariaLabel="Clip speed" value={value.speed} min={-10} max={10} onChange={(speed) => set({ speed })} />
+                <NumberField label="Blend in" ariaLabel="Clip blend in" value={value.blendIn} min={0} max={MAX_DURATION} suffix="s" onChange={(blendIn) => set({ blendIn: round3(blendIn) })} />
+                <NumberField label="Blend out" ariaLabel="Clip blend out" value={value.blendOut} min={0} max={MAX_DURATION} suffix="s" onChange={(blendOut) => set({ blendOut: round3(blendOut) })} />
+                <label className="flex items-center gap-2 text-[11px] text-gray-300">
+                    <input type="checkbox" checked={value.loop} onChange={(event) => set({ loop: event.target.checked })} className="rounded bg-gray-800 border-gray-600 text-blue-500 focus:ring-0" />
+                    Loop the clip
+                </label>
+                <p className="text-[10px] leading-snug text-gray-500">Overlapping clips crossfade; where no clip plays, the character's own animation shows. The blends ease to and from it.</p>
+            </div>
+        );
+    } else if (typeof value === 'object' && !Array.isArray(value) && 'sound' in value) {
+        const set = (change: Partial<TimelineSoundValue>) => onChange({ ...timelineKey, value: { ...value, ...change } });
+        editor = (
+            <div className="space-y-1.5">
+                <select aria-label="Sound" value={value.sound} onChange={(event) => set({ sound: event.target.value })} className={`w-full ${FIELD_CLASS}`}>
+                    {!value.sound && <option value="">Pick a sound</option>}
+                    {value.sound && !sounds.some(sound => sound.id === value.sound) && <option value={value.sound}>Missing sound</option>}
+                    {sounds.map(sound => <option key={sound.id} value={sound.id}>{sound.label}</option>)}
+                </select>
+                <NumberField label="Plays for" ariaLabel="Sound length" value={value.length} min={MIN_DURATION} max={MAX_DURATION} suffix="s" onChange={(length) => set({ length: round3(length) })} />
+                <NumberField label="Volume" ariaLabel="Sound volume" value={value.volume} min={0} max={2} onChange={(volume) => set({ volume })} />
+            </div>
+        );
+    } else if (typeof value === 'object' && !Array.isArray(value)) {
+        const set = (change: Partial<TimelineLineValue>) => onChange({ ...timelineKey, value: { ...value, ...change } });
+        editor = (
+            <div className="space-y-1.5">
+                <label className="block text-[10px] text-gray-400">
+                    Speaker
+                    <input type="text" aria-label="Speaker" value={value.speaker} onChange={(event) => set({ speaker: event.target.value })} className={`mt-1 w-full ${FIELD_CLASS}`} />
+                </label>
+                <label className="block text-[10px] text-gray-400">
+                    Line
+                    <textarea aria-label="Line" value={value.text} rows={3} onChange={(event) => set({ text: event.target.value })} className={`mt-1 w-full resize-y py-1 ${FIELD_CLASS} h-auto`} />
+                </label>
+                <NumberField label="On screen" ariaLabel="Line length" value={value.length} min={MIN_DURATION} max={MAX_DURATION} suffix="s" onChange={(length) => set({ length: round3(length) })} />
+            </div>
+        );
+    } else if (Array.isArray(value)) {
         editor = (
             <div className="space-y-1.5">
                 {AXES.map((axis, index) => (
@@ -348,7 +470,9 @@ const KeyDetails: React.FC<{
             </label>
         );
     } else if (typeof value === 'number') {
-        editor = <NumberField label="Value" value={value} onChange={(next) => onChange({ ...timelineKey, value: next })} />;
+        editor = track.kind === 'fade'
+            ? <NumberField label="Cover" ariaLabel="Fade cover" value={value} min={0} max={1} onChange={(next) => onChange({ ...timelineKey, value: next })} />
+            : <NumberField label="Value" value={value} onChange={(next) => onChange({ ...timelineKey, value: next })} />;
     } else if (track.kind === 'camera') {
         editor = (
             <select
@@ -410,7 +534,11 @@ const KeyDetails: React.FC<{
                         {INTERPOLATIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
                     </select>
                 ) : (
-                    <p className="text-[10px] text-gray-500">{track.kind === 'event' ? 'Event' : track.kind === 'camera' ? 'Camera' : 'Visibility'} keys always step: the value holds until the next key.</p>
+                    <p className="text-[10px] text-gray-500">{
+                        track.kind === 'animation' ? 'Clips blend by their own blend in and out.'
+                            : track.kind === 'audio' || track.kind === 'subtitle' ? 'It starts at its key and lasts its length.'
+                                : `${track.kind === 'event' ? 'Event' : track.kind === 'camera' ? 'Camera' : 'Visibility'} keys always step: the value holds until the next key.`
+                    }</p>
                 )}
                 {blends(track) && (
                     <p className="text-[10px] text-gray-500 leading-snug">How the value moves from this key to the next: a straight line, a hold, or an ease in and out.</p>
@@ -430,7 +558,9 @@ const KeyDetails: React.FC<{
 // --- EDITOR ---
 
 /** Full-screen dope-sheet editor for one timeline; see TimelineEditorModalProps. */
-export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({ timeline, objects, variableNames = [], ownerId, subtitle, onSave, onClose }) => {
+export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
+    timeline, objects, variableNames = [], ownerId, subtitle, clipsFor, sounds = [], onPreview, onSave, onClose,
+}) => {
     const [baseline] = useState(() => JSON.stringify(cleanTimeline(timeline)));
     const [draft, setDraft] = useState(timeline);
     const draftRef = useRef(draft);
@@ -459,6 +589,14 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({ timeli
         const ids = new Set(cameraObjects(objects).map(object => object.id));
         return objectOptions.filter(option => ids.has(option.id));
     }, [objects, objectOptions]);
+    const characterOptions = useMemo(() => {
+        const ids = new Set(animatedObjects(objects).map(object => object.id));
+        return objectOptions.filter(option => ids.has(option.id));
+    }, [objects, objectOptions]);
+    const sources = { clipsFor, sounds };
+
+    // The viewport follows the draft and the playhead.
+    useEffect(() => { onPreview?.(draft, playhead); }, [draft, playhead, onPreview]);
     const lateKeys = useMemo(() => draft.tracks.reduce((count, track) => count + lanesOf(track).reduce(
         (laneCount, lane) => laneCount + getKeys(track, lane.channel).filter(key => key.time > draft.duration + TIME_EPSILON).length, 0,
     ), 0), [draft]);
@@ -493,6 +631,18 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({ timeli
             case 'variable': return track.name.trim() || 'Variable';
             case 'event': return 'Events';
             case 'camera': return 'Camera cuts';
+            case 'animation': {
+                if (track.objectId === TIMELINE_PLAYER_TARGET) return 'The player';
+                const object = objectsById.get(track.objectId);
+                return object ? object.name || object.type : 'Animation (no character)';
+            }
+            case 'audio': {
+                if (track.objectId === TIMELINE_PLAYER_TARGET) return 'Sounds from the player';
+                const object = objectsById.get(track.objectId);
+                return object ? `Sounds from ${object.name || object.type}` : 'Sounds';
+            }
+            case 'subtitle': return 'Subtitles';
+            case 'fade': return 'Fade';
         }
     };
 
@@ -500,7 +650,10 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({ timeli
 
     const addTrack = (kind: TrackKind) => {
         const data = draftRef.current;
-        const target = ownerId && objectsById.has(ownerId) ? ownerId : objects[0]?.id ?? '';
+        const characters = animatedObjects(objects);
+        const target = kind === 'animation'
+            ? (ownerId && characters.some(object => object.id === ownerId) ? ownerId : characters[0]?.id ?? TIMELINE_PLAYER_TARGET)
+            : ownerId && objectsById.has(ownerId) ? ownerId : objects[0]?.id ?? '';
         const track = createTrack(kind, createTrackId(new Set(data.tracks.map(existing => existing.id))), target);
         commit({ ...data, tracks: [...data.tracks, track] });
     };
@@ -526,7 +679,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({ timeli
             setSelected({ trackId, channel, index: existing });
             return;
         }
-        const result = upsertKey(track, channel, createKey(track, channel, time, objects));
+        const result = upsertKey(track, channel, createKey(track, channel, time, objects, sources));
         commit(mapTrack(data, trackId, () => result.track));
         setSelected({ trackId, channel, index: result.index });
     };
@@ -682,7 +835,8 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({ timeli
             role="dialog"
             aria-modal="true"
             aria-label="Timeline editor"
-            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 outline-none"
+            // Docked along the bottom, so the viewport above shows the timeline at the playhead.
+            className="fixed inset-x-0 bottom-0 z-[100] flex justify-center p-2 outline-none"
             onKeyDown={(event) => {
                 event.stopPropagation();
                 handleKey(event);
@@ -692,14 +846,14 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({ timeli
             onDoubleClick={stop}
             onContextMenu={stop}
         >
-            <div className="relative flex w-full max-w-6xl h-[85vh] flex-col overflow-hidden rounded-xl border border-gray-700 bg-gray-900 shadow-2xl">
+            <div className="relative flex w-full h-[50vh] min-h-[320px] flex-col overflow-hidden rounded-xl border border-gray-700 bg-gray-900 shadow-2xl">
                 <div className="flex items-center justify-between border-b border-gray-800 bg-gray-950 px-5 py-3">
                     <div className="flex items-center gap-3 min-w-0">
                         <Film size={18} className="text-blue-400 shrink-0" />
                         <div className="min-w-0">
                             <h2 className="text-sm font-bold text-white">Timeline</h2>
                             <p className="text-[10px] text-gray-500 truncate">
-                                {subtitle ? `${subtitle} · ` : ''}Double-click a row to key at the playhead · drag keys to move (Shift: free timing) · Delete removes
+                                {subtitle ? `${subtitle} · ` : ''}The viewport shows the playhead · double-click a row to key there · drag keys to move (Shift: free timing) · Delete removes
                             </p>
                         </div>
                     </div>
@@ -785,7 +939,8 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({ timeli
 
                             {draft.tracks.length === 0 && (
                                 <div className="sticky left-0 px-4 py-10 text-center text-xs text-gray-500" style={{ width: HEADER_WIDTH + Math.min(laneWidth, 640) }}>
-                                    No tracks yet. Add a Transform, Visibility, Variable or Event track above.
+                                    No tracks yet. Add a track above: Transform, Visibility, Variable, Event and Camera tracks key objects, values and shots;
+                                    Animation, Audio, Subtitles and Fade tracks play clips on characters, sounds, lines and fades for cinematics.
                                 </div>
                             )}
 
@@ -850,6 +1005,71 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({ timeli
                                                         {target && !objectsById.has(target) && <option value={target}>Missing object</option>}
                                                         {objectOptions.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
                                                     </select>
+                                                )}
+                                                {track.kind === 'animation' && (
+                                                    <select
+                                                        aria-label="Character"
+                                                        value={track.objectId}
+                                                        onChange={(event) => {
+                                                            const objectId = event.target.value;
+                                                            changeTrack(track.id, current => (current.kind === 'animation' ? { ...current, objectId } : current));
+                                                        }}
+                                                        className={`w-full ${FIELD_CLASS}`}
+                                                    >
+                                                        <option value={TIMELINE_PLAYER_TARGET}>The player</option>
+                                                        {track.objectId && track.objectId !== TIMELINE_PLAYER_TARGET && !objectsById.has(track.objectId) && <option value={track.objectId}>Missing object</option>}
+                                                        {characterOptions.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
+                                                    </select>
+                                                )}
+                                                {track.kind === 'audio' && (
+                                                    <div className="flex gap-1">
+                                                        <select
+                                                            aria-label="Sound source"
+                                                            value={track.objectId}
+                                                            onChange={(event) => {
+                                                                const objectId = event.target.value;
+                                                                changeTrack(track.id, current => (current.kind === 'audio' ? { ...current, objectId } : current));
+                                                            }}
+                                                            className={`min-w-0 flex-1 ${FIELD_CLASS}`}
+                                                        >
+                                                            <option value="">Everywhere (2D)</option>
+                                                            <option value={TIMELINE_PLAYER_TARGET}>The player</option>
+                                                            {track.objectId && track.objectId !== TIMELINE_PLAYER_TARGET && !objectsById.has(track.objectId) && <option value={track.objectId}>Missing object</option>}
+                                                            {objectOptions.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
+                                                        </select>
+                                                        <select
+                                                            aria-label="Mixer bus"
+                                                            value={track.bus}
+                                                            onChange={(event) => {
+                                                                const bus = event.target.value;
+                                                                changeTrack(track.id, current => (current.kind === 'audio' ? { ...current, bus } : current));
+                                                            }}
+                                                            className={`w-16 ${FIELD_CLASS}`}
+                                                        >
+                                                            <option value="sfx">SFX</option>
+                                                            <option value="music">Music</option>
+                                                            <option value="ui">UI</option>
+                                                            <option value="master">Master</option>
+                                                        </select>
+                                                    </div>
+                                                )}
+                                                {track.kind === 'fade' && (
+                                                    <label className="flex items-center gap-1 px-1 text-[10px] text-gray-400">
+                                                        Colour
+                                                        <input
+                                                            type="color"
+                                                            aria-label="Fade colour"
+                                                            value={track.color}
+                                                            onChange={(event) => {
+                                                                const color = event.target.value;
+                                                                changeTrack(track.id, current => (current.kind === 'fade' ? { ...current, color } : current));
+                                                            }}
+                                                            className="h-5 w-8 cursor-pointer rounded border border-gray-700 bg-transparent"
+                                                        />
+                                                    </label>
+                                                )}
+                                                {track.kind === 'subtitle' && (
+                                                    <div className="px-1 text-[10px] leading-snug text-gray-500">Shows each line for its length; translate them as timeline.&lt;object&gt;.&lt;track&gt;.&lt;ms&gt;.</div>
                                                 )}
                                                 {track.kind === 'variable' && (
                                                     <input
@@ -930,6 +1150,29 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({ timeli
                                                         const ref: KeyRef = { trackId: track.id, channel: lane.channel, index };
                                                         const isSelected = selected?.trackId === track.id && selected.channel === lane.channel && selected.index === index;
                                                         const late = key.time > duration + TIME_EPSILON;
+                                                        const span = spanOf(key.value);
+                                                        if (span !== null && !late) {
+                                                            const label = spanLabel(key.value, sounds);
+                                                            return (
+                                                                <button
+                                                                    key={index}
+                                                                    type="button"
+                                                                    aria-label={`${name} ${lane.label} ${label} at ${formatTime(key.time)}`}
+                                                                    aria-pressed={isSelected}
+                                                                    title={`${formatTime(key.time)} · ${describeValue(key.value)}`}
+                                                                    className={`absolute top-1 bottom-1 overflow-hidden rounded border px-1.5 text-left text-[10px] leading-[18px] text-gray-950 cursor-ew-resize focus:outline-none ${isSelected ? 'z-10 border-amber-300 ring-2 ring-amber-400/60' : 'border-black/40 hover:brightness-110'} ${info.fill} bg-opacity-80`}
+                                                                    style={{ left: xAt(key.time), width: Math.max(8, span * zoom) }}
+                                                                    onPointerDown={(event) => startKeyDrag(event, ref, key.time)}
+                                                                    onPointerMove={moveKeyDrag}
+                                                                    onPointerUp={endKeyDrag}
+                                                                    onPointerCancel={endKeyDrag}
+                                                                    onClick={(event) => { if (event.detail === 0) setSelected(ref); }}
+                                                                    onDoubleClick={(event) => event.stopPropagation()}
+                                                                >
+                                                                    <span className="block truncate font-medium">{label}</span>
+                                                                </button>
+                                                            );
+                                                        }
                                                         return (
                                                             <button
                                                                 key={index}
@@ -972,6 +1215,8 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({ timeli
                                 onChange={changeSelectedKey}
                                 onDelete={deleteSelectedKey}
                                 cameras={cameraOptions}
+                                clips={selection.track.kind === 'animation' ? clipsFor?.(selection.track.objectId) ?? [] : []}
+                                sounds={sounds}
                             />
                         ) : (
                             <div className="space-y-2 text-[11px] leading-snug text-gray-500">
