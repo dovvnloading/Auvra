@@ -1,10 +1,11 @@
 
-import React, { useLayoutEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Sky } from '@react-three/drei';
 import { LevelObject, SkyConfig } from '../../types';
 import { LocalEnvironment } from '../Scene/LocalEnvironment';
+import { publishDaylight } from '../../runtime/daylight';
 
 interface SkySystemProps {
     levelObjects: LevelObject[];
@@ -184,6 +185,11 @@ export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects }) => {
     // from underneath; a faint moon opposite it keeps the night readable.
     const daylight = THREE.MathUtils.smoothstep(sunPosition.y / 100, -0.05, 0.15);
     const moonPosition = useMemo(() => sunPosition.clone().multiplyScalar(-1), [sunPosition]);
+    // For what reacts to the light, such as vehicle headlights.
+    useEffect(() => {
+        publishDaylight(skyObject ? daylight : 1);
+        return () => publishDaylight(null);
+    }, [skyObject, daylight]);
 
     // Default Fallback if no sky object exists (Standard Editor Lighting)
     if (!skyObject) {

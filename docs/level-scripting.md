@@ -117,7 +117,7 @@ To move something along a spline at a speed, add a [Follow Spline](world-editor.
 | Set Vehicle Input | Drives a vehicle from the blueprint: **Throttle** and **Brake** from 0 to 1 (the brake reverses once stopped), **Steer** from -1 (left) to 1 (right) and the **Handbrake**. It holds them until set again or released; its AI path waits, and the player driving it overrides them |
 | Release Vehicle Input | Hands the vehicle back to its AI path, or parks it |
 
-**Input Action** compares the action with its state on the node's previous run, so drive it from **Event Tick** to catch every press. The actions are MoveForward, MoveBack, MoveLeft, MoveRight, Jump, Sprint, Fire, Aim, Interact, Reload, NextWeapon and Pause; see [Controls](building-games.md#controls) for their keys.
+**Input Action** compares the action with its state on the node's previous run, so drive it from **Event Tick** to catch every press. The actions are MoveForward, MoveBack, MoveLeft, MoveRight, Jump, Sprint, Fire, Aim, Interact, Reload, NextWeapon, Pause, Throttle, Brake, Handbrake, CameraView and LookBack; see [Controls](building-games.md#controls) for their keys.
 
 ## Level variables
 

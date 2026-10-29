@@ -1,9 +1,12 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import * as THREE from 'three';
 import { HeightfieldCollider, RigidBody } from '@react-three/rapier';
-import type { LevelObject } from '../types';
+import type { RapierCollider } from '@react-three/rapier';
+import type { LevelObject, TextureData } from '../types';
 import { MAX_TERRAIN_HEIGHTFIELD_SAMPLES_PER_SIDE, terrainSamplesPerSide } from '../utils/terrainHeightfieldCodec';
+import { useGameContent } from './GameContentContext';
 import { physicsUserData, usePhysicsAvailable } from './physics';
+import { surfaceFromName, tagSurface, type SurfaceKind, type SurfaceTag } from './surfaces';
 
 /** Rapier heightfield arguments for a terrain, in the terrain object's own space. */
 export interface TerrainHeightfieldShape {
@@ -142,6 +145,42 @@ export const terrainSurfaceHeight = (worldX: number, worldZ: number, terrain: Le
     return terrain.position[1] + (near * (1 - ty) + far * ty) * scale.y;
 };
 
+/**
+ * The ground a terrain is made of under a world point: the painted layer with the most weight at the
+ * nearest grid sample, each layer's surface named by its texture (a 'Grass' or 'gravel_01' texture);
+ * `base` off the terrain, unpainted, or for a layer whose texture names none.
+ */
+export const terrainSurfaceAt = (
+    terrain: LevelObject,
+    layers: readonly (SurfaceKind | null)[],
+    base: SurfaceKind,
+    worldX: number,
+    worldZ: number,
+): SurfaceKind => {
+    const grid = terrainGrid(terrain);
+    const splat = terrain.terrainData?.splat;
+    if (!grid || !splat || splat.length !== grid.samples * grid.samples * 4 || layers.length === 0) return base;
+    const u = (worldX - terrain.position[0]) / grid.scale.x + 0.5;
+    const v = (worldZ - terrain.position[2]) / grid.scale.z + 0.5;
+    if (!(u >= 0 && u <= 1 && v >= 0 && v <= 1)) return base;
+    const at = (Math.round(v * grid.resolution) * grid.samples + Math.round(u * grid.resolution)) * 4;
+    let layer = 0;
+    for (let channel = 1; channel < Math.min(4, layers.length); channel++) {
+        if (splat[at + channel] > splat[at + layer]) layer = channel;
+    }
+    return layers[layer] ?? base;
+};
+
+/** A terrain's surface tag: its texture's surface, and its painted layers' by point. */
+export const terrainSurfaceTag = (terrain: LevelObject, textures: readonly Pick<TextureData, 'id' | 'name'>[]): SurfaceTag => {
+    const nameOf = (id: string | undefined) => (id ? textures.find(texture => texture.id === id)?.name : undefined);
+    const base = surfaceFromName(nameOf(terrain.terrainData?.textureId)) ?? surfaceFromName(terrain.name) ?? 'default';
+    const layers = (terrain.terrainData?.textureLayers ?? []).map(layer => surfaceFromName(nameOf(layer.textureId)));
+    return layers.some(Boolean)
+        ? { kind: base, at: (x, z) => terrainSurfaceAt(terrain, layers, base, x, z) }
+        : { kind: base };
+};
+
 const FLAT_GROUND_EXTENT = 4000;
 const FLAT_GROUND_CELLS = 64;
 /** How far below y = 0 a terrain surface may reach before the flat ground drops below it. */
@@ -191,6 +230,12 @@ const TerrainCollider: React.FC<{ terrain: LevelObject }> = ({ terrain }) => {
     // Keyed on what the shape reads, so a terrain object re-created with the same data keeps its collider.
     const shape = useMemo(() => terrainHeightfieldShape(terrain), [terrainData, scaleX, scaleY, scaleZ]);
     const args = useHeightfieldArgs(shape);
+    // What it is made of, for tyres: tagged on the collider rather than rebuilding it.
+    const { textures } = useGameContent();
+    const surface = useMemo(() => terrainSurfaceTag(terrain, textures), [terrain, textures]);
+    const tag = useCallback((collider: RapierCollider | null) => {
+        if (collider) tagSurface(collider as RapierCollider & { userData?: unknown }, surface);
+    }, [surface]);
     if (!args) return null;
     return (
         // Unscaled body: the terrain's scale is already in the heightfield's extent.
@@ -201,7 +246,7 @@ const TerrainCollider: React.FC<{ terrain: LevelObject }> = ({ terrain }) => {
             rotation={terrain.rotation}
             userData={physicsUserData(terrain.id)}
         >
-            <HeightfieldCollider args={args} />
+            <HeightfieldCollider ref={tag} args={args} />
         </RigidBody>
     );
 };

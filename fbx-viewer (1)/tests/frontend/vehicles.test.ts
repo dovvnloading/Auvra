@@ -2,7 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import {
   ackermannAngles,
+  AI_BACK_OUT_TIME,
+  AI_BLOCKED_TIME,
+  AI_STOP_GAP,
+  AI_STUCK_TIME,
+  avoidAhead,
   canStepOut,
+  createAiRecovery,
   createControlState,
   createVehicleSession,
   driveAlongPath,
@@ -13,8 +19,13 @@ import {
   planVehicleLayout,
   readVehicleSettings,
   restingSag,
+  obstacleSpeedLimit,
+  RIGHT_AFTER,
+  stepAiRecovery,
   stepOutOfVehicle,
+  stepUpright,
   stepVehicleControls,
+  uprightRotation,
   trackProgress,
   VEHICLE_DEFAULTS,
   VEHICLE_SHELL_MASS_SHARE,
@@ -299,7 +310,62 @@ const handle = (objectId: string, overrides: Partial<VehicleHandle> = {}): Vehic
   exitPoint: out => out.set(2, 0, 0),
   setScriptControls: vi.fn(),
   telemetry: () => null,
+  frame: out => out.identity(),
+  chassis: () => null,
   ...overrides,
+});
+
+describe('AI traffic and recovery', () => {
+  const cruise = { throttle: 0.8, brake: 0, steer: 0.1, handbrake: false };
+
+  it('carries no more speed than it could stop from short of what is ahead, and holds still close to it', () => {
+    expect(obstacleSpeedLimit(AI_STOP_GAP)).toBe(0);
+    expect(obstacleSpeedLimit(AI_STOP_GAP + 30)).toBeCloseTo(Math.sqrt(2 * 6 * 30), 9);
+    expect(avoidAhead(cruise, 20, Infinity)).toBe(cruise);
+    expect(avoidAhead(cruise, 10, 200)).toBe(cruise);
+    const closing = avoidAhead(cruise, 25, 30);
+    expect(closing.throttle).toBe(0);
+    expect(closing.brake).toBeGreaterThan(0);
+    // Stopped inside the gap it does not creep up.
+    expect(avoidAhead(cruise, 0, AI_STOP_GAP - 1)).toMatchObject({ throttle: 0 });
+  });
+
+  it('backs out with the steering reversed when pinned, or when held up too long, then drives on', () => {
+    const state = createAiRecovery();
+    let controls = cruise;
+    for (let t = 0; t < AI_STUCK_TIME + 0.1; t += 0.1) controls = stepAiRecovery(state, cruise, cruise, false, 0, 0.1);
+    expect(controls).toMatchObject({ throttle: 0, brake: 1, steer: -cruise.steer });
+    for (let t = 0; t < AI_BACK_OUT_TIME + 0.1; t += 0.1) controls = stepAiRecovery(state, cruise, cruise, false, -2, 0.1);
+    expect(controls).toBe(cruise);
+    // Moving along it never backs out.
+    const moving = createAiRecovery();
+    for (let t = 0; t < 10; t += 0.1) expect(stepAiRecovery(moving, cruise, cruise, false, 10, 0.1)).toBe(cruise);
+    // Held up behind something: waits, then backs out.
+    const waiting = createAiRecovery();
+    const held = avoidAhead(cruise, 0, 1);
+    for (let t = 0; t < AI_BLOCKED_TIME - 0.5; t += 0.1) expect(stepAiRecovery(waiting, cruise, held, true, 0, 0.1)).toBe(held);
+    for (let t = 0; t < 1; t += 0.1) controls = stepAiRecovery(waiting, cruise, held, true, 0, 0.1);
+    expect(controls.brake).toBe(1);
+  });
+
+  it('rights a vehicle that has lain over, nearly still, for a while, facing the way it headed', () => {
+    const state = { over: 0 };
+    expect(stepUpright(state, -1, 0, RIGHT_AFTER / 2)).toBe(false);
+    // Rolling over at speed does not count.
+    expect(stepUpright(state, -1, 10, 1)).toBe(false);
+    expect(state.over).toBe(0);
+    expect(stepUpright(state, -1, 0, RIGHT_AFTER / 2)).toBe(false);
+    expect(stepUpright(state, -1, 0, RIGHT_AFTER / 2 + 0.01)).toBe(true);
+    // Upside down heading 0.7 rad, for a model built facing +X.
+    const facing = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+    const vehicle = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.7)
+      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI));
+    const body = uprightRotation(vehicle, facing);
+    const righted = body.clone().multiply(facing);
+    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(righted);
+    expect(new THREE.Vector3(0, 1, 0).applyQuaternion(righted).y).toBeCloseTo(1, 6);
+    expect(Math.atan2(forward.x, forward.z)).toBeCloseTo(0.7, 6);
+  });
 });
 
 describe('driving session', () => {

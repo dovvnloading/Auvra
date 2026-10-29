@@ -129,5 +129,10 @@ Mouse sensitivity, invert Y and master volume start from **Game Settings**; musi
 | Interact | F | Button 2 (X) |
 | Reload | R | Button 1 (B) |
 | Next weapon | Q | Button 3 (Y) |
+| Throttle | (Move forward) | Button 7 (right trigger) |
+| Brake / reverse | (Move back) | Button 6 (left trigger) |
+| Handbrake | Space | Button 0 (A), button 5 (right bumper) |
+| Change view | V | Button 8 (Back) |
+| Look back | B | Button 11 (right stick press) |
 
-The **Pause** action (Esc or gamepad Start, rebindable in Options) pauses the game. The **Input Action** node in the level blueprint can read every action above, plus **Pause** (Esc, gamepad button 9). **Interact** talks to characters with a Dialogue component and gets into and out of [vehicles](world-editor.md#vehicles); scripts can read it too. In a vehicle, Move forward and back are the throttle and the brake (reverse from a stop), Move left and right steer, and Jump is the handbrake.
+The **Pause** action (Esc or gamepad Start, rebindable in Options) pauses the game. The **Input Action** node in the level blueprint can read every action above, plus **Pause** (Esc, gamepad button 9). **Interact** talks to characters with a Dialogue component and gets into and out of [vehicles](world-editor.md#vehicles); scripts can read it too. In a vehicle, Move forward and back (or the triggers, which are analog) are the throttle and the brake (reverse from a stop), Move left and right steer, Handbrake locks the rear wheels, Change view cycles the cameras and Look back looks behind.
