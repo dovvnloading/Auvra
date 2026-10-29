@@ -29,6 +29,12 @@ export const DEFAULT_INPUT_MAP: InputActionMap = [
     { name: 'Reload', label: 'Reload', bindings: [{ device: 'keyboard', code: 'KeyR' }, { device: 'gamepad', button: 1 }] },
     { name: 'NextWeapon', label: 'Next weapon', bindings: [{ device: 'keyboard', code: 'KeyQ' }, { device: 'gamepad', button: 3 }] },
     { name: 'Pause', label: 'Pause', bindings: [{ device: 'keyboard', code: 'Escape' }, { device: 'gamepad', button: 9 }] },
+    // Driving: the triggers are analog pedals; on a keyboard Move forward and Move back drive and brake.
+    { name: 'Throttle', label: 'Throttle', bindings: [{ device: 'gamepad', button: 7 }] },
+    { name: 'Brake', label: 'Brake / reverse', bindings: [{ device: 'gamepad', button: 6 }] },
+    { name: 'Handbrake', label: 'Handbrake', bindings: [{ device: 'keyboard', code: 'Space' }, { device: 'gamepad', button: 0 }, { device: 'gamepad', button: 5 }] },
+    { name: 'CameraView', label: 'Change view', bindings: [{ device: 'keyboard', code: 'KeyV' }, { device: 'gamepad', button: 8 }] },
+    { name: 'LookBack', label: 'Look back', bindings: [{ device: 'keyboard', code: 'KeyB' }, { device: 'gamepad', button: 11 }] },
 ];
 
 /** Gamepad stick deflection below this counts as released. */

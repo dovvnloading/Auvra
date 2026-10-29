@@ -18,6 +18,7 @@ import { PhysicsFailureBoundary, objectIdFromRigidBody, physicsUserData, usePhys
 import { useTriggerEvents } from '../triggers';
 import type { TriggerEvent } from '../triggers';
 import { findWheelNodes, readVehicleSettings, VEHICLE_COMPONENT_TYPE, VEHICLE_SHELL_MASS_SHARE } from '../vehicles';
+import { SURFACE_KINDS, SURFACES, surfaceFromName, tagSurface, triangleSurfaces, type SurfaceKind, type SurfaceTag } from '../surfaces';
 import { ComponentHostContext } from './builtins';
 import type { ComponentDefinition, ComponentRenderProps } from './types';
 
@@ -45,6 +46,8 @@ export interface ColliderSettings {
     /** Shape centre in the object's local space. */
     offset: Vec3;
     isTrigger: boolean;
+    /** What the ground is made of, for tyres and the like; 'auto' reads it from the model's material names. */
+    surface: SurfaceKind | 'auto';
 }
 
 export interface RigidBodySettings {
@@ -54,7 +57,8 @@ export interface RigidBodySettings {
     lockRotation: boolean;
 }
 
-const COLLIDER_DEFAULTS: ColliderSettings = { shape: 'box', size: [1, 1, 1], radius: 0.5, height: 2, offset: [0, 0, 0], isTrigger: false };
+const COLLIDER_DEFAULTS: ColliderSettings = { shape: 'box', size: [1, 1, 1], radius: 0.5, height: 2, offset: [0, 0, 0], isTrigger: false, surface: 'auto' };
+const COLLIDER_SURFACES: readonly (SurfaceKind | 'auto')[] = ['auto', ...SURFACE_KINDS];
 const RIGID_BODY_DEFAULTS: RigidBodySettings = { type: 'dynamic', mass: 1, gravityScale: 1, lockRotation: false };
 
 const readNumber = (component: LevelComponent, key: string, fallback: number): number => {
@@ -88,7 +92,8 @@ export const resolveColliderSettings = (component: LevelComponent): ColliderSett
         radius: Math.max(MIN_EXTENT, readNumber(component, 'radius', COLLIDER_DEFAULTS.radius)),
         height: Math.max(MIN_EXTENT, readNumber(component, 'height', COLLIDER_DEFAULTS.height)),
         offset: readVector3(component, 'offset', COLLIDER_DEFAULTS.offset),
-        isTrigger: readBoolean(component, 'isTrigger', COLLIDER_DEFAULTS.isTrigger)
+        isTrigger: readBoolean(component, 'isTrigger', COLLIDER_DEFAULTS.isTrigger),
+        surface: readChoice(component, 'surface', COLLIDER_SURFACES, COLLIDER_DEFAULTS.surface)
     };
 };
 
@@ -263,7 +268,38 @@ export interface HostGeometry {
     positions: Float32Array;
     /** Triangle indices into positions. */
     indices: Uint32Array;
+    /** Each triangle's surface, from its material's name; null when no name says one. */
+    surfaces?: Pick<SurfaceTag, 'triangles' | 'kinds'> | null;
 }
+
+/** The materials a mesh's triangles use, in index order: one run per material group (gaps unnamed). */
+const materialRuns = (mesh: THREE.Mesh, triangleCount: number): { count: number; name: string | undefined }[] => {
+    const material = mesh.material;
+    if (!Array.isArray(material)) return [{ count: triangleCount, name: material?.name }];
+    const groups = [...mesh.geometry.groups].sort((a, b) => a.start - b.start);
+    const runs: { count: number; name: string | undefined }[] = [];
+    let cursor = 0;
+    for (const group of groups) {
+        const start = Math.min(triangleCount, Math.floor(group.start / 3));
+        const end = Math.min(triangleCount, Math.floor((group.start + group.count) / 3));
+        if (start > cursor) runs.push({ count: start - cursor, name: undefined });
+        if (end > Math.max(start, cursor)) runs.push({ count: end - Math.max(start, cursor), name: material[group.materialIndex ?? 0]?.name });
+        cursor = Math.max(cursor, end);
+    }
+    if (cursor < triangleCount) runs.push({ count: triangleCount - cursor, name: material[0]?.name });
+    return runs;
+};
+
+/** The surface an object's model says it is: the first of its meshes' material names (or its own) that names one. */
+export const hostSurface = (host: THREE.Object3D, objectId: string): SurfaceKind | null => {
+    for (const mesh of collectHostMeshes(host, objectId)) {
+        for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+            const kind = surfaceFromName(material?.name) ?? surfaceFromName(mesh.name);
+            if (kind) return kind;
+        }
+    }
+    return null;
+};
 
 /** Every mesh under `host` (but those `skip` leaves out) merged into one triangle soup in the host's local space, or null when it draws none. */
 export const collectHostGeometry = (host: THREE.Object3D, objectId: string, skip?: (node: THREE.Object3D) => boolean): HostGeometry | null => {
@@ -283,6 +319,7 @@ export const collectHostGeometry = (host: THREE.Object3D, objectId: string, skip
     const toHost = new THREE.Matrix4().copy(host.matrixWorld).invert();
     const relative = new THREE.Matrix4();
     const vertex = new THREE.Vector3();
+    const runs: { count: number; name: string | undefined }[] = [];
     let vertexOffset = 0;
     let indexOffset = 0;
     for (const mesh of meshes) {
@@ -300,10 +337,11 @@ export const collectHostGeometry = (host: THREE.Object3D, objectId: string, skip
         for (let i = 0; i < triangleIndexCount; i++) {
             indices[indexOffset + i] = vertexOffset + (index ? index.getX(i) : i);
         }
+        runs.push(...materialRuns(mesh, Math.floor(triangleIndexCount / 3)));
         vertexOffset += position.count;
         indexOffset += triangleIndexCount;
     }
-    return { positions, indices };
+    return { positions, indices, surfaces: triangleSurfaces(runs) };
 };
 
 export type HullPlan =
@@ -616,9 +654,18 @@ interface ColliderPlacement {
     scale: Vec3;
 }
 
+/** The surface a collider is tagged with: its setting, else its triangles' materials (a mesh), else the object's. */
+const colliderSurface = (settings: ColliderSettings, content: HostGeometry | null, objectSurface: SurfaceKind | null): SurfaceTag | null => {
+    if (settings.surface !== 'auto') return { kind: settings.surface };
+    if (settings.shape === 'mesh' && content?.surfaces) return content.surfaces;
+    return objectSurface ? { kind: objectSurface } : null;
+};
+
 interface ObjectColliderProps {
     settings: ColliderSettings;
     content: HostGeometry | null;
+    /** The surface the object's model names, for an 'auto' collider without triangles of its own. */
+    objectSurface?: SurfaceKind | null;
     /** The absolute world scale the collider is built at, which round shapes are fitted to. */
     worldScale: Vec3;
     /** Where a collider folded in from a descendant sits in the body; the body's own colliders sit at their offset. */
@@ -632,12 +679,14 @@ interface ObjectColliderProps {
     onTriggerExit: (payload: CollisionPayload) => void;
 }
 
-const ObjectCollider: React.FC<ObjectColliderProps> = ({ settings, content, worldScale, placement, objectId, mass, sensorCollisionTypes, onTriggerEnter, onTriggerExit }) => {
+const ObjectCollider: React.FC<ObjectColliderProps> = ({ settings, content, objectSurface = null, worldScale, placement, objectId, mass, sensorCollisionTypes, onTriggerEnter, onTriggerExit }) => {
+    const surface = useMemo(() => colliderSurface(settings, content, objectSurface), [settings, content, objectSurface]);
     // The binding calls a function ref with each collider it builds (again whenever it rebuilds one).
-    const tagFolded = useCallback((collider: RapierCollider | null) => {
-        if (collider && objectId) tagColliderObject(collider, objectId);
-    }, [objectId]);
-    const tag = objectId ? tagFolded : undefined;
+    const tag = useCallback((collider: RapierCollider | null) => {
+        if (!collider) return;
+        if (objectId) tagColliderObject(collider, objectId);
+        tagSurface(collider as RapierCollider & { userData?: unknown }, surface);
+    }, [objectId, surface]);
     const pose: Pick<ColliderCommonProps, 'position' | 'rotation' | 'scale'> = placement
         ? { position: placement.position, rotation: placement.rotation, scale: placement.scale }
         : { position: settings.offset };
@@ -722,6 +771,8 @@ const SimulatedBody: React.FC<SimulatedBodyProps> = ({ object, plan, host, conte
     }, [triggers]);
     const { ActiveCollisionTypes } = rapier;
     const sensorCollisionTypes = ActiveCollisionTypes.DEFAULT | ActiveCollisionTypes.KINEMATIC_FIXED | ActiveCollisionTypes.KINEMATIC_KINEMATIC;
+    // Re-read when the model's geometry is (the model can load after the body mounts).
+    const objectSurface = useMemo(() => hostSurface(host, object.id), [host, object.id, content]);
 
     // Colliders take the host's world scale when they are built, so they are rebuilt when it changes
     // (Set Actor Transform's Scale, a scaled or animated parent); the body and its velocity stay.
@@ -797,6 +848,7 @@ const SimulatedBody: React.FC<SimulatedBodyProps> = ({ object, plan, host, conte
                     key={`${entry.id}@${scaleKey}`}
                     settings={entry.settings}
                     content={content}
+                    objectSurface={objectSurface}
                     worldScale={shapeScale}
                     mass={colliderMass(plan, entry.settings, foldedShapes)}
                     sensorCollisionTypes={sensorCollisionTypes}
@@ -1090,7 +1142,14 @@ export const PHYSICS_COMPONENTS: ComponentDefinition[] = [
             { key: 'radius', label: 'Radius', type: 'number', default: COLLIDER_DEFAULTS.radius, min: MIN_EXTENT, max: 1000, step: 0.05 },
             { key: 'height', label: 'Capsule Height', type: 'number', default: COLLIDER_DEFAULTS.height, min: MIN_EXTENT, max: 1000, step: 0.1 },
             { key: 'offset', label: 'Offset', type: 'vector3', default: COLLIDER_DEFAULTS.offset, step: 0.1 },
-            { key: 'isTrigger', label: 'Is Trigger', type: 'boolean', default: COLLIDER_DEFAULTS.isTrigger }
+            { key: 'isTrigger', label: 'Is Trigger', type: 'boolean', default: COLLIDER_DEFAULTS.isTrigger },
+            {
+                key: 'surface', label: 'Surface', type: 'select', default: COLLIDER_DEFAULTS.surface,
+                options: [
+                    { label: 'Auto (from material names)', value: 'auto' },
+                    ...SURFACE_KINDS.map(kind => ({ label: SURFACES[kind].label, value: kind })),
+                ],
+            }
         ],
         Render: ColliderRender
     },

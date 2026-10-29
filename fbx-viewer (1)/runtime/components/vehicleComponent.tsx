@@ -10,9 +10,14 @@ import { useGameContent } from '../GameContentContext';
 import { objectIdFromCollider, objectIdFromRigidBody, PLAYER_PHYSICS_ID, usePhysicsAvailable, usePhysicsQueries } from '../physics';
 import { useRuntimeServices } from '../RuntimeServicesContext';
 import { SpatialParamWriter, SpatialPositionalAudio } from '../spatialAudio';
+import { releaseSkidMarks, skidMarks } from '../skidMarks';
+import { SURFACES, surfaceOfHit, type SurfaceKind } from '../surfaces';
 import { createWorldSplineFrame, getLiveSpline, liveSplineWorldScale, sampleLiveSpline, type LiveSpline } from '../splineRegistry';
 import {
     ackermannAngles,
+    AI_STOP_GAP,
+    avoidAhead,
+    createAiRecovery,
     createControlState,
     driveAlongPath,
     FRONT_BRAKE_SHARE,
@@ -21,11 +26,15 @@ import {
     GRAVITY,
     KMH,
     NO_CONTROLS,
+    obstacleLookAhead,
     planVehicleLayout,
     readVehicleSettings,
     restingSag,
+    stepAiRecovery,
     stepOutOfVehicle,
+    stepUpright,
     stepVehicleControls,
+    uprightRotation,
     VEHICLE_COMPONENT_TYPE,
     VEHICLE_DEFAULTS,
     VEHICLE_SHELL_MASS_SHARE,
@@ -70,6 +79,10 @@ import { ComponentHostContext } from './builtins';
 import { interactKeyLabel } from './dialogueComponent';
 import { IKPlayerTargetContext } from './ikComponents';
 import { isPhysicsIgnored, PHYSICS_IGNORED_USER_DATA, PhysicsOwnerBody, planPhysicsBody } from './physicsComponents';
+import { createTyreEffects, stepTyreEffects } from './tyreEffects';
+import { ENGINE_PARAMS, engineSoundValues, ROAD_PARAMS, roadSoundValues, synthesizeEngine, synthesizeRoad, type RoadVoice } from './vehicleAudio';
+import { buildVehicleLights, disposeVehicleLights, setVehicleLights, type VehicleLights } from './vehicleLights';
+import { sceneDaylight } from '../daylight';
 import type { ComponentDefinition, ComponentRenderProps } from './types';
 
 /** Air drag, N per (m/s)²: about a road car's. */
@@ -94,10 +107,13 @@ const HOLD_SPEED = 0.6;
 const DOOR_OPEN = 0.35;
 const DOOR_HOLD = 0.35;
 const DOOR_CLOSE = 0.4;
+/** Auto headlights come on below this much daylight (0 night, 1 day): from dusk. */
+const HEADLIGHT_DAYLIGHT = 0.35;
 /** How far a door swings open, radians. */
 const DOOR_ANGLE = THREE.MathUtils.degToRad(62);
 
 const UP = new THREE.Vector3(0, 1, 0);
+const IDENTITY = new THREE.Quaternion();
 const AXLE = new THREE.Vector3(1, 0, 0);
 const DOWN = new THREE.Vector3(0, -1, 0);
 const AXIS_X = new THREE.Vector3(1, 0, 0);
@@ -273,56 +289,15 @@ interface EngineVoice {
     recorded: { rate: number; volume: number } | null;
 }
 
-const NOISE_SECONDS = 1;
-
-/** A synthesized engine (two oscillators at the firing rate through a low-pass) and tyre squeal (filtered noise). */
-const synthesizeEngine = (sound: SpatialPositionalAudio): Omit<EngineVoice, 'sound' | 'recorded'> => {
-    const context = sound.context;
-    const engine = context.createOscillator();
-    engine.type = 'sawtooth';
-    const sub = context.createOscillator();
-    sub.type = 'triangle';
-    const subLevel = context.createGain();
-    subLevel.gain.value = 0.7;
-    const tone = context.createBiquadFilter();
-    tone.type = 'lowpass';
-    tone.Q.value = 1.5;
-    const engineLevel = context.createGain();
-    engineLevel.gain.value = 0;
-    const noise = context.createBufferSource();
-    const buffer = context.createBuffer(1, Math.floor(context.sampleRate * NOISE_SECONDS), context.sampleRate);
-    const samples = buffer.getChannelData(0);
-    for (let i = 0; i < samples.length; i++) samples[i] = Math.random() * 2 - 1;
-    noise.buffer = buffer;
-    noise.loop = true;
-    const squeal = context.createBiquadFilter();
-    squeal.type = 'bandpass';
-    squeal.frequency.value = 1400;
-    squeal.Q.value = 3;
-    const squealLevel = context.createGain();
-    squealLevel.gain.value = 0;
-    const out = context.createGain();
-    engine.connect(tone);
-    sub.connect(subLevel).connect(tone);
-    tone.connect(engineLevel).connect(out);
-    noise.connect(squeal).connect(squealLevel).connect(out);
-    sound.setNodeSource(out);
-    engine.start();
-    sub.start();
-    noise.start();
-    return {
-        writer: new SpatialParamWriter([engine.frequency, sub.frequency, tone.frequency, engineLevel.gain, squealLevel.gain]),
-        stop: () => {
-            for (const source of [engine, sub, noise]) {
-                try { source.stop(); } catch { /* never started */ }
-                source.disconnect();
-            }
-            for (const node of [subLevel, tone, engineLevel, squeal, squealLevel, out]) node.disconnect();
-        },
-    };
-};
-
-const _engineValues = new Float64Array(5);
+const _engineValues = new Float64Array(ENGINE_PARAMS);
+const _roadValues = new Float64Array(ROAD_PARAMS);
+/** A frame's change in chassis velocity past this (m/s) is an impact; knocks are this far apart at least, seconds. */
+const IMPACT_SPEED = 2.5;
+const KNOCK_GAP = 0.15;
+/** A wheel back on the ground after this long in the air lands with a knock, seconds. */
+const LANDING_AIRTIME = 0.25;
+/** How fast a knock's telemetry dies away, per second. */
+const IMPACT_DECAY = 6;
 
 // ---------------------------------------------------------------------------
 // Runtime
@@ -355,6 +330,8 @@ interface SimWheel {
     /** World-space contact point while in contact. */
     contactPoint: THREE.Vector3;
     contactNormal: THREE.Vector3;
+    /** What the ground under it is made of. */
+    surface: SurfaceKind;
     /** The contact's speed over the ground, m/s. */
     groundSpeed: number;
 }
@@ -373,6 +350,7 @@ interface VehicleRig {
     track: number;
     nodes: PivotNode[][];
     doors: VehicleDoor[];
+    lights: VehicleLights;
     generated: THREE.Group[];
     /** Engine speed shown and heard, eased. */
     rpm: number;
@@ -404,6 +382,9 @@ const _velocity = new THREE.Vector3();
 const _relative = new THREE.Vector3();
 const _force = new THREE.Vector3();
 const _shapeRotation = new THREE.Quaternion();
+const _direction = new THREE.Vector3();
+const _origin = new THREE.Vector3();
+const _righted = new THREE.Quaternion();
 const _axle = new THREE.Vector3();
 const _down = { x: 0, y: -1, z: 0 };
 const _result: WheelStepResult = { fx: 0, fy: 0, slipRatio: 0, slipAngle: 0 };
@@ -420,9 +401,17 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
     const rig = useRef<VehicleRig | null>(null);
     const controlState = useRef<VehicleControlState>(createControlState());
     const follower = useRef<PathFollowerState>({ progress: null });
+    // An AI driver backing out when pinned, and any vehicle set back on its wheels once it has lain over a while.
+    const recovery = useRef(createAiRecovery());
+    const upright = useRef({ over: 0 });
     const scriptControls = useRef<VehicleControls | null>(null);
-    const lastControls = useRef<VehicleControls>(NO_CONTROLS);
     const engine = useRef<EngineVoice | null>(null);
+    const road = useRef<{ sound: SpatialPositionalAudio; voice: RoadVoice } | null>(null);
+    // Knocks: the chassis's velocity last frame, each wheel's time in the air, and when the last knock was.
+    const knocks = useRef({ velocity: new THREE.Vector3(), primed: false, airborne: [] as number[], last: 0, clock: 0 });
+    // Smoke, dust and marks from the tyres: world-space, so they stay where they were laid.
+    const effects = useMemo(createTyreEffects, []);
+    useEffect(() => () => effects.dispose(), [effects]);
     const objectId = object.id;
     const ownsBody = useMemo(() => planPhysicsBody(object)?.ownerId === component.id, [object, component.id]);
     const settingsRef = useRef(settings);
@@ -434,6 +423,7 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
 
     const dispose = (current: VehicleRig) => {
         for (const group of current.generated) group.removeFromParent();
+        disposeVehicleLights(current.lights);
     };
     useLayoutEffect(() => () => {
         const current = rig.current;
@@ -472,6 +462,7 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
             slipAngle: 0,
             contactPoint: new THREE.Vector3(),
             contactNormal: new THREE.Vector3(0, 1, 0),
+            surface: 'default',
             groundSpeed: 0,
         }));
         if (ownsBody) {
@@ -513,19 +504,20 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
             return wheel.nodes.map(node => restPivotNode(node, worldCentre)).filter((entry): entry is PivotNode => entry !== null);
         });
         const doors = findDoors(target, layout, frame, skip);
+        const lights = buildVehicleLights(target, layout, frame, skip, s.headlights !== 'off');
         const { wheelbase, track } = wheelGeometry(layout.wheels);
         const telemetry: VehicleTelemetry = {
             speed: 0, rpm: engineSpec.idleRpm, idleRpm: engineSpec.idleRpm, redlineRpm: engineSpec.redlineRpm, gear: 1, shifting: 0,
-            throttle: 0, brake: 0, handbrake: false, steer: 0, absActive: false, tractionActive: false, stabilityActive: false,
+            throttle: 0, brake: 0, handbrake: false, steer: 0, absActive: false, tractionActive: false, stabilityActive: false, impact: 0,
             wheels: wheels.map(wheel => ({
-                front: wheel.front, left: wheel.left, contact: false, load: 0, slipRatio: 0, slipAngle: 0, omega: 0, compression: 0,
+                front: wheel.front, left: wheel.left, contact: false, surface: wheel.surface, load: 0, slipRatio: 0, slipAngle: 0, omega: 0, compression: 0,
                 contactPoint: wheel.contactPoint, contactNormal: wheel.contactNormal, groundSpeed: 0,
             })),
         };
         return {
             body, layout, wheels, engine: engineSpec, gearbox, suspension, transmission: createTransmission(), traction: createTractionControl(),
             drive: { wheelTorque: 0, rpm: engineSpec.idleRpm, clutchSlip: false },
-            wheelbase, track, nodes, doors, generated, rpm: engineSpec.idleRpm, load: 0, doorTime: null, telemetry,
+            wheelbase, track, nodes, doors, lights, generated, rpm: engineSpec.idleRpm, load: 0, doorTime: null, telemetry,
         };
     };
 
@@ -623,6 +615,8 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
                 scriptControls.current = controls;
             },
             telemetry: () => rig.current?.telemetry ?? null,
+            frame: out => vehicleFrame(host, rig.current?.layout.facing ?? IDENTITY, out),
+            chassis: box,
         };
     }, [host, objectId, queries]);
 
@@ -651,6 +645,38 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
 
     const _point = useMemo(() => new THREE.Vector3(), []);
 
+    /** How far ahead (m) the nearest thing an AI driver must stop for is, along where it is steering; Infinity for nothing. */
+    const obstacleAhead = (current: VehicleRig, position: THREE.Vector3Like, speed: number, steer: number): number => {
+        const chassis = current.layout.chassis;
+        const width = chassis.max.x - chassis.min.x;
+        const centreX = (chassis.min.x + chassis.max.x) / 2;
+        const height = chassis.min.y + (chassis.max.y - chassis.min.y) * 0.4;
+        _direction.set(0, 0, 1).applyAxisAngle(UP, -steer).applyQuaternion(_vehicleQuaternion);
+        const reach = obstacleLookAhead(Math.max(0, speed));
+        let nearest = Infinity;
+        for (const across of [-0.38, 0, 0.38]) {
+            _origin.set(centreX + across * width, height, chassis.max.z + 0.05).applyQuaternion(_vehicleQuaternion).add(position);
+            const hit = queries.raycast(_origin, _direction, reach, { excludeObjectId: objectId });
+            // Ground it can drive up (a ramp, a hill) is not in its way.
+            if (hit && hit.normal.dot(_up) < 0.6) nearest = Math.min(nearest, hit.distance);
+        }
+        return nearest;
+    };
+
+    /** Sets the vehicle back on its wheels where it lies, facing the way it was heading. */
+    const rightVehicle = (current: VehicleRig, position: THREE.Vector3Like) => {
+        const { body } = current;
+        _origin.set(position.x, position.y + 4, position.z);
+        const ground = queries.raycast(_origin, DOWN, 12, { excludeObjectId: objectId });
+        const y = (ground ? ground.point.y : position.y) + current.suspension.travel + 0.3;
+        uprightRotation(_vehicleQuaternion, current.layout.facing, _righted);
+        body.setTranslation({ x: position.x, y, z: position.z }, true);
+        body.setRotation({ x: _righted.x, y: _righted.y, z: _righted.z, w: _righted.w }, true);
+        body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+        body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+        for (const wheel of current.wheels) wheel.dynamics.omega = 0;
+    };
+
     useBeforePhysicsStep(() => {
         const current = ensureRig();
         if (!current) return;
@@ -672,6 +698,12 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
         const speed = _linear.dot(_forward);
         const playerDriving = vehicleSession.state().driving === objectId;
 
+        // Lying on its side or roof, nearly still: set back on its wheels, facing the way it was heading.
+        if (stepUpright(upright.current, _up.y, _linear.length(), dt)) {
+            rightVehicle(current, t as THREE.Vector3Like);
+            return;
+        }
+
         // Who drives: the player, else a level script, else the AI path, else nobody (handbrake on).
         let controls: VehicleControls;
         if (playerDriving) {
@@ -679,7 +711,7 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
                 throttle: Math.max(input.value('Throttle'), input.value('MoveForward')),
                 brake: Math.max(input.value('Brake'), input.value('MoveBack')),
                 steer: input.axis('MoveLeft', 'MoveRight'),
-                handbrake: input.value('Jump') > 0.5,
+                handbrake: Math.max(input.value('Handbrake'), input.value('Jump')) > 0.5,
             };
         } else if (scriptControls.current) {
             controls = scriptControls.current;
@@ -692,9 +724,11 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
                 if (follower.current.progress !== null && path.pointAt(follower.current.progress, _velocity).distanceTo(_point) > AI_REJOIN_DISTANCE) {
                     follower.current.progress = null;
                 }
+                // Stops short of what is ahead (another car, the player, a wall), and backs out when pinned.
+                const ahead = obstacleAhead(current, t as THREE.Vector3Like, speed, controlState.current.steer);
+                controls = stepAiRecovery(recovery.current, controls, avoidAhead(controls, speed, ahead), ahead < AI_STOP_GAP + 0.5, speed, dt);
             } else controls = { ...NO_CONTROLS, handbrake: true };
         }
-        lastControls.current = controls;
         const pedals = stepVehicleControls(controlState.current, controls, speed, dt, s);
         const angles = ackermannAngles(pedals.steer, current.wheelbase, current.track);
 
@@ -721,6 +755,7 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
                 const across = wheel.contactNormal.dot(_axle);
                 const reach = wheel.radius * Math.sqrt(Math.max(0, 1 - across * across)) + wheel.halfWidth * Math.abs(across);
                 length = ground.timeOfImpact - reach / facing;
+                wheel.surface = surfaceOfHit(ground.collider, ground.featureId, _anchor.x, _anchor.z);
             } else wheel.contactNormal.copy(_up);
             // The tyre's own shape catches what is under its tread but not under the ray: a kerb or an edge.
             const kerbReach = Math.min(travel, length - KERB_MARGIN);
@@ -731,6 +766,7 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
             if (hit) {
                 length = hit.time_of_impact;
                 wheel.contactNormal.copy(_up);
+                wheel.surface = surfaceOfHit(hit.collider, undefined, _anchor.x, _anchor.z);
             }
             const previous = wheel.compression;
             wheel.contact = length <= travel;
@@ -814,8 +850,9 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
             const longitudinal = _velocity.dot(_heading);
             const lateral = _velocity.dot(_lateral);
             wheel.groundSpeed = Math.hypot(longitudinal, lateral);
-            const mu = s.grip * (!wheel.front && pedals.handbrake ? s.handbrakeGrip : 1);
-            stepWheel(wheel.dynamics, { longitudinal, lateral, load: wheel.load, mu, nominalLoad }, torques.get(wheel) ?? 0, brake, dt, WHEEL_SUBSTEPS, _result);
+            const ground = SURFACES[wheel.surface];
+            const mu = s.grip * ground.grip * (!wheel.front && pedals.handbrake ? s.handbrakeGrip : 1);
+            stepWheel(wheel.dynamics, { longitudinal, lateral, load: wheel.load, mu, nominalLoad, rolling: ground.rolling }, torques.get(wheel) ?? 0, brake, dt, WHEEL_SUBSTEPS, _result);
             wheel.slipRatio = _result.slipRatio;
             wheel.slipAngle = _result.slipAngle;
             wheel.rotation += wheel.dynamics.omega * dt;
@@ -865,6 +902,7 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
         wheels.forEach((wheel, index) => {
             const out = telemetry.wheels[index];
             out.contact = wheel.contact;
+            out.surface = wheel.surface;
             out.load = wheel.load;
             out.slipRatio = wheel.slipRatio;
             out.slipAngle = wheel.slipAngle;
@@ -918,20 +956,38 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
             }
         }
         engine.current = voice;
+        // The road under it: tyres, rumble, wind and knocks.
+        const roadSound = new SpatialPositionalAudio(listener);
+        roadSound.setRefDistance(5);
+        roadSound.setRolloffFactor(1);
+        routeSoundToBus(roadSound, mixer, 'sfx');
+        host.add(roadSound);
+        let roadVoice: RoadVoice | null = null;
+        try {
+            roadVoice = synthesizeRoad(roadSound);
+            road.current = { sound: roadSound, voice: roadVoice };
+        } catch (error) {
+            frontendDiagnostics.failure('vehicle_road_synth_failed', error);
+        }
         return () => {
             engine.current = null;
+            road.current = null;
             voice.stop();
-            releaseSound(sound);
-            sound.removeFromParent();
+            roadVoice?.stop();
+            for (const each of [sound, roadSound]) {
+                releaseSound(each);
+                each.removeFromParent();
+            }
             release();
         };
     }, [host, camera, mixer, audioAssets, settings.engineSound]);
 
     useEffect(() => {
         if (engine.current) routeSoundToBus(engine.current.sound, mixer, 'sfx');
+        if (road.current) routeSoundToBus(road.current.sound, mixer, 'sfx');
     }, [mixer]);
 
-    useFrame((_, delta) => {
+    useFrame((frame, delta) => {
         const current = rig.current;
         if (!current || !host || !current.body.isValid()) return;
         const s = settingsRef.current;
@@ -952,6 +1008,9 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
             for (const entry of current.nodes[index] ?? []) placePivotNode(entry, _turn, _world);
         });
 
+        const linear = current.body.linvel();
+        stepTyreEffects(effects, current.telemetry, current.wheels.map(wheel => wheel.halfWidth), _velocity.set(linear.x, linear.y, linear.z), delta, frame.size.height * frame.viewport.dpr);
+
         // The driver's door swings open and shut.
         if (current.doorTime !== null) {
             current.doorTime += delta;
@@ -971,8 +1030,13 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
         }
 
         const playerDriving = vehicleSession.state().driving === objectId;
-        const controls = lastControls.current;
         const driven = playerDriving || scriptControls.current !== null || (Boolean(s.aiPath) && aiPath() !== null);
+        // Headlights while it is driven (in the dark, for Auto); brake and reversing lamps as it brakes and reverses.
+        setVehicleLights(current.lights, {
+            head: driven && (s.headlights === 'on' || (s.headlights === 'auto' && sceneDaylight() < HEADLIGHT_DAYLIGHT)),
+            brake: driven && current.telemetry.brake > 0.05,
+            reverse: driven && current.telemetry.gear === -1,
+        });
         const speed = handle?.speed() ?? 0;
         const engineSpec = current.engine;
         const revs = Math.min(1, Math.max(0, (current.rpm - engineSpec.idleRpm) / (engineSpec.redlineRpm - engineSpec.idleRpm)));
@@ -986,28 +1050,40 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
             });
         }
 
-        // Sound: the engine runs while someone drives; the tyres squeal when they slide.
+        // Sound: the engine runs while someone drives (cut for a moment through a gear change); the road
+        // under it squeals, rumbles and roars with the tyres and speed; impacts and hard landings knock.
+        const level = s.engineVolume;
+        const telemetry = current.telemetry;
+        const roadVoice = road.current;
+        if (roadVoice) {
+            roadVoice.voice.writer.write(roadVoice.sound.context, roadSoundValues(_roadValues, telemetry, level));
+            const knock = knocks.current;
+            knock.clock += delta;
+            _scratch.set(linear.x, linear.y, linear.z);
+            const jolt = knock.primed ? _scratch.distanceTo(knock.velocity) : 0;
+            let strength = jolt > IMPACT_SPEED ? Math.min(1, (jolt - IMPACT_SPEED) / 8) : 0;
+            telemetry.wheels.forEach((wheel, index) => {
+                const air = knock.airborne[index] ?? 0;
+                if (wheel.contact && air > LANDING_AIRTIME) strength = Math.max(strength, Math.min(1, Math.abs(knock.velocity.y) / 6));
+                knock.airborne[index] = wheel.contact ? 0 : air + delta;
+            });
+            if (strength > 0.05 && knock.clock - knock.last > KNOCK_GAP) {
+                knock.last = knock.clock;
+                roadVoice.voice.thump(strength * level);
+                telemetry.impact = Math.max(telemetry.impact, strength);
+            }
+            telemetry.impact *= Math.exp(-IMPACT_DECAY * delta);
+            knock.velocity.copy(_scratch);
+            knock.primed = true;
+        }
         const voice = engine.current;
         if (!voice) return;
         const context = voice.sound.context;
-        let slide = 0;
-        for (const wheel of current.wheels) {
-            if (!wheel.contact) continue;
-            slide = Math.max(slide, Math.abs(wheel.slipAngle) / 0.35, Math.abs(wheel.slipRatio) / 0.4);
-        }
-        let squeal = Math.min(1, Math.max(0, slide - 0.6) * 1.5) * Math.min(1, Math.abs(speed) / 3);
-        if (controls.handbrake && Math.abs(speed) > 4) squeal = Math.max(squeal, 0.4);
-        const level = s.engineVolume;
         if (voice.writer) {
-            _engineValues[0] = current.rpm / 30;
-            _engineValues[1] = current.rpm / 60;
-            _engineValues[2] = 280 + 2600 * current.load + 1400 * revs;
-            _engineValues[3] = driven ? level * (0.22 + 0.32 * current.load + 0.18 * revs) : 0;
-            _engineValues[4] = level * 0.35 * squeal;
-            voice.writer.write(context, _engineValues);
+            voice.writer.write(context, engineSoundValues(_engineValues, current.rpm, revs, current.load, telemetry.shifting > 0, driven, level));
         } else if (voice.recorded && voice.sound.buffer && context.state === 'running') {
             const rate = 0.6 + 1.5 * revs;
-            const volume = driven ? level * (0.45 + 0.4 * current.load) : 0;
+            const volume = driven ? level * (0.45 + 0.4 * current.load) * (telemetry.shifting > 0 ? 0.6 : 1) : 0;
             if (Math.abs(rate - voice.recorded.rate) > 0.01) {
                 voice.recorded.rate = rate;
                 voice.sound.setPlaybackRate(rate);
@@ -1019,7 +1095,12 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
         }
     });
 
-    return <group ref={anchorRef} userData={PHYSICS_IGNORED_USER_DATA} />;
+    return (
+        <group ref={anchorRef} userData={PHYSICS_IGNORED_USER_DATA}>
+            <primitive object={effects.smoke.points} />
+            <primitive object={effects.dust.points} />
+        </group>
+    );
 };
 
 // ---------------------------------------------------------------------------
@@ -1080,6 +1161,17 @@ const VehicleRender: React.FC<ComponentRenderProps> = ({ object, component, mode
             <VehicleRuntime object={object} component={component} settings={settings} />
         </>
     );
+};
+
+// ---------------------------------------------------------------------------
+// Tyre marks
+// ---------------------------------------------------------------------------
+
+/** The play session's tyre marks, laid by every vehicle. Mount once per play session; they go when it ends. */
+export const VehicleSkidMarks: React.FC = () => {
+    const mesh = useMemo(() => skidMarks().mesh, []);
+    useEffect(() => () => releaseSkidMarks(), []);
+    return <primitive object={mesh} />;
 };
 
 // ---------------------------------------------------------------------------
@@ -1181,6 +1273,14 @@ export const VEHICLE_COMPONENT: ComponentDefinition = {
         { key: 'abs', label: 'ABS', type: 'boolean', default: VEHICLE_DEFAULTS.abs },
         { key: 'tractionControl', label: 'Traction control', type: 'boolean', default: VEHICLE_DEFAULTS.tractionControl },
         { key: 'stabilityControl', label: 'Stability control', type: 'boolean', default: VEHICLE_DEFAULTS.stabilityControl },
+        {
+            key: 'headlights', label: 'Headlights', type: 'select', default: VEHICLE_DEFAULTS.headlights,
+            options: [
+                { label: 'Auto (driven in the dark)', value: 'auto' },
+                { label: 'On (whenever driven)', value: 'on' },
+                { label: 'Off', value: 'off' },
+            ],
+        },
         { key: 'steerAngle', label: 'Steering lock (°)', type: 'number', default: VEHICLE_DEFAULTS.steerAngle, min: 0, max: 80, step: 1 },
         { key: 'steerAtSpeed', label: 'Steering at top speed', type: 'number', default: VEHICLE_DEFAULTS.steerAtSpeed, min: 0, max: 1, step: 0.05 },
         { key: 'grip', label: 'Tyre grip', type: 'number', default: VEHICLE_DEFAULTS.grip, min: 0.05, max: 20, step: 0.05 },

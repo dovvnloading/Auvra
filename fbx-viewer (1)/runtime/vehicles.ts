@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { LevelComponent } from '../types';
 import type { DifferentialKind } from './vehicleSim';
+import type { SurfaceKind } from './surfaces';
 
 /**
  * VEHICLES
@@ -35,10 +36,13 @@ export const VEHICLE_SHELL_MASS_SHARE = 0.1;
 export type VehicleDrive = 'rear' | 'front' | 'all';
 /** Which way the model's front points in its own space; auto reads it from the wheel names (else +Z). */
 export type VehicleFacing = 'auto' | '+z' | '-z' | '+x' | '-x';
+/** Headlights: on whenever it is driven, never, or (auto) while it is driven in the dark. */
+export type VehicleHeadlights = 'auto' | 'on' | 'off';
 
 const DRIVES: readonly VehicleDrive[] = ['rear', 'front', 'all'];
 const FACINGS: readonly VehicleFacing[] = ['auto', '+z', '-z', '+x', '-x'];
 const DIFFERENTIALS: readonly DifferentialKind[] = ['open', 'limited', 'locked'];
+const HEADLIGHTS: readonly VehicleHeadlights[] = ['auto', 'on', 'off'];
 
 export interface VehicleSettings {
     /** kg. */
@@ -54,6 +58,7 @@ export interface VehicleSettings {
     tractionControl: boolean;
     stabilityControl: boolean;
     facing: VehicleFacing;
+    headlights: VehicleHeadlights;
     /** Top speed forward, km/h. */
     maxSpeed: number;
     /** Top speed in reverse, km/h. */
@@ -104,6 +109,7 @@ export const VEHICLE_DEFAULTS: VehicleSettings = {
     tractionControl: true,
     stabilityControl: true,
     facing: 'auto',
+    headlights: 'auto',
     maxSpeed: 160,
     reverseSpeed: 30,
     braking: 9,
@@ -142,6 +148,7 @@ export const readVehicleSettings = (component: Pick<LevelComponent, 'props'>): V
         tractionControl: typeof p.tractionControl === 'boolean' ? p.tractionControl : d.tractionControl,
         stabilityControl: typeof p.stabilityControl === 'boolean' ? p.stabilityControl : d.stabilityControl,
         facing: typeof p.facing === 'string' && (FACINGS as readonly string[]).includes(p.facing) ? p.facing as VehicleFacing : d.facing,
+        headlights: typeof p.headlights === 'string' && (HEADLIGHTS as readonly string[]).includes(p.headlights) ? p.headlights as VehicleHeadlights : d.headlights,
         maxSpeed: clampNumber(p.maxSpeed, d.maxSpeed, 1, 1000),
         reverseSpeed: clampNumber(p.reverseSpeed, d.reverseSpeed, 0, 500),
         braking: clampNumber(p.braking, d.braking, 0, 100),
@@ -661,6 +668,113 @@ export const driveAlongPath = (
     };
 };
 
+/** The braking an AI driver plans on, m/s², and the gap it stops short of what is ahead, metres. */
+export const AI_BRAKING = 6;
+export const AI_STOP_GAP = 3.5;
+
+/** The fastest an AI driver may go and still stop AI_STOP_GAP short of something `distance` metres ahead. */
+export const obstacleSpeedLimit = (distance: number): number =>
+    Math.sqrt(2 * AI_BRAKING * Math.max(0, distance - AI_STOP_GAP));
+
+/** How far ahead an AI driver looks for what it must stop for at `speed`, metres. */
+export const obstacleLookAhead = (speed: number): number => AI_STOP_GAP + 4 + (speed * speed) / (2 * AI_BRAKING);
+
+/**
+ * An AI driver's controls held to what is `distance` metres ahead (Infinity when nothing is): no
+ * throttle once it is at the speed it could still stop from, and the brake harder the further over.
+ */
+export const avoidAhead = (controls: VehicleControls, speed: number, distance: number): VehicleControls => {
+    if (!Number.isFinite(distance)) return controls;
+    const limit = obstacleSpeedLimit(distance);
+    // Inside the gap it holds still rather than creeping up.
+    if (limit > 0 && speed <= limit * 0.85) return controls;
+    const over = speed - limit * 0.85;
+    return { ...controls, throttle: 0, brake: Math.max(controls.brake, THREE.MathUtils.clamp(over * 0.35, 0.2, 1)) };
+};
+
+/**
+ * Seconds an AI driver trying to move but pinned in place waits before backing out, how long it
+ * waits held up by something in its way that does not move off, and how long it backs out for.
+ */
+export const AI_STUCK_TIME = 2.5;
+export const AI_BLOCKED_TIME = 5;
+export const AI_BACK_OUT_TIME = 1.6;
+
+export interface AiRecoveryState {
+    /** Seconds pinned so far. */
+    stuck: number;
+    /** Seconds held up so far. */
+    blocked: number;
+    /** Seconds of backing out left. */
+    backing: number;
+}
+
+export const createAiRecovery = (): AiRecoveryState => ({ stuck: 0, blocked: 0, backing: 0 });
+
+/**
+ * An AI driver against a wall or another car: once it has tried to move for AI_STUCK_TIME without
+ * getting anywhere, or has been held up close behind something for AI_BLOCKED_TIME (`blocked`: what
+ * is ahead is inside its stopping gap), it backs out for AI_BACK_OUT_TIME with the steering turned
+ * the other way, then drives on. `wanted` is what it would do with nothing in the way; returns the
+ * controls to use.
+ */
+export const stepAiRecovery = (
+    state: AiRecoveryState,
+    wanted: VehicleControls,
+    controls: VehicleControls,
+    blocked: boolean,
+    speed: number,
+    dt: number,
+): VehicleControls => {
+    const backOut = { throttle: 0, brake: 1, steer: -wanted.steer, handbrake: false };
+    if (state.backing > 0) {
+        state.backing = Math.max(0, state.backing - dt);
+        return backOut;
+    }
+    const trying = wanted.throttle > 0.2 && !wanted.handbrake;
+    const still = Math.abs(speed) < 0.8;
+    state.stuck = trying && still && controls.throttle > 0 ? state.stuck + dt : 0;
+    state.blocked = trying && still && blocked ? state.blocked + dt : 0;
+    if (state.stuck > AI_STUCK_TIME || state.blocked > AI_BLOCKED_TIME) {
+        state.stuck = 0;
+        state.blocked = 0;
+        state.backing = AI_BACK_OUT_TIME;
+        return backOut;
+    }
+    return controls;
+};
+
+/** A vehicle lying further over than this (its up against the world's, as a cosine) for RIGHT_AFTER seconds, nearly still, is set back on its wheels. */
+export const UPRIGHT_DOT = 0.35;
+export const RIGHT_AFTER = 2;
+
+export interface UprightState {
+    /** Seconds it has lain over. */
+    over: number;
+}
+
+/** True when the vehicle should be righted now: it has lain over, barely moving, for RIGHT_AFTER seconds. */
+export const stepUpright = (state: UprightState, upDot: number, speed: number, dt: number): boolean => {
+    state.over = upDot < UPRIGHT_DOT && speed < 2 ? state.over + dt : 0;
+    if (state.over < RIGHT_AFTER) return false;
+    state.over = 0;
+    return true;
+};
+
+const _heading = new THREE.Vector3();
+
+/**
+ * The body rotation that puts a vehicle back on its wheels facing where it was heading: its frame's
+ * front levelled onto the ground, its up the world's. `facing` turns the body into the vehicle frame.
+ */
+export const uprightRotation = (vehicle: THREE.Quaternion, facing: THREE.Quaternion, out = new THREE.Quaternion()): THREE.Quaternion => {
+    _heading.set(0, 0, 1).applyQuaternion(vehicle).setY(0);
+    // Pointing straight up or down: fall back on where its roof faced.
+    if (_heading.lengthSq() < 1e-6) _heading.set(0, 1, 0).applyQuaternion(vehicle).setY(0);
+    const yaw = _heading.lengthSq() < 1e-6 ? 0 : Math.atan2(_heading.x, _heading.z);
+    return out.setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw).multiply(facing.clone().invert());
+};
+
 // ---------------------------------------------------------------------------
 // Play session: which vehicle the player drives
 // ---------------------------------------------------------------------------
@@ -672,6 +786,8 @@ export interface WheelTelemetry {
     left: boolean;
     /** On the ground. */
     contact: boolean;
+    /** What the ground under it is made of (the last ground it touched while in the air). */
+    surface: SurfaceKind;
     /** Suspension load, N. */
     load: number;
     /** Longitudinal slip ratio: positive spinning, negative locking. */
@@ -711,6 +827,8 @@ export interface VehicleTelemetry {
     absActive: boolean;
     tractionActive: boolean;
     stabilityActive: boolean;
+    /** The last knock (an impact or a hard landing), 0-1, dying away over a moment: for camera shake and the like. */
+    impact: number;
     wheels: WheelTelemetry[];
 }
 
@@ -733,6 +851,10 @@ export interface VehicleHandle {
     setScriptControls(controls: VehicleControls | null): void;
     /** The simulation's last step, or null before it has run. */
     telemetry(): VehicleTelemetry | null;
+    /** The vehicle frame in world space: +Z its front, +X its left, +Y its up (the model may face any way). */
+    frame(out: THREE.Matrix4): THREE.Matrix4;
+    /** Its body's bounds in the vehicle frame, without the wheels, or null before it is measured. */
+    chassis(): THREE.Box3 | null;
 }
 
 export interface VehicleHud {

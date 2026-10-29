@@ -170,15 +170,27 @@ Each wheel is simulated on its own, the way driving games do:
 
 ### Driving and handling
 
-| Control | Drives |
-|---|---|
-| Move forward (W) | Throttle |
-| Move back (S) | Brake; from a stop, reverse |
-| Move left / right (A, D) | Steer |
-| Jump (Space) | Handbrake: locks the rear wheels and lets the back slide |
-| Interact (F) | Get in, or get out when slow enough and there is room beside it |
+| Control | Keyboard | Gamepad |
+|---|---|---|
+| Throttle | Move forward (W) | Right trigger (analog) or left stick up |
+| Brake; from a stop, reverse | Move back (S) | Left trigger (analog) or left stick down |
+| Steer | Move left / right (A, D) | Left stick (analog) |
+| Handbrake: locks the rear wheels and lets the back slide | Space | A or right bumper |
+| Change view: chase, far chase, bonnet, bumper | V | Back |
+| Look back, while held | B | Right stick press |
+| Get in, or get out when slow enough and there is room beside it | Interact (F) | X |
 
-While driving, the view becomes a chase camera behind the vehicle (the mouse looks round it for a moment) and a speedometer shows the speed, gear and revs. The driver is out of reach of shots and blows. Getting out puts them beside the driver's door (the left), or the other side or behind when that is blocked.
+While driving, a speedometer shows the speed, gear and revs; the mouse looks round the chase views for a moment before they settle back behind. The view shakes a little at speed, more over loose ground and hard with impacts and landings, and widens with speed. The driver is out of reach of shots and blows. Getting out puts them beside the driver's door (the left), or the other side or behind when that is blocked.
+
+### Surfaces, marks and lights
+
+Tyres feel what they are on. A collider's **Surface** (see [Collider](#collider)) says what it is made of; on Auto a Mesh collider reads it triangle by triangle from its materials' names (`Asphalt`, `Road`, `Concrete`, `Gravel`, `Dirt`, `Grass`, `Sand`, `Mud`, `Snow`, `Ice`, `Water`, `Metal`, `Wood`...), and a terrain from its painted layers' texture names. Each grips and drags differently: a road grips fully, dirt about two thirds as well, grass and sand about half, snow a third and ice a tenth, and sand and mud drag hard.
+
+A tyre that slides or spins on a road lays black marks and smokes; on loose ground every tyre leaves a rut and throws up dust (spray on snow and mud) in the ground's colour, more the faster it goes. Marks stay for the rest of the play session, the oldest going first once there are many.
+
+The vehicle's lamps are the model's own nodes named for them: `HeadLight`, `TailLight`, `BrakeLight`, `ReverseLight` (or `headlamp`, `rear light`, `stop light`...). Tail lamps glow with the headlights and brighter when braking, brake lamps when braking, reversing lamps in reverse. Headlights also throw beams down the road, from the headlight lamps or the front corners of a model without any. **Headlights** sets when: **Auto** while it is driven once the sky darkens towards night, **On** whenever it is driven, **Off** never.
+
+The engine (synthesized or a recording) runs with the revs and load and cuts out for a moment through each gear change. The tyres squeal sliding on hard ground, rumble on loose ground, the wind rises with speed, and impacts and hard landings knock.
 
 | Setting | What it does |
 |---|---|
@@ -200,11 +212,16 @@ While driving, the view becomes a chase camera behind the vehicle (the mouse loo
 | Wheel radius | Overrides the measured wheel size (0 measures) |
 | Player can drive | Off for vehicles only scripts or the AI drive |
 | AI path, AI cruise speed | A Spline object the vehicle drives along whenever the player is not driving it, and its speed there |
-| Engine sound, Engine volume | An audio asset of an engine loop, pitched with the revs; without one the engine is synthesized. Tyres squeal when they slide |
+| Engine sound, Engine volume | An audio asset of an engine loop, pitched with the revs; without one the engine is synthesized |
+| Headlights | Auto (driven in the dark), On (whenever driven) or Off |
 
 ### AI driving
 
 With an **AI path**, the vehicle drives itself along the spline, round and round a closed one or to the end of an open one, where it stops. It steers for a point ahead on the path and slows for bends it could not take at its cruise speed, so a sharp corner is taken slowly and a gentle one flat out. Knocked well off the path, it heads back to the nearest stretch. When the player gets in, they drive; when they get out, the AI carries on.
+
+It looks ahead along where it is steering, as far as it needs to stop, and brakes to stop a few metres short of anything in its way: another vehicle, the player, a wall (ground it can drive up, a ramp or a hill, is not in its way). Pinned against something, or held up for several seconds by something that does not move off, it backs out with its wheels turned the other way and tries again.
+
+Any vehicle left on its side or its roof, nearly still, for two seconds is set back on its wheels facing the way it was heading.
 
 Vehicles count as moving objects: the navmesh and baked lighting leave them out.
 
@@ -224,6 +241,7 @@ A Collider on its own makes the object solid, fixed scenery. Sizes and the offse
 | Capsule Height | 2 | Full height of the capsule |
 | Offset | 0, 0, 0 | Moves the shape relative to the object |
 | Is Trigger | Off | Lets things pass through and reports the player entering (see [Triggers](#triggers)) |
+| Surface | Auto | What it is made of, for tyres (see [Surfaces](#surfaces-marks-and-lights)): Auto reads it from the model's material names, triangle by triangle for a Mesh |
 
 **Mesh** uses the model's own surface. Use it for complex fixed scenery such as buildings; simple shapes are cheaper and better for moving bodies.
 

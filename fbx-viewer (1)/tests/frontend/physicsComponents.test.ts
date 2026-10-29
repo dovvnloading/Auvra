@@ -35,7 +35,7 @@ describe('physics component definitions', () => {
       expect(typeof definition?.Render).toBe('function');
     }
     expect(createComponent('collider').props).toEqual({
-      shape: 'box', size: [1, 1, 1], radius: 0.5, height: 2, offset: [0, 0, 0], isTrigger: false,
+      shape: 'box', size: [1, 1, 1], radius: 0.5, height: 2, offset: [0, 0, 0], isTrigger: false, surface: 'auto',
     });
     expect(createComponent('rigidBody').props).toEqual({ type: 'dynamic', mass: 1, gravityScale: 1, lockRotation: false });
     expect(getComponentDefinition('collider')!.props.find(prop => prop.key === 'shape')!.options!.map(option => option.value))
@@ -46,9 +46,10 @@ describe('physics component definitions', () => {
 
   it('resolves invalid stored props to defaults and keeps sizes positive', () => {
     const settings = resolveColliderSettings(component('collider', {
-      shape: 'teapot', size: [-2, 0, 3], radius: -1, height: 'tall', offset: [1, 2], isTrigger: 'yes',
+      shape: 'teapot', size: [-2, 0, 3], radius: -1, height: 'tall', offset: [1, 2], isTrigger: 'yes', surface: 'lava',
     }));
-    expect(settings).toEqual({ shape: 'box', size: [2, 0.01, 3], radius: 0.01, height: 2, offset: [0, 0, 0], isTrigger: false });
+    expect(settings).toEqual({ shape: 'box', size: [2, 0.01, 3], radius: 0.01, height: 2, offset: [0, 0, 0], isTrigger: false, surface: 'auto' });
+    expect(resolveColliderSettings(component('collider', { surface: 'gravel' })).surface).toBe('gravel');
     expect(resolveRigidBodySettings(component('rigidBody', { type: 'floaty', mass: 0, gravityScale: Number.NaN })))
       .toEqual({ type: 'dynamic', mass: 0.001, gravityScale: 1, lockRotation: false });
   });

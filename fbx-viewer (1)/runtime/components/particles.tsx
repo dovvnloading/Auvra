@@ -305,19 +305,35 @@ const spawnParticle = (
 };
 
 /**
- * Advances the emitter by `dt` seconds (clamped to MAX_PARTICLE_STEP): ages, moves and retires
- * particles, then emits the cycle's burst and its continuous rate. Mutates only `pool`, and is
- * deterministic for a given `random`.
+ * Spawns one particle at a world point with a world velocity, for an effect that places its own
+ * particles (tyre smoke, say) rather than an emitter's cone. Nothing when the pool is full.
  */
-export const stepParticles = (
+export const emitParticleAt = (
     pool: ParticlePool,
-    settings: ParticleSettings,
-    dt: number,
-    matrix: ArrayLike<number> | null = null,
+    settings: Pick<ParticleSettings, 'lifetime' | 'variance'>,
+    x: number, y: number, z: number,
+    vx: number, vy: number, vz: number,
     random: () => number = Math.random
 ): void => {
-    const step = Number.isFinite(dt) ? clamp(dt, 0, MAX_PARTICLE_STEP) : 0;
+    if (pool.count >= pool.capacity) return;
+    const i = pool.count;
+    const v = i * 3;
+    pool.positions[v] = x;
+    pool.positions[v + 1] = y;
+    pool.positions[v + 2] = z;
+    pool.velocities[v] = vx;
+    pool.velocities[v + 1] = vy;
+    pool.velocities[v + 2] = vz;
+    pool.ages[i] = 0;
+    pool.lifetimes[i] = Math.max(MIN_LIFETIME, vary(settings.lifetime, settings.variance, random()));
+    pool.life[i] = 0;
+    pool.seeds[i] = random();
+    pool.count = i + 1;
+};
 
+/** Ages, moves and retires the particles by `dt` seconds (clamped to MAX_PARTICLE_STEP), emitting none. */
+export const ageParticles = (pool: ParticlePool, settings: Pick<ParticleSettings, 'drag' | 'gravity'>, dt: number): void => {
+    const step = Number.isFinite(dt) ? clamp(dt, 0, MAX_PARTICLE_STEP) : 0;
     const damping = settings.drag > 0 ? Math.exp(-settings.drag * step) : 1;
     const fall = settings.gravity * step;
     let i = 0;
@@ -338,6 +354,22 @@ export const stepParticles = (
         pool.life[i] = age / pool.lifetimes[i];
         i++;
     }
+};
+
+/**
+ * Advances the emitter by `dt` seconds (clamped to MAX_PARTICLE_STEP): ages, moves and retires
+ * particles, then emits the cycle's burst and its continuous rate. Mutates only `pool`, and is
+ * deterministic for a given `random`.
+ */
+export const stepParticles = (
+    pool: ParticlePool,
+    settings: ParticleSettings,
+    dt: number,
+    matrix: ArrayLike<number> | null = null,
+    random: () => number = Math.random
+): void => {
+    const step = Number.isFinite(dt) ? clamp(dt, 0, MAX_PARTICLE_STEP) : 0;
+    ageParticles(pool, settings, step);
 
     // Emission walks the step in cycle segments so a cycle boundary inside a frame is exact.
     // `left` is the time still to cover, which is also the age of anything emitted at that moment.
@@ -415,7 +447,7 @@ void main() {
 }
 `;
 
-const createParticleMaterial = () => new THREE.ShaderMaterial({
+export const createParticleMaterial = () => new THREE.ShaderMaterial({
     uniforms: {
         uSize: { value: 1 },
         uSizeEnd: { value: 1 },
@@ -432,7 +464,7 @@ const createParticleMaterial = () => new THREE.ShaderMaterial({
     depthWrite: false
 });
 
-const applyParticleStyle = (material: THREE.ShaderMaterial, settings: ParticleSettings) => {
+export const applyParticleStyle = (material: THREE.ShaderMaterial, settings: ParticleLook & ParticleStyle) => {
     const u = material.uniforms;
     u.uSize.value = settings.size;
     u.uSizeEnd.value = settings.sizeEnd;
@@ -452,7 +484,7 @@ const dynamicAttribute = (array: Float32Array, itemSize: number) =>
  * particle spawns, so trails stay behind a moving owner. The world matrix therefore stays
  * identity, and particles are never raycast (they must not steal editor clicks).
  */
-class WorldSpacePoints extends THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial> {
+export class WorldSpacePoints extends THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial> {
     constructor(pool: ParticlePool, material: THREE.ShaderMaterial) {
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute('position', dynamicAttribute(pool.positions, 3));
@@ -476,6 +508,19 @@ class WorldSpacePoints extends THREE.Points<THREE.BufferGeometry, THREE.ShaderMa
 }
 
 const UPLOADED_ATTRIBUTES: [name: string, itemSize: number][] = [['position', 3], ['aLife', 1], ['aSeed', 1]];
+
+/** Draws the pool's live particles this frame: the draw range and the changed part of each attribute. */
+export const uploadParticles = (points: WorldSpacePoints, pool: ParticlePool): void => {
+    const geometry = points.geometry;
+    geometry.setDrawRange(0, pool.count);
+    if (pool.count === 0) return;
+    for (const [name, itemSize] of UPLOADED_ATTRIBUTES) {
+        const attribute = geometry.getAttribute(name) as THREE.BufferAttribute;
+        attribute.clearUpdateRanges();
+        attribute.addUpdateRange(0, pool.count * itemSize);
+        attribute.needsUpdate = true;
+    }
+};
 
 const ParticlesRender: React.FC<ComponentRenderProps> = ({ component, mode }) => {
     const editor = mode === 'editor';
@@ -506,14 +551,7 @@ const ParticlesRender: React.FC<ComponentRenderProps> = ({ component, mode }) =>
         const geometry = points.geometry;
         // Depth-sort point for transparent layering: the emitter (world space, as matrixWorld stays identity).
         geometry.boundingSphere?.center.setFromMatrixPosition(owner.matrixWorld);
-        geometry.setDrawRange(0, pool.count);
-        if (pool.count === 0) return;
-        for (const [name, itemSize] of UPLOADED_ATTRIBUTES) {
-            const attribute = geometry.getAttribute(name) as THREE.BufferAttribute;
-            attribute.clearUpdateRanges();
-            attribute.addUpdateRange(0, pool.count * itemSize);
-            attribute.needsUpdate = true;
-        }
+        uploadParticles(points, pool);
     });
 
     return <primitive object={points} />;

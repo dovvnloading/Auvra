@@ -355,6 +355,8 @@ export interface WheelContact {
     mu: number;
     /** The tyre's load at rest, for load sensitivity. */
     nominalLoad: number;
+    /** Rolling resistance of the ground, as a share of the load (ROLLING_RESISTANCE, a road, when unset). */
+    rolling?: number;
 }
 
 export interface WheelStepResult extends TyreForce {
@@ -400,7 +402,7 @@ export const stepWheel = (
         }
         const effective = wheel.inertia + h * r * stiffness;
         wheel.omega += (h * (drive - r * fx)) / effective;
-        const resistance = brake + (contact ? ROLLING_RESISTANCE * contact.load * r : 0);
+        const resistance = brake + (contact ? (contact.rolling ?? ROLLING_RESISTANCE) * contact.load * r : 0);
         const stop = (h * resistance) / effective;
         wheel.omega = Math.abs(wheel.omega) <= stop ? 0 : wheel.omega - Math.sign(wheel.omega) * stop;
         if (contact && contact.load > 0) {

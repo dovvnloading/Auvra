@@ -50,7 +50,7 @@ import { getComponentDefinition } from './components/registry';
 import { IKPlayerTargetContext } from './components/ikComponents';
 import { CameraDirectorDriver } from './components/cameraComponent';
 import { DialogueDriver } from './components/dialogueComponent';
-import { VehicleDriver } from './components/vehicleComponent';
+import { VehicleDriver, VehicleSkidMarks } from './components/vehicleComponent';
 import { VehicleCameraRig } from './VehicleCamera';
 import { useVehicleSessionState, VehicleOverlay } from './VehicleOverlay';
 import { vehicleSession } from './vehicles';
@@ -865,6 +865,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
             {/* After the character's rig: while the player drives, the chase camera has the view. */}
             <VehicleCameraRig active={controlsEnabled} />
             <VehicleDriver enabled={controlsEnabled} />
+            <VehicleSkidMarks />
             {/* After the rig: a level camera, or a blend back from one, has the last word on the view. */}
             <CameraDirectorDriver />
         </RuntimeSpawnerProvider>
