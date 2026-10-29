@@ -4,7 +4,8 @@ import { ParticleRenderer } from './particleRenderer';
 import { ParticleSimulation, type ParticleHit, type ParticleRaycast } from './particleSimulation';
 import { builtinSpriteTexture, SPRITE_GRIDS } from './particleSprites';
 import { OPEN_SKY, type WeatherCover } from './weatherCover';
-import { windVelocity, type WeatherState } from './weather';
+import type { WeatherState } from './weather';
+import { windAt, windTime } from './wind';
 
 /**
  * PRECIPITATION
@@ -101,6 +102,7 @@ const layer = (effect: ParticleEffect, capacity: number, cheapCollision: boolean
 };
 
 const IDENTITY = new THREE.Matrix4();
+const _wind = { x: 0, y: 0, z: 0 };
 const _camera = new THREE.Vector3();
 const _emitter = new THREE.Matrix4();
 const _hit: ParticleHit = { x: 0, y: 0, z: 0, nx: 0, ny: 1, nz: 0 };
@@ -142,7 +144,9 @@ export class Precipitation {
     update(dt: number, camera: THREE.Camera, weather: WeatherState, cover: WeatherCover | null, light: number): void {
         this.cover = cover;
         camera.getWorldPosition(_camera);
-        const [wx, wz] = windVelocity(weather);
+        // The wind where the camera is: the weather's with its gusts, and any wind zone there.
+        windAt(_camera.x, _camera.y, _camera.z, windTime(), _wind, weather);
+        const wx = _wind.x, wz = _wind.z;
         // Rain and snow catch the sky's light from all round, so they stay faintly visible at night.
         const brightness = 0.22 + 0.78 * light;
 

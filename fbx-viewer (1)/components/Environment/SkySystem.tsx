@@ -11,7 +11,8 @@ import { usePhysicsAvailable, usePhysicsQueries, type PhysicsQueries } from '../
 import { Precipitation } from '../../runtime/precipitation';
 import { createSkyLighting, sanitizeWeather, worldClock } from '../../runtime/weather';
 import { COVER_SAMPLES_PER_FRAME, weatherCover, type CoverSampler } from '../../runtime/weatherCover';
-import { patchWeatherSurfaces, setSurfaceWeather } from '../../runtime/weatherSurfaces';
+import { patchWeatherSurfaces, patchWindSurfaces, setSurfaceWeather } from '../../runtime/weatherSurfaces';
+import { stepWind, windUniforms } from '../../runtime/wind';
 import { CloudLayer, LightningBolt, NightSky } from './sky/skyObjects';
 
 export const DEFAULT_SKY_CONFIG: SkyConfig = {
@@ -242,6 +243,7 @@ export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects, live = false
     const [isNight, setNight] = useState(false);
     const [reflections, setReflections] = useState(0.8);
     const frame = useRef(0);
+    const windScan = useRef(0);
     const surfacesWet = useRef(false);
 
     useEffect(() => () => {
@@ -267,6 +269,9 @@ export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects, live = false
 
     useFrame((_, delta) => {
         if (live) worldClock.step(delta);
+        // The wind blows in the editor too, so foliage and cloth can be seen moving as they will.
+        stepWind(delta);
+        if (windUniforms.uWindStrength.value > 0.05 && windScan.current++ % SURFACE_SCAN_FRAMES === 0) patchWindSurfaces(scene);
         if (!skyObject) {
             publishDaylight(1);
             setSurfaceWeather(0, 0, null);

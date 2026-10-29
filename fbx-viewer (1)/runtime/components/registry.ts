@@ -7,6 +7,7 @@ import { AUDIO_ZONE_COMPONENTS } from './audioZones';
 import { CAMERA_COMPONENT } from './cameraComponent';
 import { DECAL_COMPONENT } from './decalComponent';
 import { DESTRUCTIBLE_COMPONENT } from './destructibleComponent';
+import { WIND_COMPONENTS } from './windComponents';
 import { DIALOGUE_COMPONENT } from './dialogueComponent';
 import { PICKUP_COMPONENT } from './pickupComponent';
 import { PARTICLES_COMPONENT } from './particles';
@@ -37,6 +38,7 @@ export const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
     ...SPLINE_COMPONENTS,
     VEHICLE_COMPONENT,
     DESTRUCTIBLE_COMPONENT,
+    ...WIND_COMPONENTS,
     PARTICLES_COMPONENT,
     DECAL_COMPONENT,
     WATER_COMPONENT,

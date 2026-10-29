@@ -22,7 +22,7 @@ describe('component registry', () => {
     const types = COMPONENT_DEFINITIONS.map(definition => definition.type);
     expect(types).toEqual([
       'rotator', 'mover', 'pointLight', 'spotLight', 'camera', 'collider', 'rigidBody', 'joint', 'navLink', 'navObstacle',
-      'spline', 'splineMesh', 'splineScatter', 'followSpline', 'vehicle', 'destructible', 'particles', 'decal', 'water', 'audioSource',
+      'spline', 'splineMesh', 'splineScatter', 'followSpline', 'vehicle', 'destructible', 'cloth', 'windZone', 'windSway', 'springBones', 'particles', 'decal', 'water', 'audioSource',
       'reverbZone', 'musicPlayer',
       'postProcess', 'reflectionProbe', 'lightBakeVolume', 'lodGroup', 'distanceCull', 'levelStreaming', 'animation', 'lookAtIK', 'footIK', 'twoBoneIK', 'script', 'netSync', 'timeline',
       'dialogue', 'pickup',
