@@ -32,6 +32,7 @@ import {
     type ScriptValue,
     type ScriptVec3,
     type ScriptVehicleState,
+    type ScriptEnvironmentState,
 } from './protocol';
 import { isScriptNetPayload } from './scriptApi';
 import { MAX_SCRIPT_SPLINE_POINTS, SCRIPT_SPLINE_STEP } from './scriptSplines';
@@ -42,6 +43,7 @@ import { NET_LIMITS, type NetSession } from '../net/protocol';
 import { cameraDirector } from '../cameraDirector';
 import { KMH, vehicleSession, type VehicleSession } from '../vehicles';
 import { particleEmitters } from '../particleEmitters';
+import { setWorldTime, setWorldWeather, weatherKindFromName, worldTime, worldWeather } from '../weather';
 
 const OFFLINE_NET: ScriptNetState = { connected: false, isHost: true, selfId: null, peers: [] };
 
@@ -327,6 +329,19 @@ export const parseScriptCommand = (value: unknown): ScriptCommand | null => {
         case 'stopParticles':
             return hasKeys(v, ['type', 'objectId', 'clear']) && isName(v.objectId) && typeof v.clear === 'boolean'
                 ? { type: 'stopParticles', objectId: v.objectId, clear: v.clear }
+                : null;
+        case 'setTimeOfDay':
+            return hasKeys(v, ['type', 'hours']) && typeof v.hours === 'number' && Number.isFinite(v.hours) && v.hours >= 0 && v.hours < 24
+                ? { type: 'setTimeOfDay', hours: v.hours }
+                : null;
+        case 'setDayLength':
+            return hasKeys(v, ['type', 'minutes']) && typeof v.minutes === 'number' && Number.isFinite(v.minutes) && v.minutes >= 0
+                ? { type: 'setDayLength', minutes: v.minutes }
+                : null;
+        case 'setWeather':
+            return hasKeys(v, ['type', 'weather', 'seconds']) && typeof v.weather === 'string' && weatherKindFromName(v.weather) !== null
+                && typeof v.seconds === 'number' && Number.isFinite(v.seconds) && v.seconds >= 0 && v.seconds <= SCRIPT_LIMITS.maxWeatherSeconds
+                ? { type: 'setWeather', weather: v.weather, seconds: v.seconds }
                 : null;
         case 'emitParticles':
             return hasKeys(v, ['type', 'objectId', 'count']) && isName(v.objectId)
@@ -631,7 +646,22 @@ export interface ScriptCommandServices {
     setVehicleInput(objectId: string, controls: { throttle: number; brake: number; steer: number; handbrake: boolean } | null): boolean;
     /** Starts, stops or bursts the object's particle emitters; false when it has none. */
     particles(objectId: string, action: { play: true } | { stop: true; clear: boolean } | { emit: number }): boolean;
+    /** The world's clock and weather (runtime/weather.ts). */
+    setTimeOfDay(hours: number): void;
+    setDayLength(minutes: number): void;
+    setWeather(name: string, seconds: number): boolean;
 }
+
+/** The world's hour and weather as scripts see them. */
+export const scriptEnvironmentState = (): ScriptEnvironmentState => {
+    const time = worldTime();
+    const weather = worldWeather();
+    return {
+        hours: time.hours, light: time.light, night: time.night, weather: weather.preset,
+        clouds: weather.clouds, rain: weather.rain, snow: weather.snow, fog: weather.fog, wind: weather.wind,
+        wetness: weather.wetness, snowCover: weather.snowCover,
+    };
+};
 
 /** The session's vehicles as scripts see them; undefined when there are none. */
 export const scriptVehicleStates = (session: Pick<VehicleSession, 'all' | 'state'>): Record<string, ScriptVehicleState> | undefined => {
@@ -768,6 +798,15 @@ export const applyScriptCommand = (command: ScriptCommand, services: ScriptComma
             return;
         case 'emitParticles':
             services.particles(command.objectId, { emit: command.count });
+            return;
+        case 'setTimeOfDay':
+            services.setTimeOfDay(command.hours);
+            return;
+        case 'setDayLength':
+            services.setDayLength(command.minutes);
+            return;
+        case 'setWeather':
+            services.setWeather(command.weather, command.seconds);
             return;
         case 'log':
             services.log(command.scriptId, command.level, command.message);
@@ -1151,6 +1190,9 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
                 handle.setScriptControls(controls);
                 return true;
             },
+            setTimeOfDay: hours => setWorldTime({ hours }),
+            setDayLength: minutes => setWorldTime({ dayLength: minutes }),
+            setWeather: (name, seconds) => setWorldWeather(name, seconds),
             particles: (objectId, action) => {
                 const emitters = particleEmitters.forObject('runtime', objectId);
                 if (emitters.length === 0) {
@@ -1232,7 +1274,7 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
             net: scriptNetState(netRef.current),
         });
         const vehicles = scriptVehicleStates(vehicleSession);
-        return { ...snapshot, ...(splines ? { splines } : {}), ...(vehicles ? { vehicles } : {}) };
+        return { ...snapshot, ...(splines ? { splines } : {}), ...(vehicles ? { vehicles } : {}), environment: scriptEnvironmentState() };
     };
 
     const post = (state: HostState) => {

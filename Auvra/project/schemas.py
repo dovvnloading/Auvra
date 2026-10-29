@@ -37,7 +37,9 @@ _NESTED_KEYS = {
     "bakedLighting": {"spacing", "bounces", "intensity", "probes"},
     "probes": {"assetId", "encoding", "origin", "spacing", "counts", "bakedAt", "signature"},
     "textureLayers": {"textureId", "tiling"},
-    "skyConfig": {"timeOfDay", "sunIntensity", "ambienceIntensity", "sunColor", "fogColor", "fogDensity", "turbidity", "rayleigh", "mieCoefficient", "mieDirectionalG", "inclination", "azimuth"},
+    "skyConfig": {"timeOfDay", "sunIntensity", "ambienceIntensity", "sunColor", "fogColor", "fogDensity", "turbidity", "rayleigh", "mieCoefficient", "mieDirectionalG", "inclination", "azimuth", "dayLength", "weather", "fogMode"},
+    # The weather a level's sky starts in: the preset it came from and its values.
+    "weather": {"preset", "clouds", "rain", "snow", "fog", "wind", "windDirection", "lightning"},
     "dimensions": {"width", "height"},
     "importSettings": {"normalize", "targetSize"},
     "size": {"width", "height"},

@@ -31,6 +31,7 @@ import {
     type ScriptValue,
     type ScriptVec3,
     type ScriptVehicleState,
+    type ScriptEnvironmentState,
 } from './protocol';
 import { createScriptSpline, type ScriptSpline } from './scriptSplines';
 
@@ -189,6 +190,16 @@ export interface ScriptContext {
     exitVehicle(): void;
     /** The particle effects on object `objectId` (its Particles components; default: the script's own object). */
     particles(objectId?: string): ScriptParticles;
+    /** The hour of the day (0-24), how light it is after the weather (0-1) and whether it is night. */
+    timeOfDay(): { hours: number; light: number; night: boolean };
+    /** Sets the hour (0-24): the sun and the light move there at once. */
+    setTimeOfDay(hours: number): void;
+    /** How many real minutes a full day takes from now on; 0 stops the clock. */
+    setDayLength(minutes: number): void;
+    /** The weather now: its preset ('' for none or custom values), its values and how wet and snowy the ground is. */
+    weather(): ScriptWeather;
+    /** Heads for a weather preset over `seconds` (default 10; 0: at once): 'clear', 'cloudy', 'overcast', 'fog', 'rain', 'storm', 'snow' or 'blizzard'. */
+    setWeather(name: string, seconds?: number): void;
     /** Multiplayer: who is here, who hosts, and events to the other players. */
     readonly net: ScriptNet;
     log(...values: unknown[]): void;
@@ -197,6 +208,23 @@ export interface ScriptContext {
     /** The script's own storage, kept across frames until the script is reloaded. */
     readonly state: Record<string, unknown>;
 }
+
+/** The weather, as a script reads it. */
+export interface ScriptWeather {
+    preset: string;
+    /** 0-1. */
+    clouds: number;
+    rain: number;
+    snow: number;
+    fog: number;
+    /** m/s. */
+    wind: number;
+    /** How wet the ground is and how much snow lies on it, 0-1. */
+    wetness: number;
+    snowCover: number;
+}
+
+const SCRIPT_WEATHER_NAMES = ['clear', 'cloudy', 'overcast', 'fog', 'rain', 'storm', 'thunderstorm', 'snow', 'blizzard'];
 
 /** An object's particle effects, as a script controls them. */
 export interface ScriptParticles {
@@ -404,6 +432,10 @@ const isSplineState = (value: unknown): value is ScriptSplineState | null => val
 const isVehicleState = (value: unknown): value is ScriptVehicleState => isRecord(value)
     && isFiniteNumber(value.speed) && isFiniteNumber(value.gear) && typeof value.playerDriving === 'boolean';
 
+const isEnvironmentState = (value: unknown): value is ScriptEnvironmentState => isRecord(value)
+    && typeof value.night === 'boolean' && typeof value.weather === 'string'
+    && ['hours', 'light', 'clouds', 'rain', 'snow', 'fog', 'wind', 'wetness', 'snowCover'].every(key => isFiniteNumber(value[key]));
+
 const isObjectState = (value: unknown): value is ScriptObjectState => isRecord(value)
     && typeof value.id === 'string' && typeof value.name === 'string'
     && isVec3(value.position) && isVec3(value.rotation) && isVec3(value.scale)
@@ -457,7 +489,8 @@ export const isScriptSnapshot = (value: unknown): value is ScriptSnapshot => isR
     && everyValue(value.raycasts, isRaycastHit)
     && isNetState(value.net)
     && (value.splines === undefined || everyValue(value.splines, isSplineState))
-    && (value.vehicles === undefined || everyValue(value.vehicles, isVehicleState));
+    && (value.vehicles === undefined || everyValue(value.vehicles, isVehicleState))
+    && (value.environment === undefined || isEnvironmentState(value.environment));
 
 /** Whether a message's script entry is exactly { id, objectId, source } with non-empty ids. */
 export const isScriptSource = (value: unknown): value is ScriptSource => isRecord(value)
@@ -949,6 +982,32 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
                 };
             },
             exitVehicle: () => { queue(record, { type: 'exitVehicle' }); },
+            timeOfDay: () => {
+                const environment = world.snapshot.environment;
+                return { hours: environment?.hours ?? 12, light: environment?.light ?? 1, night: environment?.night ?? false };
+            },
+            setTimeOfDay: (hours: number) => {
+                if (!isFiniteNumber(hours)) throw new TypeError('setTimeOfDay expects hours as a number');
+                queue(record, { type: 'setTimeOfDay', hours: ((hours % 24) + 24) % 24 });
+            },
+            setDayLength: (minutes: number) => {
+                if (!isFiniteNumber(minutes) || minutes < 0) throw new TypeError('setDayLength expects minutes of 0 or more');
+                queue(record, { type: 'setDayLength', minutes });
+            },
+            weather: (): ScriptWeather => {
+                const e = world.snapshot.environment;
+                return {
+                    preset: e?.weather ?? '', clouds: e?.clouds ?? 0, rain: e?.rain ?? 0, snow: e?.snow ?? 0,
+                    fog: e?.fog ?? 0, wind: e?.wind ?? 0, wetness: e?.wetness ?? 0, snowCover: e?.snowCover ?? 0,
+                };
+            },
+            setWeather: (name: string, seconds = 10) => {
+                if (typeof name !== 'string' || !SCRIPT_WEATHER_NAMES.includes(name.trim().toLowerCase())) {
+                    throw new TypeError(`setWeather expects one of ${SCRIPT_WEATHER_NAMES.join(', ')}`);
+                }
+                if (!isFiniteNumber(seconds) || seconds < 0) throw new TypeError('setWeather expects seconds of 0 or more');
+                queue(record, { type: 'setWeather', weather: name.trim().toLowerCase(), seconds: Math.min(SCRIPT_LIMITS.maxWeatherSeconds, seconds) });
+            },
             net: {
                 connected: () => world.snapshot.net.connected,
                 isHost: () => world.snapshot.net.isHost,

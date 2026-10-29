@@ -277,6 +277,28 @@ The **Lights** panel in the **Outliner** tab (under the prefab list) lists every
 
 The light's other settings are on its component in the inspector.
 
+## Sky, time of day and weather
+
+A level's **Sky Sphere** (under Logic Actors) gives it its sky, sun and fog. Select it to set them in its inspector:
+
+| Section | What it sets |
+|---|---|
+| Time of Day | The hour the level shows in the editor and starts at in play: the sun rises at 6, stands overhead at noon and sets at 18, and the light turns warm near the horizon. After dark the stars come out and a moon rises opposite the sun |
+| Day-Night Cycle | **Day Length**: how many real minutes a full day takes in play, starting at the Time of Day (0: time stands still). **Fog Follows Sky**: the fog takes the colour of the sky at the horizon, blue by day, orange at sunset, dark at night, instead of the Fog Color |
+| Weather | The weather the level starts in: **None**, or a **Preset** (Clear, Cloudy, Overcast, Fog, Rain, Thunderstorm, Snow, Blizzard) whose values can then be changed: **Clouds** (how much sky they cover), **Rain** and **Snow** (how heavy), **Mist** (fog on top of the sky's own), **Wind** speed and the direction it blows toward, and lightning **Strikes/min** |
+| Atmosphere, Light & Fog | The sky's colour (Turbidity, Rayleigh, Mie), the strength of the sun and of the sky's fill, and the fog's density and colour |
+
+What the weather does:
+
+- **Clouds** drift with the wind across the sky, lit by the sun and coloured by the sunset. Under heavy cloud the sun dims, shadows soften and the shade fills with the sky's light; a storm darkens all of it.
+- **Rain and snow** fall around the camera wherever it goes, slanted by the wind. In play they stop at what covers them, so none falls under a roof or into a room; raindrops splash and ring ripples where they land.
+- **Wet ground**: surfaces get darker and glossier while it rains, and flat ground pools into puddles; they dry slowly once it stops, faster in sun and wind. **Snow** settles on what faces up, patchy at first, and melts slowly after. In play, what is under cover stays dry and free of snow.
+- **Lightning** strikes at random, lighting the scene and the clouds; near strikes draw a bolt on the sky, and thunder follows as late as sound takes to arrive, lower and longer the further off.
+- **Sound** (in play): rain hisses, muffled under cover, wind gusts with its speed, and thunder rolls.
+- **Vehicles** lose grip on wet roads (about 70% of their dry grip; loose ground less affected) and much more under settled snow; under cover the road stays dry. Headlights in **Auto** come on in storms and thick fog as well as at night.
+
+In the editor the sky shows the level as it starts, everywhere (cover is worked out in play). In play, level scripts change the hour, the day length and the weather with the [Time and weather nodes](level-scripting.md#time-and-weather-nodes), and gameplay scripts with `ctx.setTimeOfDay`, `ctx.setWeather` and `ctx.setDayLength` ([scripting](scripting.md)).
+
 ## Baked lighting
 
 Unbaked, a level's shaded sides get the same sky fill everywhere (the sky sphere's ambience and the environment light), so a room under a roof is as bright as open ground. **Baked Lighting**, under the Lights panel, bakes the light that really reaches each place into a grid of light probes:

@@ -6,7 +6,7 @@ import {
     Plus, Minus, X, Divide, ChevronRight, ChevronLeft, Equal, Hash, Type as TypeIcon, ToggleLeft, ArrowRight,
     Skull, Shield, Clock, RefreshCcw, AlertTriangle,
     ListOrdered, Repeat, Repeat1, ArrowLeftRight, DoorClosed, PackagePlus, Move3d, Volume2, Zap, Crosshair,
-    Variable, Gamepad2, Dices, Film, Smile, Send, Crown, Video, HeartPulse, HeartCrack, Package, Megaphone, Route, Car, Sparkles
+    Variable, Gamepad2, Dices, Film, Smile, Send, Crown, Video, HeartPulse, HeartCrack, Package, Megaphone, Route, Car, Sparkles, Sun, CloudRain
 } from 'lucide-react';
 import { LogicNode, LogicPin, PinDataType, LevelObject } from '../../types';
 import { describeActor, isOverlapEvent, overlapEventName, overlapTargetWarning, resolveOverlapTarget, selectedOverlapActorId } from './overlapTargets';
@@ -120,6 +120,11 @@ const NODE_STYLES: Record<string, { border: string, bg: string, icon: React.Reac
     'StopParticles': { border: 'border-amber-800', bg: 'bg-amber-950/50', icon: <Sparkles size={14} className="text-amber-400" /> },
     'EmitParticles': { border: 'border-amber-800', bg: 'bg-amber-950/50', icon: <Sparkles size={14} className="text-amber-400" /> },
     'GetParticles': { border: 'border-amber-800', bg: 'bg-amber-950/50', icon: <Sparkles size={14} className="text-amber-400" /> },
+    'SetTimeOfDay': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <Sun size={14} className="text-sky-400" /> },
+    'GetTimeOfDay': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <Sun size={14} className="text-sky-400" /> },
+    'SetDayLength': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <Sun size={14} className="text-sky-400" /> },
+    'SetWeather': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <CloudRain size={14} className="text-sky-400" /> },
+    'GetWeather': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <CloudRain size={14} className="text-sky-400" /> },
     'SendNetworkEvent': { border: 'border-teal-800', bg: 'bg-teal-950/70', icon: <Send size={14} className="text-teal-400" /> },
     'IsNetworkHost': { border: 'border-teal-800', bg: 'bg-teal-950/70', icon: <Crown size={14} className="text-teal-400" /> },
     'SetActiveCamera': { border: 'border-pink-800', bg: 'bg-pink-950/70', icon: <Video size={14} className="text-pink-400" /> },

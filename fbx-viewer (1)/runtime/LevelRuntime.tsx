@@ -19,6 +19,7 @@ import { LevelGroundColliders } from './terrainPhysics';
 import { InstancedLevelLayer } from '../components/Environment/InstancedLevelLayer';
 import { AudioSystem } from '../components/Environment/AudioSystem';
 import { SkySystem } from '../components/Environment/SkySystem';
+import { WeatherAudio } from './WeatherAudio';
 import { TerrainObject } from '../components/Environment/Terrain/TerrainObject';
 import { SandboxEntity, SandboxEntityHandle } from '../components/Sandbox/SandboxEntity';
 import { PlayerController } from '../components/Sandbox/PlayerController';
@@ -732,7 +733,8 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
         <LevelStreamingContext.Provider value={levelStreaming}>
         <RuntimeSpawnerProvider spawnPrefab={spawnPrefab} destroyObject={destroyRuntimeObject}>
             {/* --- Replaced Hardcoded Lights with SkySystem --- */}
-            <SkySystem levelObjects={runtimeLevelObjects} />
+            <SkySystem levelObjects={runtimeLevelObjects} live />
+            <WeatherAudio />
             <LevelLightVolume bakedLighting={level.bakedLighting} />
 
             <LevelGroundColliders terrains={renderPlan.terrains} />

@@ -118,6 +118,8 @@ export class ParticleSimulation {
     private last: Float64Array | null = null;
     /** The emitter's velocity over the last step, m/s, world. */
     readonly emitterVelocity = new Float64Array(3);
+    /** Collision queries per step at most; raise it when the ray query is cheap (a height lookup). */
+    collisionBudget = COLLISION_CHECKS_PER_STEP;
 
     constructor(effect: ParticleEffect, capacity: number, random: () => number = Math.random) {
         this.capacity = Math.max(1, Math.floor(capacity));
@@ -284,7 +286,7 @@ export class ParticleSimulation {
                 nx = cx + rx * cos + rz * sin;
                 nz = cz - rx * sin + rz * cos;
             }
-            if (collide && checks < COLLISION_CHECKS_PER_STEP && (i + this.count - checkFrom) % this.count < COLLISION_CHECKS_PER_STEP) {
+            if (collide && checks < this.collisionBudget && (i + this.count - checkFrom) % this.count < this.collisionBudget) {
                 checks++;
                 const hit = raycast!(p[v], p[v + 1], p[v + 2], nx, ny, nz);
                 if (hit) {
