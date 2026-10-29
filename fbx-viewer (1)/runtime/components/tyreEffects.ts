@@ -2,35 +2,36 @@ import * as THREE from 'three';
 import { SURFACES, type SurfaceKind } from '../surfaces';
 import { createSkidTrail, extendSkidTrail, markIntensity, skidMarks, type SkidTrail } from '../skidMarks';
 import type { VehicleTelemetry } from '../vehicles';
-import {
-    ageParticles,
-    applyParticleStyle,
-    createParticleMaterial,
-    createParticlePool,
-    emitParticleAt,
-    uploadParticles,
-    WorldSpacePoints,
-    type ParticleLook,
-    type ParticlePool,
-    type ParticleStyle,
-} from './particles';
+import { PARTICLE_PRESETS, sanitizeParticleEffect, type ParticleEffect } from '../particleEffect';
+import { ParticleRenderer } from '../particleRenderer';
+import { ParticleSimulation } from '../particleSimulation';
+import { builtinSpriteTexture, SPRITE_GRIDS } from '../particleSprites';
 
 /**
  * What a vehicle's tyres leave behind: smoke from a sliding or spinning tyre on hard ground, dust
- * or spray thrown up on loose ground (more the faster it rolls), and marks on the ground.
+ * or spray thrown up on loose ground (more the faster it rolls), and marks on the ground. The smoke
+ * and dust are particle effects the tyres emit into themselves; they never emit on their own.
  */
 
-type Look = ParticleLook & ParticleStyle;
+/** Tyre smoke: billowing and lingering, lifting and spreading as it goes. */
+export const TYRE_SMOKE: ParticleEffect = sanitizeParticleEffect({
+    ...PARTICLE_PRESETS.smoke,
+    rate: 0, maxParticles: 1200, lifetime: [1.8, 2.8], speed: [0.2, 0.6], size: [0.6, 0.9],
+    shape: { ...PARTICLE_PRESETS.smoke.shape, kind: 'point', angle: 70 },
+    gravity: -0.35, drag: 1.4, turbulence: 0.4, startColor: ['#e4e4e4', '#cfcfcf'],
+    colorOverLife: { stops: [{ t: 0, color: '#ffffff', alpha: 0 }, { t: 0.08, color: '#ffffff', alpha: 0.4 }, { t: 0.6, color: '#e0e0e0', alpha: 0.25 }, { t: 1, color: '#c0c0c0', alpha: 0 }] },
+    sizeOverLife: { points: [[0, 0.6], [1, 5]] },
+});
 
-const SMOKE: Look = {
-    lifetime: 2.4, speed: 0, spread: 0, size: 0.7, colorStart: '#e4e4e4', colorEnd: '#a6a6a6', gravity: -0.35,
-    blending: 'normal', opacity: 0.32, sizeEnd: 5, drag: 1.4, radius: 0, wobble: 0.35, variance: 0.35, softness: 0,
-};
-
-const DUST: Look = {
-    lifetime: 1.6, speed: 0, spread: 0, size: 0.5, colorStart: '#8f7656', colorEnd: '#6e5a42', gravity: -0.12,
-    blending: 'normal', opacity: 0.5, sizeEnd: 4, drag: 1.8, radius: 0, wobble: 0.25, variance: 0.4, softness: 0,
-};
+/** Dust or spray kicked up and back off loose ground, falling back as it thins. */
+export const TYRE_DUST: ParticleEffect = sanitizeParticleEffect({
+    ...PARTICLE_PRESETS.smoke,
+    rate: 0, maxParticles: 1200, lifetime: [1.2, 2], speed: [0.4, 1], size: [0.35, 0.6],
+    shape: { ...PARTICLE_PRESETS.smoke.shape, kind: 'point', angle: 40 },
+    gravity: 0.6, drag: 1.8, turbulence: 0.3, startColor: ['#ffffff', '#e8e8e8'],
+    colorOverLife: { stops: [{ t: 0, color: '#8f7656', alpha: 0 }, { t: 0.08, color: '#8f7656', alpha: 0.55 }, { t: 0.7, color: '#6e5a42', alpha: 0.35 }, { t: 1, color: '#6e5a42', alpha: 0 }] },
+    sizeOverLife: { points: [[0, 0.6], [1, 4]] },
+});
 
 /** Smoke puffs per second from a fully sliding tyre. */
 const SMOKE_RATE = 70;
@@ -38,21 +39,20 @@ const SMOKE_RATE = 70;
 const DUST_RATE = 24;
 const DUST_SKID_RATE = 60;
 const DUST_SPEED = 12;
-/** Particles each vehicle keeps alive per kind. */
-const CAPACITY = 1024;
 
 interface Emitter {
-    pool: ParticlePool;
-    material: THREE.ShaderMaterial;
-    points: WorldSpacePoints;
-    look: Look;
+    simulation: ParticleSimulation;
+    renderer: ParticleRenderer;
+    effect: ParticleEffect;
 }
 
-const createEmitter = (look: Look): Emitter => {
-    const pool = createParticlePool(CAPACITY);
-    const material = createParticleMaterial();
-    applyParticleStyle(material, look);
-    return { pool, material, points: new WorldSpacePoints(pool, material), look: { ...look } };
+const createEmitter = (effect: ParticleEffect): Emitter => {
+    const simulation = new ParticleSimulation(effect, effect.maxParticles);
+    // Emits only what the tyres put into it.
+    simulation.stop();
+    const renderer = new ParticleRenderer(effect.maxParticles);
+    renderer.setLook(effect, builtinSpriteTexture('smoke'), SPRITE_GRIDS.smoke);
+    return { simulation, renderer, effect };
 };
 
 export interface TyreEffects {
@@ -67,8 +67,8 @@ export interface TyreEffects {
 }
 
 export const createTyreEffects = (): TyreEffects => {
-    const smoke = createEmitter(SMOKE);
-    const dust = createEmitter(DUST);
+    const smoke = createEmitter(TYRE_SMOKE);
+    const dust = createEmitter(TYRE_DUST);
     return {
         smoke,
         dust,
@@ -76,20 +76,33 @@ export const createTyreEffects = (): TyreEffects => {
         carry: [],
         dustSurface: null,
         dispose() {
-            for (const emitter of [smoke, dust]) {
-                emitter.points.geometry.dispose();
-                emitter.material.dispose();
-            }
+            smoke.renderer.dispose();
+            dust.renderer.dispose();
         },
     };
 };
 
 const _kick = new THREE.Color();
 const _point = new THREE.Vector3();
+const IDENTITY = new THREE.Matrix4();
+
+/** The dust effect coloured for the ground throwing it up. */
+export const dustFor = (surface: SurfaceKind): ParticleEffect => {
+    _kick.set(SURFACES[surface].kickColor);
+    const start = `#${_kick.getHexString()}`;
+    const end = `#${_kick.multiplyScalar(0.78).getHexString()}`;
+    const spray = SURFACES[surface].kick === 'spray';
+    return {
+        ...TYRE_DUST,
+        // Spray is thrown higher and falls faster than dust.
+        gravity: spray ? 3 : TYRE_DUST.gravity,
+        colorOverLife: { stops: [{ t: 0, color: start, alpha: 0 }, { t: 0.08, color: start, alpha: spray ? 0.7 : 0.55 }, { t: 0.7, color: end, alpha: 0.35 }, { t: 1, color: end, alpha: 0 }] },
+    };
+};
 
 /**
  * One frame of a vehicle's tyre effects from its last simulation step: `halfWidths` per wheel,
- * `velocity` the chassis's (m/s, world), `viewportHeight` the drawing buffer's height in pixels.
+ * `velocity` the chassis's (m/s, world), `camera` the view the effects are drawn for.
  */
 export const stepTyreEffects = (
     effects: TyreEffects,
@@ -97,11 +110,11 @@ export const stepTyreEffects = (
     halfWidths: readonly number[],
     velocity: THREE.Vector3,
     dt: number,
-    viewportHeight: number,
+    camera: THREE.Camera,
 ): void => {
     const { smoke, dust } = effects;
-    ageParticles(smoke.pool, smoke.look, dt);
-    ageParticles(dust.pool, dust.look, dt);
+    smoke.simulation.step(dt, null);
+    dust.simulation.step(dt, null);
     const marks = skidMarks();
     let loudestDust = 0;
     let dustSurface = null as SurfaceKind | null;
@@ -118,10 +131,9 @@ export const stepTyreEffects = (
         _point.copy(wheel.contactPoint).addScaledVector(wheel.contactNormal, 0.15);
         if (surface.kick === 'smoke' && skid > 0) {
             carry.smoke += SMOKE_RATE * skid * dt;
-            for (; carry.smoke >= 1; carry.smoke -= 1) {
-                emitParticleAt(smoke.pool, smoke.look, _point.x, _point.y, _point.z,
-                    velocity.x * 0.15 + (Math.random() - 0.5) * 1.2, 0.3 + Math.random() * 0.5, velocity.z * 0.15 + (Math.random() - 0.5) * 1.2);
-            }
+            const due = Math.floor(carry.smoke);
+            carry.smoke -= due;
+            smoke.simulation.emitAt(due, _point.x, _point.y, _point.z, velocity.x * 0.15, 0.3, velocity.z * 0.15);
         } else carry.smoke = 0;
         if (surface.kick === 'dust' || surface.kick === 'spray') {
             const rolling = Math.min(1, wheel.groundSpeed / DUST_SPEED);
@@ -131,24 +143,19 @@ export const stepTyreEffects = (
                 dustSurface = wheel.surface;
             }
             carry.dust += rate * dt;
+            const due = Math.floor(carry.dust);
+            carry.dust -= due;
             const lift = surface.kick === 'spray' ? 2.2 : 1.1;
-            for (; carry.dust >= 1; carry.dust -= 1) {
-                // Thrown up and back off the tread.
-                emitParticleAt(dust.pool, dust.look, _point.x, _point.y, _point.z,
-                    -velocity.x * 0.2 + (Math.random() - 0.5) * 1.5, lift * (0.5 + Math.random()), -velocity.z * 0.2 + (Math.random() - 0.5) * 1.5);
-            }
+            // Thrown up and back off the tread.
+            dust.simulation.emitAt(due, _point.x, _point.y, _point.z, -velocity.x * 0.2, lift, -velocity.z * 0.2);
         } else carry.dust = 0;
     });
     // The dust takes the colour of the ground throwing up the most of it.
     if (dustSurface && dustSurface !== effects.dustSurface) {
         effects.dustSurface = dustSurface;
-        _kick.set(SURFACES[dustSurface].kickColor);
-        dust.look.colorStart = `#${_kick.getHexString()}`;
-        dust.look.colorEnd = `#${_kick.multiplyScalar(0.78).getHexString()}`;
-        applyParticleStyle(dust.material, dust.look);
+        dust.effect = dustFor(dustSurface);
+        dust.simulation.setEffect(dust.effect);
     }
-    for (const emitter of [smoke, dust]) {
-        emitter.material.uniforms.uViewportHeight.value = viewportHeight;
-        uploadParticles(emitter.points, emitter.pool);
-    }
+    smoke.renderer.update(smoke.simulation, IDENTITY, camera);
+    dust.renderer.update(dust.simulation, IDENTITY, camera);
 };

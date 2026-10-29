@@ -1009,7 +1009,7 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
         });
 
         const linear = current.body.linvel();
-        stepTyreEffects(effects, current.telemetry, current.wheels.map(wheel => wheel.halfWidth), _velocity.set(linear.x, linear.y, linear.z), delta, frame.size.height * frame.viewport.dpr);
+        stepTyreEffects(effects, current.telemetry, current.wheels.map(wheel => wheel.halfWidth), _velocity.set(linear.x, linear.y, linear.z), delta, frame.camera);
 
         // The driver's door swings open and shut.
         if (current.doorTime !== null) {
@@ -1097,8 +1097,8 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
 
     return (
         <group ref={anchorRef} userData={PHYSICS_IGNORED_USER_DATA}>
-            <primitive object={effects.smoke.points} />
-            <primitive object={effects.dust.points} />
+            <primitive object={effects.smoke.renderer.object} />
+            <primitive object={effects.dust.renderer.object} />
         </group>
     );
 };

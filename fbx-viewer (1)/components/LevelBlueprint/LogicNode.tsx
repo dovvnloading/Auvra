@@ -6,7 +6,7 @@ import {
     Plus, Minus, X, Divide, ChevronRight, ChevronLeft, Equal, Hash, Type as TypeIcon, ToggleLeft, ArrowRight,
     Skull, Shield, Clock, RefreshCcw, AlertTriangle,
     ListOrdered, Repeat, Repeat1, ArrowLeftRight, DoorClosed, PackagePlus, Move3d, Volume2, Zap, Crosshair,
-    Variable, Gamepad2, Dices, Film, Smile, Send, Crown, Video, HeartPulse, HeartCrack, Package, Megaphone, Route, Car
+    Variable, Gamepad2, Dices, Film, Smile, Send, Crown, Video, HeartPulse, HeartCrack, Package, Megaphone, Route, Car, Sparkles
 } from 'lucide-react';
 import { LogicNode, LogicPin, PinDataType, LevelObject } from '../../types';
 import { describeActor, isOverlapEvent, overlapEventName, overlapTargetWarning, resolveOverlapTarget, selectedOverlapActorId } from './overlapTargets';
@@ -116,6 +116,10 @@ const NODE_STYLES: Record<string, { border: string, bg: string, icon: React.Reac
     'GetPlayerVehicle': { border: 'border-orange-800', bg: 'bg-orange-950/50', icon: <Car size={14} className="text-orange-400" /> },
     'SetVehicleInput': { border: 'border-orange-800', bg: 'bg-orange-950/50', icon: <Car size={14} className="text-orange-400" /> },
     'ReleaseVehicleInput': { border: 'border-orange-800', bg: 'bg-orange-950/50', icon: <Car size={14} className="text-orange-400" /> },
+    'PlayParticles': { border: 'border-amber-800', bg: 'bg-amber-950/50', icon: <Sparkles size={14} className="text-amber-400" /> },
+    'StopParticles': { border: 'border-amber-800', bg: 'bg-amber-950/50', icon: <Sparkles size={14} className="text-amber-400" /> },
+    'EmitParticles': { border: 'border-amber-800', bg: 'bg-amber-950/50', icon: <Sparkles size={14} className="text-amber-400" /> },
+    'GetParticles': { border: 'border-amber-800', bg: 'bg-amber-950/50', icon: <Sparkles size={14} className="text-amber-400" /> },
     'SendNetworkEvent': { border: 'border-teal-800', bg: 'bg-teal-950/70', icon: <Send size={14} className="text-teal-400" /> },
     'IsNetworkHost': { border: 'border-teal-800', bg: 'bg-teal-950/70', icon: <Crown size={14} className="text-teal-400" /> },
     'SetActiveCamera': { border: 'border-pink-800', bg: 'bg-pink-950/70', icon: <Video size={14} className="text-pink-400" /> },

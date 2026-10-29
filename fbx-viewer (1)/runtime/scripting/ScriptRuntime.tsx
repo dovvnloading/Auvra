@@ -41,6 +41,7 @@ import { useNetSession } from '../net/NetSessionContext';
 import { NET_LIMITS, type NetSession } from '../net/protocol';
 import { cameraDirector } from '../cameraDirector';
 import { KMH, vehicleSession, type VehicleSession } from '../vehicles';
+import { particleEmitters } from '../particleEmitters';
 
 const OFFLINE_NET: ScriptNetState = { connected: false, isHost: true, selfId: null, peers: [] };
 
@@ -321,6 +322,17 @@ export const parseScriptCommand = (value: unknown): ScriptCommand | null => {
             return hasKeys(v, ['type', 'objectId']) && isName(v.objectId) ? { type: v.type, objectId: v.objectId } : null;
         case 'exitVehicle':
             return hasKeys(v, ['type']) ? { type: 'exitVehicle' } : null;
+        case 'playParticles':
+            return hasKeys(v, ['type', 'objectId']) && isName(v.objectId) ? { type: 'playParticles', objectId: v.objectId } : null;
+        case 'stopParticles':
+            return hasKeys(v, ['type', 'objectId', 'clear']) && isName(v.objectId) && typeof v.clear === 'boolean'
+                ? { type: 'stopParticles', objectId: v.objectId, clear: v.clear }
+                : null;
+        case 'emitParticles':
+            return hasKeys(v, ['type', 'objectId', 'count']) && isName(v.objectId)
+                && typeof v.count === 'number' && Number.isInteger(v.count) && v.count >= 0 && v.count <= SCRIPT_LIMITS.maxParticleBurst
+                ? { type: 'emitParticles', objectId: v.objectId, count: v.count }
+                : null;
         case 'setVehicleInput': {
             const unit = (value: unknown, min: number) => typeof value === 'number' && Number.isFinite(value) && value >= min && value <= 1;
             return hasKeys(v, ['type', 'objectId', 'throttle', 'brake', 'steer', 'handbrake']) && isName(v.objectId)
@@ -617,6 +629,8 @@ export interface ScriptCommandServices {
     exitVehicle(): boolean;
     /** Drives a vehicle until released (null); false when the object is not a vehicle. */
     setVehicleInput(objectId: string, controls: { throttle: number; brake: number; steer: number; handbrake: boolean } | null): boolean;
+    /** Starts, stops or bursts the object's particle emitters; false when it has none. */
+    particles(objectId: string, action: { play: true } | { stop: true; clear: boolean } | { emit: number }): boolean;
 }
 
 /** The session's vehicles as scripts see them; undefined when there are none. */
@@ -745,6 +759,15 @@ export const applyScriptCommand = (command: ScriptCommand, services: ScriptComma
             return;
         case 'releaseVehicleInput':
             services.setVehicleInput(command.objectId, null);
+            return;
+        case 'playParticles':
+            services.particles(command.objectId, { play: true });
+            return;
+        case 'stopParticles':
+            services.particles(command.objectId, { stop: true, clear: command.clear });
+            return;
+        case 'emitParticles':
+            services.particles(command.objectId, { emit: command.count });
             return;
         case 'log':
             services.log(command.scriptId, command.level, command.message);
@@ -1126,6 +1149,19 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
                     return false;
                 }
                 handle.setScriptControls(controls);
+                return true;
+            },
+            particles: (objectId, action) => {
+                const emitters = particleEmitters.forObject('runtime', objectId);
+                if (emitters.length === 0) {
+                    noteOnce(state, `particles:${objectId}`, `particles: object "${objectId}" has no Particles component.`);
+                    return false;
+                }
+                for (const emitter of emitters) {
+                    if ('play' in action) emitter.play();
+                    else if ('stop' in action) emitter.stop(action.clear);
+                    else emitter.emit(action.emit);
+                }
                 return true;
             },
             log: (scriptId, level, message) => {

@@ -70,6 +70,7 @@ const fakeServices = (objects: LevelObject[] = []) => {
     enterVehicle: objectId => { calls.push(['enterVehicle', objectId]); return true; },
     exitVehicle: () => { calls.push(['exitVehicle']); return true; },
     setVehicleInput: (objectId, controls) => { calls.push(['setVehicleInput', objectId, controls]); return true; },
+    particles: (objectId, action) => { calls.push(['particles', objectId, action]); return true; },
     raycast: (origin, direction, maxDistance, options) => {
       calls.push(['raycast', origin.toArray(), direction.toArray(), maxDistance, options]);
       return direction.z > 0 ? hit : null;

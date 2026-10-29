@@ -8,6 +8,7 @@ vi.mock('../../components/Dialogue/DialogueInspector', () => ({ DialogueInspecto
 vi.mock('../../components/Environment/ReachIKInspector', () => ({ ReachIKInspector: () => null }));
 vi.mock('../../components/Environment/SplineInspectors', () => ({ SplineInspector: () => null, SplineModelInspector: () => null, FollowSplineInspector: () => null }));
 vi.mock('../../components/Environment/VehicleInspector', () => ({ VehicleInspector: () => null }));
+vi.mock('../../components/Environment/ParticlesInspector', () => ({ ParticlesInspector: () => null }));
 
 describe('component registry', () => {
   it('leaves editor inspectors out until the editor registers them', async () => {

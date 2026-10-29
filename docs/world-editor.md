@@ -292,12 +292,21 @@ The bake is stored with the level and goes into every build. It shows **Out of d
 
 ## Particles
 
-Add a **Particles** component to an object. Particles leave the object's origin in a cone around its local up (+Y) axis and stay behind in the world as the object moves.
+Add a **Particles** component to an object for a particle effect: smoke, fire, sparks, rain, snow, an explosion, a magic swirl, a trail, falling leaves, confetti. Pick a **Preset** to start from (Smoke, Fire, Sparks, Dust motes, Explosion, Embers, Magic, Rain, Snow, Steam, Falling leaves, Confetti, Fireflies, Waterfall mist, Muzzle flash, Shockwave, Trail, Debris), then shape it in its sections. An object can carry several, one effect each: a campfire is a fire, its smoke and its embers.
 
-- **Preset**: Smoke, Sparks, Fire, Dust or Custom. A preset sets lifetime, speed, spread, size, colours, gravity and its look. Choose **Custom** to use the values in those fields instead.
-- **Rate (per s)**, **Burst** (particles emitted at once at the start of each cycle) and **Loop** always apply. A cycle lasts one lifetime; with Loop off the emitter runs once.
+| Section | What it sets |
+|---|---|
+| Emission | **Rate** per second; **Per metre moved** (particles laid along the way the object moves: trails and wakes); **Bursts** at times in each **Cycle**; **Loop** or run once; **Prewarm** (a looping effect starts as if it had been running); a **Delay** before it starts; **Max alive** |
+| Shape | Where particles come from and which way they go: a **Point**, **Sphere** or **Hemisphere** (outwards), a **Cone** opening by its spread, a **Box**, a **Disc**, a **Line**, or the **model's surface** (along its faces: embers off a burning crate, sparkles off a statue). **Spread** is the cone around the **Launch axis** (up by default; rain and snow fall down it); **Fill** is 0 for the shape's edge only, 1 for anywhere in it; **Random dir.** mixes in random directions |
+| Start | Each particle's **Lifetime**, **Speed**, **Size**, **Rotation** and **Spin**, picked between two values; a colour between two; how much of the object's own motion it starts with; and whether it stays in the **World** where it was left or moves with the object (**Local**: a jet's flame) |
+| Forces | **Gravity** (negative rises), **Drag**, **Wind**, **Turbulence** (swirling, the size of its swirls set by **Swirl size**) and **Orbit** round the object's up axis |
+| Over life | A **Colour and alpha** gradient and **Size** and **Speed** curves across each particle's life, with previews |
+| Collision | **With the world**: particles bounce off what they hit (**Bounce**, **Friction**) or die there (**Die on hit**). It only runs in play |
+| Sub-emitters | Another Particles component on the same object, set off where these particles **die** or **hit something**: rain that splashes, fireworks that burst, sparks that smoke |
+| Rendering | **Draw as** camera-facing sprites, **stretched along their motion** (sparks, rain), **flat** (ripples, shockwaves), **upright**, or a **ribbon** through them (trails). The **Sprite** is one of the engine's (soft, smoke, spark, glow, ring, star, an animated flame, droplet, snowflake, leaf, square, debris) or a texture of the project, which can be a flipbook (columns and rows) played over each particle's life, at a frame rate, or one frame at random. **Blending** added glows, blended layers; **Brightness** above 1 glows with bloom |
+| Light | A light that brightens and dims with the effect, and can flicker: a fire's glow, an explosion's flash |
 
-Emitters preview live in the editor with a lower particle limit, and one-shot emitters keep replaying there so you can see them.
+Effects preview live in the editor, one-shot effects replaying so you can see them; collision runs only in play. In play an effect starts by itself unless **Play on start** is off; the [Play, Stop and Emit Particles](level-scripting.md#particle-nodes) nodes and `ctx.particles` in [gameplay scripts](scripting.md) start, stop and burst it.
 
 ## Audio
 

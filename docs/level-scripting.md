@@ -117,6 +117,17 @@ To move something along a spline at a speed, add a [Follow Spline](world-editor.
 | Set Vehicle Input | Drives a vehicle from the blueprint: **Throttle** and **Brake** from 0 to 1 (the brake reverses once stopped), **Steer** from -1 (left) to 1 (right) and the **Handbrake**. It holds them until set again or released; its AI path waits, and the player driving it overrides them |
 | Release Vehicle Input | Hands the vehicle back to its AI path, or parks it |
 
+## Particle nodes
+
+These act on every [Particles](world-editor.md#particles) component on the **Actor**; **Emitters** is how many it has (0 when none).
+
+| Node | Does |
+|---|---|
+| Play Particles | Starts its effects from the top of their delay and cycle, so a one-shot effect (an explosion, a burst of confetti) plays again |
+| Stop Particles | Stops them emitting. With **Clear** the particles alive vanish at once; without, they live out their lives |
+| Emit Particles | A burst of **Count** particles from each one's shape, where it is now, whether it is playing or not: a hit, a splash, a spark |
+| Get Particles | Whether any of them is **Playing**, and how many particles are **Alive**. Pure |
+
 **Input Action** compares the action with its state on the node's previous run, so drive it from **Event Tick** to catch every press. The actions are MoveForward, MoveBack, MoveLeft, MoveRight, Jump, Sprint, Fire, Aim, Interact, Reload, NextWeapon, Pause, Throttle, Brake, Handbrake, CameraView and LookBack; see [Controls](building-games.md#controls) for their keys.
 
 ## Level variables
