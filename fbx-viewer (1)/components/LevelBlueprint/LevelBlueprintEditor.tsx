@@ -25,6 +25,7 @@ const WORLD_PALETTE_GROUPS: { label: string, types: WorldNodeType[] }[] = [
     { label: 'Audio & Input', types: ['PlaySound', 'MakeNoise', 'InputActionPressed'] },
     { label: 'Animation', types: ['PlayPlayerAnimation', 'SetMorphTarget'] },
     { label: 'Player', types: ['DamagePlayer', 'HealPlayer', 'GetPlayerHealth', 'AddAmmo', 'GiveWeapon'] },
+    { label: 'Splines', types: ['GetSplineLength', 'GetSplinePoint', 'FindClosestOnSpline'] },
     { label: 'Level Variables', types: ['GetLevelVariable', 'SetLevelVariable'] },
     { label: 'Utilities', types: ['RandomFloat', 'RandomInt', 'Print'] },
 ];

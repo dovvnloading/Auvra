@@ -6,6 +6,7 @@ vi.mock('../../components/Timeline/TimelineInspector', () => ({ TimelineInspecto
 vi.mock('../../components/Environment/LevelStreamingInspector', () => ({ LevelStreamingInspector: () => null }));
 vi.mock('../../components/Dialogue/DialogueInspector', () => ({ DialogueInspector: () => null }));
 vi.mock('../../components/Environment/ReachIKInspector', () => ({ ReachIKInspector: () => null }));
+vi.mock('../../components/Environment/SplineInspectors', () => ({ SplineInspector: () => null, SplineModelInspector: () => null, FollowSplineInspector: () => null }));
 
 describe('component registry', () => {
   it('leaves editor inspectors out until the editor registers them', async () => {
@@ -18,7 +19,8 @@ describe('component registry', () => {
   it('registers the built-in components once each, with a renderer and editable props', () => {
     const types = COMPONENT_DEFINITIONS.map(definition => definition.type);
     expect(types).toEqual([
-      'rotator', 'mover', 'pointLight', 'spotLight', 'camera', 'collider', 'rigidBody', 'joint', 'navLink', 'navObstacle', 'particles', 'decal', 'water', 'audioSource',
+      'rotator', 'mover', 'pointLight', 'spotLight', 'camera', 'collider', 'rigidBody', 'joint', 'navLink', 'navObstacle',
+      'spline', 'splineMesh', 'splineScatter', 'followSpline', 'particles', 'decal', 'water', 'audioSource',
       'reverbZone', 'musicPlayer',
       'postProcess', 'reflectionProbe', 'lightBakeVolume', 'lodGroup', 'distanceCull', 'levelStreaming', 'animation', 'lookAtIK', 'footIK', 'twoBoneIK', 'script', 'netSync', 'timeline',
       'dialogue', 'pickup',

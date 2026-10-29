@@ -203,6 +203,8 @@ export const roundColliderArgs = (settings: ColliderSettings, scale: Vec3): numb
 /** userData flag on the groups physics components add to their object, so geometry scans skip them. */
 const PHYSICS_ANCHOR_FLAG = 'auvraPhysicsAnchor';
 const ANCHOR_USER_DATA = { [PHYSICS_ANCHOR_FLAG]: true };
+/** userData for a group of editor helpers (spline handles, lines) inside an object, which shapes built from the object's meshes leave out. */
+export const PHYSICS_IGNORED_USER_DATA: Readonly<Record<string, unknown>> = ANCHOR_USER_DATA;
 
 const isPhysicsAnchor = (node: THREE.Object3D): boolean => node.userData?.[PHYSICS_ANCHOR_FLAG] === true;
 

@@ -481,6 +481,13 @@ class SchemaTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_domain("metadata", {"schemaVersion": 2, "documents": [{"id": "meta"}]})
 
+    def test_spawner_config_keeps_its_patrol_path(self):
+        validate_domain("objects", {"schemaVersion": 1, "documents": [{
+            "id": "spawner", "levelId": "level", "name": "Spawner", "type": "spawn_point",
+            "position": [0, 0, 0], "rotation": [0, 0, 0], "scale": [1, 1, 1],
+            "spawnConfig": {"blueprintId": "enemy", "interval": 5, "maxSpawns": 0, "team": "Enemy", "patrolPath": "spline-object"},
+        }]})
+
     def test_generated_texture_provenance_is_bounded_and_secret_free(self):
         asset = "a" * 64
         provenance = {

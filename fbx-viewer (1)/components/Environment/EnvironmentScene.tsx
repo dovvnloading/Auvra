@@ -22,6 +22,10 @@ import type { LocalTransform } from '../../utils/sceneGraph';
 import { raycastPlacement } from '../../utils/surfacePlacement';
 import { NavMeshOverlay } from './NavMeshOverlay';
 import type { LevelNavMesh } from '../../runtime/navigation';
+import { findSplineComponent } from '../../runtime/splineRegistry';
+import { SplineEditOverlay } from './SplineEditOverlay';
+import { useSplineSelection } from './splineEditing';
+import { gizmoPointer } from './gizmoPointer';
 
 type Vec3 = [number, number, number];
 type RegisterNode = (id: string, node: THREE.Object3D | null, owner?: THREE.Object3D | null) => void;
@@ -294,7 +298,7 @@ const InteractionLayer: React.FC<InteractionLayerProps> = ({
     };
 
     const handleClick = (e: ThreeEvent<MouseEvent>) => {
-        if (isTransforming) return;
+        if (isTransforming || gizmoPointer.owns()) return;
 
         if (enabled && activeModel && ghostRef.current && ghostRef.current.visible) {
             e.stopPropagation();
@@ -545,6 +549,13 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
     // LOD Group / Distance Cull components with "preview in editor" hide objects by camera distance.
     const { preview: lodPreview, hiddenIds: lodHiddenIds } = useLodEditorPreview(levelObjects);
 
+    // --- Spline point editing: the selected object's spline, and whether one of its points has the gizmo ---
+    const selectedSource = selectedId ? objectById.get(selectedId) : undefined;
+    const selectedSpline = selectedSource ? findSplineComponent(selectedSource) : null;
+    const splineSelection = useSplineSelection();
+    const editingSplinePoint = Boolean(selectedSpline && splineSelection
+        && splineSelection.objectId === selectedId && splineSelection.componentId === selectedSpline.id);
+
     // --- Selection ---
     const selection = useStableIdSet(selectedId ? [...(selectedIds ?? []), selectedId] : (selectedIds ?? []));
     const promotedIds = useStableIdSet(useMemo(() => {
@@ -564,6 +575,8 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
     const selectCallbacks = useRef({ onSelectObject, onToggleSelect });
     selectCallbacks.current = { onSelectObject, onToggleSelect };
     const handleSelect = useCallback<SelectHandler>((id, event) => {
+        // A press on a gizmo is a drag, not a click on what is behind it.
+        if (gizmoPointer.owns()) return;
         const { onSelectObject: select, onToggleSelect: toggle } = selectCallbacks.current;
         if (toggle && isAdditiveClick(event)) toggle(id);
         else select(id);
@@ -631,6 +644,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
     };
 
     const onTransformMouseDown = (e: any) => {
+        gizmoPointer.take();
         onSnapshot();
         setIsTransforming(true);
         if (transformTarget) {
@@ -783,7 +797,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                     castShadow
                     onClick={(e) => {
                         // Like every other selection in this scene, only the active view selects.
-                        if (isActiveView && (interactionMode === 'select' || interactionMode === 'sculpt')) {
+                        if (isActiveView && !gizmoPointer.owns() && (interactionMode === 'select' || interactionMode === 'sculpt')) {
                             e.stopPropagation();
                             // Sculpt mode picks the sculpt target; it never builds a multi-selection.
                             if (interactionMode === 'select') handleSelect(terrain.id, e);
@@ -905,8 +919,20 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                         />
                     )}
 
+                    {/* The selected spline's points; a selected point takes the gizmo from the object */}
+                    {selectedSource && selectedSpline && transformTarget && interactionMode === 'select' && (
+                        <SplineEditOverlay
+                            object={selectedSource}
+                            component={selectedSpline}
+                            node={transformTarget}
+                            transformSettings={transformSettings}
+                            updateLevelObject={updateLevelObject}
+                            onSnapshot={onSnapshot}
+                        />
+                    )}
+
                     {/* Transform Gizmo */}
-                    {selectedId && transformTarget && interactionMode === 'select' && (
+                    {selectedId && transformTarget && interactionMode === 'select' && !editingSplinePoint && (
                         <TransformControls
                             object={transformTarget}
                             mode={transformSettings.tool}

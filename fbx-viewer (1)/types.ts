@@ -88,6 +88,7 @@ export interface SpawnConfig {
     interval: number;    // Seconds between spawns
     maxSpawns: number;   // Total limit (0 = infinite)
     team: 'Enemy' | 'Player';
+    patrolPath?: string; // Object with a Spline component its enemies patrol along (empty: they wander)
 }
 
 export interface AudioConfig {
@@ -384,6 +385,8 @@ export interface LogicNode {
           'PlayPlayerAnimation' | 'SetMorphTarget' |
           // Player (hooks/levelBlueprintNodes/world.ts)
           'DamagePlayer' | 'HealPlayer' | 'AddAmmo' | 'GiveWeapon' | 'GetPlayerHealth' |
+          // Splines (hooks/levelBlueprintNodes/world.ts)
+          'GetSplineLength' | 'GetSplinePoint' | 'FindClosestOnSpline' |
           // Multiplayer (hooks/useLevelBlueprintRuntime.ts)
           'SendNetworkEvent' | 'IsNetworkHost' |
           // Cameras (hooks/useLevelBlueprintRuntime.ts)

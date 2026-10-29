@@ -24,7 +24,7 @@ SCHEMA_DIR = Path(__file__).resolve().parents[2] / "project" / "v1"
 # top-level JSON Schemas. These are the stable keys currently emitted by the
 # editor; free-form runtime/user settings stay in their own versioned blobs.
 _NESTED_KEYS = {
-    "spawnConfig": {"blueprintId", "interval", "maxSpawns", "team"},
+    "spawnConfig": {"blueprintId", "interval", "maxSpawns", "team", "patrolPath"},
     "audioConfig": {"audioId", "volume", "loop", "autoplay", "muted", "isSpatial", "refDistance", "maxDistance", "rolloffFactor", "loopStart", "loopEnd"},
     # ``heights`` is the legacy inline form; current documents reference a
     # binary heightfield asset instead (see ``_validate_terrain_heightfields``).

@@ -95,6 +95,16 @@ Pending delays are dropped when the level restarts or play stops.
 | Add Ammo | Adds **Rounds** to the reserve of a weapon the player carries, by name; blank is the held weapon. **Added** is false for a weapon the player does not carry or one that never runs out |
 | Give Weapon | Gives the player one of their blueprint's [weapons](characters.md#weapons) by name and puts it in their hands; a weapon they already carry gets a magazine of rounds instead. **Given** is false when nothing changed |
 
+## Spline nodes
+
+| Node | Does |
+|---|---|
+| Get Spline Length | The **Length** in metres of the **Spline** actor's [spline](world-editor.md#splines) and whether it is **Closed**. **Found** is false for an actor without one. Pure |
+| Get Spline Point | Where the spline is **Distance** metres along it: **Position**, the **Direction** it runs there and its **Up**, in world space. Distances wrap round a closed spline and stop at the ends of an open one. Pure |
+| Find Closest On Spline | The **Closest** point on the spline to **Position**, and the **Distance** along the spline it is at: how far the player has come along a track, or where to rejoin a path. Pure |
+
+To move something along a spline at a speed, add a [Follow Spline](world-editor.md#follow-spline) component; these nodes are for placing, aiming and measuring.
+
 **Input Action** compares the action with its state on the node's previous run, so drive it from **Event Tick** to catch every press. The actions are MoveForward, MoveBack, MoveLeft, MoveRight, Jump, Sprint, Fire, Aim, Interact, Reload, NextWeapon and Pause; see [Controls](building-games.md#controls) for their keys.
 
 ## Level variables

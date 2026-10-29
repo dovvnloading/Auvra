@@ -5,6 +5,7 @@ import { planHull, type HostGeometry } from './components/physicsComponents';
 import { resolveNavSettings, type NavSettings } from './navSettings';
 import { isDynamicObject } from './levelObjectMotion';
 import { flatGroundHeight, terrainHeightfieldShape, terrainSurfaceHeight } from './terrainPhysics';
+import { hasSplineCollision } from './splineMesh';
 
 /**
  * WHAT THE NAVMESH IS BAKED FROM
@@ -16,7 +17,8 @@ import { flatGroundHeight, terrainHeightfieldShape, terrainSurfaceHeight } from 
  *   model's own triangles, and a fixed rigid body without colliders as the convex hull physics
  *   wraps it in;
  * - props with a model and no collider: the model's own triangles (a tree's trunk blocks, its
- *   branches are walked under), or, until the model is loaded, the player's collision circle.
+ *   branches are walked under), or, until the model is loaded, the player's collision circle;
+ * - Spline Meshes and Spline Scatters with collision on: the bent model, the scattered copies' boxes.
  *
  * Objects that move (mover or rotator components, a non-fixed rigid body, or a child of one) are
  * left out; a Nav Obstacle component carves them out as they move instead. Triggers, pickups and
@@ -52,6 +54,8 @@ export interface NavGeometryOptions {
      * falls back to the prop circle.
      */
     shapeGeometry?: (object: LevelObject) => HostGeometry | null;
+    /** What the object's Spline Mesh and Spline Scatter components lay down solid, in object-local space (runtime/splineMesh.ts splineObjectTriangles). */
+    splineGeometry?: (object: LevelObject) => HostGeometry | null;
     /** Circle radius of a prop without a collider; null leaves it out. Defaults to the player's max(scale.x, scale.z) / 2. */
     propRadius?: (object: LevelObject, worldScale: THREE.Vector3) => number | null;
 }
@@ -129,6 +133,7 @@ const vectorProp = (value: unknown, fallback: [number, number, number]): THREE.V
  */
 const mayBlock = (object: LevelObject): boolean => {
     if (object.type === 'terrain' || object.type === 'sky_sphere') return false;
+    if (hasSplineCollision(object)) return true;
     const components = enabledComponents(object);
     const colliders = components.filter(component => component.type === 'collider');
     if (colliders.length > 0) return colliders.some(collider => collider.props?.isTrigger !== true);
@@ -472,6 +477,8 @@ export function collectNavGeometry(levelObjects: readonly LevelObject[], options
         }
         addLinks(links, object, matrix);
         if (!mayBlock(object) || isDynamicObject(object, index)) continue;
+        const laid = hasSplineCollision(object) ? options.splineGeometry?.(object) : null;
+        if (laid) solids.add(laid.positions, laid.indices, matrix);
         const components = enabledComponents(object);
         const colliders = components.filter(component => component.type === 'collider' && component.props?.isTrigger !== true);
         let needsCircle = colliders.length === 0;

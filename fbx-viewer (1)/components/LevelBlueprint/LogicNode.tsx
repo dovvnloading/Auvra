@@ -6,7 +6,7 @@ import {
     Plus, Minus, X, Divide, ChevronRight, ChevronLeft, Equal, Hash, Type as TypeIcon, ToggleLeft, ArrowRight,
     Skull, Shield, Clock, RefreshCcw, AlertTriangle,
     ListOrdered, Repeat, Repeat1, ArrowLeftRight, DoorClosed, PackagePlus, Move3d, Volume2, Zap, Crosshair,
-    Variable, Gamepad2, Dices, Film, Smile, Send, Crown, Video, HeartPulse, HeartCrack, Package, Megaphone
+    Variable, Gamepad2, Dices, Film, Smile, Send, Crown, Video, HeartPulse, HeartCrack, Package, Megaphone, Route
 } from 'lucide-react';
 import { LogicNode, LogicPin, PinDataType, LevelObject } from '../../types';
 import { describeActor, isOverlapEvent, overlapEventName, overlapTargetWarning, resolveOverlapTarget, selectedOverlapActorId } from './overlapTargets';
@@ -106,6 +106,10 @@ const NODE_STYLES: Record<string, { border: string, bg: string, icon: React.Reac
     'GetPlayerHealth': { border: 'border-green-800', bg: 'bg-green-950/50', icon: <HeartPulse size={14} className="text-green-400" /> },
     'AddAmmo': { border: 'border-amber-800', bg: 'bg-amber-950/70', icon: <Package size={14} className="text-amber-400" /> },
     'GiveWeapon': { border: 'border-amber-800', bg: 'bg-amber-950/70', icon: <Crosshair size={14} className="text-amber-400" /> },
+    // Splines
+    'GetSplineLength': { border: 'border-fuchsia-800', bg: 'bg-fuchsia-950/50', icon: <Route size={14} className="text-fuchsia-400" /> },
+    'GetSplinePoint': { border: 'border-fuchsia-800', bg: 'bg-fuchsia-950/50', icon: <Route size={14} className="text-fuchsia-400" /> },
+    'FindClosestOnSpline': { border: 'border-fuchsia-800', bg: 'bg-fuchsia-950/50', icon: <Route size={14} className="text-fuchsia-400" /> },
     'SendNetworkEvent': { border: 'border-teal-800', bg: 'bg-teal-950/70', icon: <Send size={14} className="text-teal-400" /> },
     'IsNetworkHost': { border: 'border-teal-800', bg: 'bg-teal-950/70', icon: <Crown size={14} className="text-teal-400" /> },
     'SetActiveCamera': { border: 'border-pink-800', bg: 'bg-pink-950/70', icon: <Video size={14} className="text-pink-400" /> },

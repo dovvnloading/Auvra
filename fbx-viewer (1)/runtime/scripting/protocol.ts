@@ -83,6 +83,18 @@ export interface ScriptPlayerState {
     reserve: number;
 }
 
+/**
+ * A spline (an object's Spline component) as scripts see it: points along it in world space, at most
+ * runtime/scripting/scriptSplines.ts SCRIPT_SPLINE_STEP apart, and the up at each point.
+ */
+export interface ScriptSplineState {
+    closed: boolean;
+    /** x, y, z of each point, in order along the spline. */
+    points: number[];
+    /** x, y, z of the up at each point. */
+    ups: number[];
+}
+
 /** The world as scripts see it for one frame. */
 export interface ScriptSnapshot {
     frame: number;
@@ -98,6 +110,11 @@ export interface ScriptSnapshot {
     /** Answers to the previous frame's raycast commands, by request id (null: no hit). */
     raycasts: Record<string, ScriptRaycastHit | null>;
     net: ScriptNetState;
+    /**
+     * Splines, by the id of the object they belong to, that are new or changed since the previous
+     * snapshot (null: gone). Absent when none changed; the sandbox keeps the ones it was sent.
+     */
+    splines?: Record<string, ScriptSplineState | null>;
 }
 
 export type ScriptCommand =

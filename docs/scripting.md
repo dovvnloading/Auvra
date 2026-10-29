@@ -125,6 +125,7 @@ Transforms are relative to the object's parent, like the inspector's; for an obj
 | `ctx.giveWeapon(weapon)` | Gives the player a weapon by name and puts it in their hands, like the **Give Weapon** node |
 | `ctx.setCamera(objectId, blendSeconds)` |Shows the view of the object's Camera component, blending over `blendSeconds` (default 0); `null` gives the view back to the gameplay camera. See [Camera cuts](timelines.md#camera-cuts) |
 | `ctx.startDialogue(objectId)` | Opens the conversation of the object's Dialogue component, like the **Start Dialogue** node; without an id, the one on the script's own object. Does nothing while another conversation is open. See [Dialogue](dialogue.md) |
+| `ctx.spline(objectId)` | The spline of the object's [Spline](world-editor.md#splines) component, in world space and metres, or `null` when it has none: `length`, `closed`, `pointAt(distance)` (its `position`, the `direction` it runs and its `up` there; distances wrap round a closed spline and stop at the ends of an open one) and `closest([x, y, z])` (the nearest `position` on it and the `distance` along it) |
 | `ctx.openLevel(levelId)` | Loads another level, like the **Open Level** node. Inside the editor it prints a note instead. Commands issued after it in the same frame are dropped |
 
 ### Input, variables and state

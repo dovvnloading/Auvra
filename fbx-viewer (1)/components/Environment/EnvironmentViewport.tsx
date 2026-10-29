@@ -16,6 +16,7 @@ import { getWorldMatrix } from '../../utils/sceneGraph';
 import { MODEL_DRAG_TYPE } from '../UI/Browser/browserFolders';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { useEditorNavMesh } from './hooks/useEditorNavMesh';
+import { getLiveSpline } from '../../runtime/splineRegistry';
 
 type FocusRequest = { id: string; nonce: number };
 
@@ -228,11 +229,17 @@ const findLevelObjectNode = (node: THREE.Object3D, id: string): THREE.Object3D |
     return null;
 };
 
-/** World-space bounds of a level object: its rendered geometry, else its transform (e.g. instanced foliage). */
+/** World-space bounds of a level object: its rendered geometry and its spline, else its transform (e.g. instanced foliage). */
 const focusBounds = (scene: THREE.Object3D, levelObjects: readonly LevelObject[], id: string): THREE.Sphere | null => {
     const node = findLevelObjectNode(scene, id);
     if (node) {
         const box = new THREE.Box3().setFromObject(node);
+        // An empty object's marker is small; its spline's curve is what there is to see.
+        const spline = getLiveSpline(id, 'editor');
+        if (spline) {
+            spline.node.updateWorldMatrix(true, false);
+            for (const point of spline.spline.polyline(1)) box.expandByPoint(point.applyMatrix4(spline.node.matrixWorld));
+        }
         if (!box.isEmpty() && Number.isFinite(box.min.x) && Number.isFinite(box.max.x)) {
             const sphere = box.getBoundingSphere(new THREE.Sphere());
             sphere.radius = Math.max(sphere.radius, MIN_FOCUS_RADIUS);

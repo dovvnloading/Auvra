@@ -7,6 +7,10 @@ import { OPEN_PERCEPTION, perceive, type Perception } from './AISenses';
 import { Awareness, type AwarenessStage } from '../../../runtime/awareness';
 import { evaluateNextState, calculateNavigation, DecisionContext } from './AIStateMachine';
 import { useNavMeshContext } from '../../../runtime/navigation';
+import type { SplinePatrol } from '../../../runtime/patrolPath';
+
+/** Along a patrol path, the next waypoint is taken this close to the current one, so the enemy walks on without stopping. */
+const PATROL_LOOKAHEAD = 1.6;
 
 interface BrainInput {
   enemyPosition: THREE.Vector3;
@@ -32,13 +36,16 @@ export interface BrainOutput {
 export const useAIBrain = (
     graphApi: React.RefObject<GraphRuntimeAPI | undefined>,
     onAttack?: () => void,
-    tuning: AITuning = DEFAULT_AI_TUNING // Per-enemy tunables (resolveAITuning on the blueprint's stats)
+    tuning: AITuning = DEFAULT_AI_TUNING, // Per-enemy tunables (resolveAITuning on the blueprint's stats)
+    patrol: SplinePatrol | null = null // Its spawner's patrol path (runtime/patrolPath.ts): patrols along it instead of wandering
 ) => {
   const stateRef = useRef<AIState>('IDLE');
   
   // Persistent Memory
   const lastKnownPos = useRef<THREE.Vector3 | null>(null);
   const patrolDest = useRef<THREE.Vector3 | null>(null);
+  // The current waypoint is an end of the patrol path, where it pauses before turning back.
+  const patrolEnd = useRef(false);
   const damageDealtRef = useRef(false);
   const awareness = useRef(new Awareness());
   const lastHealth = useRef<number | null>(null);
@@ -103,6 +110,20 @@ export const useAIBrain = (
         if (timers.current.memory > 0) timers.current.memory -= delta;
     }
 
+    // A waypoint on the patrol path, on the walkable surface where there is one.
+    const route = patrol?.available ? patrol : null;
+    const nextWaypoint = (): THREE.Vector3 | null => {
+        const waypoint = route?.next(enemyPosition) ?? null;
+        if (!waypoint) return null;
+        patrolEnd.current = waypoint.end;
+        const point = navMesh?.closestPoint(waypoint.point) ?? waypoint.point.setY(enemyPosition.y);
+        return point;
+    };
+    if (route && stateRef.current === 'PATROL' && patrolDest.current && !patrolEnd.current
+        && Math.hypot(enemyPosition.x - patrolDest.current.x, enemyPosition.z - patrolDest.current.z) < PATROL_LOOKAHEAD) {
+        patrolDest.current = nextWaypoint() ?? patrolDest.current;
+    }
+
     // --- 3. Decision Making (State Transition) ---
     const decisionContext: DecisionContext = {
         currentState: stateRef.current,
@@ -131,9 +152,12 @@ export const useAIBrain = (
 
         // State Entry Logic
         if (nextState === 'PATROL') {
-            // On a navmesh, a random point the enemy can walk to; otherwise a random point in the arena.
-            const onNavMesh = navMesh?.randomPointAround(enemyPosition, DISTANCES.PATROL_RADIUS) ?? null;
-            if (onNavMesh) {
+            // Along its patrol path; else on a navmesh, a random point the enemy can walk to; otherwise a random point in the arena.
+            const alongPath = nextWaypoint();
+            const onNavMesh = alongPath ? null : navMesh?.randomPointAround(enemyPosition, DISTANCES.PATROL_RADIUS) ?? null;
+            if (alongPath) {
+                patrolDest.current = alongPath;
+            } else if (onNavMesh) {
                 patrolDest.current = onNavMesh;
             } else {
                 const r = DISTANCES.PATROL_RADIUS * Math.sqrt(Math.random());
@@ -149,7 +173,9 @@ export const useAIBrain = (
              timers.current.patrolWait = 2.0; // Pause after returning bounds
         }
         else if (nextState === 'IDLE' && stateRef.current === 'PATROL') {
-             timers.current.patrolWait = 2.0 + Math.random() * 3.0; // Pause between waypoints
+             // Pause between waypoints; on a patrol path only at its ends.
+             timers.current.patrolWait = !route ? 2.0 + Math.random() * 3.0 : patrolEnd.current ? 1.5 + Math.random() * 1.5 : 0;
+             patrolEnd.current = false;
         }
         else if (nextState === 'SEARCHING') {
              timers.current.search = SENSES.SEARCH_DURATION;
@@ -193,7 +219,7 @@ export const useAIBrain = (
         awareness: perceived.stage,
         awarenessLevel: perceived.level
     };
-  }, [graphApi, onAttack, tuning, navMesh]);
+  }, [graphApi, onAttack, tuning, navMesh, patrol]);
 
   return { updateState };
 };

@@ -22,6 +22,7 @@ import { RuntimeServices, useRuntimeServices } from '../runtime/RuntimeServicesC
 import { useNoiseBus } from '../runtime/perception';
 import { FLOW_NODE_EXECUTORS, flowNodeOutputValue } from './levelBlueprintNodes/flow';
 import { findActorObject3D, isPureWorldNodeType, PLAYER_ACTOR_ID, setActorMorphTarget, WORLD_NODE_EXECUTORS, WorldExecutionContext, WorldNodeServices } from './levelBlueprintNodes/world';
+import { getLiveSpline, liveSplineQuery } from '../runtime/splineRegistry';
 
 const MAX_BLUEPRINT_EVALUATION_DEPTH = 128;
 const MAX_BLUEPRINT_EXECUTION_DEPTH = 256;
@@ -255,6 +256,10 @@ export const useLevelBlueprintRuntime = ({
             if (!world.current.playerEntityRef.current) return null;
             const { health, maxHealth } = gameState.get().player;
             return { health, max: maxHealth };
+        },
+        spline: (objectId) => {
+            const entry = getLiveSpline(objectId, 'runtime');
+            return entry ? liveSplineQuery(entry) : null;
         },
     }), [sessionObject3D]);
 

@@ -28,10 +28,14 @@ import {
     type ScriptRaycastHit,
     type ScriptSnapshot,
     type ScriptSource,
+    type ScriptSplineState,
     type ScriptValue,
     type ScriptVec3,
 } from './protocol';
 import { isScriptNetPayload } from './scriptApi';
+import { MAX_SCRIPT_SPLINE_POINTS, SCRIPT_SPLINE_STEP } from './scriptSplines';
+import { createWorldSplineFrame, findSplineComponent, getLiveSpline, liveSplineWorldScale, sampleLiveSpline, type LiveSpline } from '../splineRegistry';
+import type { Spline } from '../splines';
 import { useNetSession } from '../net/NetSessionContext';
 import { NET_LIMITS, type NetSession } from '../net/protocol';
 import { cameraDirector } from '../cameraDirector';
@@ -751,6 +755,8 @@ interface HostState {
     objectStates: WeakMap<LevelObject, ScriptObjectState>;
     printedErrors: Set<string>;
     noted: Set<string>;
+    /** Object id -> the version of its spline the sandbox was last sent (scriptSplineUpdates). */
+    sentSplines: Map<string, string>;
 }
 
 const newHostState = (): HostState => ({
@@ -773,6 +779,7 @@ const newHostState = (): HostState => ({
     objectStates: new WeakMap(),
     printedErrors: new Set(),
     noted: new Set(),
+    sentSplines: new Map(),
 });
 
 function createNonce(): string {
@@ -782,6 +789,72 @@ function createNonce(): string {
 }
 
 const clip = (text: string): string => (text.length > MAX_PRINTED_LENGTH ? `${text.slice(0, MAX_PRINTED_LENGTH)}...` : text);
+
+const splineVersions = new WeakMap<Spline, number>();
+let nextSplineVersion = 1;
+
+/** A version of a drawn spline: its curve (a new Spline whenever its points change) and where its object is. */
+const liveSplineVersion = (entry: LiveSpline): string => {
+    let version = splineVersions.get(entry.spline);
+    if (version === undefined) {
+        version = nextSplineVersion++;
+        splineVersions.set(entry.spline, version);
+    }
+    entry.node.updateWorldMatrix(true, false);
+    return `${version}:${entry.node.matrixWorld.elements.map(value => Math.round(value * 1e4)).join(',')}`;
+};
+
+const round4 = (value: number): number => Math.round(value * 1e4) / 1e4;
+
+/** A drawn spline as scripts are sent it: points along it in world space, at most SCRIPT_SPLINE_STEP metres apart. */
+export const scriptSplineState = (entry: LiveSpline): ScriptSplineState => {
+    const { spline } = entry;
+    const worldLength = spline.length * liveSplineWorldScale(entry);
+    const closed = spline.closed;
+    const steps = Math.min(MAX_SCRIPT_SPLINE_POINTS - 1, Math.max(1, Math.ceil(worldLength / SCRIPT_SPLINE_STEP)));
+    // A closed spline is sent without its end point, which is its start again.
+    const count = closed ? steps : steps + 1;
+    const frame = createWorldSplineFrame();
+    const points: number[] = [];
+    const ups: number[] = [];
+    for (let i = 0; i < count; i++) {
+        sampleLiveSpline(entry, (spline.length * i) / steps, frame);
+        points.push(round4(frame.position.x), round4(frame.position.y), round4(frame.position.z));
+        ups.push(round4(frame.up.x), round4(frame.up.y), round4(frame.up.z));
+    }
+    return { closed, points, ups };
+};
+
+/**
+ * The splines of `objectIds` to send with the next snapshot: those new or changed since `sent` was
+ * last updated, and null for those gone. Updates `sent` to what this returns.
+ */
+export const scriptSplineUpdates = (
+    sent: Map<string, string>,
+    objectIds: readonly string[],
+    find: (objectId: string) => LiveSpline | null,
+): Record<string, ScriptSplineState | null> | undefined => {
+    const updates: Record<string, ScriptSplineState | null> = {};
+    let any = false;
+    const present = new Set<string>();
+    for (const id of objectIds) {
+        const entry = find(id);
+        if (!entry) continue;
+        present.add(id);
+        const version = liveSplineVersion(entry);
+        if (sent.get(id) === version) continue;
+        sent.set(id, version);
+        updates[id] = scriptSplineState(entry);
+        any = true;
+    }
+    for (const id of [...sent.keys()]) {
+        if (present.has(id)) continue;
+        sent.delete(id);
+        updates[id] = null;
+        any = true;
+    }
+    return any ? updates : undefined;
+};
 
 const hasEnabledBody = (object: LevelObject): boolean =>
     (object.components ?? []).some(component => component.type === 'rigidBody' && component.enabled);
@@ -814,6 +887,7 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
     }, [scripts]);
     const ownerIds = useMemo(() => new Set(scripts.map(script => script.objectId)), [scripts]);
     const bodyIds = useMemo(() => props.objects.filter(hasEnabledBody).map(object => object.id), [props.objects]);
+    const splineIds = useMemo(() => props.objects.filter(object => findSplineComponent(object) !== null).map(object => object.id), [props.objects]);
 
     const print = (message: string, type: PrintType) => latest.current.print(message, type);
     const label = (scriptId: string) => labels.get(scriptId) ?? 'Script';
@@ -1033,13 +1107,16 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
         }
     };
 
-    const buildSnapshot = (state: HostState, frame: number): ScriptSnapshot => {
+    const buildSnapshot = (state: HostState, frame: number, loading: boolean): ScriptSnapshot => {
         const liveIds = new Set(bodyIds);
         state.touched.forEach((touchedAt, id) => {
             if (frame - touchedAt < LIVE_READ_SNAPSHOTS) liveIds.add(id);
             else state.touched.delete(id);
         });
-        return buildScriptSnapshot({
+        // A sandbox that is loading has none of the splines yet.
+        if (loading) state.sentSplines.clear();
+        const splines = scriptSplineUpdates(state.sentSplines, splineIds, id => getLiveSpline(id, 'runtime'));
+        const snapshot = buildScriptSnapshot({
             frame,
             time: state.time,
             delta: state.sinceSnapshot,
@@ -1055,6 +1132,7 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
             raycasts: state.raycasts,
             net: scriptNetState(netRef.current),
         });
+        return splines ? { ...snapshot, splines } : snapshot;
     };
 
     const post = (state: HostState) => {
@@ -1064,7 +1142,7 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
         const loading = state.phase === 'ready';
         const frame = state.nextFrame;
         const budget = SCRIPT_LIMITS.maxMessageBytes - ENVELOPE_BYTES - (loading ? jsonByteLength(scripts) : 0);
-        const fitted = fitScriptSnapshot(buildSnapshot(state, frame), budget, ownerIds);
+        const fitted = fitScriptSnapshot(buildSnapshot(state, frame, loading), budget, ownerIds);
         if (!fitted) {
             stop(state, 'script_snapshot_too_large', 'Scripts stopped: the world is too large for the script message limit.');
             return;
