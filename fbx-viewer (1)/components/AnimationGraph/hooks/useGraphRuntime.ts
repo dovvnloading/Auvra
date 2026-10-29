@@ -103,8 +103,12 @@ export const useGraphRuntime = (
     // 2. Sub-System Hooks (Separation of Concerns)
 
     // -- Graphics: Handles Three.js resources
+    // Root motion clips play in place; so do a Motion Match state's clips, whose travel the matcher reads from their feet.
     const rootMotionClipNames = useMemo(
-        () => graph.states.filter(state => state.rootMotion && state.stateType === 'Single' && state.clipName).map(state => state.clipName as string),
+        () => [
+            ...graph.states.filter(state => state.rootMotion && state.stateType === 'Single' && state.clipName).map(state => state.clipName as string),
+            ...graph.states.filter(state => state.stateType === 'MotionMatch').flatMap(state => state.blendSamples.map(sample => sample.clipName).filter(Boolean)),
+        ],
         [graph.states]
     );
     const { mixer, actionsMap, clipsByName, rootMotions } = useAnimationMixer(modelObject, allClips, rootMotionClipNames);

@@ -11,6 +11,7 @@ vi.mock('../../components/Environment/VehicleInspector', () => ({ VehicleInspect
 vi.mock('../../components/Environment/ParticlesInspector', () => ({ ParticlesInspector: () => null }));
 vi.mock('../../components/Environment/AbilitiesInspector', () => ({ AbilitiesInspector: () => null }));
 vi.mock('../../components/Environment/ScatterInspector', () => ({ ScatterInspector: () => null }));
+vi.mock('../../components/Environment/ProceduralRigInspector', () => ({ ProceduralRigInspector: () => null }));
 
 describe('component registry', () => {
   it('leaves editor inspectors out until the editor registers them', async () => {
@@ -26,7 +27,7 @@ describe('component registry', () => {
       'rotator', 'mover', 'pointLight', 'spotLight', 'camera', 'collider', 'rigidBody', 'joint', 'navLink', 'navObstacle',
       'spline', 'splineMesh', 'splineScatter', 'followSpline', 'proceduralScatter', 'vehicle', 'destructible', 'cloth', 'windZone', 'windSway', 'springBones', 'particles', 'decal', 'water', 'audioSource',
       'reverbZone', 'musicPlayer',
-      'postProcess', 'reflectionProbe', 'lightBakeVolume', 'lodGroup', 'distanceCull', 'levelStreaming', 'animation', 'lookAtIK', 'footIK', 'twoBoneIK', 'script', 'netSync', 'timeline',
+      'postProcess', 'reflectionProbe', 'lightBakeVolume', 'lodGroup', 'distanceCull', 'levelStreaming', 'animation', 'lookAtIK', 'footIK', 'twoBoneIK', 'proceduralRig', 'script', 'netSync', 'timeline',
       'dialogue', 'pickup', 'abilities',
     ]);
     for (const definition of COMPONENT_DEFINITIONS) {

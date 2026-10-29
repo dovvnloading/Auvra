@@ -21,6 +21,7 @@ import { LOD_COMPONENTS } from './lodComponents';
 import { LEVEL_STREAMING_COMPONENT } from './levelStreamingComponent';
 import { PHYSICS_COMPONENTS } from './physicsComponents';
 import { POST_PROCESS_COMPONENT } from './postProcess';
+import { PROCEDURAL_RIG_COMPONENT } from './proceduralRigComponent';
 import { REFLECTION_PROBE_COMPONENT } from './reflectionProbe';
 import { SCATTER_COMPONENT } from './scatterComponent';
 import { SCRIPT_COMPONENT } from './scriptComponent';
@@ -54,6 +55,7 @@ export const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
     LEVEL_STREAMING_COMPONENT,
     ANIMATION_COMPONENT,
     ...IK_COMPONENTS,
+    PROCEDURAL_RIG_COMPONENT,
     SCRIPT_COMPONENT,
     NET_SYNC_COMPONENT,
     TIMELINE_COMPONENT,

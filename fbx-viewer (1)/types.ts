@@ -259,7 +259,8 @@ export interface InputBinding {
 }
 
 /** Conduit: a junction with no animation; entering it goes straight on through one of its own transitions. */
-export type StateType = 'Single' | 'Blend1D' | 'Blend2D' | 'StateMachine' | 'Conduit';
+/** MotionMatch plays whichever moment of its clips (its blend samples) best continues the character's movement. */
+export type StateType = 'Single' | 'Blend1D' | 'Blend2D' | 'StateMachine' | 'Conduit' | 'MotionMatch';
 
 /** The states and transitions inside a State Machine state; its root state is where it is entered. */
 export interface SubStateMachine {

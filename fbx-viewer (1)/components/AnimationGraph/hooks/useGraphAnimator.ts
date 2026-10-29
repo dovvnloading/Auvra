@@ -10,6 +10,8 @@ import { rootMotionDelta, type RootMotion } from '../utils/rootMotion';
 import { actionPhase, syncBlendActions, syncLeader } from '../utils/syncGroups';
 import { curveVariableValue } from '../utils/curves';
 import { clipGroundSpeed, groundSpeedRate } from '../utils/groundSpeed';
+import { MotionMatcher } from '../../../runtime/motionMatching';
+import { motionDatabaseFor } from '../../../runtime/motionDatabase';
 
 /**
  * Animation runs before every other frame callback (priority -1), so IK, sockets and attachments
@@ -62,15 +64,24 @@ export const statePlayRate = (state: Pick<GraphState, 'playRate' | 'playRatePara
     return base * factor;
 };
 
-/** Target weight per clip name for a state, given the graph variables. */
+/**
+ * Target weight per clip name for a state, given the graph variables. A Motion Match state plays the
+ * clip its matcher chose (`matched`), else its first.
+ */
 export const stateTargetWeights = (
     state: GraphState,
     variables: Record<string, number | boolean>,
-    hasClip: (name: string) => boolean
+    hasClip: (name: string) => boolean,
+    matched: string | null = null,
 ): Record<string, number> => {
     const targets: Record<string, number> = {};
     if (state.stateType === 'Single') {
         if (state.clipName && hasClip(state.clipName)) targets[state.clipName] = 1;
+        return targets;
+    }
+    if (state.stateType === 'MotionMatch') {
+        const name = matched && hasClip(matched) ? matched : state.blendSamples.find(sample => sample.clipName && hasClip(sample.clipName))?.clipName;
+        if (name) targets[name] = 1;
         return targets;
     }
     const x = finiteNumber(variables[state.blendParamX], 0);
@@ -135,6 +146,10 @@ const _groundAt = new THREE.Vector3();
 const _modelScale = new THREE.Vector3();
 /** How quickly the measured ground speed follows the character's movement, per second. */
 const GROUND_SPEED_RATE = 10;
+/** Seconds a Motion Match state crossfades over when it jumps to another clip. */
+export const MOTION_MATCH_BLEND = 0.2;
+const _groundVelocity = new THREE.Vector3();
+const _modelQuaternion = new THREE.Quaternion();
 const _rootBasis = new THREE.Matrix3();
 
 const rootBoneParent = (modelObject: THREE.Object3D, motion: RootMotion): THREE.Object3D | null => {
@@ -176,7 +191,9 @@ export const useGraphAnimator = (
     // Time not yet given to the mixer by a character posed less often (extras.lod).
     const lodPending = useRef({ delta: 0, frames: 0 });
     // How fast the character is moving over the ground (world units a second), for states that match it.
-    const ground = useRef({ speed: 0, last: null as THREE.Vector3 | null });
+    const ground = useRef({ speed: 0, last: null as THREE.Vector3 | null, velocity: new THREE.Vector3() });
+    // A Motion Match state's matcher, made for its clips on this model when it is first played.
+    const matching = useRef({ stateId: null as string | null, key: '', matcher: null as MotionMatcher | null });
 
     // -- FRAME LOOP --
     useFrame((state, rawDelta) => {
@@ -205,6 +222,8 @@ export const useGraphAnimator = (
         // state in the leaving state's sync group starts at its phase (a run picks up the walk's
         // stride where it was) instead of at the beginning.
         if (activeStateRef.current !== previousStateRef.current) {
+            // Entering a Motion Match state searches afresh.
+            if (matching.current.matcher) matching.current.matcher.clip = -1;
             const enteringState = graph.states.find(s => s.id === activeStateRef.current);
             const leavingState = graph.states.find(s => s.id === previousStateRef.current);
             if (enteringState) {
@@ -234,26 +253,64 @@ export const useGraphAnimator = (
 
         // 2. Target weights and playback speed of the current state; a blend's samples run in step.
         const currentState = graph.states.find(s => s.id === activeStateRef.current);
-        const targetWeights = currentState ? stateTargetWeights(currentState, variables, name => !!actionsMap[name]) : {};
         if (modelObject) {
             modelObject.getWorldPosition(_groundAt);
             const last = ground.current.last;
             if (last && delta > 0) {
                 const moved = Math.hypot(_groundAt.x - last.x, _groundAt.z - last.z) / delta;
-                ground.current.speed += (moved - ground.current.speed) * (1 - Math.exp(-GROUND_SPEED_RATE * delta));
+                const ease = 1 - Math.exp(-GROUND_SPEED_RATE * delta);
+                ground.current.speed += (moved - ground.current.speed) * ease;
+                _groundVelocity.set((_groundAt.x - last.x) / delta, 0, (_groundAt.z - last.z) / delta);
+                ground.current.velocity.lerp(_groundVelocity, ease);
                 last.copy(_groundAt);
             } else {
                 ground.current.last = _groundAt.clone();
             }
         }
+        // A Motion Match state picks the moment of its clips that best carries on the character's movement.
+        let matched: string | null = null;
+        let matchedScale = 1;
+        if (currentState?.stateType === 'MotionMatch' && modelObject) {
+            const names = currentState.blendSamples.map(sample => sample.clipName).filter((name): name is string => !!name && !!actionsMap[name]);
+            const key = `${currentState.id}|${names.join('|')}`;
+            const match = matching.current;
+            if (match.key !== key) {
+                match.key = key;
+                match.stateId = currentState.id;
+                const database = names.length ? motionDatabaseFor(modelObject, names.map(name => actionsMap[name].getClip())) : null;
+                match.matcher = database ? new MotionMatcher(database) : null;
+            }
+            if (match.matcher) {
+                // The character's velocity in its own space and in its model's units (the database's).
+                modelObject.getWorldQuaternion(_modelQuaternion).invert();
+                matchedScale = modelObject.getWorldScale(_modelScale).x / (modelObject.scale.x || 1) || 1;
+                _groundVelocity.copy(ground.current.velocity).applyQuaternion(_modelQuaternion).divideScalar(matchedScale);
+                const velocity = { x: _groundVelocity.x, z: _groundVelocity.z };
+                const choice = match.matcher.step(delta, velocity, velocity, 0);
+                matched = choice.clip >= 0 ? match.matcher.database.clips[choice.clip].name : null;
+                const action = matched ? actionsMap[matched] : undefined;
+                if (action && choice.jumped) {
+                    // A clip fading back in starts where the match is; one already showing moves there.
+                    if (action.getEffectiveWeight() < 0.01) action.reset();
+                    action.setLoop(THREE.LoopRepeat, Infinity);
+                    action.time = choice.time;
+                    action.play();
+                }
+            }
+        }
+        const targetWeights = currentState ? stateTargetWeights(currentState, variables, name => !!actionsMap[name], matched) : {};
         if (currentState) {
             let rate = statePlayRate(currentState, variables);
             if (currentState.matchSpeed && !currentState.rootMotion && modelObject) {
                 // Played at the rate that carries the character at the speed it is really moving.
                 const scale = modelObject.getWorldScale(_modelScale).x;
-                rate *= groundSpeedRate(ground.current.speed, targetWeights, name => clipGroundSpeed(modelObject, actionsMap[name].getClip()) * scale);
+                // A Motion Match state has its clips' speeds in its database, where a clip standing still has none.
+                const database = matched ? matching.current.matcher?.database : undefined;
+                rate *= groundSpeedRate(ground.current.speed, targetWeights, name => (database
+                    ? database.clipSpeed(name) * matchedScale
+                    : clipGroundSpeed(modelObject, actionsMap[name].getClip()) * scale));
             }
-            if (currentState.stateType === 'Single') {
+            if (currentState.stateType === 'Single' || currentState.stateType === 'MotionMatch') {
                 Object.keys(targetWeights).forEach(name => { actionsMap[name].timeScale = rate; });
             } else {
                 syncBlendActions(actionsMap, targetWeights, rate);
@@ -266,7 +323,7 @@ export const useGraphAnimator = (
         Object.keys(actionsMap).forEach((name) => {
             currentWeights[name] = actionsMap[name].getEffectiveWeight();
         });
-        const nextWeights = stepActionWeights(currentWeights, targetWeights, delta, blend);
+        const nextWeights = stepActionWeights(currentWeights, targetWeights, delta, matched ? MOTION_MATCH_BLEND : blend);
 
         Object.keys(actionsMap).forEach((name) => {
             const action = actionsMap[name];
@@ -288,6 +345,8 @@ export const useGraphAnimator = (
         extras.montage?.current?.update(delta);
         mixer.update(delta);
         extras.montage?.current?.applyMeshSpaceRotation();
+        // The matcher keeps to the time the chosen clip has really reached.
+        if (matched && matching.current.matcher && actionsMap[matched]) matching.current.matcher.time = actionsMap[matched].time;
 
         if (!currentState || !tracked) return;
         const clipName = currentState.clipName as string;

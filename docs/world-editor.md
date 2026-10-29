@@ -74,6 +74,7 @@ Objects can carry components that add behaviour. Select an object and use **Add 
 | Distance Cull | Hides the object and its children beyond a distance |
 | Animation | Plays one of a placed character's clips during play, looping or once, at a speed and from a point in the clip: an NPC idling, waving or working. Clip names match with or without an FBX take prefix such as `Armature|` |
 | Look At IK / Foot IK / Reach IK | Turn a bone toward the camera or the player, plant the feet of the object's model on the ground, or bend a limb so a hand or foot reaches another object or the player (see [IK](characters.md#ik)) |
+| Procedural Rig | Constraints on the object's bones after its animation, in order: aim a bone at the camera, the player, an object or a point; copy or offset rotations; limit them; make a bone lag; spread twist along a limb (see [Procedural rig](characters.md#procedural-rig)) |
 | Script | Runs your own JavaScript or TypeScript during play (see [Gameplay scripting](scripting.md)) |
 | Network Sync | In multiplayer games the host sends the object's position and rotation and the other players follow it (see [Multiplayer](multiplayer.md)) |
 | Timeline | Plays keyed tracks that move, show and hide objects, write level variables and raise events (see [Timelines](timelines.md)) |

@@ -3,6 +3,7 @@ import { Layers, Settings, Activity, Crown, Trash2, Link2, Network, GitFork } fr
 import { GraphState, AnimationGraphData, StateType } from '../../../types';
 import { SingleStateConfig } from './SingleStateConfig';
 import { BlendStateConfig } from './BlendStateConfig';
+import { MotionMatchConfig } from './MotionMatchConfig';
 import { innerStateCount, newSubStateMachine } from '../utils/stateMachines';
 
 /** State kinds offered by the type switch, in display order. */
@@ -12,6 +13,7 @@ const STATE_TYPES: { type: StateType; label: string }[] = [
     { type: 'Blend2D', label: 'Blend 2D' },
     { type: 'StateMachine', label: 'Machine' },
     { type: 'Conduit', label: 'Conduit' },
+    { type: 'MotionMatch', label: 'Match' },
 ];
 
 interface StateInspectorProps {
@@ -163,6 +165,8 @@ const curveVariableOptions = [
                             Open State Machine
                         </button>
                     </div>
+                ) : node.stateType === 'MotionMatch' ? (
+                    <MotionMatchConfig node={node} updateState={updateState} clipOptions={clipOptions} />
                 ) : node.stateType === 'Single' ? (
                     <SingleStateConfig 
                         node={node} 

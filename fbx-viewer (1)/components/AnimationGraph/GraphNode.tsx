@@ -66,6 +66,11 @@ export const GraphNode: React.FC<GraphNodeProps> = ({
                         <Network size={8} />
                         <span className="truncate">State machine &middot; {innerStateCount(state)} {innerStateCount(state) === 1 ? 'state' : 'states'}</span>
                     </div>
+                ) : state.stateType === 'MotionMatch' ? (
+                    <div className="flex items-center gap-1.5 text-emerald-300 bg-emerald-950/30 px-2 py-1 rounded border border-emerald-900/30">
+                        <Play size={8} />
+                        <span className="truncate">Motion match &middot; {state.blendSamples.filter(sample => sample.clipName).length} clips</span>
+                    </div>
                 ) : state.stateType === 'Single' && state.clipName ? (
                     <div className="flex items-center gap-1.5 text-blue-300 bg-blue-950/30 px-2 py-1 rounded border border-blue-900/30">
                         <Play size={8} /> 
