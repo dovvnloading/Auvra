@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { LoadedModelData } from '../types';
-import { optimizeModelMaterials } from './processing/ModelMaterials';
+import { optimizeModelMaterials, splitAlphaCards } from './processing/ModelMaterials';
 import { compressModelTextures } from './textureCompression/compressTextures';
 import { withGltfDecoders } from './gltfDecoders';
 import { normalizeModel, SOURCE_METRES_PER_UNIT } from './processing/ModelTransforms';
@@ -437,6 +437,8 @@ export const loadModelFile = async (file: File, options: ModelLoadOptions = { no
     if (format === 'glb' || format === 'gltf') prepareNativeGltfMaterials(object);
     else optimizeModelMaterials(object);
     if (options.compressTextures !== false) await compressModelTextures(object);
+    // Hair, lashes and leaf cards draw a solid body, then their soft fringe.
+    splitAlphaCards(object);
 
     // --- RENAME ANIMATIONS ---
     nameAnimations(object.animations || [], file.name, format);

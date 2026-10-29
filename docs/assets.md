@@ -9,7 +9,7 @@ The **Content Browser** imports **FBX**, **glTF (.gltf with embedded data)**, **
 - **Normalise on** scales the model so its largest dimension equals the target size in metres (5 by default). Useful for assets from mixed sources.
 - **Normalise off** keeps the authored size. An FBX file says what unit it is authored in (Blender, Maya and Mixamo write centimetres), and the model comes in at that size in metres, so a 1.8 m character authored in centimetres is 1.8 m tall. glTF and GLB are metres already.
 
-The world is in metres: gravity, vehicles, speeds and distances all are. A character's capsule, step height, jump height and third-person camera are sized from its height, so a character of any size moves and is framed the same way; a person is about 1.8 m tall.
+The world is in metres: gravity, vehicles, speeds and distances all are. A character's capsule, step height, jump height and third-person camera are sized from its height, so a character of any size moves and is framed the same way; a person is about 1.8 m tall. The third-person camera sits a little to the character's right, so the character stands beside the crosshair rather than under it.
 
 An FBX that names texture images it does not contain (they were left beside the file it came from) still imports, without those textures, and says how many it left out. Import the images as textures and assign them in the model's **Material Overrides**.
 
