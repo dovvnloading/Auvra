@@ -197,6 +197,16 @@ const sanitizeModifier = (value: unknown): Modifier | null => {
     return { attribute: m.attribute, operation: choice(m.operation, MODIFIER_OPERATIONS, 'add'), value: num(m.value, 0, -BIG, BIG) };
 };
 
+/** The shortest period an effect ticks at, and the most ticks one step makes (a long hitch drops the rest). */
+export const MIN_EFFECT_PERIOD = 0.02;
+const MAX_TICKS_PER_STEP = 64;
+
+/** 0 (no ticking), or a period no shorter than MIN_EFFECT_PERIOD. */
+const effectPeriod = (value: unknown): number => {
+    const period = num(value, 0, 0, 3600);
+    return period > 0 ? Math.max(MIN_EFFECT_PERIOD, period) : 0;
+};
+
 export const sanitizeEffect = (value: unknown): EffectDefinition | null => {
     const e = record(value);
     if (typeof e.id !== 'string' || !e.id || e.id.length > 64) return null;
@@ -205,7 +215,7 @@ export const sanitizeEffect = (value: unknown): EffectDefinition | null => {
         name: text(e.name, e.id),
         duration: choice(e.duration, EFFECT_DURATIONS, 'instant'),
         seconds: num(e.seconds, 5, 0, 3600),
-        period: num(e.period, 0, 0, 3600),
+        period: effectPeriod(e.period),
         modifiers: (Array.isArray(e.modifiers) ? e.modifiers : []).map(sanitizeModifier).filter((m): m is Modifier => m !== null).slice(0, 16),
         grantedTags: tags(e.grantedTags),
         requiredTags: tags(e.requiredTags),
@@ -326,6 +336,8 @@ export class AbilitySystem {
     private readonly active: ActiveEffect[] = [];
     private readonly listeners = new Set<(event: AbilityEvent) => void>();
     private serial = 0;
+    /** Attributes in the order recompute works them out (those bounded by another after it); attributes are fixed once made. */
+    private ordered: AttributeState[] | null = null;
 
     constructor(readonly id: string, definition: AbilitySetDefinition = sanitizeAbilitySet({})) {
         for (const attribute of definition.attributes) {
@@ -427,8 +439,8 @@ export class AbilitySystem {
     /** Current values from base values and lasting effects' modifiers, then the clamps, in order. */
     private recompute(): void {
         // Bounds first, so health is clamped to the max health just worked out.
-        const ordered = [...this.attributes.values()].sort((a, b) => Number(typeof a.definition.max === 'string') - Number(typeof b.definition.max === 'string'));
-        for (const state of ordered) {
+        this.ordered ??= [...this.attributes.values()].sort((a, b) => Number(typeof a.definition.max === 'string') - Number(typeof b.definition.max === 'string'));
+        for (const state of this.ordered) {
             let add = 0;
             let multiply = 1;
             let override: number | null = null;
@@ -661,20 +673,28 @@ export class AbilitySystem {
                 if (state.active <= 0) this.end(state);
             }
         }
-        for (let i = this.active.length - 1; i >= 0; i--) {
-            const effect = this.active[i];
+        // Each tick tells listeners, and what they do (a death removing effects, a script applying one) may
+        // change the list: it is walked as it was, each effect followed by itself, not by its place.
+        const effects = [...this.active];
+        for (let i = effects.length - 1; i >= 0; i--) {
+            const effect = effects[i];
+            if (!this.active.includes(effect)) continue;
             const definition = effect.definition;
             const elapsed = definition.duration === 'timed' ? Math.min(dt, effect.left) : dt;
             if (definition.period > 0) {
                 effect.untilTick -= elapsed;
-                while (effect.untilTick <= 1e-9) {
+                for (let ticks = 0; effect.untilTick <= 1e-9; ticks++) {
+                    if (ticks >= MAX_TICKS_PER_STEP || !this.active.includes(effect)) {
+                        effect.untilTick = definition.period;
+                        break;
+                    }
                     this.applyToBase(definition.modifiers, effect.stacks);
                     effect.untilTick += definition.period;
                 }
             }
-            if (definition.duration === 'timed') {
+            if (definition.duration === 'timed' && this.active.includes(effect)) {
                 effect.left -= dt;
-                if (effect.left <= 1e-9) this.removeAt(i);
+                if (effect.left <= 1e-9) this.removeAt(this.active.indexOf(effect));
             }
         }
         for (const state of this.attributes.values()) {

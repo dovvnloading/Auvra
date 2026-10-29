@@ -21,8 +21,15 @@ const GBUFFER_VERTEX = /* glsl */ `
 uniform mat3 mapTransform;
 out vec3 vViewNormal;
 out vec2 vSurfaceUv;
+#ifdef SURFACE_ALPHA_MAP
+uniform mat3 alphaMapTransform;
+out vec2 vAlphaUv;
+#endif
 void main() {
     vSurfaceUv = ( mapTransform * vec3( uv, 1.0 ) ).xy;
+    #ifdef SURFACE_ALPHA_MAP
+    vAlphaUv = ( alphaMapTransform * vec3( uv, 1.0 ) ).xy;
+    #endif
     #include <color_vertex>
     #include <batching_vertex>
     #include <beginnormal_vertex>
@@ -49,12 +56,19 @@ uniform float alphaTest;
 #ifdef SURFACE_MAP
 uniform sampler2D map;
 #endif
+#ifdef SURFACE_ALPHA_MAP
+uniform sampler2D alphaMap;
+in vec2 vAlphaUv;
+#endif
 in vec3 vViewNormal;
 in vec2 vSurfaceUv;
 void main() {
     vec4 albedo = vec4( diffuse, 1.0 );
     #ifdef SURFACE_MAP
     albedo *= texture( map, vSurfaceUv );
+    #endif
+    #ifdef SURFACE_ALPHA_MAP
+    albedo.a *= texture( alphaMap, vAlphaUv ).g;
     #endif
     #ifdef SURFACE_ALPHA_TEST
     if ( albedo.a < alphaTest ) discard;
@@ -92,8 +106,11 @@ export const surfaceOf = (material: LitMaterial): { roughness: number; metalness
 
 const twins = new WeakMap<THREE.Material, THREE.ShaderMaterial>();
 
+/** Cut out by an alpha map as well as (or instead of) the colour map's alpha, as three.js reads it (green). */
+const cutByAlphaMap = (material: LitMaterial) => material.alphaTest > 0 && !!material.alphaMap;
+
 const twinKey = (material: LitMaterial) =>
-    `${material.map ? 'm' : ''}${material.alphaTest > 0 ? 'a' : ''}${material.vertexColors ? 'c' : ''}`;
+    `${material.map ? 'm' : ''}${material.alphaTest > 0 ? 'a' : ''}${cutByAlphaMap(material) ? 'p' : ''}${material.vertexColors ? 'c' : ''}`;
 
 /** The surface-buffer twin of a lit material, made once and refreshed each frame. */
 export const surfaceTwin = (material: LitMaterial): THREE.ShaderMaterial => {
@@ -104,6 +121,7 @@ export const surfaceTwin = (material: LitMaterial): THREE.ShaderMaterial => {
         const defines: Record<string, string> = {};
         if (material.map) defines.SURFACE_MAP = '';
         if (material.alphaTest > 0) defines.SURFACE_ALPHA_TEST = '';
+        if (cutByAlphaMap(material)) defines.SURFACE_ALPHA_MAP = '';
         twin = new THREE.ShaderMaterial({
             glslVersion: THREE.GLSL3,
             vertexShader: GBUFFER_VERTEX,
@@ -116,6 +134,8 @@ export const surfaceTwin = (material: LitMaterial): THREE.ShaderMaterial => {
                 alphaTest: { value: 0 },
                 map: { value: null },
                 mapTransform: { value: new THREE.Matrix3() },
+                alphaMap: { value: null },
+                alphaMapTransform: { value: new THREE.Matrix3() },
             },
         });
         twin.vertexColors = material.vertexColors;
@@ -134,6 +154,12 @@ export const surfaceTwin = (material: LitMaterial): THREE.ShaderMaterial => {
         (u.mapTransform.value as THREE.Matrix3).copy(material.map.matrix);
     } else {
         (u.mapTransform.value as THREE.Matrix3).identity();
+    }
+    if (cutByAlphaMap(material)) {
+        const alphaMap = material.alphaMap!;
+        u.alphaMap.value = alphaMap;
+        if (alphaMap.matrixAutoUpdate) alphaMap.updateMatrix();
+        (u.alphaMapTransform.value as THREE.Matrix3).copy(alphaMap.matrix);
     }
     twin.side = material.side;
     return twin;

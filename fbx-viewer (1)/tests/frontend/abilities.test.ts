@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  AbilitySystem, TagSet, abilityActors, isTag, sanitizeAbilitySet, tagMatches, type AbilityEvent, type AbilitySetDefinition,
+  AbilitySystem, MIN_EFFECT_PERIOD, TagSet, abilityActors, isTag, sanitizeAbilitySet, tagMatches, type AbilityEvent, type AbilitySetDefinition,
 } from '../../runtime/abilities';
 
 /*
@@ -110,6 +110,41 @@ describe('attributes and effects', () => {
     expect(actor.get('health')).toBe(140);
     actor.removeEffect('fortify');
     expect(actor.get('health')).toBe(100);
+  });
+
+  it('keeps stepping right when a tick makes a listener change the effects (a death clearing them)', () => {
+    const actor = new AbilitySystem('a', fighter());
+    actor.applyEffect('haste');
+    actor.applyEffect('burning');
+    actor.applyEffect('fortify');
+    actor.setBase('health', 5);
+    // At 0 health every effect is cleared, from inside the tick that killed.
+    actor.on(event => {
+      if (event.type === 'attribute' && event.attribute === 'health' && event.value <= 0) {
+        for (const effect of actor.activeEffects()) actor.removeEffect(effect.id);
+      }
+    });
+    expect(() => actor.step(1)).not.toThrow();
+    expect(actor.get('health')).toBe(0);
+    expect(actor.activeEffects()).toEqual([]);
+    expect(actor.tags.has('State.Burning')).toBe(false);
+    expect(actor.tags.has('State.Hasted')).toBe(false);
+    // The fortify buff went with the rest, so the maximum is its own again.
+    expect(actor.get('maxHealth')).toBe(100);
+  });
+
+  it('ticks no faster than the shortest period, and no more than so many times in one step', () => {
+    const actor = new AbilitySystem('a', set({
+      attributes: [{ name: 'heat', base: 0 }],
+      effects: [{ id: 'flicker', duration: 'infinite', period: 0.000001, modifiers: [{ attribute: 'heat', operation: 'add', value: 1 }] }],
+    }));
+    expect(actor.effectDefinition('flicker')!.period).toBe(MIN_EFFECT_PERIOD);
+    actor.applyEffect('flicker');
+    actor.step(0.1);
+    expect(actor.get('heat')).toBe(Math.round(0.1 / MIN_EFFECT_PERIOD));
+    // A long hitch drops the ticks past the cap instead of running them all at once.
+    actor.step(3600);
+    expect(actor.get('heat')).toBeLessThan(200);
   });
 
   it('ticks periodic effects while they last and stacks them', () => {

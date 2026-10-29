@@ -89,6 +89,18 @@ describe('surface buffer', () => {
     expect((mapped.uniforms.mapTransform.value as THREE.Matrix3).elements[4]).toBe(3);
   });
 
+  it('cuts an alpha-tested surface by its alpha map too, following the map\'s transform', () => {
+    const material = new THREE.MeshStandardMaterial({ alphaTest: 0.5, alphaMap: new THREE.Texture() });
+    material.alphaMap!.repeat.set(4, 1);
+    const twin = surfaceTwin(material);
+    expect(twin.defines.SURFACE_ALPHA_TEST).toBe('');
+    expect(twin.defines.SURFACE_ALPHA_MAP).toBe('');
+    expect(twin.uniforms.alphaMap.value).toBe(material.alphaMap);
+    expect((twin.uniforms.alphaMapTransform.value as THREE.Matrix3).elements[0]).toBe(4);
+    // Without an alpha test, the alpha map does not cut.
+    expect(surfaceTwin(new THREE.MeshStandardMaterial({ alphaMap: new THREE.Texture() })).defines.SURFACE_ALPHA_MAP).toBeUndefined();
+  });
+
   it('draws the scene with twins into its own targets and puts everything back', () => {
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x123456);

@@ -17,6 +17,7 @@ import {
 import type { CompoundBodyRegistry } from '../../runtime/components/physicsComponents';
 import { createPhysicsQueries, physicsUserData, usePhysicsQueries } from '../../runtime/physics';
 import type { LevelComponent, LevelObject } from '../../types';
+import { splitAlphaCards } from '../../utils/processing/ModelMaterials';
 import { loadRuntimeRapier } from './rapierRuntime';
 import type { RuntimeRapier } from './rapierRuntime';
 
@@ -290,5 +291,15 @@ describe('automatic shapes', () => {
 
     const geometry = collectHostGeometry(host, 'cart')!;
     expect(Array.from(geometry.positions)).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  });
+
+  it('take a hair or leaf card mesh once, not again for the copy that draws its fringe', () => {
+    const host = levelGroup('bush');
+    const leaves = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshStandardMaterial({ map: new THREE.Texture(), transparent: true }));
+    leaves.geometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3));
+    host.add(leaves);
+    splitAlphaCards(host);
+    expect(leaves.children).toHaveLength(1);
+    expect(collectHostGeometry(host, 'bush')!.positions).toHaveLength(9);
   });
 });

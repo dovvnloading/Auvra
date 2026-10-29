@@ -139,19 +139,35 @@ export const sampleClip = (model: THREE.Object3D, clip: THREE.AnimationClip, loo
     return { name: clip.name, loop, samples };
 };
 
-const databases = new WeakMap<THREE.Object3D, Map<string, MotionDatabase | null>>();
+/** Databases kept, the oldest let go first. */
+const MAX_DATABASES = 32;
+const databases = new Map<string, MotionDatabase | null>();
 
-/** The database for `clips` on `model`, built once per model and clip list; null when none can be sampled. */
-export const motionDatabaseFor = (model: THREE.Object3D, clips: readonly THREE.AnimationClip[]): MotionDatabase | null => {
-    let byModel = databases.get(model);
-    if (!byModel) {
-        byModel = new Map();
-        databases.set(model, byModel);
-    }
-    const key = clips.map(clip => `${clip.uuid}`).join('|');
-    if (byModel.has(key)) return byModel.get(key) ?? null;
+/**
+ * What a database depends on in a model: its skin (copies of one model share their geometry, so they
+ * share databases) and its own scale, the database's units. A model without a skin is its own.
+ */
+const rigKey = (model: THREE.Object3D): string => {
+    let skin = '';
+    model.traverse(node => { if (!skin && (node as THREE.SkinnedMesh).isSkinnedMesh) skin = (node as THREE.SkinnedMesh).geometry.uuid; });
+    return `${skin || model.uuid}|${model.scale.x.toFixed(5)},${model.scale.y.toFixed(5)},${model.scale.z.toFixed(5)}`;
+};
+
+/**
+ * The database for `clips` on `model`, built once per rig and clip list and shared by every character
+ * made from the same model; null when none can be sampled. `sources` names the clips (by default
+ * their ids): pass the model's own clips' ids when `clips` are a mixer's copies of them.
+ */
+export const motionDatabaseFor = (
+    model: THREE.Object3D,
+    clips: readonly THREE.AnimationClip[],
+    sources: readonly string[] = clips.map(clip => clip.uuid),
+): MotionDatabase | null => {
+    const key = `${rigKey(model)}|${sources.join('|')}`;
+    if (databases.has(key)) return databases.get(key) ?? null;
     const sampled = clips.map(clip => sampleClip(model, clip)).filter((entry): entry is MotionClipSamples => entry !== null);
     const database = sampled.length > 0 ? new MotionDatabase(sampled) : null;
-    byModel.set(key, database);
+    databases.set(key, database);
+    if (databases.size > MAX_DATABASES) databases.delete(databases.keys().next().value as string);
     return database;
 };
