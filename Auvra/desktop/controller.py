@@ -634,9 +634,12 @@ class FrameController:
                 attributes["errorType"] = exception_type
             if isinstance(incoming.get("success"), bool):
                 attributes["success"] = incoming["success"]
+            if isinstance(incoming.get("reason"), str):
+                attributes["reason"] = incoming["reason"]
             diagnostic_event = ("webview.message_rejected" if event == "message_rejected" else
                                 "webview.policy_rejected" if event == "policy_rejected" else
                                 "webview.process_failed" if incoming.get("code") == "renderer_process_failed" else
+                                "webview.process_recovered" if event == "process_failed" else
                                 "webview.lifecycle")
             if diagnostic_event in {"webview.message_rejected", "webview.policy_rejected"}:
                 attributes.pop("state", None)

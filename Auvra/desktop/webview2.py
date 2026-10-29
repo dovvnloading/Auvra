@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
+import re
 import struct
 import subprocess
 import threading
+import time
 from typing import Any, Callable
 
 from .assets import (
@@ -33,6 +36,35 @@ from Auvra.diagnostics.webview import WEBVIEW_DIAGNOSTIC_PROTOCOL
 from Auvra.host.validation import ProtocolValidationError, validate_message
 
 MESSAGE_MAX_BYTES = 256 * 1024
+
+# A page whose renderer dies is reloaded at most this many times in this many
+# seconds; one that keeps dying (out of memory while loading, a crash in its
+# startup code) closes the frame instead of reloading forever.
+RENDERER_RELOAD_LIMIT = 3
+RENDERER_RELOAD_WINDOW = 300.0
+
+# CoreWebView2ProcessFailedKind by value, for runtimes that hand the enum over
+# as a number.
+_PROCESS_FAILED_KINDS = (
+    "browser_process_exited", "render_process_exited", "render_process_unresponsive",
+    "frame_render_process_exited", "utility_process_exited", "sandbox_helper_process_exited",
+    "gpu_process_exited", "ppapi_plugin_process_exited", "ppapi_broker_process_exited",
+    "unknown_process_exited",
+)
+
+
+def _process_failed_kind(args: Any) -> str | None:
+    """The failed process's kind in snake case (``GpuProcessExited`` is ``gpu_process_exited``); None when unreadable."""
+    raw = getattr(args, "ProcessFailedKind", None)
+    if raw is None:
+        return None
+    text = str(raw).rsplit(".", 1)[-1].strip()
+    if text.isdigit():
+        index = int(text)
+        return _PROCESS_FAILED_KINDS[index] if index < len(_PROCESS_FAILED_KINDS) else "unknown_process_exited"
+    if not text.isidentifier():
+        return None
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", text).lower()
 
 
 def _validate_envelope(message: Any) -> None:
@@ -79,6 +111,7 @@ class WebView2Frame:
         self._browser_process_id: int | None = None
         self._dll_directory_handle: Any = None
         self._pending_actions: list[Any] = []
+        self._renderer_reloads: deque[float] = deque()
         self._resource_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="auvra-assets")
         self._resource_slots = threading.BoundedSemaphore(4)
 
@@ -845,8 +878,48 @@ class WebView2Frame:
                 self._signal("message_failed", {"code": "dispatcher_failed"})
 
     def _on_process_failed(self, sender: Any, args: Any) -> None:
-        self._fail("renderer_process_failed", "The Auvra renderer process failed")
+        """Survive the process failures WebView2 recovers from; close only on the ones it cannot.
+
+        GPU, utility, sandbox and subframe processes are restarted by the
+        runtime itself. A page whose own renderer died (out of memory, say) is
+        reloaded, so the editor comes back with its crash recovery instead of
+        quitting. A busy page is left to finish. Only a dead browser process,
+        or a renderer that keeps dying, closes the frame.
+        """
+        kind = _process_failed_kind(args)
+        if kind is None or kind == "browser_process_exited":
+            self._fail("renderer_process_failed", "The Auvra renderer process failed")
+            self.close(timeout=self.config.shutdown_timeout)
+            return
+        if kind == "render_process_unresponsive":
+            self._signal("process_failed", {"code": "renderer_unresponsive", "reason": kind})
+            return
+        if kind != "render_process_exited":
+            self._signal("process_failed", {"code": "process_recovered", "reason": kind})
+            return
+        if self._reload_after_renderer_exit():
+            self._signal("process_failed", {"code": "renderer_reloaded", "reason": kind})
+            return
+        self._fail("renderer_process_failed", "The Auvra renderer process failed repeatedly")
         self.close(timeout=self.config.shutdown_timeout)
+
+    def _reload_after_renderer_exit(self) -> bool:
+        """Reload the page after its renderer died; False when it should not (or could not) be."""
+        now = time.monotonic()
+        with self._lock:
+            if self._state is not FrameState.READY or self._core is None:
+                return False
+            while self._renderer_reloads and now - self._renderer_reloads[0] > RENDERER_RELOAD_WINDOW:
+                self._renderer_reloads.popleft()
+            if len(self._renderer_reloads) >= RENDERER_RELOAD_LIMIT:
+                return False
+            self._renderer_reloads.append(now)
+            core = self._core
+        try:
+            core.Reload()
+        except Exception:
+            return False
+        return True
 
     def _terminate_owned_browser(self) -> None:
         """Contain a browser tree that ignored controller disposal."""

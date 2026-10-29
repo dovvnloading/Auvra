@@ -10,6 +10,8 @@ python Auvra/Auvra.py
 
 The launcher prepares its own Python environment and frontend dependencies, then opens the editor in its own window. See the main [README](../README.md) for requirements and launcher commands.
 
+If part of the editor window's browser engine fails, the editor carries on: the graphics and helper processes restart by themselves, and if the page itself crashes the editor reloads it and offers to recover unsaved work. Only a page that crashes three times within five minutes, or a failure of the browser engine as a whole, closes the editor.
+
 ## Create a project
 
 The quickest start is **Starter** in the header. It creates a project with a playable level (rolling terrain, sky, a player start, a player character and scattered props) and game settings already filled in. Press **PLAY LEVEL** in the World Editor straight away, then change things.

@@ -13,7 +13,7 @@ from pathlib import Path
 from Auvra.desktop.contracts import FrameConfig, FrameMode, FrameStartupError, FrameState, FrameUnavailableError
 from Auvra.desktop.assets import ASSET_ORIGIN, AssetResourceResponse
 from Auvra.desktop.webview2 import WebView2Frame
-from .fakes import download, frame_navigation, message, navigation, new_window, permission, resource
+from .fakes import EventArgs, download, frame_navigation, message, navigation, new_window, permission, resource
 
 
 class WebView2HandlerTests(unittest.TestCase):
@@ -167,6 +167,68 @@ class WebView2HandlerTests(unittest.TestCase):
         self.frame._on_browser_exited(None, object())
         self.assertIsNone(self.frame.failure)
         self.assertTrue(self.frame._browser_exited.is_set())
+
+    def _ready_frame(self) -> tuple[WebView2Frame, list[tuple[str, dict | None]], list[str]]:
+        signals: list[tuple[str, dict | None]] = []
+        reloads: list[str] = []
+        frame = WebView2Frame(FrameConfig(FrameMode.DEVELOPMENT, development_origin="http://127.0.0.1:3000",
+                                          on_lifecycle=lambda event, fields=None: signals.append((event, fields))))
+        frame._state = FrameState.READY
+        frame._core = types.SimpleNamespace(Reload=lambda: reloads.append("reload"))
+        self.addCleanup(frame.close)
+        return frame, signals, reloads
+
+    def test_processes_the_runtime_restarts_itself_leave_the_frame_running(self):
+        frame, signals, reloads = self._ready_frame()
+        for kind in ("GpuProcessExited", "UtilityProcessExited", "FrameRenderProcessExited",
+                     "SandboxHelperProcessExited", "UnknownProcessExited"):
+            frame._on_process_failed(None, EventArgs(ProcessFailedKind=kind))
+        self.assertIsNone(frame.failure)
+        self.assertIs(frame.state, FrameState.READY)
+        self.assertEqual(reloads, [])
+        self.assertEqual([fields["reason"] for event, fields in signals if event == "process_failed"],
+                         ["gpu_process_exited", "utility_process_exited", "frame_render_process_exited",
+                          "sandbox_helper_process_exited", "unknown_process_exited"])
+
+    def test_a_busy_page_is_left_to_finish(self):
+        frame, signals, reloads = self._ready_frame()
+        frame._on_process_failed(None, EventArgs(ProcessFailedKind="RenderProcessUnresponsive"))
+        self.assertIsNone(frame.failure)
+        self.assertEqual(reloads, [])
+        self.assertIn(("process_failed", {"code": "renderer_unresponsive", "reason": "render_process_unresponsive"}), signals)
+
+    def test_a_dead_page_renderer_reloads_the_page_until_it_keeps_dying(self):
+        frame, signals, reloads = self._ready_frame()
+        for _ in range(3):
+            frame._on_process_failed(None, EventArgs(ProcessFailedKind="RenderProcessExited"))
+        self.assertEqual(len(reloads), 3)
+        self.assertIsNone(frame.failure)
+        self.assertEqual(sum(1 for event, fields in signals if fields and fields.get("code") == "renderer_reloaded"), 3)
+        frame._on_process_failed(None, EventArgs(ProcessFailedKind="RenderProcessExited"))
+        self.assertEqual(len(reloads), 3)
+        self.assertEqual(frame.failure.code, "renderer_process_failed")
+
+    def test_reloads_long_ago_do_not_count_towards_the_limit(self):
+        frame, _, reloads = self._ready_frame()
+        with mock.patch("Auvra.desktop.webview2.time.monotonic", side_effect=[0.0, 1.0, 2.0, 400.0]):
+            for _ in range(4):
+                frame._on_process_failed(None, EventArgs(ProcessFailedKind="RenderProcessExited"))
+        self.assertEqual(len(reloads), 4)
+        self.assertIsNone(frame.failure)
+
+    def test_numeric_kinds_and_a_dead_browser_still_close_the_frame(self):
+        frame, signals, reloads = self._ready_frame()
+        frame._on_process_failed(None, EventArgs(ProcessFailedKind=6))
+        self.assertIsNone(frame.failure)
+        self.assertEqual(signals[-1][1]["reason"], "gpu_process_exited")
+        frame._on_process_failed(None, EventArgs(ProcessFailedKind="BrowserProcessExited"))
+        self.assertEqual(frame.failure.code, "renderer_process_failed")
+        self.assertEqual(reloads, [])
+
+    def test_an_unreadable_failure_closes_the_frame_as_before(self):
+        frame, _, _ = self._ready_frame()
+        frame._on_process_failed(None, object())
+        self.assertEqual(frame.failure.code, "renderer_process_failed")
 
     def test_hung_sta_still_terminates_owned_browser_before_raising(self):
         class Form:

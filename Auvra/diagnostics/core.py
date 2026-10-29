@@ -146,6 +146,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     "webview.message_rejected": _spec("webview", "warning", frozenset({"code", "reason", "count"})),
     "webview.policy_rejected": _spec("webview", "warning", frozenset({"code", "reason", "count"})),
     "webview.process_failed": _spec("webview", "error", _LIFECYCLE),
+    "webview.process_recovered": _spec("webview", "warning", _LIFECYCLE),
     "host.request_started": _spec("host", "info", _REQUEST),
     "host.request_completed": _spec("host", "info", _REQUEST),
     "host.request_failed": _spec("host", "error", _REQUEST),
