@@ -59,7 +59,7 @@ import { vehicleSession } from './vehicles';
 import { dialogueStore, useDialogueState } from './dialogue';
 import { DialogueOverlay } from './DialogueOverlay';
 import { LevelStreamingContext, streamedObjects, streamedRoots, type LevelStreaming } from './levelStreaming';
-import { AutoExposure, LightShafts, PostProcessAllowedContext, SunHaze, usePostProcessClaimed } from './components/postProcess';
+import { AutoExposure, LightShafts, PostProcessAllowedContext, ScreenLighting, SunHaze, usePostProcessClaimed } from './components/postProcess';
 import { MeshLodContext } from '../components/Scene/useMeshLod';
 import type { InputState } from './input';
 import { collectTimelineTargets } from './timeline/evaluate';
@@ -881,13 +881,14 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
 };
 
 /**
- * The runtime's own haze, light shafts, auto exposure, bloom, vignette and tone mapping, standing down
- * while a level Post Process component owns the canvas.
+ * The runtime's own bounced light and reflections, haze, light shafts, auto exposure, bloom, vignette and
+ * tone mapping, standing down while a level Post Process component owns the canvas.
  */
 const DefaultPostProcess: React.FC = () => {
     if (usePostProcessClaimed()) return null;
     return (
         <EffectComposer enableNormalPass={false}>
+            <ScreenLighting bounce={1} reflections={1} />
             <SunHaze intensity={0.5} />
             <LightShafts intensity={0.35} />
             <AutoExposure compensation={0} speed={1} />

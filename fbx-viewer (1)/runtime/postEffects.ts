@@ -25,7 +25,7 @@ void main() {
 }`;
 
 /** One full-screen triangle drawn with a material into a render target. */
-class FullscreenPass {
+export class FullscreenPass {
     private readonly scene = new THREE.Scene();
     private readonly camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     readonly material: THREE.ShaderMaterial;
@@ -53,7 +53,8 @@ class FullscreenPass {
     }
 }
 
-const target = (width: number, height: number): THREE.WebGLRenderTarget =>
+/** A half-float colour target for an effect's own passes. */
+export const effectTarget = (width: number, height: number): THREE.WebGLRenderTarget =>
     new THREE.WebGLRenderTarget(width, height, {
         type: THREE.HalfFloatType, format: THREE.RGBAFormat, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
         depthBuffer: false, generateMipmaps: false,
@@ -170,9 +171,9 @@ export class AutoExposureEffect extends Effect {
             measured: { value: null }, previous: { value: null }, deltaTime: { value: 0 },
             brighten: { value: options.brighten ?? 3 }, darken: { value: options.darken ?? 1.2 }, first: { value: 1 },
         });
-        this.targets = [target(LUMINANCE_SIZE, LUMINANCE_SIZE), target(16, 16), target(4, 4), target(1, 1)];
+        this.targets = [effectTarget(LUMINANCE_SIZE, LUMINANCE_SIZE), effectTarget(16, 16), effectTarget(4, 4), effectTarget(1, 1)];
         for (const t of this.targets) t.texture.minFilter = t.texture.magFilter = THREE.NearestFilter;
-        this.adapted = [target(1, 1), target(1, 1)];
+        this.adapted = [effectTarget(1, 1), effectTarget(1, 1)];
     }
 
     set(options: AutoExposureOptions): void {
@@ -271,7 +272,7 @@ export class MotionBlurEffect extends Effect {
     private readonly camera: THREE.Camera;
     private readonly previous = new THREE.Matrix4();
     private readonly velocityPass: FullscreenPass;
-    private readonly velocityTarget = target(1, 1);
+    private readonly velocityTarget = effectTarget(1, 1);
     private depth: THREE.Texture | null = null;
     private placed = false;
 
@@ -386,8 +387,8 @@ export class LightShaftsEffect extends Effect {
     private readonly camera: THREE.Camera;
     private readonly maskPass: FullscreenPass;
     private readonly blurPass: FullscreenPass;
-    private maskTarget = target(1, 1);
-    private blurTarget = target(1, 1);
+    private maskTarget = effectTarget(1, 1);
+    private blurTarget = effectTarget(1, 1);
     private depth: THREE.Texture | null = null;
     private strength: number;
 

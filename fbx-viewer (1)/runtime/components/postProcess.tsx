@@ -8,6 +8,7 @@ import { BlendFunction, LUT3DEffect, ToneMappingMode } from 'postprocessing';
 import {
     AutoExposureEffect, COLOR_LOOKS, LightShaftsEffect, lookTexture, MotionBlurEffect, SunHazeEffect, WhiteBalanceEffect, type ColorLook,
 } from '../postEffects';
+import { ScreenLightingEffect } from '../screenLighting';
 import { RENDER_CONVENTIONS } from '../../renderer/conventions';
 import type { LevelComponent } from '../../types';
 import type { ComponentDefinition, ComponentPropSchema, ComponentRenderProps } from './types';
@@ -60,6 +61,12 @@ export interface PostProcessSettings {
     /** Fog and mist glowing toward the sun. */
     sunHaze: boolean;
     sunHazeIntensity: number;
+    /** Light bounced from lit surfaces onto the surfaces around them, worked out from the screen. */
+    globalIllumination: boolean;
+    giIntensity: number;
+    /** Reflections of what is on screen in glossy surfaces. */
+    reflections: boolean;
+    reflectionIntensity: number;
     /** Blur from the camera's own motion; 1 is a full frame's worth (a 360-degree shutter). */
     motionBlur: boolean;
     motionBlurStrength: number;
@@ -105,6 +112,10 @@ export const POST_PROCESS_DEFAULTS: PostProcessSettings = {
     lightShaftsIntensity: 0.35,
     sunHaze: true,
     sunHazeIntensity: 0.5,
+    globalIllumination: true,
+    giIntensity: 1,
+    reflections: true,
+    reflectionIntensity: 1,
     motionBlur: false,
     motionBlurStrength: 0.5,
     temperature: 0,
@@ -132,6 +143,8 @@ export const POST_PROCESS_RANGES: Record<NumberSetting, { min: number; max: numb
     adaptationSpeed: { min: 0.1, max: 10, step: 0.1 },
     lightShaftsIntensity: { min: 0, max: 3, step: 0.05 },
     sunHazeIntensity: { min: 0, max: 3, step: 0.05 },
+    giIntensity: { min: 0, max: 4, step: 0.05 },
+    reflectionIntensity: { min: 0, max: 2, step: 0.05 },
     motionBlurStrength: { min: 0, max: 1, step: 0.05 },
     temperature: { min: -1, max: 1, step: 0.01 },
     tint: { min: -1, max: 1, step: 0.01 },
@@ -184,6 +197,10 @@ export const resolvePostProcessSettings = (component: LevelComponent): PostProce
         lightShaftsIntensity: readNumber(props, 'lightShaftsIntensity'),
         sunHaze: readBoolean(props, 'sunHaze'),
         sunHazeIntensity: readNumber(props, 'sunHazeIntensity'),
+        globalIllumination: readBoolean(props, 'globalIllumination'),
+        giIntensity: readNumber(props, 'giIntensity'),
+        reflections: readBoolean(props, 'reflections'),
+        reflectionIntensity: readNumber(props, 'reflectionIntensity'),
         motionBlur: readBoolean(props, 'motionBlur'),
         motionBlurStrength: readNumber(props, 'motionBlurStrength'),
         temperature: readNumber(props, 'temperature'),
@@ -343,6 +360,16 @@ const VIGNETTE_OFFSET = 0.35;
 
 // --- CINEMATIC EFFECTS (runtime/postEffects.ts) ---
 
+/** Bounced light and screen-space reflections; rebuilt for a new scene or camera. */
+export const ScreenLighting: React.FC<{ bounce: number; reflections: number }> = ({ bounce, reflections }) => {
+    const scene = useThree(state => state.scene);
+    const camera = useThree(state => state.camera);
+    const effect = useMemo(() => new ScreenLightingEffect(scene, camera, { bounce, reflections }), [scene, camera]);
+    useEffect(() => { effect.set({ bounce, reflections }); }, [effect, bounce, reflections]);
+    useEffect(() => () => effect.dispose(), [effect]);
+    return <primitive object={effect} />;
+};
+
 /** Auto exposure; lives as long as the stack, its settings changed in place. */
 export const AutoExposure: React.FC<{ compensation: number; speed: number }> = ({ compensation, speed }) => {
     const effect = useMemo(() => new AutoExposureEffect(), []);
@@ -392,19 +419,25 @@ const Look: React.FC<{ look: ColorLook; strength: number }> = ({ look, strength 
 };
 
 /**
- * One composer with the enabled effects, in pipeline order: sunlit haze and occlusion on the lit scene,
+ * One composer with the enabled effects, in pipeline order: bounced light, reflections, sunlit haze and
+ * occlusion on the lit scene,
  * depth of field, light shafts, motion blur, then auto exposure, white balance and bloom on HDR values;
  * tone mapping, colour grading, look, vignette, fringes and grain on display values; then SMAA. MSAA stays
  * off: SMAA (or nothing) is the anti-aliasing, which keeps the HDR buffers single-sampled.
  *
- * Haze stays first: it reads depth in the composer's first effect pass, the one that reads the buffer the
- * depth texture belongs to. Later effects that need depth read it into targets of their own.
+ * Haze stays in the composer's first effect pass: it reads depth there, from the buffer the depth texture
+ * belongs to, so nothing that starts a pass of its own may come before it. Bounced light and reflections
+ * draw their own surface buffer and join that pass. Later effects that need depth read it into targets of
+ * their own.
  */
 const PostProcessStack = React.memo<{ settings: PostProcessSettings }>(({ settings }) => {
     const camera = useThree(state => state.camera);
     const effects: React.ReactElement[] = [];
-    // Light first: haze and shafts add to the lit scene, motion blur smears it, and the eye adapts to the result.
-    // Haze must lead (see above).
+    // Light first: bounces and reflections, then haze and shafts add to the lit scene, motion blur smears it,
+    // and the eye adapts to the result. Nothing that starts its own pass may come before the haze (see above).
+    const bounce = settings.globalIllumination ? settings.giIntensity : 0;
+    const reflections = settings.reflections ? settings.reflectionIntensity : 0;
+    if (bounce > 0 || reflections > 0) effects.push(<ScreenLighting key="lighting" bounce={bounce} reflections={reflections} />);
     if (settings.sunHaze) effects.push(<SunHaze key="haze" intensity={settings.sunHazeIntensity} />);
     if (settings.ambientOcclusion) {
         // The pass keeps the camera it was built with, so a new default camera rebuilds it.
@@ -494,7 +527,8 @@ export const POST_PROCESS_COMPONENT: ComponentDefinition = {
     type: 'postProcess',
     label: 'Post Process',
     description: 'Post-processing for the whole view, in the editor and in play: bloom, ambient occlusion, tone mapping, '
-        + 'exposure and auto exposure, light shafts, sunlit haze, motion blur, vignette, depth of field, white balance, '
+        + 'exposure and auto exposure, global illumination, screen reflections, light shafts, sunlit haze, motion blur, '
+        + 'vignette, depth of field, white balance, '
         + 'colour grading looks, film grain and anti-aliasing. The object\'s transform is ignored; '
         + 'when several objects carry one, the first mounted applies.',
     props: [
@@ -522,6 +556,10 @@ export const POST_PROCESS_COMPONENT: ComponentDefinition = {
         numberProp('lightShaftsIntensity', 'Light Shafts Intensity'),
         booleanProp('sunHaze', 'Sunlit Haze'),
         numberProp('sunHazeIntensity', 'Haze Intensity'),
+        booleanProp('globalIllumination', 'Global Illumination'),
+        numberProp('giIntensity', 'GI Intensity'),
+        booleanProp('reflections', 'Screen Reflections'),
+        numberProp('reflectionIntensity', 'Reflection Intensity'),
         booleanProp('motionBlur', 'Motion Blur'),
         numberProp('motionBlurStrength', 'Motion Blur Strength'),
         booleanProp('vignette', 'Vignette'),
