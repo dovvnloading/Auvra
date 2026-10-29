@@ -391,6 +391,7 @@ export interface LogicNode {
           'GetSplineLength' | 'GetSplinePoint' | 'FindClosestOnSpline' |
           // Vehicles (hooks/levelBlueprintNodes/world.ts)
           'EnterVehicle' | 'ExitVehicle' | 'GetVehicleState' | 'GetPlayerVehicle' | 'SetVehicleInput' | 'ReleaseVehicleInput' |
+          'PlayParticles' | 'StopParticles' | 'EmitParticles' | 'GetParticles' |
           // Multiplayer (hooks/useLevelBlueprintRuntime.ts)
           'SendNetworkEvent' | 'IsNetworkHost' |
           // Cameras (hooks/useLevelBlueprintRuntime.ts)

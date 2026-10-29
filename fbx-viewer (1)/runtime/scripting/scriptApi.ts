@@ -187,6 +187,8 @@ export interface ScriptContext {
     playerVehicle(): string | null;
     /** Takes the player out of their vehicle at once, beside it. */
     exitVehicle(): void;
+    /** The particle effects on object `objectId` (its Particles components; default: the script's own object). */
+    particles(objectId?: string): ScriptParticles;
     /** Multiplayer: who is here, who hosts, and events to the other players. */
     readonly net: ScriptNet;
     log(...values: unknown[]): void;
@@ -194,6 +196,17 @@ export interface ScriptContext {
     error(...values: unknown[]): void;
     /** The script's own storage, kept across frames until the script is reloaded. */
     readonly state: Record<string, unknown>;
+}
+
+/** An object's particle effects, as a script controls them. */
+export interface ScriptParticles {
+    readonly id: string;
+    /** Starts them from the top of their delay and cycle: a one-shot effect plays again. */
+    play(): void;
+    /** Stops them emitting; with `clear` the particles alive vanish at once. */
+    stop(clear?: boolean): void;
+    /** A burst of `count` particles from each, from its shape where it is now. */
+    emit(count?: number): void;
 }
 
 /** The callbacks a script may define as top-level functions; every one is optional. */
@@ -920,6 +933,21 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
                 };
             },
             playerVehicle: () => Object.entries(world.snapshot.vehicles ?? {}).find(([, state]) => state.playerDriving)?.[0] ?? null,
+            particles: (objectId?: string): ScriptParticles => {
+                const id = objectId === undefined ? record.objectId : readId('particles', objectId);
+                return {
+                    id,
+                    play: () => { queue(record, { type: 'playParticles', objectId: id }); },
+                    stop: (clear = false) => {
+                        if (typeof clear !== 'boolean') throw new TypeError('particles.stop expects true or false');
+                        queue(record, { type: 'stopParticles', objectId: id, clear });
+                    },
+                    emit: (count = 20) => {
+                        if (!isFiniteNumber(count) || count < 0) throw new TypeError('particles.emit expects a count of 0 or more');
+                        queue(record, { type: 'emitParticles', objectId: id, count: Math.min(SCRIPT_LIMITS.maxParticleBurst, Math.round(count)) });
+                    },
+                };
+            },
             exitVehicle: () => { queue(record, { type: 'exitVehicle' }); },
             net: {
                 connected: () => world.snapshot.net.connected,

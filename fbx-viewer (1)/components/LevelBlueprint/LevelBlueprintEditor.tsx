@@ -27,6 +27,7 @@ const WORLD_PALETTE_GROUPS: { label: string, types: WorldNodeType[] }[] = [
     { label: 'Player', types: ['DamagePlayer', 'HealPlayer', 'GetPlayerHealth', 'AddAmmo', 'GiveWeapon'] },
     { label: 'Splines', types: ['GetSplineLength', 'GetSplinePoint', 'FindClosestOnSpline'] },
     { label: 'Vehicles', types: ['EnterVehicle', 'ExitVehicle', 'GetVehicleState', 'GetPlayerVehicle', 'SetVehicleInput', 'ReleaseVehicleInput'] },
+    { label: 'Particles', types: ['PlayParticles', 'StopParticles', 'EmitParticles', 'GetParticles'] },
     { label: 'Level Variables', types: ['GetLevelVariable', 'SetLevelVariable'] },
     { label: 'Utilities', types: ['RandomFloat', 'RandomInt', 'Print'] },
 ];

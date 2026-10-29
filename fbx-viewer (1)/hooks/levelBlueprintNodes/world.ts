@@ -54,7 +54,11 @@ export type WorldNodeType =
     | 'GetVehicleState'
     | 'GetPlayerVehicle'
     | 'SetVehicleInput'
-    | 'ReleaseVehicleInput';
+    | 'ReleaseVehicleInput'
+    | 'PlayParticles'
+    | 'StopParticles'
+    | 'EmitParticles'
+    | 'GetParticles';
 
 export type Vec3 = [number, number, number];
 
@@ -164,6 +168,12 @@ export interface WorldNodeServices {
     exitVehicle?(): boolean;
     /** Drives a vehicle from the level script until released (null): its AI path and parking brake wait. False when it is not a vehicle. */
     setVehicleInput?(objectId: string, controls: { throttle: number; brake: number; steer: number; handbrake: boolean } | null): boolean;
+    /** Starts, stops or bursts every particle emitter on an object; how many emitters it has (0 when none). */
+    playParticles?(objectId: string): number;
+    stopParticles?(objectId: string, clear: boolean): number;
+    emitParticles?(objectId: string, count: number): number;
+    /** Whether any of an object's emitters is emitting, and how many particles they have alive. */
+    particles?(objectId: string): { playing: boolean; alive: number; emitters: number };
 }
 
 export interface WorldExecutionContext extends FlowExecutionContext {
@@ -462,6 +472,39 @@ export const WORLD_NODE_DEFINITIONS: readonly WorldNodeDefinition[] = [
         inputs: [exec('Exec', 'Input'), input('Vehicle', 'Object')],
         outputs: [exec('Out', 'Output')],
         data: { default_Vehicle: '' },
+    },
+    {
+        type: 'PlayParticles',
+        title: 'Play Particles',
+        description: "Starts every Particles component on the actor from the top of its delay and cycle: a one-shot effect plays again. Emitters is how many it has.",
+        inputs: [exec('Exec', 'Input'), input('Actor', 'Object')],
+        outputs: [exec('Out', 'Output'), output('Emitters', 'Integer')],
+        data: { default_Actor: '' },
+    },
+    {
+        type: 'StopParticles',
+        title: 'Stop Particles',
+        description: 'Stops every Particles component on the actor emitting. With Clear the particles alive vanish at once; without, they live out their lives.',
+        inputs: [exec('Exec', 'Input'), input('Actor', 'Object'), input('Clear', 'Boolean')],
+        outputs: [exec('Out', 'Output'), output('Emitters', 'Integer')],
+        data: { default_Actor: '', default_Clear: false },
+    },
+    {
+        type: 'EmitParticles',
+        title: 'Emit Particles',
+        description: "A burst of Count particles from every Particles component on the actor, from its shape where it is now, whether it is playing or not: a hit, an explosion, a splash.",
+        inputs: [exec('Exec', 'Input'), input('Actor', 'Object'), input('Count', 'Integer')],
+        outputs: [exec('Out', 'Output'), output('Emitters', 'Integer')],
+        data: { default_Actor: '', default_Count: 20 },
+    },
+    {
+        type: 'GetParticles',
+        title: 'Get Particles',
+        description: "Whether any Particles component on the actor is emitting, and how many particles they have alive.",
+        pure: true,
+        inputs: [input('Actor', 'Object')],
+        outputs: [output('Playing', 'Boolean'), output('Alive', 'Integer'), output('Emitters', 'Integer')],
+        data: { default_Actor: '' },
     },
     {
         type: 'SetMorphTarget',
@@ -844,6 +887,30 @@ const runReleaseVehicleInput: WorldNodeExecutor = (_node, ctx) => {
     finish(ctx, {});
 };
 
+const particleActorOf = (ctx: WorldExecutionContext): string | null => toActorId(ctx.evaluate('Actor'));
+
+const runPlayParticles: WorldNodeExecutor = (_node, ctx) => {
+    const id = particleActorOf(ctx);
+    finish(ctx, { Emitters: id ? ctx.services.playParticles?.(id) ?? 0 : 0 });
+};
+
+const runStopParticles: WorldNodeExecutor = (_node, ctx) => {
+    const id = particleActorOf(ctx);
+    finish(ctx, { Emitters: id ? ctx.services.stopParticles?.(id, ctx.evaluate('Clear') === true) ?? 0 : 0 });
+};
+
+const runEmitParticles: WorldNodeExecutor = (_node, ctx) => {
+    const id = particleActorOf(ctx);
+    const count = Math.max(0, Math.min(5000, Math.round(toNumber(ctx.evaluate('Count'), 0))));
+    finish(ctx, { Emitters: id ? ctx.services.emitParticles?.(id, count) ?? 0 : 0 });
+};
+
+const runGetParticles: WorldNodeExecutor = (_node, ctx) => {
+    const id = particleActorOf(ctx);
+    const state = id ? ctx.services.particles?.(id) ?? null : null;
+    publish(ctx, { Playing: state?.playing ?? false, Alive: state?.alive ?? 0, Emitters: state?.emitters ?? 0 });
+};
+
 const executors = {
     SpawnPrefab: runSpawnPrefab,
     GetActorTransform: runGetActorTransform,
@@ -874,6 +941,10 @@ const executors = {
     GetPlayerVehicle: runGetPlayerVehicle,
     SetVehicleInput: runSetVehicleInput,
     ReleaseVehicleInput: runReleaseVehicleInput,
+    PlayParticles: runPlayParticles,
+    StopParticles: runStopParticles,
+    EmitParticles: runEmitParticles,
+    GetParticles: runGetParticles,
 } satisfies Record<WorldNodeType, WorldNodeExecutor>;
 
 /** Executor per world node type; look up by `node.type` and treat a miss as "not a world node". */

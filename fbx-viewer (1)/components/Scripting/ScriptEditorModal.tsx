@@ -84,6 +84,7 @@ export const SCRIPT_API_REFERENCE: ScriptApiSection[] = [
             { signature: 'ctx.vehicle(objectId)', description: "The object's Vehicle: { speed (km/h), gear, playerDriving, enter(), setInput({ throttle, brake, steer, handbrake }), release() }, or null." },
             { signature: 'ctx.playerVehicle()', description: 'The id of the vehicle the player drives, or null on foot.' },
             { signature: 'ctx.exitVehicle()', description: 'Takes the player out of their vehicle at once, beside it.' },
+            { signature: 'ctx.particles(objectId?)', description: "The object's particle effects (default: this script's object): { play(), stop(clear?), emit(count?) }." },
         ],
     },
     {

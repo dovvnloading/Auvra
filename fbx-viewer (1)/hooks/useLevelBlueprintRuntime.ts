@@ -24,6 +24,7 @@ import { FLOW_NODE_EXECUTORS, flowNodeOutputValue } from './levelBlueprintNodes/
 import { findActorObject3D, isPureWorldNodeType, PLAYER_ACTOR_ID, setActorMorphTarget, WORLD_NODE_EXECUTORS, WorldExecutionContext, WorldNodeServices } from './levelBlueprintNodes/world';
 import { getLiveSpline, liveSplineQuery } from '../runtime/splineRegistry';
 import { KMH, vehicleSession, type VehicleSessionEvent } from '../runtime/vehicles';
+import { particleEmitters } from '../runtime/particleEmitters';
 
 const MAX_BLUEPRINT_EVALUATION_DEPTH = 128;
 const MAX_BLUEPRINT_EXECUTION_DEPTH = 256;
@@ -282,6 +283,29 @@ export const useLevelBlueprintRuntime = ({
             if (!handle) return false;
             handle.setScriptControls(controls);
             return true;
+        },
+        playParticles: (objectId) => {
+            const emitters = particleEmitters.forObject('runtime', objectId);
+            for (const emitter of emitters) emitter.play();
+            return emitters.length;
+        },
+        stopParticles: (objectId, clear) => {
+            const emitters = particleEmitters.forObject('runtime', objectId);
+            for (const emitter of emitters) emitter.stop(clear);
+            return emitters.length;
+        },
+        emitParticles: (objectId, count) => {
+            const emitters = particleEmitters.forObject('runtime', objectId);
+            for (const emitter of emitters) emitter.emit(count);
+            return emitters.length;
+        },
+        particles: (objectId) => {
+            const emitters = particleEmitters.forObject('runtime', objectId);
+            return {
+                playing: emitters.some(emitter => emitter.isPlaying()),
+                alive: emitters.reduce((sum, emitter) => sum + emitter.alive(), 0),
+                emitters: emitters.length,
+            };
         },
     }), [sessionObject3D]);
 

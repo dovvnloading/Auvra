@@ -100,11 +100,12 @@ describe('tyre smoke and dust', () => {
   it('smokes a sliding tyre on a road, throws dust from one rolling on dirt, and neither from one rolling on a road', () => {
     const effects = createTyreEffects();
     const velocity = new THREE.Vector3(0, 0, 10);
+    const view = new THREE.PerspectiveCamera();
     const run = (surface: SurfaceKind, overrides: Partial<WheelTelemetry>) => {
-      effects.smoke.pool.count = 0;
-      effects.dust.pool.count = 0;
-      for (let i = 0; i < 30; i++) stepTyreEffects(effects, telemetry([wheel({ surface, ...overrides })]), [0.1], velocity, 1 / 60, 800);
-      return { smoke: effects.smoke.pool.count, dust: effects.dust.pool.count };
+      effects.smoke.simulation.stop(true);
+      effects.dust.simulation.stop(true);
+      for (let i = 0; i < 30; i++) stepTyreEffects(effects, telemetry([wheel({ surface, ...overrides })]), [0.1], velocity, 1 / 60, view);
+      return { smoke: effects.smoke.simulation.count, dust: effects.dust.simulation.count };
     };
     expect(run('asphalt', {})).toEqual({ smoke: 0, dust: 0 });
     const sliding = run('asphalt', { slipAngle: 0.6 });
@@ -114,7 +115,7 @@ describe('tyre smoke and dust', () => {
     expect(dirt.dust).toBeGreaterThan(5);
     expect(dirt.smoke).toBe(0);
     // The dust takes the ground's colour.
-    expect(effects.dust.look.colorStart).toBe(SURFACES.dirt.kickColor);
+    expect(effects.dust.effect.colorOverLife.stops[1].color).toBe(SURFACES.dirt.kickColor);
     effects.dispose();
   });
 });

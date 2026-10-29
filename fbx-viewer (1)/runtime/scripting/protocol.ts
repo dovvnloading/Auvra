@@ -157,6 +157,10 @@ export type ScriptCommand =
     /** Drives a vehicle from the script until released; the player driving it overrides this. */
     | { type: 'setVehicleInput'; objectId: string; throttle: number; brake: number; steer: number; handbrake: boolean }
     | { type: 'releaseVehicleInput'; objectId: string }
+    /** Starts, stops (`clear`: the particles alive go too) or bursts every Particles component on object `objectId`. */
+    | { type: 'playParticles'; objectId: string }
+    | { type: 'stopParticles'; objectId: string; clear: boolean }
+    | { type: 'emitParticles'; objectId: string; count: number }
     /** A multiplayer event to every other player, or to one (`to`). */
     | { type: 'netSend'; name: string; payload: ScriptNetPayload; to?: string }
     | { type: 'log'; scriptId: string; level: 'info' | 'warn' | 'error'; message: string };
@@ -183,4 +187,6 @@ export const SCRIPT_LIMITS = {
     /** Execution budget per callback, as for HUD code. */
     maxStepsPerCallback: 200_000,
     maxMsPerCallback: 8,
+    /** Particles one emitParticles command bursts at most. */
+    maxParticleBurst: 5000,
 };
