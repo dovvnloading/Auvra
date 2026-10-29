@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { DEFAULT_MODEL_IMPORT_SETTINGS, type LoadedModelData, type ModelImportSettings } from '../../types';
 import { disposeMaterial } from './ModelLifecycle'; // Reuse internal helper if needed, or duplicate strictly local logic
 
+/** userData key on a loaded model's root: metres per unit its source file says it is authored in. */
+export const SOURCE_METRES_PER_UNIT = 'sourceMetresPerUnit';
+
 /** Upper bound accepted by the project models schema for importSettings.targetSize. */
 export const MAX_MODEL_TARGET_SIZE = 1000000;
 
@@ -29,7 +32,8 @@ export const isDefaultImportSettings = (settings?: Partial<ModelImportSettings> 
  * Applies import settings to the model root and returns the root scale.
  * - normalize: scale so the largest dimension equals targetSize, centre on X/Z
  *   and sit the bounds on the floor (y = 0).
- * - otherwise: keep the authored scale and pivot (identity root transform).
+ * - otherwise: keep the authored size and pivot: unit scale, or the source's own unit in metres
+ *   when its file says (an FBX authored in centimetres comes in at a hundredth).
  * The root transform is reset first, so re-applying different settings to an
  * already-normalized model is safe.
  */
@@ -47,6 +51,12 @@ export const normalizeModel = (
   group.updateMatrixWorld(true); 
 
   if (!normalize) {
+      const unit = group.userData[SOURCE_METRES_PER_UNIT];
+      if (typeof unit === 'number' && Number.isFinite(unit) && unit > 0 && unit !== 1) {
+          group.scale.setScalar(unit);
+          group.updateMatrix();
+          return [unit, unit, unit];
+      }
       return [1, 1, 1];
   }
 

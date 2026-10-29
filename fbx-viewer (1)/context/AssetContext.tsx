@@ -25,7 +25,7 @@ interface AssetContextType {
   models: LoadedModelData[];
   addModel: (file: File, category: AssetCategory) => Promise<void>;
   importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory) => Promise<void>;
-  reimportModel: (modelId: string, file: File) => Promise<void>;
+  reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings) => Promise<void>;
   updateModel: (id: string, updates: AssetInfoUpdate) => Promise<void>;
   removeModel: (id: string) => void;
   placeInScene: (id: string) => void; 

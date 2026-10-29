@@ -4,7 +4,7 @@ import { LoadedModelData } from '../types';
 import { optimizeModelMaterials } from './processing/ModelMaterials';
 import { compressModelTextures } from './textureCompression/compressTextures';
 import { withGltfDecoders } from './gltfDecoders';
-import { normalizeModel } from './processing/ModelTransforms';
+import { normalizeModel, SOURCE_METRES_PER_UNIT } from './processing/ModelTransforms';
 import { disposeObject } from './processing/ModelLifecycle';
 import { UV_ORIGIN_TOP_LEFT_KEY } from './materialOverrides';
 import { frontendDiagnostics } from '../diagnostics/runtime';
@@ -97,12 +97,19 @@ type WorkerFormat = 'fbx' | 'obj';
 
 type WorkerResponse =
   | { type: 'progress'; progress: number; phase: ImportPhase; workerState: string }
-  | { type: 'complete'; glb: ArrayBuffer; itemCount: number; clipCount: number }
+  | { type: 'complete'; glb: ArrayBuffer; itemCount: number; clipCount: number; missingTextures: number; metresPerUnit: number | null }
   | { type: 'error'; message: string };
 
 type ParsedGltf = Awaited<ReturnType<GLTFLoader['parseAsync']>>;
 
-interface ParsedModel { object: THREE.Group; animations: THREE.AnimationClip[] }
+interface ParsedModel {
+  object: THREE.Group;
+  animations: THREE.AnimationClip[];
+  /** Textures the source names but does not contain, imported without them. */
+  missingTextures?: number;
+  /** Metres per unit the source says it is authored in (FBX), when it says. */
+  metresPerUnit?: number | null;
+}
 
 const abortError = (): DOMException => new DOMException('Asset import was cancelled.', 'AbortError');
 
@@ -156,7 +163,7 @@ const parseOffThread = async (
     phase: 'worker_creation', workerState: 'created', queueState: 'worker_active', assetAlias: diagnostics.assetAlias, progressBucket: 0,
   }, diagnostics);
   try {
-    const converted = await new Promise<{ glb: ArrayBuffer; itemCount: number; clipCount: number }>((resolve, reject) => {
+    const converted = await new Promise<{ glb: ArrayBuffer; itemCount: number; clipCount: number; missingTextures: number; metresPerUnit: number | null }>((resolve, reject) => {
       const onAbort = () => {
         worker.terminate();
         reject(abortError());
@@ -203,7 +210,8 @@ const parseOffThread = async (
     throwIfAborted(signal);
     const object = loaded.scene;
     object.animations = loaded.animations;
-    return { object, animations: loaded.animations };
+    if (converted.missingTextures > 0) frontendDiagnostics.warning('model_textures_missing', converted.missingTextures);
+    return { object, animations: loaded.animations, missingTextures: converted.missingTextures, metresPerUnit: converted.metresPerUnit };
   } finally {
     worker.terminate();
   }
@@ -434,6 +442,8 @@ export const loadModelFile = async (file: File, options: ModelLoadOptions = { no
     nameAnimations(object.animations || [], file.name, format);
 
     let initialScale: [number, number, number] = [1, 1, 1];
+    // The unit the file says it is authored in, for the import setting that keeps its authored size.
+    if (parsed.metresPerUnit) object.userData[SOURCE_METRES_PER_UNIT] = parsed.metresPerUnit;
 
     if (options.normalize) {
       options.onProgress?.(0.96, 'material_optimization_normalization');
@@ -476,7 +486,8 @@ export const loadModelFile = async (file: File, options: ModelLoadOptions = { no
       animations: object.animations || [],
       category: 'Prop',
       isPlacedInScene: false,
-      initialScale
+      initialScale,
+      ...(parsed.missingTextures ? { missingTextures: parsed.missingTextures } : {}),
     };
 
   } catch (err) {

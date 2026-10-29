@@ -151,9 +151,22 @@ On its own the component makes the object a dynamic physics body of the vehicle'
 
 ### Wheels
 
-The vehicle uses the model's own wheels: nodes named like `Wheel_FL`, `FrontLeftTire`, `wheel_rr` or `Rim_RL` (a tyre and the rim, hub or brake disc sharing its centre turn as one wheel). Steering wheels, spares and wheel arches are left out. Which wheels are at the front and which on the left follows where they sit: the model's front is +Z. Each wheel is measured from its mesh, so its pivot does not have to be at its centre. A model that names fewer than three wheels gets four drawn at the corners of its body, so any model can be driven while you make a proper one.
+The vehicle uses the model's own wheels: nodes named like `Wheel_FL`, `wheel_br`, `FrontLeftTire` or `Rim_RL` (a tyre and the rim, hub or brake disc sharing its centre turn as one wheel). Steering wheels, spares and wheel arches are left out. Each wheel is measured from its mesh, so its pivot does not have to be at its centre. A model that names fewer than three wheels gets four drawn at the corners of its body, so any model can be driven while you make a proper one.
+
+Which way the model faces comes from its wheel names: front and rear (`fl`, `rr`, `front`, `back`) tell it which end is the front, and left and right which side is which, whatever axis the model was built along. Set **Model faces** when the names say nothing (the front is then +Z) or to override them.
+
+Nodes named with the word `door` (`door_l`, `Door_FR`, a door's window or handle) are the doors: a door's parts swing together about its front edge, and the driver's door (the front one on the left) opens as the driver gets in and out and shuts behind them.
 
 In the editor each vehicle shows a ring where each of its wheels is and an arrow along the way it drives.
+
+### How it drives
+
+Each wheel is simulated on its own, the way driving games do:
+
+- **Suspension**: a spring and damper per wheel, with a bump stop at the end of its travel. The wheel finds the ground under it exactly, and the tyre's own shape catches a kerb or an edge under the tread. The car leans in corners, squats when it pulls away and dives when it brakes, and the load on each tyre moves with it.
+- **Tyres**: grip comes from how much each tyre slips, lengthways and sideways (a Pacejka "magic formula" curve), shared between the two (a tyre braking hard can corner less), and grows with the load on it a little less than in step. Past its peak a tyre lets go: a locked wheel slides and a spinning one loses its pull.
+- **Engine and gearbox**: an engine torque curve from its power, through a gearbox geared for the top speed, a clutch that slips to pull away, and a differential to the driven wheels. It changes up near the redline, down as it slows, and kicks down when you floor it.
+- **Assists**: **ABS** lets a locking wheel's brake off so it still steers; **traction control** trims the throttle to hold the driven wheels at the slip that pulls hardest; **stability control** brakes a single wheel to catch a slide or tighten a turn that runs wide, and eases off the power while it does.
 
 ### Driving and handling
 
@@ -170,12 +183,16 @@ While driving, the view becomes a chase camera behind the vehicle (the mouse loo
 | Setting | What it does |
 |---|---|
 | Mass | Total mass in kilograms |
-| Drive | Which wheels the engine drives: rear, front or all |
-| Power | Engine power in kW. A launch is held to what road tyres put down (about 0.6 g); above that the engine's power sets the pull |
-| Top speed, Reverse speed | In km/h; the engine eases off as it nears them |
-| Braking | Deceleration at full brake, m/s² (9 is a road car) |
+| Model faces | Which way the model's front points: Auto reads it from the wheel names |
+| Drive | Which wheels the engine drives: rear, front or all (all splits it 40/60 front to rear) |
+| Power | Peak engine power in kW. The default 120 kW car does 0-100 km/h in about 9 s |
+| Top speed, Reverse speed | In km/h; the gearbox is geared so the top gear reaches top speed at the redline |
+| Gears | Forward gears, 1-10 |
+| Differential | Open (the easier wheel gets the power), Limited slip (default; most of it reaches the wheel with grip) or Locked (both turn together: drifts and off-road) |
+| Braking | Deceleration the brakes ask for at full pedal, m/s² (9 is a road car); the tyres' grip limits what you get |
+| ABS, Traction control, Stability control | The driving assists, all on by default. Turn stability control off for a car that drifts |
 | Steering lock, Steering at top speed | The front wheels' angle at full lock, and the share of it left at top speed. The inner wheel turns more than the outer one, so both roll round the same centre |
-| Tyre grip, Handbrake grip | Tyre friction, and the share of the rear grip left with the handbrake on |
+| Tyre grip, Handbrake grip | The tyres' friction coefficient (1.2 is a good road tyre; 0.5 is like a wet road, 0.2 like snow), and the share of the rear grip left with the handbrake on |
 | Suspension travel, stiffness, damping | Spring length, how firm it is (the car sags 9.81 / (4 x stiffness) metres at rest) and how quickly bouncing dies away |
 | Anti-roll | Keeps the body flat in corners |
 | Downforce | Pushes it onto the road harder the faster it goes |
@@ -183,7 +200,7 @@ While driving, the view becomes a chase camera behind the vehicle (the mouse loo
 | Wheel radius | Overrides the measured wheel size (0 measures) |
 | Player can drive | Off for vehicles only scripts or the AI drive |
 | AI path, AI cruise speed | A Spline object the vehicle drives along whenever the player is not driving it, and its speed there |
-| Engine sound, Engine volume | An audio asset of an engine loop, pitched up with the revs; without one the engine is synthesized. Tyres squeal when it slides |
+| Engine sound, Engine volume | An audio asset of an engine loop, pitched with the revs; without one the engine is synthesized. Tyres squeal when they slide |
 
 ### AI driving
 

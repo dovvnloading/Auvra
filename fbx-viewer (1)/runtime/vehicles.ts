@@ -1,24 +1,27 @@
 import * as THREE from 'three';
 import type { LevelComponent } from '../types';
+import type { DifferentialKind } from './vehicleSim';
 
 /**
  * VEHICLES
  *
- * Wheeled vehicles on Rapier's ray-cast vehicle controller: a dynamic chassis body held up by a
- * spring and damper ray under each wheel, pushed along by tyre friction. This module holds what is
- * not tied to React or a running world, so it can be tested on its own:
+ * Wheeled vehicles: a dynamic chassis body held up by a suspension under each wheel and driven by
+ * its tyres (runtime/vehicleSim.ts holds the physics). This module holds what is not tied to React
+ * or a running world, so it can be tested on its own:
  *
  * - settings, read from the Vehicle component's props;
- * - the drive model: throttle, brakes, reverse, handbrake and speed-sensitive Ackermann steering,
- *   with an engine of fixed power, a soft limiter at top speed and a gearbox for the engine note;
- * - finding the model's own wheels by name (Wheel_FL, FrontLeftTire, rim_rr ...), or laying out
- *   wheels at the corners of a model that has none;
+ * - the driver's controls: throttle, brakes, reverse from a stop, handbrake and speed-sensitive
+ *   Ackermann steering;
+ * - finding the model's own wheels by name (Wheel_FL, FrontLeftTire, rim_rr ...) and which way the
+ *   model faces (from wheel names such as fl and rr, or a setting), or laying out wheels at the
+ *   corners of a model that has none;
  * - AI driving along a spline: pure-pursuit steering and a speed plan that brakes for corners
  *   and for the end of an open path;
  * - the play session's vehicles: which one the player drives, the Interact prompt and the HUD.
  *
- * Frames: a vehicle's body frame is its object's world transform without scale. +Z is forward,
- * +Y up and +X the vehicle's left (the model faces +Z, so its right hand is -X).
+ * Frames: a vehicle's body frame is its object's world transform without scale. Its vehicle frame
+ * is the body frame turned about +Y to the way the model faces: +Z forward, +Y up and +X the
+ * vehicle's left (so its right hand is -X).
  */
 
 export const VEHICLE_COMPONENT_TYPE = 'vehicle';
@@ -30,8 +33,12 @@ export const VEHICLE_COMPONENT_TYPE = 'vehicle';
 export const VEHICLE_SHELL_MASS_SHARE = 0.1;
 
 export type VehicleDrive = 'rear' | 'front' | 'all';
+/** Which way the model's front points in its own space; auto reads it from the wheel names (else +Z). */
+export type VehicleFacing = 'auto' | '+z' | '-z' | '+x' | '-x';
 
 const DRIVES: readonly VehicleDrive[] = ['rear', 'front', 'all'];
+const FACINGS: readonly VehicleFacing[] = ['auto', '+z', '-z', '+x', '-x'];
+const DIFFERENTIALS: readonly DifferentialKind[] = ['open', 'limited', 'locked'];
 
 export interface VehicleSettings {
     /** kg. */
@@ -39,6 +46,14 @@ export interface VehicleSettings {
     drive: VehicleDrive;
     /** Engine power, kW. */
     power: number;
+    /** Forward gears. */
+    gears: number;
+    differential: DifferentialKind;
+    /** Anti-lock brakes. */
+    abs: boolean;
+    tractionControl: boolean;
+    stabilityControl: boolean;
+    facing: VehicleFacing;
     /** Top speed forward, km/h. */
     maxSpeed: number;
     /** Top speed in reverse, km/h. */
@@ -49,7 +64,7 @@ export interface VehicleSettings {
     steerAngle: number;
     /** Share of the lock left at top speed (0-1): less steering at speed keeps it stable. */
     steerAtSpeed: number;
-    /** Tyre grip: friction coefficient (1 is a road tyre; more grips harder). */
+    /** Tyre grip: peak friction coefficient (1 is a road tyre, 1.3 a sports tyre). */
     grip: number;
     /** Share of the rear grip the handbrake leaves (0-1): lower slides more. */
     handbrakeGrip: number;
@@ -83,12 +98,18 @@ export const VEHICLE_DEFAULTS: VehicleSettings = {
     mass: 1200,
     drive: 'rear',
     power: 120,
+    gears: 6,
+    differential: 'limited',
+    abs: true,
+    tractionControl: true,
+    stabilityControl: true,
+    facing: 'auto',
     maxSpeed: 160,
     reverseSpeed: 30,
     braking: 9,
     steerAngle: 35,
     steerAtSpeed: 0.3,
-    grip: 1.6,
+    grip: 1.2,
     handbrakeGrip: 0.35,
     suspensionTravel: 0.3,
     suspensionStiffness: 30,
@@ -115,6 +136,12 @@ export const readVehicleSettings = (component: Pick<LevelComponent, 'props'>): V
         mass: clampNumber(p.mass, d.mass, 1, 100000),
         drive: typeof p.drive === 'string' && (DRIVES as readonly string[]).includes(p.drive) ? p.drive as VehicleDrive : d.drive,
         power: clampNumber(p.power, d.power, 0, 5000),
+        gears: Math.round(clampNumber(p.gears, d.gears, 1, 10)),
+        differential: typeof p.differential === 'string' && (DIFFERENTIALS as readonly string[]).includes(p.differential) ? p.differential as DifferentialKind : d.differential,
+        abs: typeof p.abs === 'boolean' ? p.abs : d.abs,
+        tractionControl: typeof p.tractionControl === 'boolean' ? p.tractionControl : d.tractionControl,
+        stabilityControl: typeof p.stabilityControl === 'boolean' ? p.stabilityControl : d.stabilityControl,
+        facing: typeof p.facing === 'string' && (FACINGS as readonly string[]).includes(p.facing) ? p.facing as VehicleFacing : d.facing,
         maxSpeed: clampNumber(p.maxSpeed, d.maxSpeed, 1, 1000),
         reverseSpeed: clampNumber(p.reverseSpeed, d.reverseSpeed, 0, 500),
         braking: clampNumber(p.braking, d.braking, 0, 100),
@@ -157,90 +184,57 @@ export interface VehicleControls {
 
 export const NO_CONTROLS: Readonly<VehicleControls> = { throttle: 0, brake: 0, steer: 0, handbrake: false };
 
-/** Gearbox stages as shares of top speed; the engine note rises through each. */
-const GEAR_TOPS = [0.24, 0.4, 0.56, 0.71, 0.86, 1.02];
-export const IDLE_RPM = 850;
-export const REDLINE_RPM = 6800;
 /** Below this the vehicle counts as stopped: the brake pedal starts reversing, throttle starts forward. */
 const STOPPED_SPEED = 0.8;
 /** Steering moves towards the wheel's position at this many full locks per second, and back faster. */
 const STEER_RATE = 2.2;
 const STEER_RETURN_RATE = 3.5;
-/** Rolling resistance and engine braking while coasting, as a deceleration (m/s²). */
-const COAST_DECELERATION = 0.55;
 /** Front share of the brakes. */
-const FRONT_BRAKE_SHARE = 0.6;
+export const FRONT_BRAKE_SHARE = 0.6;
 /** Front share of the drive on all-wheel drive. */
-const FRONT_DRIVE_SHARE = 0.4;
-/** Reverse pushes this share of the engine's force. */
-const REVERSE_FORCE_SHARE = 0.6;
+export const FRONT_DRIVE_SHARE = 0.4;
 
-/** The drive model's own state between steps. */
-export interface VehicleDriveState {
+/** The controls' own state between steps. */
+export interface VehicleControlState {
     /** Current front-wheel steering, radians, positive turning right. */
     steer: number;
-    /** 1-6 forward, -1 reverse. */
-    gear: number;
-    rpm: number;
     reversing: boolean;
 }
 
-export const createDriveState = (): VehicleDriveState => ({ steer: 0, gear: 1, rpm: IDLE_RPM, reversing: false });
+export const createControlState = (): VehicleControlState => ({ steer: 0, reversing: false });
 
-/** What one step asks of the wheels, split by axle. Forces in newtons, steering in radians. */
-export interface VehicleDriveOutput {
-    /** Total drive force, positive forward. */
-    driveForce: number;
-    /** Front share of `driveForce` (0-1). */
-    frontDrive: number;
-    /** Total brake force on the front and on the rear wheels. */
-    frontBrake: number;
-    rearBrake: number;
-    /** The handbrake is on: rear grip drops to settings.handbrakeGrip. */
+/** What the controls ask of the vehicle this step. */
+export interface VehiclePedals {
+    /** Engine throttle, 0-1 (the brake pedal while reversing). */
+    throttle: number;
+    /** Service brakes, 0-1. */
+    brake: number;
+    /** In reverse gear. */
+    reverse: boolean;
     handbrake: boolean;
-    /** Steering angle of the front axle's centre, positive turning right. */
+    /** Steering angle of the front axle's centre, radians, positive turning right. */
     steer: number;
-    /** Throttle the engine is under (0-1), for the engine note. */
-    load: number;
 }
-
-/**
- * Most a launch accelerates the vehicle, as a share of gravity: about what road tyres put down. More
- * at a standstill pitches a short car up onto its rear wheels, where it cannot steer.
- */
-export const LAUNCH_ACCELERATION = 0.6;
-
-/** Engine force at `speed` (m/s, any sign) for full throttle: constant power, held under the launch limit at low speed, a soft limiter at top speed. */
-export const engineForce = (settings: Pick<VehicleSettings, 'power' | 'maxSpeed' | 'mass'>, speed: number, limit = settings.maxSpeed * KMH): number => {
-    const power = settings.power * 1000;
-    const top = Math.max(0.1, limit);
-    const v = Math.abs(speed);
-    const force = Math.min(power / Math.max(v, 0.5), settings.mass * GRAVITY * LAUNCH_ACCELERATION);
-    // The last 8% below the limit fades the force out, so top speed is held without bouncing off it.
-    const fade = Math.min(1, Math.max(0, (1 - v / top) / 0.08));
-    return force * fade;
-};
 
 const moveTowards = (value: number, target: number, step: number): number =>
     value < target ? Math.min(target, value + step) : Math.max(target, value - step);
 
 /**
- * One step of the drive model. `speed` is the chassis's forward speed (m/s, negative rolling
+ * One step of the driver's controls. `speed` is the chassis's forward speed (m/s, negative rolling
  * backwards). Throttle drives forward and brakes a car rolling back; the brake pedal brakes a car
- * rolling forward and reverses one that has stopped.
+ * rolling forward and reverses one that has stopped, up to the reverse speed. Steering eases
+ * towards the wheel's position, with less lock at speed.
  */
-export const stepVehicleDrive = (
-    state: VehicleDriveState,
+export const stepVehicleControls = (
+    state: VehicleControlState,
     controls: VehicleControls,
     speed: number,
     dt: number,
-    settings: VehicleSettings,
-): VehicleDriveOutput => {
+    settings: Pick<VehicleSettings, 'maxSpeed' | 'reverseSpeed' | 'steerAngle' | 'steerAtSpeed'>,
+): VehiclePedals => {
     const throttle = Math.min(1, Math.max(0, controls.throttle || 0));
     const pedal = Math.min(1, Math.max(0, controls.brake || 0));
     const steerInput = Math.min(1, Math.max(-1, controls.steer || 0));
-    const weight = settings.mass * GRAVITY;
-    const brakeForce = settings.mass * settings.braking;
 
     // Which way the driver means to go: reverse is chosen only from a stop.
     if (speed > STOPPED_SPEED) state.reversing = false;
@@ -248,27 +242,17 @@ export const stepVehicleDrive = (
     else if (pedal > 0 && throttle === 0) state.reversing = true;
     else if (throttle > 0) state.reversing = false;
 
-    let driveForce = 0;
-    let braking = 0;
-    let load = 0;
+    let engine = 0;
+    let brake = 0;
     if (state.reversing) {
-        // Throttle brakes a car rolling backwards; the pedal drives it back.
-        if (throttle > 0 && speed < -STOPPED_SPEED) braking = throttle;
-        else if (pedal > 0) {
-            driveForce = -pedal * REVERSE_FORCE_SHARE * engineForce(settings, speed, settings.reverseSpeed * KMH);
-            load = pedal;
-        }
+        // Throttle brakes a car rolling backwards; the pedal drives it back, up to the reverse speed.
+        if (throttle > 0 && speed < -STOPPED_SPEED) brake = throttle;
+        else if (pedal > 0 && -speed < settings.reverseSpeed * KMH) engine = pedal;
     } else {
-        if (pedal > 0 && speed > STOPPED_SPEED) braking = pedal;
-        else if (throttle > 0) {
-            driveForce = throttle * engineForce(settings, speed);
-            load = throttle;
-        }
+        if (pedal > 0 && speed > STOPPED_SPEED) brake = pedal;
+        else if (throttle > 0) engine = throttle;
     }
-    const coasting = driveForce === 0 && braking === 0;
-    const totalBrake = braking * brakeForce + (coasting ? settings.mass * COAST_DECELERATION : 0);
 
-    // Steering: less lock at speed, eased towards the wheel's position.
     const atSpeed = Math.min(1, Math.abs(speed) / Math.max(1, settings.maxSpeed * KMH));
     const lock = THREE.MathUtils.degToRad(settings.steerAngle) * (1 - (1 - settings.steerAtSpeed) * atSpeed);
     const wanted = steerInput * lock;
@@ -276,31 +260,7 @@ export const stepVehicleDrive = (
     const rate = (returning ? STEER_RETURN_RATE : STEER_RATE) * Math.max(lock, 1e-3) * dt;
     state.steer = moveTowards(state.steer, wanted, rate);
 
-    // Gearbox and revs, for the engine note.
-    const top = Math.max(1, settings.maxSpeed * KMH);
-    const v = Math.abs(speed);
-    if (state.reversing && v > 0.1) state.gear = -1;
-    else {
-        if (state.gear < 1) state.gear = 1;
-        while (state.gear < GEAR_TOPS.length && v > GEAR_TOPS[state.gear - 1] * top * 0.97) state.gear++;
-        while (state.gear > 1 && v < GEAR_TOPS[state.gear - 2] * top * 0.62) state.gear--;
-    }
-    const gearIndex = state.gear < 0 ? 0 : state.gear - 1;
-    const gearLow = gearIndex === 0 ? 0 : GEAR_TOPS[gearIndex - 1] * top * 0.62;
-    const gearTop = GEAR_TOPS[gearIndex] * top;
-    const inGear = Math.min(1, Math.max(0, (v - gearLow * 0.5) / Math.max(0.1, gearTop - gearLow * 0.5)));
-    const wantedRpm = Math.max(IDLE_RPM + load * 900, IDLE_RPM + (REDLINE_RPM - IDLE_RPM) * inGear);
-    state.rpm += (wantedRpm - state.rpm) * Math.min(1, dt * 8);
-
-    return {
-        driveForce,
-        frontDrive: settings.drive === 'front' ? 1 : settings.drive === 'all' ? FRONT_DRIVE_SHARE : 0,
-        frontBrake: totalBrake * FRONT_BRAKE_SHARE,
-        rearBrake: totalBrake * (1 - FRONT_BRAKE_SHARE) + (controls.handbrake ? weight * 1.5 : 0),
-        handbrake: controls.handbrake,
-        steer: state.steer,
-        load,
-    };
+    return { throttle: engine, brake, reverse: state.reversing, handbrake: controls.handbrake, steer: state.steer };
 };
 
 /**
@@ -332,6 +292,25 @@ const nameWords = (name: string): string[] =>
 
 const WHEEL_WORDS = new Set(['wheel', 'wheels', 'tire', 'tires', 'tyre', 'tyres', 'rim', 'rims', 'hub', 'hubs', 'hubcap']);
 const NOT_WHEEL_WORDS = new Set(['steering', 'steer', 'spare', 'well', 'arch', 'guard', 'fender', 'cover', 'mud', 'flap', 'housing']);
+
+/** Where a wheel's name puts it: fl, rr, lf, front, rear, left, right ...; undefined where it says nothing. */
+export const wheelNameTags = (name: string): { front?: boolean; left?: boolean } => {
+    const tags: { front?: boolean; left?: boolean } = {};
+    for (const word of nameWords(name)) {
+        if (word === 'front') tags.front = true;
+        else if (word === 'rear' || word === 'back') tags.front = false;
+        else if (word === 'left') tags.left = true;
+        else if (word === 'right') tags.left = false;
+        else if (/^[fbr][lr]$/.test(word)) {
+            tags.front = word[0] === 'f';
+            tags.left = word[1] === 'l';
+        } else if (/^[lr][fb]$/.test(word)) {
+            tags.left = word[0] === 'l';
+            tags.front = word[1] === 'f';
+        }
+    }
+    return tags;
+};
 
 /** True for a node named like a road wheel (or its tyre, rim or hub), not a steering wheel, spare or arch. */
 export const isWheelName = (name: string): boolean => {
@@ -373,12 +352,21 @@ export interface VehicleWheel {
 }
 
 export interface VehicleLayout {
+    /** Wheels in the vehicle frame. */
     wheels: VehicleWheel[];
-    /** The bounds of the body without its wheels, in the chassis frame. */
+    /** The bounds of the body without its wheels, in the vehicle frame. */
     chassis: THREE.Box3;
     /** True when the wheels were laid out from the body because the model names none. */
     generated: boolean;
+    /** Turns the vehicle frame into the body frame (a quarter turn about +Y, or none). */
+    facing: THREE.Quaternion;
 }
+
+const FACING_YAW: Record<Exclude<VehicleFacing, 'auto'>, number> = { '+z': 0, '-z': Math.PI, '+x': Math.PI / 2, '-x': -Math.PI / 2 };
+
+/** The facing whose front is nearest the body-frame direction (x, z). */
+const facingOf = (x: number, z: number): Exclude<VehicleFacing, 'auto'> =>
+    Math.abs(z) >= Math.abs(x) ? (z >= 0 ? '+z' : '-z') : (x >= 0 ? '+x' : '-x');
 
 const _inverse = new THREE.Matrix4();
 const _frame = new THREE.Matrix4();
@@ -393,6 +381,13 @@ export const chassisFrame = (host: THREE.Object3D, out = new THREE.Matrix4()): T
     host.matrixWorld.decompose(_position, _quaternion, _scale);
     return out.compose(_position, _quaternion, new THREE.Vector3(1, 1, 1));
 };
+
+const UNIT = new THREE.Vector3(1, 1, 1);
+const ORIGIN = new THREE.Vector3();
+
+/** The vehicle frame of `host`: its chassis frame turned to the way its model faces. */
+export const vehicleFrame = (host: THREE.Object3D, facing: THREE.Quaternion, out = new THREE.Matrix4()): THREE.Matrix4 =>
+    chassisFrame(host, out).multiply(_frame.compose(ORIGIN, facing, UNIT));
 
 /** Bounds, in the frame `toFrame` maps world space into, of the meshes under `node`; `skip` leaves out subtrees. */
 const boundsInFrame = (node: THREE.Object3D, toFrame: THREE.Matrix4, out: THREE.Box3, skip?: (node: THREE.Object3D) => boolean): THREE.Box3 => {
@@ -426,6 +421,7 @@ export const planVehicleLayout = (
     host: THREE.Object3D,
     radius = 0,
     skip?: (node: THREE.Object3D) => boolean,
+    facingSetting: VehicleFacing = 'auto',
 ): VehicleLayout => {
     host.updateWorldMatrix(true, true);
     _inverse.copy(chassisFrame(host, _frame)).invert();
@@ -433,53 +429,78 @@ export const planVehicleLayout = (
     const nodes = findWheelNodes(host, skip);
     const wheelSet = new Set(nodes);
     const isWheel = (node: THREE.Object3D) => wheelSet.has(node) || Boolean(skip?.(node));
-    const chassis = boundsInFrame(host, toChassis, new THREE.Box3(), isWheel);
+    const bodyBox = boundsInFrame(host, toChassis, new THREE.Box3(), isWheel);
 
-    // Group nodes that share a centre (tyre, rim, brake disc) into one wheel.
-    const groups: { box: THREE.Box3; nodes: THREE.Object3D[] }[] = [];
+    // Group nodes that share a centre (tyre, rim, brake disc) into one wheel; its name tags say where it sits.
+    const groups: { box: THREE.Box3; nodes: THREE.Object3D[]; front?: boolean; left?: boolean }[] = [];
     for (const node of nodes) {
         const box = boundsInFrame(node, toChassis, new THREE.Box3(), skip);
         if (box.isEmpty()) continue;
         const size = box.getSize(new THREE.Vector3());
         const centre = box.getCenter(new THREE.Vector3());
-        const own = Math.max(size.y, size.z) / 2;
+        const own = Math.max(size.x, size.y, size.z) / 2;
+        const tags = wheelNameTags(node.name);
         const match = groups.find(group => group.box.getCenter(_position).distanceTo(centre) < SAME_WHEEL * Math.max(own, 0.05));
-        if (match) {
-            match.box.union(box);
-            match.nodes.push(node);
-        } else groups.push({ box, nodes: [node] });
+        const group = match ?? { box: new THREE.Box3(), nodes: [] as THREE.Object3D[] };
+        group.box.union(box);
+        group.nodes.push(node);
+        if (tags.front !== undefined) group.front = tags.front;
+        if (tags.left !== undefined) group.left = tags.left;
+        if (!match) groups.push(group);
     }
 
+    // Which way the model faces: the setting, else from the front and rear wheels' names, else +Z.
+    let facingName: Exclude<VehicleFacing, 'auto'> = facingSetting === 'auto' ? '+z' : facingSetting;
+    if (facingSetting === 'auto') {
+        const front = new THREE.Vector3();
+        const rear = new THREE.Vector3();
+        let fronts = 0;
+        let rears = 0;
+        for (const group of groups) {
+            if (group.front === true) { front.add(group.box.getCenter(_position)); fronts++; }
+            if (group.front === false) { rear.add(group.box.getCenter(_position)); rears++; }
+        }
+        if (fronts && rears) {
+            front.divideScalar(fronts).sub(rear.divideScalar(rears));
+            facingName = facingOf(front.x, front.z);
+        }
+    }
+    const facing = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), FACING_YAW[facingName]);
+    // Body frame into the vehicle frame.
+    const toVehicle = new THREE.Matrix4().makeRotationFromQuaternion(facing.clone().invert());
+    const chassis = bodyBox.isEmpty() ? bodyBox : bodyBox.clone().applyMatrix4(toVehicle);
+
     if (groups.length >= 3) {
+        const boxes = groups.map(group => group.box.clone().applyMatrix4(toVehicle));
         const mean = new THREE.Vector3();
-        for (const group of groups) mean.add(group.box.getCenter(_position));
-        mean.divideScalar(groups.length);
-        const wheels = groups.map(group => {
-            const size = group.box.getSize(new THREE.Vector3());
-            const centre = group.box.getCenter(new THREE.Vector3());
+        for (const box of boxes) mean.add(box.getCenter(_position));
+        mean.divideScalar(boxes.length);
+        const wheels = groups.map((group, index) => {
+            const size = boxes[index].getSize(new THREE.Vector3());
+            const centre = boxes[index].getCenter(new THREE.Vector3());
             return {
                 centre,
                 radius: radius > 0 ? radius : Math.max(0.02, Math.max(size.y, size.z) / 2),
                 width: Math.max(0.02, size.x),
-                front: centre.z > mean.z,
-                left: centre.x > mean.x,
+                front: group.front ?? centre.z > mean.z,
+                left: group.left ?? centre.x > mean.x,
                 nodes: group.nodes,
             };
         });
         if (chassis.isEmpty()) for (const wheel of wheels) chassis.expandByPoint(wheel.centre);
-        return { wheels, chassis, generated: false };
+        return { wheels, chassis, generated: false, facing };
     }
 
     // No wheels in the model: four at the corners of its body, poking out below it.
-    const body = chassis.isEmpty() ? new THREE.Box3(new THREE.Vector3(-0.5, 0, -1), new THREE.Vector3(0.5, 1, 1)) : chassis;
-    const size = body.getSize(new THREE.Vector3());
+    const box = chassis.isEmpty() ? new THREE.Box3(new THREE.Vector3(-0.5, 0, -1), new THREE.Vector3(0.5, 1, 1)) : chassis;
+    const size = box.getSize(new THREE.Vector3());
     const r = radius > 0 ? radius : THREE.MathUtils.clamp(Math.min(size.x, size.z) * 0.2, 0.08, 1.2);
     const width = THREE.MathUtils.clamp(r * 0.7, 0.04, size.x / 3);
     const x = Math.max(0.05, size.x / 2 - width / 2);
     const z = Math.max(0.1, size.z / 2 - r * 1.1);
-    const centreX = (body.min.x + body.max.x) / 2;
-    const centreZ = (body.min.z + body.max.z) / 2;
-    const y = body.min.y + r * 0.45;
+    const centreX = (box.min.x + box.max.x) / 2;
+    const centreZ = (box.min.z + box.max.z) / 2;
+    const y = box.min.y + r * 0.45;
     const wheels: VehicleWheel[] = [];
     for (const front of [true, false]) {
         for (const left of [true, false]) {
@@ -493,7 +514,7 @@ export const planVehicleLayout = (
             });
         }
     }
-    return { wheels, chassis: body.clone(), generated: true };
+    return { wheels, chassis: box.clone(), generated: true, facing };
 };
 
 /** Distance between the front and rear axles and between the left and right wheels. */
@@ -512,17 +533,6 @@ export const wheelGeometry = (wheels: readonly VehicleWheel[]): { wheelbase: num
 /** Static sag of each spring under the car's weight shared by `wheels` wheels. */
 export const restingSag = (settings: Pick<VehicleSettings, 'suspensionStiffness'>, wheels: number): number =>
     GRAVITY / (Math.max(1, wheels) * settings.suspensionStiffness);
-
-/** Spring and damper coefficients for Rapier (it scales them by the chassis mass). */
-export const suspensionCoefficients = (settings: Pick<VehicleSettings, 'suspensionStiffness' | 'suspensionDamping'>): { stiffness: number; compression: number; relaxation: number } => {
-    // Per wheel the damping ratio is c / sqrt(k); rebound is damped harder than compression, as in a road car.
-    const critical = Math.sqrt(settings.suspensionStiffness);
-    return {
-        stiffness: settings.suspensionStiffness,
-        compression: settings.suspensionDamping * critical * 0.7,
-        relaxation: settings.suspensionDamping * critical * 1.3,
-    };
-};
 
 // ---------------------------------------------------------------------------
 // AI driving
@@ -656,6 +666,54 @@ export const driveAlongPath = (
 // ---------------------------------------------------------------------------
 
 /** A vehicle in the running session, as the session and level logic see it. */
+/** One wheel as the simulation last stepped it. */
+export interface WheelTelemetry {
+    front: boolean;
+    left: boolean;
+    /** On the ground. */
+    contact: boolean;
+    /** Suspension load, N. */
+    load: number;
+    /** Longitudinal slip ratio: positive spinning, negative locking. */
+    slipRatio: number;
+    /** Slip angle, radians. */
+    slipAngle: number;
+    /** Spin, rad/s. */
+    omega: number;
+    /** Suspension compression, metres from full extension. */
+    compression: number;
+    /** Where the tyre touches the ground, world space (meaningful while in contact). */
+    contactPoint: THREE.Vector3;
+    /** The ground's normal under the tyre, world space. */
+    contactNormal: THREE.Vector3;
+    /** The contact's speed over the ground, m/s. */
+    groundSpeed: number;
+}
+
+/** The vehicle's state for effects, sound, HUDs and debugging: read it, never write it. */
+export interface VehicleTelemetry {
+    /** Forward speed, m/s. */
+    speed: number;
+    rpm: number;
+    idleRpm: number;
+    redlineRpm: number;
+    /** Gear engaged (-1 reverse); while shifting, the one being shifted into. */
+    gear: number;
+    /** Seconds left of a gear change under way. */
+    shifting: number;
+    /** What the engine is given after the assists, 0-1. */
+    throttle: number;
+    brake: number;
+    handbrake: boolean;
+    /** Front axle steering, radians, positive right. */
+    steer: number;
+    /** The assists acting this step. */
+    absActive: boolean;
+    tractionActive: boolean;
+    stabilityActive: boolean;
+    wheels: WheelTelemetry[];
+}
+
 export interface VehicleHandle {
     objectId: string;
     /** The object's transform group, which follows the chassis body. */
@@ -673,6 +731,8 @@ export interface VehicleHandle {
     exitPoint(out: THREE.Vector3): THREE.Vector3 | null;
     /** Controls a level script set, overriding the AI path until released (null). */
     setScriptControls(controls: VehicleControls | null): void;
+    /** The simulation's last step, or null before it has run. */
+    telemetry(): VehicleTelemetry | null;
 }
 
 export interface VehicleHud {

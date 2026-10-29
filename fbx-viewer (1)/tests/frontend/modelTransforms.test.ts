@@ -6,7 +6,9 @@ import {
   isDefaultImportSettings,
   normalizeModel,
   resolveImportSettings,
+  SOURCE_METRES_PER_UNIT,
 } from '../../utils/processing/ModelTransforms';
+import { fbxMetresPerUnit, fbxUnitScaleFactor } from '../../utils/processing/fbxUnits';
 
 /** A 2 x 4 x 1 box whose bounds start at (10, -3, 0): off-centre and below the floor. */
 const authoredModel = () => {
@@ -53,6 +55,18 @@ describe('normalizeModel', () => {
     expect(box.max.toArray()).toEqual([12, 1, 1]);
   });
 
+  it("keeps the authored size in metres when the source says it is authored in another unit", () => {
+    const group = authoredModel();
+    group.userData[SOURCE_METRES_PER_UNIT] = 0.01;
+    normalizeModel(group);
+    expect(normalizeModel(group, { normalize: false, targetSize: 5 })).toEqual([0.01, 0.01, 0.01]);
+    const box = worldBounds(group);
+    expect(box.getSize(new THREE.Vector3()).y).toBeCloseTo(0.04, 9);
+    expect(box.min.x).toBeCloseTo(0.1, 9);
+    // Normalizing still fits the target size whatever the unit.
+    expect(normalizeModel(group, { normalize: true, targetSize: 5 })).toEqual([1.25, 1.25, 1.25]);
+  });
+
   it('leaves empty models at unit scale', () => {
     expect(normalizeModel(new THREE.Group(), { normalize: true, targetSize: 3 })).toEqual([1, 1, 1]);
   });
@@ -79,5 +93,43 @@ describe('import settings', () => {
     const animation = { ...model, category: 'Animation', initialScale: [0.01, 0.01, 0.01] } as LoadedModelData;
     applyModelImportSettings(animation, { normalize: true, targetSize: 2 });
     expect(animation.initialScale).toEqual([0.01, 0.01, 0.01]);
+  });
+});
+
+describe('FBX units', () => {
+  /** A binary FBX fragment: the magic, then property records as an FBX writes them. */
+  const binary = (records: [string, string | number][][]) => {
+    const parts: number[] = [...Array.from('Kaydara FBX Binary  \0', c => c.charCodeAt(0)), 0x1a, 0, 0xe8, 0x1c, 0, 0];
+    for (const record of records) {
+      for (const [type, value] of record) {
+        parts.push(type.charCodeAt(0));
+        if (type === 'S') {
+          const text = String(value);
+          parts.push(text.length & 0xff, (text.length >> 8) & 0xff, 0, 0, ...Array.from(text, c => c.charCodeAt(0)));
+        } else {
+          const bytes = new Uint8Array(8);
+          new DataView(bytes.buffer).setFloat64(0, Number(value), true);
+          parts.push(...bytes);
+        }
+      }
+    }
+    return new Uint8Array(parts).buffer;
+  };
+  const property = (name: string, value: number): [string, string | number][] =>
+    [['S', name], ['S', 'double'], ['S', 'Number'], ['S', ''], ['D', value]];
+
+  it('reads the unit a binary FBX is authored in, not its original unit', () => {
+    const file = binary([property('OriginalUnitScaleFactor', 100), property('UnitScaleFactor', 1)]);
+    expect(fbxUnitScaleFactor(file)).toBe(1);
+    expect(fbxMetresPerUnit(file)).toBe(0.01);
+    expect(fbxMetresPerUnit(binary([property('UnitScaleFactor', 100)]))).toBe(1);
+  });
+
+  it('reads an ASCII FBX, and says nothing for a file without the setting or with a bad one', () => {
+    const ascii = new TextEncoder().encode('GlobalSettings:  {\n  P: "UnitScaleFactor", "double", "Number", "",2.54\n}').buffer;
+    expect(fbxUnitScaleFactor(ascii)).toBe(2.54);
+    expect(fbxMetresPerUnit(binary([property('OriginalUnitScaleFactor', 100)]))).toBeNull();
+    expect(fbxMetresPerUnit(binary([property('UnitScaleFactor', 0)]))).toBeNull();
+    expect(fbxMetresPerUnit(new TextEncoder().encode('; FBX 7.4.0 project file').buffer)).toBeNull();
   });
 });

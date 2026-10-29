@@ -4,15 +4,18 @@ import { DEFAULT_MODEL_IMPORT_SETTINGS, ModelImportSettings } from '../../../typ
 import { MAX_MODEL_TARGET_SIZE, resolveImportSettings } from '../../../utils/processing/ModelTransforms';
 
 interface ImportOptionsDialogProps {
-  file: File;
+  /** The file being imported, or the model whose size is being changed. */
+  name: string;
   /** Starting values, e.g. a model's stored settings; defaults to DEFAULT_MODEL_IMPORT_SETTINGS. */
   initialSettings?: ModelImportSettings;
+  /** The confirm button: 'Import' for a new file, 'Apply' for an imported model. */
+  confirmLabel?: string;
   onConfirm: (settings: ModelImportSettings) => void;
   onCancel: () => void;
 }
 
 /** Per-model import options: fit the model to a target size, or keep its authored scale. */
-export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ file, initialSettings, onConfirm, onCancel }) => {
+export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, initialSettings, confirmLabel = 'Import', onConfirm, onCancel }) => {
   const start = resolveImportSettings(initialSettings ?? DEFAULT_MODEL_IMPORT_SETTINGS);
   const [normalize, setNormalize] = useState(start.normalize);
   const [targetSize, setTargetSize] = useState(String(start.targetSize));
@@ -42,7 +45,7 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ file, 
             <Box size={18} className="shrink-0 text-blue-400" />
             <div className="min-w-0">
               <h2 className="text-sm font-bold text-white">Import Options</h2>
-              <p className="truncate text-[10px] text-gray-500" title={file.name}>{file.name}</p>
+              <p className="truncate text-[10px] text-gray-500" title={name}>{name}</p>
             </div>
           </div>
           <button type="button" onClick={onCancel} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white" aria-label="Cancel import"><X size={16} /></button>
@@ -55,9 +58,9 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ file, 
           <p className="text-[10px] text-gray-500">
             {normalize
               ? 'Scales the model so its largest dimension matches the target size, centred and resting on the floor.'
-              : 'Keeps the authored scale and pivot from the source file.'}
+              : 'Keeps the authored size and pivot from the source file, in metres when the file says what unit it is in (FBX).'}
           </p>
-          <label className="block text-[9px] uppercase text-gray-500">Target size (units)
+          <label className="block text-[9px] uppercase text-gray-500">Target size (metres)
             <input
               type="number"
               aria-label="Target size"
@@ -74,7 +77,7 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ file, 
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-gray-800 bg-gray-950 px-5 py-3">
           <button type="button" onClick={onCancel} className="rounded px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-800 hover:text-white">Cancel</button>
-          <button type="submit" disabled={!canConfirm} className="rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-500 disabled:opacity-50">Import</button>
+          <button type="submit" disabled={!canConfirm} className="rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-500 disabled:opacity-50">{confirmLabel}</button>
         </div>
       </form>
     </div>
