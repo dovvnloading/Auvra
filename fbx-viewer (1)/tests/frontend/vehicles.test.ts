@@ -3,25 +3,24 @@ import * as THREE from 'three';
 import {
   ackermannAngles,
   canStepOut,
-  createDriveState,
+  createControlState,
   createVehicleSession,
   driveAlongPath,
-  engineForce,
   findWheelNodes,
   GRAVITY,
   isWheelName,
   KMH,
-  LAUNCH_ACCELERATION,
   planVehicleLayout,
   readVehicleSettings,
   restingSag,
   stepOutOfVehicle,
-  stepVehicleDrive,
-  suspensionCoefficients,
+  stepVehicleControls,
   trackProgress,
   VEHICLE_DEFAULTS,
   VEHICLE_SHELL_MASS_SHARE,
+  vehicleFrame,
   wheelGeometry,
+  wheelNameTags,
   type DrivePath,
   type VehicleHandle,
 } from '../../runtime/vehicles';
@@ -48,76 +47,47 @@ describe('vehicle settings', () => {
   });
 });
 
-describe('drive model', () => {
-  it('launches no harder than the tyres put down, then holds the engine power, then fades out at top speed', () => {
-    const s = settings();
-    expect(engineForce(s, 0)).toBeCloseTo(s.mass * GRAVITY * LAUNCH_ACCELERATION, 6);
-    const v = 25;
-    expect(engineForce(s, v)).toBeCloseTo((s.power * 1000) / v, 6);
-    expect(engineForce(s, s.maxSpeed * KMH)).toBe(0);
-    expect(engineForce(s, -v)).toBeCloseTo(engineForce(s, v), 6);
-  });
+describe('driver controls', () => {
+  const NONE = { throttle: 0, brake: 0, steer: 0, handbrake: false };
 
   it('drives forward on throttle, brakes on the pedal while rolling, and reverses only from a stop', () => {
     const s = settings();
-    const state = createDriveState();
-    const forward = stepVehicleDrive(state, { throttle: 1, brake: 0, steer: 0, handbrake: false }, 0, DT, s);
-    expect(forward.driveForce).toBeGreaterThan(0);
-    expect(forward.load).toBe(1);
+    const state = createControlState();
+    const forward = stepVehicleControls(state, { ...NONE, throttle: 1 }, 0, DT, s);
+    expect(forward).toMatchObject({ throttle: 1, brake: 0, reverse: false });
 
-    const braking = stepVehicleDrive(state, { throttle: 0, brake: 1, steer: 0, handbrake: false }, 15, DT, s);
-    expect(braking.driveForce).toBe(0);
-    expect(braking.frontBrake + braking.rearBrake).toBeCloseTo(s.mass * s.braking, 6);
-    expect(braking.frontBrake).toBeGreaterThan(braking.rearBrake);
+    const braking = stepVehicleControls(state, { ...NONE, brake: 1 }, 15, DT, s);
+    expect(braking).toMatchObject({ throttle: 0, brake: 1, reverse: false });
 
-    const reverse = stepVehicleDrive(state, { throttle: 0, brake: 1, steer: 0, handbrake: false }, 0.2, DT, s);
-    expect(reverse.driveForce).toBeLessThan(0);
-    expect(state.reversing).toBe(true);
-    stepVehicleDrive(state, { throttle: 0, brake: 1, steer: 0, handbrake: false }, -3, DT, s);
-    expect(state.gear).toBe(-1);
+    // Stopped with the pedal held: reverse, the pedal now the throttle.
+    const reverse = stepVehicleControls(state, { ...NONE, brake: 1 }, 0.2, DT, s);
+    expect(reverse).toMatchObject({ throttle: 1, brake: 0, reverse: true });
+    // No faster backwards than the reverse speed.
+    expect(stepVehicleControls(state, { ...NONE, brake: 1 }, -s.reverseSpeed * KMH - 0.1, DT, s).throttle).toBe(0);
 
-    // Rolling backwards, throttle brakes first.
-    const stopping = stepVehicleDrive(state, { throttle: 1, brake: 0, steer: 0, handbrake: false }, -3, DT, s);
-    expect(stopping.driveForce).toBe(0);
-    expect(stopping.frontBrake).toBeGreaterThan(0);
+    // Rolling backwards, throttle brakes first; once stopped it drives forward.
+    expect(stepVehicleControls(state, { ...NONE, throttle: 1 }, -3, DT, s)).toMatchObject({ throttle: 0, brake: 1, reverse: true });
+    expect(stepVehicleControls(state, { ...NONE, throttle: 1 }, 0.1, DT, s)).toMatchObject({ throttle: 1, reverse: false });
   });
 
-  it('coasts on a little braking, and the handbrake locks the rear wheels', () => {
-    const s = settings();
-    const coast = stepVehicleDrive(createDriveState(), { throttle: 0, brake: 0, steer: 0, handbrake: false }, 10, DT, s);
-    expect(coast.driveForce).toBe(0);
-    expect(coast.frontBrake + coast.rearBrake).toBeGreaterThan(0);
-    expect(coast.frontBrake + coast.rearBrake).toBeLessThan(s.mass * 1);
-    const handbrake = stepVehicleDrive(createDriveState(), { throttle: 0, brake: 0, steer: 0, handbrake: true }, 10, DT, s);
-    expect(handbrake.handbrake).toBe(true);
-    expect(handbrake.rearBrake).toBeGreaterThan(s.mass * GRAVITY);
+  it('clamps the pedals and passes the handbrake through', () => {
+    const pedals = stepVehicleControls(createControlState(), { throttle: 4, brake: -2, steer: 0, handbrake: true }, 10, DT, settings());
+    expect(pedals).toMatchObject({ throttle: 1, brake: 0, handbrake: true });
   });
 
   it('eases the steering towards the lock, with less lock at speed', () => {
     const s = settings();
-    const state = createDriveState();
-    const first = stepVehicleDrive(state, { throttle: 0, brake: 0, steer: 1, handbrake: false }, 0, DT, s);
+    const lock = THREE.MathUtils.degToRad(s.steerAngle);
+    const state = createControlState();
+    const first = stepVehicleControls(state, { ...NONE, steer: 1 }, 0, DT, s);
     expect(first.steer).toBeGreaterThan(0);
-    expect(first.steer).toBeLessThan(THREE.MathUtils.degToRad(s.steerAngle));
-    for (let i = 0; i < 120; i++) stepVehicleDrive(state, { throttle: 0, brake: 0, steer: 1, handbrake: false }, 0, DT, s);
-    expect(state.steer).toBeCloseTo(THREE.MathUtils.degToRad(s.steerAngle), 6);
+    expect(first.steer).toBeLessThan(lock);
+    for (let i = 0; i < 120; i++) stepVehicleControls(state, { ...NONE, steer: 1 }, 0, DT, s);
+    expect(state.steer).toBeCloseTo(lock, 6);
 
-    const fast = createDriveState();
-    for (let i = 0; i < 120; i++) stepVehicleDrive(fast, { throttle: 0, brake: 0, steer: 1, handbrake: false }, s.maxSpeed * KMH, DT, s);
-    expect(fast.steer).toBeCloseTo(THREE.MathUtils.degToRad(s.steerAngle) * s.steerAtSpeed, 6);
-  });
-
-  it('shifts up through the gears as it speeds up, the revs rising within each', () => {
-    const s = settings();
-    const state = createDriveState();
-    const gears: number[] = [];
-    for (let speed = 0; speed <= s.maxSpeed * KMH; speed += 0.5) {
-      for (let i = 0; i < 10; i++) stepVehicleDrive(state, { throttle: 1, brake: 0, steer: 0, handbrake: false }, speed, DT, s);
-      gears.push(state.gear);
-    }
-    expect(gears[0]).toBe(1);
-    expect(Math.max(...gears)).toBe(6);
-    expect(gears.every((gear, i) => i === 0 || gear >= gears[i - 1])).toBe(true);
+    const fast = createControlState();
+    for (let i = 0; i < 120; i++) stepVehicleControls(fast, { ...NONE, steer: 1 }, s.maxSpeed * KMH, DT, s);
+    expect(fast.steer).toBeCloseTo(lock * s.steerAtSpeed, 6);
   });
 
   it('turns the inner front wheel more than the outer one (Ackermann)', () => {
@@ -206,12 +176,46 @@ describe('wheels', () => {
     expect(planVehicleLayout(host, 0.6).wheels[0].radius).toBe(0.6);
   });
 
-  it('sags the springs to share the weight, damping rebound harder than compression', () => {
+  it('sags the springs to share the weight', () => {
     expect(restingSag({ suspensionStiffness: 30 }, 4)).toBeCloseTo(GRAVITY / 120, 9);
-    const coefficients = suspensionCoefficients({ suspensionStiffness: 25, suspensionDamping: 0.4 });
-    expect(coefficients.stiffness).toBe(25);
-    expect(coefficients.relaxation).toBeGreaterThan(coefficients.compression);
-    expect((coefficients.compression + coefficients.relaxation) / 2).toBeCloseTo(0.4 * 5, 9);
+  });
+
+  it('reads where a wheel sits from its name', () => {
+    expect(wheelNameTags('wheel fl')).toEqual({ front: true, left: true });
+    expect(wheelNameTags('Wheel_BR')).toEqual({ front: false, left: false });
+    expect(wheelNameTags('RearLeftTyre')).toEqual({ front: false, left: true });
+    expect(wheelNameTags('Tyre.003')).toEqual({});
+  });
+
+  it('turns a model that faces another way into the vehicle frame, from its wheel names', () => {
+    // A car modelled facing -X (its front wheels at -X), so its left is +Z.
+    const host = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.7, 1.8), new THREE.MeshBasicMaterial());
+    body.position.set(0, 0.65, 0);
+    host.add(body);
+    host.add(
+      wheelMesh('wheel fl', -1.35, 0.35, 0.8).rotateY(Math.PI / 2),
+      wheelMesh('wheel fr', -1.35, 0.35, -0.8).rotateY(Math.PI / 2),
+      wheelMesh('wheel bl', 1.35, 0.35, 0.8).rotateY(Math.PI / 2),
+      wheelMesh('wheel br', 1.35, 0.35, -0.8).rotateY(Math.PI / 2),
+    );
+    host.updateMatrixWorld(true);
+    const layout = planVehicleLayout(host);
+    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(layout.facing);
+    expect(forward.x).toBeCloseTo(-1, 6);
+    const fl = layout.wheels.find(wheel => wheel.front && wheel.left)!;
+    // In the vehicle frame the front is +Z and the left +X.
+    expect(fl.centre.z).toBeCloseTo(1.35, 3);
+    expect(fl.centre.x).toBeCloseTo(0.8, 3);
+    expect(fl.radius).toBeCloseTo(0.35, 3);
+    expect(fl.width).toBeCloseTo(0.25, 3);
+    expect(layout.chassis.max.z - layout.chassis.min.z).toBeCloseTo(4.2, 3);
+    // The vehicle frame maps the wheel back onto the model.
+    const world = fl.centre.clone().applyMatrix4(vehicleFrame(host, layout.facing));
+    expect(world.x).toBeCloseTo(-1.35, 3);
+    expect(world.z).toBeCloseTo(0.8, 3);
+    // A set facing wins over the names.
+    expect(new THREE.Vector3(0, 0, 1).applyQuaternion(planVehicleLayout(host, 0, undefined, '+z').facing).z).toBeCloseTo(1, 6);
   });
 });
 
@@ -294,6 +298,7 @@ const handle = (objectId: string, overrides: Partial<VehicleHandle> = {}): Vehic
   reach: () => 2,
   exitPoint: out => out.set(2, 0, 0),
   setScriptControls: vi.fn(),
+  telemetry: () => null,
   ...overrides,
 });
 

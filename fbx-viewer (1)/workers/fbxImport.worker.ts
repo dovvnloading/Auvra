@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
+import { fbxMetresPerUnit } from '../utils/processing/fbxUnits';
 import { writeOpacity } from '../utils/processing/opacityMaps';
 
 // Despite the file name this worker converts every format whose loader parses
@@ -12,7 +13,7 @@ type ImportFormat = 'fbx' | 'obj';
 type ImportRequest = { type: 'parse'; buffer: ArrayBuffer; format?: ImportFormat };
 type ImportPhase = 'fbx_structure_parse' | 'model_structure_parse' | 'embedded_texture_decode' | 'runtime_asset_construction' | 'runtime_asset_transfer';
 type ImportProgress = { type: 'progress'; progress: number; phase: ImportPhase; workerState: 'parsing' | 'decoding' | 'constructing' | 'transferring' };
-type ImportComplete = { type: 'complete'; glb: ArrayBuffer; itemCount: number; clipCount: number };
+type ImportComplete = { type: 'complete'; glb: ArrayBuffer; itemCount: number; clipCount: number; missingTextures: number; metresPerUnit: number | null };
 type ImportFailure = { type: 'error'; message: string };
 
 const scope = self as unknown as DedicatedWorkerGlobalScope;
@@ -93,27 +94,36 @@ const report = (progress: number, phase: ImportPhase, workerState: ImportProgres
   scope.postMessage({ type: 'progress', progress, phase, workerState } satisfies ImportProgress);
 };
 
-const replaceWorkerImages = (object: THREE.Object3D): ImageBitmap[] => {
-  const bitmaps: ImageBitmap[] = [];
+/**
+ * Hands each decoded texture its bitmap. A texture whose image could not be read (an external file
+ * the FBX names that is not inside it) is taken off its material, so the model still imports
+ * untextured there; returns how many textures that was.
+ */
+const replaceWorkerImages = (object: THREE.Object3D, bitmaps: ImageBitmap[]): number => {
+  const missing = new Set<THREE.Texture>();
   object.traverse((child) => {
     const material = (child as THREE.Mesh).material;
     if (!material) return;
     for (const candidate of (Array.isArray(material) ? material : [material])) {
-      for (const value of Object.values(candidate)) {
+      const slots = candidate as unknown as Record<string, unknown>;
+      for (const [key, value] of Object.entries(slots)) {
         const texture = value as THREE.Texture;
-        const image = texture?.isTexture ? texture.image as WorkerImage | undefined : undefined;
-        if (!(image instanceof WorkerImage)) continue;
-        if (image.bitmap) {
+        if (!texture?.isTexture) continue;
+        const image = texture.image as WorkerImage | null | undefined;
+        if (image instanceof WorkerImage && image.bitmap) {
           texture.image = image.bitmap;
           texture.needsUpdate = true;
           bitmaps.push(image.bitmap);
-        } else {
-          texture.image = null;
+        } else if (image instanceof WorkerImage || image == null) {
+          slots[key] = null;
+          candidate.needsUpdate = true;
+          missing.add(texture);
         }
       }
     }
   });
-  return bitmaps;
+  for (const texture of missing) texture.dispose();
+  return missing.size;
 };
 
 /**
@@ -207,7 +217,9 @@ const prepareObjMeshes = (object: THREE.Object3D): number => {
 scope.onmessage = async (event: MessageEvent<ImportRequest>) => {
   if (event.data?.type !== 'parse' || !(event.data.buffer instanceof ArrayBuffer)) return;
   const format: ImportFormat = event.data.format === 'obj' ? 'obj' : 'fbx';
-  let bitmaps: ImageBitmap[] = [];
+  const bitmaps: ImageBitmap[] = [];
+  let missingTextures = 0;
+  let metresPerUnit: number | null = null;
   try {
     let object: THREE.Group;
     if (format === 'obj') {
@@ -216,10 +228,11 @@ scope.onmessage = async (event: MessageEvent<ImportRequest>) => {
       if (prepareObjMeshes(object) === 0) throw new Error('The OBJ file contains no mesh geometry.');
     } else {
       report(0.12, 'fbx_structure_parse', 'parsing');
+      metresPerUnit = fbxMetresPerUnit(event.data.buffer);
       object = new FBXLoader().parse(event.data.buffer, '');
       report(0.48, 'embedded_texture_decode', 'decoding');
       await Promise.all(pendingImages);
-      bitmaps = replaceWorkerImages(object);
+      missingTextures = replaceWorkerImages(object, bitmaps);
       bakeOpacityMaps(object, bitmaps);
     }
     report(0.64, 'runtime_asset_construction', 'constructing');
@@ -233,7 +246,7 @@ scope.onmessage = async (event: MessageEvent<ImportRequest>) => {
     let itemCount = 0;
     object.traverse(() => { itemCount += 1; });
     report(0.82, 'runtime_asset_transfer', 'transferring');
-    scope.postMessage({ type: 'complete', glb: exported, itemCount, clipCount: object.animations?.length ?? 0 } satisfies ImportComplete, [exported]);
+    scope.postMessage({ type: 'complete', glb: exported, itemCount, clipCount: object.animations?.length ?? 0, missingTextures, metresPerUnit } satisfies ImportComplete, [exported]);
   } catch (error) {
     const message = error instanceof Error ? error.message : `Background ${format.toUpperCase()} processing failed`;
     scope.postMessage({ type: 'error', message } satisfies ImportFailure);

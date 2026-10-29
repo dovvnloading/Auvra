@@ -79,6 +79,8 @@ export interface LoadedModelData {
   importSettings?: ModelImportSettings;
   /** Names of the clips in the model's own file, as stored with its document (they survive renaming the model). */
   sourceClipNames?: string[];
+  /** On import: textures the source file names but does not contain, which it was imported without. */
+  missingTextures?: number;
 }
 
 export type LevelObjectType = 'prop' | 'foliage' | 'spawn_point' | 'audio_emitter' | 'terrain' | 'sky_sphere' | 'player_start';
@@ -670,8 +672,11 @@ export interface SceneContextType {
   addModel: (file: File, category: AssetCategory) => Promise<void>;
   /** Import with explicit options; the settings are stored on the model document. */
   importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory) => Promise<void>;
-  /** Replace a model's source file in place (id, references and settings are kept). */
-  reimportModel: (modelId: string, file: File) => Promise<void>;
+  /**
+   * Replace a model's source file in place (id, references and settings are kept), or without a
+   * file read its stored source again; `settings` replaces its import settings (its size).
+   */
+  reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings) => Promise<void>;
   /** Rename and/or move a model; rejects when the change cannot be saved. */
   updateModel: (id: string, updates: AssetInfoUpdate) => Promise<void>;
   removeModel: (id: string) => void;

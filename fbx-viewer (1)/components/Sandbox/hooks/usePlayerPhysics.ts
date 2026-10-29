@@ -163,7 +163,8 @@ const useOptionalRapier = (): RapierContext | null => {
     }
 };
 
-const measureCharacterHeight = (model: THREE.Object3D): number => {
+/** A character model's standing height, world units; the default import size when it cannot be measured. */
+export const measureCharacterHeight = (model: THREE.Object3D): number => {
     model.updateWorldMatrix(true, true);
     const box = new THREE.Box3().setFromObject(model);
     const height = box.max.y - box.min.y;

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronLeft, FolderInput, HardDrive, Pencil, RefreshCw, Folder } from 'lucide-react';
+import { Check, ChevronLeft, FolderInput, HardDrive, Pencil, RefreshCw, Folder, Scaling } from 'lucide-react';
 import { ROOT_FOLDER, ROOT_FOLDER_LABEL, depthFirstFolderOrder, folderDepth, folderLeafName, normalizeFolderPath } from './browserFolders';
 
 export interface AssetMenuAction {
@@ -18,9 +18,12 @@ interface AssetContextMenuProps {
     move: AssetMenuAction;
     /** Omitted for assets that cannot be reimported (textures, audio). */
     reimport?: AssetMenuAction;
+    /** Changing an imported model's size; omitted for other assets. */
+    importSize?: AssetMenuAction;
     onRename: () => void;
     onMove: (folder: string) => void;
     onReimport: () => void;
+    onImportSize?: () => void;
     onClose: () => void;
 }
 
@@ -34,9 +37,11 @@ export const AssetContextMenu: React.FC<AssetContextMenuProps> = ({
     rename,
     move,
     reimport,
+    importSize,
     onRename,
     onMove,
     onReimport,
+    onImportSize,
     onClose,
 }) => {
     const [mode, setMode] = useState<'main' | 'move'>('main');
@@ -94,6 +99,7 @@ export const AssetContextMenu: React.FC<AssetContextMenuProps> = ({
                         {item('Rename', <Pencil size={12} />, rename, onRename)}
                         {item('Move to Folder', <FolderInput size={12} />, move, () => setMode('move'))}
                         {reimport && item('Reimport...', <RefreshCw size={12} />, reimport, onReimport)}
+                        {importSize && onImportSize && item('Import Size...', <Scaling size={12} />, importSize, onImportSize)}
                     </>
                 ) : (
                     <>

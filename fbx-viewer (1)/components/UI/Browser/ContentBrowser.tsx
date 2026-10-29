@@ -46,7 +46,7 @@ type AssetInfoUpdate = { name?: string; folder?: string };
  */
 interface BrowserAssetActions {
     importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory) => Promise<void>;
-    reimportModel: (modelId: string, file: File) => Promise<void>;
+    reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings) => Promise<void>;
     updateModel: (id: string, updates: AssetInfoUpdate) => Promise<void> | void;
     updateTexture: (id: string, updates: AssetInfoUpdate) => Promise<void> | void;
     updateAudio: (id: string, updates: AssetInfoUpdate) => Promise<void> | void;
@@ -448,6 +448,21 @@ export const ContentBrowser: React.FC = () => {
         reimportInputRef.current?.click();
     };
 
+    // --- Import size: an imported model read again from its source at another size ---
+    const [sizeTarget, setSizeTarget] = useState<LoadedModelData | null>(null);
+
+    const applyImportSize = async (settings: ModelImportSettings) => {
+        const model = sizeTarget;
+        setSizeTarget(null);
+        const reimport = assetActions.reimportModel;
+        if (!model || !reimport) return;
+        try {
+            await reimport(model.id, null, settings);
+        } catch (error) {
+            notifyError(`Could not resize ${model.name}`, error);
+        }
+    };
+
     const handleReimportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         event.target.value = '';
@@ -673,13 +688,27 @@ export const ContentBrowser: React.FC = () => {
                     onRename={() => { closeMenu(); beginRename(menuItem); }}
                     onMove={(folder) => { closeMenu(); void moveAsset(menuItem.kind, menuItem.id, folder); }}
                     onReimport={() => { closeMenu(); startReimport(menuItem.id); }}
+                    importSize={menuItem.kind === 'model' && menuItem.model.category !== 'Animation'
+                        ? actionState(Boolean(assetActions.reimportModel) && !isLoading, isLoading ? 'Wait for the current import to finish.' : 'Changing a model\'s size is not available yet.')
+                        : undefined}
+                    onImportSize={() => { closeMenu(); if (menuItem.kind === 'model') setSizeTarget(menuItem.model); }}
                     onClose={closeMenu}
+                />
+            )}
+
+            {sizeTarget && (
+                <ImportOptionsDialog
+                    name={sizeTarget.name}
+                    initialSettings={sizeTarget.importSettings}
+                    confirmLabel="Apply"
+                    onConfirm={(settings) => { void applyImportSize(settings); }}
+                    onCancel={() => setSizeTarget(null)}
                 />
             )}
 
             {importPromptFile && (
                 <ImportOptionsDialog
-                    file={importPromptFile}
+                    name={importPromptFile.name}
                     onConfirm={settleImportPrompt}
                     onCancel={cancelImportPrompt}
                 />

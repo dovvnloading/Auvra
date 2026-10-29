@@ -2,10 +2,11 @@
 import React, { useRef, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
-import { AnimationGraphData } from '../../types';
+import { AnimationGraphData, DEFAULT_MODEL_IMPORT_SETTINGS } from '../../types';
 import { useRuntimeServices } from '../../runtime/RuntimeServicesContext';
 import { cameraDirector } from '../../runtime/cameraDirector';
 import { vehicleSession } from '../../runtime/vehicles';
+import { measureCharacterHeight } from './hooks/usePlayerPhysics';
 
 interface CharacterCameraRigProps {
     target: THREE.Object3D;
@@ -30,6 +31,14 @@ const _blendQuaternion = new THREE.Quaternion();
 
 /** Seconds the rig takes to blend back from a vehicle's chase camera once the player is out. */
 const VEHICLE_HANDBACK_SECONDS = 0.6;
+
+/**
+ * The rig's lengths (pivot and aim offsets, distance, zoom range) are authored for a character of the
+ * default import size; a taller or shorter character scales them, so a human-sized character is
+ * framed as the default one is.
+ */
+export const cameraRigScale = (target: THREE.Object3D): number =>
+    measureCharacterHeight(target) / DEFAULT_MODEL_IMPORT_SETTINGS.targetSize;
 const smoothStep = (t: number) => t * t * (3 - 2 * t);
 
 export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({ 
@@ -56,12 +65,15 @@ export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({
     const minPitch = 0.1;
     const maxPitch = Math.PI - 0.2;
 
+    const scale = useMemo(() => cameraRigScale(target), [target]);
+    const scaleRef = useRef(scale);
+    scaleRef.current = scale;
+
     // Resolve Camera Distance from Graph
     const defaultDistance = useMemo(() => {
-        if (!graph) return 6.0; 
-        const variable = graph.variables.find(v => v.name === 'CameraDistance');
-        return (variable && typeof variable.value === 'number') ? variable.value : 6.0;
-    }, [graph]);
+        const variable = graph?.variables.find(v => v.name === 'CameraDistance');
+        return ((variable && typeof variable.value === 'number') ? variable.value : 6.0) * scale;
+    }, [graph, scale]);
 
     // Internal State
     const state = useRef({
@@ -95,8 +107,9 @@ export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({
 
         const onWheel = (e: WheelEvent) => {
             if (!active || isAiming) return;
-            state.current.currentDistance += e.deltaY * 0.005;
-            state.current.currentDistance = Math.max(2.0, Math.min(15.0, state.current.currentDistance));
+            const zoom = scaleRef.current;
+            state.current.currentDistance += e.deltaY * 0.005 * zoom;
+            state.current.currentDistance = Math.max(2.0 * zoom, Math.min(15.0 * zoom, state.current.currentDistance));
         };
 
         // Right mouse is the default Aim binding; keep the browser menu from opening over the game.
@@ -160,7 +173,7 @@ export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({
         
         // 3. Calculate 3rd Person View (Orbit)
         // Pivot is centered on character + offset
-        const pivotY = _targetWorldPos.y + offset[1];
+        const pivotY = _targetWorldPos.y + offset[1] * scale;
         const pivotX = _targetWorldPos.x;
         const pivotZ = _targetWorldPos.z;
 
@@ -187,14 +200,14 @@ export const CharacterCameraRig: React.FC<CharacterCameraRigProps> = ({
 
         // Aim Position: Start at Head
         const aimX = pivotX 
-            + (rightX * aimOffset[0]) // Shift Right
-            - (fwdX * aimOffset[2]);  // Shift Forward/Back
+            + (rightX * aimOffset[0] * scale) // Shift Right
+            - (fwdX * aimOffset[2] * scale);  // Shift Forward/Back
         
-        const aimY = _targetWorldPos.y + aimOffset[1]; // Height
+        const aimY = _targetWorldPos.y + aimOffset[1] * scale; // Height
         
         const aimZ = pivotZ 
-            + (rightZ * aimOffset[0]) // Shift Right
-            - (fwdZ * aimOffset[2]);  // Shift Forward/Back
+            + (rightZ * aimOffset[0] * scale) // Shift Right
+            - (fwdZ * aimOffset[2] * scale);  // Shift Forward/Back
 
         // 5. Blend Positions
         // If aimFactor is 0, use orbit. If 1, use aim.
