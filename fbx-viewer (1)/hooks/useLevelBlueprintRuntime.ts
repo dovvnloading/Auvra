@@ -26,6 +26,7 @@ import { getLiveSpline, liveSplineQuery } from '../runtime/splineRegistry';
 import { KMH, vehicleSession, type VehicleSessionEvent } from '../runtime/vehicles';
 import { particleEmitters } from '../runtime/particleEmitters';
 import { setWorldTime, setWorldWeather, worldTime, worldWeather } from '../runtime/weather';
+import { destructibles, explode } from '../runtime/destructibles';
 
 const MAX_BLUEPRINT_EVALUATION_DEPTH = 128;
 const MAX_BLUEPRINT_EXECUTION_DEPTH = 256;
@@ -109,6 +110,12 @@ export const timelineEventMatches = (node: LogicNode, event: TimelineEvent): boo
 export const dialogueEventMatches = (node: LogicNode, event: DialogueEvent): boolean => {
     const name = typeof node.data?.eventName === 'string' ? node.data.eventName.trim() : '';
     return !name || name === event.name;
+};
+
+/** Whether an Event ObjectBroken node handles an object breaking: it names that object, or none and takes any. */
+export const brokenEventMatches = (node: LogicNode, objectId: string): boolean => {
+    const wanted = typeof node.data?.actorId === 'string' ? node.data.actorId.trim() : '';
+    return !wanted || wanted === objectId;
 };
 
 /** Whether an Event VehicleEntered/VehicleExited node handles a vehicle: its vehicle matches, or it names none and takes any. */
@@ -313,6 +320,16 @@ export const useLevelBlueprintRuntime = ({
         setDayLength: minutes => setWorldTime({ dayLength: minutes }),
         setWeather: (name, seconds) => setWorldWeather(name, seconds),
         weather: worldWeather,
+        explode: (centre, radius, damage, force) => {
+            const result = explode({ centre: { x: centre[0], y: centre[1], z: centre[2] }, radius, damage, force });
+            return { characters: result.characters, broken: result.broken };
+        },
+        breakObject: objectId => destructibles.get(objectId)?.breakApart(null, null) === true,
+        damageObject: (objectId, amount) => destructibles.get(objectId)?.damage(amount, null, null) === true,
+        objectHealth: objectId => {
+            const handle = destructibles.get(objectId);
+            return handle ? { health: handle.health(), maxHealth: handle.maxHealth(), broken: handle.broken() } : null;
+        },
     }), [sessionObject3D]);
 
     // -------------------------------------------------------------------------
@@ -328,7 +345,7 @@ export const useLevelBlueprintRuntime = ({
      * @param context The running event's context; an overlap event's Other Actor output reads its otherActorId.
      * @returns The evaluated value (number, boolean, string, etc.) or null.
      */
-    const evaluateInput = useCallback((nodeId: string, inputPinId: string, context?: { otherActorId?: string; networkValue?: string; networkFrom?: string; vehicleId?: string }): any => {
+    const evaluateInput = useCallback((nodeId: string, inputPinId: string, context?: { otherActorId?: string; networkValue?: string; networkFrom?: string; vehicleId?: string; brokenId?: string }): any => {
         // Editor-made nodes start with an Exec pin, so data pins are found by name, then by data-pin order.
         const dataPin = (pins: LogicPin[], name: string, index: number): LogicPin | undefined =>
             pins.find(p => p.name === name) ?? pins.filter(p => p.dataType !== 'Exec')[index];
@@ -366,6 +383,7 @@ export const useLevelBlueprintRuntime = ({
                 if (sourceNode.name === 'Event NetworkEvent' && pin?.name === 'Value') return context?.networkValue ?? '';
                 if (sourceNode.name === 'Event NetworkEvent' && pin?.name === 'From') return context?.networkFrom ?? '';
                 if (pin?.name === 'Vehicle' && (sourceNode.name === 'Event VehicleEntered' || sourceNode.name === 'Event VehicleExited')) return context?.vehicleId ?? null;
+                if (pin?.name === 'Actor' && sourceNode.name === 'Event ObjectBroken') return context?.brokenId ?? null;
                 return null;
             }
 
@@ -755,6 +773,16 @@ export const useLevelBlueprintRuntime = ({
             .forEach(node => executeNode(node.id, { vehicleId: event.objectId }));
     };
     useEffect(() => vehicleSession.onEvent(event => handleVehicleEvent.current(event)), []);
+
+    // --- Event: Object broken (a Destructible broke) ---
+    const handleBrokenEvent = useRef<(objectId: string) => void>(() => undefined);
+    handleBrokenEvent.current = (objectId: string) => {
+        if (!hasBegunPlay.current || sessionEnded.current) return;
+        blueprint.nodes
+            .filter(n => n.type === 'Event' && n.name === 'Event ObjectBroken' && brokenEventMatches(n, objectId))
+            .forEach(node => executeNode(node.id, { brokenId: objectId }));
+    };
+    useEffect(() => destructibles.onBroken(objectId => handleBrokenEvent.current(objectId)), []);
 
     // --- Event: Tick & Overlap Physics ---
     useFrame((state, delta) => {

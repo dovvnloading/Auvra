@@ -14,6 +14,7 @@ Nodes are added from the palette. Select a node to edit it in the inspector: dat
 | Network Event | When another player sends a network event with its name; provides Value (as text) and From (their player id). See [Multiplayer](multiplayer.md) |
 | Dialogue Event | When a dialogue line or choice raises an event with its name (empty: any). See [Dialogue](dialogue.md#dialogue-events) |
 | Vehicle Entered, Vehicle Exited | When the player gets into or out of the chosen [vehicle](world-editor.md#vehicles) (or any); provides the **Vehicle** |
+| Object Broken | When the chosen object with a [Destructible](world-editor.md#destruction) component (or any) breaks; provides the **Actor** that broke |
 
 **On Overlap** targets a specific object, picked from a list showing its name, type and a short id. Renaming the object does not break the reference. Older graphs that referenced actors by name are converted automatically when the name is unique; ambiguous ones show a warning until you pick the actor.
 
@@ -143,6 +144,19 @@ These change and read the level's [time of day and weather](world-editor.md#sky-
 | Get Weather | The preset the weather is heading for (**Weather**, empty for none), how cloudy, rainy, snowy and misty it is, the **Wind** in m/s, and how wet the ground is (**Wetness**) and how much snow lies on it (**Snow Cover**), each 0 to 1. Pure |
 
 A storm that rolls in: **Event Begin Play**, **Delay** 60, **Set Weather** Storm over 45 seconds. Lights that come on at dusk: **Event Tick** into **Get Time of Day**, **Branch** on **Is Night**.
+
+## Destruction nodes
+
+These act on objects with a [Destructible](world-editor.md#destruction) component, and on everything in reach of a blast.
+
+| Node | Does |
+|---|---|
+| Explode | A blast at **Position**. Characters (the player included) and breakable objects within **Radius** metres take up to **Damage**, less further out, and loose bodies are thrown at up to **Force** m/s. It shows a fireball, smoke and flying debris with a flash, and is heard. **Characters Hit** and **Objects Broken** count what it reached |
+| Break Object | Breaks the **Actor** into pieces at once. **Broken** is false for an actor that cannot break or has already broken |
+| Damage Object | Takes **Amount** from the **Actor**'s health; at none it breaks. **Broken** is true when this broke it |
+| Get Object Health | The **Actor**'s **Health** and **Max Health**, and whether it is **Broken**. **Destructible** is false for an actor that cannot break. Pure |
+
+A charge the player sets off: **On Overlap** of a trigger, **Delay** 3, **Explode** at the charge's position. A gate that opens once its barricade is down: **Object Broken** for the barricade, then the gate's timeline.
 
 ## Level variables
 

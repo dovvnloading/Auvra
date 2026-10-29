@@ -129,6 +129,9 @@ Transforms are relative to the object's parent, like the inspector's; for an obj
 | `ctx.vehicle(objectId)` | The object's [Vehicle](world-editor.md#vehicles), or `null` when it has none: `speed` (km/h, negative backwards), `gear` (-1 in reverse), `playerDriving`, `enter()` (puts the player in), `setInput({ throttle, brake, steer, handbrake })` (drives it until released; throttle and brake 0-1, steer -1 to 1) and `release()` |
 | `ctx.playerVehicle()` | The id of the vehicle the player drives, or `null` on foot |
 | `ctx.exitVehicle()` | Takes the player out of their vehicle at once, beside it |
+| `ctx.explode(position, radius, damage, force)` | A blast at `position` ([x, y, z]): characters and [breakable objects](world-editor.md#destruction) within `radius` m (6 by default) take up to `damage` (80), less further out, and loose bodies are thrown at up to `force` m/s (12), like the **Explode** node |
+| `ctx.breakObject(objectId)`, `ctx.damageObject(objectId, amount)` | Breaks an object with a Destructible component at once, or takes `amount` from its health (at none it breaks) |
+| `ctx.objectHealth(objectId)` | `{ health, maxHealth, broken }` of an object that can break; null for one that cannot |
 | `ctx.timeOfDay()` | The [hour and light](world-editor.md#sky-time-of-day-and-weather): `{ hours, light, night }` (hours 0-24, light 0-1 after the weather) |
 | `ctx.setTimeOfDay(hours)`, `ctx.setDayLength(minutes)` | Moves the clock to an hour (wrapped into 0-24); sets how many real minutes a day takes from now on (0 stops it) |
 | `ctx.weather()` | The weather now: `{ preset, clouds, rain, snow, fog, wind, wetness, snowCover }` (preset '' for none; wind in m/s, the rest 0-1) |

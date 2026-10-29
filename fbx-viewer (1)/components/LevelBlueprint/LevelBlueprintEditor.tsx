@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
-import { Send, Crown, Video, Play, GitBranch, CheckSquare, Database, Trash2, ArrowLeft, MessageSquare, Box, Shield, Skull, Calculator, Timer, Hash, Type, ToggleLeft, Activity, X, LayoutTemplate, RefreshCcw, DoorOpen, Save, FolderOpen, Undo2, Redo2, Car } from 'lucide-react';
+import { Send, Crown, Video, Play, GitBranch, CheckSquare, Database, Trash2, ArrowLeft, MessageSquare, Box, Shield, Skull, Calculator, Timer, Hash, Type, ToggleLeft, Activity, X, LayoutTemplate, RefreshCcw, DoorOpen, Save, FolderOpen, Undo2, Redo2, Car, Bomb } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
 import { LogicCanvas, LogicGraphSnapshot } from './LogicCanvas';
 import { LevelBlueprintInspector } from './LevelBlueprintInspector';
@@ -29,6 +29,7 @@ const WORLD_PALETTE_GROUPS: { label: string, types: WorldNodeType[] }[] = [
     { label: 'Vehicles', types: ['EnterVehicle', 'ExitVehicle', 'GetVehicleState', 'GetPlayerVehicle', 'SetVehicleInput', 'ReleaseVehicleInput'] },
     { label: 'Particles', types: ['PlayParticles', 'StopParticles', 'EmitParticles', 'GetParticles'] },
     { label: 'Time & Weather', types: ['SetTimeOfDay', 'GetTimeOfDay', 'SetDayLength', 'SetWeather', 'GetWeather'] },
+    { label: 'Destruction', types: ['Explode', 'BreakObject', 'DamageObject', 'GetObjectHealth'] },
     { label: 'Level Variables', types: ['GetLevelVariable', 'SetLevelVariable'] },
     { label: 'Utilities', types: ['RandomFloat', 'RandomInt', 'Print'] },
 ];
@@ -256,6 +257,11 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                 { name: 'Exec', dataType: 'Exec', direction: 'Output' },
                 { name: 'Vehicle', dataType: 'Object', direction: 'Output' }
             ], { vehicleId: '' });
+        } else if (type === 'ObjectBroken') {
+            addNode('Event', 'Event ObjectBroken', [], [
+                { name: 'Exec', dataType: 'Exec', direction: 'Output' },
+                { name: 'Actor', dataType: 'Object', direction: 'Output' }
+            ], { actorId: '' });
         } else if (type === 'AnimNotify') {
             addNode('Event', 'Event AnimNotify', [], [{ name: 'Exec', dataType: 'Exec', direction: 'Output' }], { notifyName: '', notifySource: 'player' });
         } else if (type === 'Tick') {
@@ -643,6 +649,9 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                         </button>
                         <button onClick={() => handleAddEvent('VehicleExited', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
                             <Car size={12} className="text-red-400 group-hover:text-red-300" /> Vehicle Exited
+                        </button>
+                        <button onClick={() => handleAddEvent('ObjectBroken', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
+                            <Bomb size={12} className="text-red-400 group-hover:text-red-300" /> Object Broken
                         </button>
                         <button onClick={() => handleAddEvent('AnimNotify', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
                             <Activity size={12} className="text-red-400 group-hover:text-red-300" /> Animation Notify

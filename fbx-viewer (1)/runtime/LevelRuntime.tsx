@@ -20,6 +20,7 @@ import { InstancedLevelLayer } from '../components/Environment/InstancedLevelLay
 import { AudioSystem } from '../components/Environment/AudioSystem';
 import { SkySystem } from '../components/Environment/SkySystem';
 import { WeatherAudio } from './WeatherAudio';
+import { Destruction } from './Destruction';
 import { TerrainObject } from '../components/Environment/Terrain/TerrainObject';
 import { SandboxEntity, SandboxEntityHandle } from '../components/Sandbox/SandboxEntity';
 import { PlayerController } from '../components/Sandbox/PlayerController';
@@ -770,6 +771,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
 
             <BloodSystem ref={bloodSystemRef} />
             <ProjectileManager ref={projectileManagerRef} />
+            <Destruction />
 
             {/* Multiplayer: this player's state goes out, other players' avatars come in (nothing without a session). */}
             <LocalPlayerReplicator playerObject={runtimePlayerModel.object} playerApiRef={playerApiRef} />

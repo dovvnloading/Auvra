@@ -268,6 +268,21 @@ Terrain is solid during play: it gets a matching physics shape, so dynamic bodie
 
 Turn on **Is Trigger** to make a volume the player can walk through, such as a checkpoint, pickup or door sensor. An **On Overlap** event in the level blueprint that targets the object fires once each time the player enters it. See [Level scripting](level-scripting.md#events).
 
+## Destruction
+
+Add a **Destructible** component to an object for it to break into pieces: a wall, a crate, a pillar, a pane of glass, a rock. Give it a **Collider** too, so shots and vehicles can reach it.
+
+- **Health** is the damage it takes to break. Shots take it down round by round, and explosions in reach take it down less the further they are.
+- **Break speed**: a heavy loose body (a car, a falling crate) hitting it at this speed in m/s breaks it at once and carries on through, slowed by the pieces. 0 turns this off. Something light, however fast, does not break it. A piece of something already broken needs twice the speed, so one break does not easily set off the next.
+- **Pieces** (2 to 64) and **Pattern** set how it breaks. Pieces are cut like cracks round random points, each keeping its share of the model's surface and gaining cut faces of the **Inside colour** (over the model's own texture). Turn on **Preview pieces (editor)** to see them in place of the model.
+- **Scatter** is how fast the pieces fly apart. Those nearest the hit fly hardest, away from it. **Density** sets how heavy the pieces are: about 600 for wood, 2,400 for concrete, 2,500 for glass.
+- **Pieces stay** is how many seconds the pieces lie before shrinking away (0: they stay). At most 600 pieces are loose at once; past that the oldest go first.
+- **Dust and chips** raises a dust cloud and chips in the inside colour as it breaks. **Sound** plays an audio asset as it breaks; left blank, a synthesized crunch plays.
+
+A broken object is gone for the rest of the session, and a save remembers it. Solid, roughly convex models break best: the cut faces follow the model's outer shape, so a deep hollow in a model is filled where it is cut.
+
+Rounds the player and enemies fire now stop at walls, the ground and props instead of passing through them. Each hit shows how it struck: sparks off metal, stone and roads, dust and chips off wood, earth and plaster (in the surface's own colour), a splash in water. A round also pushes a loose body it hits. The [Explode, Break Object, Damage Object and Get Object Health nodes](level-scripting.md#destruction-nodes) and `ctx.explode`, `ctx.breakObject` and `ctx.damageObject` in [gameplay scripts](scripting.md) set off blasts and break things on cue.
+
 ## Lights
 
 The **Lights** panel in the **Outliner** tab (under the prefab list) lists every point and spot light in the level.
