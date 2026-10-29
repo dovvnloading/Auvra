@@ -143,6 +143,8 @@ export interface CharacterRig {
     airborneTime: number;
     /** Left the ground by jumping, and has not landed since. */
     jumped: boolean;
+    /** The collider's own solver groups while the character rides in a vehicle (it pushes nothing then); null on foot. */
+    ridingGroups: number | null;
 }
 
 /** Off the ground after a jump, or for longer than FALL_DELAY: running over a bump or down a step is not a fall. */
@@ -213,6 +215,7 @@ export const createCharacterRig = ({ world, rapier }: CharacterPhysicsContext, m
         grounded: false,
         airborneTime: 0,
         jumped: false,
+        ridingGroups: null,
     };
 };
 
@@ -550,5 +553,38 @@ export const usePlayerPhysics = (
         };
     };
 
-    return { updatePhysics, hasPhysicsWorld: physics !== null };
+    /**
+     * While the player drives a vehicle: the character stands at `seat` (world space, where its feet
+     * go) facing `yaw`, and its capsule pushes nothing, though triggers and line-of-sight rays still
+     * find it there. Null puts it back on foot where the model stands now; the next update moves the
+     * capsule there.
+     */
+    const ride = (seat: THREE.Vector3 | null, yaw = modelObject.rotation.y) => {
+        if (seat) {
+            modelObject.position.copy(seat);
+            modelObject.rotation.y = yaw;
+        }
+        if (!physics) return;
+        const character = getRig(physics);
+        if (seat) {
+            if (character.ridingGroups === null) {
+                character.ridingGroups = character.collider.solverGroups();
+                character.collider.setSolverGroups(0);
+            }
+            character.centre.copy(seat);
+            character.centre.y += character.centreOffset;
+            character.collider.setTranslation(character.centre);
+            character.body.setNextKinematicTranslation(character.centre);
+            character.placedAt.copy(modelObject.position);
+            character.verticalSpeed = 0;
+            character.grounded = true;
+            character.airborneTime = 0;
+            character.jumped = false;
+        } else if (character.ridingGroups !== null) {
+            character.collider.setSolverGroups(character.ridingGroups);
+            character.ridingGroups = null;
+        }
+    };
+
+    return { updatePhysics, ride, hasPhysicsWorld: physics !== null };
 };

@@ -130,4 +130,4 @@ Mouse sensitivity, invert Y and master volume start from **Game Settings**; musi
 | Reload | R | Button 1 (B) |
 | Next weapon | Q | Button 3 (Y) |
 
-The **Pause** action (Esc or gamepad Start, rebindable in Options) pauses the game. The **Input Action** node in the level blueprint can read every action above, plus **Pause** (Esc, gamepad button 9). **Interact** has no built-in use, so it is free for your own scripting.
+The **Pause** action (Esc or gamepad Start, rebindable in Options) pauses the game. The **Input Action** node in the level blueprint can read every action above, plus **Pause** (Esc, gamepad button 9). **Interact** talks to characters with a Dialogue component and gets into and out of [vehicles](world-editor.md#vehicles); scripts can read it too. In a vehicle, Move forward and back are the throttle and the brake (reverse from a stop), Move left and right steer, and Jump is the handbrake.

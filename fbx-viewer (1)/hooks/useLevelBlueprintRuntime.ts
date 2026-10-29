@@ -23,6 +23,7 @@ import { useNoiseBus } from '../runtime/perception';
 import { FLOW_NODE_EXECUTORS, flowNodeOutputValue } from './levelBlueprintNodes/flow';
 import { findActorObject3D, isPureWorldNodeType, PLAYER_ACTOR_ID, setActorMorphTarget, WORLD_NODE_EXECUTORS, WorldExecutionContext, WorldNodeServices } from './levelBlueprintNodes/world';
 import { getLiveSpline, liveSplineQuery } from '../runtime/splineRegistry';
+import { KMH, vehicleSession, type VehicleSessionEvent } from '../runtime/vehicles';
 
 const MAX_BLUEPRINT_EVALUATION_DEPTH = 128;
 const MAX_BLUEPRINT_EXECUTION_DEPTH = 256;
@@ -106,6 +107,12 @@ export const timelineEventMatches = (node: LogicNode, event: TimelineEvent): boo
 export const dialogueEventMatches = (node: LogicNode, event: DialogueEvent): boolean => {
     const name = typeof node.data?.eventName === 'string' ? node.data.eventName.trim() : '';
     return !name || name === event.name;
+};
+
+/** Whether an Event VehicleEntered/VehicleExited node handles a vehicle: its vehicle matches, or it names none and takes any. */
+export const vehicleEventMatches = (node: LogicNode, vehicleId: string): boolean => {
+    const wanted = typeof node.data?.vehicleId === 'string' ? node.data.vehicleId.trim() : '';
+    return !wanted || wanted === vehicleId;
 };
 
 /**
@@ -261,6 +268,21 @@ export const useLevelBlueprintRuntime = ({
             const entry = getLiveSpline(objectId, 'runtime');
             return entry ? liveSplineQuery(entry) : null;
         },
+        vehicle: (objectId) => {
+            const handle = vehicleSession.get(objectId);
+            if (!handle) return null;
+            const speed = handle.speed();
+            return { speed: speed / KMH, gear: handle.gear(), playerDriving: vehicleSession.state().driving === objectId };
+        },
+        playerVehicle: () => vehicleSession.state().driving,
+        enterVehicle: (objectId) => vehicleSession.enter(objectId),
+        exitVehicle: () => vehicleSession.exit(),
+        setVehicleInput: (objectId, controls) => {
+            const handle = vehicleSession.get(objectId);
+            if (!handle) return false;
+            handle.setScriptControls(controls);
+            return true;
+        },
     }), [sessionObject3D]);
 
     // -------------------------------------------------------------------------
@@ -276,7 +298,7 @@ export const useLevelBlueprintRuntime = ({
      * @param context The running event's context; an overlap event's Other Actor output reads its otherActorId.
      * @returns The evaluated value (number, boolean, string, etc.) or null.
      */
-    const evaluateInput = useCallback((nodeId: string, inputPinId: string, context?: { otherActorId?: string; networkValue?: string; networkFrom?: string }): any => {
+    const evaluateInput = useCallback((nodeId: string, inputPinId: string, context?: { otherActorId?: string; networkValue?: string; networkFrom?: string; vehicleId?: string }): any => {
         // Editor-made nodes start with an Exec pin, so data pins are found by name, then by data-pin order.
         const dataPin = (pins: LogicPin[], name: string, index: number): LogicPin | undefined =>
             pins.find(p => p.name === name) ?? pins.filter(p => p.dataType !== 'Exec')[index];
@@ -313,6 +335,7 @@ export const useLevelBlueprintRuntime = ({
                 if (pin?.name === 'Other Actor') return context?.otherActorId ?? null;
                 if (sourceNode.name === 'Event NetworkEvent' && pin?.name === 'Value') return context?.networkValue ?? '';
                 if (sourceNode.name === 'Event NetworkEvent' && pin?.name === 'From') return context?.networkFrom ?? '';
+                if (pin?.name === 'Vehicle' && (sourceNode.name === 'Event VehicleEntered' || sourceNode.name === 'Event VehicleExited')) return context?.vehicleId ?? null;
                 return null;
             }
 
@@ -691,6 +714,17 @@ export const useLevelBlueprintRuntime = ({
             .forEach(node => executeNode(node.id, {}));
     };
     useEffect(() => dialogueStore.onEvent(event => handleDialogueEvent.current(event)), []);
+
+    // --- Event: Vehicle entered / exited (the player got into or out of a vehicle) ---
+    const handleVehicleEvent = useRef<(event: VehicleSessionEvent) => void>(() => undefined);
+    handleVehicleEvent.current = (event: VehicleSessionEvent) => {
+        if (!hasBegunPlay.current || sessionEnded.current) return;
+        const name = event.type === 'entered' ? 'Event VehicleEntered' : 'Event VehicleExited';
+        blueprint.nodes
+            .filter(n => n.type === 'Event' && n.name === name && vehicleEventMatches(n, event.objectId))
+            .forEach(node => executeNode(node.id, { vehicleId: event.objectId }));
+    };
+    useEffect(() => vehicleSession.onEvent(event => handleVehicleEvent.current(event)), []);
 
     // --- Event: Tick & Overlap Physics ---
     useFrame((state, delta) => {

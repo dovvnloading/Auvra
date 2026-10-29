@@ -41,6 +41,8 @@ export const SCRIPT_API_REFERENCE: ScriptApiSection[] = [
             { signature: 'onAnimNotify(ctx, name, source)', description: "An animation notify fired. source is 'player' for the player character; a level object's own notifies (source is its id) reach only its scripts." },
             { signature: 'onTimelineEvent(ctx, name, timelineObjectId)', description: 'A playing timeline crossed a key on one of its event tracks. Reaches every script.' },
             { signature: 'onDialogueEvent(ctx, name, objectId)', description: 'A dialogue line or choice raised an event. objectId holds the Dialogue component. Reaches every script.' },
+            { signature: 'onVehicleEntered(ctx, vehicleId)', description: 'The player got into a vehicle (an object with a Vehicle component). Reaches every script.' },
+            { signature: 'onVehicleExited(ctx, vehicleId)', description: 'The player got out of a vehicle. Reaches every script.' },
             { signature: 'onSpawned(ctx, requestId, objectIds)', description: "This script's ctx.spawn request was placed. objectIds start with the new root object." },
         ],
     },
@@ -79,6 +81,9 @@ export const SCRIPT_API_REFERENCE: ScriptApiSection[] = [
             { signature: 'ctx.openLevel(levelId)', description: 'Loads another level of the game.' },
             { signature: 'ctx.startDialogue(objectId?)', description: "Opens the conversation of the object's Dialogue component (default: this script's object). Does nothing while another is open." },
             { signature: 'ctx.spline(objectId)', description: "The object's Spline in world space and metres: { length, closed, pointAt(distance) → { position, direction, up }, closest([x, y, z]) → { distance, position } }, or null." },
+            { signature: 'ctx.vehicle(objectId)', description: "The object's Vehicle: { speed (km/h), gear, playerDriving, enter(), setInput({ throttle, brake, steer, handbrake }), release() }, or null." },
+            { signature: 'ctx.playerVehicle()', description: 'The id of the vehicle the player drives, or null on foot.' },
+            { signature: 'ctx.exitVehicle()', description: 'Takes the player out of their vehicle at once, beside it.' },
         ],
     },
     {

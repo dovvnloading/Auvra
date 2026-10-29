@@ -49,6 +49,8 @@ export interface PhysicsRaycastHit {
 export interface PhysicsRaycastOptions {
     /** Skip every collider of this object (e.g. the caster's own body). */
     excludeObjectId?: string;
+    /** Skip every collider of these objects too (a vehicle and the player riding in it). */
+    excludeObjectIds?: readonly string[];
     /** Trigger (sensor) colliders are ignored unless this is true. */
     includeTriggers?: boolean;
 }
@@ -83,11 +85,15 @@ export const createPhysicsQueries = (world: RapierWorld, rapier: RapierModule): 
         const dir = { x: direction.x / length, y: direction.y / length, z: direction.z / length };
         const ray = new rapier.Ray({ x: origin.x, y: origin.y, z: origin.z }, dir);
         const flags = options.includeTriggers ? undefined : rapier.QueryFilterFlags.EXCLUDE_SENSORS;
-        const excluded = options.excludeObjectId;
-        const predicate = excluded === undefined
+        const excluded = [...(options.excludeObjectId === undefined ? [] : [options.excludeObjectId]), ...(options.excludeObjectIds ?? [])];
+        const predicate = excluded.length === 0
             ? undefined
             // Excluding an object also skips the children folded into its body.
-            : (collider: RapierCollider) => objectIdFromCollider(collider) !== excluded && objectIdFromRigidBody(collider.parent()) !== excluded;
+            : (collider: RapierCollider) => {
+                const own = objectIdFromCollider(collider);
+                const body = objectIdFromRigidBody(collider.parent());
+                return !excluded.some(id => id === own || id === body);
+            };
         let hit: ReturnType<RapierWorld['castRayAndGetNormal']>;
         try {
             hit = world.castRayAndGetNormal(

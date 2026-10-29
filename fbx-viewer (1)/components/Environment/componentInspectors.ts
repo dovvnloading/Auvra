@@ -5,6 +5,7 @@ import { TimelineInspector } from '../Timeline/TimelineInspector';
 import { LevelStreamingInspector } from './LevelStreamingInspector';
 import { ReachIKInspector } from './ReachIKInspector';
 import { FollowSplineInspector, SplineInspector, SplineModelInspector } from './SplineInspectors';
+import { VehicleInspector } from './VehicleInspector';
 
 /**
  * Editor-only Inspectors for component settings a schema field cannot edit. Importing this module
@@ -20,3 +21,4 @@ registerComponentInspector('spline', SplineInspector);
 registerComponentInspector('splineMesh', SplineModelInspector);
 registerComponentInspector('splineScatter', SplineModelInspector);
 registerComponentInspector('followSpline', FollowSplineInspector);
+registerComponentInspector('vehicle', VehicleInspector);

@@ -5,7 +5,7 @@ import type { LevelComponent, LevelObject } from '../types';
  * navigation mesh, baked lighting) leave moving objects out.
  */
 
-const DYNAMIC_COMPONENT_TYPES: ReadonlySet<string> = new Set(['mover', 'rotator', 'followSpline']);
+const DYNAMIC_COMPONENT_TYPES: ReadonlySet<string> = new Set(['mover', 'rotator', 'followSpline', 'vehicle']);
 
 const isDynamicComponent = (component: LevelComponent): boolean => {
     if (component.enabled === false) return false;

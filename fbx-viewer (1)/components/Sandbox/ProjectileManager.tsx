@@ -56,7 +56,7 @@ export const ProjectileManager = forwardRef<ProjectileManagerHandle, {}>((_props
         rayEnd.copy(p.position).addScaledVector(p.velocity, delta);
 
         for (const target of targetsRef.current) {
-            if (target.team === p.team || target.isDead()) continue;
+            if (target.team === p.team || target.isDead() || target.isHittable?.() === false) continue;
 
             const hitbox = target.getHitbox();
             

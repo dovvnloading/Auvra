@@ -57,6 +57,9 @@ export type ScriptEvent =
     | { type: 'dialogueEvent'; objectId: string; name: string }
     /** A multiplayer event another player sent (ctx.net.send there). */
     | { type: 'netEvent'; from: string; name: string; payload: ScriptNetPayload }
+    /** The player got into, or out of, the vehicle on object `objectId`. */
+    | { type: 'vehicleEntered'; objectId: string }
+    | { type: 'vehicleExited'; objectId: string }
     | { type: 'spawned'; requestId: string; objectIds: string[] };
 
 /** A multiplayer event's payload: a value, a list of values, or a flat object of values. */
@@ -95,6 +98,15 @@ export interface ScriptSplineState {
     ups: number[];
 }
 
+/** A vehicle (an object's Vehicle component) as scripts see it. */
+export interface ScriptVehicleState {
+    /** km/h, negative going backwards. */
+    speed: number;
+    /** 1-6, -1 in reverse. */
+    gear: number;
+    playerDriving: boolean;
+}
+
 /** The world as scripts see it for one frame. */
 export interface ScriptSnapshot {
     frame: number;
@@ -115,6 +127,8 @@ export interface ScriptSnapshot {
      * snapshot (null: gone). Absent when none changed; the sandbox keeps the ones it was sent.
      */
     splines?: Record<string, ScriptSplineState | null>;
+    /** The session's vehicles, by the id of their object. Absent when the level has none. */
+    vehicles?: Record<string, ScriptVehicleState>;
 }
 
 export type ScriptCommand =
@@ -137,6 +151,12 @@ export type ScriptCommand =
     | { type: 'setCamera'; objectId: string | null; blend: number }
     /** Opens the conversation of the Dialogue component on object `objectId`. */
     | { type: 'startDialogue'; objectId: string }
+    /** Puts the player in the vehicle on object `objectId`, or takes them out of theirs. */
+    | { type: 'enterVehicle'; objectId: string }
+    | { type: 'exitVehicle' }
+    /** Drives a vehicle from the script until released; the player driving it overrides this. */
+    | { type: 'setVehicleInput'; objectId: string; throttle: number; brake: number; steer: number; handbrake: boolean }
+    | { type: 'releaseVehicleInput'; objectId: string }
     /** A multiplayer event to every other player, or to one (`to`). */
     | { type: 'netSend'; name: string; payload: ScriptNetPayload; to?: string }
     | { type: 'log'; scriptId: string; level: 'info' | 'warn' | 'error'; message: string };
