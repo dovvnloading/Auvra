@@ -108,6 +108,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/levelObjectMotion.ts': 'pure-utility',
   'runtime/perception.ts': 'context-adapter',
   'runtime/audioOcclusion.ts': 'hot-loop',
+  'runtime/spatialAudio.ts': 'hot-loop',
   'runtime/splines.ts': 'pure-utility',
   'runtime/splineMesh.ts': 'pure-utility',
   'runtime/splineRegistry.ts': 'pure-derived-state',

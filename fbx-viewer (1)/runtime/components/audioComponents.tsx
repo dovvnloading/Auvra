@@ -8,6 +8,7 @@ import { useGameContent } from '../GameContentContext';
 import { useRuntimeServices } from '../RuntimeServicesContext';
 import type { ComponentDefinition, ComponentRenderProps } from './types';
 import { useAudioOcclusion } from '../audioOcclusion';
+import { SpatialAudioListener, SpatialPositionalAudio } from '../spatialAudio';
 
 // --- SHARED AUDIO PLUMBING (level emitters, weapon sounds and the audioSource component) ---
 
@@ -73,7 +74,7 @@ export const acquireAudioListener = (camera: THREE.Object3D): { listener: THREE.
     if (!lease) {
         const existing = camera.children.find(child => child.type === 'AudioListener');
         if (existing) return { listener: existing as THREE.AudioListener, release: () => undefined };
-        const listener = new THREE.AudioListener();
+        const listener = new SpatialAudioListener();
         camera.add(listener);
         lease = { listener, holders: 0 };
         listenerLeases.set(camera, lease);
@@ -146,7 +147,7 @@ const AudioSourcePlayback: React.FC<ComponentRenderProps> = ({ component, object
 
     useEffect(() => {
         const { listener, release } = acquireAudioListener(camera);
-        const created: Sound = spatial ? new THREE.PositionalAudio(listener) : new THREE.Audio(listener);
+        const created: Sound = spatial ? new SpatialPositionalAudio(listener) : new THREE.Audio(listener);
         setSound(created);
         return () => {
             releaseSound(created);
