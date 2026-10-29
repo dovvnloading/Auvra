@@ -297,7 +297,7 @@ An **Abilities** component makes its object an actor with attributes, effects an
   - **Instantly**: damage, healing, spending. They change base values for good.
   - **For some seconds**: a speed boost, a weakness. They change the current value only while they last, then it returns.
   - **Until removed**: a passive aura.
-  - **Every (s)**: a lasting effect applied over and over while it lasts, such as burning for 4 a second or healing over time.
+  - **Every (s)**: a lasting effect applied over and over while it lasts, such as burning for 4 a second or healing over time. It ticks at most 50 times a second (every 0.02 s).
 
   Applied again while it lasts, an effect **starts over**, **stacks** (up to a number of stacks) or is **refused**. It can **grant tags** while it lasts, **need tags** to take, have the target be **immune** with certain tags, and **remove** the effects that grant certain tags (a cleanse, or water putting out fire).
 - **Abilities** have **costs** in attributes and a **cooldown**. They can **need tags**, be **blocked by** tags (no casting while State.Stunned), grant tags **while active** for some seconds, and **cancel** other active abilities by their tags. When used, they apply effects **on the user** and **on the target**. An ability with a **Range** and target effects takes the actor or character the user aims at within that range. The player's abilities bound to a **Key** are used with the number keys **1** to **4** (the left bumper and the d-pad on a gamepad).

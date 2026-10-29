@@ -162,6 +162,7 @@ export const useGraphRuntime = (
         rootMotionOut: rootMotionRef,
         eventSource,
         lod,
+        sourceClips: clipsByName,
     });
 
     // Without a character controller (the editor preview) the graph applies its own root motion.

@@ -194,10 +194,15 @@ export const splitAlphaCards = (root: THREE.Object3D): void => {
     const original = mesh.material;
     const list = Array.isArray(original) ? original : [original];
     // The fringe draws only the cards; other parts of a many-material mesh draw nothing in it.
-    const nothing = new THREE.MeshBasicMaterial({ visible: false });
-    nothing.userData[CARD_FRINGE_KEY] = true;
+    let nothing: THREE.Material | null = null;
     const fringeMaterials = list.map((material) => {
-      if (!isAlphaCard(material)) return nothing;
+      if (!isAlphaCard(material)) {
+        if (!nothing) {
+          nothing = new THREE.MeshBasicMaterial({ visible: false });
+          nothing.userData[CARD_FRINGE_KEY] = true;
+        }
+        return nothing;
+      }
       material.depthWrite = false;
       return material;
     });

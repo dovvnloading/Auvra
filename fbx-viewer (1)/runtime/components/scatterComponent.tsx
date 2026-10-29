@@ -230,7 +230,9 @@ const ScatterRender: React.FC<ComponentRenderProps> = ({ object, component, mode
         const host = anchor.current?.parent;
         if (!host) return;
         const camera = state.camera.getWorldPosition(_origin);
-        const scale = Math.max(Math.abs(host.matrixWorld.elements[0]), Math.abs(host.matrixWorld.elements[10]), 1e-6);
+        // The cells' reach in the world: the area's largest horizontal scale, whatever way it is turned.
+        _scale.setFromMatrixScale(host.matrixWorld);
+        const scale = Math.max(_scale.x, _scale.z, 1e-6);
         for (const view of views) {
             _world.copy(view.cell.centre).applyMatrix4(host.matrixWorld);
             const distance = Math.max(0, camera.distanceTo(_world) - view.cell.radius * scale);

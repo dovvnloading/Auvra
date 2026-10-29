@@ -320,6 +320,11 @@ export const readSpringSettings = (component: LevelComponent) => ({
 
 const springWind = (x: number, y: number, z: number, out: typeof _wind) => windAt(x, y, z, windTime(), out);
 
+const isUnder = (node: THREE.Object3D, root: THREE.Object3D): boolean => {
+    for (let at: THREE.Object3D | null = node; at; at = at.parent) if (at === root) return true;
+    return false;
+};
+
 const SpringBonesRender: React.FC<ComponentRenderProps> = ({ component }) => {
     const settings = useMemo(() => readSpringSettings(component), [component]);
     const anchor = useRef<THREE.Group>(null);
@@ -335,6 +340,11 @@ const SpringBonesRender: React.FC<ComponentRenderProps> = ({ component }) => {
     useFrame((_, delta) => {
         const owner = host?.current ?? anchor.current?.parent;
         if (!owner) return;
+        // A model reloaded or swapped leaves the bones found before behind: let them go and look again.
+        const found = chains.current;
+        if (found && (found.root !== owner || !found.springs.joints.every(joint => isUnder(joint.bone, owner)))) {
+            chains.current = null;
+        }
         // The model may load after the component: look for its bones now and then until found.
         if (!chains.current || chains.current.bones !== settings.bones) {
             if (search.current++ % 30 !== 0) return;

@@ -20,8 +20,11 @@ export const PROCEDURAL_RIG_COMPONENT_TYPE = 'proceduralRig';
 
 /** Where the player's eyes are when an aim targets the player and its head bone is not found. */
 const PLAYER_EYE_HEIGHT = 1.6;
+/** Seconds before a target object that was not found (not spawned yet) is looked for again. */
+const TARGET_RETRY = 0.5;
 
 const _target = new THREE.Vector3();
+const _eyes = new THREE.Vector3(0, PLAYER_EYE_HEIGHT, 0);
 
 const ProceduralRigRuntime: React.FC<ComponentRenderProps> = ({ object, component }) => {
     const hostRef = useContext(ComponentHostContext);
@@ -29,8 +32,9 @@ const ProceduralRigRuntime: React.FC<ComponentRenderProps> = ({ object, componen
     const constraints = useMemo(() => readRigConstraints(component.props), [component.props]);
     const [rig] = useState(() => new ProceduralRig(constraints));
     const [guard] = useState(() => new IKPoseGuard());
-    const [bones] = useState(() => ({ host: null as THREE.Object3D | null, byName: new Map<string, THREE.Object3D | null>() }));
-    const [objects] = useState(() => new Map<string, THREE.Object3D | null>());
+    const [bones] = useState(() => ({ host: null as THREE.Object3D | null, children: [] as THREE.Object3D[], byName: new Map<string, THREE.Object3D | null>() }));
+    const [objects] = useState(() => new Map<string, { node: THREE.Object3D | null; at: number }>());
+    const [playerHead] = useState(() => ({ player: null as THREE.Object3D | null, head: null as THREE.Object3D | null }));
     useEffect(() => {
         rig.constraints = constraints;
         rig.reset();
@@ -42,8 +46,10 @@ const ProceduralRigRuntime: React.FC<ComponentRenderProps> = ({ object, componen
     useFrame((frame, delta) => {
         const host = hostRef?.current;
         if (!host) return;
-        if (bones.host !== host) {
+        // Bones are found again when the host or its children change (its model loading or swapped).
+        if (bones.host !== host || bones.children.length !== host.children.length || bones.children.some((child, i) => host.children[i] !== child)) {
             bones.host = host;
+            bones.children = [...host.children];
             bones.byName.clear();
         }
         // Bones by name, found once (by loose name: 'Head' finds 'mixamorig:Head') and kept while they stay under the host.
@@ -64,16 +70,22 @@ const ProceduralRigRuntime: React.FC<ComponentRenderProps> = ({ object, componen
             if (target.kind === 'player') {
                 const player = playerRef?.current;
                 if (!player) return frame.camera.getWorldPosition(_target);
-                const head = findBone(player, 'Head');
-                return head ? head.getWorldPosition(_target) : player.getWorldPosition(_target).add(new THREE.Vector3(0, PLAYER_EYE_HEIGHT, 0));
+                if (playerHead.player !== player || (playerHead.head && !isDescendantOf(playerHead.head, player))) {
+                    playerHead.player = player;
+                    playerHead.head = findBone(player, 'Head');
+                }
+                return playerHead.head ? playerHead.head.getWorldPosition(_target) : player.getWorldPosition(_target).add(_eyes);
             }
-            let node = objects.get(target.id);
-            if (node === undefined || (node && !node.parent)) {
-                node = null;
+            // Found once and kept while it stays in the scene; one not found yet (spawned later) is looked for again shortly.
+            const now = frame.clock.elapsedTime;
+            let known = objects.get(target.id);
+            if (!known || (known.node && !known.node.parent) || (!known.node && now - known.at > TARGET_RETRY)) {
+                let node: THREE.Object3D | null = null;
                 frame.scene.traverse(candidate => { if (!node && candidate.userData?.levelObjectId === target.id) node = candidate; });
-                objects.set(target.id, node);
+                known = { node, at: now };
+                objects.set(target.id, known);
             }
-            return node ? node.getWorldPosition(_target) : null;
+            return known.node ? known.node.getWorldPosition(_target) : null;
         };
         rig.apply(find, targetOf, delta);
         guard.commit();

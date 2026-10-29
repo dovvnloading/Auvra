@@ -371,12 +371,17 @@ const IMPOSTOR_FRAGMENT = /* glsl */ `
 #include <common>
 #include <fog_pars_fragment>
 uniform sampler2D map;
+uniform vec2 mapSize;
 uniform float light;
 varying vec2 vUv;
 void main() {
     vec4 texel = texture2D( map, vUv );
-    if ( texel.a < 0.5 ) discard;
-    gl_FragColor = vec4( texel.rgb * light, 1.0 );
+    // Smaller mip levels average thin leaves' alpha away; raising it with the level keeps far copies full.
+    vec2 dx = dFdx( vUv * mapSize ), dy = dFdy( vUv * mapSize );
+    float level = max( 0.0, 0.5 * log2( max( dot( dx, dx ), dot( dy, dy ) ) ) );
+    if ( texel.a * ( 1.0 + 0.25 * level ) < 0.5 ) discard;
+    // The picture was drawn over clear black, which the mip levels average in: divided out, edges keep their colour.
+    gl_FragColor = vec4( texel.rgb / max( texel.a, 1e-3 ) * light, 1.0 );
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
     #include <fog_fragment>
@@ -394,7 +399,7 @@ export const impostorMaterial = (impostor: Impostor): THREE.ShaderMaterial => {
     const material = new THREE.ShaderMaterial({
         uniforms: THREE.UniformsUtils.merge([
             THREE.UniformsLib.fog,
-            { map: { value: null }, light: { value: 1 }, impostorRect: { value: new THREE.Vector4() } },
+            { map: { value: null }, mapSize: { value: new THREE.Vector2(1, 1) }, light: { value: 1 }, impostorRect: { value: new THREE.Vector4() } },
         ]),
         vertexShader: IMPOSTOR_VERTEX,
         fragmentShader: IMPOSTOR_FRAGMENT,
@@ -402,6 +407,8 @@ export const impostorMaterial = (impostor: Impostor): THREE.ShaderMaterial => {
     });
     // Merged uniforms are copies, so the picture is set after.
     material.uniforms.map.value = impostor.texture;
+    const picture = impostor.texture.image as { width?: number; height?: number } | undefined;
+    (material.uniforms.mapSize.value as THREE.Vector2).set(picture?.width || 1, picture?.height || 1);
     (material.uniforms.impostorRect.value as THREE.Vector4).set(impostor.left, impostor.bottom, impostor.width, impostor.height);
     return material;
 };

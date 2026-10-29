@@ -14,6 +14,7 @@ import {
 } from '@react-three/rapier';
 import type { CollisionPayload, CuboidColliderProps, RapierCollider, RapierRigidBody, RigidBodyProps } from '@react-three/rapier';
 import type { LevelComponent, LevelObject } from '../../types';
+import { CARD_FRINGE_KEY } from '../../utils/processing/ModelMaterials';
 import { PhysicsFailureBoundary, objectIdFromRigidBody, physicsUserData, usePhysicsAvailable } from '../physics';
 import { useTriggerEvents } from '../triggers';
 import type { TriggerEvent } from '../triggers';
@@ -250,7 +251,8 @@ export const collectHostMeshes = (host: THREE.Object3D, objectId: string, skip?:
     const meshes: THREE.Mesh[] = [];
     const visit = (node: THREE.Object3D) => {
         for (const child of node.children) {
-            if (!child.visible || isPhysicsAnchor(child) || isNestedObject(child, objectId) || skip?.(child)) continue;
+            // A card fringe repeats its mesh's triangles (see splitAlphaCards): the mesh itself is enough.
+            if (!child.visible || isPhysicsAnchor(child) || isNestedObject(child, objectId) || child.userData?.[CARD_FRINGE_KEY] || skip?.(child)) continue;
             const mesh = child as THREE.Mesh;
             if (mesh.isMesh && !(child as THREE.InstancedMesh).isInstancedMesh
                 && mesh.geometry?.getAttribute('position') && hasVisibleMaterial(mesh)) {

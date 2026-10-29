@@ -3,7 +3,9 @@ import {
   DEFAULT_MATCHER_OPTIONS, FEATURE_SIZE, MotionDatabase, MotionMatcher, SAMPLE_RATE, TRAJECTORY_TIMES, buildQuery, frameFeatures, predictTrajectory,
   type MotionClipSamples, type MotionSample,
 } from '../../runtime/motionMatching';
-import { smoothSeries, travelFromFeet } from '../../runtime/motionDatabase';
+import * as THREE from 'three';
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { motionDatabaseFor, smoothSeries, travelFromFeet } from '../../runtime/motionDatabase';
 
 /*
  * Motion matching on synthetic locomotion: clips whose root moves at a known velocity (and turns),
@@ -186,6 +188,48 @@ describe('matcher', () => {
     };
     expect(jumps({ ...DEFAULT_MATCHER_OPTIONS, switchCost: 0 })).toBeGreaterThan(0);
     expect(jumps(DEFAULT_MATCHER_OPTIONS)).toBe(0);
+  });
+});
+
+/** A small rig (hips over two feet, skinned) and a clip that walks its hips forward. */
+const walker = () => {
+  const hips = new THREE.Bone();
+  hips.name = 'mixamorigHips';
+  hips.position.set(0, 1, 0);
+  const feet = ['Left', 'Right'].map((side, i) => {
+    const foot = new THREE.Bone();
+    foot.name = `mixamorig${side}Foot`;
+    foot.position.set(i ? 0.15 : -0.15, -0.95, 0);
+    hips.add(foot);
+    return foot;
+  });
+  const geometry = new THREE.BoxGeometry(0.4, 2, 0.4, 1, 1, 1);
+  const count = geometry.getAttribute('position').count;
+  geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(new Uint16Array(count * 4), 4));
+  geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(new Float32Array(count * 4).map((_, i) => (i % 4 === 0 ? 1 : 0)), 4));
+  const mesh = new THREE.SkinnedMesh(geometry, new THREE.MeshBasicMaterial());
+  const model = new THREE.Group();
+  model.add(hips, mesh);
+  mesh.bind(new THREE.Skeleton([hips, ...feet]));
+  const clip = new THREE.AnimationClip('Walk', 1, [new THREE.VectorKeyframeTrack('mixamorigHips.position', [0, 1], [0, 1, 0, 0, 1, 1.5])]);
+  return { model, clip };
+};
+
+describe('databases', () => {
+  it('are shared by characters made from one model, and kept apart for another size', () => {
+    const { model, clip } = walker();
+    const a = cloneSkinned(model);
+    const b = cloneSkinned(model);
+    // Each mixer plays its own copy of the clip; the model's own clip names them.
+    const first = motionDatabaseFor(a, [clip.clone()], [clip.uuid]);
+    expect(first).not.toBeNull();
+    expect(first!.clipSpeed('Walk')).toBeGreaterThan(1);
+    expect(motionDatabaseFor(b, [clip.clone()], [clip.uuid])).toBe(first);
+    const giant = cloneSkinned(model);
+    giant.scale.setScalar(2);
+    const big = motionDatabaseFor(giant, [clip.clone()], [clip.uuid]);
+    expect(big).not.toBe(first);
+    expect(big!.clipSpeed('Walk')).toBeCloseTo(first!.clipSpeed('Walk') * 2, 1);
   });
 });
 

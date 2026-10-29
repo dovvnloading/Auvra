@@ -119,6 +119,8 @@ export interface AnimatorExtras {
     eventSource?: string | null;
     /** Pose less often when far from the camera or out of view (see animationUpdateInterval). */
     lod?: boolean;
+    /** The model's own clips by name (the mixer plays copies), so characters made from one model share what is built from them. */
+    sourceClips?: Record<string, THREE.AnimationClip>;
 }
 
 /** Roughly a character's size, for telling whether it is on screen. */
@@ -148,6 +150,9 @@ const _modelScale = new THREE.Vector3();
 const GROUND_SPEED_RATE = 10;
 /** Seconds a Motion Match state crossfades over when it jumps to another clip. */
 export const MOTION_MATCH_BLEND = 0.2;
+/** The name a Motion Match state's second copy of a clip plays under, so a jump within one clip crossfades too. */
+export const MOTION_MATCH_TWIN = '\u0000match';
+const matchedClipName = (name: string) => (name.endsWith(MOTION_MATCH_TWIN) ? name.slice(0, -MOTION_MATCH_TWIN.length) : name);
 const _groundVelocity = new THREE.Vector3();
 const _modelQuaternion = new THREE.Quaternion();
 const _rootBasis = new THREE.Matrix3();
@@ -193,7 +198,7 @@ export const useGraphAnimator = (
     // How fast the character is moving over the ground (world units a second), for states that match it.
     const ground = useRef({ speed: 0, last: null as THREE.Vector3 | null, velocity: new THREE.Vector3() });
     // A Motion Match state's matcher, made for its clips on this model when it is first played.
-    const matching = useRef({ stateId: null as string | null, key: '', matcher: null as MotionMatcher | null });
+    const matching = useRef({ stateId: null as string | null, key: '', matcher: null as MotionMatcher | null, showing: {} as Record<string, string> });
 
     // -- FRAME LOOP --
     useFrame((state, rawDelta) => {
@@ -277,7 +282,9 @@ export const useGraphAnimator = (
             if (match.key !== key) {
                 match.key = key;
                 match.stateId = currentState.id;
-                const database = names.length ? motionDatabaseFor(modelObject, names.map(name => actionsMap[name].getClip())) : null;
+                const clips = names.map(name => actionsMap[name].getClip());
+                const sources = names.map((name, i) => extras.sourceClips?.[name]?.uuid ?? clips[i].uuid);
+                const database = names.length ? motionDatabaseFor(modelObject, clips, sources) : null;
                 match.matcher = database ? new MotionMatcher(database) : null;
             }
             if (match.matcher) {
@@ -287,14 +294,33 @@ export const useGraphAnimator = (
                 _groundVelocity.copy(ground.current.velocity).applyQuaternion(_modelQuaternion).divideScalar(matchedScale);
                 const velocity = { x: _groundVelocity.x, z: _groundVelocity.z };
                 const choice = match.matcher.step(delta, velocity, velocity, 0);
-                matched = choice.clip >= 0 ? match.matcher.database.clips[choice.clip].name : null;
-                const action = matched ? actionsMap[matched] : undefined;
-                if (action && choice.jumped) {
-                    // A clip fading back in starts where the match is; one already showing moves there.
-                    if (action.getEffectiveWeight() < 0.01) action.reset();
-                    action.setLoop(THREE.LoopRepeat, Infinity);
-                    action.time = choice.time;
-                    action.play();
+                const clipName = choice.clip >= 0 ? match.matcher.database.clips[choice.clip].name : null;
+                if (clipName) {
+                    // Each clip plays as itself or as its copy, whichever the last jump to it started.
+                    const showing = match.showing[clipName];
+                    matched = showing && actionsMap[showing] ? showing : clipName;
+                    if (choice.jumped) {
+                        let action = actionsMap[matched];
+                        if (mixer && action.getEffectiveWeight() >= 0.01) {
+                            // The clip is on show (playing, or fading out): the jump starts its other copy where the
+                            // match is and crossfades to it, instead of snapping the pose.
+                            const other = matched === clipName ? clipName + MOTION_MATCH_TWIN : clipName;
+                            if (!actionsMap[other]) {
+                                const twin = mixer.clipAction(action.getClip().clone());
+                                twin.clampWhenFinished = true;
+                                twin.enabled = false;
+                                twin.setEffectiveWeight(0);
+                                actionsMap[other] = twin;
+                            }
+                            matched = other;
+                            match.showing[clipName] = other;
+                            action = actionsMap[other];
+                        }
+                        action.reset();
+                        action.setLoop(THREE.LoopRepeat, Infinity);
+                        action.time = choice.time;
+                        action.play();
+                    }
                 }
             }
         }
@@ -307,7 +333,7 @@ export const useGraphAnimator = (
                 // A Motion Match state has its clips' speeds in its database, where a clip standing still has none.
                 const database = matched ? matching.current.matcher?.database : undefined;
                 rate *= groundSpeedRate(ground.current.speed, targetWeights, name => (database
-                    ? database.clipSpeed(name) * matchedScale
+                    ? database.clipSpeed(matchedClipName(name)) * matchedScale
                     : clipGroundSpeed(modelObject, actionsMap[name].getClip()) * scale));
             }
             if (currentState.stateType === 'Single' || currentState.stateType === 'MotionMatch') {
