@@ -30,9 +30,9 @@ export class FullscreenPass {
     private readonly camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     readonly material: THREE.ShaderMaterial;
 
-    constructor(fragmentShader: string, uniforms: Record<string, THREE.IUniform>) {
+    constructor(fragmentShader: string, uniforms: Record<string, THREE.IUniform>, glslVersion: THREE.GLSLVersion | null = null) {
         this.material = new THREE.ShaderMaterial({
-            vertexShader: FULLSCREEN_VERTEX, fragmentShader, uniforms,
+            vertexShader: FULLSCREEN_VERTEX, fragmentShader, uniforms, glslVersion,
             depthTest: false, depthWrite: false, toneMapped: false,
         });
         const geometry = new THREE.BufferGeometry();

@@ -362,11 +362,11 @@ The bake is stored with the level and goes into every build. It shows **Out of d
 
 ## Particles
 
-Add a **Particles** component to an object for a particle effect: smoke, fire, sparks, rain, snow, an explosion, a magic swirl, a trail, falling leaves, confetti. Pick a **Preset** to start from (Smoke, Fire, Sparks, Dust motes, Explosion, Embers, Magic, Rain, Snow, Steam, Falling leaves, Confetti, Fireflies, Waterfall mist, Muzzle flash, Shockwave, Trail, Debris), then shape it in its sections. An object can carry several, one effect each: a campfire is a fire, its smoke and its embers.
+Add a **Particles** component to an object for a particle effect: smoke, fire, sparks, rain, snow, an explosion, a magic swirl, a trail, falling leaves, confetti. Pick a **Preset** to start from (Smoke, Fire, Sparks, Dust motes, Explosion, Embers, Magic, Rain, Snow, Steam, Falling leaves, Confetti, Fireflies, Waterfall mist, Muzzle flash, Shockwave, Trail, Debris, and on the GPU Fountain, Swarm and Downpour), then shape it in its sections. An object can carry several, one effect each: a campfire is a fire, its smoke and its embers.
 
 | Section | What it sets |
 |---|---|
-| Emission | **Rate** per second; **Per metre moved** (particles laid along the way the object moves: trails and wakes); **Bursts** at times in each **Cycle**; **Loop** or run once; **Prewarm** (a looping effect starts as if it had been running); a **Delay** before it starts; **Max alive** |
+| Emission | **Simulation** on the **CPU** or the **GPU** (see below); **Rate** per second; **Per metre moved** (particles laid along the way the object moves: trails and wakes); **Bursts** at times in each **Cycle**; **Loop** or run once; **Prewarm** (a looping effect starts as if it had been running); a **Delay** before it starts; **Max alive** |
 | Shape | Where particles come from and which way they go: a **Point**, **Sphere** or **Hemisphere** (outwards), a **Cone** opening by its spread, a **Box**, a **Disc**, a **Line**, or the **model's surface** (along its faces: embers off a burning crate, sparkles off a statue). **Spread** is the cone around the **Launch axis** (up by default; rain and snow fall down it); **Fill** is 0 for the shape's edge only, 1 for anywhere in it; **Random dir.** mixes in random directions |
 | Start | Each particle's **Lifetime**, **Speed**, **Size**, **Rotation** and **Spin**, picked between two values; a colour between two; how much of the object's own motion it starts with; and whether it stays in the **World** where it was left or moves with the object (**Local**: a jet's flame) |
 | Forces | **Gravity** (negative rises), **Drag**, **Wind**, **Turbulence** (swirling, the size of its swirls set by **Swirl size**) and **Orbit** round the object's up axis |
@@ -375,6 +375,14 @@ Add a **Particles** component to an object for a particle effect: smoke, fire, s
 | Sub-emitters | Another Particles component on the same object, set off where these particles **die** or **hit something**: rain that splashes, fireworks that burst, sparks that smoke |
 | Rendering | **Draw as** camera-facing sprites, **stretched along their motion** (sparks, rain), **flat** (ripples, shockwaves), **upright**, or a **ribbon** through them (trails). The **Sprite** is one of the engine's (soft, smoke, spark, glow, ring, star, an animated flame, droplet, snowflake, leaf, square, debris) or a texture of the project, which can be a flipbook (columns and rows) played over each particle's life, at a frame rate, or one frame at random. **Blending** added glows, blended layers; **Brightness** above 1 glows with bloom |
 | Light | A light that brightens and dims with the effect, and can flicker: a fire's glow, an explosion's flash |
+
+### GPU particles
+
+Set **Simulation** to **GPU** for effects of hundreds of thousands of particles: a fountain, a storm of rain over a whole valley, a swarm, a model dissolving into light. The graphics card moves and draws them, so an emitter holds up to 1,048,576 particles in play (131,072 in the editor's preview) and emits up to a million a second. Shapes (the model's surface too), forces, the curves over life, sprites and flipbooks, the light and the scripting nodes work as they do on the CPU. Some things are different:
+
+- **Collision** is with the ground under the emitter rather than with every surface, looked for a few times a second.
+- **Sub-emitters** do not run, **ribbons** draw as camera-facing sprites, and particles are not **sorted**: added (glowing) blending suits them best.
+- When an emitter asks for more than it holds, its oldest particles give way to new ones.
 
 Effects preview live in the editor, one-shot effects replaying so you can see them; collision runs only in play. In play an effect starts by itself unless **Play on start** is off; the [Play, Stop and Emit Particles](level-scripting.md#particle-nodes) nodes and `ctx.particles` in [gameplay scripts](scripting.md) start, stop and burst it.
 
