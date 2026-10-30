@@ -15,6 +15,7 @@ import type { HostGeometry } from './components/physicsComponents';
 import { usePhysicsQueries } from './physics';
 import { GUNSHOT_NOISE_RADIUS, NoiseBus, NoiseBusContext, useNoiseBus } from './perception';
 import { LevelLightVolume } from './lighting/LevelLightVolume';
+import { ShadowDetailContext } from './lighting/DistanceShadowLights';
 import { LevelGroundColliders } from './terrainPhysics';
 import { InstancedLevelLayer } from '../components/Environment/InstancedLevelLayer';
 import { AudioSystem } from '../components/Environment/AudioSystem';
@@ -1004,6 +1005,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                 {/* --- GPU POST PROCESSING PIPELINE --- */}
                 {/* A level Post Process component replaces the default stack; the quality setting and the fallback gate both. */}
                 <PostProcessAllowedContext.Provider value={postProcessAllowed}>
+                <ShadowDetailContext.Provider value={highQuality ? 'high' : 'low'}>
                 <MeshLodContext.Provider value={settings.quality.meshLod !== false}>
                 {postProcessAllowed && <DefaultPostProcess />}
 
@@ -1035,6 +1037,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                     </TriggerEventsProvider>
                 </RuntimeServicesProvider>
                 </MeshLodContext.Provider>
+                </ShadowDetailContext.Provider>
                 </PostProcessAllowedContext.Provider>
             </AuvraCanvas>
 

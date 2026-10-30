@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { cascadeCount } from '../../runtime/lighting/DistanceShadowLights';
-import { cascadedLightsChunk, cascadeSplits, fitCascade, viewSliceSphere } from '../../runtime/lighting/distanceShadows';
+import { cascadedLightsChunk, cascadeSplits, farShadowReach, fitCascade, lookDistance, NEAR_SHADOW_REACH, nearShadowReach, viewSliceSphere } from '../../runtime/lighting/distanceShadows';
 // The chunk as three.js ships it (the live one is replaced once the cascade lights' module loads).
 // @ts-expect-error three.js ships its chunk sources without typings.
 import plainLightsChunk from 'three/src/renderers/shaders/ShaderChunk/lights_fragment_begin.glsl.js';
@@ -39,6 +39,17 @@ describe('distance-shadow lighting chunk', () => {
     // Each cascade is looked for once, and each of the five directional lights shades once.
     expect(unrolled.match(/shadowCascadeFound = true;/g)).toHaveLength(3);
     expect(unrolled.match(/RE_Direct\( directLight/g)?.length).toBeGreaterThanOrEqual(5);
+    // One sample per shadow map in the search, one per directional light (the compiler drops those past the third).
+    expect(unrolled.match(/getShadow\( directionalShadowMap/g)).toHaveLength(3 + 5);
+  });
+
+  it('eases one cascade into the next, fades out the last, and spends no lighting on dark lights', () => {
+    const chunk = cascadedLightsChunk(plainLightsChunk)!;
+    expect(chunk).toContain('mix( shadowCascadeSample, shadowCascade, smoothstep( 0.0, 0.040, shadowCascadeFirstEdge ) )');
+    expect(chunk).toContain('mix( 1.0, shadowCascade, smoothstep( 0.0, 0.040, shadowCascadeFirstEdge ) )');
+    expect(chunk).toContain('if ( dot( directLight.color, directLight.color ) > 0.0 ) RE_Direct( directLight,');
+    // What does not take shadows reads no cascade.
+    expect(chunk).toContain('receiveShadow && shadowCascadeEdge > 0.002');
   });
 
   it('leaves a chunk it was not written against alone, and is what lit materials now compile with', () => {
@@ -48,8 +59,31 @@ describe('distance-shadow lighting chunk', () => {
 });
 
 describe('cascades', () => {
-  it('are more for a farther distance, and none when it is off', () => {
-    expect([0, -5, 80, 250, 1000].map(cascadeCount)).toEqual([0, 0, 1, 2, 3]);
+  it('are as many for any distance, so changing it recompiles nothing, and none when it is off', () => {
+    expect([0, -5, 80, 250, 1000].map(cascadeCount)).toEqual([0, 0, 2, 2, 2]);
+  });
+
+  it('start where the near map stops and reach the distance past it, moving out only as an orbit pulls back', () => {
+    expect(nearShadowReach(0)).toBe(NEAR_SHADOW_REACH);
+    expect(nearShadowReach(10)).toBe(NEAR_SHADOW_REACH);
+    expect(farShadowReach(250, 10)).toBe(250);
+    // Pulled back, the near map still reaches what is looked at, and the rest goes along with it.
+    expect(nearShadowReach(200)).toBeGreaterThanOrEqual(240);
+    expect(farShadowReach(250, 200)).toBe(250 + nearShadowReach(200) - NEAR_SHADOW_REACH);
+    // In steps: a small zoom does not re-fit the map.
+    expect(nearShadowReach(200)).toBe(nearShadowReach(201));
+    expect(nearShadowReach(400)).toBeGreaterThan(nearShadowReach(200));
+  });
+
+  it('count a look from what the camera orbits, none without an orbit, and hold it while the orbit is off', () => {
+    const camera = new THREE.PerspectiveCamera();
+    camera.position.set(0, 30, 40);
+    camera.updateMatrixWorld();
+    const orbit = { target: new THREE.Vector3(), enabled: true };
+    expect(lookDistance(camera, orbit, 0)).toBeCloseTo(50, 6);
+    expect(lookDistance(camera, null, 12)).toBe(0);
+    orbit.enabled = false;
+    expect(lookDistance(camera, orbit, 12)).toBe(12);
   });
 
   it('split the view from the near map out to the distance, tighter near', () => {
@@ -90,6 +124,8 @@ describe('cascades', () => {
     expect(direction.dot(towardSun)).toBeCloseTo(1, 6);
     expect(light.shadow.camera.right).toBe(64);
     expect(light.shadow.normalBias).toBeCloseTo((128 / 1024) * 1.5, 6);
+    // The depth bias is two texels in world units, whatever the map's depth range.
+    expect(-light.shadow.bias * (light.shadow.camera.far - light.shadow.camera.near)).toBeCloseTo((128 / 1024) * 2, 6);
     // Where the map sits across the light (moving along the light changes nothing it draws).
     const across = (point: THREE.Vector3) => point.clone().sub(towardSun.clone().multiplyScalar(point.dot(towardSun)));
     const placed = across(light.target.position);
@@ -99,5 +135,14 @@ describe('cascades', () => {
     fitCascade(light, new THREE.Vector3(14, 0, 10), 64, towardSun);
     const moved = across(light.target.position).distanceTo(placed) / (128 / 1024);
     expect(moved).toBeGreaterThan(1);
+  });
+
+  it('stand back far enough for a sphere of any size', () => {
+    const light = new THREE.DirectionalLight(0x000000, 0);
+    light.shadow.mapSize.set(1024, 1024);
+    const towardSun = new THREE.Vector3(0, 1, 0);
+    fitCascade(light, new THREE.Vector3(), 1500, towardSun);
+    expect(light.position.distanceTo(light.target.position)).toBeGreaterThanOrEqual(1500);
+    expect(light.shadow.camera.far).toBeGreaterThanOrEqual(light.position.distanceTo(light.target.position) + 1500);
   });
 });
