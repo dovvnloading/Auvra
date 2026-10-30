@@ -5,6 +5,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { AuvraCanvas } from '../../renderer/AuvraCanvas';
 import { View, PerspectiveCamera, OrthographicCamera, OrbitControls } from '@react-three/drei';
+import { PostProcessAllowedContext } from '../../runtime/components/postProcess';
 import { useAssets, useLevel } from '../../context/SceneContext';
 import { LevelObject } from '../../types';
 import { InteractionMode, PaintMode, PaintSettings, TransformSettings, ViewportLayout, SculptSettings } from './types';
@@ -640,6 +641,9 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                 eventSource={containerRef as React.MutableRefObject<HTMLElement>}
                 shadows
             >
+                {/* A composer draws one picture for the whole canvas and clears what the views drew in their own
+                    rectangles, so with four views up each draws straight to the screen instead. */}
+                <PostProcessAllowedContext.Provider value={layout === 'single'}>
                 {layout === 'single' && (
                     <View track={viewMain as React.MutableRefObject<HTMLElement>}>
                         <PerspectiveCamera makeDefault position={[10, 10, 10]} fov={45} />
@@ -726,6 +730,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                         </View>
                     </>
                 )}
+                </PostProcessAllowedContext.Provider>
             </AuvraCanvas>
         </div>
     );
