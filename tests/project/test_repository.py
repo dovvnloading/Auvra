@@ -175,6 +175,26 @@ class ProjectTests(unittest.TestCase):
         self.assertFalse(nested_archive.exists())
         self.assertFalse(any(self.root.glob("nested.auvrapack.tmp-*")))
 
+    def test_save_as_keeps_imported_assets_and_leaves_upload_staging_behind(self):
+        reference = self.repo.assets.put_stream(io.BytesIO(b"model"), mime="application/octet-stream")
+        self.repo.apply_changes({"models": [{"id": "m", "name": "Model", "assetId": reference.asset_id}]}, expected_revision=0)
+        staging = self.root / "Content" / "sha256" / ".incoming"
+        self.assertTrue(staging.is_dir())
+        (staging / "asset-unfinished").write_bytes(b"half an upload")
+        destination = Path(self.tmp.name) / "imported-copy"
+        copy = self.repo.save_as(destination)
+        try:
+            self.assertFalse((destination / "Content" / "sha256" / ".incoming").exists())
+            self.assertTrue(copy.assets.verify(reference.asset_id))
+            # A copy can take imports of its own, and the source keeps what it was doing.
+            imported = copy.assets.put_stream(io.BytesIO(b"another model"), mime="application/octet-stream")
+            self.assertTrue(copy.assets.verify(imported.asset_id))
+            self.assertTrue((staging / "asset-unfinished").is_file())
+        finally: copy.close()
+        reopened = ProjectRepository(destination)
+        try: self.assertTrue(reopened.assets.verify(reference.asset_id))
+        finally: reopened.close()
+
     def test_save_as_same_name_keeps_descriptor(self):
         destination = Path(self.tmp.name) / "same-name"
         copy = self.repo.save_as(destination, name=self.repo.name)
