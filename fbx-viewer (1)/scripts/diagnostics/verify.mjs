@@ -159,6 +159,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/patrolPath.ts': 'hot-loop',
   'runtime/scripting/scriptSplines.ts': 'pure-utility',
   'runtime/lighting/bakedLighting.ts': 'pure-utility',
+  'runtime/lighting/distanceShadows.ts': 'hot-loop',
   'runtime/lighting/lightBaker.ts': 'hot-loop',
   'runtime/lighting/lightBakeJobs.ts': 'data-model',
   'runtime/lighting/LevelLightVolume.tsx': 'hot-loop-controller',
