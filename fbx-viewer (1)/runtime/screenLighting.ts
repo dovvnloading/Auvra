@@ -471,6 +471,10 @@ export class ScreenLightingEffect extends Effect {
         for (const t of [this.bounceRaw, ...this.history, ...this.smoothed, this.reflectionRaw, this.reflectionSoft]) {
             t.texture.minFilter = t.texture.magFilter = THREE.LinearFilter;
         }
+        // History holds a colour and a distance per pixel: blending across an edge in looking one up would make a
+        // value true of neither side, which passes the distance check and stays. Bounced light is soft enough
+        // not to miss the filtering, and a jittered camera looks up off-centre every frame.
+        for (const t of this.history) t.texture.minFilter = t.texture.magFilter = THREE.NearestFilter;
         const u = this.uniforms;
         u.get('surfaceDepth')!.value = this.surface.depth;
         u.get('surfaceNormal')!.value = this.surface.normalRoughness;

@@ -7,6 +7,7 @@ import {
   POST_PROCESS_COMPONENT,
   POST_PROCESS_DEFAULTS,
   PostProcessAllowedContext,
+  PostProcessQualityContext,
   claimPostProcess,
   createToneMappingOverride,
   getPostProcessOwner,
@@ -31,7 +32,37 @@ const harness = vi.hoisted(() => ({
   frames: new Set<() => void>(),
   mountedComposers: 0,
   lastComposer: null as { multisampling?: number; effects: RecordedEffect[] } | null,
+  lastPipeline: null as { renderScale: number; sharpness: number; lit: string[]; display: string[]; elements: unknown } | null,
 }));
+
+vi.mock('../../runtime/temporal/TemporalPipeline', async () => {
+  const R = await import('react');
+  const named = (children: React.ReactNode) => R.Children.toArray(children).map(child => {
+    const element = child as React.ReactElement<Record<string, unknown>>;
+    const type = element.type as { displayName?: string; name?: string };
+    return { name: type.displayName ?? type.name ?? '?', key: element.key, props: element.props };
+  });
+  const useMounted = () => R.useEffect(() => {
+    harness.mountedComposers++;
+    return () => { harness.mountedComposers--; };
+  }, []);
+  return {
+    OwnedComposer: ({ children }: { children: React.ReactNode }) => {
+      useMounted();
+      harness.lastPipeline = null;
+      harness.lastComposer = { multisampling: 0, effects: named(children) };
+      return R.createElement(R.Fragment, null, children);
+    },
+    TemporalPipeline: ({ renderScale, sharpness, lit, display }: { renderScale: number; sharpness: number; lit: React.ReactNode; display: React.ReactNode }) => {
+      useMounted();
+      const litEffects = named(lit);
+      const displayEffects = named(display);
+      harness.lastPipeline = { renderScale, sharpness, lit: litEffects.map(effect => effect.name), display: displayEffects.map(effect => effect.name), elements: display };
+      harness.lastComposer = { multisampling: 0, effects: [...litEffects, ...displayEffects] };
+      return R.createElement(R.Fragment, null, lit, display);
+    },
+  };
+});
 
 vi.mock('@react-three/fiber', async () => {
   const R = await import('react');
@@ -106,6 +137,7 @@ beforeEach(() => {
   harness.frames.clear();
   harness.mountedComposers = 0;
   harness.lastComposer = null;
+  harness.lastPipeline = null;
 });
 
 describe('post process settings', () => {
@@ -118,7 +150,7 @@ describe('post process settings', () => {
       'autoExposure', 'exposureCompensation', 'adaptationSpeed', 'lightShafts', 'lightShaftsIntensity', 'sunHaze', 'sunHazeIntensity',
       'globalIllumination', 'giIntensity', 'reflections', 'reflectionIntensity', 'motionBlur', 'motionBlurStrength', 'vignette', 'vignetteDarkness', 'depthOfField', 'focusDistance', 'bokehScale',
       'saturation', 'contrast', 'brightness', 'temperature', 'tint', 'look', 'lookStrength', 'filmGrain', 'chromaticAberration',
-      'antialias',
+      'antialias', 'renderScale', 'sharpness',
     ]);
     for (const prop of POST_PROCESS_COMPONENT.props) {
       if (prop.type === 'select') expect(prop.options?.map(option => option.value)).toContain(prop.default);
@@ -129,12 +161,12 @@ describe('post process settings', () => {
     }
     const select = (key: string) => POST_PROCESS_COMPONENT.props.find(prop => prop.key === key)?.options?.map(option => option.value);
     expect(select('toneMapping')).toEqual(['aces', 'agx', 'reinhard', 'neutral', 'none']);
-    expect(select('antialias')).toEqual(['smaa', 'none']);
+    expect(select('antialias')).toEqual(['temporal', 'smaa', 'none']);
     expect(select('look')).toEqual(['none', 'warm', 'cool', 'cinematic', 'bleach', 'noir', 'vintage', 'night']);
 
     expect(resolvePostProcessSettings(componentWith(defaults()))).toEqual(POST_PROCESS_DEFAULTS);
     expect(POST_PROCESS_DEFAULTS).toMatchObject({
-      bloom: true, ambientOcclusion: true, toneMapping: 'aces', exposure: 1, depthOfField: false, antialias: 'smaa',
+      bloom: true, ambientOcclusion: true, toneMapping: 'aces', exposure: 1, depthOfField: false, antialias: 'temporal',
       saturation: 0, contrast: 0, brightness: 0,
       // The eye adapts and the sun lights the air by default; the camera's own effects are opt-in.
       autoExposure: true, exposureCompensation: 0, lightShafts: true, sunHaze: true, motionBlur: false,
@@ -272,15 +304,19 @@ describe('post process stack', () => {
   it('builds the default stack in pipeline order with single-sampled buffers', () => {
     const view = render(stackElement(componentWith(defaults())));
     expect(effectNames()).toEqual([
-      'ScreenLighting', 'SunHaze', 'N8AO', 'LightShafts', 'AutoExposure', 'Bloom', 'ToneMapping', 'Vignette', 'SMAA',
+      'ScreenLighting', 'SunHaze', 'AmbientOcclusion', 'LightShafts', 'AutoExposure', 'Bloom', 'ToneMapping', 'Vignette',
     ]);
+    // The lit scene's effects run at the render scale, up to the resolve; the rest on the steady picture.
+    expect(harness.lastPipeline?.lit).toEqual(['ScreenLighting', 'SunHaze', 'AmbientOcclusion']);
+    expect(harness.lastPipeline?.display[0]).toBe('LightShafts');
+    expect(harness.lastPipeline).toMatchObject({ renderScale: 1, sharpness: POST_PROCESS_DEFAULTS.sharpness });
     expect(effectProps('ScreenLighting')).toMatchObject({ bounce: 1, reflections: 1 });
     expect(effectProps('SunHaze')).toMatchObject({ intensity: POST_PROCESS_DEFAULTS.sunHazeIntensity });
     expect(effectProps('LightShafts')).toMatchObject({ intensity: POST_PROCESS_DEFAULTS.lightShaftsIntensity });
     expect(effectProps('AutoExposure')).toMatchObject({ compensation: 0, speed: 1 });
     expect(harness.lastComposer?.multisampling).toBe(0);
     expect(effectProps('ToneMapping')).toMatchObject({ mode: ToneMappingMode.ACES_FILMIC });
-    expect(effectProps('N8AO')).toMatchObject({ intensity: POST_PROCESS_DEFAULTS.aoIntensity, aoRadius: POST_PROCESS_DEFAULTS.aoRadius });
+    expect(effectProps('AmbientOcclusion')).toMatchObject({ intensity: POST_PROCESS_DEFAULTS.aoIntensity, aoRadius: POST_PROCESS_DEFAULTS.aoRadius });
     expect(effectProps('Bloom')).toMatchObject({
       mipmapBlur: true, intensity: POST_PROCESS_DEFAULTS.bloomIntensity, luminanceThreshold: POST_PROCESS_DEFAULTS.bloomThreshold,
     });
@@ -292,8 +328,8 @@ describe('post process stack', () => {
       ...defaults(), depthOfField: true, focusDistance: 6, bokehScale: 3, saturation: -0.5, contrast: 0.25, brightness: 0,
     })));
     expect(effectNames()).toEqual([
-      'ScreenLighting', 'SunHaze', 'N8AO', 'DepthOfField', 'LightShafts', 'AutoExposure', 'Bloom', 'ToneMapping', 'HueSaturation',
-      'BrightnessContrast', 'Vignette', 'SMAA',
+      'ScreenLighting', 'SunHaze', 'AmbientOcclusion', 'DepthOfField', 'LightShafts', 'AutoExposure', 'Bloom', 'ToneMapping', 'HueSaturation',
+      'BrightnessContrast', 'Vignette',
     ]);
     expect(effectProps('DepthOfField')).toMatchObject({ worldFocusDistance: 6, bokehScale: 3 });
     expect(effectProps('HueSaturation')).toMatchObject({ saturation: -0.5 });
@@ -309,14 +345,83 @@ describe('post process stack', () => {
     view.unmount();
   });
 
+  it('uses the composer of old for the other anti-aliasing choices, with SMAA last', () => {
+    const view = render(stackElement(componentWith({ ...defaults(), antialias: 'smaa' })));
+    expect(harness.lastPipeline).toBeNull();
+    expect(effectNames()).toEqual([
+      'ScreenLighting', 'SunHaze', 'AmbientOcclusion', 'LightShafts', 'AutoExposure', 'Bloom', 'ToneMapping', 'Vignette', 'SMAA',
+    ]);
+    view.rerender(stackElement(componentWith({ ...defaults(), antialias: 'none' })));
+    expect(effectNames()).not.toContain('SMAA');
+    view.unmount();
+  });
+
+  it('passes the render scale and sharpness on, and holds them to the project', () => {
+    const scaled = componentWith({ ...defaults(), renderScale: 0.75, sharpness: 0.5 });
+    const view = render(stackElement(scaled));
+    expect(harness.lastPipeline).toMatchObject({ renderScale: 0.75, sharpness: 0.5 });
+    view.rerender(React.createElement(PostProcessQualityContext.Provider, { value: { antialias: 'temporal', renderScale: 0.8 } }, stackElement(scaled)));
+    expect(harness.lastPipeline?.renderScale).toBeCloseTo(0.6);
+    view.rerender(React.createElement(PostProcessQualityContext.Provider, { value: { antialias: 'smaa', renderScale: 1 } }, stackElement(scaled)));
+    expect(harness.lastPipeline).toBeNull();
+    expect(effectNames()).toContain('SMAA');
+    view.unmount();
+  });
+
+  it('falls back to SMAA on a device that cannot draw into float targets', () => {
+    harness.gl = { ...harness.gl, extensions: { has: () => false } } as typeof harness.gl;
+    const view = render(stackElement(componentWith(defaults())));
+    expect(harness.lastPipeline).toBeNull();
+    expect(effectNames()).toContain('SMAA');
+    view.unmount();
+  });
+
+  it('counts a running temporal stack for the slow-frame fallback, and only that', () => {
+    const temporalStacks = { current: 0 };
+    const quality = (antialias: 'temporal' | 'smaa') => ({ antialias, renderScale: 1, temporalStacks });
+    const element = (antialias: 'temporal' | 'smaa', props = defaults()) => React.createElement(PostProcessQualityContext.Provider, { value: quality(antialias) }, stackElement(componentWith(props)));
+    const view = render(element('temporal'));
+    expect(temporalStacks.current).toBe(1);
+    view.rerender(element('smaa'));
+    expect(temporalStacks.current).toBe(0);
+    view.rerender(element('temporal', { ...defaults(), antialias: 'none' }));
+    expect(temporalStacks.current).toBe(0);
+    view.rerender(element('temporal'));
+    expect(temporalStacks.current).toBe(1);
+    view.unmount();
+    expect(temporalStacks.current).toBe(0);
+  });
+
+  it('keeps the same effect lists when only the render scale changes, so nothing has to rebuild', () => {
+    const scaled = componentWith(defaults());
+    const inQuality = (renderScale: number) => React.createElement(PostProcessQualityContext.Provider, { value: { antialias: 'temporal', renderScale } }, stackElement(scaled));
+    const view = render(inQuality(1));
+    const before = harness.lastPipeline?.elements;
+    view.rerender(inQuality(0.7));
+    expect(harness.lastPipeline?.renderScale).toBeCloseTo(0.7);
+    expect(harness.lastPipeline?.elements).toBe(before);
+    view.unmount();
+  });
+
+  it('starts a fresh composer when the effects change, so a new one cannot land after tone mapping', () => {
+    const view = render(stackElement(componentWith({ ...defaults(), bloom: false, antialias: 'smaa' })));
+    expect(harness.mountedComposers).toBe(1);
+    view.rerender(stackElement(componentWith({ ...defaults(), bloom: true, antialias: 'smaa' })));
+    // React kept none of the old composer: one is mounted, and it is new.
+    expect(harness.mountedComposers).toBe(1);
+    const names = effectNames()!;
+    expect(names.indexOf('Bloom')).toBeLessThan(names.indexOf('ToneMapping'));
+    view.unmount();
+  });
+
   it('adds the camera effects and colour work only when they change the image', () => {
     const view = render(stackElement(componentWith({
       ...defaults(), motionBlur: true, motionBlurStrength: 0.8, exposureCompensation: -1, adaptationSpeed: 2,
       temperature: 0.4, tint: -0.1, look: 'cinematic', lookStrength: 0.6, filmGrain: 0.5, chromaticAberration: 0.5,
     })));
     expect(effectNames()).toEqual([
-      'ScreenLighting', 'SunHaze', 'N8AO', 'LightShafts', 'MotionBlur', 'AutoExposure', 'WhiteBalance', 'Bloom', 'ToneMapping', 'Look',
-      'Vignette', 'ChromaticAberration', 'Noise', 'SMAA',
+      'ScreenLighting', 'SunHaze', 'AmbientOcclusion', 'LightShafts', 'MotionBlur', 'AutoExposure', 'WhiteBalance', 'Bloom', 'ToneMapping', 'Look',
+      'Vignette', 'ChromaticAberration', 'Noise',
     ]);
     expect(effectProps('MotionBlur')).toMatchObject({ strength: 0.8 });
     expect(effectProps('AutoExposure')).toMatchObject({ compensation: -1, speed: 2 });
@@ -354,13 +459,13 @@ describe('post process stack', () => {
 
   it('rebuilds occlusion for a new default camera', () => {
     const view = render(stackElement(componentWith(defaults())));
-    const occlusion = () => harness.lastComposer?.effects.find(effect => effect.name === 'N8AO');
+    const occlusion = () => harness.lastComposer?.effects.find(effect => effect.name === 'AmbientOcclusion');
     const before = occlusion();
     harness.camera = { uuid: 'camera-b' };
     view.rerender(stackElement(componentWith({ ...defaults(), aoIntensity: 3 })));
     const after = occlusion();
-    expect(before?.name).toBe('N8AO');
-    expect(after?.name).toBe('N8AO');
+    expect(before?.name).toBe('AmbientOcclusion');
+    expect(after?.name).toBe('AmbientOcclusion');
     expect(after?.key).not.toBe(before?.key);
     expect(after?.props.intensity).toBe(3);
     view.unmount();

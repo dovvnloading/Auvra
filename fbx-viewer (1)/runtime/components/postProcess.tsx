@@ -1,14 +1,16 @@
-import React, { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import React, { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import {
-    Bloom, BrightnessContrast, ChromaticAberration, DepthOfField, EffectComposer, HueSaturation, N8AO, Noise, SMAA, ToneMapping, Vignette
+    Bloom, BrightnessContrast, ChromaticAberration, DepthOfField, HueSaturation, N8AO, Noise, SMAA, ToneMapping, Vignette
 } from '@react-three/postprocessing';
 import { BlendFunction, LUT3DEffect, ToneMappingMode } from 'postprocessing';
 import {
     AutoExposureEffect, COLOR_LOOKS, LightShaftsEffect, lookTexture, MotionBlurEffect, SunHazeEffect, WhiteBalanceEffect, type ColorLook,
 } from '../postEffects';
 import { ScreenLightingEffect } from '../screenLighting';
+import { OwnedComposer, TemporalPipeline } from '../temporal/TemporalPipeline';
+import { MAX_RENDER_SCALE, MIN_RENDER_SCALE } from '../temporal/temporalSettings';
 import { RENDER_CONVENTIONS } from '../../renderer/conventions';
 import type { LevelComponent } from '../../types';
 import type { ComponentDefinition, ComponentPropSchema, ComponentRenderProps } from './types';
@@ -16,11 +18,11 @@ import type { ComponentDefinition, ComponentPropSchema, ComponentRenderProps } f
 // --- SETTINGS ---
 
 export type PostProcessToneMapping = 'aces' | 'agx' | 'reinhard' | 'neutral' | 'none';
-export type PostProcessAntialias = 'smaa' | 'none';
+export type PostProcessAntialias = 'temporal' | 'smaa' | 'none';
 export type PostProcessLook = ColorLook;
 
 export const POST_PROCESS_TONE_MAPPINGS: readonly PostProcessToneMapping[] = ['aces', 'agx', 'reinhard', 'neutral', 'none'];
-export const POST_PROCESS_ANTIALIAS_MODES: readonly PostProcessAntialias[] = ['smaa', 'none'];
+export const POST_PROCESS_ANTIALIAS_MODES: readonly PostProcessAntialias[] = ['temporal', 'smaa', 'none'];
 
 /** A level's post-process stack, every field defaulted and within range. */
 export interface PostProcessSettings {
@@ -49,6 +51,10 @@ export interface PostProcessSettings {
     /** -1..1; 0 leaves the image unchanged. */
     brightness: number;
     antialias: PostProcessAntialias;
+    /** Temporal only: the size the lit scene is drawn at, as a share of the display's in each direction. */
+    renderScale: number;
+    /** Temporal only: how much crispness to restore to the gathered picture. */
+    sharpness: number;
     /** The eye adapting to the light: brighter in the dark, darker in glare. */
     autoExposure: boolean;
     /** Stops (EV) brighter or darker than auto exposure settles on. */
@@ -85,7 +91,7 @@ type SettingKey<T> = { [K in keyof PostProcessSettings]: PostProcessSettings[K] 
 type NumberSetting = SettingKey<number>;
 type BooleanSetting = SettingKey<boolean>;
 
-/** Subtle bloom on emissive and over-bright pixels, ambient occlusion, ACES, a light vignette and SMAA. */
+/** Subtle bloom on emissive and over-bright pixels, ambient occlusion, ACES, a light vignette and temporal anti-aliasing. */
 export const POST_PROCESS_DEFAULTS: PostProcessSettings = {
     bloom: true,
     bloomIntensity: 0.4,
@@ -104,7 +110,9 @@ export const POST_PROCESS_DEFAULTS: PostProcessSettings = {
     saturation: 0,
     contrast: 0,
     brightness: 0,
-    antialias: 'smaa',
+    antialias: 'temporal',
+    renderScale: 1,
+    sharpness: 0.25,
     autoExposure: true,
     exposureCompensation: 0,
     adaptationSpeed: 1,
@@ -150,7 +158,9 @@ export const POST_PROCESS_RANGES: Record<NumberSetting, { min: number; max: numb
     tint: { min: -1, max: 1, step: 0.01 },
     lookStrength: { min: 0, max: 1, step: 0.05 },
     filmGrain: { min: 0, max: 1, step: 0.01 },
-    chromaticAberration: { min: 0, max: 1, step: 0.01 }
+    chromaticAberration: { min: 0, max: 1, step: 0.01 },
+    renderScale: { min: MIN_RENDER_SCALE, max: MAX_RENDER_SCALE, step: 0.05 },
+    sharpness: { min: 0, max: 1, step: 0.05 }
 };
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -190,6 +200,8 @@ export const resolvePostProcessSettings = (component: LevelComponent): PostProce
         contrast: readNumber(props, 'contrast'),
         brightness: readNumber(props, 'brightness'),
         antialias: readChoice(props.antialias, POST_PROCESS_ANTIALIAS_MODES, POST_PROCESS_DEFAULTS.antialias),
+        renderScale: readNumber(props, 'renderScale'),
+        sharpness: readNumber(props, 'sharpness'),
         autoExposure: readBoolean(props, 'autoExposure'),
         exposureCompensation: readNumber(props, 'exposureCompensation'),
         adaptationSpeed: readNumber(props, 'adaptationSpeed'),
@@ -280,6 +292,41 @@ export const usePostProcessClaimed = (): boolean => {
 /** False turns every postProcess component under it off (the player's post-processing quality setting). */
 export const PostProcessAllowedContext = createContext(true);
 
+/**
+ * What the project and the moment allow: the most anti-aliasing a stack may use, and a multiplier on its
+ * render scale (the project's setting, times whatever a slow frame rate has taken off).
+ */
+export const PostProcessQualityContext = createContext<{
+    antialias: PostProcessAntialias;
+    renderScale: number;
+    /** Counts the stacks running temporal anti-aliasing, for what can lower the render scale to know it would help. */
+    temporalStacks?: React.MutableRefObject<number>;
+}>({ antialias: 'temporal', renderScale: 1 });
+
+/** A level's choice held to what the project allows: temporal steps down to the project's choice, nothing steps up. */
+export const allowedAntialias = (wanted: PostProcessAntialias, allowed: PostProcessAntialias): PostProcessAntialias =>
+    wanted === 'temporal' ? allowed : allowed === 'none' ? 'none' : wanted;
+
+/** The temporal stage keeps depth in a float target, which a device must be able to draw into. */
+const canDrawFloat = (gl: unknown): boolean =>
+    (gl as { extensions?: { has?: (name: string) => boolean } }).extensions?.has?.('EXT_color_buffer_float') !== false;
+
+/** The anti-aliasing a stack that wants `wanted` should run on this canvas, counted for the slow-frame fallback while it runs. */
+export const useAllowedAntialias = (wanted: PostProcessAntialias, running = true): PostProcessAntialias => {
+    const gl = useThree(state => state.gl);
+    const { antialias: allowed, temporalStacks } = useContext(PostProcessQualityContext);
+    const chosen = allowedAntialias(wanted, allowed);
+    const antialias = chosen === 'temporal' && !canDrawFloat(gl) ? 'smaa' : chosen;
+    const temporal = running && antialias === 'temporal';
+    useLayoutEffect(() => {
+        if (!temporal || !temporalStacks) return undefined;
+        const stacks = temporalStacks;
+        stacks.current += 1;
+        return () => { stacks.current -= 1; };
+    }, [temporal, temporalStacks]);
+    return antialias;
+};
+
 // --- RENDERER TONE MAPPING ---
 
 /** The renderer fields a post-process stack overrides while it owns the output. */
@@ -360,6 +407,16 @@ const VIGNETTE_OFFSET = 0.35;
 
 // --- CINEMATIC EFFECTS (runtime/postEffects.ts) ---
 
+/** Ambient occlusion, which frees its targets when it goes, as the component on its own does not. */
+const AmbientOcclusion: React.FC<React.ComponentProps<typeof N8AO>> = (props) => {
+    const pass = useRef<{ dispose?: () => void } | null>(null);
+    useLayoutEffect(() => {
+        const owned = pass.current;
+        return () => owned?.dispose?.();
+    }, []);
+    return <N8AO ref={pass as never} {...props} />;
+};
+
 /** Bounced light and screen-space reflections; rebuilt for a new scene or camera. */
 export const ScreenLighting: React.FC<{ bounce: number; reflections: number }> = ({ bounce, reflections }) => {
     const scene = useThree(state => state.scene);
@@ -422,8 +479,11 @@ const Look: React.FC<{ look: ColorLook; strength: number }> = ({ look, strength 
  * One composer with the enabled effects, in pipeline order: bounced light, reflections, sunlit haze and
  * occlusion on the lit scene,
  * depth of field, light shafts, motion blur, then auto exposure, white balance and bloom on HDR values;
- * tone mapping, colour grading, look, vignette, fringes and grain on display values; then SMAA. MSAA stays
- * off: SMAA (or nothing) is the anti-aliasing, which keeps the HDR buffers single-sampled.
+ * tone mapping, colour grading, look, vignette, fringes and grain on display values; then SMAA when that is
+ * the choice. MSAA stays off, which keeps the HDR buffers single-sampled.
+ *
+ * With temporal anti-aliasing the part on the lit scene runs at the render scale inside the temporal stage,
+ * up to the resolve, and everything from depth of field on runs on the steady picture at the display's size.
  *
  * Haze stays in the composer's first effect pass: it reads depth there, from the buffer the depth texture
  * belongs to, so nothing that starts a pass of its own may come before it. Bounced light and reflections
@@ -432,18 +492,39 @@ const Look: React.FC<{ look: ColorLook; strength: number }> = ({ look, strength 
  */
 const PostProcessStack = React.memo<{ settings: PostProcessSettings }>(({ settings }) => {
     const camera = useThree(state => state.camera);
+    const quality = useContext(PostProcessQualityContext);
+    const antialias = useAllowedAntialias(settings.antialias);
+    // Kept from render to render: a composer given new children rebuilds every pass and loses what they have gathered.
+    const stack = useMemo(() => stackEffects(settings, camera.uuid, antialias), [settings, camera.uuid, antialias]);
+    return (
+        <>
+            {antialias === 'temporal' ? (
+                <TemporalPipeline key={stack.key} renderScale={settings.renderScale * quality.renderScale} sharpness={settings.sharpness} lit={stack.lit} display={stack.effects} />
+            ) : (
+                <OwnedComposer key={stack.key}>
+                    {stack.all}
+                </OwnedComposer>
+            )}
+            <RendererToneOverride exposure={settings.exposure} />
+        </>
+    );
+});
+PostProcessStack.displayName = 'PostProcessStack';
+
+const stackEffects = (settings: PostProcessSettings, cameraId: string, antialias: PostProcessAntialias) => {
+    const lit: React.ReactElement[] = [];
     const effects: React.ReactElement[] = [];
     // Light first: bounces and reflections, then haze and shafts add to the lit scene, motion blur smears it,
     // and the eye adapts to the result. Nothing that starts its own pass may come before the haze (see above).
     const bounce = settings.globalIllumination ? settings.giIntensity : 0;
     const reflections = settings.reflections ? settings.reflectionIntensity : 0;
-    if (bounce > 0 || reflections > 0) effects.push(<ScreenLighting key="lighting" bounce={bounce} reflections={reflections} />);
-    if (settings.sunHaze) effects.push(<SunHaze key="haze" intensity={settings.sunHazeIntensity} />);
+    if (bounce > 0 || reflections > 0) lit.push(<ScreenLighting key="lighting" bounce={bounce} reflections={reflections} />);
+    if (settings.sunHaze) lit.push(<SunHaze key="haze" intensity={settings.sunHazeIntensity} />);
     if (settings.ambientOcclusion) {
         // The pass keeps the camera it was built with, so a new default camera rebuilds it.
-        effects.push(
-            <N8AO
-                key={`ao-${camera.uuid}`}
+        lit.push(
+            <AmbientOcclusion
+                key={`ao-${cameraId}`}
                 intensity={settings.aoIntensity}
                 aoRadius={settings.aoRadius}
                 distanceFalloff={settings.aoRadius * AO_FALLOFF_RATIO}
@@ -493,17 +574,12 @@ const PostProcessStack = React.memo<{ settings: PostProcessSettings }>(({ settin
     if (settings.filmGrain > 0) {
         effects.push(<Noise key="grain" premultiply blendFunction={BlendFunction.SOFT_LIGHT} opacity={settings.filmGrain * 0.6} />);
     }
-    if (settings.antialias === 'smaa') effects.push(<SMAA key="smaa" />);
-    return (
-        <>
-            <EffectComposer multisampling={0} enableNormalPass={false}>
-                {effects}
-            </EffectComposer>
-            <RendererToneOverride exposure={settings.exposure} />
-        </>
-    );
-});
-PostProcessStack.displayName = 'PostProcessStack';
+    if (antialias === 'smaa') effects.push(<SMAA key="smaa" />);
+    // A composer takes its effects in the order it first saw them, and an effect added later lands last, after
+    // tone mapping. A different set of effects, or a new camera (which rebuilds them), gets a fresh composer.
+    const all = [...lit, ...effects];
+    return { lit, effects, all, key: `${cameraId}/${all.map(effect => effect.key).join(',')}` };
+};
 
 /** Mounts the stack for the canvas's post-process owner; the owner's transform plays no part. */
 const PostProcessRender: React.FC<ComponentRenderProps> = ({ component }) => {
@@ -591,10 +667,13 @@ export const POST_PROCESS_COMPONENT: ComponentDefinition = {
         {
             key: 'antialias', label: 'Anti-aliasing', type: 'select', default: POST_PROCESS_DEFAULTS.antialias,
             options: [
+                { label: 'Temporal', value: 'temporal' },
                 { label: 'SMAA', value: 'smaa' },
                 { label: 'None', value: 'none' }
             ]
-        }
+        },
+        numberProp('renderScale', 'Render Scale'),
+        numberProp('sharpness', 'Sharpness')
     ],
     Render: PostProcessRender
 };

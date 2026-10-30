@@ -11,6 +11,7 @@ import {
 } from '../../runtime/types';
 import { normalizeNetworkSettings } from '../../runtime/net/protocol';
 import { NAV_SETTING_LIMITS, resolveNavSettings } from '../../runtime/navSettings';
+import { MAX_RENDER_SCALE, MIN_RENDER_SCALE } from '../../runtime/temporal/temporalSettings';
 
 interface GameSettingsDocument {
   id: string;
@@ -70,6 +71,7 @@ const clamp = (value: number, min: number, max: number, fallback: number) => (
 const LIMITS = {
   maxDpr: { min: 0.5, max: 4, step: 0.25 },
   fov: { min: 30, max: 120, step: 1 },
+  renderScale: { min: MIN_RENDER_SCALE, max: MAX_RENDER_SCALE, step: 0.05 },
   mouseSensitivity: { min: 0.0001, max: 0.02, step: 0.0001 },
   masterVolume: { min: 0, max: 1, step: 0.05 },
 } as const;
@@ -91,6 +93,8 @@ const sanitizeGameSettings = (value: GameSettings): GameSettings => {
       textureCompression: settings.quality.textureCompression !== false,
       maxDpr: clamp(settings.quality.maxDpr, LIMITS.maxDpr.min, LIMITS.maxDpr.max, defaults.quality.maxDpr),
       fov: clamp(settings.quality.fov, LIMITS.fov.min, LIMITS.fov.max, defaults.quality.fov),
+      antiAliasing: settings.quality.antiAliasing === 'smaa' || settings.quality.antiAliasing === 'none' ? settings.quality.antiAliasing : 'temporal',
+      renderScale: clamp(settings.quality.renderScale, LIMITS.renderScale.min, LIMITS.renderScale.max, defaults.quality.renderScale),
     },
     input: {
       mouseSensitivity: clamp(settings.input.mouseSensitivity, LIMITS.mouseSensitivity.min, LIMITS.mouseSensitivity.max, defaults.input.mouseSensitivity),
@@ -273,6 +277,14 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
             <Toggle label="Post-processing" checked={draft.quality.postProcessing} disabled={disabled} onChange={(postProcessing) => update((current) => ({ ...current, quality: { ...current.quality, postProcessing } }))} />
             <Toggle label="Mesh detail levels" checked={draft.quality.meshLod} disabled={disabled} onChange={(meshLod) => update((current) => ({ ...current, quality: { ...current.quality, meshLod } }))} />
             <Toggle label="Texture compression" checked={draft.quality.textureCompression} disabled={disabled} onChange={(textureCompression) => update((current) => ({ ...current, quality: { ...current.quality, textureCompression } }))} />
+            <label className="block text-[9px] uppercase text-gray-500">Anti-aliasing
+              <select aria-label="Anti-aliasing" value={draft.quality.antiAliasing} disabled={disabled} onChange={(event) => { const antiAliasing = event.target.value as GameSettings['quality']['antiAliasing']; update((current) => ({ ...current, quality: { ...current.quality, antiAliasing } })); }} className={`mt-1 ${inputClass}`}>
+                <option value="temporal">Temporal</option>
+                <option value="smaa">SMAA</option>
+                <option value="none">None</option>
+              </select>
+            </label>
+            <NumberField label="Render scale (temporal)" value={draft.quality.renderScale} limits={LIMITS.renderScale} disabled={disabled} onChange={(renderScale) => update((current) => ({ ...current, quality: { ...current.quality, renderScale } }))} />
             <div className="grid grid-cols-2 gap-2">
               <NumberField label="Max pixel ratio" value={draft.quality.maxDpr} limits={LIMITS.maxDpr} disabled={disabled} onChange={(maxDpr) => update((current) => ({ ...current, quality: { ...current.quality, maxDpr } }))} />
               <NumberField label="Field of view" value={draft.quality.fov} limits={LIMITS.fov} disabled={disabled} onChange={(fov) => update((current) => ({ ...current, quality: { ...current.quality, fov } }))} />

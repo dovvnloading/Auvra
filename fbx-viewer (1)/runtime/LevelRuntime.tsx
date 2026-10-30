@@ -1,9 +1,9 @@
 import { cloneCharacterModel } from '../utils/mountedParts';
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { PerformanceMonitor } from '@react-three/drei';
-import { EffectComposer, Bloom, Vignette, ToneMapping } from '@react-three/postprocessing';
+import { Bloom, SMAA, Vignette, ToneMapping } from '@react-three/postprocessing';
 import { ToneMappingMode } from 'postprocessing';
 import { AuvraCanvas } from '../renderer/AuvraCanvas';
 import { ProfilerPanel, ProfilerProbe, useProfilerToggle } from './ProfilerOverlay';
@@ -60,7 +60,9 @@ import { vehicleSession } from './vehicles';
 import { dialogueStore, useDialogueState } from './dialogue';
 import { DialogueOverlay } from './DialogueOverlay';
 import { LevelStreamingContext, streamedObjects, streamedRoots, type LevelStreaming } from './levelStreaming';
-import { AutoExposure, LightShafts, PostProcessAllowedContext, ScreenLighting, SunHaze, usePostProcessClaimed } from './components/postProcess';
+import { OwnedComposer, TemporalPipeline } from './temporal/TemporalPipeline';
+import { MIN_RENDER_SCALE } from './temporal/temporalSettings';
+import { AutoExposure, LightShafts, PostProcessAllowedContext, PostProcessQualityContext, ScreenLighting, SunHaze, useAllowedAntialias, usePostProcessClaimed } from './components/postProcess';
 import { MeshLodContext } from '../components/Scene/useMeshLod';
 import type { InputState } from './input';
 import { collectTimelineTargets } from './timeline/evaluate';
@@ -102,6 +104,10 @@ const ORIGIN_START: PlayerStart = { position: [0, 0.5, 0], rotation: [0, 0, 0] }
 
 /** Levels are not arenas: AI bounds sit far beyond any authored level, so nothing is clamped to a fixed area. */
 const RUNTIME_WORLD_BOUNDARY = 100_000;
+
+/** How much render scale one slow check takes off, and how many times it may rise only to fall again. */
+const SLOW_SCALE_STEP = 0.15;
+const MAX_SCALE_HUNTS = 2;
 
 const RUNTIME_GL = {
     powerPreference: 'high-performance',
@@ -888,25 +894,39 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
     );
 };
 
+// Module constants: a composer given new children rebuilds every pass and loses what they have gathered.
+const DEFAULT_LIT = [<ScreenLighting key="lighting" bounce={1} reflections={1} />, <SunHaze key="haze" intensity={0.5} />];
+const DEFAULT_DISPLAY = [
+    <LightShafts key="shafts" intensity={0.35} />,
+    <AutoExposure key="exposure" compensation={0} speed={1} />,
+    <Bloom key="bloom" luminanceThreshold={1.2} mipmapBlur intensity={0.6} />,
+    <Vignette key="vignette" eskil={false} offset={0.1} darkness={1.1} />,
+    // The composer bypasses the renderer's ACES tone mapping, so apply it as the final effect.
+    <ToneMapping key="tone" mode={ToneMappingMode.ACES_FILMIC} />,
+];
+const DEFAULT_STACK = [...DEFAULT_LIT, ...DEFAULT_DISPLAY];
+const DEFAULT_STACK_SMAA = [...DEFAULT_STACK, <SMAA key="smaa" />];
+
 /**
  * The runtime's own bounced light and reflections, haze, light shafts, auto exposure, bloom, vignette and
  * tone mapping, standing down while a level Post Process component owns the canvas.
  */
-const DefaultPostProcess: React.FC = () => {
-    if (usePostProcessClaimed()) return null;
+const DefaultPostProcess: React.FC = React.memo(() => {
+    const quality = useContext(PostProcessQualityContext);
+    const camera = useThree(state => state.camera);
+    const claimed = usePostProcessClaimed();
+    const antialias = useAllowedAntialias('temporal', !claimed);
+    if (claimed) return null;
+    if (antialias === 'temporal') {
+        return <TemporalPipeline key={camera.uuid} renderScale={quality.renderScale} sharpness={0.25} lit={DEFAULT_LIT} display={DEFAULT_DISPLAY} />;
+    }
     return (
-        <EffectComposer enableNormalPass={false}>
-            <ScreenLighting bounce={1} reflections={1} />
-            <SunHaze intensity={0.5} />
-            <LightShafts intensity={0.35} />
-            <AutoExposure compensation={0} speed={1} />
-            <Bloom luminanceThreshold={1.2} mipmapBlur intensity={0.6} />
-            <Vignette eskil={false} offset={0.1} darkness={1.1} />
-            {/* The composer bypasses the renderer's ACES tone mapping, so apply it as the final effect. */}
-            <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
-        </EffectComposer>
+        <OwnedComposer key={`${camera.uuid}/${antialias}`}>
+            {antialias === 'smaa' ? DEFAULT_STACK_SMAA : DEFAULT_STACK}
+        </OwnedComposer>
     );
-};
+});
+DefaultPostProcess.displayName = 'DefaultPostProcess';
 
 /**
  * LEVEL RUNTIME
@@ -949,20 +969,50 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
     const toggleQuality = useCallback(() => setHighQuality(prev => !prev), []);
     // A slow frame rate first lowers the resolution; still slow after that, post-processing goes.
     // A steady frame rate never turns anything off (the monitor reports every check above its bound as a rise).
+    // With temporal anti-aliasing the lit scene draws smaller first, which the resolve largely hides.
     const slowChecks = useRef(0);
+    const [slowScale, setSlowScale] = useState(1);
+    const currentSlowScale = useRef(1);
+    const temporalStacks = useRef(0);
+    // Raised, then slow again: each such round trip counts, and after a couple it stays put rather than hunt for the limit.
+    const scaleRaised = useRef(false);
+    const scaleHunts = useRef(0);
+    const projectScale = settings.quality.renderScale;
     const handleIncline = useCallback(() => {
         slowChecks.current = 0;
+        if (currentSlowScale.current < 1) {
+            if (scaleHunts.current >= MAX_SCALE_HUNTS) return;
+            scaleRaised.current = true;
+            currentSlowScale.current = Math.min(1, currentSlowScale.current + SLOW_SCALE_STEP);
+            setSlowScale(currentSlowScale.current);
+            return;
+        }
         setDprLevel(2);
     }, []);
     const handleDecline = useCallback(() => {
+        if (scaleRaised.current) {
+            scaleRaised.current = false;
+            scaleHunts.current += 1;
+        }
+        // Only worth doing while a stack is drawing at the render scale, and it has somewhere left to go.
+        const scaled = projectScale * currentSlowScale.current;
+        if (temporalStacks.current > 0 && scaled > MIN_RENDER_SCALE + 1e-3) {
+            currentSlowScale.current = Math.max(MIN_RENDER_SCALE / Math.max(projectScale, MIN_RENDER_SCALE), currentSlowScale.current - SLOW_SCALE_STEP);
+            setSlowScale(currentSlowScale.current);
+            return;
+        }
         setDprLevel(1);
         slowChecks.current += 1;
         if (slowChecks.current === 2) {
             frontendDiagnostics.warning('renderer_quality_reduced');
             setHighQuality(false);
         }
-    }, []);
+    }, [projectScale]);
     const profilerVisible = useProfilerToggle();
+    const postProcessQuality = useMemo(
+        () => ({ antialias: settings.quality.antiAliasing, renderScale: projectScale * slowScale, temporalStacks }),
+        [settings.quality.antiAliasing, projectScale, slowScale],
+    );
     const postProcessAllowed = settings.quality.postProcessing && highQuality;
     const [touchInput, setTouchInput] = useState<InputState | null>(null);
 
@@ -1004,6 +1054,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
 
                 {/* --- GPU POST PROCESSING PIPELINE --- */}
                 {/* A level Post Process component replaces the default stack; the quality setting and the fallback gate both. */}
+                <PostProcessQualityContext.Provider value={postProcessQuality}>
                 <PostProcessAllowedContext.Provider value={postProcessAllowed}>
                 <ShadowDetailContext.Provider value={highQuality ? 'high' : 'low'}>
                 <MeshLodContext.Provider value={settings.quality.meshLod !== false}>
@@ -1039,6 +1090,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                 </MeshLodContext.Provider>
                 </ShadowDetailContext.Provider>
                 </PostProcessAllowedContext.Provider>
+                </PostProcessQualityContext.Provider>
             </AuvraCanvas>
 
             {/* On-screen joystick and buttons on touch devices; unmounted while paused so look input does not pile up. */}
