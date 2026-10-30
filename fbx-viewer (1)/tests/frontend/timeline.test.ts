@@ -1,6 +1,6 @@
 import React from 'react';
 import * as THREE from 'three';
-import { cleanup, render } from '@testing-library/react';
+import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { gameState } from '../../runtime/gameState';
@@ -24,6 +24,11 @@ import {
   timelineTargetIds,
 } from '../../runtime/timeline/evaluate';
 import { createTimelineEvents, timelineEvents, type TimelineEvent } from '../../runtime/timeline/events';
+import { timelinePreview } from '../../runtime/timeline/preview';
+import { cinematics } from '../../runtime/cinematics';
+import { cameraDirector } from '../../runtime/cameraDirector';
+import { GameContentProvider } from '../../runtime/GameContentContext';
+import type { GameContent } from '../../runtime/types';
 import type { TimelineData, TimelineKey, TimelineTrack, TimelineVec3 } from '../../runtime/timeline/types';
 import type { LevelComponent, LevelObject } from '../../types';
 
@@ -33,7 +38,7 @@ const fiber = vi.hoisted(() => ({ frame: null as FrameCallback | null, scene: nu
 
 vi.mock('@react-three/fiber', () => ({
   useFrame: (callback: FrameCallback) => { fiber.frame = callback; },
-  useThree: (selector: (state: { scene: unknown }) => unknown) => selector({ scene: fiber.scene }),
+  useThree: (selector: (state: { scene: unknown; invalidate: () => void }) => unknown) => selector({ scene: fiber.scene, invalidate: () => undefined }),
 }));
 
 // The inspector is editor UI, not under test here.
@@ -44,6 +49,8 @@ afterEach(() => {
   fiber.frame = null;
   levelVariables.reset();
   gameState.reset();
+  cinematics.clear();
+  cameraDirector.setActive(null, 0);
 });
 
 const timeline = (tracks: TimelineTrack[], duration = 4): TimelineData => ({ duration, tracks });
@@ -146,6 +153,7 @@ describe('evaluateTimeline', () => {
       transforms: [{ objectId: 'box', position: [0, 5, 0], scale: [1, 1, 1] }],
       visibility: [{ objectId: 'box', visible: false }],
       variables: [{ name: 'Score', value: 50 }],
+      animations: [],
     });
   });
 
@@ -159,7 +167,7 @@ describe('evaluateTimeline', () => {
       { id: 'f', kind: 'variable', name: '   ', keys: [{ time: 0, value: 1 }] },
       { id: 'g', kind: 'visibility', objectId: 'lamp', keys: [] },
     ]);
-    expect(evaluateTimeline(data, 1)).toEqual({ transforms: [], visibility: [], variables: [] });
+    expect(evaluateTimeline(data, 1)).toEqual({ transforms: [], visibility: [], variables: [], animations: [] });
   });
 
   it('treats a non-finite time as the start', () => {
@@ -442,18 +450,39 @@ describe('timeline component', () => {
     expect(TIMELINE_COMPONENT.type).toBe(TIMELINE_COMPONENT_TYPE);
     expect(TIMELINE_COMPONENT.label).toBe('Timeline');
     expect(Object.fromEntries(TIMELINE_COMPONENT.props.map(prop => [prop.key, prop.default])))
-      .toEqual({ autoplay: true, loop: false, speed: 1, playVariable: '' });
+      .toEqual({ autoplay: true, loop: false, speed: 1, playVariable: '', cinematic: false, skippable: true, holdEnd: false });
     expect(TIMELINE_COMPONENT.props.some(prop => prop.key === 'timeline')).toBe(false);
     expect(TIMELINE_COMPONENT.Inspector).toBeUndefined();
     expect(readTimelineSettings({ id: 'x', type: 'timeline', enabled: true, props: { speed: 99, loop: 'yes', playVariable: '  Door ' } }))
-      .toEqual({ autoplay: true, loop: false, speed: 10, playVariable: 'Door' });
+      .toEqual({ autoplay: true, loop: false, speed: 10, playVariable: 'Door', cinematic: false, skippable: true, holdEnd: false });
   });
 
-  it('renders nothing and runs nothing in the editor', () => {
-    sessionScene('door');
+  it('in the editor, changes nothing until the Timeline editor previews it, then shows the playhead and puts everything back', () => {
+    const { groups } = sessionScene('door', 'lamp');
+    levelVariables.reset([{ name: 'Progress', type: 'Float', value: 0 }]);
     const { container } = mount(timelineComponent({}), 'editor');
     expect(container.innerHTML).toBe('');
-    expect(fiber.frame).toBeNull();
+    runFrames(3);
+    expect(groups.door.position.y).toBe(0);
+
+    act(() => timelinePreview.set({ ownerId: 'switch', data: normalizeTimeline(doorTimeline), time: 0.75 }));
+    runFrames(1);
+    expect(groups.door.position.y).toBeCloseTo(3, 6);
+    expect(groups.lamp.visible).toBe(false);
+    // Scrubbing back shows the earlier state; play's level variables are left alone.
+    act(() => timelinePreview.set({ ownerId: 'switch', data: normalizeTimeline(doorTimeline), time: 0.25 }));
+    runFrames(1);
+    expect(groups.door.position.y).toBeCloseTo(1, 6);
+    expect(groups.lamp.visible).toBe(true);
+    expect(levelVariables.get('Progress')).toBe(0);
+
+    // Another timeline's preview, or none, puts the level back.
+    act(() => timelinePreview.set({ ownerId: 'other', data: normalizeTimeline(doorTimeline), time: 1 }));
+    expect(groups.door.position.y).toBe(0);
+    expect(groups.door.rotation.y).toBe(0);
+    act(() => timelinePreview.set(null));
+    runFrames(1);
+    expect(groups.door.position.y).toBe(0);
   });
 
   it('moves, hides, writes variables and raises events on the session groups while it plays', () => {
@@ -528,5 +557,91 @@ describe('timeline component', () => {
     expect(remounted.position.y).toBeCloseTo(1.2, 6);
     runFrames(10);
     expect(warning).toHaveBeenCalledTimes(1);
+  });
+
+  describe('as a cinematic', () => {
+    /** A character drawn in a session group: its model (a spine bone) under the group, which names the model. */
+    const character = () => {
+      const { scene, groups } = sessionScene('hero');
+      groups.hero.userData = { levelObjectId: 'hero', modelId: 'remy' };
+      groups.hero.remove(groups.hero.children[0]);
+      const model = new THREE.Group();
+      const spine = new THREE.Bone();
+      spine.name = 'Spine';
+      model.add(spine);
+      groups.hero.add(model);
+      const turn = new THREE.AnimationClip('Turn', 1, [new THREE.QuaternionKeyframeTrack('Spine.quaternion', [0, 1], [
+        ...new THREE.Quaternion().toArray(),
+        ...new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2).toArray(),
+      ])]);
+      const content = { models: [{ id: 'remy', animations: [turn] }], audioAssets: [] } as unknown as GameContent;
+      return { scene, spine, content };
+    };
+    const cutscene = {
+      duration: 1,
+      tracks: [
+        { id: 'pose', kind: 'animation', objectId: 'hero', keys: [{ time: 0, value: { clip: 'Turn', length: 1, offset: 0, speed: 1, loop: false, blendIn: 0, blendOut: 0 } }] },
+        { id: 'lines', kind: 'subtitle', keys: [{ time: 0, value: { speaker: 'Hero', text: 'Ready.', length: 0.6 } }] },
+        { id: 'cuts', kind: 'camera', keys: [{ time: 0, value: 'shot' }] },
+        { id: 'cues', kind: 'event', keys: [{ time: 0.5, value: 'Half' }, { time: 1, value: 'Done' }] },
+      ],
+    };
+    const play = (content: GameContent, props: Record<string, unknown>) => render(React.createElement(GameContentProvider, {
+      value: content,
+      children: React.createElement(TIMELINE_COMPONENT.Render!, { object: owner, component: timelineComponent({ timeline: cutscene, cinematic: true, ...props }), mode: 'runtime' }),
+    }));
+    const yaw = (bone: THREE.Object3D) => new THREE.Euler().setFromQuaternion(bone.quaternion, 'YXZ').y;
+
+    it("poses a character from its model's clips, letterboxes and lines up the overlay, then gives everything back", () => {
+      const { spine, content } = character();
+      const unregister = cameraDirector.register('shot', new THREE.PerspectiveCamera());
+      const { seen, unsubscribe } = collectEvents();
+      play(content, {});
+      runFrames(3);
+      expect(yaw(spine)).toBeCloseTo((Math.PI / 2) * 0.3, 4);
+      expect(cinematics.state()).toMatchObject({ active: true, skippable: true, subtitle: { speaker: 'Hero', text: 'Ready.', key: 'timeline.switch.lines.0' } });
+      expect(cameraDirector.activeId()).toBe('shot');
+      runFrames(10);
+      // Finished: the character's own pose, the view and the controls are given back.
+      expect(yaw(spine)).toBeCloseTo(0, 6);
+      expect(cinematics.state()).toMatchObject({ active: false, subtitle: null });
+      expect(cameraDirector.activeId()).toBeNull();
+      expect(seen.map(event => event.name)).toEqual(['Half', 'Done']);
+      unsubscribe();
+      unregister();
+    });
+
+    it('skips to its end, raising the events it had left, and holds the end pose when asked', () => {
+      const { spine, content } = character();
+      const unregister = cameraDirector.register('shot', new THREE.PerspectiveCamera());
+      const { seen, unsubscribe } = collectEvents();
+      play(content, { holdEnd: true });
+      runFrames(2);
+      expect(seen).toEqual([]);
+      act(() => cinematics.skip());
+      runFrames(1);
+      expect(seen.map(event => event.name)).toEqual(['Half', 'Done']);
+      expect(cinematics.state().active).toBe(false);
+      expect(cameraDirector.activeId()).toBeNull();
+      // Held: still at the clip's end frame after more frames.
+      expect(yaw(spine)).toBeCloseTo(Math.PI / 2, 3);
+      runFrames(5);
+      expect(yaw(spine)).toBeCloseTo(Math.PI / 2, 3);
+      unsubscribe();
+      unregister();
+    });
+
+    it('is not skipped by a skip asked for before it started, nor when it cannot be skipped', () => {
+      const { content } = character();
+      cinematics.skip();
+      const { seen, unsubscribe } = collectEvents();
+      play(content, { skippable: false });
+      runFrames(2);
+      cinematics.skip();
+      runFrames(2);
+      expect(seen.map(event => event.name)).toEqual([]);
+      expect(cinematics.state()).toMatchObject({ active: true, skippable: false });
+      unsubscribe();
+    });
   });
 });

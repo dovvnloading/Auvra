@@ -77,7 +77,7 @@ Objects can carry components that add behaviour. Select an object and use **Add 
 | Procedural Rig | Constraints on the object's bones after its animation, in order: aim a bone at the camera, the player, an object or a point; copy or offset rotations; limit them; make a bone lag; spread twist along a limb (see [Procedural rig](characters.md#procedural-rig)) |
 | Script | Runs your own JavaScript or TypeScript during play (see [Gameplay scripting](scripting.md)) |
 | Network Sync | In multiplayer games the host sends the object's position and rotation and the other players follow it (see [Multiplayer](multiplayer.md)) |
-| Timeline | Plays keyed tracks that move, show and hide objects, write level variables and raise events (see [Timelines](timelines.md)) |
+| Timeline | Plays keyed tracks that move, show and hide objects, write level variables, raise events and cut cameras, and for cutscenes play clips on characters, sounds, subtitles and fades, letterboxed and skippable (see [Timelines](timelines.md)) |
 | Dialogue | A conversation the player opens with Interact when within reach: lines, choices, level variables and dialogue events (see [Dialogue](dialogue.md)) |
 | Spline | A smooth curve through points, edited in the viewport (see [Splines](#splines)) |
 | Spline Mesh | Bends a model along the object's spline: roads, rails, pipes, walls, river beds |

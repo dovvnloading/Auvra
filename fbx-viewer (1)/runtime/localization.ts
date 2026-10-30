@@ -170,6 +170,7 @@ export const BUILTIN_UI_STRINGS = {
     'ui.dialogue.title': 'Conversation',
     'ui.dialogue.continue': 'Continue',
     'ui.dialogue.end': 'End',
+    'ui.cinematic.skip': 'Skip',
     'ui.vehicle.drive': 'Drive',
     'ui.vehicle.exit': 'Get out',
     'ui.vehicle.speedUnit': 'km/h',

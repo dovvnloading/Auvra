@@ -5,6 +5,7 @@ import { Billboard, Html } from '@react-three/drei';
 import { Skull, Music, Sun } from 'lucide-react';
 import { LoadedModelData, LevelObject } from '../../types';
 import { getComponentDefinition } from '../../runtime/components/registry';
+import { cloneCharacterModel } from '../../utils/mountedParts';
 
 /**
  * Mounts the Render of every enabled component on `object`. Place it inside the object's
@@ -68,7 +69,11 @@ export const LevelObjectRenderer = forwardRef<THREE.Group, LevelObjectRendererPr
     // never changes the hook order.
     const clone = useMemo(() => {
         if (isGizmo || !model) return null;
-        const c = model.object.clone();
+        // A rigged model gets its own skeleton, so one placed character can be posed (a timeline preview)
+        // without posing every other copy of its model.
+        let skinned = false;
+        model.object.traverse(node => { if ((node as THREE.SkinnedMesh).isSkinnedMesh) skinned = true; });
+        const c = skinned ? cloneCharacterModel(model.object) : model.object.clone();
         // Ensure userData carries the ID for raycasting identification
         c.userData = { ...c.userData, levelObjectId: data.id };
         c.traverse((child) => {
@@ -275,6 +280,7 @@ export const LevelObjectRenderer = forwardRef<THREE.Group, LevelObjectRendererPr
             {...transform}
             onClick={onClick}
             visible={visible}
+            userData={{ levelObjectId: data.id, modelId: data.modelId }}
         >
             <primitive object={clone} />
             

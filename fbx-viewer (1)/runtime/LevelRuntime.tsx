@@ -63,6 +63,8 @@ import { AutoExposure, LightShafts, PostProcessAllowedContext, ScreenLighting, S
 import { MeshLodContext } from '../components/Scene/useMeshLod';
 import type { InputState } from './input';
 import { collectTimelineTargets } from './timeline/evaluate';
+import { CinematicOverlay } from './CinematicOverlay';
+import { cinematics, PlayerClipsContext, useCinematicState } from './cinematics';
 import { TouchControls } from './TouchControls';
 import { spawnPositionAround } from './spawning';
 import { NetSessionProvider } from './net/NetSessionContext';
@@ -402,7 +404,7 @@ const LevelObjectNode: React.FC<{ object: LevelObject; plan: LevelRenderPlan; mo
     const children = plan.groupChildren.get(object.id);
 
     return (
-        <group ref={groupRef} position={object.position} rotation={object.rotation} scale={object.scale} userData={{ levelObjectId: object.id }}>
+        <group ref={groupRef} position={object.position} rotation={object.rotation} scale={object.scale} userData={{ levelObjectId: object.id, modelId: object.modelId }}>
             {meshes && <primitive object={meshes} />}
             <ComponentHostContext.Provider value={groupRef}>
                 {components.map(({ Render, component }) => (
@@ -605,6 +607,9 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
     }, []);
     // The player stands still and the camera holds while a conversation is open.
     const talking = useDialogueState().active !== null;
+    // A cinematic playing takes the player's controls until it ends or is skipped.
+    const watching = useCinematicState().active;
+    useEffect(() => () => cinematics.clear(), [sessionKey]);
 
     // --- CALCULATE ALL SCENE CLIPS ---
     const allSceneClips = useMemo(() => models.flatMap(m => m.animations || []), [models]);
@@ -724,13 +729,14 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
 
     if (!runtimePlayerModel) return null;
 
-    const controlsEnabled = !isGameOver && !paused && !talking;
+    const controlsEnabled = !isGameOver && !paused && !talking && !watching;
 
     return (
         <NavMeshContext.Provider value={navMesh}>
         <NoiseBusContext.Provider value={noises}>
         <NavMeshUpdater navMesh={navMesh} />
         <IKPlayerTargetContext.Provider value={playerTargetRef}>
+        <PlayerClipsContext.Provider value={player.model.animations}>
         <LevelStreamingContext.Provider value={levelStreaming}>
         <RuntimeSpawnerProvider spawnPrefab={spawnPrefab} destroyObject={destroyRuntimeObject}>
             {/* --- Replaced Hardcoded Lights with SkySystem --- */}
@@ -874,6 +880,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
             <CameraDirectorDriver />
         </RuntimeSpawnerProvider>
         </LevelStreamingContext.Provider>
+        </PlayerClipsContext.Provider>
         </IKPlayerTargetContext.Provider>
         </NoiseBusContext.Provider>
         </NavMeshContext.Provider>
@@ -930,6 +937,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
     const [gameOverSession, setGameOverSession] = useState<number | null>(null);
     const isGameOver = gameOverSession === sessionKey;
     const handleGameOver = useCallback(() => setGameOverSession(sessionKey), [sessionKey]);
+    const cinematic = useCinematicState();
 
     // --- Rendering Quality State ---
     // highQuality: requested by the player; dprLevel: scaled down on low performance, capped by the settings.
@@ -1031,17 +1039,21 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
             </AuvraCanvas>
 
             {/* On-screen joystick and buttons on touch devices; unmounted while paused so look input does not pile up. */}
-            {touchInput && !paused && !isGameOver && <TouchControls input={touchInput} weapons={!!player.blueprint.weapons?.length} />}
+            {touchInput && !paused && !isGameOver && !cinematic.active && <TouchControls input={touchInput} weapons={!!player.blueprint.weapons?.length} />}
 
-            {overlay ?? (
-                <FallbackHud
-                    player={player}
-                    isGameOver={isGameOver}
-                    highQuality={highQuality}
-                    onToggleQuality={toggleQuality}
-                    host={runtimeHost}
-                />
-            )}
+            {/* A cinematic hides the HUD without unmounting it, so it keeps its state for when play resumes. */}
+            <div style={{ display: 'contents', visibility: cinematic.active ? 'hidden' : 'visible' }}>
+                {overlay ?? (
+                    <FallbackHud
+                        player={player}
+                        isGameOver={isGameOver}
+                        highQuality={highQuality}
+                        onToggleQuality={toggleQuality}
+                        host={runtimeHost}
+                    />
+                )}
+            </div>
+            {!isGameOver && <CinematicOverlay />}
             {!paused && !isGameOver && <DialogueOverlay input={touchInput} />}
             {!paused && !isGameOver && <VehicleOverlay input={touchInput} />}
             <ProfilerPanel visible={profilerVisible} />

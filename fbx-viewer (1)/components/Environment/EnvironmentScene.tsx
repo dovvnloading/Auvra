@@ -1,5 +1,5 @@
 
-import React, { useRef, useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useMemo, useEffect, useCallback, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import { useThree } from '@react-three/fiber';
 import type { ThreeEvent } from '@react-three/fiber';
@@ -26,6 +26,8 @@ import { findSplineComponent } from '../../runtime/splineRegistry';
 import { SplineEditOverlay } from './SplineEditOverlay';
 import { useSplineSelection } from './splineEditing';
 import { gizmoPointer } from './gizmoPointer';
+import { timelinePreview } from '../../runtime/timeline/preview';
+import { timelineTargetIds } from '../../runtime/timeline/evaluate';
 
 type Vec3 = [number, number, number];
 type RegisterNode = (id: string, node: THREE.Object3D | null, owner?: THREE.Object3D | null) => void;
@@ -391,6 +393,8 @@ const LevelObjectNode = React.memo(({
             position={object.position}
             rotation={object.rotation}
             scale={object.scale}
+            // The object's own transform group, as a play session draws it, for what drives it (a timeline preview).
+            userData={{ levelObjectId: object.id, modelId: object.modelId }}
             onClick={selectable ? (e: ThreeEvent<MouseEvent>) => {
                 e.stopPropagation();
                 onSelect(object.id, e);
@@ -735,11 +739,22 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
         [promotedIds, resolvedById]
     );
 
+    // While the Timeline editor previews a timeline, what it moves and poses is drawn on its own, as play draws it.
+    const preview = useSyncExternalStore(timelinePreview.subscribe, timelinePreview.get, timelinePreview.get);
+    const previewTargets = useMemo(() => (preview ? timelineTargetIds(preview.data).join('|') : ''), [preview]);
+    const previewedObjects = useMemo(
+        () => (previewTargets ? previewTargets.split('|') : [])
+            .map(id => resolvedById.get(id))
+            .filter((object): object is LevelObject => !!object && isInstancedObject(object) && !promotedIds.has(object.id)),
+        [previewTargets, resolvedById, promotedIds]
+    );
+    const liftedIds = useStableIdSet(useMemo(() => [...promotedIds, ...previewedObjects.map(object => object.id)], [promotedIds, previewedObjects]));
+
     // Terrain and instanced objects draw their geometry elsewhere, so their components get a group of their own.
     const previewObjects = useMemo(
         () => resolvedObjects.filter(object => object.components?.length
-            && (object.type === 'terrain' || (isInstancedObject(object) && !promotedIds.has(object.id)))),
-        [resolvedObjects, promotedIds]
+            && (object.type === 'terrain' || (isInstancedObject(object) && !liftedIds.has(object.id)))),
+        [resolvedObjects, liftedIds]
     );
 
     // Check if current view is active for interaction
@@ -749,8 +764,8 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
     // Objects a foliage erase stroke has taken, hidden until the stroke is saved.
     const [erasingIds, setErasingIds] = useState<ReadonlySet<string>>(EMPTY_IDS);
     const layerHiddenIds = useMemo(
-        () => (lodHiddenIds.size || erasingIds.size ? new Set([...promotedIds, ...lodHiddenIds, ...erasingIds]) : promotedIds),
-        [promotedIds, lodHiddenIds, erasingIds]
+        () => (lodHiddenIds.size || erasingIds.size ? new Set([...liftedIds, ...lodHiddenIds, ...erasingIds]) : liftedIds),
+        [liftedIds, lodHiddenIds, erasingIds]
     );
 
     const handleInstancedSelect = useCallback((id: string, event: unknown) => {
@@ -869,6 +884,21 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                     source={objectById.get(obj.id) ?? obj}
                     model={modelById.get(obj.modelId)}
                     isSelected={isActiveView}
+                    selectable={objectsInteractive}
+                    onRegister={registerNode}
+                    onSelect={handleSelect}
+                    hidden={lodHiddenIds.has(obj.id)}
+                />
+            ))}
+
+            {/* Objects a previewed timeline moves or poses, lifted out of their instanced layer */}
+            {previewedObjects.map(obj => (
+                <LevelObjectNode
+                    key={obj.id}
+                    object={obj}
+                    source={objectById.get(obj.id) ?? obj}
+                    model={modelById.get(obj.modelId)}
+                    isSelected={false}
                     selectable={objectsInteractive}
                     onRegister={registerNode}
                     onSelect={handleSelect}

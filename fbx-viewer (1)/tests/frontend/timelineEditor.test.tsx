@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TimelineInspector } from '../../components/Timeline/TimelineInspector';
 import type { LevelComponent, LevelObject } from '../../types';
 import type { TimelineData } from '../../runtime/timeline/types';
+import { timelinePreview } from '../../runtime/timeline/preview';
 
 const makeObject = (id: string, name: string, patch: Partial<LevelObject> = {}): LevelObject => ({
     id,
@@ -24,6 +25,9 @@ const { scene } = vi.hoisted(() => ({
     scene: {
         levelObjects: [] as LevelObject[],
         activeLevelBlueprint: { nodes: [], connections: [], variables: [{ id: 'var-1', name: 'score', type: 'Float', value: 0 }] },
+        models: [] as unknown[],
+        blueprints: [] as unknown[],
+        audioAssets: [] as { id: string; name: string }[],
     },
 }));
 
@@ -272,6 +276,54 @@ describe('Timeline editor', () => {
             { id: expect.any(String), kind: 'event', label: 'Cues', muted: true, keys: [{ time: 6, value: 'Explode' }] },
         ]);
         expect(saved.tracks[0].id).not.toBe(saved.tracks[1].id);
+    });
+
+    it('authors a cinematic: clips on a character as bars, a sound, subtitle lines and a fade, previewed at the playhead', () => {
+        const hero = makeObject('hero', 'Hero', { modelId: 'remy' });
+        scene.levelObjects = [door, lamp, hero];
+        scene.models = [{ id: 'remy', animations: [{ name: 'Idle' }, { name: 'Walk' }] }];
+        scene.audioAssets = [{ id: 'theme', name: 'Theme' }];
+        const onChangeProps = renderInspector();
+        openEditor();
+        expect(timelinePreview.get()).toMatchObject({ ownerId: 'door', time: 0 });
+
+        // The character track picks the object with a model, and its first clip.
+        fireEvent.click(screen.getByRole('button', { name: 'Add Animation track' }));
+        expect(screen.getByLabelText('Character')).toHaveValue('hero');
+        setPlayhead(1);
+        expect(timelinePreview.get()?.time).toBe(1);
+        fireEvent.doubleClick(screen.getByRole('group', { name: 'Hero Clips keys' }));
+        expect(screen.getByLabelText('Clip')).toHaveValue('Idle');
+        fireEvent.change(screen.getByLabelText('Clip'), { target: { value: 'Walk' } });
+        fireEvent.change(screen.getByLabelText('Clip length'), { target: { value: '3' } });
+        fireEvent.click(screen.getByLabelText('Loop the clip'));
+        expect(screen.getByRole('button', { name: /Hero Clips Walk at 1\.00 s/ })).toHaveStyle({ width: '300px' });
+
+        fireEvent.click(screen.getByRole('button', { name: 'Add Audio track' }));
+        fireEvent.change(screen.getByLabelText('Mixer bus'), { target: { value: 'music' } });
+        fireEvent.doubleClick(screen.getByRole('group', { name: 'Sounds Sounds keys' }));
+        expect(screen.getByLabelText('Sound')).toHaveValue('theme');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Add Subtitles track' }));
+        fireEvent.doubleClick(screen.getByRole('group', { name: 'Subtitles Lines keys' }));
+        fireEvent.change(screen.getByLabelText('Speaker'), { target: { value: 'Hero' } });
+        fireEvent.change(screen.getByLabelText('Line'), { target: { value: 'Halt.' } });
+
+        fireEvent.click(screen.getByRole('button', { name: 'Add Fade track' }));
+        fireEvent.doubleClick(screen.getByRole('group', { name: 'Fade Cover keys' }));
+        fireEvent.change(screen.getByLabelText('Fade cover'), { target: { value: '0.5' } });
+
+        save();
+        const saved = savedTimeline(onChangeProps);
+        expect(saved.tracks.map(track => track.kind)).toEqual(['animation', 'audio', 'subtitle', 'fade']);
+        expect(saved.tracks[0]).toMatchObject({ objectId: 'hero', keys: [{ time: 1, value: { clip: 'Walk', length: 3, loop: false, blendIn: 0.25, blendOut: 0.25 } }] });
+        expect(saved.tracks[1]).toMatchObject({ objectId: '', bus: 'music', keys: [{ time: 1, value: { sound: 'theme', length: 3, volume: 1 } }] });
+        expect(saved.tracks[2]).toMatchObject({ keys: [{ time: 1, value: { speaker: 'Hero', text: 'Halt.', length: 3 } }] });
+        expect(saved.tracks[3]).toMatchObject({ color: '#000000', keys: [{ time: 1, value: 0.5 }] });
+        // Closing ends the preview.
+        expect(timelinePreview.get()).toBeNull();
+        scene.models = [];
+        scene.audioAssets = [];
     });
 
     it('asks before discarding unsaved changes and commits nothing on cancel', () => {
