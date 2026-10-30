@@ -1,7 +1,8 @@
 import React, { useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Lightbulb, Flashlight, Plus, Power } from 'lucide-react';
+import { Lightbulb, Flashlight, Plus, Power, SunDim } from 'lucide-react';
+import { resolveSkyLight, skyModel } from '../../runtime/sky/skySettings';
 import { useScene } from '../../context/SceneContext';
-import type { LevelComponent, LevelObject } from '../../types';
+import type { LevelComponent, LevelObject, SkyConfig } from '../../types';
 import { createComponent, getComponentDefinition } from '../../runtime/components/registry';
 import { editorSession } from '../../utils/editorSession';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
@@ -132,6 +133,43 @@ interface LightingPanelProps {
  * Sidebar panel for level lighting: add point/spot lights (empty props with a light component)
  * and tweak each light's colour, intensity and on/off state without opening the inspector.
  */
+/** The level's Sky Light, which lives on its Sky Sphere: its state, and the way to it. */
+const SkyLightRow: React.FC<{
+    levelId: string | null;
+    objects: readonly LevelObject[];
+    onSelect: (id: string) => void;
+    onChange: (id: string, skyConfig: SkyConfig) => void;
+}> = ({ levelId, objects, onSelect, onChange }) => {
+    const sky = objects.find(object => object.levelId === levelId && object.type === 'sky_sphere' && object.skyConfig);
+    if (!sky?.skyConfig) {
+        return <div className="px-3 py-2 text-[10px] text-gray-500 border-b border-gray-800">Add a Sky Sphere to light this level from its sky.</div>;
+    }
+    const settings = resolveSkyLight(sky.skyConfig.skyLight);
+    const usable = skyModel(sky.skyConfig) !== 'classic';
+    return (
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-800">
+            <SunDim size={12} className={settings.enabled && usable ? 'text-cyan-400' : 'text-gray-600'} />
+            <button
+                type="button"
+                onClick={() => onSelect(sky.id)}
+                className="flex-1 text-left text-[11px] text-gray-300 hover:text-white"
+                title="Lights the level from the sky itself. Select the Sky Sphere to set it."
+            >
+                Sky Light
+                <span className="ml-1 text-[9px] text-gray-500">{usable ? (settings.enabled ? settings.capture === 'live' ? 'Live' : 'Captured once' : 'Off') : 'Needs the Atmosphere sky'}</span>
+            </button>
+            {usable && (
+                <input
+                    type="checkbox"
+                    aria-label="Sky Light on"
+                    checked={settings.enabled}
+                    onChange={(e) => onChange(sky.id, { ...sky.skyConfig!, skyLight: { ...settings, enabled: e.target.checked } })}
+                />
+            )}
+        </div>
+    );
+};
+
 export const LightingPanel: React.FC<LightingPanelProps> = ({ levelId, onSelect, placementTarget, selectedObjectId }) => {
     const { levelObjects, currentLevelId, addLevelObjects, updateLevelObject, snapshotHistory } = useScene();
     const session = useSyncExternalStore(editorSession.subscribe, editorSession.getSnapshot, editorSession.getSnapshot);
@@ -213,6 +251,8 @@ export const LightingPanel: React.FC<LightingPanelProps> = ({ levelId, onSelect,
                     ))}
                 </div>
             </div>
+
+            <SkyLightRow levelId={levelId} objects={levelObjects} onSelect={onSelect} onChange={(id, skyConfig) => { snapshotHistory(); updateLevelObject(id, { skyConfig }); }} />
 
             <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
                 {lights.length === 0 && (

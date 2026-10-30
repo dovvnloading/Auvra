@@ -16,6 +16,7 @@
  * returns the commands the callbacks issued. Nothing here touches the DOM: script-frame.ts supplies
  * the compiler, the execution guard and the message port.
  */
+import { SKY_PRESETS, skyPresetFromName } from '../sky/skyPresets';
 import {
     SCRIPT_LIMITS,
     type ScriptCommand,
@@ -228,6 +229,8 @@ export interface ScriptContext {
     weather(): ScriptWeather;
     /** Heads for a weather preset over `seconds` (default 10; 0: at once): 'clear', 'cloudy', 'overcast', 'fog', 'rain', 'storm', 'snow' or 'blizzard'. */
     setWeather(name: string, seconds?: number): void;
+    /** Heads for a sky preset (its id or name) over seconds (10 by default, 0 at once), its hour too when withHour. */
+    setSkyPreset(name: string, seconds?: number, withHour?: boolean): void;
     /** A blast at `position`: characters and breakable objects within `radius` m take up to `damage`, loose bodies are thrown at up to `force` m/s. */
     explode(position: ScriptVec3, radius?: number, damage?: number, force?: number): void;
     /** Breaks object `objectId` (one with a Destructible component) at once, or takes `amount` from its health. */
@@ -1115,6 +1118,13 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
                 }
                 if (!isFiniteNumber(seconds) || seconds < 0) throw new TypeError('setWeather expects seconds of 0 or more');
                 queue(record, { type: 'setWeather', weather: name.trim().toLowerCase(), seconds: Math.min(SCRIPT_LIMITS.maxWeatherSeconds, seconds) });
+            },
+            setSkyPreset: (name: string, seconds = 10, withHour = false) => {
+                if (typeof name !== 'string' || !skyPresetFromName(name)) {
+                    throw new TypeError(`setSkyPreset expects one of ${SKY_PRESETS.map(preset => preset.id).join(', ')}`);
+                }
+                if (!isFiniteNumber(seconds) || seconds < 0) throw new TypeError('setSkyPreset expects seconds of 0 or more');
+                queue(record, { type: 'setSkyPreset', preset: name.trim().toLowerCase(), seconds: Math.min(SCRIPT_LIMITS.maxWeatherSeconds, seconds), withHour: withHour === true });
             },
             net: {
                 connected: () => world.snapshot.net.connected,

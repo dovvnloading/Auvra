@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { pauseSceneSky } from './skyScene';
 import {
     fillInvalidProbes,
     isStaticLightingLight,
@@ -187,6 +188,7 @@ export class LightBaker {
     private readonly target = new THREE.WebGLCubeRenderTarget(CAPTURE_SIZE, { type: THREE.HalfFloatType, generateMipmaps: false });
     private readonly camera = new THREE.CubeCamera(CAPTURE_NEAR, CAPTURE_FAR, this.target);
     private readonly sky: THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMaterial>;
+    private resumeSky: (() => void) | null = null;
     private readonly frontFaces = faceMaterial(THREE.FrontSide);
     private readonly anyFaces = faceMaterial(THREE.DoubleSide);
     /** Each captured probe's result, SLOT pixels apiece, read back a batch at a time. */
@@ -445,6 +447,7 @@ export class LightBaker {
             shadowAutoUpdate: this.renderer.shadowMap.autoUpdate,
             shadows,
         };
+        this.resumeSky = pauseSceneSky(scene);
         // The environment map's light, as the sky the probes see.
         scene.background = scene.environment;
         scene.backgroundIntensity = scene.environmentIntensity ?? 1;
@@ -484,6 +487,8 @@ export class LightBaker {
 
     private restore(state: SceneState): void {
         const scene = this.scene;
+        this.resumeSky?.();
+        this.resumeSky = null;
         scene.remove(this.sky);
         for (const object of state.hidden) object.visible = true;
         scene.background = state.background;

@@ -97,6 +97,7 @@ export const SCRIPT_API_REFERENCE: ScriptApiSection[] = [
             { signature: 'ctx.abilities.addAttribute(actor, name, amount) / setAttribute(actor, name, value)', description: "Changes an attribute's base value, within its bounds." },
             { signature: 'ctx.abilities.hasTag / tags / addTag / removeTag (actor, tag)', description: "An actor's tags: 'State.Stunned' counts as 'State'." },
             { signature: 'ctx.abilities.cooldown(actor, ability) / effects(actor) / actors()', description: 'Seconds of cooldown left, the lasting effects on an actor, and every actor with abilities.' },
+            { signature: "ctx.setSkyPreset(name, seconds?, withHour?)", description: "Heads for a whole sky preset over seconds (default 10): 'fair-day', 'sunset', 'moonlit-night', 'thunderstorm', 'dust-world' and the rest in the sky's preset gallery. With withHour the clock moves to its hour too." },
             { signature: "ctx.setWeather(name, seconds?)", description: "Heads for a weather preset over seconds (default 10): 'clear', 'cloudy', 'overcast', 'fog', 'rain', 'storm', 'snow' or 'blizzard'." },
         ],
     },

@@ -74,6 +74,7 @@ const fakeServices = (objects: LevelObject[] = []) => {
     setTimeOfDay: hours => { calls.push(['setTimeOfDay', hours]); },
     setDayLength: minutes => { calls.push(['setDayLength', minutes]); },
     setWeather: (name, seconds) => { calls.push(['setWeather', name, seconds]); return true; },
+    setSkyPreset: (name, seconds, withHour) => { calls.push(['setSkyPreset', name, seconds, withHour]); return true; },
     explode: (position, radius, damage, force) => { calls.push(['explode', position, radius, damage, force]); },
     breakObject: objectId => { calls.push(['breakObject', objectId]); return true; },
     damageObject: (objectId, amount) => { calls.push(['damageObject', objectId, amount]); return true; },

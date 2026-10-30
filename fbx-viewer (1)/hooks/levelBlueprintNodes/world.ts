@@ -63,6 +63,7 @@ export type WorldNodeType =
     | 'GetTimeOfDay'
     | 'SetDayLength'
     | 'SetWeather'
+    | 'SetSkyPreset'
     | 'GetWeather'
     | 'Explode'
     | 'BreakObject'
@@ -199,6 +200,7 @@ export interface WorldNodeServices {
     setDayLength?(minutes: number): void;
     /** Heads for a weather preset (by name) over `seconds`; false for a name that is none. */
     setWeather?(name: string, seconds: number): boolean;
+    setSkyPreset?(name: string, seconds: number, withHour: boolean): boolean;
     /** The weather now: the preset it is heading for ('' for none or custom values), its values, and how wet and snowy the ground is. */
     weather?(): { preset: string; clouds: number; rain: number; snow: number; fog: number; wind: number; wetness: number; snowCover: number };
     /** A blast: characters and breakable objects in reach are hurt, loose bodies thrown. */
@@ -586,6 +588,14 @@ export const WORLD_NODE_DEFINITIONS: readonly WorldNodeDefinition[] = [
         inputs: [exec('Exec', 'Input'), input('Weather', 'String'), input('Seconds', 'Float')],
         outputs: [exec('Out', 'Output'), output('Set', 'Boolean')],
         data: { default_Weather: 'Rain', default_Seconds: 20 },
+    },
+    {
+        type: 'SetSkyPreset',
+        title: 'Set Sky Preset',
+        description: 'Changes the whole sky to a preset over Seconds (0: at once): its air, clouds, night and weather, such as Fair Day, Sunset, Moonlit Night, Thunderstorm or Dust World. With Change Hour, the clock moves forward to the hour of the preset too. Set is false for a name that is no preset. Needs a sky drawn with the Atmosphere model.',
+        inputs: [exec('Exec', 'Input'), input('Preset', 'String'), input('Seconds', 'Float'), input('Change Hour', 'Boolean')],
+        outputs: [exec('Out', 'Output'), output('Set', 'Boolean')],
+        data: { default_Preset: 'Sunset', default_Seconds: 30, 'default_Change Hour': true },
     },
     {
         type: 'GetWeather',
@@ -1129,6 +1139,12 @@ const runSetDayLength: WorldNodeExecutor = (_node, ctx) => {
     finish(ctx, {});
 };
 
+const runSetSkyPreset: WorldNodeExecutor = (_node, ctx) => {
+    const name = ctx.evaluate('Preset');
+    const seconds = Math.max(0, toNumber(ctx.evaluate('Seconds'), 0));
+    finish(ctx, { Set: typeof name === 'string' && ctx.services.setSkyPreset?.(name, seconds, ctx.evaluate('Change Hour') === true) === true });
+};
+
 const runSetWeather: WorldNodeExecutor = (_node, ctx) => {
     const name = ctx.evaluate('Weather');
     const seconds = Math.max(0, toNumber(ctx.evaluate('Seconds'), 0));
@@ -1269,6 +1285,7 @@ const executors = {
     GetTimeOfDay: runGetTimeOfDay,
     SetDayLength: runSetDayLength,
     SetWeather: runSetWeather,
+    SetSkyPreset: runSetSkyPreset,
     GetWeather: runGetWeather,
     Explode: runExplode,
     BreakObject: runBreakObject,

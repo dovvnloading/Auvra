@@ -337,18 +337,68 @@ The light's other settings are on its component in the inspector.
 
 ## Sky, time of day and weather
 
-A level's **Sky Sphere** (under Logic Actors) gives it its sky, sun and fog. Select it to set them in its inspector:
+A level's **Sky Sphere** (under Logic Actors) gives it its sky, sun and fog, and lights it. Select it to set them in its inspector.
+
+**Sky Model** chooses what draws the sky:
+
+- **Atmosphere** (new skies): air, haze and ozone scattering the sun's light as they do on a real planet, with volumetric clouds, a sun and moon with discs, stars and a Milky Way that turn with the night. Everything in the sky comes from these, so a change of hour or haze changes it all together.
+- **Classic**: the older analytic sky, which levels saved before there was a choice keep, so they look as they did.
+- **Panorama Image**: one of your textures wrapped round the sky, 360 by 180 degrees (twice as wide as it is tall).
+
+### Sky presets
+
+**Sky Presets** is a gallery of ready-made skies. Each sets the whole look: the hour, the sun's path, the air, the clouds, the night, the weather and the fog. Change anything afterwards; the gallery says what the sky was changed from. A preset leaves alone what is about your level or your machine: the Sky Light's settings, shadow distance, day length and cloud quality.
+
+| Group | Presets |
+|---|---|
+| Day | Fair Day, Clear Noon, Morning, Towering Clouds, Alpine |
+| Golden Hour | Golden Hour, Sunset, Dawn, Blue Hour |
+| Night | Moonlit Night, Starry Night, Crescent Night |
+| Weather | Overcast, Rain, Thunderstorm, Misty Morning, Snowfall |
+| Other Worlds | Hazy Desert, Dust World, Emerald World, Violet World |
+
+In play, the **Set Sky Preset** node and `ctx.setSkyPreset` head from one sky to another over any number of seconds (see [Time and weather](level-scripting.md)).
+
+### Time of day
+
+The hour is the sky's main control, and with the Atmosphere model the light follows it: the sun's colour comes from how much air it shines through, so it warms and reddens as it sinks; the sky and the shade take their colour from the same air; the moon takes over as the light that casts shadows once the sun has gone; and the picture opens up as the light falls, as an eye or a camera does, so a sunset and a blue hour read as they should and not as a dark picture.
+
+Under the slider, the jump buttons go to Dawn, Morning, Noon, Sunset and Night, and the play button runs the day through in the viewport to see the light change, without changing the level.
+
+### What the sections set
 
 | Section | What it sets |
 |---|---|
-| Time of Day | The hour the level shows in the editor and starts at in play: the sun rises at 6, stands overhead at noon and sets at 18, and the light turns warm near the horizon. After dark the stars come out and a moon rises opposite the sun |
-| Day-Night Cycle | **Day Length**: how many real minutes a full day takes in play, starting at the Time of Day (0: time stands still). **Fog Follows Sky**: the fog takes the colour of the sky at the horizon, blue by day, orange at sunset, dark at night, instead of the Fog Color |
-| Weather | The weather the level starts in: **None**, or a **Preset** (Clear, Cloudy, Overcast, Fog, Rain, Thunderstorm, Snow, Blizzard) whose values can then be changed: **Clouds** (how much sky they cover), **Rain** and **Snow** (how heavy), **Mist** (fog on top of the sky's own), **Wind** speed and the direction it blows toward, and lightning **Strikes/min** |
-| Atmosphere, Light & Fog | The sky's colour (Turbidity, Rayleigh, Mie), the strength of the sun and of the sky's fill, and the fog's density and colour |
+| Sun Path | **Compass Turn** turns the sun's path round the horizon. **Lean** tilts it from passing straight overhead, as it does away from the tropics: most places want some, for longer shadows at noon. **Sun Size** and **Sun Colour** |
+| Atmosphere | **Air**: how much it scatters (1 is Earth's; more is a deeper sky and a redder sunset). **Air Colour**: what it scatters, white for Earth's blue, a tint for another world's. **Haze**: dust and droplets, for a paler sky and a wider glow. **Sun Glow**: how tightly that glow sits round the sun. **Ozone**: what keeps dusk blue. **Ground**: the land beyond the level, seen below the horizon. **Brightness** |
+| Clouds | **Quality**: Off, Flat Layer, or Volumetric at Low, Medium or High. **Base Height** and **Depth** in metres; deep layers grow towering clouds. **Density**, **Detail** (how much fine detail eats at their edges), **Cloud Size**, and **Ground Shadows**, how much they shade the land as they pass. How much of the sky they cover is the weather's **Clouds** |
+| Night | **Moon Phase** (0: new, 0.5: full), **Moon Size**, **Moonlight** (it casts shadows), **Stars**, **Milky Way**, and **Night Air**, a faint glow that keeps a moonless night from going black |
+| Sky Light | See below |
+| Day-Night Cycle | **Day Length**: how many real minutes a full day takes in play, starting at the Time of Day (0: time stands still). **Fog Follows Sky**: distant things fade into the sky behind them, each in its own direction, so land melts into the horizon and glows toward a low sun. Off, fog keeps one colour |
+| Weather | The weather the level starts in: **None**, or a **Preset** (Clear, Cloudy, Overcast, Fog, Rain, Thunderstorm, Snow, Blizzard) whose values can then be changed: **Clouds** (how much sky they cover), **Rain**, **Snow**, **Mist**, **Wind** and its direction, and lightning **Strikes/min** |
+| Light & Fog | The strength of the sun, how far it casts shadows, and the fog's density and colour. A Classic sky also has its Turbidity, Rayleigh and Mie here, and the strength of its fill |
+
+### Sky Light
+
+A **Sky Light** lights a level from its sky: the colour, brightness and clouds overhead reach every surface from every direction, and show in every reflection. It is on for new skies, and the **Lighting** panel shows it too. It takes the place of a flat ambient fill, and it follows the sky, so the shade is blue under a clear noon, orange at sunset, grey under cloud and faint under the moon, with no fill to set by hand.
+
+| Setting | What it does |
+|---|---|
+| Light From Sky | Off leaves the flat fill |
+| Source | **This Sky**, or a **Panorama Image** from your textures, whatever the sky itself shows |
+| Capture | **Live** follows the sky as it changes. **Once** captures it when it is set, and costs nothing after: use it for a sky that never moves |
+| Resolution | Of the captured map. Higher makes reflections on shiny things sharper; dull surfaces cannot tell |
+| Intensity, Tint, Reflections | Its strength and colour, and how much of it shows in reflections |
+| Solid Lower Half | Light from below the horizon comes from this colour, in place of the sky's ground |
+| Occlusion | How far what stands overhead shuts out the sky, so a room under a roof goes dark, the ground under a tree falls into shade, and the base of a wall is darker than the open ground. It follows what moves, within a second or so. 0 turns it off |
+| Min Light | The least sky a covered place keeps |
+| Reach | The area round the camera that occlusion covers, in metres. A larger one is coarser; beyond it, nothing is shut out |
+
+Occlusion looks down from above, so it knows what stands over a place and how open the land around it is, but not, say, that a room has a window: for interiors that need light to bounce and come in through their openings, add [baked lighting](#baked-lighting), which takes over the diffuse light wherever it has been baked, or the **Global illumination** screen effect. Things with a Reflection Probe keep the reflections it saw.
 
 What the weather does:
 
-- **Clouds** drift with the wind across the sky, lit by the sun and coloured by the sunset. Under heavy cloud the sun dims, shadows soften and the shade fills with the sky's light; a storm darkens all of it.
+- **Clouds** drift with the wind across the sky, lit by the sun and coloured by the sunset, and with volumetric clouds their shadows pass over the land. Under heavy cloud the sun dims, shadows soften and the shade fills with the sky's light; a storm darkens all of it.
 - **Rain and snow** fall around the camera wherever it goes, slanted by the wind. In play they stop at what covers them, so none falls under a roof or into a room; raindrops splash and ring ripples where they land.
 - **Wet ground**: surfaces get darker and glossier while it rains, and flat ground pools into puddles; they dry slowly once it stops, faster in sun and wind. **Snow** settles on what faces up, patchy at first, and melts slowly after. In play, what is under cover stays dry and free of snow.
 - **Lightning** strikes at random, lighting the scene and the clouds; near strikes draw a bolt on the sky, and thunder follows as late as sound takes to arrive, lower and longer the further off.

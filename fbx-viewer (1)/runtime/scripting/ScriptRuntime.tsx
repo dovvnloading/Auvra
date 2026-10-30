@@ -46,6 +46,8 @@ import { cameraDirector } from '../cameraDirector';
 import { KMH, vehicleSession, type VehicleSession } from '../vehicles';
 import { particleEmitters } from '../particleEmitters';
 import { setWorldTime, setWorldWeather, weatherKindFromName, worldTime, worldWeather } from '../weather';
+import { setWorldSkyPreset } from '../sky/skyDirector';
+import { skyPresetFromName } from '../sky/skyPresets';
 import { destructibles, explode } from '../destructibles';
 import { abilityActors, isTag } from '../abilities';
 import { activateActorAbility, applyActorEffect, findActor } from '../abilityWorld';
@@ -382,6 +384,11 @@ export const parseScriptCommand = (value: unknown): ScriptCommand | null => {
                 && typeof v.seconds === 'number' && Number.isFinite(v.seconds) && v.seconds >= 0 && v.seconds <= SCRIPT_LIMITS.maxWeatherSeconds
                 ? { type: 'setWeather', weather: v.weather, seconds: v.seconds }
                 : null;
+        case 'setSkyPreset':
+            return hasKeys(v, ['type', 'preset', 'seconds', 'withHour']) && typeof v.preset === 'string' && skyPresetFromName(v.preset) !== null
+                && typeof v.seconds === 'number' && Number.isFinite(v.seconds) && v.seconds >= 0 && v.seconds <= SCRIPT_LIMITS.maxWeatherSeconds && typeof v.withHour === 'boolean'
+                ? { type: 'setSkyPreset', preset: v.preset, seconds: v.seconds, withHour: v.withHour }
+                : null;
         case 'emitParticles':
             return hasKeys(v, ['type', 'objectId', 'count']) && isName(v.objectId)
                 && typeof v.count === 'number' && Number.isInteger(v.count) && v.count >= 0 && v.count <= SCRIPT_LIMITS.maxParticleBurst
@@ -689,6 +696,7 @@ export interface ScriptCommandServices {
     setTimeOfDay(hours: number): void;
     setDayLength(minutes: number): void;
     setWeather(name: string, seconds: number): boolean;
+    setSkyPreset(name: string, seconds: number, withHour: boolean): boolean;
     /** A blast, and breaking or damaging an object that can break (runtime/destructibles.ts). */
     explode(position: [number, number, number], radius: number, damage: number, force: number): void;
     breakObject(objectId: string): boolean;
@@ -876,6 +884,9 @@ export const applyScriptCommand = (command: ScriptCommand, services: ScriptComma
             return;
         case 'setWeather':
             services.setWeather(command.weather, command.seconds);
+            return;
+        case 'setSkyPreset':
+            services.setSkyPreset(command.preset, command.seconds, command.withHour);
             return;
         case 'explode':
             services.explode(command.position, command.radius, command.damage, command.force);
@@ -1286,6 +1297,7 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
             setTimeOfDay: hours => setWorldTime({ hours }),
             setDayLength: minutes => setWorldTime({ dayLength: minutes }),
             setWeather: (name, seconds) => setWorldWeather(name, seconds),
+            setSkyPreset: (name, seconds, withHour) => setWorldSkyPreset(name, seconds, withHour),
             explode: (position, radius, damage, force) => {
                 explode({ centre: { x: position[0], y: position[1], z: position[2] }, radius, damage, force });
             },

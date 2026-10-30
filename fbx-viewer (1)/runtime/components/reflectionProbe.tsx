@@ -118,7 +118,13 @@ const assign = (mesh: THREE.Mesh, probe: ProbeEntry) => {
     }
     const original = mesh.material;
     const list = Array.isArray(original) ? original : [original];
-    const copies = list.map(material => (isProbeMaterial(material) ? material.clone() : material));
+    const copies = list.map(material => {
+        if (!isProbeMaterial(material)) return material;
+        const copy = material.clone();
+        // Its reflections come from the probe, which saw what is around it: the sky's being shut out does not apply.
+        copy.defines = { ...copy.defines, AUVRA_LOCAL_REFLECTION: '' };
+        return copy;
+    });
     mesh.material = Array.isArray(original) ? copies : copies[0];
     const assignment: Assignment = { probeId: probe.id, original, copies };
     assignments.set(mesh, assignment);

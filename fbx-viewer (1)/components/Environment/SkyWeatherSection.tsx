@@ -109,7 +109,7 @@ export const SkyWeatherSection: React.FC<SkyWeatherSectionProps> = ({ config, on
                         </div>
                     )}
                     <div className="text-[9px] text-gray-500">
-                        Level scripts change the weather and the hour in play: Set Weather, Set Time of Day.
+                        Level scripts change the weather and the hour in play: Set Weather, Set Time of Day, Set Sky Preset.
                     </div>
                 </div>
             </div>
