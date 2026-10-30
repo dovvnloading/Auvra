@@ -14,8 +14,8 @@ import { COVER_SAMPLES_PER_FRAME, weatherCover, type CoverSampler } from '../../
 import { patchWeatherSurfaces, patchWindSurfaces, setSurfaceWeather } from '../../runtime/weatherSurfaces';
 import { stepWind, windUniforms } from '../../runtime/wind';
 import { CloudLayer, LightningBolt, NightSky } from './sky/skyObjects';
-import { DistanceShadows } from '../../runtime/lighting/DistanceShadowLights';
-import { DEFAULT_SHADOW_DISTANCE, NEAR_SHADOW_REACH, fitCascade, viewSliceSphere } from '../../runtime/lighting/distanceShadows';
+import { DistanceShadows, useLookDistance } from '../../runtime/lighting/DistanceShadowLights';
+import { DEFAULT_SHADOW_DISTANCE, fitCascade, nearShadowReach, viewSliceSphere } from '../../runtime/lighting/distanceShadows';
 
 const _sliceCentre = new THREE.Vector3();
 
@@ -46,6 +46,8 @@ const SUN_SHADOW_REACH = 1.2;
 /** The reach changes in steps of this ratio, so the shadow map is not re-fitted every frame of a zoom. */
 const SUN_SHADOW_STEP = 1.25;
 const SUN_SHADOW_MAP_SIZE = 2048;
+const SUN_SHADOW_BIAS = -0.0002;
+const SUN_SHADOW_NORMAL_BIAS = 0.03;
 /** How far the sun sits from the point it lights; its shadows reach this far either side of it. */
 const SUN_DISTANCE = 800;
 /** Where no ground is in view (the camera looks level or up), the point this far ahead stands in for it. */
@@ -113,13 +115,14 @@ const SunLight: React.FC<{
     color?: string;
     light?: React.MutableRefObject<THREE.DirectionalLight | null>;
     /**
-     * With distance shadows carrying the far view: the sun's own map covers just the view's first this
-     * many units, so near shadows stay sharp however far the camera looks. Absent: it follows the point
-     * looked at and widens with its distance.
+     * With distance shadows carrying the far view: the sun's own map covers just the view's first units
+     * (see nearShadowReach), so near shadows stay sharp however far the camera looks. Otherwise it follows
+     * the point looked at and widens with its distance.
      */
-    reach?: number;
-}> = ({ direction, intensity, color, light: outer, reach }) => {
+    cascaded?: boolean;
+}> = ({ direction, intensity, color, light: outer, cascaded = false }) => {
     const camera = useThree(state => state.camera);
+    const look = useLookDistance();
     const own = useRef<THREE.DirectionalLight | null>(null);
     const light = outer ?? own;
     const target = useMemo(() => new THREE.Object3D(), []);
@@ -136,9 +139,11 @@ const SunLight: React.FC<{
     useFrame(() => {
         const sun = light.current;
         if (!sun) return;
-        if (reach !== undefined) {
+        // A dark sun (at night) casts nothing to draw.
+        sun.shadow.autoUpdate = sun.intensity > 0;
+        if (cascaded) {
             camera.updateMatrixWorld();
-            const radius = viewSliceSphere(camera, reach, _sliceCentre);
+            const radius = viewSliceSphere(camera, nearShadowReach(look()), _sliceCentre);
             fitCascade(sun, _sliceCentre, radius, direction);
             fitted.current = 0;
             return;
@@ -149,7 +154,12 @@ const SunLight: React.FC<{
             const shadowCamera = sun.shadow.camera;
             shadowCamera.left = shadowCamera.bottom = -halfExtent;
             shadowCamera.right = shadowCamera.top = halfExtent;
+            // Distance shadows may have just given the map up, with their own depth range and bias.
+            shadowCamera.near = 1;
+            shadowCamera.far = SUN_DISTANCE * 2;
             shadowCamera.updateProjectionMatrix();
+            sun.shadow.bias = SUN_SHADOW_BIAS;
+            sun.shadow.normalBias = SUN_SHADOW_NORMAL_BIAS;
         }
         target.updateMatrixWorld();
         sun.position.copy(target.position).addScaledVector(_towardSun.copy(direction).normalize(), SUN_DISTANCE);
@@ -164,8 +174,8 @@ const SunLight: React.FC<{
                 {...(intensity === undefined ? {} : { intensity })}
                 {...(color === undefined ? {} : { color })}
                 castShadow
-                shadow-bias={-0.0002}
-                shadow-normalBias={0.03}
+                shadow-bias={SUN_SHADOW_BIAS}
+                shadow-normalBias={SUN_SHADOW_NORMAL_BIAS}
                 shadow-mapSize={[SUN_SHADOW_MAP_SIZE, SUN_SHADOW_MAP_SIZE]}
             />
         </>
@@ -373,7 +383,7 @@ export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects, live = false
                 <color attach="background" args={['#050505']} />
                 <fog attach="fog" args={['#050505', 10, 60]} />
                 <ambientLight intensity={0.4} />
-                <SunLight direction={FALLBACK_SUN_DIRECTION} intensity={1.2} reach={NEAR_SHADOW_REACH} />
+                <SunLight direction={FALLBACK_SUN_DIRECTION} intensity={1.2} cascaded />
                 <DistanceShadows direction={FALLBACK_SUN_DIRECTION} distance={DEFAULT_SHADOW_DISTANCE} />
                 <LocalEnvironment />
             </>
@@ -400,9 +410,9 @@ export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects, live = false
             <primitive object={precipitation.object} />
 
             {/* Sun, a faint moon opposite it, and lightning: always there, dark when idle, so lit materials never recompile */}
-            <SunLight direction={sunDirection} light={sun} reach={(config.shadowDistance ?? DEFAULT_SHADOW_DISTANCE) > 0 ? NEAR_SHADOW_REACH : undefined} />
+            <SunLight direction={sunDirection} light={sun} cascaded={(config.shadowDistance ?? DEFAULT_SHADOW_DISTANCE) > 0} />
             {/* Shadows past the sun's own map, out to the shadow distance (after the sun, which is tried first) */}
-            <DistanceShadows direction={sunDirection} distance={config.shadowDistance ?? DEFAULT_SHADOW_DISTANCE} />
+            <DistanceShadows direction={sunDirection} distance={config.shadowDistance ?? DEFAULT_SHADOW_DISTANCE} sun={sun} />
             <directionalLight ref={moon} color="#9db4ff" intensity={0} />
             <directionalLight ref={flash} color="#c8d8ff" intensity={0} />
 
