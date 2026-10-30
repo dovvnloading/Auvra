@@ -99,6 +99,9 @@ const CASCADED_SHADOW = /* glsl */ `
 				getShadow( directionalShadowMap[ i ], directionalLightShadow.shadowMapSize, directionalLightShadow.shadowBias, directionalLightShadow.shadowRadius, vDirectionalShadowCoord[ i ] ),
 				smoothstep( 0.0, ${BLEND}, shadowCascadeEdge )
 			) : 1.0;
+			#ifdef AUVRA_SKY
+				if ( receiveShadow ) directLight.color *= auvraCloudShade( auvraWorldPoint( geometryPosition ) );
+			#endif
 		}
 		#endif
 		if ( dot( directLight.color, directLight.color ) > 0.0 ) $DIRECT`;

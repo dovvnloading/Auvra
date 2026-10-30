@@ -142,6 +142,7 @@ These change and read the level's [time of day and weather](world-editor.md#sky-
 | Set Time of Day | Moves the clock to **Hours** (0 to 24; 13.5 is half past one): the sun, sky and light go there at once |
 | Get Time of Day | The **Hours**, how much **Light** there is after the weather (0 dark to 1 full day) and whether it **Is Night**. Pure |
 | Set Day Length | How many real **Minutes** a full day takes from now on; 0 stops the clock where it is |
+| Set Sky Preset | Changes the whole sky to a [preset](world-editor.md#sky-presets) over **Seconds** (0: at once): its air, clouds, night and weather, such as Fair Day, Sunset, Moonlit Night, Thunderstorm or Dust World. With **Change Hour**, the clock moves forward to the preset's hour too. **Set** is false for a name that is no preset. Needs a sky drawn with the Atmosphere model |
 | Set Weather | Changes the weather to a preset over **Seconds** (0: at once): Clear, Cloudy, Overcast, Fog, Rain, Storm (or Thunderstorm), Snow or Blizzard, in any case. **Set** is false for a name that is none of them |
 | Get Weather | The preset the weather is heading for (**Weather**, empty for none), how cloudy, rainy, snowy and misty it is, the **Wind** in m/s, and how wet the ground is (**Wetness**) and how much snow lies on it (**Snow Cover**), each 0 to 1. Pure |
 

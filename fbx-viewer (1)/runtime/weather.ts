@@ -147,16 +147,20 @@ export const formatHours = (hours: number): string => {
 };
 
 /**
- * Unit vector toward the sun at `hours`: it rises at 6, stands overhead at 12 and sets at 18, its
- * path turned round the vertical by `azimuth` (a share of a full turn).
+ * Unit vector toward the sun at `hours`: it rises at 6, stands highest at 12 and sets at 18, its path
+ * turned round the vertical by `azimuth` (a share of a full turn) and leaning `tilt` degrees from
+ * passing straight overhead, as it does anywhere away from the tropics.
  */
-export const sunDirection = (hours: number, azimuth: number, out: { x: number; y: number; z: number }) => {
+export const sunDirection = (hours: number, azimuth: number, out: { x: number; y: number; z: number }, tilt = 0) => {
     const theta = ((hours - 6) / 24) * Math.PI * 2;
     const turn = azimuth * Math.PI * 2;
+    const lean = (tilt * Math.PI) / 180;
     const x = Math.cos(theta);
-    out.x = x * Math.cos(turn);
-    out.y = Math.sin(theta);
-    out.z = -x * Math.sin(turn);
+    const rise = Math.sin(theta);
+    const z = rise * Math.sin(lean);
+    out.x = x * Math.cos(turn) + z * Math.sin(turn);
+    out.y = rise * Math.cos(lean);
+    out.z = -x * Math.sin(turn) + z * Math.cos(turn);
     return out;
 };
 
@@ -246,9 +250,9 @@ const SNOW_DENSITY = 0.01;
 
 const _tint: Rgb = [0, 0, 0];
 
-/** Fills `out` with the sky's light at `hours` under `weather`, its sun path turned by `azimuth`. */
-export const skyLighting = (hours: number, azimuth: number, weather: WeatherState, out: SkyLighting): SkyLighting => {
-    sunDirection(hours, azimuth, out.sun);
+/** Fills `out` with the sky's light at `hours` under `weather`, its sun path turned by `azimuth` and leaning `tilt` degrees. */
+export const skyLighting = (hours: number, azimuth: number, weather: WeatherState, out: SkyLighting, tilt = 0): SkyLighting => {
+    sunDirection(hours, azimuth, out.sun, tilt);
     const height = out.sun.y;
     const daylight = sunDaylight(height);
     const stormy = storminess(weather);
@@ -457,8 +461,8 @@ export class WorldClock {
     }
 
     /** The sky's light now (see skyLighting). */
-    lighting(azimuth: number, out: SkyLighting): SkyLighting {
-        return skyLighting(this.hours, azimuth, this.weather, out);
+    lighting(azimuth: number, out: SkyLighting, tilt = 0): SkyLighting {
+        return skyLighting(this.hours, azimuth, this.weather, out, tilt);
     }
 }
 

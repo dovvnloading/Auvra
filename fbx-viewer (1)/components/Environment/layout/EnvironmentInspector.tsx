@@ -11,9 +11,11 @@ import { TerrainLayerPanel } from '../Terrain/TerrainLayerPanel';
 import { ScrubbableInput } from '../../UI/Properties/ScrubbableInput';
 import { useScene } from '../../../context/SceneContext';
 import { WaveformEditor } from '../assets/WaveformEditor';
-import { DEFAULT_SKY_CONFIG } from '../SkySystem';
 import { DEFAULT_SHADOW_DISTANCE } from '../../../runtime/lighting/distanceShadows';
 import { SkyWeatherSection } from '../SkyWeatherSection';
+import { DayPreviewControls, SkyDomeSection } from '../SkyDomeSection';
+import { skyModel } from '../../../runtime/sky/skySettings';
+import { newSkyConfig } from '../../../runtime/sky/skyPresets';
 import { isTerrainHeightfieldPending } from '../../../utils/terrainHeightfieldCodec';
 import { editorSession } from '../../../utils/editorSession';
 import { appConfirm } from '../../../utils/appDialogs';
@@ -994,10 +996,18 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                             className="w-full h-1.5 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-cyan-400"
                                         />
                                         <div className="flex justify-between text-[8px] text-gray-500 mt-1">
-                                            <span>6 AM</span><span>NOON</span><span>6 PM</span><span>MIDNIGHT</span>
+                                            <span>0:00</span><span>6:00</span><span>12:00</span><span>18:00</span><span>24:00</span>
                                         </div>
+                                        <DayPreviewControls hour={selectedObject.skyConfig.timeOfDay} onHour={(hours) => commitUpdate({ skyConfig: { ...selectedObject.skyConfig!, timeOfDay: hours } })} />
                                     </div>
                                 </div>
+
+                                {/* The sky's model, presets and everything they set; its Sky Light */}
+                                <SkyDomeSection
+                                    config={selectedObject.skyConfig}
+                                    onScrub={(config) => scrubUpdate({ skyConfig: config })}
+                                    onCommit={(config) => commitUpdate({ skyConfig: config })}
+                                />
 
                                 {/* Day-night cycle and weather */}
                                 <SkyWeatherSection
@@ -1006,8 +1016,8 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                     onCommit={(config) => commitUpdate({ skyConfig: config })}
                                 />
 
-                                {/* Atmosphere */}
-                                <div className="space-y-2">
+                                {/* Atmosphere: the analytic sky's own controls */}
+                                {skyModel(selectedObject.skyConfig) === 'classic' && <div className="space-y-2">
                                     <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
                                         <Wind size={12} /> Atmosphere
                                     </div>
@@ -1037,7 +1047,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                             step={0.01} labelWidth="w-16"
                                         />
                                     </div>
-                                </div>
+                                </div>}
 
                                 {/* Lighting & Fog */}
                                 <div className="space-y-2">
@@ -1087,7 +1097,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
 
                                 {/* Reset to Default */}
                                 <button
-                                    onClick={() => commitUpdate({ skyConfig: DEFAULT_SKY_CONFIG })}
+                                    onClick={() => commitUpdate({ skyConfig: newSkyConfig() })}
                                     className="w-full py-2 text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded text-gray-400 flex items-center justify-center gap-2 transition-colors"
                                 >
                                     <RotateCcw size={12} /> Reset to Default

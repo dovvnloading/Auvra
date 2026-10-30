@@ -1,3 +1,4 @@
+import { newSkyConfig } from '../../runtime/sky/skyPresets';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Search, Trees, Box, Image, MousePointer2, Layers, Trash2, Plus, ChevronDown, ChevronRight, Crosshair, CornerLeftUp, Skull, Music, Sun, PersonStanding, Axis3d, Spline } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
@@ -318,20 +319,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
             [0, 0, 0],
             [1, 1, 1],
             'sky_sphere',
-            { // Default Sky Config
-                timeOfDay: 14,
-                sunIntensity: 1.5,
-                ambienceIntensity: 0.5,
-                sunColor: '#ffffff',
-                fogColor: '#8caebf', // Light blueish fog
-                fogDensity: 0.02,
-                turbidity: 8,
-                rayleigh: 1,
-                mieCoefficient: 0.005,
-                mieDirectionalG: 0.7,
-                inclination: 0.49,
-                azimuth: 0.25
-            }
+            newSkyConfig()
         );
         if (newId) onSelectObject(newId);
     };

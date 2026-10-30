@@ -79,9 +79,13 @@ def _ground_y(x: float, z: float, flat_radius: float = _STARTER_FLAT_RADIUS, sin
 # The sky the editor's Add Sky Sphere creates (EnvironmentSidebar): without a skyConfig the sky inspector hides
 # every control and the runtime falls back to a config with near-black fog.
 _SKY_CONFIG = {
-    "timeOfDay": 14.0, "sunIntensity": 1.5, "ambienceIntensity": 0.5, "sunColor": "#ffffff",
-    "fogColor": "#8caebf", "fogDensity": 0.02, "turbidity": 8.0, "rayleigh": 1.0,
-    "mieCoefficient": 0.005, "mieDirectionalG": 0.7, "inclination": 0.49, "azimuth": 0.25,
+    "timeOfDay": 11.0, "sunIntensity": 3.1416, "ambienceIntensity": 0.5, "sunColor": "#ffffff",
+    "fogColor": "#8caebf", "fogDensity": 0.0016, "turbidity": 8.0, "rayleigh": 1.0,
+    "mieCoefficient": 0.005, "mieDirectionalG": 0.7, "inclination": 0.49, "azimuth": 0.1,
+    # The physically based sky, lighting the level from itself (runtime/sky/skyPresets.ts: Fair Day).
+    "model": "atmosphere", "preset": "fair-day", "sunTilt": 35.0, "fogMode": "sky",
+    "weather": {"preset": "clear", "clouds": 0.44, "rain": 0.0, "snow": 0.0, "fog": 0.0, "wind": 2.0, "windDirection": 60.0, "lightning": 0.0},
+    "skyLight": {"enabled": True},
 }
 
 
@@ -649,7 +653,7 @@ _COURTYARD_MODELS = {
 }
 
 # A warm late-afternoon sky.
-_COURTYARD_SKY = dict(_SKY_CONFIG, timeOfDay=17.0, sunColor="#ffd9a8", fogColor="#c9a888", fogDensity=0.015)
+_COURTYARD_SKY = dict(_SKY_CONFIG, timeOfDay=16.9, preset="golden-hour", sunTilt=22.0, azimuth=0.08, fogColor="#c9a888", fogDensity=0.0022)
 
 # The Script component on each relic: the editor's Collectible template, counting into `relics`.
 _RELIC_SCRIPT = f"""// A relic: spins, and when the player walks into its trigger adds one to the level variable
@@ -931,8 +935,7 @@ _CLIP = {name: f"Armature|{name}" for name in (
     "Shooting", "Aiming", "Hit Reaction", "Death", "Wave")}
 
 # Late afternoon, the sun warm and low over the camp.
-_OUTPOST_SKY = dict(_SKY_CONFIG, timeOfDay=16.4, sunIntensity=1.8, sunColor="#ffdcb0", fogColor="#c9ad92", fogDensity=0.009,
-                    azimuth=0.1)
+_OUTPOST_SKY = dict(_SKY_CONFIG, timeOfDay=16.4, preset="golden-hour", sunTilt=22.0, fogColor="#c9ad92", fogDensity=0.002, azimuth=0.1)
 
 # Supply caches: (name, x, z). Out past the camp, one behind it.
 _SUPPLIES = (("East Ridge", 27.0, 6.0), ("West Woods", -26.0, -16.0), ("North Rocks", 9.0, -31.0))

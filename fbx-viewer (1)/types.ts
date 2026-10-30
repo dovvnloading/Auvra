@@ -6,6 +6,7 @@ import type { ProjectStatus } from './utils/projectStatus';
 import type { MaterialOverrides } from './utils/materialOverrides';
 import type { LevelBakedLighting } from './runtime/lighting/bakedLighting';
 import type { WeatherSettings } from './runtime/weather';
+import type { SkyAtmosphereSettings, SkyCloudSettings, SkyImageSettings, SkyLightSettings, SkyModel, SkyNightSettings } from './runtime/sky/skySettings';
 
 export type AssetCategory = 'Character' | 'Prop' | 'Environment' | 'Weapon' | 'Animation' | 'Audio' | 'Texture';
 
@@ -168,6 +169,21 @@ export interface SkyConfig {
     fogMode?: 'custom' | 'sky';
     /** How far from the camera the sun casts shadows (world units), through distance-shadow cascades; 0: only near the view's focus. Absent: the default. */
     shadowDistance?: number;
+    /** What draws the sky. Absent: Classic, the look of a sky saved before there was a choice. */
+    model?: SkyModel;
+    /** The preset this sky started from (runtime/sky/skyPresets.ts). */
+    preset?: string;
+    /** How far the sun's path leans from passing straight overhead, degrees. */
+    sunTilt?: number;
+    /** The sun's size, 1: as it really looks. */
+    sunSize?: number;
+    atmosphere?: Partial<SkyAtmosphereSettings>;
+    cloudLayer?: Partial<SkyCloudSettings>;
+    night?: Partial<SkyNightSettings>;
+    /** Lighting the level from the sky itself. Absent: off, and the older flat fill lights it. */
+    skyLight?: Partial<SkyLightSettings>;
+    /** The Panorama Image model's image, also what a Sky Light can capture. */
+    panorama?: Partial<SkyImageSettings>;
 }
 
 export interface LevelData {
@@ -403,7 +419,7 @@ export interface LogicNode {
           'EnterVehicle' | 'ExitVehicle' | 'GetVehicleState' | 'GetPlayerVehicle' | 'SetVehicleInput' | 'ReleaseVehicleInput' |
           'PlayParticles' | 'StopParticles' | 'EmitParticles' | 'GetParticles' |
           // Time of day and weather (hooks/levelBlueprintNodes/world.ts)
-          'SetTimeOfDay' | 'GetTimeOfDay' | 'SetDayLength' | 'SetWeather' | 'GetWeather' |
+          'SetTimeOfDay' | 'GetTimeOfDay' | 'SetDayLength' | 'SetWeather'| 'SetSkyPreset' | 'GetWeather' |
           // Destruction (hooks/levelBlueprintNodes/world.ts)
           'Explode' | 'BreakObject' | 'DamageObject' | 'GetObjectHealth' |
           // Abilities (hooks/levelBlueprintNodes/world.ts)

@@ -37,7 +37,13 @@ _NESTED_KEYS = {
     "bakedLighting": {"spacing", "bounces", "intensity", "probes"},
     "probes": {"assetId", "encoding", "origin", "spacing", "counts", "bakedAt", "signature"},
     "textureLayers": {"textureId", "tiling"},
-    "skyConfig": {"timeOfDay", "sunIntensity", "ambienceIntensity", "sunColor", "fogColor", "fogDensity", "turbidity", "rayleigh", "mieCoefficient", "mieDirectionalG", "inclination", "azimuth", "dayLength", "weather", "fogMode", "shadowDistance"},
+    "skyConfig": {"timeOfDay", "sunIntensity", "ambienceIntensity", "sunColor", "fogColor", "fogDensity", "turbidity", "rayleigh", "mieCoefficient", "mieDirectionalG", "inclination", "azimuth", "dayLength", "weather", "fogMode", "shadowDistance", "model", "preset", "sunTilt", "sunSize", "atmosphere", "cloudLayer", "night", "skyLight", "panorama"},
+    # The physically based sky: its air, its clouds, its night, the Sky Light it lights the level with and a panorama image.
+    "atmosphere": {"rayleigh", "rayleighTint", "haze", "hazeGlow", "ozone", "ground", "brightness"},
+    "cloudLayer": {"quality", "altitude", "thickness", "density", "detail", "scale", "shadows"},
+    "night": {"moonPhase", "moonSize", "moonBrightness", "stars", "milkyWay", "glow"},
+    "skyLight": {"enabled", "source", "capture", "resolution", "intensity", "tint", "reflections", "lowerSolid", "lowerColor", "occlusion", "occlusionFloor", "occlusionRange"},
+    "panorama": {"textureId", "rotation", "brightness"},
     # The weather a level's sky starts in: the preset it came from and its values.
     "weather": {"preset", "clouds", "rain", "snow", "fog", "wind", "windDirection", "lightning"},
     "dimensions": {"width", "height"},

@@ -210,6 +210,7 @@ export type ScriptCommand =
     | { type: 'setTimeOfDay'; hours: number }
     | { type: 'setDayLength'; minutes: number }
     | { type: 'setWeather'; weather: string; seconds: number }
+    | { type: 'setSkyPreset'; preset: string; seconds: number; withHour: boolean }
     /** A blast (see the Explode node); breaks or damages an object with a Destructible component. */
     | { type: 'explode'; position: ScriptVec3; radius: number; damage: number; force: number }
     | { type: 'breakObject'; objectId: string }

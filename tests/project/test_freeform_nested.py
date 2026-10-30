@@ -21,7 +21,7 @@ class FreeformNestedTests(unittest.TestCase):
 
     def test_a_sky_keeps_its_day_length_fog_mode_and_weather(self):
         weather = {"preset": "storm", "clouds": 1, "rain": 1, "snow": 0, "fog": 0.25, "wind": 13, "windDirection": 60, "lightning": 8}
-        _assert_known_nested({"skyConfig": {"timeOfDay": 18, "dayLength": 24, "fogMode": "sky", "shadowDistance": 300, "weather": weather}})
+        _assert_known_nested({"skyConfig": {"timeOfDay": 18, "dayLength": 24, "fogMode": "sky", "shadowDistance": 300, "model": "atmosphere", "preset": "sunset", "sunTilt": 20, "sunSize": 1.5, "atmosphere": {"rayleigh": 1, "rayleighTint": "#ffffff", "haze": 2, "hazeGlow": 0.8, "ozone": 1, "ground": "#6b5f4e", "brightness": 1}, "cloudLayer": {"quality": "medium", "altitude": 1500, "thickness": 1500, "density": 1, "detail": 0.5, "scale": 1, "shadows": 0.7}, "night": {"moonPhase": 0.5, "moonSize": 2, "moonBrightness": 0.2, "stars": 1, "milkyWay": 1, "glow": "#0e182a"}, "skyLight": {"enabled": True, "source": "sky", "capture": "live", "resolution": 128, "intensity": 1, "tint": "#ffffff", "reflections": 1, "lowerSolid": False, "lowerColor": "#3b352c", "occlusion": 1, "occlusionFloor": 0.06, "occlusionRange": 128}, "panorama": {"textureId": "sky", "rotation": 0, "brightness": 1}, "weather": weather}})
         with self.assertRaisesRegex(ValueError, "unknown fields in weather"):
             _assert_known_nested({"skyConfig": {"weather": {**weather, "hail": 1}}})
 

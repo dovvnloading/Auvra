@@ -26,6 +26,7 @@ import { getLiveSpline, liveSplineQuery } from '../runtime/splineRegistry';
 import { KMH, vehicleSession, type VehicleSessionEvent } from '../runtime/vehicles';
 import { particleEmitters } from '../runtime/particleEmitters';
 import { setWorldTime, setWorldWeather, worldTime, worldWeather } from '../runtime/weather';
+import { setWorldSkyPreset } from '../runtime/sky/skyDirector';
 import { destructibles, explode } from '../runtime/destructibles';
 import { abilityActors, abilityBus, isTag, type AbilityBusEvent } from '../runtime/abilities';
 import { activateActorAbility, applyActorEffect, findActor } from '../runtime/abilityWorld';
@@ -333,6 +334,7 @@ export const useLevelBlueprintRuntime = ({
         setTimeOfDay: hours => setWorldTime({ hours }),
         setDayLength: minutes => setWorldTime({ dayLength: minutes }),
         setWeather: (name, seconds) => setWorldWeather(name, seconds),
+        setSkyPreset: (name, seconds, withHour) => setWorldSkyPreset(name, seconds, withHour),
         weather: worldWeather,
         explode: (centre, radius, damage, force) => {
             const result = explode({ centre: { x: centre[0], y: centre[1], z: centre[2] }, radius, damage, force });

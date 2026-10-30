@@ -124,6 +124,7 @@ const NODE_STYLES: Record<string, { border: string, bg: string, icon: React.Reac
     'GetTimeOfDay': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <Sun size={14} className="text-sky-400" /> },
     'SetDayLength': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <Sun size={14} className="text-sky-400" /> },
     'SetWeather': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <CloudRain size={14} className="text-sky-400" /> },
+    'SetSkyPreset': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <CloudRain size={14} className="text-sky-400" /> },
     'Explode': { border: 'border-rose-800', bg: 'bg-rose-950/50', icon: <Bomb size={14} className="text-rose-400" /> },
     'BreakObject': { border: 'border-rose-800', bg: 'bg-rose-950/50', icon: <Bomb size={14} className="text-rose-400" /> },
     'DamageObject': { border: 'border-rose-800', bg: 'bg-rose-950/50', icon: <Bomb size={14} className="text-rose-400" /> },
