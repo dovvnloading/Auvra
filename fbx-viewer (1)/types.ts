@@ -166,6 +166,8 @@ export interface SkyConfig {
     weather?: WeatherSettings;
     /** Fog colour: the Fog Color as set, or the sky's own at the horizon, which changes through the day. Absent: custom. */
     fogMode?: 'custom' | 'sky';
+    /** How far from the camera the sun casts shadows (world units), through distance-shadow cascades; 0: only near the view's focus. Absent: the default. */
+    shadowDistance?: number;
 }
 
 export interface LevelData {

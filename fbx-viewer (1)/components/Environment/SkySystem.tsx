@@ -14,6 +14,10 @@ import { COVER_SAMPLES_PER_FRAME, weatherCover, type CoverSampler } from '../../
 import { patchWeatherSurfaces, patchWindSurfaces, setSurfaceWeather } from '../../runtime/weatherSurfaces';
 import { stepWind, windUniforms } from '../../runtime/wind';
 import { CloudLayer, LightningBolt, NightSky } from './sky/skyObjects';
+import { DistanceShadows } from '../../runtime/lighting/DistanceShadowLights';
+import { DEFAULT_SHADOW_DISTANCE, NEAR_SHADOW_REACH, fitCascade, viewSliceSphere } from '../../runtime/lighting/distanceShadows';
+
+const _sliceCentre = new THREE.Vector3();
 
 export const DEFAULT_SKY_CONFIG: SkyConfig = {
     timeOfDay: 14, // 2 PM
@@ -108,7 +112,13 @@ const SunLight: React.FC<{
     intensity?: number;
     color?: string;
     light?: React.MutableRefObject<THREE.DirectionalLight | null>;
-}> = ({ direction, intensity, color, light: outer }) => {
+    /**
+     * With distance shadows carrying the far view: the sun's own map covers just the view's first this
+     * many units, so near shadows stay sharp however far the camera looks. Absent: it follows the point
+     * looked at and widens with its distance.
+     */
+    reach?: number;
+}> = ({ direction, intensity, color, light: outer, reach }) => {
     const camera = useThree(state => state.camera);
     const own = useRef<THREE.DirectionalLight | null>(null);
     const light = outer ?? own;
@@ -126,6 +136,13 @@ const SunLight: React.FC<{
     useFrame(() => {
         const sun = light.current;
         if (!sun) return;
+        if (reach !== undefined) {
+            camera.updateMatrixWorld();
+            const radius = viewSliceSphere(camera, reach, _sliceCentre);
+            fitCascade(sun, _sliceCentre, radius, direction);
+            fitted.current = 0;
+            return;
+        }
         const halfExtent = sunShadowFocus(camera, direction, target.position);
         if (halfExtent !== fitted.current) {
             fitted.current = halfExtent;
@@ -356,7 +373,8 @@ export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects, live = false
                 <color attach="background" args={['#050505']} />
                 <fog attach="fog" args={['#050505', 10, 60]} />
                 <ambientLight intensity={0.4} />
-                <SunLight direction={FALLBACK_SUN_DIRECTION} intensity={1.2} />
+                <SunLight direction={FALLBACK_SUN_DIRECTION} intensity={1.2} reach={NEAR_SHADOW_REACH} />
+                <DistanceShadows direction={FALLBACK_SUN_DIRECTION} distance={DEFAULT_SHADOW_DISTANCE} />
                 <LocalEnvironment />
             </>
         );
@@ -382,7 +400,9 @@ export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects, live = false
             <primitive object={precipitation.object} />
 
             {/* Sun, a faint moon opposite it, and lightning: always there, dark when idle, so lit materials never recompile */}
-            <SunLight direction={sunDirection} light={sun} />
+            <SunLight direction={sunDirection} light={sun} reach={(config.shadowDistance ?? DEFAULT_SHADOW_DISTANCE) > 0 ? NEAR_SHADOW_REACH : undefined} />
+            {/* Shadows past the sun's own map, out to the shadow distance (after the sun, which is tried first) */}
+            <DistanceShadows direction={sunDirection} distance={config.shadowDistance ?? DEFAULT_SHADOW_DISTANCE} />
             <directionalLight ref={moon} color="#9db4ff" intensity={0} />
             <directionalLight ref={flash} color="#c8d8ff" intensity={0} />
 

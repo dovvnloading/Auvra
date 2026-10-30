@@ -12,6 +12,7 @@ import { ScrubbableInput } from '../../UI/Properties/ScrubbableInput';
 import { useScene } from '../../../context/SceneContext';
 import { WaveformEditor } from '../assets/WaveformEditor';
 import { DEFAULT_SKY_CONFIG } from '../SkySystem';
+import { DEFAULT_SHADOW_DISTANCE } from '../../../runtime/lighting/distanceShadows';
 import { SkyWeatherSection } from '../SkyWeatherSection';
 import { isTerrainHeightfieldPending } from '../../../utils/terrainHeightfieldCodec';
 import { editorSession } from '../../../utils/editorSession';
@@ -1054,6 +1055,13 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                             <span className="text-[10px] text-gray-400">Ambience</span>
                                             <div className="w-16">
                                                 <ScrubbableInput label="" value={selectedObject.skyConfig.ambienceIntensity} onChange={(v) => scrubUpdate({ skyConfig: { ...selectedObject.skyConfig!, ambienceIntensity: Math.max(0, v) } })} step={0.1} labelWidth="w-0" />
+                                            </div>
+                                        </div>
+
+                                        <div className="flex items-center justify-between" title="How far from the camera the sun casts shadows. 0 keeps them near what the camera looks at.">
+                                            <span className="text-[10px] text-gray-400">Shadow Distance</span>
+                                            <div className="w-16">
+                                                <ScrubbableInput label="" value={selectedObject.skyConfig.shadowDistance ?? DEFAULT_SHADOW_DISTANCE} onChange={(v) => scrubUpdate({ skyConfig: { ...selectedObject.skyConfig!, shadowDistance: Math.min(2000, Math.max(0, Math.round(v))) } })} step={10} labelWidth="w-0" />
                                             </div>
                                         </div>
 
