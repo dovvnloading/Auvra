@@ -410,17 +410,47 @@ export const writeSortedInstances = (
     }
 };
 
+const _seen = new Float64Array(6);
+
+/** The box around what is sorted as seen, with the same room as the tests above: min x, y, z, max x, y, z, shared and inside out if none are. */
+export const seenBounds = (placed: PlacedInstances, assigned: Int8Array): Float64Array => {
+    _seen.fill(Infinity, 0, 3);
+    _seen.fill(-Infinity, 3, 6);
+    const { spheres } = placed;
+    for (let index = 0, at = 0; index < placed.count; index++, at += SPHERE_FLOATS) {
+        if (assigned[index] % INSTANCE_NEEDS !== INSTANCE_SEEN) continue;
+        const bounds = spheres[at + 3] * CULL_BOUNDS_ROOM;
+        for (let axis = 0; axis < 3; axis++) {
+            const middle = spheres[at + axis];
+            if (middle - bounds < _seen[axis]) _seen[axis] = middle - bounds;
+            if (middle + bounds > _seen[3 + axis]) _seen[3 + axis] = middle + bounds;
+        }
+    }
+    return _seen;
+};
+
+/** How many triangles the instances sorted as seen draw. */
+export const seenTriangles = (levels: readonly MeshLodLevel[], tally: Int32Array): number => {
+    let triangles = 0;
+    for (let level = 0; level < levels.length; level++) triangles += levels[level].triangles * tally[level * INSTANCE_NEEDS + INSTANCE_SEEN];
+    return triangles;
+};
+
 /**
  * Has `mesh`, the instanced mesh of detail level `level`, draw only what the pass in hand needs: the seen for
- * the camera its set was chosen for, the casting as well in that camera's shadow maps, and for anything else,
- * or once the camera has left the set's room, every instance.
+ * the camera its set was chosen for (none while nearer surfaces hide them, by `sorted.occlusion`), the casting
+ * as well in that camera's shadow maps, and for anything else, or once the camera has left the set's room,
+ * every instance.
  */
-export const gateInstanceDraws = (mesh: THREE.InstancedMesh, level: number, tally: Int32Array, sorted: { view: CullView | null }): void => {
+export const gateInstanceDraws = (
+    mesh: THREE.InstancedMesh, level: number, tally: Int32Array, sorted: { view: CullView | null; occlusion?: { hidden: boolean } | null },
+): void => {
     const slot = level * INSTANCE_NEEDS;
     const everything = () => tally[slot] + tally[slot + 1] + tally[slot + 2];
     const rest = () => { mesh.count = everything(); };
     mesh.onBeforeRender = (_renderer, _scene, camera) => {
-        mesh.count = sorted.view && viewCovers(sorted.view, camera, CULL_TRUST_SHARE) ? tally[slot] : everything();
+        if (!sorted.view || !viewCovers(sorted.view, camera, CULL_TRUST_SHARE)) mesh.count = everything();
+        else mesh.count = sorted.occlusion?.hidden ? 0 : tally[slot];
     };
     mesh.onAfterRender = rest;
     mesh.onBeforeShadow = (...args) => {

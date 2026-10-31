@@ -67,6 +67,7 @@ import { OwnedComposer, TemporalPipeline } from './temporal/TemporalPipeline';
 import { MIN_RENDER_SCALE } from './temporal/temporalSettings';
 import { AutoExposure, LightShafts, PostProcessAllowedContext, PostProcessQualityContext, ScreenLighting, SunHaze, useAllowedAntialias, usePostProcessClaimed } from './components/postProcess';
 import { MeshLodContext } from '../components/Scene/useMeshLod';
+import { OcclusionCullingLayer } from './OcclusionCullingLayer';
 import type { InputState } from './input';
 import { collectTimelineTargets } from './timeline/evaluate';
 import { CinematicOverlay } from './CinematicOverlay';
@@ -1076,6 +1077,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                 <PostProcessAllowedContext.Provider value={postProcessAllowed}>
                 <ShadowDetailContext.Provider value={highQuality ? 'high' : 'low'}>
                 <MeshLodContext.Provider value={settings.quality.meshLod !== false}>
+                <OcclusionCullingLayer enabled={settings.quality.occlusionCulling !== false}>
                 {postProcessAllowed && <DefaultPostProcess />}
 
                 {/* Input, audio buses and player options live for the whole run; the session adds its prefab spawner. */}
@@ -1105,6 +1107,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                         </PhysicsWorld>
                     </TriggerEventsProvider>
                 </RuntimeServicesProvider>
+                </OcclusionCullingLayer>
                 </MeshLodContext.Provider>
                 </ShadowDetailContext.Provider>
                 </PostProcessAllowedContext.Provider>
