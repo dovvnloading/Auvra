@@ -1,5 +1,6 @@
-import React from 'react';
-import { Environment, Lightformer } from '@react-three/drei';
+import React, { useLayoutEffect } from 'react';
+import { useThree } from '@react-three/fiber';
+import { captureLocalEnvironment } from './localEnvironmentCapture';
 
 export interface LocalEnvironmentProps {
     /** Select the cooler, lower-energy night rig used by SkySystem. */
@@ -9,20 +10,29 @@ export interface LocalEnvironmentProps {
 }
 
 /**
- * Deterministic editor lighting with no asset loaders. Environment's children
- * are rendered into a local cube render target; unlike an asset-based path this
- * never resolves a Drei HDR URL or touches the network.
+ * Deterministic editor lighting with no asset loaders: a small rig captured once into a map this component
+ * owns, which never resolves an HDR URL or touches the network, and which goes when the component does.
  */
 export const LocalEnvironment: React.FC<LocalEnvironmentProps> = ({ night = false, intensity = 0.8 }) => {
-    const keyColor = night ? '#5271a8' : '#fff4dc';
-    const fillColor = night ? '#172a4d' : '#b9d7ff';
-    const sunIntensity = night ? 0.6 : 1.4;
+    const gl = useThree(state => state.gl);
+    const scene = useThree(state => state.scene);
 
-    return (
-        <Environment background={false} resolution={64} frames={1} environmentIntensity={intensity}>
-            <Lightformer form="rect" intensity={sunIntensity} color={keyColor} position={[4, 6, 3]} scale={[5, 5, 1]} />
-            <Lightformer form="rect" intensity={0.8} color={fillColor} position={[-4, 2, 2]} scale={[4, 3, 1]} />
-            <Lightformer form="rect" intensity={0.35} color={night ? '#0b1630' : '#526b86'} position={[0, 1, -4]} scale={[3, 3, 1]} />
-        </Environment>
-    );
+    useLayoutEffect(() => {
+        const target = captureLocalEnvironment(gl, night);
+        const before = scene.environment;
+        scene.environment = target.texture;
+        return () => {
+            // Something else may have taken over since (the sky's own light): that is theirs to clear.
+            if (scene.environment === target.texture) scene.environment = before;
+            target.dispose();
+        };
+    }, [gl, scene, night]);
+
+    useLayoutEffect(() => {
+        const before = scene.environmentIntensity;
+        scene.environmentIntensity = intensity;
+        return () => { scene.environmentIntensity = before; };
+    }, [scene, intensity]);
+
+    return null;
 };

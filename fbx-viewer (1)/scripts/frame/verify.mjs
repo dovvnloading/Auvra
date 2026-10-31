@@ -24,6 +24,7 @@ const files = {
   texture: resolve(root, "components/UI/Browser/TextureCard.tsx"),
   retexture: resolve(root, "components/Tools/RetextureTool.tsx"),
   localEnvironment: resolve(root, "components/Scene/LocalEnvironment.tsx"),
+  localEnvironmentCapture: resolve(root, "components/Scene/localEnvironmentCapture.ts"),
   viewerScene: resolve(root, "components/Scene/ViewerScene.tsx"),
   graphPreview: resolve(root, "components/AnimationGraph/GraphPreview.tsx"),
   retextureEditor: resolve(root, "components/Tools/RetextureEditor.tsx"),
@@ -116,16 +117,18 @@ check(source.tailwind.includes("750: '#333333'") && source.tailwind.includes("85
 check(source.scope.includes("reticle-noise"), "scope reticle lacks local noise replacement");
 check(source.texture.includes("<button") && !source.texture.includes('target="_blank"'), "texture card retains popup behavior");
 check(source.retexture.includes("texture-preview-surface"), "retexture preview lacks local surface");
-const environmentSites = ["localEnvironment", "viewerScene", "graphPreview", "retextureEditor", "thumbnailTooltip", "skySystem"];
+const environmentSites = ["localEnvironment", "localEnvironmentCapture", "viewerScene", "graphPreview", "retextureEditor", "thumbnailTooltip", "skySystem"];
 for (const name of environmentSites) {
   check(!/<Environment\s+preset\b|\bpreset\s*=|Drei.*preset|environment-assets/i.test(source[name]), `${name} retains preset-based environment resolution`);
   check(!/https?:\/\/(?!127\.0\.0\.1)|cdn\.tailwind|esm\.sh/i.test(source[name]), `${name} contains a remote render dependency`);
 }
-check(source.localEnvironment.includes("<Lightformer") && source.localEnvironment.includes("frames={1}"), "local procedural environment is missing deterministic Lightformer content");
+check(source.localEnvironmentCapture.includes("localLightPanels") && source.localEnvironmentCapture.includes("fromCubemap") && source.localEnvironment.includes("captureLocalEnvironment"), "local procedural environment is missing its deterministic light rig");
+check(source.localEnvironment.includes("target.dispose()") && !/<Environment\b/.test(source.localEnvironment), "local environment must own and free its map: the renderer's own conversion of a captured cube cannot be freed");
 check(source.localEnvironment.includes("export const LocalEnvironment"), "reusable local environment component is missing");
 for (const name of ["viewerScene", "graphPreview", "retextureEditor", "skySystem"]) check(source[name].includes("LocalEnvironment"), `${name} is missing the local environment replacement`);
 check(source.thumbnailTooltip.includes("model.thumbnail") && !source.thumbnailTooltip.includes("<Canvas") && !source.thumbnailTooltip.includes("LocalEnvironment"), "thumbnail tooltip must use the generated image without owning a live renderer");
 check(source.skySystem.includes("<LocalEnvironment night={isNight}"), "SkySystem no longer distinguishes day and night lighting");
+check(source.skySystem.includes("mesh.geometry.dispose()") && source.skySystem.includes("as THREE.Material).dispose()"), "classic sky must free its mesh: nothing frees a primitive when it leaves");
 check(source.dynamic.indexOf("new TextEncoder().encode(code)") < source.dynamic.indexOf("Babel.transform"), "HUD source size is not checked before Babel");
 check(source.dynamic.includes("boundedExecutionPlugin") && source.dynamic.includes("__auvraHudGuard") && source.dynamic.includes("plugins: [boundedExecutionPlugin]"), "HUD code is not instrumented with an execution budget");
 check(source.hudScript.includes("MAX_EXECUTION_STEPS") && source.hudScript.includes("MAX_EXECUTION_MS") && source.hudScript.includes("createExecutionGuard") && source.hudScript.includes("__auvraHudGuard"), "HUD sandbox does not enforce a step/deadline budget");
