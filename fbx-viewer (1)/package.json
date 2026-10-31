@@ -24,6 +24,7 @@
     "renderer:verify": "node scripts/renderer/verify.mjs",
     "diagnostics:verify": "node scripts/diagnostics/verify.mjs",
     "player:verify": "node scripts/player/verify.mjs",
+    "rendering:verify": "node scripts/rendering/run.mjs",
     "lint": "eslint ."
   },
   "dependencies": {
