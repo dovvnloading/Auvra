@@ -281,6 +281,31 @@ describe('assets in memory', () => {
         expect(fake.released).toEqual(['tree']);
     });
 
+    it('drops what a grid asked for once its level has ended, so the next level is not held up', async () => {
+        const fake = fakeLoader(() => MB);
+        const residency = new LevelAssetResidency(fake.loader, id => LEVELS[id], () => MB, 100 * MB);
+        await residency.prepare('a');
+        const first = residency.requestCellModels(needing('crate'));
+        const stale = residency.requestCellModels(needing('gun'));
+        const next = residency.prepare('b');
+        await Promise.all([first, stale, next]);
+        const loaded = fake.loads.flat();
+        expect(loaded).not.toContain('crate');
+        expect(loaded).not.toContain('gun');
+        expect(loaded).toContain('tree');
+    });
+
+    it('skips a model the camera has moved on from before its turn came', async () => {
+        const fake = fakeLoader(() => MB);
+        const residency = new LevelAssetResidency(fake.loader, id => LEVELS[id], () => MB, 100 * MB);
+        await residency.prepare('a');
+        residency.setCellsInUse(new Set(['gun']));
+        await residency.requestCellModels(needing('crate'), () => residency.cellInUse('crate'));
+        await residency.requestCellModels(needing('gun'), () => residency.cellInUse('gun'));
+        expect(fake.models.map(model => model.id)).not.toContain('crate');
+        expect(fake.models.map(model => model.id)).toContain('gun');
+    });
+
     it('answers a grid with only the models it asked for and still has', async () => {
         const fake = fakeLoader(() => MB);
         const residency = new LevelAssetResidency(fake.loader, id => LEVELS[id], () => MB, 100 * MB);

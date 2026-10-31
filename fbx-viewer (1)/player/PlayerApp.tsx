@@ -129,7 +129,7 @@ export const PlayerApp: React.FC = () => {
                     documents.settings.quality.assetMemoryMb * 1024 * 1024,
                 );
                 const cellModels: GameContent['cellModels'] = onDemand ? {
-                    request: (modelIds) => residency.requestCellModels(index.needsOfModels(modelIds)),
+                    request: (modelIds) => residency.requestCellModels(index.needsOfModels(modelIds), () => modelIds.some(id => residency.cellInUse(id))),
                     setInUse: (modelIds) => residency.setCellsInUse(modelIds),
                 } : undefined;
                 assets.current = { residency, refresh: () => contentSnapshot(documents, loader, cellModels) };
