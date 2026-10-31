@@ -7,6 +7,7 @@ import { OperationHandle, useOperationActions } from '../context/OperationContex
 import { frontendDiagnostics, type DiagnosticAttributes, type DiagnosticContext } from '../diagnostics/runtime';
 import { editorSession, type EditorSessionReadyLease, type EditorSessionTransition } from '../utils/editorSession';
 import { createEditorStateDocument, EDITOR_STATE_DOCUMENT_ID } from '../utils/editorState';
+import { prepareModelsForBuild, unpreparedNotice } from '../utils/preparedModels/buildPreparation';
 
 type HydrationProgress = (
   progress: number,
@@ -182,9 +183,20 @@ export const useProjectManager = ({
 
   const buildGame = useCallback(async (target: 'web' | 'windows' = 'web') => {
     await run('project.buildGame', target === 'web' ? 'Building web game' : 'Building Windows game',
-      (handle) => projectService.buildGame(target, 'dialog', contextFor(handle)),
+      async (handle) => {
+        // Before the build's request: the host holds its lock through it, so nothing can be uploaded during one.
+        const preparation = await prepareModelsForBuild({
+          signal: handle.signal,
+          diagnostics: contextFor(handle),
+          onProgress: (progress, detail) => handle.update({ phase: 'model_preparation', progress, detail }),
+        });
+        handle.update({ phase: 'host_request', progress: null, detail: 'Writing the game' });
+        const result = await projectService.buildGame(target, 'dialog', contextFor(handle), preparation.prepared);
+        const notice = unpreparedNotice(preparation, result?.report);
+        if (notice) addNotification({ message: notice, type: 'info' });
+      },
       target === 'web' ? 'Web game built. Serve the folder over http(s) to play it.' : 'Windows game built.');
-  }, [contextFor, run]);
+  }, [addNotification, contextFor, run]);
 
   const importProject = useCallback(async () => {
     await run('project.import', 'Importing project package', async (handle, transition) => {

@@ -2,7 +2,7 @@ import { assertRequest, assertResponse, isValidMessage } from "./protocol";
 import type { ErrorCode, Event, ProjectResult, Request, Response, SuccessResult } from "./generated/protocolV1";
 import type { HostTransport } from "./transport";
 
-const PROJECT_METHODS = ["project.getStatus", "project.create", "project.open", "project.openRecent", "project.close", "project.getSnapshot", "project.applyChanges", "project.save", "project.saveAs", "project.exportPack", "project.buildGame", "project.importPack", "project.importLegacy", "asset.beginUpload", "asset.resolve"] as const;
+const PROJECT_METHODS = ["project.getStatus", "project.create", "project.open", "project.openRecent", "project.close", "project.getSnapshot", "project.applyChanges", "project.save", "project.saveAs", "project.exportPack", "project.buildGame", "project.importPack", "project.importLegacy", "asset.beginUpload", "asset.resolve", "asset.queryPrepared", "asset.beginPreparedUpload"] as const;
 const PROVIDER_METHODS = ["provider.list", "provider.getStatus", "provider.configureCredential", "provider.deleteCredential", "provider.configure", "provider.listModels", "provider.health", "inference.submit", "inference.get", "inference.list", "inference.cancel", "inference.retry", "media.discard", "media.commit", "command.preview", "command.approve", "command.undo"] as const;
 const ENGINE_METHODS = ["engine.getStatus", "engine.getSnapshot", "engine.applyChanges", "engine.openViewport", "engine.closeViewport", "engine.renderReference", "engine.getMetrics", "engine.recover"] as const;
 const MEDIA_CAPABILITIES = ["media.generate", "media.edit"] as const;
@@ -20,8 +20,9 @@ export class FakeHost implements HostTransport {
   private projectDirty = false;
   private projectReadOnly = false;
   private readonly documents = new Map<string, unknown>();
-  private readonly tickets = new Map<string, { method: "PUT" | "GET"; size: number; mime: string; expiresAt: number; consumed: boolean; sha256?: string }>();
+  private readonly tickets = new Map<string, { method: "PUT" | "GET"; size: number; mime: string; expiresAt: number; consumed: boolean; sha256?: string; preparedKey?: string }>();
   private readonly uploaded = new Set<string>();
+  private readonly preparedModels = new Set<string>();
   private readonly providerConfigured = new Set<string>();
   private readonly providerSettings = new Map<string, Record<string, unknown>>();
   private readonly providerSettingsRevision = new Map<string, number>();
@@ -107,6 +108,8 @@ export class FakeHost implements HostTransport {
       case "project.importLegacy": if (payload.sourceHandle === "invalid") throw { code: "migration_failed", message: "Legacy source could not be migrated" }; this.projectOpen = true; this.revision++; return this.result({ report: { migrated: true } });
       case "asset.beginUpload": { this.requireMutation(payload); const token = "A".repeat(43); this.tickets.set(token, { method: "PUT", size: Number(payload.size), mime: String(payload.mime), expiresAt: this.clock + 300, consumed: false }); this.projectRevision++; this.revision++; return this.result({ uploadId: token, size: Number(payload.size), mime: String(payload.mime), method: "PUT", expiresAt: this.clock + 300, url: `https://assets.auvra.local/v1/put/${token}` }); }
       case "asset.resolve": { this.requireProject(payload); const assetId = String(payload.assetId); if (!this.uploaded.has(assetId)) throw { code: "invalid_project", message: "Asset is unavailable" }; const token = "B".repeat(43); this.tickets.set(token, { method: "GET", size: 0, mime: "application/octet-stream", expiresAt: this.clock + 300, consumed: false, sha256: assetId }); return this.result({ assetId, method: "GET", expiresAt: this.clock + 300, url: `https://assets.auvra.local/v1/get/${token}` }); }
+      case "asset.queryPrepared": this.requireProject(payload); return this.result({ preparedKeys: (payload.keys as string[]).filter((key) => this.preparedModels.has(key)) });
+      case "asset.beginPreparedUpload": { this.requireProject(payload); const token = "C".repeat(43); this.tickets.set(token, { method: "PUT", size: Number(payload.size), mime: "model/gltf-binary", expiresAt: this.clock + 300, consumed: false, preparedKey: String(payload.key) }); return this.result({ size: Number(payload.size), mime: "model/gltf-binary", method: "PUT", expiresAt: this.clock + 300, url: `https://assets.auvra.local/v1/put/${token}` }); }
       case "provider.list": return { kind: "provider.list", providers: [
         ["fal", "fal.ai", "cloud", ["media.generate", "media.edit"]], ["openai", "OpenAI", "cloud", ["text", "code", "commands"]],
         ["anthropic", "Anthropic", "cloud", ["text", "code", "commands"]], ["xai", "xAI", "cloud", ["text", "code", "commands"]],
@@ -220,7 +223,7 @@ export class FakeHost implements HostTransport {
       if (request.mime !== ticket.mime || !request.body || request.body.byteLength !== ticket.size) throw { code: "asset_size_or_mime_denied" };
       const digest = await crypto.subtle.digest("SHA-256", request.body);
       const sha256 = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-      ticket.sha256 = sha256; ticket.consumed = true; this.uploaded.add(sha256); return { status: 204, sha256 };
+      ticket.sha256 = sha256; ticket.consumed = true; if (ticket.preparedKey) this.preparedModels.add(ticket.preparedKey); else this.uploaded.add(sha256); return { status: 204, sha256 };
     }
     ticket.consumed = true; return { status: 200, sha256: ticket.sha256 };
   }

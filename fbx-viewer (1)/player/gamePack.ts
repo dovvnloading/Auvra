@@ -1,4 +1,5 @@
 import { GAME_PACK_FORMAT, type GamePackManifest } from '../runtime/types';
+import { PREPARED_MODEL_VERSION } from '../utils/preparedModels/format';
 
 /** A game pack served next to the player: game/game.json, game/content/<domain>.json, game/assets/<file>. */
 export interface GamePackSource {
@@ -22,6 +23,21 @@ const isManifest = (value: unknown): value is GamePackManifest => {
     return !!manifest && manifest.format === GAME_PACK_FORMAT && manifest.schema === 1
         && typeof manifest.gameId === 'string' && typeof manifest.startupLevelId === 'string'
         && Array.isArray(manifest.domains) && Array.isArray(manifest.assets);
+};
+
+/**
+ * The prepared asset of each source asset, for a game this device can use them in. A pack of an
+ * unknown version, or with BC textures on a GPU that cannot sample them, loads its sources.
+ */
+export const usablePreparedModels = (manifest: GamePackManifest, blockCompression: { colour: boolean; normal: boolean }): ReadonlyMap<string, string> => {
+    const prepared = manifest.prepared;
+    const usable = new Map<string, string>();
+    if (prepared?.version !== PREPARED_MODEL_VERSION || !Array.isArray(prepared.models)) return usable;
+    const textures = prepared.textures === 'none' || (prepared.textures === 'bc' && blockCompression.colour && blockCompression.normal);
+    if (!textures) return usable;
+    const held = new Set(manifest.assets.map(asset => asset.id));
+    for (const model of prepared.models) if (held.has(model?.asset)) usable.set(model.source, model.asset);
+    return usable;
 };
 
 export const loadGamePack = async (baseUrl: string, signal?: AbortSignal): Promise<GamePackSource> => {

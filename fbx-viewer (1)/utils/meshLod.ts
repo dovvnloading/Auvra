@@ -42,13 +42,13 @@ const triangleCount = (geometry: THREE.BufferGeometry): number =>
     Math.floor((geometry.index ? geometry.index.count : geometry.attributes.position.count) / 3);
 
 /** A level geometry over `base`'s own attributes with its own indices and material groups. */
-const levelGeometry = (base: THREE.BufferGeometry, indices: Uint32Array, groups: { start: number; count: number; materialIndex?: number }[]): THREE.BufferGeometry => {
+const levelGeometry = (base: THREE.BufferGeometry, indices: Uint16Array | Uint32Array, groups: { start: number; count: number; materialIndex?: number }[]): THREE.BufferGeometry => {
     const level = new THREE.BufferGeometry();
     for (const [name, attribute] of Object.entries(base.attributes)) level.setAttribute(name, attribute);
     level.morphAttributes = base.morphAttributes;
     level.morphTargetsRelative = base.morphTargetsRelative;
     const vertexCount = base.attributes.position.count;
-    level.setIndex(new THREE.BufferAttribute(vertexCount < 65536 ? new Uint16Array(indices) : indices, 1));
+    level.setIndex(new THREE.BufferAttribute(vertexCount < 65536 && indices instanceof Uint32Array ? new Uint16Array(indices) : indices, 1));
     groups.forEach(group => level.addGroup(group.start, group.count, group.materialIndex));
     if (!base.boundingSphere) base.computeBoundingSphere();
     if (!base.boundingBox) base.computeBoundingBox();
@@ -84,6 +84,13 @@ const surfaceAttributes = (geometry: THREE.BufferGeometry): { values: Float32Arr
     }
     const weights = [...(uv ? [UV_WEIGHT, UV_WEIGHT] : []), ...(normal ? [NORMAL_WEIGHT, NORMAL_WEIGHT, NORMAL_WEIGHT] : [])];
     return { values, stride, weights };
+};
+
+/** Freeing a mesh frees its levels, which nothing else would. Drawn again, they upload again as it does. */
+const disposeLevelsWith = (geometry: THREE.BufferGeometry, levels: readonly MeshLodLevel[]): void => {
+    geometry.addEventListener('dispose', () => {
+        for (const level of levels) if (level.geometry !== geometry) level.geometry.dispose();
+    });
 };
 
 /**
@@ -146,11 +153,23 @@ export const meshLodChain = (geometry: THREE.BufferGeometry): MeshLodLevel[] => 
     }
     if (levels.length === 1) levels[0] = full;
     chains.set(geometry, levels);
-    // Freeing a mesh frees its levels, which nothing else would. Drawn again, they upload again as it does.
-    geometry.addEventListener('dispose', () => {
-        for (const level of levels) if (level.geometry !== geometry) level.geometry.dispose();
-    });
+    disposeLevelsWith(geometry, levels);
     return levels;
+};
+
+/**
+ * Gives `geometry` the detail levels made for it ahead of time (a prepared model's), past its full
+ * level: meshLodChain then has nothing to build, simplifier or not. No levels means it was tried
+ * and could not be reduced.
+ */
+export const seedMeshLodChain = (geometry: THREE.BufferGeometry, seeds: readonly { indices: Uint16Array | Uint32Array; error: number }[]): void => {
+    if (chains.has(geometry)) return;
+    const levels: MeshLodLevel[] = [{ geometry, error: 0, triangles: triangleCount(geometry) }];
+    for (const { indices, error } of seeds) {
+        levels.push({ geometry: levelGeometry(geometry, indices, []), error, triangles: Math.floor(indices.length / 3) });
+    }
+    chains.set(geometry, levels);
+    disposeLevelsWith(geometry, levels);
 };
 
 /** Pixels one world unit covers at a distance of one unit for `camera` on a `viewportHeight`-pixel view; 0 for other cameras. */

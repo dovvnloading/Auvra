@@ -9,7 +9,8 @@ import { gameState, useGameState } from '../runtime/gameState';
 import type { GameContent, LoadedGameContent, PlayerStart, RuntimeHost, RuntimeLevel, RuntimeSaveState, SaveGameData } from '../runtime/types';
 import { createGameContentLoader, readGameDocuments, type GameContentLoader } from '../utils/projectHydration';
 import { HUDRenderer } from '../components/HUDEditor/HUDRenderer';
-import { loadGamePack, type GamePackSource } from './gamePack';
+import { blockCompressionSupport } from '../utils/textureCompression/compressTextures';
+import { loadGamePack, usablePreparedModels, type GamePackSource } from './gamePack';
 import { OptionsMenu } from './OptionsMenu';
 import {
     AuthoredMenu,
@@ -95,10 +96,11 @@ export const PlayerApp: React.FC = () => {
                 localization.scopeToGame(source.manifest.gameId);
                 localization.load(localizationSettingsFromDocuments(source.domains.metadata));
                 const domains = source.domains as Record<string, any[]>;
-                let residency: LevelAssetResidency | null = null;
+                const prepared = usablePreparedModels(source.manifest, blockCompressionSupport());
                 const loader = createGameContentLoader(domains, {
                     resolveAssetUrl: source.resolveAssetUrl,
                     releaseAssetUrl: source.releaseAssetUrl,
+                    preparedAssetFor: assetId => prepared.get(assetId),
                     dropSourceFiles: true,
                     generateThumbnails: false,
                     // The player has no level manager to load terrain heights and paint later.
@@ -117,18 +119,20 @@ export const PlayerApp: React.FC = () => {
                 for (const key of ['models', 'textures', 'audio', 'attachments']) {
                     for (const document of domains[key] ?? []) assetIds.set(`${key}:${document?.id}`, document?.assetId);
                 }
-                residency = new LevelAssetResidency(
+                const residency = new LevelAssetResidency(
                     loader,
                     needsOf,
-                    (kind, id) => sizes.get(assetIds.get(`${kind}:${id}`) as string) ?? 0,
+                    (kind, id) => {
+                        const assetId = assetIds.get(`${kind}:${id}`) as string;
+                        return sizes.get(prepared.get(assetId) ?? assetId) ?? 0;
+                    },
                     documents.settings.quality.assetMemoryMb * 1024 * 1024,
                 );
-                const held = residency;
                 const cellModels: GameContent['cellModels'] = onDemand ? {
-                    request: (modelIds) => held.requestCellModels(index.needsOfModels(modelIds)),
-                    setInUse: (modelIds) => held.setCellsInUse(modelIds),
+                    request: (modelIds) => residency.requestCellModels(index.needsOfModels(modelIds)),
+                    setInUse: (modelIds) => residency.setCellsInUse(modelIds),
                 } : undefined;
-                assets.current = { residency: held, refresh: () => contentSnapshot(documents, loader, cellModels) };
+                assets.current = { residency, refresh: () => contentSnapshot(documents, loader, cellModels) };
                 if (!controller.signal.aborted) setLoaded(assets.current.refresh());
             } catch (failure) {
                 if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : String(failure));

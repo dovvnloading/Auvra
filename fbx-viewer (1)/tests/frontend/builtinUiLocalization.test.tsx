@@ -43,6 +43,7 @@ const french: LocalizationSettings = {
 };
 
 vi.mock('../../player/gamePack', () => ({
+  usablePreparedModels: () => new Map(),
   loadGamePack: async () => ({
     manifest: { gameId: 'l10n-test', name: 'Demo Game', startupLevelId: 'level-1', assets: [] },
     domains: { metadata: [{ id: LOCALIZATION_DOCUMENT_ID, settings: french }], hud: [] },

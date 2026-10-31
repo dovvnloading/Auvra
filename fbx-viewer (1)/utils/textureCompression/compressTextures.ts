@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { BlockFormat } from './bcEncoder';
 import type { CompressResponse, TextureKind } from '../../workers/textureCompress.worker';
+import { isCompressibleSize } from './textureEncoding';
 
 /**
  * GPU TEXTURE COMPRESSION
@@ -25,8 +26,6 @@ const COMPRESSED_SLOTS: readonly { key: string; kind: TextureKind }[] = [
     { key: 'metalnessMap', kind: 'data' },
     { key: 'normalMap', kind: 'normal' },
 ];
-/** Textures smaller than this on a side are left as they are. */
-const MIN_COMPRESSED_SIZE = 64;
 
 /** Each compressed texture's source image, for editor tools that read a texture's pixels. */
 const sourceImages = new WeakMap<THREE.Texture, unknown>();
@@ -95,8 +94,6 @@ export const rebuildNormalZ = (material: THREE.Material): void => {
     material.needsUpdate = true;
 };
 
-const isPowerOfTwo = (value: number): boolean => value > 0 && (value & (value - 1)) === 0;
-
 type CompressResult = { format: BlockFormat; levels: { data: ArrayBuffer; width: number; height: number }[]; cached: boolean };
 
 /** A small pool of compression workers, shared by every load. */
@@ -145,7 +142,7 @@ const pool = (() => {
 })();
 
 /** The compressed texture standing in for `texture`, keeping how it is sampled and placed. */
-const compressedTexture = (texture: THREE.Texture, result: CompressResult): THREE.CompressedTexture => {
+export const compressedTexture = (texture: THREE.Texture, result: Pick<CompressResult, 'format' | 'levels'>): THREE.CompressedTexture => {
     const levels = result.levels.map(level => ({ data: new Uint8Array(level.data), width: level.width, height: level.height }));
     const format = result.format === 'bc5' ? THREE.RED_GREEN_RGTC2_Format : result.format === 'bc3' ? THREE.RGBA_S3TC_DXT5_Format : THREE.RGB_S3TC_DXT1_Format;
     const compressed = new THREE.CompressedTexture(levels as unknown as ImageData[], levels[0].width, levels[0].height, format, THREE.UnsignedByteType);
@@ -207,7 +204,7 @@ export const compressModelTextures = async (root: THREE.Object3D, keepSources = 
         const image = texture.image as { width?: number; height?: number } | null;
         const width = image?.width ?? 0;
         const height = image?.height ?? 0;
-        if (!image || !isPowerOfTwo(width) || !isPowerOfTwo(height) || Math.min(width, height) < MIN_COMPRESSED_SIZE) {
+        if (!image || !isCompressibleSize(width, height)) {
             report.skipped++;
             return;
         }
