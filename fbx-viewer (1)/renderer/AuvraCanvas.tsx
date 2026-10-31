@@ -24,7 +24,7 @@ export interface AuvraCanvasProps extends Omit<CanvasProps, "onCreated" | "gl"> 
   gl?: AuvraCanvasGlOptions;
   /** Reported fallback reason supplied by a wrapper whose own backend could not present this surface. */
   fallbackReason?: string | null;
-  /** The project's Renderer setting; `?renderer=` on the page wins over it. Without either a surface draws with WebGL2. */
+  /** The project's Renderer setting; `?renderer=` on the page wins over it. Without either a surface draws with WebGPU where the machine has it. */
   backend?: RendererSetting;
 }
 
@@ -183,7 +183,7 @@ export const AuvraCanvas: React.FC<AuvraCanvasProps> = ({
   const [generation, setGeneration] = useState(0);
 
   const pageRequest = useMemo(readPageRendererRequest, []);
-  const requestedBackend = pageRequest ?? backend ?? "webgl2";
+  const requestedBackend = pageRequest ?? backend ?? "auto";
 
   const gl = useMemo(() => ({
     antialias: true,

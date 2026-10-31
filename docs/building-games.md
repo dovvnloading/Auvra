@@ -21,9 +21,9 @@ Each level should have a **Player Start**; without one the player spawns at the 
 
 **Renderer** under **Window & quality** in Game Settings says what draws your levels: in the world editor's view, in Play and in a built game.
 
-- **WebGL2** (the default): runs on nearly every machine.
+- **WebGL2**: runs on nearly every machine.
 - **WebGPU**: the newer renderer. Where a machine cannot run it, the level draws with WebGL2 instead and the reason goes in the renderer's report.
-- **Auto**: WebGPU where the machine has it, WebGL2 elsewhere.
+- **Auto** (the default): WebGPU where the machine has it, WebGL2 elsewhere.
 
 To try a renderer without changing the project, add `?renderer=webgpu`, `?renderer=webgl2` or `?renderer=auto` to the page's address. It wins over the setting for that page.
 

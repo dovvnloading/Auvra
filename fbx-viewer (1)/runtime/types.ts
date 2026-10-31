@@ -83,7 +83,7 @@ export const DEFAULT_GAME_SETTINGS: GameSettings = {
     startupLevelId: null,
     playerBlueprintId: null,
     window: { fullscreen: false },
-    quality: { shadows: true, postProcessing: true, maxDpr: 2, fov: 60, meshLod: true, occlusionCulling: true, textureCompression: true, antiAliasing: 'temporal', renderScale: 1, loadLevelsOnDemand: true, assetMemoryMb: 2048, renderer: 'webgl2' },
+    quality: { shadows: true, postProcessing: true, maxDpr: 2, fov: 60, meshLod: true, occlusionCulling: true, textureCompression: true, antiAliasing: 'temporal', renderScale: 1, loadLevelsOnDemand: true, assetMemoryMb: 2048, renderer: 'auto' },
     input: { mouseSensitivity: 0.002, invertY: false },
     audio: { masterVolume: 1 },
     network: DEFAULT_NETWORK_SETTINGS,

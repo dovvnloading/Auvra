@@ -99,7 +99,7 @@ const sanitizeGameSettings = (value: GameSettings): GameSettings => {
       fov: clamp(settings.quality.fov, LIMITS.fov.min, LIMITS.fov.max, defaults.quality.fov),
       antiAliasing: settings.quality.antiAliasing === 'smaa' || settings.quality.antiAliasing === 'none' ? settings.quality.antiAliasing : 'temporal',
       renderScale: clamp(settings.quality.renderScale, LIMITS.renderScale.min, LIMITS.renderScale.max, defaults.quality.renderScale),
-      renderer: settings.quality.renderer === 'auto' || settings.quality.renderer === 'webgpu' ? settings.quality.renderer : 'webgl2',
+      renderer: settings.quality.renderer === 'auto' || settings.quality.renderer === 'webgpu' ? settings.quality.renderer : 'auto',
     },
     input: {
       mouseSensitivity: clamp(settings.input.mouseSensitivity, LIMITS.mouseSensitivity.min, LIMITS.mouseSensitivity.max, defaults.input.mouseSensitivity),
