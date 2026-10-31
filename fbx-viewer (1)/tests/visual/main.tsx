@@ -57,7 +57,6 @@ const capture = async (name: string) => {
   seedChance(0x2f6e2b1);
   const stage = document.getElementById('stage')!;
   const root = createRoot(stage);
-  const bytesBefore = gpuBytes();
   const started = realNow();
   let latest: RootState | null = null;
   root.render(
@@ -90,7 +89,7 @@ const capture = async (name: string) => {
   const { calls, triangles } = state.gl.info.render;
   const { geometries, textures } = state.gl.info.memory;
   const programs = state.gl.info.programs?.length ?? 0;
-  const bytes = gpuBytes() - bytesBefore;
+  const bytes = gpuBytes(state.gl.getContext() as WebGL2RenderingContext);
   root.unmount();
   // Lets the canvas and what it holds go before the next scene.
   await new Promise((resolve) => setTimeout(resolve, 50));

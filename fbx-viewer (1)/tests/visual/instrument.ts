@@ -49,22 +49,23 @@ const BYTES_PER_TEXEL: Record<number, number> = {
   0x8056: 2, 0x8057: 2, 0x8d62: 2, 0x8059: 4, 0x8d9f: 4, // RGBA4, RGB5_A1, RGB565, RGB10_A2, RGB10_A2UI... small targets
 };
 
-const held = new Map<object, number>();
-let bytesHeld = 0;
+const held = new WeakMap<object, number>();
+// Each scene has a context of its own, and what the last one lets go of later must not count against this one.
+const bytesHeld = new WeakMap<WebGL2RenderingContext, number>();
 
-const hold = (resource: object | null, bytes: number): void => {
+const hold = (gl: WebGL2RenderingContext, resource: object | null, bytes: number): void => {
   if (!resource) return;
-  bytesHeld += bytes - (held.get(resource) ?? 0);
+  bytesHeld.set(gl, (bytesHeld.get(gl) ?? 0) + bytes - (held.get(resource) ?? 0));
   held.set(resource, bytes);
 };
 
-const letGo = (resource: object | null): void => {
+const letGo = (gl: WebGL2RenderingContext, resource: object | null): void => {
   if (!resource) return;
-  bytesHeld -= held.get(resource) ?? 0;
+  bytesHeld.set(gl, (bytesHeld.get(gl) ?? 0) - (held.get(resource) ?? 0));
   held.delete(resource);
 };
 
-export const gpuBytes = (): number => bytesHeld;
+export const gpuBytes = (gl: WebGL2RenderingContext): number => bytesHeld.get(gl) ?? 0;
 
 const texelBytes = (format: number): number => BYTES_PER_TEXEL[format] ?? 4;
 
@@ -97,14 +98,14 @@ const after = <K extends keyof WebGL2RenderingContext>(name: K, count: (gl: WebG
 
 after('bufferData', (gl, [target, data]) => {
   const bytes = typeof data === 'number' ? data : (data as ArrayBufferView | null)?.byteLength ?? 0;
-  hold(bufferBinding(gl, target as number), bytes);
+  hold(gl, bufferBinding(gl, target as number), bytes);
 });
 after('texStorage2D', (gl, [target, levels, format, width, height]) => {
   const faces = target === gl.TEXTURE_CUBE_MAP ? 6 : 1;
-  hold(textureBinding(gl, target as number), faces * mipBytes(width as number, height as number, 1, levels as number, texelBytes(format as number)));
+  hold(gl, textureBinding(gl, target as number), faces * mipBytes(width as number, height as number, 1, levels as number, texelBytes(format as number)));
 });
 after('texStorage3D', (gl, [target, levels, format, width, height, depth]) => {
-  hold(textureBinding(gl, target as number), mipBytes(width as number, height as number, depth as number, levels as number, texelBytes(format as number)));
+  hold(gl, textureBinding(gl, target as number), mipBytes(width as number, height as number, depth as number, levels as number, texelBytes(format as number)));
 });
 after('texImage2D', (gl, args) => {
   const [target, level, format] = args as number[];
@@ -114,18 +115,18 @@ after('texImage2D', (gl, args) => {
   const width = source ? source.width ?? source.videoWidth ?? 0 : args[3] as number;
   const height = source ? source.height ?? source.videoHeight ?? 0 : args[4] as number;
   const faces = target >= gl.TEXTURE_CUBE_MAP_POSITIVE_X && target <= gl.TEXTURE_CUBE_MAP_NEGATIVE_Z ? 6 : 1;
-  hold(textureBinding(gl, target), faces * width * height * texelBytes(format));
+  hold(gl, textureBinding(gl, target), faces * width * height * texelBytes(format));
 });
 after('texImage3D', (gl, args) => {
   const [target, level, format, width, height, depth] = args as number[];
-  if (level === 0) hold(textureBinding(gl, target), width * height * depth * texelBytes(format));
+  if (level === 0) hold(gl, textureBinding(gl, target), width * height * depth * texelBytes(format));
 });
 after('renderbufferStorage', (gl, [, format, width, height]) => {
-  hold(gl.getParameter(gl.RENDERBUFFER_BINDING), (width as number) * (height as number) * texelBytes(format as number));
+  hold(gl, gl.getParameter(gl.RENDERBUFFER_BINDING), (width as number) * (height as number) * texelBytes(format as number));
 });
 after('renderbufferStorageMultisample', (gl, [, samples, format, width, height]) => {
-  hold(gl.getParameter(gl.RENDERBUFFER_BINDING), Math.max(1, samples as number) * (width as number) * (height as number) * texelBytes(format as number));
+  hold(gl, gl.getParameter(gl.RENDERBUFFER_BINDING), Math.max(1, samples as number) * (width as number) * (height as number) * texelBytes(format as number));
 });
-after('deleteBuffer', (_gl, [buffer]) => letGo(buffer as object | null));
-after('deleteTexture', (_gl, [texture]) => letGo(texture as object | null));
-after('deleteRenderbuffer', (_gl, [renderbuffer]) => letGo(renderbuffer as object | null));
+after('deleteBuffer', (gl, [buffer]) => letGo(gl, buffer as object | null));
+after('deleteTexture', (gl, [texture]) => letGo(gl, texture as object | null));
+after('deleteRenderbuffer', (gl, [renderbuffer]) => letGo(gl, renderbuffer as object | null));
