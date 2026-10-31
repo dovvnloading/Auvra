@@ -3,7 +3,9 @@ import React, { useContext, useMemo, useLayoutEffect, useRef, useState, useCallb
 import * as THREE from 'three';
 import { ThreeEvent, useFrame } from '@react-three/fiber';
 import { LoadedModelData, LevelObject } from '../../types';
-import { chooseLodLevel, lodPixelsPerUnit, meshLodChain, type MeshLodLevel } from '../../utils/meshLod';
+import { materialGraphOffsetsVertices } from '../../runtime/materials/graphMaterial';
+import { cullViewFor, gateInstanceDraws, INSTANCE_NEEDS, sortPlacedInstances, SPHERE_FLOATS, UNDRAWN_LAYER, writeSortedInstances, type CullView, type PlacedInstances } from '../../utils/instanceCulling';
+import { meshLodChain, type MeshLodLevel } from '../../utils/meshLod';
 import { LOD_UPDATE_INTERVAL, MeshLodContext, useMeshLodReady } from '../Scene/useMeshLod';
 
 interface InstancedLevelLayerProps {
@@ -45,6 +47,23 @@ const SELECTION_MATERIAL = new THREE.MeshBasicMaterial({
 const noRaycast = () => undefined;
 /** Marks the instanced meshes as level geometry for baked lighting (see runtime/lighting/bakedLighting.ts). */
 const STATIC_LIGHTING = { staticLighting: true };
+/** The same for meshes whose instances change places from frame to frame (see utils/instanceCulling.ts). */
+const CULLED_STATIC_LIGHTING = { staticLighting: true, shuffledInstances: true };
+
+const soleLevels = new WeakMap<THREE.BufferGeometry, MeshLodLevel[]>();
+
+/** The level of a part with no simpler versions to draw: itself, the same array every time. */
+const soleLevel = (geometry: THREE.BufferGeometry): MeshLodLevel[] => {
+    let levels = soleLevels.get(geometry);
+    if (!levels) {
+        levels = [{ geometry, error: 0, triangles: Math.floor((geometry.index?.count ?? geometry.attributes.position?.count ?? 0) / 3) }];
+        soleLevels.set(geometry, levels);
+    }
+    return levels;
+};
+
+const offsetsVertices = (material: MeshPart['material']): boolean =>
+    Array.isArray(material) ? material.some(materialGraphOffsetsVertices) : materialGraphOffsetsVertices(material);
 
 const InstancedModelGroup: React.FC<{
     model: LoadedModelData;
@@ -90,10 +109,12 @@ const InstancedModelGroup: React.FC<{
     return (
         <group>
             {parts.map((part) => {
-                // In play the instances draw at the detail their size on the screen calls for; the
-                // editor keeps one mesh per part, so its instance ids stay the objects' for picking.
-                const levels = !interactive && lodReady && lodAllowed ? meshLodChain(part.geometry) : null;
-                if (levels && levels.length > 1) {
+                // In play the instances draw at the detail their size on the screen calls for, and only
+                // as a view needs them, even with one level to draw; the editor keeps one mesh per part, so
+                // its instance ids stay the objects' for picking, and only that mesh shows the selection.
+                const chain = !interactive && lodReady && lodAllowed ? meshLodChain(part.geometry) : null;
+                const levels = chain && chain.length > 1 ? chain : !interactive && !selectedIds?.size ? soleLevel(part.geometry) : null;
+                if (levels) {
                     return <LodPartInstancer key={part.key} part={part} levels={levels} instances={instances} hiddenIds={hiddenIds} />;
                 }
                 return (
@@ -112,11 +133,11 @@ const InstancedModelGroup: React.FC<{
     );
 };
 
-const _lodCamera = new THREE.Vector3();
-
 /**
  * A part's instances drawn at their detail levels: one instanced mesh per level, the instances
- * sorted into them by how large each shows on the screen (chooseLodLevel), every few frames.
+ * sorted into them by how large each shows on the screen (chooseLodLevel) and by what the view needs
+ * of them (utils/instanceCulling.ts), every few frames or as soon as the camera calls for it. One more
+ * mesh holds the whole set, in order and never drawn, for what reads instances rather than draws them.
  */
 const LodPartInstancer: React.FC<{
     part: MeshPart;
@@ -125,54 +146,59 @@ const LodPartInstancer: React.FC<{
     hiddenIds?: ReadonlySet<string>;
 }> = ({ part, levels, instances, hiddenIds }) => {
     const meshes = useRef<(THREE.InstancedMesh | null)[]>([]);
-    const frame = useRef(0);
-    // Each instance's world matrix, the middle of its bounds and its scale; null when hidden.
-    const placed = useMemo(() => {
+    const whole = useRef<THREE.InstancedMesh | null>(null);
+    // Each instance's world matrix, the sphere around its bounds and its scale; the hidden are left out.
+    const placed = useMemo((): PlacedInstances => {
         const dummy = new THREE.Object3D();
+        const matrix = new THREE.Matrix4();
+        const centre = new THREE.Vector3();
         const base = levels[0].geometry;
         if (!base.boundingSphere) base.computeBoundingSphere();
-        return instances.map((data) => {
-            if (hiddenIds?.has(data.id)) return null;
+        const shown = hiddenIds ? instances.filter(data => !hiddenIds.has(data.id)) : instances;
+        const matrices = new Float32Array(shown.length * 16);
+        const spheres = new Float32Array(shown.length * SPHERE_FLOATS);
+        shown.forEach((data, index) => {
             dummy.position.set(data.position[0], data.position[1], data.position[2]);
             dummy.rotation.set(data.rotation[0], data.rotation[1], data.rotation[2]);
             dummy.scale.set(data.scale[0], data.scale[1], data.scale[2]);
             dummy.updateMatrix();
-            const matrix = new THREE.Matrix4().multiplyMatrices(dummy.matrix, part.relativeMatrix);
-            return { matrix, centre: base.boundingSphere!.center.clone().applyMatrix4(matrix), scale: matrix.getMaxScaleOnAxis() };
+            matrix.multiplyMatrices(dummy.matrix, part.relativeMatrix).toArray(matrices, index * 16);
+            centre.copy(base.boundingSphere!.center).applyMatrix4(matrix);
+            const scale = matrix.getMaxScaleOnAxis();
+            const at = index * SPHERE_FLOATS;
+            spheres[at] = centre.x;
+            spheres[at + 1] = centre.y;
+            spheres[at + 2] = centre.z;
+            spheres[at + 3] = base.boundingSphere!.radius * scale;
+            spheres[at + 4] = scale;
         });
+        return { count: shown.length, matrices, spheres };
     }, [instances, hiddenIds, part.relativeMatrix, levels]);
-    // The level each instance was last drawn at (-1: not yet sorted).
-    const assigned = useMemo(() => new Int8Array(placed.length).fill(-1), [placed]);
+    // The slot each instance was last sorted into (-1: not yet sorted), and how many are in each.
+    const assigned = useMemo(() => new Int8Array(placed.count).fill(-1), [placed]);
+    const tally = useMemo(() => new Int32Array(levels.length * INSTANCE_NEEDS), [levels]);
+    // What the set in the meshes was last sorted for.
+    const sorted = useRef<{ placed: PlacedInstances | null; view: CullView | null; version: number }>({ placed: null, view: null, version: 0 }).current;
 
-    useFrame(({ camera, size }) => {
-        const firstSort = assigned.length > 0 && assigned[0] === -1;
-        if (!firstSort && frame.current++ % LOD_UPDATE_INTERVAL !== 0) return;
-        const pixelsPerUnit = lodPixelsPerUnit(camera, size.height);
-        camera.getWorldPosition(_lodCamera);
-        let changed = firstSort;
-        placed.forEach((instance, index) => {
-            const level = instance ? chooseLodLevel(levels, instance.scale, instance.centre.distanceTo(_lodCamera), pixelsPerUnit) : -2;
-            if (assigned[index] !== level) {
-                assigned[index] = level;
-                changed = true;
-            }
-        });
-        if (!changed) return;
-        const counts = levels.map(() => 0);
-        placed.forEach((instance, index) => {
-            const level = assigned[index];
-            const mesh = meshes.current[level];
-            if (!instance || level < 0 || !mesh) return;
-            mesh.setMatrixAt(counts[level]++, instance.matrix);
-        });
-        meshes.current.forEach((mesh, level) => {
-            if (!mesh) return;
-            mesh.count = counts[level];
-            mesh.instanceMatrix.needsUpdate = true;
-            // The bounds follow the instances now drawn, so the whole set is culled correctly.
-            mesh.boundingSphere = null;
-            if (mesh.count) mesh.computeBoundingSphere();
-        });
+    useLayoutEffect(() => {
+        const mesh = whole.current;
+        if (!mesh) return;
+        (mesh.instanceMatrix.array as Float32Array).set(placed.matrices);
+        mesh.count = placed.count;
+        mesh.instanceMatrix.needsUpdate = true;
+        mesh.boundingSphere = null;
+    }, [placed]);
+
+    useFrame(({ camera, scene, size, gl }) => {
+        const view = cullViewFor(camera, gl.shadowMap.enabled ? scene : null, gl.info.render.frame, size.height, LOD_UPDATE_INTERVAL);
+        const firstSort = sorted.placed !== placed;
+        if (!firstSort && sorted.view === view && sorted.version === view.version) return;
+        sorted.placed = placed;
+        sorted.view = view;
+        sorted.version = view.version;
+        // What a graph offsets can show from anywhere, so such a part is not culled by its bounds.
+        const changed = sortPlacedInstances(placed, levels, view, offsetsVertices(part.material), assigned, tally);
+        writeSortedInstances(placed, assigned, tally, firstSort ? ~0 : changed, meshes.current);
     });
 
     return (
@@ -182,17 +208,30 @@ const LodPartInstancer: React.FC<{
                     key={index}
                     ref={(mesh) => {
                         meshes.current[index] = mesh;
+                        if (!mesh) return;
+                        gateInstanceDraws(mesh, index, tally, sorted);
                         // Nothing draws until the first sort places the instances.
-                        if (mesh && assigned.length && assigned[0] === -1) mesh.count = 0;
+                        if (sorted.placed !== placed) mesh.count = 0;
                     }}
                     args={[level.geometry, part.material, Math.max(1, instances.length)]}
                     castShadow
                     receiveShadow
                     raycast={noRaycast}
                     // Instanced objects never move, so baked lighting sees them as level geometry.
-                    userData={STATIC_LIGHTING}
+                    userData={CULLED_STATIC_LIGHTING}
                 />
             ))}
+            {/* The whole set for rays and decals: it holds still as the view turns, and no camera draws its layer. */}
+            <instancedMesh
+                ref={(mesh) => {
+                    whole.current = mesh;
+                    mesh?.layers.set(UNDRAWN_LAYER);
+                }}
+                args={[levels[0].geometry, part.material, Math.max(1, instances.length)]}
+                castShadow
+                raycast={noRaycast}
+                userData={STATIC_LIGHTING}
+            />
         </>
     );
 };

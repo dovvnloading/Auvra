@@ -254,6 +254,40 @@ describe('keeping up with a level', () => {
         expect(rays.closestHit(new THREE.Vector3(500, 0, 10), toward)).toBeNull();
     });
 
+    it('reads a culled layer from its whole set, and takes no notice as its drawn instances change places', () => {
+        const scene = new THREE.Scene();
+        const box = new THREE.BoxGeometry(2, 2, 2);
+        const whole = new THREE.InstancedMesh(box, material(), 2);
+        whole.setMatrixAt(0, new THREE.Matrix4().makeTranslation(0, 0, 0));
+        whole.setMatrixAt(1, new THREE.Matrix4().makeTranslation(50, 0, 0));
+        // Never drawn: rays see it all the same.
+        whole.layers.set(31);
+        const drawn = new THREE.InstancedMesh(box, material(), 2);
+        drawn.userData.shuffledInstances = true;
+        drawn.setMatrixAt(0, new THREE.Matrix4().makeTranslation(0, 0, 0));
+        drawn.setMatrixAt(1, new THREE.Matrix4().makeTranslation(50, 0, 0));
+        scene.add(whole, drawn);
+        const rays = new RayScene();
+        frames(rays, scene, 3);
+        expect(rays.stats.instances).toBe(2);
+        const toward = new THREE.Vector3(0, 0, -1);
+        expect(rays.closestHit(new THREE.Vector3(50, 0, 10), toward)).not.toBeNull();
+
+        const tree = rays.sceneNodes.texture.version;
+        const table = rays.instances.texture.version;
+        // The view turns: what is drawn shrinks and swaps round, over and over.
+        for (let turn = 0; turn < 40; turn++) {
+            drawn.count = turn % 2 ? 1 : 2;
+            drawn.setMatrixAt(0, new THREE.Matrix4().makeTranslation(turn % 2 ? 50 : 0, 0, 0));
+            drawn.instanceMatrix.needsUpdate = true;
+            frames(rays, scene, 1);
+        }
+        expect(rays.sceneNodes.texture.version).toBe(tree);
+        expect(rays.instances.texture.version).toBe(table);
+        expect(rays.stats.instances).toBe(2);
+        expect(rays.closestHit(new THREE.Vector3(50, 0, 10), toward)).not.toBeNull();
+    });
+
     it('takes in what is added and lets go of what is removed', () => {
         const scene = new THREE.Scene();
         const rays = new RayScene();

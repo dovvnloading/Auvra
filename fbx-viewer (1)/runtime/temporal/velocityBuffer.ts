@@ -364,7 +364,8 @@ export class VelocityBuffer {
         const backInSight = entry.seenAt < this.frame - 1;
         if (backInSight) entry.previous.copy(now);
         entry.seenAt = this.frame;
-        const instancesMoved = hasInstances && entry.instanceVersion !== instanced.instanceMatrix.version;
+        // Instances that change places as the view turns have not moved, and last frame's matrix at an index is another's.
+        const instancesMoved = hasInstances && entry.instanceVersion !== instanced.instanceMatrix.version && !mesh.userData.shuffledInstances;
         if (hasInstances) entry.instanceVersion = instanced.instanceMatrix.version;
         if (!hasBones && !instancesMoved && entry.previous.equals(now)) return;
 

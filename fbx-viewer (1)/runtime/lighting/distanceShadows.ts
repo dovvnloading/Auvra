@@ -36,7 +36,7 @@ export const SHADOW_CASCADES = 2;
 const MAX_LOOK_DISTANCE = 2000;
 /** The near map's reach per unit of look, and the ratio it changes in, so a zoom re-fits it only now and then. */
 const LOOK_REACH = 1.2;
-const LOOK_REACH_STEP = 1.25;
+export const LOOK_REACH_STEP = 1.25;
 /** How far behind its slice a cascade's light stands, so what stands between it and the sun still casts. */
 const CASCADE_BACKOFF = 600;
 
