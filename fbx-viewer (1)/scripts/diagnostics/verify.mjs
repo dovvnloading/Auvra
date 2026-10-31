@@ -43,6 +43,8 @@ const EXEMPT = new Map(Object.entries({
   'runtime/motionDatabase.ts': 'pure-utility',
   'runtime/proceduralRig.ts': 'hot-loop',
   'runtime/levelStreaming.ts': 'pure-utility',
+  'runtime/levelAssets.ts': 'pure-utility',
+  'runtime/assetResidency.ts': 'pure-utility',
   'runtime/cameraDirector.ts': 'hot-loop',
   'runtime/net/protocol.ts': 'protocol-model',
   'runtime/net/replication.ts': 'hot-loop',

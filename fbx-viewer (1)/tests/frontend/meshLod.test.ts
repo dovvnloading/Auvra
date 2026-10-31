@@ -5,6 +5,16 @@ import { chooseLodLevel, lodPixelsPerUnit, meshLodChain, meshLodReady, MIN_LOD_T
 beforeAll(async () => { await meshLodReady; });
 
 describe('mesh level of detail chain', () => {
+  it('frees its levels with the mesh, which nothing else would', () => {
+    const sphere = new THREE.SphereGeometry(1, 64, 48);
+    const levels = meshLodChain(sphere);
+    expect(levels.length).toBeGreaterThan(2);
+    let freed = 0;
+    for (const level of levels.slice(1)) level.geometry.addEventListener('dispose', () => { freed += 1; });
+    sphere.dispose();
+    expect(freed).toBe(levels.length - 1);
+  });
+
   it('makes coarser levels over the same vertices, each with fewer triangles and more error', () => {
     const sphere = new THREE.SphereGeometry(1, 64, 48);
     const levels = meshLodChain(sphere);

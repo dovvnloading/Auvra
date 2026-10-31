@@ -44,20 +44,26 @@ const french: LocalizationSettings = {
 
 vi.mock('../../player/gamePack', () => ({
   loadGamePack: async () => ({
-    manifest: { gameId: 'l10n-test', name: 'Demo Game', startupLevelId: 'level-1' },
+    manifest: { gameId: 'l10n-test', name: 'Demo Game', startupLevelId: 'level-1', assets: [] },
     domains: { metadata: [{ id: LOCALIZATION_DOCUMENT_ID, settings: french }], hud: [] },
     resolveAssetUrl: async (id: string) => id,
+    releaseAssetUrl: () => undefined,
     dispose: () => undefined,
   }),
 }));
 
 vi.mock('../../utils/projectHydration', () => ({
-  loadGameContent: async () => ({
-    content: {},
+  readGameDocuments: () => ({
     levels: [{ id: 'level-1', name: 'Level 1' }],
-    objects: [],
     hud: null,
     settings: { ...DEFAULT_GAME_SETTINGS, startupLevelId: 'level-1' },
+  }),
+  createGameContentLoader: () => ({
+    load: async () => undefined,
+    release: () => undefined,
+    releaseAll: () => undefined,
+    content: () => ({}),
+    objects: () => [],
   }),
 }));
 

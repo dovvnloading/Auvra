@@ -50,10 +50,12 @@ export interface GameSettings {
      * textureCompression: colour and material maps load GPU-compressed (utils/textureCompression).
      * antiAliasing: the most a level's Post Process may use, and what the default stack uses (runtime/temporal).
      * renderScale: the share of the display's size the lit scene is drawn at, with temporal anti-aliasing.
+     * loadLevelsOnDemand: a built game loads each level's assets when it starts (runtime/levelAssets.ts); off, all of them at once.
+     * assetMemoryMb: how much a built game holds before freeing what earlier levels used (runtime/assetResidency.ts).
      */
     quality: {
         shadows: boolean; postProcessing: boolean; maxDpr: number; fov: number; meshLod: boolean; textureCompression: boolean;
-        antiAliasing: 'temporal' | 'smaa' | 'none'; renderScale: number;
+        antiAliasing: 'temporal' | 'smaa' | 'none'; renderScale: number; loadLevelsOnDemand: boolean; assetMemoryMb: number;
     };
     input: { mouseSensitivity: number; invertY: boolean };
     audio: { masterVolume: number };
@@ -71,7 +73,7 @@ export const DEFAULT_GAME_SETTINGS: GameSettings = {
     startupLevelId: null,
     playerBlueprintId: null,
     window: { fullscreen: false },
-    quality: { shadows: true, postProcessing: true, maxDpr: 2, fov: 60, meshLod: true, textureCompression: true, antiAliasing: 'temporal', renderScale: 1 },
+    quality: { shadows: true, postProcessing: true, maxDpr: 2, fov: 60, meshLod: true, textureCompression: true, antiAliasing: 'temporal', renderScale: 1, loadLevelsOnDemand: true, assetMemoryMb: 2048 },
     input: { mouseSensitivity: 0.002, invertY: false },
     audio: { masterVolume: 1 },
     network: DEFAULT_NETWORK_SETTINGS,

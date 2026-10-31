@@ -146,6 +146,10 @@ export const meshLodChain = (geometry: THREE.BufferGeometry): MeshLodLevel[] => 
     }
     if (levels.length === 1) levels[0] = full;
     chains.set(geometry, levels);
+    // Freeing a mesh frees its levels, which nothing else would. Drawn again, they upload again as it does.
+    geometry.addEventListener('dispose', () => {
+        for (const level of levels) if (level.geometry !== geometry) level.geometry.dispose();
+    });
     return levels;
 };
 

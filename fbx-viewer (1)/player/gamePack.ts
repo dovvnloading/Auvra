@@ -6,6 +6,8 @@ export interface GamePackSource {
     domains: Record<string, unknown[]>;
     /** Returns a blob URL typed with the manifest MIME, so static hosts that send octet-stream still work. */
     resolveAssetUrl(assetId: string): Promise<string>;
+    /** Lets go of an asset's copy once it has been read, so it does not stay in memory for the rest of the game. */
+    releaseAssetUrl(assetId: string): void;
     dispose(): void;
 }
 
@@ -54,10 +56,21 @@ export const loadGamePack = async (baseUrl: string, signal?: AbortSignal): Promi
         return pending;
     };
 
+    const releaseAssetUrl = (assetId: string): void => {
+        const pending = urls.get(assetId);
+        if (!pending) return;
+        urls.delete(assetId);
+        void pending.then(url => {
+            URL.revokeObjectURL(url);
+            created.splice(created.indexOf(url), 1);
+        }, () => undefined);
+    };
+
     return {
         manifest,
         domains,
         resolveAssetUrl,
+        releaseAssetUrl,
         dispose: () => created.splice(0).forEach(url => URL.revokeObjectURL(url)),
     };
 };
