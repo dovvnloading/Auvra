@@ -6,7 +6,7 @@ import { SandboxEntityHandle } from '../SandboxEntity';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { releaseSound, routeSoundToBus, useRuntimeMixer } from '../../../runtime/components/audioComponents';
 import type { ResolvedWeapon } from '../../../runtime/weapons';
-import { PLAYER_PHYSICS_ID, usePhysicsQueries } from '../../../runtime/physics';
+import { PLAYER_PHYSICS_ID, usePhysicsQueries } from '../../../runtime/physicsQueries';
 import { GUNSHOT_NOISE_RADIUS, useNoiseBus } from '../../../runtime/perception';
 import { crosshairTarget } from '../../../runtime/aimTarget';
 

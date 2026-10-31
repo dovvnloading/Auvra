@@ -4,7 +4,7 @@ import { useFrame } from '@react-three/fiber';
 import { useBeforePhysicsStep, useRapier } from '@react-three/rapier';
 import type { RapierCollider, RapierContext } from '@react-three/rapier';
 import type { LevelComponent } from '../../types';
-import { objectIdFromRigidBody, usePhysicsAvailable } from '../physics';
+import { objectIdFromRigidBody, usePhysicsAvailable } from '../physicsQueries';
 import { ComponentHostContext } from './builtins';
 import type { ComponentDefinition, ComponentRenderProps } from './types';
 

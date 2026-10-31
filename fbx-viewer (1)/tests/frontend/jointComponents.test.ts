@@ -15,7 +15,7 @@ import {
   resolveJointSettings,
 } from '../../runtime/components/jointComponents';
 import type { JointBreakMonitor, JointLink, JointSettings } from '../../runtime/components/jointComponents';
-import { physicsUserData } from '../../runtime/physics';
+import { physicsUserData } from '../../runtime/physicsQueries';
 import type { LevelComponent, LevelObject } from '../../types';
 import { loadRuntimeRapier } from './rapierRuntime';
 import type { RuntimeRapier } from './rapierRuntime';

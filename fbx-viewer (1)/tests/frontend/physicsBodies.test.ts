@@ -15,7 +15,7 @@ import {
   teleportBodyToHost,
 } from '../../runtime/components/physicsComponents';
 import type { CompoundBodyRegistry } from '../../runtime/components/physicsComponents';
-import { createPhysicsQueries, physicsUserData, usePhysicsQueries } from '../../runtime/physics';
+import { createPhysicsQueries, physicsUserData, usePhysicsQueries } from '../../runtime/physicsQueries';
 import type { LevelComponent, LevelObject } from '../../types';
 import { splitAlphaCards } from '../../utils/processing/ModelMaterials';
 import { loadRuntimeRapier } from './rapierRuntime';

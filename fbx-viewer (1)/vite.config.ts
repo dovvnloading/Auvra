@@ -59,6 +59,23 @@ const thirdPartyNoticesPlugin = (): Plugin => ({
   },
 });
 
+// Libraries in chunks of their own: they change far less often than the engine, and the entry stays what starts the page.
+const VENDOR_CHUNKS: readonly (readonly [string, RegExp])[] = [
+  ['physics', /node_modules\/@dimforge\/rapier3d-compat\//],
+  ['three', /node_modules\/three\//],
+  // What the others below reach for: left out, they would be folded into whichever of those comes first.
+  ['scene', /node_modules\/(?:@react-three\/fiber|three-stdlib|buffer|base64-js|ieee754)\//],
+  ['post', /node_modules\/(?:postprocessing|@react-three\/postprocessing|n8ao)\//],
+  ['react', /node_modules\/(?:react|react-dom|react-reconciler|scheduler|its-fine|zustand|suspend-react)\//],
+];
+
+const chunkOf = (id: string): string | undefined => {
+  const path = id.replace(/\\/g, '/');
+  // The protocol's generated validators, as long as the rest of the editor's own startup code together.
+  if (path.includes('/host/generated/')) return 'protocol';
+  return VENDOR_CHUNKS.find(([, pattern]) => pattern.test(path))?.[0];
+};
+
 export default defineConfig(({ command, mode }) => {
   const isPlayer = mode === 'player';
   const editorInput: Record<string, string> = {
@@ -86,7 +103,19 @@ export default defineConfig(({ command, mode }) => {
     open: false,
     // Transform the editor's whole import graph as soon as the server starts, rather than module
     // by module as the window first asks for them: the window then boots from a warm server.
-    warmup: { clientFiles: ['./index.tsx'] },
+    // That only follows what is imported up front, so the tabs that load when opened are named too.
+    warmup: {
+      clientFiles: [
+        './index.tsx',
+        './components/Environment/EnvironmentEditor.tsx',
+        './components/AnimationGraph/GraphEditor.tsx',
+        './components/Blueprint/BlueprintEditor.tsx',
+        './components/Sandbox/SandboxScene.tsx',
+        './components/HUDEditor/HUDEditor.tsx',
+        './components/Materials/MaterialGraphEditor.tsx',
+        './components/Tools/RetextureEditor.tsx',
+      ],
+    },
   },
   plugins: [
     react(),
@@ -138,6 +167,7 @@ export default defineConfig(({ command, mode }) => {
     ...(isPlayer ? { outDir: 'dist/player', emptyOutDir: true } : {}),
     rollupOptions: {
       input: isPlayer ? playerInput : editorInput,
+      output: { manualChunks: chunkOf },
     },
   },
   ...(developmentNonce ? { html: { cspNonce: developmentNonce } } : {}),

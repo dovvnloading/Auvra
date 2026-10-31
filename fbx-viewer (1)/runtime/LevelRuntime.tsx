@@ -12,7 +12,7 @@ import { NavMeshContext, useLevelNavMesh, type LevelNavMesh, type NavSettings } 
 import { modelTriangles } from './navGeometry';
 import { splineObjectTriangles } from './splineMesh';
 import type { HostGeometry } from './components/physicsComponents';
-import { usePhysicsQueries } from './physics';
+import { usePhysicsQueries } from './physicsQueries';
 import { GUNSHOT_NOISE_RADIUS, NoiseBus, NoiseBusContext, useNoiseBus } from './perception';
 import { LevelDynamicGi } from './lighting/dynamicGi/LevelDynamicGi';
 import { LevelLightVolume } from './lighting/LevelLightVolume';

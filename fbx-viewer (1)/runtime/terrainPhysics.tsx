@@ -5,7 +5,7 @@ import type { RapierCollider } from '@react-three/rapier';
 import type { LevelObject, TextureData } from '../types';
 import { MAX_TERRAIN_HEIGHTFIELD_SAMPLES_PER_SIDE, terrainSamplesPerSide } from '../utils/terrainHeightfieldCodec';
 import { useGameContent } from './GameContentContext';
-import { physicsUserData, usePhysicsAvailable } from './physics';
+import { physicsUserData, usePhysicsAvailable } from './physicsQueries';
 import { surfaceFromName, tagSurface, type SurfaceKind, type SurfaceTag } from './surfaces';
 
 /** Rapier heightfield arguments for a terrain, in the terrain object's own space. */

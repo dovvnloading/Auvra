@@ -12,7 +12,7 @@ import {
   resolveColliderSettings,
   resolveRigidBodySettings,
 } from '../../runtime/components/physicsComponents';
-import { createPhysicsQueries, objectIdFromUserData, physicsUserData, PLAYER_PHYSICS_ID } from '../../runtime/physics';
+import { createPhysicsQueries, objectIdFromUserData, physicsUserData, PLAYER_PHYSICS_ID } from '../../runtime/physicsQueries';
 import type { LevelComponent, LevelObject } from '../../types';
 import type { TriggerEvent } from '../../runtime/triggers';
 

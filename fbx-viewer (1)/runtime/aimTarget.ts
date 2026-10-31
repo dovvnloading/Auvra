@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { PhysicsQueries } from './physics';
+import type { PhysicsQueries } from './physicsQueries';
 
 /** How far an aim with nothing in its way reaches, in world units. */
 export const AIM_REACH = 1000;

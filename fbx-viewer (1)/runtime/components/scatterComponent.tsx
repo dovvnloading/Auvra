@@ -4,7 +4,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { CuboidCollider, RigidBody } from '@react-three/rapier';
 import { createPlacementQuery } from '../../utils/surfacePlacement';
 import { useGameContent } from '../GameContentContext';
-import { physicsUserData, usePhysicsAvailable } from '../physics';
+import { physicsUserData, usePhysicsAvailable } from '../physicsQueries';
 import {
     bakeImpostor, cellsOf, generateScatter, impostorMaterial, impostorQuad, readScatterSettings, scatterTier, updateImpostorLight,
     type Impostor, type ScatterCell, type ScatterGround, type ScatterSettings, type ScatterTier,

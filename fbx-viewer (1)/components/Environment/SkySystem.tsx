@@ -7,7 +7,7 @@ import type { Sky as SkyMesh } from 'three-stdlib';
 import { LevelObject, SkyConfig } from '../../types';
 import { LocalEnvironment } from '../Scene/LocalEnvironment';
 import { publishDaylight, publishSkyLight } from '../../runtime/daylight';
-import { usePhysicsAvailable, usePhysicsQueries, type PhysicsQueries } from '../../runtime/physics';
+import { usePhysicsAvailable, usePhysicsQueries, type PhysicsQueries } from '../../runtime/physicsQueries';
 import { Precipitation } from '../../runtime/precipitation';
 import { createSkyLighting, sanitizeWeather, windVelocity, worldClock } from '../../runtime/weather';
 import { COVER_SAMPLES_PER_FRAME, weatherCover, type CoverSampler } from '../../runtime/weatherCover';
