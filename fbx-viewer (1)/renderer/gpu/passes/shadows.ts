@@ -8,6 +8,7 @@ import { INSTANCE_FLAG, INSTANCE_WORDS } from "../shaders";
 import { STANDARD_SURFACE } from "../surfaces";
 import type { GpuDepthOptions } from "./surfaces";
 import type { VirtualShadowPass } from "./virtualShadows";
+import { reportGpu } from "../report";
 
 /**
  * SHADOW MAPS
@@ -761,7 +762,7 @@ export class ShadowPass implements GpuPass {
       this.virtual = new VirtualShadowPass(this.core);
       renderer.addPass(this.virtual);
     }).catch((error: unknown) => {
-      console.error("[gpu] page-based shadows failed to load", error);
+      reportGpu("[gpu] page-based shadows failed to load", error);
     });
   }
 

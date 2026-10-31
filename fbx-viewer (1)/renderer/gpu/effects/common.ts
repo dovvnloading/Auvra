@@ -4,6 +4,7 @@ import type * as THREE from "three";
 import { useThree } from "@react-three/fiber";
 import { TARGET_FORMATS, isGpuRenderer, type GpuFrame, type GpuPass, type GpuRendererApi } from "../frame";
 import { CAMERA_BINDINGS_WGSL, INSTANCE_WGSL, SCENE_BINDINGS_WGSL, VIEW_WGSL } from "../shaders";
+import { reportGpu } from "../report";
 
 /**
  * WHAT THE LEVEL EFFECTS SHARE
@@ -144,7 +145,7 @@ export class EffectPipelines {
     this.device.createRenderPipelineAsync({ label: `gpu effect ${key}`, ...describe() }).then((pipeline) => {
       this.renders.set(key, pipeline);
     }).catch((error: unknown) => {
-      console.error(`[gpu] effect pipeline ${key} failed`, error);
+      reportGpu(`[gpu] effect pipeline ${key} failed`, error);
     });
     return null;
   }
@@ -155,7 +156,7 @@ export class EffectPipelines {
     this.device.createComputePipelineAsync({ label: `gpu effect ${key}`, ...describe() }).then((pipeline) => {
       this.computes.set(key, pipeline);
     }).catch((error: unknown) => {
-      console.error(`[gpu] effect pipeline ${key} failed`, error);
+      reportGpu(`[gpu] effect pipeline ${key} failed`, error);
     });
     return null;
   }

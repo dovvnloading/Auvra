@@ -1,4 +1,5 @@
 /// <reference types="@webgpu/types" />
+import { reportGpu } from "./report";
 
 /**
  * THE GPU DEVICE
@@ -86,7 +87,7 @@ const requestCore = async (): Promise<GpuCoreResult> => {
     return info;
   });
   device.addEventListener("uncapturederror", (event) => {
-    console.error("[gpu]", (event as GPUUncapturedErrorEvent).error.message);
+    reportGpu("[gpu]", (event as GPUUncapturedErrorEvent).error.message);
   });
   return {
     reason: null,

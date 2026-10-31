@@ -8,6 +8,7 @@ import { textureLayoutEntries, type SurfaceKind } from "../surfaces";
 import { hookUniforms } from "./materialHooks";
 import { GRAPH_FLAG, compileGraphWgsl, type CompiledGraphWgsl } from "./materialWgsl";
 import { deviceOf, worldBindEntries, worldLayoutEntries } from "./world";
+import { reportGpu } from "../report";
 
 /**
  * MATERIALS SHADED BY A GRAPH
@@ -159,7 +160,7 @@ const checkEntry = (entry: GraphEntry): void => {
       return;
     }
     entry.state = "failed";
-    console.error(`[gpu] A material graph's shader does not compile, so it draws plain: ${errors[0].message}`);
+    reportGpu(`[gpu] A material graph's shader does not compile, so it draws plain: ${errors[0].message}`);
   });
 };
 
@@ -177,7 +178,7 @@ const entryFor = (graph: MaterialGraph): GraphEntry | null => {
       checkEntry(made);
     }
   } catch (error) {
-    console.error("[gpu] A material graph cannot be put in WGSL, so it draws plain:", error);
+    reportGpu("[gpu] A material graph cannot be put in WGSL, so it draws plain:", error);
     entry = null;
   }
   entriesByGraph.set(graph, entry);

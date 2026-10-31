@@ -20,7 +20,6 @@ import type { PosedMesh } from "../gpuScene";
  */
 
 const JOB_BYTES = 176;
-const JOB_WORDS = JOB_BYTES / 4;
 const WORKGROUP = 64;
 const BONE_BYTES = 64;
 const BONE_WORDS = BONE_BYTES / 4;

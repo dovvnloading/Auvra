@@ -38,7 +38,7 @@ export class FrameTimings {
   gpuTotalMs = 0;
   cpuTotalMs = 0;
 
-  constructor(private readonly device: GPUDevice, enabled: boolean) {
+  constructor(device: GPUDevice, enabled: boolean) {
     this.querySet = enabled ? device.createQuerySet({ label: "gpu stage timestamps", type: "timestamp", count: MAX_MARKS }) : null;
     this.resolve = enabled
       ? device.createBuffer({ label: "gpu stage timestamps", size: MAX_MARKS * 8, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC })

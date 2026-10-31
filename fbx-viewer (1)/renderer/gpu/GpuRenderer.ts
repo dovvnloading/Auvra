@@ -11,6 +11,7 @@ import { VIEW_BYTES } from "./shaders";
 import { registerEffectSurfaces } from "./effects/surfaceKinds";
 import { installSurfaces } from "./surfaces/index";
 import { TexturePool } from "./texturePool";
+import { reportGpu } from "./report";
 
 /**
  * THE RENDERER
@@ -532,7 +533,7 @@ export class GpuRenderer implements GpuRendererApi {
     for (const name of this.materials.unsupported) {
       if (this.reported.has(name)) continue;
       this.reported.add(name);
-      console.warn(`[gpu] no surface draws ${name} yet`);
+      reportGpu(`[gpu] no surface draws ${name} yet`);
     }
   }
 
@@ -545,7 +546,7 @@ export class GpuRenderer implements GpuRendererApi {
     } catch (error) {
       if (!this.failedPasses.has(pass.id)) {
         this.failedPasses.add(pass.id);
-        console.error(`[gpu] pass ${pass.id} failed`, error);
+        reportGpu(`[gpu] pass ${pass.id} failed`, error);
       }
     }
   }

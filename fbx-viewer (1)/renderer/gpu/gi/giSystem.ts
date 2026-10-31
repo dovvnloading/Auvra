@@ -39,6 +39,7 @@ import {
 } from "./giWgsl";
 import { GpuRayScene, type PosedVertexLookup } from "./rayTables";
 import { TextureMeans } from "./textureMeans";
+import { reportGpu } from "../report";
 
 /**
  * DYNAMIC GLOBAL ILLUMINATION
@@ -213,7 +214,7 @@ export class GpuGi {
       compute: { module: device.createShaderModule({ label: "gi trace", code: TRACE_WGSL }), entryPoint: "traceProbeRays" },
     }).then((pipeline) => {
       if (!this.disposed) this.tracePipeline = pipeline;
-    }, (error: unknown) => console.error("[gpu] the probes' trace would not compile", error));
+    }, (error: unknown) => reportGpu("[gpu] the probes' trace would not compile", error));
   }
 
   /** What the ray scene holds now and what is still to come in, for the inspector and for checks. */
@@ -456,7 +457,7 @@ class GiReflectionPass implements GpuPass {
       },
     }).then((pipeline) => {
       if (!this.disposed) this.tracePipeline = pipeline;
-    }, (error: unknown) => console.error("[gpu] the reflections' rays would not compile", error));
+    }, (error: unknown) => reportGpu("[gpu] the reflections' rays would not compile", error));
   }
 
   private imagesFor(width: number, height: number): NonNullable<GiReflectionPass["images"]> {
@@ -664,7 +665,7 @@ class GiViewPass implements GpuPass {
         compute: { module: this.device.createShaderModule({ label: "gi ray view", code: RAY_VIEW_WGSL }), entryPoint: "traceView" },
       }).then((pipeline) => {
         if (!this.disposed) this.rayPipeline = pipeline;
-      }, (error: unknown) => console.error("[gpu] the ray view would not compile", error));
+      }, (error: unknown) => reportGpu("[gpu] the ray view would not compile", error));
     }
     if (!this.rayPipeline) return;
     const { targets } = frame;

@@ -13,6 +13,7 @@ import { MAPPED_NORMAL_WGSL, type SurfaceKind } from "../surfaces";
 import { BAKED_VOLUME_WGSL } from "./bakedVolume";
 import { GLSL_SUPPORT_WGSL, GlslError, GlslTranslator, wgslType, type GlslContext, type GlslFunction } from "./glslToWgsl";
 import { INSTANCE_INVERSE_WGSL, STIPPLE_WGSL, worldWgsl } from "./world";
+import { reportGpu } from "../report";
 
 /**
  * MATERIAL GRAPHS IN WGSL
@@ -441,7 +442,7 @@ const translateGlobal = (source: string, functions: Record<string, GlslFunction>
   } catch (error) {
     const header = /^\s*(\w+)\s+(\w+)\s*\(([^)]*)\)/.exec(source);
     if (!header || !(error instanceof GlslError)) throw error;
-    console.warn(`[gpu] A Custom GLSL node's code cannot be used: ${error.message}`);
+    reportGpu(`[gpu] A Custom GLSL node's code cannot be used: ${error.message}`);
     functions[header[2]] = { returns: header[1], params: ["vec4", "vec4", "vec4", "vec4"] };
     return `fn ${header[2]}(a: vec4f, b: vec4f, c: vec4f, d: vec4f) -> ${wgslType(header[1])} { return ${wgslType(header[1])}(); }`;
   }

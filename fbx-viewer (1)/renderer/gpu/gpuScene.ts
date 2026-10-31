@@ -6,6 +6,7 @@ import type { DrawRange, GeometryEntry, GeometryPool } from "./geometryPool";
 import { LOD_GROUP_WORDS, LOD_LAYOUT_ENTRIES, LOD_LEVEL_WORDS } from "./lodSelect";
 import type { MaterialEntry, MaterialPool } from "./materialPool";
 import { INSTANCE_FLAG, INSTANCE_WORDS } from "./shaders";
+import { reportGpu } from "./report";
 
 /**
  * THE GPU SCENE
@@ -309,7 +310,7 @@ export class GpuScene {
       (scene.onBeforeRender as unknown as BeforeRender).call(scene, this.renderer, scene, this.camera, null, undefined, undefined);
     } catch (error) {
       this.brokenCallbacks.add(scene);
-      console.warn("[gpu] the scene's onBeforeRender failed and is no longer called", error);
+      reportGpu("[gpu] the scene's onBeforeRender failed and is no longer called", error);
     }
   }
 
@@ -401,7 +402,7 @@ export class GpuScene {
     } catch (error) {
       // Some are written for the WebGL renderer alone. One of those is no reason for a frame to fail, or for a warning each frame.
       this.brokenCallbacks.add(mesh);
-      console.warn(`[gpu] onBeforeRender of "${mesh.name || mesh.type}" failed and is no longer called`, error);
+      reportGpu(`[gpu] onBeforeRender of "${mesh.name || mesh.type}" failed and is no longer called`, error);
     }
   }
 

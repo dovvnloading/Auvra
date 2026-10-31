@@ -8,6 +8,7 @@ import type { MaterialEntry } from "../materialPool";
 import { CAMERA_BINDINGS_WGSL, INSTANCE_WGSL, VIEW_WGSL, shadowShader, surfaceBufferShader } from "../shaders";
 import type { SurfaceKind } from "../surfaces";
 import { DepthPyramid, DepthPyramidPipelines, type DepthPyramidProduct } from "./depthPyramid";
+import { reportGpu } from "../report";
 
 /**
  * THE SURFACE PASS
@@ -804,7 +805,7 @@ export class SurfacePass implements GpuPass, GpuViewDrawer {
       entry.pipeline = pipeline;
       this.pipelineRevision++;
     }).catch((error: unknown) => {
-      console.error(`[gpu] pipeline ${key} failed`, error);
+      reportGpu(`[gpu] pipeline ${key} failed`, error);
     });
     return entry;
   }

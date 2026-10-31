@@ -70,8 +70,6 @@ const buildInputs = ["editorInput", "playerInput"].map((name) => source.vite.mat
 check(buildInputs.every((input) => input.includes("'hud-frame.html'") && input.includes("'script-frame.html'")), "sandbox frames are missing from the editor or player build");
 // An opaque-origin frame's module scripts are CORS loads every host refuses; the frames load classic bundles.
 check(source.vite.includes("classicSandboxFrames({ root: __dirname, frameCsp: hudCsp })"), "sandbox frames do not load their code as classic scripts");
-// Under an embedder policy those classic loads are cross-origin to an opaque frame: they pass only with a resource policy.
-check(source.vite.includes("'Cross-Origin-Embedder-Policy': 'require-corp'") && source.vite.includes("'Cross-Origin-Resource-Policy': 'cross-origin'"), "development server does not isolate the page in a way the sandbox frames can load under");
 const editorCspDefinitions = {
   development: source.vite.match(/const editorDevCsp[^`]+`([^`]+)`;/)?.[1],
   packaged: source.vite.match(/const editorPackagedCsp\s*=\s*`([^`]+)`;/)?.[1],

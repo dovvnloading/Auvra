@@ -2,6 +2,7 @@
 import type { SkyFrame } from "../../../components/Environment/sky/SkyRenderer";
 import { CLOUD_EDGE, cloudThreshold, GROUND_RADIUS, TOP_RADIUS } from "../../../runtime/sky/atmosphere";
 import type { AtmosphereTables } from "./atmosphereTables";
+import { reportGpu } from "../report";
 
 /**
  * VOLUMETRIC CLOUDS
@@ -563,7 +564,7 @@ export class CloudMap {
     void this.device.createComputePipelineAsync({ label: "sky cloud trace", layout: "auto", compute: { module, entryPoint: "traceMain" } }).then((pipeline) => {
       if (!this.disposed) this.tracePipeline = pipeline;
     }, (error: unknown) => {
-      console.error("[gpu] the clouds' shader failed", error);
+      reportGpu("[gpu] the clouds' shader failed", error);
     });
   }
 

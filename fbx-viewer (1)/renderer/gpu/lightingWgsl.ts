@@ -4,6 +4,8 @@ import { GrowableBuffer } from "./buffers";
 import type { GpuCore } from "./device";
 import type { GpuFrame } from "./frame";
 import type { ShadowMapsProduct } from "./passes/shadows";
+import { reportGpu } from "./report";
+import type { SkyFogProduct } from "./sky/skySettings";
 
 /**
  * LIGHTING
@@ -40,7 +42,7 @@ export const SHADOW_TAPS = 16;
 const BITS_PER_WORD = 32;
 const MAX_WORDS_PER_CLUSTER = Math.ceil(MAX_LOCAL_LIGHTS / BITS_PER_WORD);
 const LOCAL_LIGHT_WORDS = 24;
-const UNIFORM_WORDS = 232;
+const UNIFORM_WORDS = 236;
 const CASCADES = 4;
 const POINT_LIGHT_CONE = -2;
 const NOISE_FRAMES = 64;
@@ -136,7 +138,10 @@ struct LightingUniforms {
   cascadeCount: u32,
   cascadeSun: i32,
   environmentMips: f32,
-  pad: f32,
+  // How grey heavy cloud has made the air, for fog that takes the sky's colour.
+  fogGrey: f32,
+  // What the sky's table is scaled by, and how far fog takes its colour over fogColor (0: not at all).
+  fogSky: vec4f,
 }
 `;
 
@@ -185,6 +190,8 @@ const LIGHTING_BINDINGS_WGSL = /* wgsl */ `
 @group(${LIGHTING_GROUP}) @binding(7) var lightingCascadeSampler: sampler_comparison;
 @group(${LIGHTING_GROUP}) @binding(8) var lightingAtlas: texture_depth_2d;
 @group(${LIGHTING_GROUP}) @binding(9) var lightingAtlasSampler: sampler_comparison;
+@group(${LIGHTING_GROUP}) @binding(10) var lightingSkyView: texture_2d<f32>;
+@group(${LIGHTING_GROUP}) @binding(11) var lightingSkyViewSampler: sampler;
 `;
 
 const LIGHTING_FUNCTIONS_WGSL = /* wgsl */ `
@@ -502,6 +509,16 @@ fn lightSurface(s: LightingInput) -> vec3f {
 }
 
 // scene.fog by the distance along the camera's axis, not from the eye, as three.js measures it.
+// The sky behind a point, for the fog in front of it: never below the horizon, where it would be the ground's colour.
+fn lightingSkyColour(toward: vec3f) -> vec3f {
+  let direction = normalize(vec3f(toward.x, max(toward.y, 0.035), toward.z));
+  let latitude = asin(direction.y);
+  let v = 0.5 + 0.5 * sqrt(latitude / 1.570796);
+  let u = clamp(atan2(direction.z, direction.x) / 6.283185 + 0.5, 0.002, 0.998);
+  let sky = textureSampleLevel(lightingSkyView, lightingSkyViewSampler, vec2f(u, v), 0.0).rgb * lighting.fogSky.rgb;
+  return mix(sky, vec3f(dot(sky, vec3f(0.2126, 0.7152, 0.0722))), lighting.fogGrey);
+}
+
 fn lightingApplyFog(color: vec3f, worldPosition: vec3f) -> vec3f {
   let mode = lighting.fogColor.w;
   if (mode < 0.5) { return color; }
@@ -514,7 +531,11 @@ fn lightingApplyFog(color: vec3f, worldPosition: vec3f) -> vec3f {
     let amount = lighting.fogParams.z * depth;
     factor = 1.0 - exp(-amount * amount);
   }
-  return mix(color, lighting.fogColor.rgb, factor);
+  var tint = lighting.fogColor.rgb;
+  if (lighting.fogSky.a > 0.0) {
+    tint = mix(tint, lightingSkyColour(worldPosition - view.eye.xyz), lighting.fogSky.a);
+  }
+  return mix(color, tint, factor);
 }
 `;
 
@@ -537,6 +558,8 @@ export const createLightingLayout = (device: GPUDevice): GPUBindGroupLayout => {
       { binding: 7, visibility, sampler: { type: "comparison" } },
       { binding: 8, visibility, texture: { sampleType: "depth", viewDimension: "2d" } },
       { binding: 9, visibility, sampler: { type: "comparison" } },
+      { binding: 10, visibility, texture: { sampleType: "float", viewDimension: "2d" } },
+      { binding: 11, visibility, sampler: { type: "filtering" } },
     ],
   });
 };
@@ -574,6 +597,7 @@ export class LightingResources {
   private readonly fallbackCascades: GPUTextureView;
   private readonly fallbackAtlas: GPUTextureView;
   private readonly fallbackComparison: GPUSampler;
+  private readonly fallbackSkyView: GPUTextureView;
   private readonly environmentSampler: GPUSampler;
   private bound: unknown[] = [];
   private bindGroup: GPUBindGroup;
@@ -595,14 +619,16 @@ export class LightingResources {
     const environment = device.createTexture({ label: "gpu no environment", size: [1, 1, 6], format: "rgba16float", usage: GPUTextureUsage.TEXTURE_BINDING });
     const cascades = device.createTexture({ label: "gpu no cascades", size: [1, 1, 1], format: "depth32float", usage: GPUTextureUsage.TEXTURE_BINDING });
     const atlas = device.createTexture({ label: "gpu no atlas", size: [1, 1, 1], format: "depth32float", usage: GPUTextureUsage.TEXTURE_BINDING });
-    this.fallbackTextures = [environment, cascades, atlas];
+    const skyView = device.createTexture({ label: "gpu no sky table", size: [1, 1], format: "rgba16float", usage: GPUTextureUsage.TEXTURE_BINDING });
+    this.fallbackSkyView = skyView.createView();
+    this.fallbackTextures = [environment, cascades, atlas, skyView];
     this.fallbackEnvironment = environment.createView({ dimension: "cube" });
     this.fallbackCascades = cascades.createView({ dimension: "2d-array" });
     this.fallbackAtlas = atlas.createView({ dimension: "2d" });
     this.fallbackComparison = device.createSampler({ label: "gpu no shadow", compare: "greater" });
     this.environmentSampler = device.createSampler({ label: "gpu environment", magFilter: "linear", minFilter: "linear", mipmapFilter: "linear" });
 
-    this.bindGroup = this.makeBindGroup(this.fallbackEnvironment, this.fallbackCascades, this.fallbackComparison, this.fallbackAtlas, this.fallbackComparison);
+    this.bindGroup = this.makeBindGroup(this.fallbackEnvironment, this.fallbackCascades, this.fallbackComparison, this.fallbackAtlas, this.fallbackComparison, this.fallbackSkyView, this.environmentSampler);
     this.product = { layout: this.layout, bindGroup: this.bindGroup, wgsl: LIGHTING_WGSL, resources: this };
   }
 
@@ -636,7 +662,7 @@ export class LightingResources {
     const suns = gpuScene.directional;
     if (suns.length > MAX_SUNS && !this.warnedSuns) {
       this.warnedSuns = true;
-      console.warn(`[gpu] ${suns.length} directional lights in the scene; the first ${MAX_SUNS} light it`);
+      reportGpu(`[gpu] ${suns.length} directional lights in the scene; the first ${MAX_SUNS} light it`);
     }
     const sunCount = Math.min(suns.length, MAX_SUNS);
     for (let index = 0; index < sunCount; index++) {
@@ -707,7 +733,7 @@ export class LightingResources {
     const lights = gpuScene.local;
     if (lights.length > MAX_LOCAL_LIGHTS && !this.warnedLocal) {
       this.warnedLocal = true;
-      console.warn(`[gpu] ${lights.length} point and spot lights in the scene; the first ${MAX_LOCAL_LIGHTS} light it`);
+      reportGpu(`[gpu] ${lights.length} point and spot lights in the scene; the first ${MAX_LOCAL_LIGHTS} light it`);
     }
     const count = Math.min(lights.length, MAX_LOCAL_LIGHTS);
     const shadowMaps = frame.products.get("shadowMaps") as ShadowMapsProduct | undefined;
@@ -800,6 +826,13 @@ export class LightingResources {
       }
     }
     floats[230] = environment ? environment.specularMips : 0;
+    const skyFog = frame.products.get("skyFog") as SkyFogProduct | undefined;
+    const takesSky = !!skyFog?.followsSky && skyFog.share > 0;
+    floats[231] = skyFog?.grey ?? 0;
+    floats[232] = skyFog?.scale[0] ?? 1;
+    floats[233] = skyFog?.scale[1] ?? 1;
+    floats[234] = skyFog?.scale[2] ?? 1;
+    floats[235] = takesSky ? skyFog.share : 0;
 
     const shadowMaps = frame.products.get("shadowMaps") as ShadowMapsProduct | undefined;
     const cascades = shadowMaps?.cascades ?? null;
@@ -828,19 +861,21 @@ export class LightingResources {
       cascades?.sampler ?? this.fallbackComparison,
       atlas?.view ?? this.fallbackAtlas,
       atlas?.sampler ?? this.fallbackComparison,
+      skyFog?.view ?? this.fallbackSkyView,
+      skyFog?.sampler ?? this.environmentSampler,
     );
     this.product.bindGroup = next;
   }
 
-  private makeOrReuseBindGroup(environment: GPUTextureView, cascades: GPUTextureView, cascadeSampler: GPUSampler, atlas: GPUTextureView, atlasSampler: GPUSampler): GPUBindGroup {
-    const wanted = [environment, cascades, cascadeSampler, atlas, atlasSampler, this.shadowEntries.buffer];
+  private makeOrReuseBindGroup(environment: GPUTextureView, cascades: GPUTextureView, cascadeSampler: GPUSampler, atlas: GPUTextureView, atlasSampler: GPUSampler, skyView: GPUTextureView, skySampler: GPUSampler): GPUBindGroup {
+    const wanted = [environment, cascades, cascadeSampler, atlas, atlasSampler, skyView, skySampler, this.shadowEntries.buffer];
     if (wanted.every((resource, index) => resource === this.bound[index])) return this.bindGroup;
-    this.bindGroup = this.makeBindGroup(environment, cascades, cascadeSampler, atlas, atlasSampler);
+    this.bindGroup = this.makeBindGroup(environment, cascades, cascadeSampler, atlas, atlasSampler, skyView, skySampler);
     return this.bindGroup;
   }
 
-  private makeBindGroup(environment: GPUTextureView, cascades: GPUTextureView, cascadeSampler: GPUSampler, atlas: GPUTextureView, atlasSampler: GPUSampler): GPUBindGroup {
-    this.bound = [environment, cascades, cascadeSampler, atlas, atlasSampler, this.shadowEntries.buffer];
+  private makeBindGroup(environment: GPUTextureView, cascades: GPUTextureView, cascadeSampler: GPUSampler, atlas: GPUTextureView, atlasSampler: GPUSampler, skyView: GPUTextureView, skySampler: GPUSampler): GPUBindGroup {
+    this.bound = [environment, cascades, cascadeSampler, atlas, atlasSampler, skyView, skySampler, this.shadowEntries.buffer];
     return this.device.createBindGroup({
       label: "gpu lighting",
       layout: this.layout,
@@ -855,6 +890,8 @@ export class LightingResources {
         { binding: 7, resource: cascadeSampler },
         { binding: 8, resource: atlas },
         { binding: 9, resource: atlasSampler },
+        { binding: 10, resource: skyView },
+        { binding: 11, resource: skySampler },
       ],
     });
   }
