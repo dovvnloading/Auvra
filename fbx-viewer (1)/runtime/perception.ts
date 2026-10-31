@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react';
 import * as THREE from 'three';
-import { PLAYER_PHYSICS_ID, type PhysicsQueries } from './physics';
+import { PLAYER_PHYSICS_ID, type PhysicsQueries } from './physicsQueries';
 
 /**
  * AI PERCEPTION

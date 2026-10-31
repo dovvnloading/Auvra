@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
-import { usePhysicsQueries } from './physics';
+import { usePhysicsQueries } from './physicsQueries';
 import { lineOfSight } from './perception';
 
 /**

@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import { SCRIPT_COMPONENT, SCRIPT_COMPONENT_TYPE, readScriptSource } from '../../runtime/components/scriptComponent';
 import { DEFAULT_INPUT_MAP, InputState } from '../../runtime/input';
-import type { PhysicsRaycastHit } from '../../runtime/physics';
+import type { PhysicsRaycastHit } from '../../runtime/physicsQueries';
 import { SCRIPT_LIMITS, type ScriptCommand, type ScriptHostMessage, type ScriptSnapshot } from '../../runtime/scripting/protocol';
 import {
   applyScriptCommand,

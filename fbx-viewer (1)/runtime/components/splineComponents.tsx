@@ -6,7 +6,7 @@ import { CuboidCollider, RigidBody, TrimeshCollider } from '@react-three/rapier'
 import type { LevelComponent } from '../../types';
 import { useGameContent } from '../GameContentContext';
 import { levelVariables } from '../levelVariables';
-import { physicsUserData, usePhysicsAvailable } from '../physics';
+import { physicsUserData, usePhysicsAvailable } from '../physicsQueries';
 import { isTimelinePlayValue } from '../timeline/evaluate';
 import {
     createWorldSplineFrame,

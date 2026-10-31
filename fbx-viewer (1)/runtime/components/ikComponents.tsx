@@ -12,8 +12,8 @@ import {
     offsetBoneWorld,
     solveTwoBoneIK
 } from '../ik';
-import { usePhysicsQueries } from '../physics';
-import type { PhysicsQueries } from '../physics';
+import { usePhysicsQueries } from '../physicsQueries';
+import type { PhysicsQueries } from '../physicsQueries';
 import { ANIMATION_FRAME_PRIORITY } from '../../components/AnimationGraph/hooks/useGraphAnimator';
 import { ComponentHostContext } from './builtins';
 import type { ComponentDefinition, ComponentRenderProps } from './types';

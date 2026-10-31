@@ -4,7 +4,7 @@ import type { LevelComponent, LevelObject } from '../../types';
 import { createComponent } from '../../runtime/components/registry';
 import { capsuleHalfHeight, colliderMass, createTriggerOverlapTracker, planPhysicsBody } from '../../runtime/components/physicsComponents';
 import type { TriggerOverlapTracker } from '../../runtime/components/physicsComponents';
-import { createPhysicsQueries, objectIdFromRigidBody, physicsUserData, PLAYER_PHYSICS_ID } from '../../runtime/physics';
+import { createPhysicsQueries, objectIdFromRigidBody, physicsUserData, PLAYER_PHYSICS_ID } from '../../runtime/physicsQueries';
 import { FLAT_GROUND_SHAPE, terrainHeightfieldShape } from '../../runtime/terrainPhysics';
 import type { TriggerEvent } from '../../runtime/triggers';
 import type { CharacterRig } from '../../components/Sandbox/hooks/usePlayerPhysics';

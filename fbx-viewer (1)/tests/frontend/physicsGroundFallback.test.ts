@@ -8,7 +8,7 @@ import {
   terrainHeightfieldShape,
   terrainSurfaceHeight,
 } from '../../runtime/terrainPhysics';
-import { physicsUserData } from '../../runtime/physics';
+import { physicsUserData } from '../../runtime/physicsQueries';
 import { createCharacterRig, resolveLocomotionSpeeds, stepCharacterPhysics } from '../../components/Sandbox/hooks/usePlayerPhysics';
 import { loadRuntimeRapier } from './rapierRuntime';
 import type { RuntimeRapier } from './rapierRuntime';

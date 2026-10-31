@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import { LoadedModelData, Blueprint, AttachmentData, SocketData, Hittable, Hitbox, DEFAULT_UPPER_BODY_BONE } from '../../types';
 import { GraphRuntime, GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
-import { PLAYER_PHYSICS_ID } from '../../runtime/physics';
+import { PLAYER_PHYSICS_ID } from '../../runtime/physicsQueries';
 import { CharacterIK, heldWeaponGrip } from './CharacterIK';
 import { CharacterRagdoll } from './CharacterRagdoll';
 import { AttachmentController } from '../Scene/AttachmentController';

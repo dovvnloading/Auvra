@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { PLAYER_PHYSICS_ID, type PhysicsRaycastHit } from '../../runtime/physics';
+import { PLAYER_PHYSICS_ID, type PhysicsRaycastHit } from '../../runtime/physicsQueries';
 import { NoiseBus, characterHeight, lineOfSight } from '../../runtime/perception';
 import { OPEN_PERCEPTION, seesTarget } from '../../components/Sandbox/AI/AISenses';
 import { evaluateNextState, type DecisionContext } from '../../components/Sandbox/AI/AIStateMachine';

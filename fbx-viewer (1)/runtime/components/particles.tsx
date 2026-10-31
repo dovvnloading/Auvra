@@ -18,7 +18,7 @@ import { particleEmitters } from '../particleEmitters';
 import { ParticleRenderer } from '../particleRenderer';
 import { ParticleSimulation, type MeshSurface, type ParticleRaycast } from '../particleSimulation';
 import { builtinSpriteTexture, SPRITE_GRIDS } from '../particleSprites';
-import { usePhysicsAvailable, usePhysicsQueries } from '../physics';
+import { usePhysicsAvailable, usePhysicsQueries } from '../physicsQueries';
 import { collectHostGeometry, PHYSICS_IGNORED_USER_DATA } from './physicsComponents';
 import type { ComponentDefinition, ComponentRenderProps } from './types';
 
