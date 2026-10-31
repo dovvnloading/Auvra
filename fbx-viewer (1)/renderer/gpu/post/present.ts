@@ -33,7 +33,8 @@ struct Present {
   vignette: f32,
   grain: f32,
   time: f32,
-  padding: f32,
+  // 1: the vignette darkens the light before tone mapping, as the default stack has it. 0: the display values after it.
+  vignetteFirst: f32,
   fringe: vec2f,
 }
 
@@ -196,7 +197,9 @@ fn vignetted(input: vec3f, uv: vec2f) -> vec3f {
 
 // The tone-mapped, graded picture at a place, in linear display values.
 fn pictureAt(uv: vec2f) -> vec3f {
-  var c = toneMap(max(textureSampleLevel(source, linearClamp, uv, 0.0).rgb, vec3f(0.0)));
+  var scene = max(textureSampleLevel(source, linearClamp, uv, 0.0).rgb, vec3f(0.0));
+  if (p.vignette > 0.5 && p.vignetteFirst > 0.5) { scene = vignetted(scene, uv); }
+  var c = toneMap(scene);
   if (p.saturation != 0.0) { c = saturated(c); }
   // Brightness, contrast and looks work on encoded values.
   let graded = p.brightness != 0.0 || p.contrast != 0.0;
@@ -216,7 +219,7 @@ fn pictureAt(uv: vec2f) -> vec3f {
     }
     c = decodeSrgb(c);
   }
-  if (p.vignette > 0.5) { c = vignetted(c, uv); }
+  if (p.vignette > 0.5 && p.vignetteFirst < 0.5) { c = vignetted(c, uv); }
   return c;
 }
 
@@ -326,6 +329,7 @@ export class PresentPass implements GpuPass {
     data[8] = display?.vignette ? 1 : 0;
     data[9] = (display?.filmGrain ?? 0) * GRAIN_OPACITY;
     data[10] = frame.time;
+    data[11] = display?.vignetteFirst ? 1 : 0;
     // Red and blue pull apart along a slant, its height in proportion to the view's shape; y runs down the texture.
     const shift = (display?.chromaticAberration ?? 0) * CHROMATIC_ABERRATION_SHIFT;
     data[12] = shift;

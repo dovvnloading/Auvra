@@ -22,13 +22,15 @@ export interface GpuPostTuning {
   bloomSmoothing: number;
   bloomRadius: number;
   vignetteOffset: number;
+  /** The vignette darkens the light before tone mapping rather than the display values after it. */
+  vignetteFirst?: boolean;
 }
 
 /** A level's Post Process component. */
 export const GPU_POST_TUNING: GpuPostTuning = { bloomSmoothing: 0.2, bloomRadius: 0.7, vignetteOffset: 0.35 };
 
 /** The runtime's default stack, standing in when no level component owns the canvas. */
-export const GPU_DEFAULT_TUNING: GpuPostTuning = { bloomSmoothing: 0.025, bloomRadius: 0.85, vignetteOffset: 0.1 };
+export const GPU_DEFAULT_TUNING: GpuPostTuning = { bloomSmoothing: 0.025, bloomRadius: 0.85, vignetteOffset: 0.1, vignetteFirst: true };
 
 /** The runtime's default stack: bounced light, reflections, haze, shafts, auto exposure, bloom, vignette and ACES. */
 export const GPU_DEFAULT_SETTINGS: PostProcessSettings = {
@@ -88,6 +90,7 @@ export interface GpuDisplaySettings {
   vignette: boolean;
   vignetteOffset: number;
   vignetteDarkness: number;
+  vignetteFirst: boolean;
   chromaticAberration: number;
   filmGrain: number;
 }
@@ -101,6 +104,7 @@ export const displaySettingsOf = (config: GpuPostConfig): GpuDisplaySettings => 
   vignette: config.vignette,
   vignetteOffset: config.vignetteOffset,
   vignetteDarkness: config.vignetteDarkness,
+  vignetteFirst: !!config.vignetteFirst,
   chromaticAberration: config.chromaticAberration,
   filmGrain: config.filmGrain,
 });
