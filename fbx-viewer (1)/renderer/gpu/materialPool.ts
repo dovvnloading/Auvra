@@ -169,7 +169,8 @@ export class MaterialPool {
     if (!entry) {
       const kind = kindOf(material);
       if (!kind) {
-        this.unsupported.add(material.name ? `${material.type}: ${material.name}` : material.type);
+        // Wide lines have a pass of their own (effects/fatLines.ts), which finds them in the scene.
+        if (material.type !== "LineMaterial") this.unsupported.add(material.name ? `${material.type}: ${material.name}` : material.type);
         return null;
       }
       entry = this.create(material, kind);

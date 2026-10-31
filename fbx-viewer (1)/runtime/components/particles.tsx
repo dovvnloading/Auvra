@@ -13,6 +13,9 @@ import {
     type ParticleEffect,
     type ParticleShapeKind,
 } from '../particleEffect';
+import { isGpuRenderer } from '../../renderer/gpu/frame';
+import type { ComputeEmitter, ComputeSubEmitter } from '../../renderer/gpu/particles/computeEmitter';
+import { particleWorldOf } from '../../renderer/gpu/particles/particleWorld';
 import { GpuParticleSystem } from '../gpuParticles';
 import { particleEmitters } from '../particleEmitters';
 import { ParticleRenderer } from '../particleRenderer';
@@ -133,6 +136,9 @@ type EmitterProps = ComponentRenderProps & { effect: ParticleEffect };
 
 const ParticlesRender: React.FC<ComponentRenderProps> = (props) => {
     const effect = useMemo(() => resolveParticleEffect(props.component.props), [props.component.props]);
+    const onGpuRenderer = useThree(state => isGpuRenderer(state.gl));
+    // The WebGPU renderer has one path for every effect: compute shaders, whichever simulation the effect names.
+    if (onGpuRenderer) return <ComputeParticles {...props} effect={effect} />;
     return effect.simulation === 'gpu' ? <GpuParticles {...props} effect={effect} /> : <CpuParticles {...props} effect={effect} />;
 };
 
@@ -331,6 +337,121 @@ const GpuParticles: React.FC<EmitterProps> = ({ object, component, mode, effect 
     return (
         <group ref={anchor} userData={PHYSICS_IGNORED_USER_DATA}>
             <primitive object={system.object} />
+            {light && <primitive object={light} />}
+        </group>
+    );
+};
+
+/** The compute emitters running, so that a sub-emitter can find the emitter it sets off. */
+const computeEmitters = new Map<string, ComputeEmitter>();
+const computeEmitterKey = (scope: string, objectId: string, componentId: string) => `${scope}/${objectId}/${componentId}`;
+/** Frames between looks for sub-emitter targets that were not there yet. */
+const SUB_EMITTER_RETRY_FRAMES = 30;
+
+const ComputeParticles: React.FC<EmitterProps> = ({ object, component, mode, effect }) => {
+    const editor = mode === 'editor';
+    const playOnStart = component.props.playOnStart !== false;
+    const capacity = Math.min(editor ? EDITOR_GPU_PARTICLE_LIMIT : GPU_PARTICLE_LIMIT, effect.maxParticles);
+    const gl = useThree(state => state.gl);
+    const { textures } = useGameContent();
+    const queries = usePhysicsQueries();
+    const physics = usePhysicsAvailable();
+    const anchor = useRef<THREE.Group>(null);
+
+    const system = useMemo(() => {
+        if (!isGpuRenderer(gl)) throw new Error('Compute particles need the WebGPU renderer');
+        return particleWorldOf(gl).createEmitter(capacity);
+    }, [gl, capacity]);
+    useEffect(() => () => system.dispose(), [system]);
+    const sprite = useMemo(() => spriteFor(effect, textures), [effect, textures]);
+    useLayoutEffect(() => {
+        system.setEffect(effect);
+        system.setLook(effect, sprite.texture, sprite.grid);
+    }, [system, effect, sprite]);
+    const { light, glow } = useParticleLight(effect);
+
+    const takeSurface = useCallback((surface: MeshSurface | null) => system.setMeshSurface(surface), [system]);
+    useMeshSurface(anchor, effect.shape.kind, object.id, takeSurface);
+
+    const started = useRef(false);
+    useLayoutEffect(() => {
+        started.current = false;
+        if (editor || playOnStart) system.play();
+        else system.stop();
+    }, [system, editor, playOnStart]);
+
+    const scope = editor ? 'editor' : 'runtime';
+    useEffect(() => {
+        const key = computeEmitterKey(scope, object.id, component.id);
+        computeEmitters.set(key, system);
+        const remove = particleEmitters.register(scope, {
+            objectId: object.id,
+            componentId: component.id,
+            play: () => system.play(),
+            stop: clear => system.stop(clear),
+            emit: count => {
+                const host = anchor.current?.parent;
+                if (!host) return;
+                host.updateWorldMatrix(true, false);
+                const at = new THREE.Vector3().setFromMatrixPosition(host.matrixWorld);
+                system.emitAt(Math.max(0, Math.round(count)), at.x, at.y, at.z);
+            },
+            emitAt: (count, x, y, z, vx = 0, vy = 0, vz = 0) => system.emitAt(Math.max(0, Math.round(count)), x, y, z, vx, vy, vz),
+            isPlaying: () => system.isEmitting,
+            alive: () => system.count,
+        });
+        return () => {
+            if (computeEmitters.get(key) === system) computeEmitters.delete(key);
+            remove();
+        };
+    }, [scope, object.id, component.id, system]);
+
+    const ground = useRef<number | null>(null);
+    const sinceGround = useRef(Infinity);
+    const idle = useRef(0);
+    // Other emitters on the object may mount after this one, so their links are looked for until all are found.
+    const wiredFor = useRef<ParticleEffect | null>(null);
+    const sinceWiring = useRef(SUB_EMITTER_RETRY_FRAMES);
+
+    useFrame((_, delta) => {
+        const host = anchor.current?.parent;
+        if (!host) return;
+        host.updateWorldMatrix(true, false);
+        if (wiredFor.current !== effect && ++sinceWiring.current >= SUB_EMITTER_RETRY_FRAMES) {
+            sinceWiring.current = 0;
+            const links: ComputeSubEmitter[] = [];
+            for (const sub of effect.subEmitters) {
+                const target = computeEmitters.get(computeEmitterKey(scope, object.id, sub.target));
+                if (target) links.push({ trigger: sub.trigger, target, count: sub.count, inheritVelocity: sub.inheritVelocity });
+            }
+            system.setSubEmitters(links);
+            if (links.length === effect.subEmitters.length) wiredFor.current = effect;
+        }
+        if (!started.current) {
+            started.current = true;
+            if (effect.loop && effect.prewarm && system.isEmitting) system.prewarm();
+        }
+        sinceGround.current += delta;
+        if (effect.collision.mode === 'world' && sinceGround.current >= GROUND_CHECK_INTERVAL) {
+            sinceGround.current = 0;
+            _from.setFromMatrixPosition(host.matrixWorld);
+            const hit = physics ? queries.raycast(_from, _down, 500, { excludeObjectId: object.id }) : null;
+            ground.current = hit ? hit.point.y : null;
+        }
+        system.step(delta, host.matrixWorld, ground.current);
+
+        if (editor && system.isDone) {
+            idle.current += delta;
+            if (idle.current > PREVIEW_REPLAY_DELAY) {
+                idle.current = 0;
+                system.play();
+            }
+        } else idle.current = 0;
+        glow(delta, system.count);
+    });
+
+    return (
+        <group ref={anchor} userData={PHYSICS_IGNORED_USER_DATA}>
             {light && <primitive object={light} />}
         </group>
     );

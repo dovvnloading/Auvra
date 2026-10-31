@@ -11,6 +11,7 @@ const MAX_REPORTS = 200;
 
 /** The latest reports, newest last. */
 export const gpuReports: string[] = [];
+(globalThis as { auvraGpuReports?: string[] }).auvraGpuReports = gpuReports;
 
 const describe = (part: unknown): string => {
   if (part instanceof Error) return part.message;
@@ -18,7 +19,10 @@ const describe = (part: unknown): string => {
 };
 
 export const reportGpu = (...parts: unknown[]): void => {
-  gpuReports.push(parts.map(describe).join(" "));
+  const report = parts.map(describe).join(" ");
+  // One broken pipeline says the same thing every frame: the first of a kind is the one worth keeping.
+  if (gpuReports.includes(report)) return;
+  gpuReports.push(report);
   if (gpuReports.length > MAX_REPORTS) gpuReports.shift();
   frontendDiagnostics.warning("gpu_renderer_report");
 };

@@ -11,7 +11,7 @@ import { publishDaylight, publishSkyLight } from "../../../runtime/daylight";
 import { ShadowDetailContext, useLookDistance } from "../../../runtime/lighting/DistanceShadowLights";
 import { DEFAULT_SHADOW_DISTANCE, nearShadowReach } from "../../../runtime/lighting/distanceShadows";
 import { usePhysicsAvailable, usePhysicsQueries, type PhysicsQueries } from "../../../runtime/physics";
-import { Precipitation } from "../../../runtime/precipitation";
+import { GpuPrecipitation } from "../effects/precipitation";
 import {
   atmosphereCoefficients, cloudThreshold, eyeAdaptation, horizonColour, linearFromHex, MOON_ANGULAR_RADIUS, overcastSky, SKY_EXPOSURE, skyAmbient, sunlightAt, SUN_ANGULAR_RADIUS,
 } from "../../../runtime/sky/atmosphere";
@@ -334,7 +334,7 @@ const GpuSky: React.FC<GpuSkySystemProps & { renderer: GpuRendererApi }> = ({ re
   const clouds = useMemo(() => new CloudLayer(), []);
   const night = useMemo(() => new NightSky(), []);
   const bolt = useMemo(() => new LightningBolt(), []);
-  const precipitation = useMemo(() => new Precipitation(), []);
+  const precipitation = useMemo(() => new GpuPrecipitation(renderer, scene), [renderer, scene]);
   const nightOut = useMemo<GpuNightSky>(() => ({ starPositions: new Float32Array(0), starSizes: new Float32Array(0), starBrightness: new Float32Array(0), starOpacity: 0, starTime: 0, moonDirection: new THREE.Vector3(0, -1, 0), moonOpacity: 0 }), []);
   const flatOut = useMemo<GpuFlatClouds>(() => ({ coverage: 0, storm: 0, light: 1, flash: 0, offset: new THREE.Vector2(), sunDirection: new THREE.Vector3(0, 1, 0), sunColor: new THREE.Color(), horizon: new THREE.Color(), shade: new THREE.Color() }), []);
   const boltOut = useMemo<GpuBolt>(() => ({ positions: new Float32Array(0), edges: new Float32Array(0), indices: [], version: -1, brightness: 0 }), []);

@@ -257,7 +257,7 @@ struct WaterOut {
     // In place of what lightSurface took from the environment in this direction.
     var environment = vec3f(0.0);
     if (lighting.environmentMips > 0.0) {
-      environment = textureSampleLevel(lightingEnvironment, lightingEnvironmentSampler, aimed, roughness * (lighting.environmentMips - 1.0)).rgb * lighting.environmentIntensity;
+      environment = textureSampleLevel(lightingEnvironment, lightingEnvironmentSampler, aimed, roughness * (lighting.environmentMips - 1.0)).rgb;
     }
     mirrored = (traced.rgb - environment) * reflectance * traced.a;
   }

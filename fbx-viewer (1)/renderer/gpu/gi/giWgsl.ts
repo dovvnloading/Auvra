@@ -686,8 +686,8 @@ fn composeReflections(in: FullscreenOut) -> @location(0) vec4f {
   if (lighting.environmentMips > 0.0) {
     let reflected = normalize(mix(reflect(-toEye, n), n, roughness * roughness));
     let level = roughness * (lighting.environmentMips - 1.0);
-    environment = textureSampleLevel(lightingEnvironment, lightingEnvironmentSampler, reflected, level).rgb * lighting.environmentIntensity;
-    openness = dot(lightingIrradianceSH(n) * lighting.environmentIntensity, vec3f(0.2126, 0.7152, 0.0722));
+    environment = textureSampleLevel(lightingEnvironment, lightingEnvironmentSampler, reflected, level).rgb;
+    openness = dot(lightingIrradianceSH(n), vec3f(0.2126, 0.7152, 0.0722));
   }
   var wanted = environment;
   // A surface with baked light took none of the gathered light, and goes by its own.

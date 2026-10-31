@@ -8,6 +8,7 @@ import { GeometryPool } from "./geometryPool";
 import { GpuScene } from "./gpuScene";
 import { MaterialPool } from "./materialPool";
 import { VIEW_BYTES } from "./shaders";
+import { WideLineEffect } from "./effects/fatLines";
 import { registerEffectSurfaces } from "./effects/surfaceKinds";
 import { installSurfaces } from "./surfaces/index";
 import { TexturePool } from "./texturePool";
@@ -147,6 +148,7 @@ export class GpuRenderer implements GpuRendererApi {
     for (const pass of this.builtin.passes) this.addPass(pass);
     installSurfaces(this);
     registerEffectSurfaces();
+    for (const pass of new WideLineEffect().passes) this.addPass(pass);
   }
 
   addPass(pass: GpuPass): void {

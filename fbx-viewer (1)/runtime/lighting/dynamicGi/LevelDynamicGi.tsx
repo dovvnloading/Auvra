@@ -2,6 +2,7 @@ import React, { useContext, useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import type { LevelObject } from '../../../types';
+import { isGpuRenderer } from '../../../renderer/gpu/frame';
 import { canDrawFloat } from '../../keptDepth';
 import type { RayFilter } from '../../raytracing/rayScene';
 import { ShadowDetailContext } from '../DistanceShadowLights';
@@ -9,6 +10,8 @@ import { DYNAMIC_GI_UNIFORMS, setSceneGi, setSceneReflectionTracer } from './giM
 import { PROBE_VIEW_FRAGMENT, PROBE_VIEW_VERTEX } from './giShaders';
 import { DynamicGi } from './giSystem';
 import { PROBES_PER_CASCADE, resolveDynamicGiSettings, type DynamicGiSettings } from './probeGrid';
+
+const GpuDynamicGi = React.lazy(() => import('../../../renderer/gpu/gi/GpuDynamicGi').then(module => ({ default: module.GpuDynamicGi })));
 
 export const DYNAMIC_GI_COMPONENT_TYPE = 'dynamicGi';
 
@@ -196,6 +199,9 @@ const DynamicGiRunner: React.FC<{ settings: DynamicGiSettings; levelObjects: rea
 export const LevelDynamicGi: React.FC<{ levelObjects: readonly LevelObject[] }> = ({ levelObjects }) => {
     const gl = useThree(state => state.gl);
     const settings = useMemo(() => dynamicGiSettingsOf(levelObjects), [levelObjects]);
-    if (!settings || !canDrawFloat(gl)) return null;
+    const include = useMemo(() => tracedMeshFilter(levelObjects), [levelObjects]);
+    if (!settings) return null;
+    if (isGpuRenderer(gl)) return <React.Suspense fallback={null}><GpuDynamicGi settings={settings} include={include} /></React.Suspense>;
+    if (!canDrawFloat(gl)) return null;
     return <DynamicGiRunner settings={settings} levelObjects={levelObjects} />;
 };
