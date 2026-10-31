@@ -735,7 +735,7 @@ export class SurfacePass implements GpuPass, GpuViewDrawer {
     for (const group of frame.gpuScene.groupList) {
       const entry = choose(group);
       // Not compiled yet, or the material has not been bound yet: it joins when the bundle is next recorded.
-      if (!entry?.pipeline || (entry.bindsMaterial && !group.material.bindGroup)) continue;
+      if (!entry?.pipeline || (entry.bindsMaterial && (!group.material.bindGroup || group.material.gone))) continue;
       draws.push({ group, entry });
     }
     // Holes last: they are drawn the most slowly, and whatever is already in front of them saves them the work.

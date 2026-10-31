@@ -350,6 +350,8 @@ export const useEffectEntry = <E, T extends GpuEntryEffect<E>>(id: string, make:
     effect.entries.add(entry);
     return () => {
       effect.entries.delete(entry);
+      // Gone from the set, the effect will not free what the entry holds, whenever it ends.
+      (entry as { destroy?: () => void }).destroy?.();
       release();
     };
     // `make` is a constant of the effect's file.

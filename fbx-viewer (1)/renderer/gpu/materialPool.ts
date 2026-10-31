@@ -43,6 +43,10 @@ export interface MaterialEntry {
   textureRevisions: number[];
   bufferGeneration: number;
   packedFrame: number;
+  /** Which `rebindAll` its bind group dates from. */
+  bindEpoch: number;
+  /** What its bind group holds has been destroyed. Nothing may draw it until it has been looked up again. */
+  gone: boolean;
 }
 
 /** The uniform slice of one material, far enough apart for any device's offset alignment. */
@@ -50,6 +54,10 @@ const SLICE_BYTES = 768;
 const SLICE_WORDS = SLICE_BYTES / 4;
 const PACK_WORDS = 96;
 const INITIAL_SLICES = 512;
+/** Frames a material may go undrawn before its slice is given back. Every editor view on screen is a frame of its own. */
+const UNUSED_FOR = 7200;
+/** Frames between looks for materials gone unused. */
+const LOOK_EVERY = 256;
 
 const blendFactor = (factor: number, fallback: GPUBlendFactor): GPUBlendFactor => {
   switch (factor) {
@@ -155,6 +163,10 @@ export class MaterialPool {
    * entry's revision must differ from the old one's for anything recorded over the old bind group to be recorded again.
    */
   private nextRevision = 1;
+  private bindEpoch = 0;
+  /** A material dropped without being disposed would otherwise hold its slice for good: nothing else tells this pool. */
+  private readonly live = new Set<MaterialEntry>();
+  private nextLook = 0;
 
   constructor(private readonly device: GPUDevice, private readonly textures: TexturePool) {
     this.buffer = new GrowableBuffer(device, "gpu materials", GPUBufferUsage.UNIFORM, INITIAL_SLICES * SLICE_BYTES);
@@ -171,6 +183,7 @@ export class MaterialPool {
 
   /** The material as drawn, or null if nothing can draw it yet (it is named in `unsupported`). */
   acquire(material: THREE.Material, frame: number): MaterialEntry | null {
+    if (frame >= this.nextLook) this.letGoOfUnused(frame);
     let entry = this.entries.get(material) ?? null;
     if (!entry) {
       const kind = kindOf(material);
@@ -181,6 +194,7 @@ export class MaterialPool {
       }
       entry = this.create(material, kind);
       this.entries.set(material, entry);
+      this.live.add(entry);
       material.addEventListener("dispose", this.onDispose);
     }
     if (entry.packedFrame !== frame) {
@@ -199,6 +213,13 @@ export class MaterialPool {
     this.release(event.target as THREE.Material);
   };
 
+  private letGoOfUnused(frame: number): void {
+    this.nextLook = frame + LOOK_EVERY;
+    for (const entry of this.live) {
+      if (frame - entry.packedFrame > UNUSED_FOR) this.release(entry.material);
+    }
+  }
+
   private create(material: THREE.Material, kind: SurfaceKind): MaterialEntry {
     const slot = this.slices.allocate(1);
     this.buffer.ensure((slot + 1) * SLICE_BYTES);
@@ -214,6 +235,8 @@ export class MaterialPool {
       textureRevisions: [],
       bufferGeneration: -1,
       packedFrame: -1,
+      bindEpoch: this.bindEpoch,
+      gone: false,
       bindGroup: null as unknown as GPUBindGroup,
     };
     return entry;
@@ -231,7 +254,7 @@ export class MaterialPool {
     }
 
     const maps = kind.textures(material).map((texture) => this.textures.acquire(texture));
-    let rebind = !entry.bindGroup || entry.bufferGeneration !== this.buffer.generation;
+    let rebind = !entry.bindGroup || entry.gone || entry.bindEpoch !== this.bindEpoch || entry.bufferGeneration !== this.buffer.generation;
     for (let index = 0; index < maps.length; index++) {
       if (entry.textures[index] !== maps[index] || entry.textureRevisions[index] !== (maps[index]?.revision ?? 0)) rebind = true;
     }
@@ -239,6 +262,8 @@ export class MaterialPool {
       entry.textures = maps;
       entry.textureRevisions = maps.map((map) => map?.revision ?? 0);
       entry.bufferGeneration = this.buffer.generation;
+      entry.bindEpoch = this.bindEpoch;
+      entry.gone = false;
       entry.bindGroup = this.device.createBindGroup({
         label: `gpu material ${material.name || material.type}`,
         layout: this.layoutFor(kind),
@@ -279,7 +304,37 @@ export class MaterialPool {
     const entry = this.entries.get(material);
     if (!entry) return;
     this.entries.delete(material);
+    this.live.delete(entry);
     this.lastPacks.delete(entry.slot);
     this.slices.release(entry.slot, 1);
+    this.seal(entry);
+  }
+
+  /** How many pictures have been destroyed so far. */
+  get pictureDeaths(): number {
+    return this.textures.deaths;
+  }
+
+  /** Looks at what an entry not drawn this frame holds, and seals it if a picture of it has been destroyed. */
+  checkPictures(entry: MaterialEntry): void {
+    if (entry.gone) return;
+    for (let index = 0; index < entry.textures.length; index++) {
+      const image = entry.textures[index]?.image;
+      if (image && image.users <= 0) {
+        this.seal(entry);
+        return;
+      }
+    }
+  }
+
+  /** Takes an entry out of drawing until it is next looked up. The new revision has what was recorded over it recorded again. */
+  seal(entry: MaterialEntry): void {
+    entry.gone = true;
+    entry.revision = this.nextRevision++;
+  }
+
+  /** Has every material make its bind group again as it is next used: for when something recorded has turned out wrong. */
+  rebindAll(): void {
+    this.bindEpoch++;
   }
 }

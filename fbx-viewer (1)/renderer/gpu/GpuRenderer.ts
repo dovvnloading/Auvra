@@ -313,6 +313,7 @@ export class GpuRenderer implements GpuRendererApi {
     this.disposed = true;
     for (const list of this.passes.values()) for (const pass of list) pass.dispose?.();
     this.passes.clear();
+    this.builtin.present.dispose?.();
     this.destroyTargets();
     for (const { gpu } of this.gpuScenes.values()) gpu.destroy();
     this.gpuScenes.clear();
@@ -677,10 +678,21 @@ export class GpuRenderer implements GpuRendererApi {
       return;
     }
     this.failedFrames++;
+    this.repair();
     if (this.gaveUp || this.failedFrames < FAILED_FRAMES_TO_GIVE_UP) return;
     this.gaveUp = true;
     reportGpu("[gpu] giving up on this renderer: every frame is failing");
     this.onGiveUp?.("Frames kept failing on the WebGPU renderer; using the WebGL2 renderer");
+  }
+
+  /**
+   * What a failed frame most likely tripped over is something recorded earlier and since gone. So all of that is made
+   * again, and what is not being drawn stays out of it until it is.
+   */
+  private repair(): void {
+    this.materials.rebindAll();
+    this.sceneBindGroup = null;
+    for (const { gpu, lastDrawn } of this.gpuScenes.values()) gpu.sealHidden(lastDrawn);
   }
 
   /** Gives back the tables of a scene no longer drawn. Anything that draws it again makes them anew. */

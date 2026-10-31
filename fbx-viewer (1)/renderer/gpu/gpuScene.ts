@@ -90,6 +90,8 @@ export interface DrawGroup {
   firstVisible: number;
   /** Its detail levels, full first. Every slot has `capacity` places in the visible list and draws from `baseVertex`. */
   slots: DrawSlot[];
+  /** The geometries its coarser levels draw from, which nothing else looks at from frame to frame. */
+  levelEntries: GeometryEntry[];
   /** Drawn by the forward pass from its list, not in the surface buffer: see GpuScene.forward. */
   forward: boolean;
   /** The posed mesh it draws, when it is one's. */
@@ -244,6 +246,7 @@ export class GpuScene {
   private scene: THREE.Scene | null = null;
   private readonly brokenCallbacks = new WeakSet<THREE.Object3D>();
   private readonly refused = new WeakMap<THREE.Object3D, number>();
+  private knownDeaths = 0;
 
   constructor(
     private readonly device: GPUDevice,
@@ -302,11 +305,33 @@ export class GpuScene {
     this.beforeRenderScene(scene);
     this.walk(scene, frame);
     if (this.seen !== this.recordList.length) this.sweep(frame);
+    this.sealGoneMaterials(frame);
     this.giveLevels();
     if (this.layoutDirty) this.layout();
     this.instances.ensure(this.allocator.end);
     if (this.instanceBuffer.ensure(this.instances.data.byteLength)) this.instances.markAllDirty(this.allocator.end);
     this.instances.upload(this.instanceBuffer);
+  }
+
+  /**
+   * A group stays in what was recorded while its objects are hidden, and a hidden object's material is not looked at. If
+   * a picture of it was destroyed in that time, its bind group would throw away every frame it was still recorded in.
+   */
+  private sealGoneMaterials(frame: number): void {
+    const deaths = this.materials.pictureDeaths;
+    if (deaths === this.knownDeaths) return;
+    this.knownDeaths = deaths;
+    for (const group of this.groups.values()) {
+      if (group.seenFrame !== frame) this.materials.checkPictures(group.material);
+    }
+  }
+
+  /** Takes every group not drawn in `frame` out of what is recorded until it is drawn again, and has the rest recorded anew. */
+  sealHidden(frame: number): void {
+    for (const group of this.groups.values()) {
+      if (group.seenFrame !== frame) this.materials.seal(group.material);
+    }
+    this.layoutDirty = true;
   }
 
   private beforeRenderScene(scene: THREE.Scene): void {
@@ -446,6 +471,8 @@ export class GpuScene {
     }
     const source = this.geometries.check(group.source);
     if (source.released) return;
+    this.geometries.touch(group.geometry);
+    for (let index = 0; index < group.levelEntries.length; index++) this.geometries.touch(group.levelEntries[index]);
     // Levels over welded vertices are a copy of what the mesh had, and do not follow what it has now.
     if (group.geometry !== source && source.vertexEdits !== group.levelEdits) this.dropLevels(group);
     const { drawRange } = source.geometry;
@@ -523,6 +550,7 @@ export class GpuScene {
         group.source = entry;
         group.geometry = entry;
         group.slots.length = 1;
+        group.levelEntries = [];
         this.layoutDirty = true;
         this.placeGroup(group);
         this.levelQueue.push(group);
@@ -580,6 +608,7 @@ export class GpuScene {
       capacity: 0,
       firstVisible: 0,
       slots: [{ slot: -1, error: 0, range, firstVisible: 0 }],
+      levelEntries: [],
       forward: forwardKind || materialEntry.state.transparent,
       posed,
       source: entry,
@@ -643,6 +672,7 @@ export class GpuScene {
   private dropLevels(group: DrawGroup): void {
     if (group.slots.length > 1) this.layoutDirty = true;
     group.slots.length = 1;
+    group.levelEntries = [];
     const { posed, source } = group;
     if (group.geometry === source) return;
     group.geometry = source;
@@ -663,7 +693,10 @@ export class GpuScene {
       const group = posed.groups[index];
       group.geometry = onto;
       group.levelEdits = group.source.vertexEdits;
-      if (onto === group.source) group.slots.length = 1;
+      if (onto === group.source) {
+        group.slots.length = 1;
+        group.levelEntries = [];
+      }
       this.placeGroup(group);
     }
     this.layoutDirty = true;
@@ -696,10 +729,12 @@ export class GpuScene {
     const sourceGroups = source.geometry.groups;
     const usesParts = group.arrayed && sourceGroups.length > 0;
     const slots: DrawSlot[] = [group.slots[0]];
+    const levelEntries: GeometryEntry[] = [];
     for (let level = 1; level < levels.length; level++) {
       const { geometry, error } = levels[level];
       const entry = this.geometries.acquire(geometry);
       if (!entry) break;
+      levelEntries.push(entry);
       if (usesParts) {
         // A level made ahead of time may not say which of its triangles go with which material.
         const part = geometry.groups[group.partIndex];
@@ -711,6 +746,7 @@ export class GpuScene {
     }
     if (slots.length < 2) return;
     group.slots = slots;
+    group.levelEntries = levelEntries;
     group.levelEdits = source.vertexEdits;
     this.layoutDirty = true;
     const { posed } = group;

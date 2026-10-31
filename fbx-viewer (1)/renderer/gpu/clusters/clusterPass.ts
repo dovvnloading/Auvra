@@ -517,7 +517,7 @@ export class ClusterPass implements GpuPass {
     runs.forEach((run, index) => {
       const { material } = run.group;
       const surface = this.surfacePipelineFor(frame, material.kind, material.state.masked, material.state.cull);
-      if (!surface || !material.bindGroup) return;
+      if (!surface || !material.bindGroup || material.gone) return;
       pass.setPipeline(surface);
       pass.setBindGroup(2, material.bindGroup);
       pass.setBindGroup(3, drawGroup, [index * DRAW_BYTES]);

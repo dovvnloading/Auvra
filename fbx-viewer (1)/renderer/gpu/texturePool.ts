@@ -30,7 +30,7 @@ export interface TextureEntry {
 }
 
 /** One picture on the graphics card and how many textures draw from it. */
-interface GpuImage {
+export interface GpuImage {
   texture: GPUTexture;
   view: GPUTextureView;
   source: THREE.Source<unknown>;
@@ -135,6 +135,8 @@ export class TexturePool {
   /** How many pictures are on the card, and roughly what they take. */
   count = 0;
   bytes = 0;
+  /** How many have been destroyed: whatever recorded a bind group over one looks to see that it still holds. */
+  deaths = 0;
 
   constructor(private readonly device: GPUDevice, private readonly features: GpuFeatures) {
     this.defaultSampler = device.createSampler({ label: "gpu default sampler", magFilter: "linear", minFilter: "linear", mipmapFilter: "linear", addressModeU: "repeat", addressModeV: "repeat" });
@@ -272,6 +274,7 @@ export class TexturePool {
     if (forSource?.get(image.key) === image) forSource.delete(image.key);
     this.count--;
     this.bytes -= image.bytes;
+    this.deaths++;
     retire(image.texture);
   }
 

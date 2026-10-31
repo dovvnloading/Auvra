@@ -43,6 +43,10 @@ const INITIAL_INDICES = 1 << 19;
 const HELD_INDEX_LISTS = 8;
 /** Past this many separate changed ranges in an attribute, the whole of it goes up instead. */
 const MAX_PARTIAL_RANGES = 32;
+/** Scene walks a geometry may go unused before its place is given back. Every editor view on screen is a walk of its own. */
+const UNUSED_FOR = 7200;
+/** Scene walks between looks for geometries gone unused. */
+const LOOK_EVERY = 256;
 
 type AnyAttribute = THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
 
@@ -113,7 +117,7 @@ export interface GeometryEntry {
   reshaped: boolean;
   /** How many times its vertices were sent again. */
   vertexEdits: number;
-  /** Freed with its geometry. Drawn again, the geometry comes back as a new entry. */
+  /** Freed with its geometry, or for going unused. Drawn again, the geometry comes back as a new entry. */
   released: boolean;
   /** It has detail levels over its own vertices, so it is not alone in its run for any other reason. */
   hasLevels: boolean;
@@ -122,6 +126,8 @@ export interface GeometryEntry {
   /** Index lists it holds, the longest unused first. */
   heldIndexLists: IndexList[];
   checked: number;
+  /** The scene walk that last used it. */
+  used: number;
 }
 
 const packOctahedral = (x: number, y: number, z: number): number => {
@@ -235,8 +241,16 @@ export class GeometryPool {
   private readonly changedRanges: number[] = [];
   /** Each entry and run is looked at for changes once per stamp. */
   private stamp = 0;
+  /**
+   * What is on the card. A geometry dropped without being disposed would otherwise hold its place for good: a WebGL
+   * buffer goes when nothing refers to it, but a place in these tables is only a number.
+   */
+  private readonly live = new Set<GeometryEntry>();
+
   /** How many geometries are on the card. */
-  count = 0;
+  get count(): number {
+    return this.live.size;
+  }
 
   /** Goes up when any of the buffers changed, so bind groups over them are made again. */
   get generation(): number {
@@ -254,6 +268,15 @@ export class GeometryPool {
   /** Starts a frame's looking: from here on each geometry is compared with what was sent once. */
   beginFrame(): void {
     this.stamp++;
+    if (this.stamp % LOOK_EVERY) return;
+    for (const entry of this.live) {
+      if (this.stamp - entry.used > UNUSED_FOR) this.release(entry.geometry);
+    }
+  }
+
+  /** Says a geometry is still being drawn from, for one held through a group rather than looked at each frame. */
+  touch(entry: GeometryEntry): void {
+    entry.used = this.stamp;
   }
 
   /** A run of `count` in the table `buffer` holds, which grows to fit. If it cannot, nothing is kept and this throws. */
@@ -285,6 +308,7 @@ export class GeometryPool {
   check(entry: GeometryEntry): GeometryEntry {
     if (entry.checked === this.stamp || entry.released) return entry;
     entry.checked = this.stamp;
+    entry.used = this.stamp;
     const { geometry } = entry;
     if (!geometry.attributes.position) {
       this.release(geometry);
@@ -347,20 +371,19 @@ export class GeometryPool {
       indexList: null as unknown as IndexList,
       heldIndexLists: [],
       checked: this.stamp,
+      used: this.stamp,
     };
     this.joinRun(entry, run);
     this.useIndex(entry, geometry.index);
     entry.version = run.version + versionOf(geometry.index);
     this.entries.set(geometry, entry);
-    this.count++;
+    this.live.add(entry);
     geometry.addEventListener("dispose", this.onDispose);
     return entry;
   }
 
   private readonly onDispose = (event: { target?: unknown }): void => {
-    const geometry = event.target as THREE.BufferGeometry;
-    geometry.removeEventListener("dispose", this.onDispose);
-    this.release(geometry);
+    this.release(event.target as THREE.BufferGeometry);
   };
 
   /** Whether `run` holds what `geometry` would draw: the same attributes, not merely the same positions. */
@@ -750,8 +773,9 @@ export class GeometryPool {
   private release(geometry: THREE.BufferGeometry): void {
     const entry = this.entries.get(geometry);
     if (!entry) return;
+    geometry.removeEventListener("dispose", this.onDispose);
     this.entries.delete(geometry);
-    this.count--;
+    this.live.delete(entry);
     entry.released = true;
     this.leaveRun(entry);
     this.dropEdges(entry);
