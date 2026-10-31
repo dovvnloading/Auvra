@@ -4,6 +4,7 @@ import { useInstanceHandle, useThree } from '@react-three/fiber';
 import { EffectComposer } from '@react-three/postprocessing';
 import { Effect, EffectAttribute, EffectPass, Pass, type EffectComposer as PostComposer } from 'postprocessing';
 import { canDrawFloat, KeepDepthPass } from '../keptDepth';
+import '../passDispose';
 import { TemporalStage } from './temporalStage';
 
 /**

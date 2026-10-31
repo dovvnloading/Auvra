@@ -106,6 +106,12 @@ export const surfaceOf = (material: LitMaterial): { roughness: number; metalness
 
 const twins = new WeakMap<THREE.Material, THREE.ShaderMaterial>();
 
+/** A twin goes with its material: nothing else can reach it to free it. */
+const freeTwin = (event: { target: THREE.Material }) => {
+    twins.get(event.target)?.dispose();
+    twins.delete(event.target);
+};
+
 /** Cut out by an alpha map as well as (or instead of) the colour map's alpha, as three.js reads it (green). */
 const cutByAlphaMap = (material: LitMaterial) => material.alphaTest > 0 && !!material.alphaMap;
 
@@ -118,6 +124,7 @@ export const surfaceTwin = (material: LitMaterial): THREE.ShaderMaterial => {
     let twin = twins.get(material);
     if (!twin || twin.userData.key !== key) {
         twin?.dispose();
+        material.addEventListener('dispose', freeTwin);
         const defines: Record<string, string> = {};
         if (material.map) defines.SURFACE_MAP = '';
         if (material.alphaTest > 0) defines.SURFACE_ALPHA_TEST = '';
