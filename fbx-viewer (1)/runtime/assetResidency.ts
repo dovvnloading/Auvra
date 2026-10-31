@@ -15,6 +15,12 @@ import type { LevelAssetNeeds } from './levelAssets';
 /** How much a game holds before it starts letting go of what earlier levels used. */
 export const DEFAULT_ASSET_BUDGET_BYTES = 2 * 1024 * 1024 * 1024;
 
+/**
+ * What a model takes in memory for each byte of its file, until this game's own have been measured.
+ * Models arrive compressed and unpack to several times their size: real ones here took about 4.
+ */
+const FIRST_GUESS_MODEL_GROWTH = 4;
+
 type HeldKind = keyof LevelAssetNeeds;
 const HELD_KINDS: readonly HeldKind[] = ['models', 'textures', 'audio', 'attachments', 'levels'];
 
@@ -81,6 +87,8 @@ export class LevelAssetResidency {
     private cellsInUse: ReadonlySet<string> = new Set();
     /** Models a World Grid asked for, for its answer. */
     private readonly cellModelIds = new Set<string>();
+    private measuredModelBytes = 0;
+    private measuredFileBytes = 0;
 
     constructor(
         private readonly loader: GameContentLoader,
@@ -143,13 +151,20 @@ export class LevelAssetResidency {
         await this.loadWithinBudget(needs, ++this.starts);
     }
 
+    /** About what an asset will take once loaded: files alone say too little, and freeing too little runs the game out of memory. */
+    private incomingBytes(kind: HeldKind, id: string): number {
+        const file = this.estimate(kind, id);
+        if (kind !== 'models' && kind !== 'attachments') return file;
+        return file * (this.measuredFileBytes > 0 ? Math.max(1, this.measuredModelBytes / this.measuredFileBytes) : FIRST_GUESS_MODEL_GROWTH);
+    }
+
     private async loadWithinBudget(needs: LevelAssetNeeds, start: number): Promise<void> {
         let incoming = 0;
         for (const kind of HELD_KINDS) {
             for (const id of needs[kind]) {
                 const held = this.held.get(LevelAssetResidency.key(kind, id));
                 if (held) held.used = start;
-                else incoming += this.estimate(kind, id);
+                else incoming += this.incomingBytes(kind, id);
             }
         }
         this.makeRoom(incoming, start);
@@ -182,7 +197,12 @@ export class LevelAssetResidency {
         const objects = this.loader.objects();
         const note = (kind: HeldKind, id: string, bytes: number) => {
             const key = LevelAssetResidency.key(kind, id);
-            if (!this.held.has(key) && needs[kind].has(id)) this.held.set(key, { kind, id, bytes, used: start });
+            if (this.held.has(key) || !needs[kind].has(id)) return;
+            this.held.set(key, { kind, id, bytes, used: start });
+            if (kind === 'models' || kind === 'attachments') {
+                this.measuredModelBytes += bytes;
+                this.measuredFileBytes += this.estimate(kind, id);
+            }
         };
         for (const model of content.models) note('models', model.id, objectMemoryBytes(model.object));
         for (const attachment of content.attachments) note('attachments', attachment.id, objectMemoryBytes(attachment.object));

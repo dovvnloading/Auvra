@@ -333,6 +333,26 @@ describe('assets in memory', () => {
         expect(order).toEqual(['release', 'load']);
     });
 
+    it('learns what models really take from their files, and frees for that, not for the files alone', async () => {
+        // Each file is 10 MB, each loaded model 40 MB: going by files would leave the old level in memory.
+        const fake = fakeLoader(() => 40 * MB);
+        const residency = new LevelAssetResidency(fake.loader, id => LEVELS[id], () => 10 * MB, 100 * MB);
+        await residency.prepare('a');
+        await residency.prepare('b');
+        expect(fake.released).toEqual(['rock']);
+        expect(residency.heldBytes()).toBeLessThanOrEqual(100 * MB);
+    });
+
+    it('guesses models grow before any has been measured, as the first level may be followed by nothing else', async () => {
+        const fake = fakeLoader(() => 40 * MB);
+        const residency = new LevelAssetResidency(fake.loader, () => needing('crate'), () => 10 * MB, 100 * MB);
+        await residency.requestCellModels(needing('tree', 'hero'));
+        residency.setCellsInUse(new Set());
+        // 80 MB held and one more model of about 40: something has to go, though by its file alone it would fit.
+        await residency.prepare('c');
+        expect(fake.released.length).toBeGreaterThan(0);
+    });
+
     it('still gives a level everything it needs when that alone is past the budget', async () => {
         const fake = fakeLoader(() => 500 * MB);
         const residency = new LevelAssetResidency(fake.loader, id => LEVELS[id], () => 500 * MB, 100 * MB);
