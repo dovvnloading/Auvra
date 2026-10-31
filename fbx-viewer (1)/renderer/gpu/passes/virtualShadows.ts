@@ -4,6 +4,7 @@ import type { GpuCore } from "../device";
 import type { GpuFrame, GpuPass } from "../frame";
 import type { GpuScene } from "../gpuScene";
 import { CAMERA_BINDINGS_WGSL, VIEW_WGSL } from "../shaders";
+import { isLitMaterial } from "../surfaces/lit";
 import {
   casterWatchFor,
   DepthTileClearer,
@@ -74,6 +75,9 @@ export const VIRTUAL_SHADOW_GROUP = 3;
 export const VIRTUAL_SHADOW_FIRST_BINDING = 10;
 export const VIRTUAL_SHADOW_BINDINGS = 4;
 export const VIRTUAL_SHADOWS_READER = "virtualShadowsReader";
+/** The last frame an effect lit something through the cascades, which it sets each time: they go on being drawn for it. */
+export const CASCADES_WANTED = "cascadesWanted";
+const CASCADES_WANTED_FRAMES = 16;
 const PRODUCT = "virtualShadows";
 
 const LEVELS = 12;
@@ -360,6 +364,10 @@ export class VirtualShadowPass implements GpuPass {
     if (!this.ready || this.camera !== frame.camera || this.scene !== frame.gpuScene || !this.resources) return false;
     if (frame.products.get(VIRTUAL_SHADOWS_READER) !== true) return false;
     if (!shadowSettings(frame)?.get("shadows.virtual")) return false;
+    // What is lit outside the surface buffer reads the cascades.
+    if (frame.gpuScene.forward.some((item) => isLitMaterial(item.part.group.material.material))) return false;
+    const wanted = frame.products.get(CASCADES_WANTED) as number | undefined;
+    if (wanted !== undefined && frame.frameNumber - wanted < CASCADES_WANTED_FRAMES) return false;
     if (this.plane.toSun.distanceToSquared(toSun) >= SAME_DIRECTION) return false;
     // Would need a new depth scale, and so every page again, later this frame.
     const { top, bottom } = casterWatchFor(frame.gpuScene).extents(this.plane.toSun);

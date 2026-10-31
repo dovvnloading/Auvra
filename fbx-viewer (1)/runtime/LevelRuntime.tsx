@@ -1058,6 +1058,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                 surfaceId="runtime-level-game-loop"
                 role="runtime"
                 backend={settings.quality.renderer}
+                shadowPages={settings.quality.shadowPages}
                 shadows={settings.quality.shadows}
                 camera={{ fov: settings.quality.fov }}
                 dpr={dpr}

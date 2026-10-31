@@ -26,6 +26,8 @@ export interface AuvraCanvasProps extends Omit<CanvasProps, "onCreated" | "gl"> 
   fallbackReason?: string | null;
   /** The project's Renderer setting; `?renderer=` on the page wins over it. Without either a surface draws with WebGPU where the machine has it. */
   backend?: RendererSetting;
+  /** The project's page-based sun shadows setting, for a surface that draws with WebGPU. */
+  shadowPages?: boolean;
 }
 
 /** The `?renderer=` the page names, if it names one. */
@@ -99,9 +101,13 @@ const RendererLifecycleBridge: React.FC<{
   remount: () => void;
   onDeviceLost: (reason: string | undefined) => void;
   onGpuGiveUp: (reason: string) => void;
-}> = ({ surfaceId, role, requestedBackend, fallbackReasonOverride, recoveryTimeoutMs, remount, onDeviceLost, onGpuGiveUp }) => {
+  shadowPages: boolean;
+}> = ({ surfaceId, role, requestedBackend, fallbackReasonOverride, recoveryTimeoutMs, remount, onDeviceLost, onGpuGiveUp, shadowPages }) => {
   const { gl } = useThree();
   const recoveryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (isGpuRenderer(gl)) gl.settings.set("shadows.virtual", shadowPages);
+  }, [gl, shadowPages]);
   useEffect(() => {
     const renderer = gl as THREE.WebGLRenderer;
     const canvas = renderer.domElement;
@@ -181,6 +187,7 @@ export const AuvraCanvas: React.FC<AuvraCanvasProps> = ({
   gl: providedGl,
   fallbackReason = null,
   backend,
+  shadowPages = false,
   children,
   ...props
 }) => {
@@ -259,7 +266,7 @@ export const AuvraCanvas: React.FC<AuvraCanvasProps> = ({
     ? "This surface is not owned by the separate native viewport; using the web compatibility renderer"
     : null);
   const createRenderer = attempt?.createRenderer;
-  return <Canvas key={`${surfaceId}:${generation}${createRenderer ? ":gpu" : ""}`} {...props} gl={createRenderer ?? gl}><RendererLifecycleBridge surfaceId={surfaceId} role={role} requestedBackend={webBackend} fallbackReasonOverride={reportedFallback} recoveryTimeoutMs={recoveryTimeoutMs} remount={remount} onDeviceLost={onDeviceLost} onGpuGiveUp={onGpuGiveUp} /><MaterialClock />{children}</Canvas>;
+  return <Canvas key={`${surfaceId}:${generation}${createRenderer ? ":gpu" : ""}`} {...props} gl={createRenderer ?? gl}><RendererLifecycleBridge surfaceId={surfaceId} role={role} requestedBackend={webBackend} fallbackReasonOverride={reportedFallback} recoveryTimeoutMs={recoveryTimeoutMs} remount={remount} onDeviceLost={onDeviceLost} onGpuGiveUp={onGpuGiveUp} shadowPages={shadowPages} /><MaterialClock />{children}</Canvas>;
 };
 
 export default AuvraCanvas;

@@ -734,6 +734,16 @@ export class ShadowPass implements GpuPass {
   }
 
   execute(frame: GpuFrame): void {
+    // The project's Shadows switch, which @react-three/fiber hands to the renderer as three.js has it.
+    const renderer = frame.products.get("renderer") as (GpuRendererApi & { shadowMap?: { enabled: boolean } }) | undefined;
+    if (renderer?.shadowMap?.enabled === false) {
+      this.forgetCascades();
+      this.product.cascades.count = 0;
+      this.product.cascades.sunIndex = -1;
+      this.product.atlas = null;
+      frame.products.set("shadowMaps", this.product);
+      return;
+    }
     this.syncVirtual(frame);
     const changes = this.readChanges(frame);
     this.drawCascades(frame, changes);

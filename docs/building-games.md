@@ -25,6 +25,8 @@ Each level should have a **Player Start**; without one the player spawns at the 
 - **WebGPU**: the newer renderer. Where a machine cannot run it, the level draws with WebGL2 instead and the reason goes in the renderer's report.
 - **Auto** (the default): WebGPU where the machine has it, WebGL2 elsewhere.
 
+**Sharp sun shadows** under the same heading makes the sun's shadow as sharp far away as it is close by, and a scene that holds still draws no shadows at all from then on. It takes more graphics memory than ordinary shadows and only applies on WebGPU. While anything lit is see-through or the sun is moving, ordinary shadows carry on alongside it.
+
 To try a renderer without changing the project, add `?renderer=webgpu`, `?renderer=webgl2` or `?renderer=auto` to the page's address. It wins over the setting for that page.
 
 ## Building

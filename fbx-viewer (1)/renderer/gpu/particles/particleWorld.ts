@@ -2,6 +2,7 @@
 import * as THREE from "three";
 import type { GpuFrame, GpuPass, GpuRendererApi, GpuTargets } from "../frame";
 import type { LightingProduct } from "../lightingWgsl";
+import { CASCADES_WANTED } from "../passes/virtualShadows";
 import type { DepthPyramidProduct } from "../passes/depthPyramid";
 import { ComputeEmitter, type EmitterHome } from "./computeEmitter";
 import { ParticlePipelines } from "./particlePipelines";
@@ -170,6 +171,7 @@ export class ParticleWorld implements EmitterHome {
       return;
     }
     const lighting = (frame.products.get("lighting") as LightingProduct | undefined) ?? null;
+    frame.products.set(CASCADES_WANTED, frame.frameNumber);
     const list = this.drawList;
     list.length = 0;
     for (const emitter of this.emitters) if (emitter.drawable && emitter.shownIn(frame)) list.push(emitter);

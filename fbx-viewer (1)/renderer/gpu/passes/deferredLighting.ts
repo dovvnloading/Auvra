@@ -2,7 +2,9 @@
 import type { GpuCore } from "../device";
 import type { GpuFrame, GpuPass } from "../frame";
 import { LIGHTING_GROUP, LIGHTING_WGSL, type LightingProduct } from "../lightingWgsl";
+import { reportGpu } from "../report";
 import { CAMERA_BINDINGS_WGSL, VIEW_WGSL } from "../shaders";
+import { VIRTUAL_SHADOWS_READER, virtualShadowLayoutEntries, virtualShadowsWgsl, type VirtualShadowsProduct } from "./virtualShadows";
 
 /**
  * LIGHTING THE SURFACE BUFFER
@@ -16,12 +18,16 @@ import { CAMERA_BINDINGS_WGSL, VIEW_WGSL } from "../shaders";
  *   "ao" = { view } occlusion in one channel, multiplied into what arrives indirectly.
  *   "gi" = { view } gathered irradiance in rgb, in place of the ambient lights.
  * A missing one is bound as a neutral pixel, so there is one pipeline whatever a level has switched on.
+ *
+ * While "virtualShadows" is published the sun's shadow comes from those pages, by a second pipeline compiled off the frame
+ * the first time it is wanted: until that is ready the cascades carry on.
  */
 
-const DEFERRED_WGSL = /* wgsl */ `
+const deferredWgsl = (pages: boolean): string => /* wgsl */ `
 ${VIEW_WGSL}
 ${CAMERA_BINDINGS_WGSL}
 ${LIGHTING_WGSL}
+${pages ? virtualShadowsWgsl(1, 0) : ""}
 
 struct DeferredParams {
   hasIndirect: u32,
@@ -93,7 +99,9 @@ fn lightPixels(@builtin(global_invocation_id) id: vec3u) {
     vec3f(view.viewMatrix[0][2], view.viewMatrix[1][2], view.viewMatrix[2][2]),
     view.orthographic != 0u,
   );
-  var input = lightingInput(world, decodeOctahedral(packed.xy), toEye, albedo.rgb, packed.z, packed.w, vec2f(id.xy) + 0.5);
+  let normal = decodeOctahedral(packed.xy);
+  var input = lightingInput(world, normal, toEye, albedo.rgb, packed.z, packed.w, vec2f(id.xy) + 0.5);
+  ${pages ? "input.sunShade = virtualShadow(world, normal);" : ""}
   input.occlusion = albedo.a * loadScreenInput(screenOcclusion, uv).r;
   input.hasBakedLight = emissive.a > 0.375;
   input.receivesShadow = fract(emissive.a * 2.0) < 0.25;
@@ -118,7 +126,7 @@ export class DeferredLightingPass implements GpuPass {
 
   private readonly device: GPUDevice;
   private readonly inputLayout: GPUBindGroupLayout;
-  /** Nothing in group 1 for this pass, but the lighting group keeps its number in every shader that uses it. */
+  /** Nothing in group 1 for this pass unless shadow pages are in use, but the lighting group keeps its number in every shader that uses it. */
   private readonly emptyLayout: GPUBindGroupLayout;
   private readonly emptyGroup: GPUBindGroup;
   private readonly paramsBuffer: GPUBuffer;
@@ -127,6 +135,12 @@ export class DeferredLightingPass implements GpuPass {
   private readonly noOcclusion: GPUTextureView;
   private readonly noIndirect: GPUTextureView;
   private pipeline: GPUComputePipeline | null = null;
+  private readonly pagesLayout: GPUBindGroupLayout;
+  /** Null until it has compiled, and for good if that failed. */
+  private pagesPipeline: GPUComputePipeline | null = null;
+  private pagesAsked = false;
+  private pagesGroup: GPUBindGroup | null = null;
+  private pagesProduct: VirtualShadowsProduct | null = null;
   private inputGroup: GPUBindGroup | null = null;
   private inputViews: GPUTextureView[] = [];
 
@@ -149,6 +163,7 @@ export class DeferredLightingPass implements GpuPass {
     });
     this.emptyLayout = device.createBindGroupLayout({ label: "gpu deferred nothing", entries: [] });
     this.emptyGroup = device.createBindGroup({ label: "gpu deferred nothing", layout: this.emptyLayout, entries: [] });
+    this.pagesLayout = device.createBindGroupLayout({ label: "gpu deferred shadow pages", entries: virtualShadowLayoutEntries(0) });
     this.paramsBuffer = device.createBuffer({ label: "gpu deferred params", size: this.params.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
 
     const pixel = (label: string, value: number[]): GPUTexture => {
@@ -171,11 +186,43 @@ export class DeferredLightingPass implements GpuPass {
       label: "gpu deferred lighting",
       layout: this.device.createPipelineLayout({ label: "gpu deferred lighting", bindGroupLayouts }),
       compute: {
-        module: this.device.createShaderModule({ label: "gpu deferred lighting", code: DEFERRED_WGSL }),
+        module: this.device.createShaderModule({ label: "gpu deferred lighting", code: deferredWgsl(false) }),
         entryPoint: "lightPixels",
       },
     });
     return this.pipeline;
+  }
+
+  /** The pipeline that reads the sun's shadow from pages, once it has compiled. */
+  private pagesPipelineFor(frame: GpuFrame, lighting: LightingProduct): GPUComputePipeline | null {
+    if (this.pagesAsked) return this.pagesPipeline;
+    this.pagesAsked = true;
+    const bindGroupLayouts: GPUBindGroupLayout[] = [frame.cameraLayout, this.pagesLayout, this.inputLayout];
+    bindGroupLayouts[LIGHTING_GROUP] = lighting.layout;
+    this.device.createComputePipelineAsync({
+      label: "gpu deferred lighting with shadow pages",
+      layout: this.device.createPipelineLayout({ label: "gpu deferred lighting with shadow pages", bindGroupLayouts }),
+      compute: {
+        module: this.device.createShaderModule({ label: "gpu deferred lighting with shadow pages", code: deferredWgsl(true) }),
+        entryPoint: "lightPixels",
+      },
+    }).then((pipeline) => {
+      this.pagesPipeline = pipeline;
+    }).catch((error: unknown) => {
+      reportGpu("[gpu] lighting with shadow pages would not compile; cascades carry on", error);
+    });
+    return null;
+  }
+
+  private pagesGroupFor(product: VirtualShadowsProduct): GPUBindGroup {
+    if (this.pagesGroup && this.pagesProduct === product) return this.pagesGroup;
+    this.pagesProduct = product;
+    this.pagesGroup = this.device.createBindGroup({
+      label: "gpu deferred shadow pages",
+      layout: this.pagesLayout,
+      entries: product.bindGroupEntries(0),
+    });
+    return this.pagesGroup;
   }
 
   private inputsFor(frame: GpuFrame, occlusion: GPUTextureView, indirect: GPUTextureView): GPUBindGroup {
@@ -205,10 +252,15 @@ export class DeferredLightingPass implements GpuPass {
     this.device.queue.writeBuffer(this.paramsBuffer, 0, this.params);
 
     const inputs = this.inputsFor(frame, occlusion?.view ?? this.noOcclusion, indirect?.view ?? this.noIndirect);
+    const pages = frame.products.get("virtualShadows") as VirtualShadowsProduct | undefined;
+    const pagesPipeline = pages ? this.pagesPipelineFor(frame, lighting) : null;
+    // Said only once the shader can read them, because it is what lets the cascades stop being drawn.
+    if (pagesPipeline) frame.products.set(VIRTUAL_SHADOWS_READER, true);
+    else frame.products.delete(VIRTUAL_SHADOWS_READER);
     const pass = frame.encoder.beginComputePass({ label: "gpu deferred lighting" });
-    pass.setPipeline(this.pipelineFor(frame, lighting));
+    pass.setPipeline(pagesPipeline ?? this.pipelineFor(frame, lighting));
     pass.setBindGroup(0, frame.cameraBindGroup, [frame.mainViewOffset]);
-    pass.setBindGroup(1, this.emptyGroup);
+    pass.setBindGroup(1, pages && pagesPipeline ? this.pagesGroupFor(pages) : this.emptyGroup);
     pass.setBindGroup(2, inputs);
     pass.setBindGroup(LIGHTING_GROUP, lighting.bindGroup);
     pass.dispatchWorkgroups(Math.ceil(frame.targets.width / WORKGROUP_SIZE), Math.ceil(frame.targets.height / WORKGROUP_SIZE));

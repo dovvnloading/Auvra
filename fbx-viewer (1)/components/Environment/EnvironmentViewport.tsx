@@ -444,6 +444,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
     // time only: a canvas cannot change renderer, and a revision bump re-hydrates the document without changing it.
     const { document: settingsDocument, hydrated: settingsHydrated } = useNativeProjectDocument<GameSettingsDocument>('metadata', GAME_SETTINGS_DOCUMENT_ID, createDefaultGameSettingsDocument);
     const renderer = useMemo(() => normalizeGameSettings(settingsDocument.settings).quality.renderer, [settingsDocument]);
+    const shadowPages = useMemo(() => normalizeGameSettings(settingsDocument.settings).quality.shadowPages, [settingsDocument]);
     const settingsLoaded = useRef(false);
     if (settingsHydrated) settingsLoaded.current = true;
 
@@ -654,6 +655,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                 surfaceId="editor-environment-viewport"
                 role="editor"
                 backend={renderer}
+                shadowPages={shadowPages}
                 className="absolute inset-0 pointer-events-none"
                 eventSource={containerRef as React.MutableRefObject<HTMLElement>}
                 shadows

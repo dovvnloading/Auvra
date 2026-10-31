@@ -5,6 +5,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { TARGET_FORMATS, type GpuFrame, type GpuPass } from "../frame";
 import type { LightingProduct } from "../lightingWgsl";
 import type { DepthPyramidProduct } from "../passes/depthPyramid";
+import { CASCADES_WANTED } from "../passes/virtualShadows";
 import { VIEW_WGSL, CAMERA_BINDINGS_WGSL } from "../shaders";
 import { BindGroupCache, TargetCopy, UniformSlices, WORLD_FROM_DEPTH_WGSL, effectPipelinesFor, isDrawnIn, useEffectEntry, type GpuEntryEffect } from "./common";
 
@@ -322,6 +323,7 @@ class WaterPass implements GpuPass {
     }
     if (!drawn.length) return;
     const lighting = frame.products.get("lighting") as LightingProduct | undefined;
+    frame.products.set(CASCADES_WANTED, frame.frameNumber);
     const pyramid = frame.products.get("depthPyramid") as DepthPyramidProduct | undefined;
     if (!lighting || !pyramid) return;
 

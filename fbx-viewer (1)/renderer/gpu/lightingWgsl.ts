@@ -235,6 +235,8 @@ struct LightingInput {
   // The baked light is already in what the surface emits, so the ambient lights would count it twice.
   hasBakedLight: bool,
   receivesShadow: bool,
+  // The sun's shadow when something else has worked it out, 1 lit and 0 in shadow; negative to look it up here.
+  sunShade: f32,
 }
 
 fn lightingInput(worldPosition: vec3f, normal: vec3f, viewDirection: vec3f, albedo: vec3f, roughness: f32, metalness: f32, pixel: vec2f) -> LightingInput {
@@ -251,6 +253,7 @@ fn lightingInput(worldPosition: vec3f, normal: vec3f, viewDirection: vec3f, albe
   input.hasIndirect = false;
   input.hasBakedLight = false;
   input.receivesShadow = true;
+  input.sunShade = -1.0;
   return input;
 }
 
@@ -550,7 +553,12 @@ fn lightSurface(s: LightingInput) -> vec3f {
     if (dotNL <= 0.0) { continue; }
     var color = lighting.suns[index].color;
     if (s.receivesShadow && i32(index) == lighting.cascadeSun) {
-      color *= lightingSunShadow(s, lightingViewDepth(s.worldPosition), toLight, dotNL, start) * lightingCloudShade(s.worldPosition);
+      if (s.sunShade >= 0.0) {
+        color *= s.sunShade;
+      } else {
+        color *= lightingSunShadow(s, lightingViewDepth(s.worldPosition), toLight, dotNL, start);
+      }
+      color *= lightingCloudShade(s.worldPosition);
     }
     result += lightingDirect(m, toLight, dotNL, color);
   }
@@ -947,7 +955,8 @@ export class LightingResources {
     const cascades = shadowMaps?.cascades ?? null;
     const atlas = shadowMaps?.atlas ?? null;
     uints[228] = cascades ? Math.min(cascades.count, CASCADES) : 0;
-    ints[229] = cascades && cascades.count > 0 ? cascades.sunIndex : -1;
+    // Named even with no cascades drawn: page-based shadows may be carrying it, and with neither there is no shadow to read.
+    ints[229] = cascades ? cascades.sunIndex : -1;
     if (cascades) {
       floats.set(cascades.matrices.subarray(0, CASCADES * 16), 144);
       floats.set(cascades.splits.subarray(0, CASCADES), 208);
