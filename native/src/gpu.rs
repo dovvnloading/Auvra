@@ -1641,7 +1641,9 @@ mod tests {
             let read = |index: usize, attribute: &wgpu::VertexAttribute| -> Vec<f32> {
                 let start = index * stride + attribute.offset as usize;
                 bytes[start..start + attribute.format.size() as usize]
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|chunk| f32::from_ne_bytes(chunk.try_into().unwrap()))
                     .collect()
             };
@@ -1661,7 +1663,7 @@ mod tests {
             .flat_map(|batch| batch.entity_ids.iter())
             .map(|id| &extraction.snapshot.entities[indices[id]])
             .collect::<Vec<_>>();
-        for (triangle, entity) in scene.chunks_exact(3).zip(batch_order) {
+        for (triangle, entity) in scene.as_chunks::<3>().0.iter().zip(batch_order) {
             for vertex in triangle {
                 assert_eq!(vertex.color, entity.material.base_color_factor);
                 assert_eq!(
