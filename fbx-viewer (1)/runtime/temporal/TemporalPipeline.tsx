@@ -3,15 +3,31 @@ import type * as THREE from 'three';
 import { useInstanceHandle, useThree } from '@react-three/fiber';
 import { EffectComposer } from '@react-three/postprocessing';
 import { Effect, EffectAttribute, EffectPass, Pass, type EffectComposer as PostComposer } from 'postprocessing';
+import { canDrawFloat, KeepDepthPass } from '../keptDepth';
 import { TemporalStage } from './temporalStage';
 
 /**
- * A composer that takes its buffers with it. The component leaves them behind when it unmounts, and a stack
- * remounts each time its effects or camera change, so at full size they would soon fill the GPU.
+ * A composer that takes its buffers with it, and whose effects can trust their depth. The component leaves its
+ * buffers behind when it unmounts, and a stack remounts each time its effects or camera change, so at full size
+ * they would soon fill the GPU. `scenePasses` says how many passes come before the depth is complete.
  */
-export const OwnedComposer = React.forwardRef<PostComposer, { children: React.ReactNode }>(({ children }, ref) => {
+export const OwnedComposer = React.forwardRef<PostComposer, { children: React.ReactNode; scenePasses?: number }>(({ children, scenePasses = 1 }, ref) => {
     const composer = useRef<PostComposer>(null);
     useImperativeHandle(ref, () => composer.current!, []);
+    const gl = useThree(state => state.gl);
+    const kept = useRef<KeepDepthPass | null>(null);
+    // After the composer has added its passes, which it does when its children change: effects run child first.
+    useLayoutEffect(() => {
+        const owned = composer.current as unknown as (PostComposer & { depthTexture: THREE.Texture | null }) | null;
+        if (!owned || owned.depthTexture === null || !canDrawFloat(gl)) return;
+        if (!kept.current) {
+            kept.current = new KeepDepthPass();
+            owned.addPass(kept.current, scenePasses);
+        }
+        for (const pass of owned.passes) {
+            if (pass !== kept.current) pass.setDepthTexture(kept.current.copy.texture);
+        }
+    }, [children, scenePasses, gl]);
     useLayoutEffect(() => {
         const owned = composer.current;
         return () => owned?.dispose();
@@ -97,7 +113,7 @@ export const TemporalPipeline: React.FC<{
         <>
             <group ref={litGroup}>{lit}</group>
             {/* Keyed by the stage: a composer swapping one child for another would run that one last. */}
-            <OwnedComposer key={stage.id} ref={composer}>
+            <OwnedComposer key={stage.id} ref={composer} scenePasses={2}>
                 {composerChildren}
             </OwnedComposer>
         </>

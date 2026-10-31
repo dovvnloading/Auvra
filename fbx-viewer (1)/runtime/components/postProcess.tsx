@@ -11,6 +11,7 @@ import {
 import { ScreenLightingEffect } from '../screenLighting';
 import { OwnedComposer, TemporalPipeline } from '../temporal/TemporalPipeline';
 import { MAX_RENDER_SCALE, MIN_RENDER_SCALE } from '../temporal/temporalSettings';
+import { canDrawFloat } from '../keptDepth';
 import { RENDER_CONVENTIONS } from '../../renderer/conventions';
 import type { LevelComponent } from '../../types';
 import type { ComponentDefinition, ComponentPropSchema, ComponentRenderProps } from './types';
@@ -307,10 +308,6 @@ export const PostProcessQualityContext = createContext<{
 export const allowedAntialias = (wanted: PostProcessAntialias, allowed: PostProcessAntialias): PostProcessAntialias =>
     wanted === 'temporal' ? allowed : allowed === 'none' ? 'none' : wanted;
 
-/** The temporal stage keeps depth in a float target, which a device must be able to draw into. */
-const canDrawFloat = (gl: unknown): boolean =>
-    (gl as { extensions?: { has?: (name: string) => boolean } }).extensions?.has?.('EXT_color_buffer_float') !== false;
-
 /** The anti-aliasing a stack that wants `wanted` should run on this canvas, counted for the slow-frame fallback while it runs. */
 export const useAllowedAntialias = (wanted: PostProcessAntialias, running = true): PostProcessAntialias => {
     const gl = useThree(state => state.gl);
@@ -485,10 +482,9 @@ const Look: React.FC<{ look: ColorLook; strength: number }> = ({ look, strength 
  * With temporal anti-aliasing the part on the lit scene runs at the render scale inside the temporal stage,
  * up to the resolve, and everything from depth of field on runs on the steady picture at the display's size.
  *
- * Haze stays in the composer's first effect pass: it reads depth there, from the buffer the depth texture
- * belongs to, so nothing that starts a pass of its own may come before it. Bounced light and reflections
- * draw their own surface buffer and join that pass. Later effects that need depth read it into targets of
- * their own.
+ * Every effect that needs depth reads a copy kept straight after the scene (runtime/keptDepth.ts), as the
+ * depth itself does not survive the passes that follow. Bounced light and reflections draw their own surface
+ * buffer.
  */
 const PostProcessStack = React.memo<{ settings: PostProcessSettings }>(({ settings }) => {
     const camera = useThree(state => state.camera);
@@ -515,7 +511,7 @@ const stackEffects = (settings: PostProcessSettings, cameraId: string, antialias
     const lit: React.ReactElement[] = [];
     const effects: React.ReactElement[] = [];
     // Light first: bounces and reflections, then haze and shafts add to the lit scene, motion blur smears it,
-    // and the eye adapts to the result. Nothing that starts its own pass may come before the haze (see above).
+    // and the eye adapts to the result.
     const bounce = settings.globalIllumination ? settings.giIntensity : 0;
     const reflections = settings.reflections ? settings.reflectionIntensity : 0;
     if (bounce > 0 || reflections > 0) lit.push(<ScreenLighting key="lighting" bounce={bounce} reflections={reflections} />);

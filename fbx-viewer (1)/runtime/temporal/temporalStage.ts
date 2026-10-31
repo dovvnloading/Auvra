@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import { EffectComposer, Pass, RenderPass } from 'postprocessing';
+import { DepthCopy } from '../keptDepth';
 import { FullscreenPass } from '../postEffects';
 import { setTextureMipBias } from './mipBias';
-import { DEPTH_COPY_FRAGMENT, OUTPUT_FRAGMENT, RESOLVE_FRAGMENT } from './temporalShaders';
+import { OUTPUT_FRAGMENT, RESOLVE_FRAGMENT } from './temporalShaders';
 import {
-    clampRenderScale, contrastFadeFor, isCameraCut, mipBiasFor, renderSizeOf, temporalJitter,
+    cameraStillnessFor, clampRenderScale, contrastFadeFor, isCameraCut, mipBiasFor, renderSizeOf, temporalJitter,
 } from './temporalSettings';
 import { VelocityBuffer } from './velocityBuffer';
 
@@ -97,8 +98,7 @@ export class TemporalStage {
     private readonly velocity = new VelocityBuffer();
     private readonly resolver: FullscreenPass;
     private readonly presenter: FullscreenPass;
-    private readonly depthCopier: FullscreenPass;
-    private readonly depthCopy: THREE.WebGLRenderTarget;
+    private readonly depthCopy = new DepthCopy();
     private history: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget];
     private chain: Pass[] = [];
 
@@ -134,11 +134,6 @@ export class TemporalStage {
         this.composer.autoRenderToScreen = false;
 
         this.history = [historyTarget(), historyTarget()];
-        this.depthCopy = new THREE.WebGLRenderTarget(1, 1, {
-            type: THREE.FloatType, format: THREE.RedFormat, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
-            depthBuffer: false, generateMipmaps: false,
-        });
-        this.depthCopier = new FullscreenPass(DEPTH_COPY_FRAGMENT, { depthMap: { value: null } }, THREE.GLSL3);
         this.resolver = new FullscreenPass(RESOLVE_FRAGMENT, {
             current: { value: null },
             depthMap: { value: this.depthCopy.texture },
@@ -153,6 +148,7 @@ export class TemporalStage {
             blendFloor: { value: BLEND_FLOOR },
             clipSpread: { value: CLIP_SPREAD },
             contrastFade: { value: contrastFadeFor(1) },
+            cameraStillness: { value: 1 },
             depthToDistance: { value: new THREE.Vector3(1, 1, 0) },
         }, THREE.GLSL3);
         this.presenter = new FullscreenPass(OUTPUT_FRAGMENT, {
@@ -180,6 +176,7 @@ export class TemporalStage {
         passes.forEach((pass, index) => {
             this.composer.addPass(pass, index + 2);
             pass.setSize(this.inputWidth, this.inputHeight);
+            pass.setDepthTexture(this.depthCopy.texture);
         });
     }
 
@@ -218,7 +215,7 @@ export class TemporalStage {
 
     setDepth(depth: THREE.DepthTexture): void {
         this.velocity.setDepth(depth);
-        this.depthCopier.material.uniforms.depthMap.value = depth;
+        this.depthCopy.setSource(depth);
     }
 
     /** Runs the scene's chain with the frame's jitter in the camera, and leaves the camera as it found it. */
@@ -254,7 +251,9 @@ export class TemporalStage {
         const camera = this.camera;
         camera.getWorldPosition(this.position);
         camera.getWorldDirection(this.facing);
-        const cut = this.hasHistory && isCameraCut(this.position.distanceTo(this.lastPosition), this.facing.dot(this.lastFacing));
+        const moved = this.position.distanceTo(this.lastPosition);
+        const cut = this.hasHistory && isCameraCut(moved, this.facing.dot(this.lastFacing));
+        this.resolver.material.uniforms.cameraStillness.value = this.hasHistory ? cameraStillnessFor(moved) : 1;
         this.carryOn = this.hasHistory && !cut;
         this.cleanViewProjection.multiplyMatrices(this.cleanProjection, camera.matrixWorldInverse);
         // No past to measure from: the first frame after a cut has no motion.
@@ -262,7 +261,7 @@ export class TemporalStage {
         this.reprojection.copy(this.cleanViewProjection).invert().premultiply(this.previousViewProjection);
 
         this.velocity.render(renderer, this.scene, camera, this.cleanViewProjection, this.previousViewProjection);
-        this.depthCopier.render(renderer, this.depthCopy);
+        this.depthCopy.render(renderer);
     }
 
     /** Called from the end of the scene's chain. */
@@ -298,7 +297,6 @@ export class TemporalStage {
         this.velocity.dispose();
         this.resolver.dispose();
         this.presenter.dispose();
-        this.depthCopier.dispose();
         this.depthCopy.dispose();
         for (const target of this.history) target.dispose();
     }
