@@ -246,18 +246,18 @@ export class TexturePool {
   }
 
   /** Each mip drawn from the one above it. */
-  generateMips(texture: GPUTexture, format: GPUTextureFormat, mips: number): void {
+  generateMips(texture: GPUTexture, format: GPUTextureFormat, mips: number, layer = 0): void {
     const pipeline = this.mipPipeline(format);
     const encoder = this.device.createCommandEncoder({ label: "gpu mips" });
     for (let mip = 1; mip < mips; mip++) {
       const pass = encoder.beginRenderPass({
-        colorAttachments: [{ view: texture.createView({ baseMipLevel: mip, mipLevelCount: 1 }), loadOp: "clear", storeOp: "store", clearValue: [0, 0, 0, 0] }],
+        colorAttachments: [{ view: texture.createView({ dimension: "2d", baseArrayLayer: layer, arrayLayerCount: 1, baseMipLevel: mip, mipLevelCount: 1 }), loadOp: "clear", storeOp: "store", clearValue: [0, 0, 0, 0] }],
       });
       pass.setPipeline(pipeline);
       pass.setBindGroup(0, this.device.createBindGroup({
         layout: pipeline.getBindGroupLayout(0),
         entries: [
-          { binding: 0, resource: texture.createView({ baseMipLevel: mip - 1, mipLevelCount: 1 }) },
+          { binding: 0, resource: texture.createView({ dimension: "2d", baseArrayLayer: layer, arrayLayerCount: 1, baseMipLevel: mip - 1, mipLevelCount: 1 }) },
           { binding: 1, resource: this.mipSampler! },
         ],
       }));

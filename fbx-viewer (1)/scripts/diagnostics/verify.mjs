@@ -12,6 +12,7 @@ const generatedPrefixes = ['host/generated/'];
 const EXEMPT = new Map(Object.entries({
   'components/AnimationGraph/hooks/useAnimationMixer.ts': 'hot-loop',
   'components/Scene/useMeshLod.ts': 'hot-loop',
+  'renderer/gpu/probes.ts': 'hot-loop',
   'renderer/gpu/particles/effectParts.ts': 'hot-loop',
   'renderer/gpu/clusters/clusterPass.ts': 'hot-loop',
   'renderer/gpu/GpuRenderer.ts': 'hot-loop',

@@ -7,6 +7,7 @@ import { STAGE_ORDER, TARGET_FORMATS, type GpuFrame, type GpuPass, type GpuRende
 import { GeometryPool } from "./geometryPool";
 import { GpuScene } from "./gpuScene";
 import { MaterialPool } from "./materialPool";
+import { MAX_PROBES, PROBE_SIZE, ProbeStore } from "./probes";
 import { VIEW_BYTES } from "./shaders";
 import { WideLineEffect } from "./effects/fatLines";
 import { registerEffectSurfaces } from "./effects/surfaceKinds";
@@ -23,6 +24,15 @@ import { reportGpu } from "./report";
  */
 
 const MAX_VIEWS = 256;
+/** What a reflection probe's picture is made by. */
+const PROBE_PASSES: ReadonlySet<string> = new Set(["surfaces", "clusters", "light-clusters", "deferred-lighting", "sky", "forward"]);
+const SCREEN_PRODUCTS = ["ao", "gi", "reflections", "rayReflections", "resolved", "depthPyramid", "gpuProbes"];
+
+interface FrameCapture {
+  size: number;
+  onlyPasses: ReadonlySet<string>;
+  finish(encoder: GPUCommandEncoder, targets: GpuTargets): void;
+}
 const TARGETS_KEPT_FRAMES = 240;
 const VISIBILITY_ALL = 7; // vertex | fragment | compute
 
@@ -116,6 +126,7 @@ export class GpuRenderer implements GpuRendererApi {
   private disposed = false;
   /** How long each stage takes: read by the profiler overlay. */
   readonly timings: FrameTimings;
+  private readonly probes: ProbeStore;
 
   constructor(canvas: HTMLCanvasElement, core: GpuCore) {
     this.domElement = canvas;
@@ -144,6 +155,7 @@ export class GpuRenderer implements GpuRendererApi {
       entries: [{ binding: 0, resource: { buffer: this.viewBuffer, offset: 0, size: VIEW_BYTES } }],
     });
     this.timings = new FrameTimings(device, core.features.timestamps);
+    this.probes = new ProbeStore(device, shared.textures);
     this.builtin = createBuiltinPasses(core);
     for (const pass of this.builtin.passes) this.addPass(pass);
     installSurfaces(this);
@@ -272,6 +284,7 @@ export class GpuRenderer implements GpuRendererApi {
     this.destroyTargets();
     this.viewBuffer.destroy();
     this.timings.destroy();
+    this.probes.destroy();
     this.context.unconfigure();
   }
 
@@ -418,7 +431,44 @@ export class GpuRenderer implements GpuRendererApi {
 
   private boundScene: GpuScene | null = null;
 
+  /**
+   * Draws what a reflection probe sees from where it stands into its slot, with the frame's lighting but not its screen
+   * effects, which have no meaning for a cube face. Anything hidden from the probe is hidden before this is called.
+   */
+  captureProbe(scene: THREE.Scene, id: string, position: THREE.Vector3, radius: number, intensity: number): void {
+    if (this.disposed) return;
+    const slot = this.probes.slotFor(id);
+    if (slot === null) {
+      reportGpu(`more than ${MAX_PROBES} reflection probes: the rest show the sky`);
+      return;
+    }
+    const cameras = this.probes.facesAt(position);
+    cameras.forEach((camera, face) => {
+      this.runFrame(scene, camera, {
+        size: PROBE_SIZE,
+        onlyPasses: PROBE_PASSES,
+        finish: (encoder, targets) => this.probes.copyFace(encoder, targets.hdr.texture, slot, face),
+      });
+    });
+    this.probes.finish(slot, position, radius, intensity);
+  }
+
+  /** New numbers for a captured probe. */
+  placeProbe(id: string, position: THREE.Vector3, radius: number, intensity: number): void {
+    const slot = this.probes.slotFor(id);
+    if (slot !== null) this.probes.place(slot, position, radius, intensity);
+  }
+
+  removeProbe(id: string): void {
+    this.probes.remove(id);
+  }
+
   render(scene: THREE.Scene, camera: THREE.Camera): void {
+    this.runFrame(scene, camera, null);
+  }
+
+  /** One frame, for the canvas or, with `capture`, into targets of its own size and nowhere else. */
+  private runFrame(scene: THREE.Scene, camera: THREE.Camera, capture: FrameCapture | null): void {
     if (this.disposed) return;
     if (this.renderTarget) return; // Nothing drawn here goes to a WebGL target; what asks for one has its own path.
     const canvas = this.domElement;
@@ -440,19 +490,21 @@ export class GpuRenderer implements GpuRendererApi {
     const scale = this.settings.get("temporal.renderScale");
     const renderScale = typeof scale === "number" && scale > 0 ? Math.min(scale, 1) : 1;
     const viewport = this.canvasRect();
-    const targets = this.ensureTargets(Math.max(1, Math.round(viewport.width * renderScale)), Math.max(1, Math.round(viewport.height * renderScale)), frameNumber);
+    const targets = capture
+      ? this.ensureTargets(capture.size, capture.size, frameNumber)
+      : this.ensureTargets(Math.max(1, Math.round(viewport.width * renderScale)), Math.max(1, Math.round(viewport.height * renderScale)), frameNumber);
 
     const now = performance.now();
     const time = (now - this.startTime) / 1000;
-    const delta = Math.min(0.25, (now - this.lastTime) / 1000);
-    this.lastTime = now;
+    const delta = capture ? 0 : Math.min(0.25, (now - this.lastTime) / 1000);
+    if (!capture) this.lastTime = now;
     this.viewCursor = 0;
 
     const perspective = camera as THREE.PerspectiveCamera;
     camera.getWorldPosition(_eye);
-    const previous = this.previousViewProjections.get(camera) ?? null;
+    const previous = capture ? null : this.previousViewProjections.get(camera) ?? null;
     const jitterOf = this.settings.get("temporal.jitter") as ((frame: number) => readonly [number, number]) | undefined;
-    const jitter = jitterOf ? jitterOf(frameNumber) : ([0, 0] as const);
+    const jitter = jitterOf && !capture ? jitterOf(frameNumber) : ([0, 0] as const);
     const mainViewOffset = this.writeViewSlice({
       projection: camera.projectionMatrix,
       matrixWorldInverse: camera.matrixWorldInverse,
@@ -469,18 +521,21 @@ export class GpuRenderer implements GpuRendererApi {
       near: perspective.near,
       far: perspective.far,
     });
-    let stored = previous;
-    if (!stored) {
-      stored = new THREE.Matrix4();
-      this.previousViewProjections.set(camera, stored);
+    if (!capture) {
+      let stored = previous;
+      if (!stored) {
+        stored = new THREE.Matrix4();
+        this.previousViewProjections.set(camera, stored);
+      }
+      _unjittered.multiplyMatrices(_reverse, camera.projectionMatrix);
+      stored.multiplyMatrices(_unjittered, camera.matrixWorldInverse);
     }
-    _unjittered.multiplyMatrices(_reverse, camera.projectionMatrix);
-    stored.multiplyMatrices(_unjittered, camera.matrixWorldInverse);
 
     const encoder = device.createCommandEncoder({ label: "gpu frame" });
-    const canvasTexture = this.context.getCurrentTexture();
-    const canvasLoadOp: GPULoadOp = canvasTexture === this.lastCanvasTexture ? "load" : "clear";
-    this.lastCanvasTexture = canvasTexture;
+    // A capture has no business with the canvas: taking its texture here would make the frame's own view keep what is there.
+    const canvasTexture = capture ? null : this.context.getCurrentTexture();
+    const canvasLoadOp: GPULoadOp = canvasTexture && canvasTexture === this.lastCanvasTexture ? "load" : "clear";
+    if (canvasTexture) this.lastCanvasTexture = canvasTexture;
     const lodEye = _eye.clone();
     const afterSubmit: (() => void)[] = [];
     const frame: GpuFrame = {
@@ -494,7 +549,7 @@ export class GpuRenderer implements GpuRendererApi {
       materials: this.materials,
       textures: this.textures,
       targets,
-      canvasView: canvasTexture.createView(),
+      canvasView: canvasTexture ? canvasTexture.createView() : targets.hdr.view,
       viewport,
       canvasLoadOp,
       presentFormat: core.presentFormat,
@@ -509,7 +564,7 @@ export class GpuRenderer implements GpuRendererApi {
       sceneLayout: this.sceneLayout,
       sceneBindGroup: this.bindScene(gpuScene),
       drawer: this.builtin.drawer,
-      products: this.products,
+      products: capture ? this.captureProducts() : this.products,
       afterSubmit: (run) => afterSubmit.push(run),
     };
     frame.products.set("mainPixelsPerUnit", perspective.isPerspectiveCamera ? targets.height / (2 * Math.tan(THREE.MathUtils.degToRad(perspective.fov) / 2) / perspective.zoom) : 0);
@@ -517,6 +572,19 @@ export class GpuRenderer implements GpuRendererApi {
     this.settings.set("toneMapping", this.toneMapping);
     frame.products.set("renderer", this);
 
+    if (capture) {
+      for (const stage of STAGE_ORDER) {
+        const list = this.passes.get(stage);
+        if (list) for (const pass of list) if (capture.onlyPasses.has(pass.id)) this.runPass(pass, frame);
+      }
+      capture.finish(encoder, targets);
+      device.queue.submit([encoder.finish()]);
+      for (const run of afterSubmit) run();
+      return;
+    }
+    const probes = this.probes.current;
+    if (probes) this.products.set("probes", probes);
+    else this.products.delete("probes");
     this.timings.begin(encoder);
     for (const stage of STAGE_ORDER) {
       if (stage === "overlay") {
@@ -531,6 +599,13 @@ export class GpuRenderer implements GpuRendererApi {
     device.queue.submit([encoder.finish()]);
     this.timings.collect(readback);
     for (const run of afterSubmit) run();
+  }
+
+  /** What a capture's passes read: the frame's, without what describes the screen. */
+  private captureProducts(): Map<string, unknown> {
+    const products = new Map(this.products);
+    for (const name of SCREEN_PRODUCTS) products.delete(name);
+    return products;
   }
 
   /** Names each material nothing can draw yet, once: it is absent from the picture, and this is why. */

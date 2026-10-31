@@ -5,6 +5,7 @@ import type { GpuCore } from "./device";
 import type { GpuFrame } from "./frame";
 import type { ShadowMapsProduct } from "./passes/shadows";
 import { reportGpu } from "./report";
+import { MAX_PROBES, type ProbesProduct } from "./probes";
 import type { SkyFogProduct } from "./sky/skySettings";
 
 /**
@@ -42,7 +43,7 @@ export const SHADOW_TAPS = 16;
 const BITS_PER_WORD = 32;
 const MAX_WORDS_PER_CLUSTER = Math.ceil(MAX_LOCAL_LIGHTS / BITS_PER_WORD);
 const LOCAL_LIGHT_WORDS = 24;
-const UNIFORM_WORDS = 236;
+const UNIFORM_WORDS = 304;
 const CASCADES = 4;
 const POINT_LIGHT_CONE = -2;
 const NOISE_FRAMES = 64;
@@ -142,6 +143,13 @@ struct LightingUniforms {
   fogGrey: f32,
   // What the sky's table is scaled by, and how far fog takes its colour over fogColor (0: not at all).
   fogSky: vec4f,
+  probeCount: u32,
+  probeMips: f32,
+  probePad0: f32,
+  probePad1: f32,
+  // Where each reflection probe is and how far it reaches, then its strength.
+  probeSpheres: array<vec4f, ${MAX_PROBES}>,
+  probeIntensities: array<vec4f, ${MAX_PROBES}>,
 }
 `;
 
@@ -192,6 +200,7 @@ const LIGHTING_BINDINGS_WGSL = /* wgsl */ `
 @group(${LIGHTING_GROUP}) @binding(9) var lightingAtlasSampler: sampler_comparison;
 @group(${LIGHTING_GROUP}) @binding(10) var lightingSkyView: texture_2d<f32>;
 @group(${LIGHTING_GROUP}) @binding(11) var lightingSkyViewSampler: sampler;
+@group(${LIGHTING_GROUP}) @binding(12) var lightingProbes: texture_cube_array<f32>;
 `;
 
 const LIGHTING_FUNCTIONS_WGSL = /* wgsl */ `
@@ -316,11 +325,28 @@ fn lightingIndirect(s: LightingInput, m: LightingMaterial) -> vec3f {
   }
 
   var radiance = vec3f(0.0);
-  if (hasEnvironment) {
+  // The nearest reflection probe holding this point sees what is really around it, where the sky would not.
+  var probe = -1;
+  var probeDistance = 1e30;
+  for (var index = 0u; index < lighting.probeCount; index++) {
+    let sphere = lighting.probeSpheres[index];
+    let away = distance(s.worldPosition, sphere.xyz);
+    if (away <= sphere.w && away < probeDistance) {
+      probe = i32(index);
+      probeDistance = away;
+    }
+  }
+  if (hasEnvironment || probe >= 0) {
     // Leaning a rough surface's reflection toward its normal keeps it from gathering light from behind itself.
     let reflected = normalize(mix(reflect(-m.viewDirection, m.normal), m.normal, m.roughness * m.roughness));
-    let level = m.roughness * (lighting.environmentMips - 1.0);
-    radiance = textureSampleLevel(lightingEnvironment, lightingEnvironmentSampler, reflected, level).rgb;
+    if (probe >= 0) {
+      let level = m.roughness * (lighting.probeMips - 1.0);
+      // Its faces are laid out mirrored in z: see probes.ts.
+      radiance = textureSampleLevel(lightingProbes, lightingEnvironmentSampler, reflected * vec3f(1.0, 1.0, -1.0), probe, level).rgb * lighting.probeIntensities[probe].x;
+    } else {
+      let level = m.roughness * (lighting.environmentMips - 1.0);
+      radiance = textureSampleLevel(lightingEnvironment, lightingEnvironmentSampler, reflected, level).rgb;
+    }
   }
 
   // One bounce off the microfacets, and the energy of the further bounces that a single-bounce model loses.
@@ -560,6 +586,7 @@ export const createLightingLayout = (device: GPUDevice): GPUBindGroupLayout => {
       { binding: 9, visibility, sampler: { type: "comparison" } },
       { binding: 10, visibility, texture: { sampleType: "float", viewDimension: "2d" } },
       { binding: 11, visibility, sampler: { type: "filtering" } },
+      { binding: 12, visibility, texture: { sampleType: "float", viewDimension: "cube-array" } },
     ],
   });
 };
@@ -598,6 +625,7 @@ export class LightingResources {
   private readonly fallbackAtlas: GPUTextureView;
   private readonly fallbackComparison: GPUSampler;
   private readonly fallbackSkyView: GPUTextureView;
+  private readonly fallbackProbes: GPUTextureView;
   private readonly environmentSampler: GPUSampler;
   private bound: unknown[] = [];
   private bindGroup: GPUBindGroup;
@@ -621,14 +649,16 @@ export class LightingResources {
     const atlas = device.createTexture({ label: "gpu no atlas", size: [1, 1, 1], format: "depth32float", usage: GPUTextureUsage.TEXTURE_BINDING });
     const skyView = device.createTexture({ label: "gpu no sky table", size: [1, 1], format: "rgba16float", usage: GPUTextureUsage.TEXTURE_BINDING });
     this.fallbackSkyView = skyView.createView();
-    this.fallbackTextures = [environment, cascades, atlas, skyView];
+    const probes = device.createTexture({ label: "gpu no probes", size: [1, 1, 6], format: "rgba16float", usage: GPUTextureUsage.TEXTURE_BINDING });
+    this.fallbackProbes = probes.createView({ dimension: "cube-array", arrayLayerCount: 6 });
+    this.fallbackTextures = [environment, cascades, atlas, skyView, probes];
     this.fallbackEnvironment = environment.createView({ dimension: "cube" });
     this.fallbackCascades = cascades.createView({ dimension: "2d-array" });
     this.fallbackAtlas = atlas.createView({ dimension: "2d" });
     this.fallbackComparison = device.createSampler({ label: "gpu no shadow", compare: "greater" });
     this.environmentSampler = device.createSampler({ label: "gpu environment", magFilter: "linear", minFilter: "linear", mipmapFilter: "linear" });
 
-    this.bindGroup = this.makeBindGroup(this.fallbackEnvironment, this.fallbackCascades, this.fallbackComparison, this.fallbackAtlas, this.fallbackComparison, this.fallbackSkyView, this.environmentSampler);
+    this.bindGroup = this.makeBindGroup(this.fallbackEnvironment, this.fallbackCascades, this.fallbackComparison, this.fallbackAtlas, this.fallbackComparison, this.fallbackSkyView, this.environmentSampler, this.fallbackProbes);
     this.product = { layout: this.layout, bindGroup: this.bindGroup, wgsl: LIGHTING_WGSL, resources: this };
   }
 
@@ -833,6 +863,13 @@ export class LightingResources {
     floats[233] = skyFog?.scale[1] ?? 1;
     floats[234] = skyFog?.scale[2] ?? 1;
     floats[235] = takesSky ? skyFog.share : 0;
+    const probes = frame.products.get("probes") as ProbesProduct | undefined;
+    this.uints[236] = probes?.count ?? 0;
+    floats[237] = probes?.mips ?? 0;
+    if (probes) {
+      floats.set(probes.spheres, 240);
+      floats.set(probes.intensities, 272);
+    }
 
     const shadowMaps = frame.products.get("shadowMaps") as ShadowMapsProduct | undefined;
     const cascades = shadowMaps?.cascades ?? null;
@@ -863,19 +900,20 @@ export class LightingResources {
       atlas?.sampler ?? this.fallbackComparison,
       skyFog?.view ?? this.fallbackSkyView,
       skyFog?.sampler ?? this.environmentSampler,
+      probes?.view ?? this.fallbackProbes,
     );
     this.product.bindGroup = next;
   }
 
-  private makeOrReuseBindGroup(environment: GPUTextureView, cascades: GPUTextureView, cascadeSampler: GPUSampler, atlas: GPUTextureView, atlasSampler: GPUSampler, skyView: GPUTextureView, skySampler: GPUSampler): GPUBindGroup {
-    const wanted = [environment, cascades, cascadeSampler, atlas, atlasSampler, skyView, skySampler, this.shadowEntries.buffer];
+  private makeOrReuseBindGroup(environment: GPUTextureView, cascades: GPUTextureView, cascadeSampler: GPUSampler, atlas: GPUTextureView, atlasSampler: GPUSampler, skyView: GPUTextureView, skySampler: GPUSampler, probes: GPUTextureView): GPUBindGroup {
+    const wanted = [environment, cascades, cascadeSampler, atlas, atlasSampler, skyView, skySampler, probes, this.shadowEntries.buffer];
     if (wanted.every((resource, index) => resource === this.bound[index])) return this.bindGroup;
-    this.bindGroup = this.makeBindGroup(environment, cascades, cascadeSampler, atlas, atlasSampler, skyView, skySampler);
+    this.bindGroup = this.makeBindGroup(environment, cascades, cascadeSampler, atlas, atlasSampler, skyView, skySampler, probes);
     return this.bindGroup;
   }
 
-  private makeBindGroup(environment: GPUTextureView, cascades: GPUTextureView, cascadeSampler: GPUSampler, atlas: GPUTextureView, atlasSampler: GPUSampler, skyView: GPUTextureView, skySampler: GPUSampler): GPUBindGroup {
-    this.bound = [environment, cascades, cascadeSampler, atlas, atlasSampler, skyView, skySampler, this.shadowEntries.buffer];
+  private makeBindGroup(environment: GPUTextureView, cascades: GPUTextureView, cascadeSampler: GPUSampler, atlas: GPUTextureView, atlasSampler: GPUSampler, skyView: GPUTextureView, skySampler: GPUSampler, probes: GPUTextureView): GPUBindGroup {
+    this.bound = [environment, cascades, cascadeSampler, atlas, atlasSampler, skyView, skySampler, probes, this.shadowEntries.buffer];
     return this.device.createBindGroup({
       label: "gpu lighting",
       layout: this.layout,
@@ -892,6 +930,7 @@ export class LightingResources {
         { binding: 9, resource: atlasSampler },
         { binding: 10, resource: skyView },
         { binding: 11, resource: skySampler },
+        { binding: 12, resource: probes },
       ],
     });
   }
