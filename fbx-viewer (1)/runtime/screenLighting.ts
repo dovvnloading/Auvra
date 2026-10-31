@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Effect } from 'postprocessing';
 import { SurfaceBuffer } from './gbuffer';
+import { DYNAMIC_GI_UNIFORMS, GI_SAMPLE_GLSL, sceneReadsGi } from './lighting/dynamicGi/giMaterials';
 import { effectTarget, FullscreenPass } from './postEffects';
 
 /**
@@ -20,6 +21,10 @@ import { effectTarget, FullscreenPass } from './postEffects';
  *    colour and other surfaces mostly at grazing angles.
  * Both read the surface buffer (gbuffer.ts) and only bounce light the camera can see: what is off
  * screen or hidden behind something casts no bounce and shows in no reflection.
+ *
+ * With Dynamic Global Illumination on (lighting/dynamicGi), the probes have the far light and this keeps the near:
+ * the detail between probes, small things touching and close-up colour. A ray that lands still takes what it
+ * finds; one that escapes brings what the probes gave this pixel, so that it adds nothing to it.
  */
 
 const COMMON = /* glsl */ `
@@ -78,6 +83,10 @@ uniform float envIntensity;
 uniform sampler2D envMap;
 #include <cube_uv_reflection_fragment>
 #endif
+#ifdef AUVRA_DYNAMIC_GI
+uniform vec4 auvraGiParams;
+${GI_SAMPLE_GLSL}
+#endif
 #define RAYS 4
 #define STEPS 10
 
@@ -108,6 +117,12 @@ void main() {
     vec3 origin = p + n * ( 0.02 - p.z * 0.01 );
     float n0 = noiseAt( gl_FragCoord.xy + frame * 5.588238 );
     float n1 = noiseAt( gl_FragCoord.xy * 1.37 + frame * 3.1416 + 17.0 );
+    #ifdef AUVRA_DYNAMIC_GI
+    vec3 worldPoint = ( cameraWorld * vec4( p, 1.0 ) ).xyz;
+    vec3 toCamera = normalize( ( cameraWorld * vec4( -p, 0.0 ) ).xyz );
+    vec4 gathered4 = auvraGiIrradiance( worldPoint, worldNormal, toCamera, n0 );
+    vec3 probeLight = gathered4.rgb * auvraGiParams.x * RECIPROCAL_PI;
+    #endif
     vec3 sum = vec3( 0.0 );
     for ( int r = 0; r < RAYS; r++ ) {
         vec2 xi = fract( vec2( n0, n1 ) + vec2( float( r ) * 0.618034, float( r ) * 0.381966 ) );
@@ -115,6 +130,9 @@ void main() {
         float jitter = fract( n1 + float( r ) * 0.25 );
         vec3 worldDir = normalize( ( cameraWorld * vec4( dir, 0.0 ) ).xyz );
         vec3 sky = skyFrom( worldDir, 0.5 + 0.75 * dot( worldDir, hemiUp ) );
+        #ifdef AUVRA_DYNAMIC_GI
+        sky = mix( sky, probeLight, gathered4.a );
+        #endif
         vec3 gathered = sky;
         for ( int s = 0; s < STEPS; s++ ) {
             float along = ( float( s ) + jitter ) / float( STEPS );
@@ -137,6 +155,9 @@ void main() {
         sum += gathered;
     }
     vec3 ambient = skyFrom( worldNormal, 0.5 + 0.5 * dot( worldNormal, hemiUp ) );
+    #ifdef AUVRA_DYNAMIC_GI
+    ambient = mix( ambient, probeLight, gathered4.a );
+    #endif
     gl_FragColor = vec4( sum / float( RAYS ) - ambient, -p.z );
 }`;
 
@@ -459,6 +480,7 @@ export class ScreenLightingEffect extends Effect {
             ambientLight: uniform(new THREE.Color()), hemiSky: uniform(new THREE.Color()), hemiGround: uniform(new THREE.Color()),
             hemiUp: uniform(new THREE.Vector3(0, 1, 0)), envMap: uniform<THREE.Texture | null>(null),
             envRotation: uniform(new THREE.Matrix3()), envIntensity: uniform(1),
+            auvraGiAtlas: DYNAMIC_GI_UNIFORMS.auvraGiAtlas, auvraGiGrid: DYNAMIC_GI_UNIFORMS.auvraGiGrid, auvraGiParams: DYNAMIC_GI_UNIFORMS.auvraGiParams, auvraGiCorners: DYNAMIC_GI_UNIFORMS.auvraGiCorners,
         });
         this.accumulate = new FullscreenPass(ACCUMULATE, {
             ...c, current: uniform(null), history: uniform(null), cameraWorld: uniform(new THREE.Matrix4()),
@@ -539,6 +561,7 @@ export class ScreenLightingEffect extends Effect {
             trace.envIntensity.value = this.scene.environmentIntensity;
             gatherAmbient(this.scene, trace as unknown as AmbientUniforms);
             this.syncEnvironment(renderer);
+            this.followProbes();
             this.bounceTrace.render(renderer, this.bounceRaw);
 
             const [read, write] = this.history;
@@ -574,6 +597,18 @@ export class ScreenLightingEffect extends Effect {
         this.previousView.copy(camera.matrixWorldInverse);
         this.previousViewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
         renderer.setRenderTarget(before);
+    }
+
+    /** The trace reads the probes while the scene does: what it gathered without them means nothing with them. */
+    private followProbes(): void {
+        const material = this.bounceTrace.material;
+        const defines = material.defines as Record<string, string | number>;
+        const reading = sceneReadsGi(this.scene);
+        if (reading === 'AUVRA_DYNAMIC_GI' in defines) return;
+        if (reading) defines.AUVRA_DYNAMIC_GI = '';
+        else delete defines.AUVRA_DYNAMIC_GI;
+        material.needsUpdate = true;
+        this.hasHistory = false;
     }
 
     /**

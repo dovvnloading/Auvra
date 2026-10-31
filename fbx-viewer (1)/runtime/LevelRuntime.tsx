@@ -14,6 +14,7 @@ import { splineObjectTriangles } from './splineMesh';
 import type { HostGeometry } from './components/physicsComponents';
 import { usePhysicsQueries } from './physics';
 import { GUNSHOT_NOISE_RADIUS, NoiseBus, NoiseBusContext, useNoiseBus } from './perception';
+import { LevelDynamicGi } from './lighting/dynamicGi/LevelDynamicGi';
 import { LevelLightVolume } from './lighting/LevelLightVolume';
 import { ShadowDetailContext } from './lighting/DistanceShadowLights';
 import { LevelGroundColliders } from './terrainPhysics';
@@ -750,6 +751,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
             <SkySystem levelObjects={runtimeLevelObjects} live />
             <WeatherAudio />
             <LevelLightVolume bakedLighting={level.bakedLighting} />
+            <LevelDynamicGi levelObjects={runtimeLevelObjects} />
 
             <LevelGroundColliders terrains={renderPlan.terrains} />
 

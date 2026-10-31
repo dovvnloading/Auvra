@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { pauseSceneGi } from './dynamicGi/giMaterials';
 import { pauseSceneSky } from './skyScene';
 import {
     fillInvalidProbes,
@@ -189,6 +190,7 @@ export class LightBaker {
     private readonly camera = new THREE.CubeCamera(CAPTURE_NEAR, CAPTURE_FAR, this.target);
     private readonly sky: THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMaterial>;
     private resumeSky: (() => void) | null = null;
+    private resumeGi: (() => void) | null = null;
     private readonly frontFaces = faceMaterial(THREE.FrontSide);
     private readonly anyFaces = faceMaterial(THREE.DoubleSide);
     /** Each captured probe's result, SLOT pixels apiece, read back a batch at a time. */
@@ -448,6 +450,7 @@ export class LightBaker {
             shadows,
         };
         this.resumeSky = pauseSceneSky(scene);
+        this.resumeGi = pauseSceneGi(scene);
         // The environment map's light, as the sky the probes see.
         scene.background = scene.environment;
         scene.backgroundIntensity = scene.environmentIntensity ?? 1;
@@ -489,6 +492,8 @@ export class LightBaker {
         const scene = this.scene;
         this.resumeSky?.();
         this.resumeSky = null;
+        this.resumeGi?.();
+        this.resumeGi = null;
         scene.remove(this.sky);
         for (const object of state.hidden) object.visible = true;
         scene.background = state.background;

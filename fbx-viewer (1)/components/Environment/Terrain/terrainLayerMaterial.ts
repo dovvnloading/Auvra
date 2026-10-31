@@ -156,6 +156,7 @@ export function createTerrainLayerMaterial(splat: THREE.DataTexture): TerrainLay
   material.name = 'TerrainLayerMaterial';
   // Rain wets it and snow settles on it (runtime/weatherSurfaces.ts).
   material.userData.weatherSurface = true;
+  material.userData.raySolid = true;
   material.userData.terrainUniforms = uniforms;
   material.onBeforeCompile = (shader) => patchTerrainLayerShader(shader, uniforms);
   material.customProgramCacheKey = () => PROGRAM_KEY;
@@ -179,6 +180,9 @@ export function createTerrainGroundMaterial(): THREE.MeshStandardMaterial {
   material.name = 'TerrainGroundMaterial';
   // Rain wets it and snow settles on it (runtime/weatherSurfaces.ts).
   material.userData.weatherSurface = true;
+  // What bounced light takes from it: its colours are worked out in the shader, mostly grass.
+  material.userData.rayAlbedo = new THREE.Color(0.068, 0.112, 0.03);
+  material.userData.raySolid = true;
   material.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vGroundWorld;\nvarying vec3 vGroundNormal;')
@@ -233,6 +237,8 @@ export function bindTerrainLayers(material: TerrainLayerMaterial, binding: Terra
   mask[0] = 1;
   uniforms.terrainLayerTiling.value.set(tiling[0], tiling[1], tiling[2], tiling[3]);
   uniforms.terrainLayerMask.value.set(mask[0], mask[1], mask[2], mask[3]);
+  // What bounced light takes from it: the layers averaged, not knowing how much of each is painted.
+  material.userData.rayAlbedoMaps = slots.filter((_, index) => mask[index] > 0).map(slot => slot.value);
   const aspect = Number.isFinite(binding.aspect) && binding.aspect > 0 ? binding.aspect : 1;
   uniforms.terrainUvAspect.value.set(1, aspect);
 }

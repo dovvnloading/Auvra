@@ -68,6 +68,7 @@ Objects can carry components that add behaviour. Select an object and use **Add 
 | Water | An animated water surface with waves, reflections and foam; dynamic rigid bodies float in it and are slowed by it |
 | Reflection Probe | Captures its surroundings into a reflection map for shiny materials within its radius; the nearest probe wins where probes overlap. Updates once at start, at an interval, or every frame |
 | Light Bake Volume | A box (centred on the object, drawn in the editor) where [baked lighting](#baked-lighting) puts its light probes |
+| Dynamic Global Illumination | Light that bounces around the level as it plays, gathered by rays, with no bake: see [Dynamic global illumination](#dynamic-global-illumination) |
 | Post Process | The level's screen effects: global illumination, screen reflections, bloom, ambient occlusion, tone mapping, exposure and auto exposure, light shafts, sunlit haze, motion blur, vignette, depth of field, white balance, colour grading looks, film grain and antialiasing (see [Screen effects](#screen-effects)) |
 | LOD Group | Shows one of the object's children by camera distance (LOD 0, 1, 2) and hides all of them past the last distance |
 | Level Streaming | Loads another level's objects while the player is inside its box and unloads them after the player leaves (see [Level streaming](#level-streaming)) |
@@ -423,6 +424,29 @@ Every level gets global illumination, screen reflections, sunlit haze, light sha
 - **Film Grain** and **Chromatic Aberration** (colour fringes toward the edges of the picture) start at 0, which leaves them off.
 
 If the frame rate stays low, play first lowers the resolution, and turns these effects off only if that is not enough.
+
+## Dynamic global illumination
+
+Add a **Dynamic Global Illumination** component to any object in the level (one is enough; it applies to the whole level). Light then bounces as the level plays, with nothing to bake:
+
+- **It sees what is off screen.** A sunlit red wall tints the room whether or not it is in view, unlike the screen-space **Global illumination** of the Post Process component.
+- **It follows the level.** Move the sun, a lamp, a wall or a crate and the light around it starts to change at once, settling over a few seconds as it bounces on. A door that opens lets the light in, and a room sealed shut goes dark.
+- **Glowing surfaces light the room.** A material's emissive colour counts as a light source, with soft shadows, at no cost per surface.
+- **Rooms go dark.** A room with no openings loses the sky, where the unbaked fill would light it like open ground; reflections of the sky fade with it. Characters and moving objects take the light of wherever they stand.
+
+| Setting | What it does |
+|---|---|
+| **Quality** | How many probes update each frame, and how many rays each sends. Higher settles sooner and with less noise. In play, a slow machine falls back to Low on its own |
+| **Probe spacing** | Metres between the finest probes. Smaller catches smaller rooms and tighter corners, over a smaller area |
+| **Intensity** | Scales all the indirect light |
+| **Later bounces** | How much light carries on past its first bounce. 0 is one bounce only; 1 lets it fade naturally |
+| **Show** | **Indirect light only** shows it on white, **Light probes** shows the probes themselves (red ones are stuck inside something), and **What rays see** shows the scene as the rays do, to check what they take in |
+
+Probes sit in nested grids around the camera, each three times the spacing of the last, so at the default spacing they reach about 200 metres out; past that the level's ordinary sky fill applies. A probe buried in a wall or a crate moves out of it by itself.
+
+The rays see props, foliage and terrain, whether they move or not, and characters as a box around their bones. They do not see glass, wireframes, or materials more than half transparent. A surface gives bounced light its average colour, not the detail of its texture. Meshes of more than 48,000 triangles are simplified for the rays, which does not change how they are drawn.
+
+With this on, the Post Process **Global illumination** adds the close-range detail between probes rather than a second helping of ambient light, so the two are meant to be used together. It takes priority over [baked lighting](#baked-lighting) where both apply. Baking still works, and bakes without it.
 
 ## Baked lighting
 
