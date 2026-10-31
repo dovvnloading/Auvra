@@ -1,5 +1,8 @@
+import type { LevelObject } from '../types';
 import { mirroredClipName } from '../utils/animationBinding';
 import type { AssetSelection } from '../utils/projectHydration';
+import { collectTimelineTargets } from './timeline/evaluate';
+import { objectsLeftToTheGrid } from './worldGrid';
 
 /**
  * WHAT A LEVEL NEEDS
@@ -42,6 +45,8 @@ const documentsOf = (domains: Domains, key: string): Document[] => {
 export interface LevelAssetIndex {
     /** Everything `levelId` can need, whichever level it is entered from. An unknown level needs what every level does. */
     needsOf(levelId: string): LevelAssetNeeds;
+    /** What these models need to draw, for ones a World Grid asks for: them, their textures and their attachments. */
+    needsOfModels(modelIds: readonly string[]): LevelAssetNeeds;
 }
 
 /** Every asset and level in a project, for a game that loads it all. */
@@ -116,7 +121,7 @@ export const createLevelAssetIndex = (domains: Domains): LevelAssetIndex => {
     }
     const levelById = new Map(documentsOf(domains, 'levels').map(document => [document.id, document]));
 
-    const walk = (levelId: string): LevelAssetNeeds => {
+    const walker = () => {
         const needs = {
             models: new Set<string>(),
             textures: new Set<string>(),
@@ -163,7 +168,11 @@ export const createLevelAssetIndex = (domains: Domains): LevelAssetIndex => {
             read(levelById.get(id));
             objectsByLevel.get(id)?.forEach(read);
         };
+        return { needs, enter, read, enterLevel };
+    };
 
+    const walk = (levelId: string): LevelAssetNeeds => {
+        const { needs, enter, read, enterLevel } = walker();
         // What every level can need: the game's settings and HUD, the characters it plays with, and
         // the models whose clips are not recorded, which characters may find by a name only those hold.
         documentsOf(domains, 'metadata').forEach(read);
@@ -174,7 +183,17 @@ export const createLevelAssetIndex = (domains: Domains): LevelAssetIndex => {
             if (blueprint) enter({ kind: 'document', document: blueprint });
         }
         clipsUnknown.forEach(enter);
-        enterLevel(levelId);
+        // What the level's World Grid will ask for itself is not needed up front. Its other objects are read by
+        // hand here, so a level that streams this one in still loads all of it.
+        const objects = (objectsByLevel.get(levelId) ?? []) as LevelObject[];
+        const left = objectsLeftToTheGrid(objects, collectTimelineTargets(objects));
+        if (left.size) {
+            needs.levels.add(levelId);
+            read(levelById.get(levelId));
+            objects.filter(object => !left.has(object)).forEach(read);
+        } else {
+            enterLevel(levelId);
+        }
         return needs;
     };
 
@@ -185,6 +204,14 @@ export const createLevelAssetIndex = (domains: Domains): LevelAssetIndex => {
             if (existing) return existing;
             const needs = walk(levelId);
             known.set(levelId, needs);
+            return needs;
+        },
+        needsOfModels: (modelIds) => {
+            const { needs, enter } = walker();
+            for (const id of modelIds) {
+                const entry = modelById.get(id);
+                if (entry) enter(entry);
+            }
             return needs;
         },
     };

@@ -52,6 +52,8 @@ import { RuntimeServicesProvider, RuntimeSpawnerProvider, type SpawnPosition, to
 import { ComponentHostContext } from './components/builtins';
 import { getComponentDefinition } from './components/registry';
 import { IKPlayerTargetContext } from './components/ikComponents';
+import { worldGridSettingsOf } from './worldGrid';
+import { WorldGridLayer } from './WorldGridLayer';
 import { CameraDirectorDriver } from './components/cameraComponent';
 import { DialogueDriver } from './components/dialogueComponent';
 import { VehicleDriver, VehicleSkidMarks } from './components/vehicleComponent';
@@ -711,6 +713,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
     // Hierarchy and components render as transform groups; gameplay systems read world-space copies.
     const renderPlan = useMemo(() => planLevelRender(runtimeLevelObjects), [runtimeLevelObjects]);
     const worldLevelObjects = renderPlan.worldObjects;
+    const worldGrid = useMemo(() => worldGridSettingsOf(runtimeLevelObjects), [runtimeLevelObjects]);
     // Enemies walk the level's navmesh; the hierarchy stays intact so moving parents are detected.
     // Mesh colliders and auto hulls bake from the model's own triangles; memoized, since a new function re-bakes the navmesh.
     const navShapeGeometry = useCallback((object: LevelObject) => {
@@ -770,8 +773,21 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
                     />
                 ))}
 
-                <InstancedLevelLayer models={models} levelObjects={renderPlan.instancedFoliage} interactive={false} />
-                <InstancedLevelLayer models={models} levelObjects={renderPlan.instancedProps} interactive={false} />
+                {worldGrid ? (
+                    <WorldGridLayer
+                        settings={worldGrid}
+                        foliage={renderPlan.instancedFoliage}
+                        props={renderPlan.instancedProps}
+                        models={models}
+                        cellModels={content.cellModels}
+                        start={sessionStart.position}
+                    />
+                ) : (
+                    <>
+                        <InstancedLevelLayer models={models} levelObjects={renderPlan.instancedFoliage} interactive={false} />
+                        <InstancedLevelLayer models={models} levelObjects={renderPlan.instancedProps} interactive={false} />
+                    </>
+                )}
 
                 {renderPlan.groupRoots.map(obj => (
                     <LevelObjectNode key={obj.id} object={obj} plan={renderPlan} models={models} />

@@ -1,5 +1,5 @@
 import type * as THREE from 'three';
-import type { LevelObject } from '../types';
+import type { LevelObject, LoadedModelData } from '../types';
 import type { AssetSelection, GameContentLoader } from '../utils/projectHydration';
 import type { LevelAssetNeeds } from './levelAssets';
 
@@ -76,6 +76,11 @@ export class LevelAssetResidency {
     private readonly held = new Map<string, Held>();
     private starts = 0;
     private queue: Promise<unknown> = Promise.resolve();
+    /** What the running level needs and what its World Grid is drawing: never freed to make room. */
+    private levelNeeds: LevelAssetNeeds | null = null;
+    private cellsInUse: ReadonlySet<string> = new Set();
+    /** Models a World Grid asked for, for its answer. */
+    private readonly cellModelIds = new Set<string>();
 
     constructor(
         private readonly loader: GameContentLoader,
@@ -112,9 +117,33 @@ export class LevelAssetResidency {
         return run;
     }
 
+    /** The World Grid's models tell it which are drawing; those are safe until it says otherwise. */
+    setCellsInUse(modelIds: ReadonlySet<string>): void {
+        this.cellsInUse = modelIds;
+    }
+
+    /**
+     * Loads models a World Grid asks for while the game runs, after what came before, freeing what was used
+     * longest ago to stay in budget. Resolves with every model loaded this way that is still held.
+     */
+    requestCellModels(needs: LevelAssetNeeds): Promise<LoadedModelData[]> {
+        const run = this.queue.then(async () => {
+            needs.models.forEach(id => this.cellModelIds.add(id));
+            await this.loadWithinBudget(needs, ++this.starts);
+            return this.loader.content().models.filter(model => this.cellModelIds.has(model.id));
+        });
+        this.queue = run.catch(() => undefined);
+        return run;
+    }
+
     private async prepareNow(levelId: string): Promise<void> {
         const needs = this.needsOf(levelId);
-        const start = ++this.starts;
+        this.levelNeeds = needs;
+        this.cellsInUse = new Set();
+        await this.loadWithinBudget(needs, ++this.starts);
+    }
+
+    private async loadWithinBudget(needs: LevelAssetNeeds, start: number): Promise<void> {
         let incoming = 0;
         for (const kind of HELD_KINDS) {
             for (const id of needs[kind]) {
@@ -135,11 +164,13 @@ export class LevelAssetResidency {
     private makeRoom(incoming: number, start: number): void {
         let bytes = this.heldBytes() + incoming;
         if (bytes <= this.budgetBytes) return;
-        const candidates = [...this.held.values()].filter(held => held.used !== start).sort((a, b) => a.used - b.used);
+        const inUse = (held: Held): boolean => Boolean(this.levelNeeds?.[held.kind].has(held.id)) || (held.kind === 'models' && this.cellsInUse.has(held.id));
+        const candidates = [...this.held.values()].filter(held => held.used !== start && !inUse(held)).sort((a, b) => a.used - b.used);
         const selection: Record<HeldKind, Set<string>> = { models: new Set(), textures: new Set(), audio: new Set(), attachments: new Set(), levels: new Set() };
         for (const held of candidates) {
             if (bytes <= this.budgetBytes) break;
             selection[held.kind].add(held.id);
+            if (held.kind === 'models') this.cellModelIds.delete(held.id);
             this.held.delete(LevelAssetResidency.key(held.kind, held.id));
             bytes -= held.bytes;
         }

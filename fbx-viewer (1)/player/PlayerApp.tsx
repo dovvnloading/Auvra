@@ -6,7 +6,7 @@ import { objectsByLevel } from '../runtime/levelStreaming';
 import { LevelRuntime } from '../runtime/LevelRuntime';
 import { createSaveGameStore } from '../runtime/saveGame';
 import { gameState, useGameState } from '../runtime/gameState';
-import type { LoadedGameContent, PlayerStart, RuntimeHost, RuntimeLevel, RuntimeSaveState, SaveGameData } from '../runtime/types';
+import type { GameContent, LoadedGameContent, PlayerStart, RuntimeHost, RuntimeLevel, RuntimeSaveState, SaveGameData } from '../runtime/types';
 import { createGameContentLoader, readGameDocuments, type GameContentLoader } from '../utils/projectHydration';
 import { HUDRenderer } from '../components/HUDEditor/HUDRenderer';
 import { loadGamePack, type GamePackSource } from './gamePack';
@@ -33,10 +33,10 @@ interface Session {
 }
 
 /** The content as the loader holds it now, around the game's documents, which never change. */
-const contentSnapshot = (documents: ReturnType<typeof readGameDocuments>, loader: GameContentLoader): LoadedGameContent => {
+const contentSnapshot = (documents: ReturnType<typeof readGameDocuments>, loader: GameContentLoader, cellModels: GameContent['cellModels']): LoadedGameContent => {
     const objects = loader.objects();
     // Level Streaming volumes load other levels' objects (terrain heights resolved with their level) on demand.
-    return { ...documents, objects, content: { ...loader.content(), levelObjects: objectsByLevel(objects) } };
+    return { ...documents, objects, content: { ...loader.content(), levelObjects: objectsByLevel(objects), cellModels } };
 };
 
 interface Toast {
@@ -73,6 +73,7 @@ export const PlayerApp: React.FC = () => {
     // A level whose assets are loading; the session it will start.
     const [preparing, setPreparing] = useState<Omit<Session, 'key'> | null>(null);
     const assets = useRef<{ residency: LevelAssetResidency; refresh(): LoadedGameContent } | null>(null);
+    const progressShown = useRef(false);
     // Filled by the running level: what a save records of the session.
     const saveStateRef = useRef<(() => RuntimeSaveState | null) | null>(null);
     const [paused, setPaused] = useState(false);
@@ -94,6 +95,7 @@ export const PlayerApp: React.FC = () => {
                 localization.scopeToGame(source.manifest.gameId);
                 localization.load(localizationSettingsFromDocuments(source.domains.metadata));
                 const domains = source.domains as Record<string, any[]>;
+                let residency: LevelAssetResidency | null = null;
                 const loader = createGameContentLoader(domains, {
                     resolveAssetUrl: source.resolveAssetUrl,
                     releaseAssetUrl: source.releaseAssetUrl,
@@ -101,26 +103,32 @@ export const PlayerApp: React.FC = () => {
                     generateThumbnails: false,
                     // The player has no level manager to load terrain heights and paint later.
                     resolveTerrains: true,
-                    onProgress: (value, label) => setProgress({ value, label }),
+                    // Only a loading screen shows this; a World Grid loads while the game plays, and must not re-render it.
+                    onProgress: (value, label) => { if (progressShown.current) setProgress({ value, label }); },
                     signal: controller.signal,
                 });
                 const documents = readGameDocuments(domains);
                 const everything = everyAssetIn(domains);
-                const needsOf = documents.settings.quality.loadLevelsOnDemand ? createLevelAssetIndex(domains).needsOf : () => everything;
+                const onDemand = documents.settings.quality.loadLevelsOnDemand;
+                const index = createLevelAssetIndex(domains);
+                const needsOf = onDemand ? index.needsOf : () => everything;
                 const sizes = new Map(source.manifest.assets.map(asset => [asset.id, asset.size]));
                 const assetIds = new Map<string, unknown>();
                 for (const key of ['models', 'textures', 'audio', 'attachments']) {
                     for (const document of domains[key] ?? []) assetIds.set(`${key}:${document?.id}`, document?.assetId);
                 }
-                assets.current = {
-                    residency: new LevelAssetResidency(
-                        loader,
-                        needsOf,
-                        (kind, id) => sizes.get(assetIds.get(`${kind}:${id}`) as string) ?? 0,
-                        documents.settings.quality.assetMemoryMb * 1024 * 1024,
-                    ),
-                    refresh: () => contentSnapshot(documents, loader),
-                };
+                residency = new LevelAssetResidency(
+                    loader,
+                    needsOf,
+                    (kind, id) => sizes.get(assetIds.get(`${kind}:${id}`) as string) ?? 0,
+                    documents.settings.quality.assetMemoryMb * 1024 * 1024,
+                );
+                const held = residency;
+                const cellModels: GameContent['cellModels'] = onDemand ? {
+                    request: (modelIds) => held.requestCellModels(index.needsOfModels(modelIds)),
+                    setInUse: (modelIds) => held.setCellsInUse(modelIds),
+                } : undefined;
+                assets.current = { residency: held, refresh: () => contentSnapshot(documents, loader, cellModels) };
                 if (!controller.signal.aborted) setLoaded(assets.current.refresh());
             } catch (failure) {
                 if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : String(failure));
@@ -179,6 +187,7 @@ export const PlayerApp: React.FC = () => {
         setPaused(false);
         if (assets.current && !assets.current.residency.holds(levelId)) {
             // Off the running level first, below: nothing may be drawing what makes way for this one.
+            progressShown.current = true;
             setProgress({ value: 0 });
             setScreen('loading');
             setPreparing({ levelId, restore });
@@ -194,6 +203,7 @@ export const PlayerApp: React.FC = () => {
         const { residency, refresh } = assets.current;
         void residency.prepare(preparing.levelId).then(() => {
             if (!live) return;
+            progressShown.current = false;
             setLoaded(refresh());
             setPreparing(null);
             setScreen('playing');

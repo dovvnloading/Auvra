@@ -173,7 +173,7 @@ export interface TextureCompressionReport {
  * Swaps the colour and material maps of every material under `root` for BC-compressed textures,
  * shared textures once. Does nothing where the GPU cannot sample BC textures.
  */
-export const compressModelTextures = async (root: THREE.Object3D): Promise<TextureCompressionReport> => {
+export const compressModelTextures = async (root: THREE.Object3D, keepSources = true): Promise<TextureCompressionReport> => {
     const report: TextureCompressionReport = { compressed: 0, cached: 0, skipped: 0, bytesBefore: 0, bytesAfter: 0 };
     const supported = typeof Worker !== 'undefined' && typeof createImageBitmap !== 'undefined' ? blockCompressionSupport() : { colour: false, normal: false };
     if (!supported.colour && !supported.normal) return report;
@@ -207,7 +207,8 @@ export const compressModelTextures = async (root: THREE.Object3D): Promise<Textu
             const bitmap = await createImageBitmap(image as ImageBitmapSource);
             const result = await pool.compress(bitmap, kind === 'colour' && texture.colorSpace !== THREE.SRGBColorSpace ? 'data' : kind, texture.flipY);
             const compressed = compressedTexture(texture, result);
-            sourceImages.set(compressed, sourceImages.get(texture) ?? texture.image);
+            // Only editor tools read these, and a 4096 image holds far more than its compressed texture.
+            if (keepSources) sourceImages.set(compressed, sourceImages.get(texture) ?? texture.image);
             for (const { material, key } of slots) {
                 (material as unknown as Record<string, THREE.Texture>)[key] = compressed;
                 if (result.format === 'bc5') rebuildNormalZ(material);

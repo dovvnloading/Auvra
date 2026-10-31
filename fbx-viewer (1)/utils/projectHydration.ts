@@ -57,7 +57,7 @@ export interface LoadGameContentOptions {
   resolveTerrains?: boolean;
   /** Told when an asset's bytes have been read, for a source that keeps its own copy of them (a game pack). */
   releaseAssetUrl?(assetId: string): void;
-  /** Models keep their source file for reimporting and for attachments copied from them, which only the editor does. */
+  /** Models keep their source file and their textures' images for reimporting and editor tools, which only the editor has. */
   dropSourceFiles?: boolean;
 }
 
@@ -282,6 +282,7 @@ export function createGameContentLoader(
           manualId: item.id,
           // An animation model keeps only its clips, so compressing its textures would be wasted.
           compressTextures: compressTextures && item.category !== 'Animation',
+          keepTextureSources: !dropSourceFiles,
           signal,
           diagnostics: traceAsset(assetAlias),
           onProgress: (progress, phase) => {
@@ -414,6 +415,7 @@ export function createGameContentLoader(
           normalize: false,
           manualId: item.id,
           compressTextures,
+          keepTextureSources: !dropSourceFiles,
           signal,
           diagnostics: traceAsset(assetAlias),
           onProgress: (progress, phase) => {

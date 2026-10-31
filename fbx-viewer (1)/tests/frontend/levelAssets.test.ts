@@ -4,6 +4,8 @@ import { DEFAULT_ASSET_BUDGET_BYTES, LevelAssetResidency, objectMemoryBytes } fr
 import { createLevelAssetIndex, everyAssetIn } from '../../runtime/levelAssets';
 import type { AssetSelection, GameContentLoader } from '../../utils/projectHydration';
 import type { LevelAssetNeeds } from '../../runtime/levelAssets';
+import { distanceToCell, nextActiveCells, partitionIntoCells, resolveWorldGridSettings, worldGridSettingsOf } from '../../runtime/worldGrid';
+import type { LevelObject } from '../../types';
 
 const prop = (id: string, levelId: string, modelId: string, extra: object = {}) => ({ id, levelId, modelId, name: id, type: 'prop', ...extra });
 
@@ -177,7 +179,116 @@ const fakeLoader = (bytesOf: (id: string) => number) => {
 const needing = (...ids: string[]): LevelAssetNeeds => ({ models: new Set(ids), textures: new Set(), audio: new Set(), attachments: new Set(), levels: new Set() });
 const LEVELS: Record<string, LevelAssetNeeds> = { a: needing('rock', 'hero'), b: needing('tree', 'hero'), c: needing('crate', 'hero') };
 
+describe('a level with a World Grid', () => {
+    const gridded = () => {
+        const project = domains();
+        project.objects.push(prop('g', 'a', '', { components: [{ id: 'grid', type: 'worldGrid', enabled: true, props: {} }] }));
+        return project;
+    };
+
+    it('leaves plain props to the grid, which asks for them as it goes', () => {
+        const needs = createLevelAssetIndex(gridded()).needsOf('a');
+        expect(needs.models.has('rock')).toBe(false);
+        expect(needs.levels.has('a')).toBe(true);
+    });
+
+    it('still needs a plain prop\'s model when something else names it', () => {
+        const project = gridded();
+        project.prefabs.push({ id: 'rock-kit', name: 'Rocks', objects: [{ id: 'p', modelId: 'rock' }] });
+        project.levels[0].blueprint.nodes.push({ id: 'spawn', values: { prefab: 'rock-kit' } } as never);
+        expect(createLevelAssetIndex(project).needsOf('a').models.has('rock')).toBe(true);
+    });
+
+    it('needs the models of objects drawn another way: with components, parents, children or moved by a timeline', () => {
+        const project = gridded();
+        project.objects.push(prop('w1', 'a', 'tree', { components: [{ id: 'm', type: 'mover', enabled: true, props: {} }] }));
+        project.objects.push(prop('w2', 'a', 'crate', { parentId: 'o1' }));
+        project.objects.push(prop('w3', 'a', 'gun'));
+        project.objects.push(prop('w4', 'a', '', { components: [{ id: 't', type: 'timeline', enabled: true, props: { timeline: { duration: 1, tracks: [{ id: 'tr', kind: 'transform', targetId: 'w3', keys: [] }] } } }] }));
+        const needs = createLevelAssetIndex(project).needsOf('a');
+        expect(needs.models.has('tree')).toBe(true);
+        expect(needs.models.has('crate')).toBe(true);
+        expect(needs.models.has('rock')).toBe(true);
+    });
+
+    it('loads all of a gridded level that another level streams in', () => {
+        const project = gridded();
+        project.objects.push(prop('v', 'b', '', { components: [{ id: 's', type: 'levelStreaming', enabled: true, props: { levelId: 'a' } }] }));
+        expect(createLevelAssetIndex(project).needsOf('b').models.has('rock')).toBe(true);
+    });
+
+    it('names what a model the grid asks for needs: its textures and attachments', () => {
+        const needs = createLevelAssetIndex(gridded()).needsOfModels(['rock']);
+        expect([...needs.models]).toEqual(['rock']);
+        expect([...needs.textures]).toEqual(['rock-paint']);
+        expect([...needs.attachments]).toEqual(['rock-moss']);
+    });
+});
+
+describe('the grid\'s cells', () => {
+    const SETTINGS = { cellSize: 10, loadDistance: 15, unloadDistance: 25 };
+    const at = (id: string, x: number, z: number, modelId = 'rock') => ({ ...prop(id, 'a', modelId), position: [x, 0, z] }) as unknown as LevelObject;
+
+    it('puts an object in the cell it stands in, negative coordinates too', () => {
+        const cells = partitionIntoCells([at('f', 1, 1, 'tree')], [at('p', 9, 1), at('n', -1, -1)], 10);
+        expect([...cells.keys()].sort()).toEqual(['-1,-1', '0,0']);
+        expect(cells.get('0,0')?.foliage.length).toBe(1);
+        expect(cells.get('0,0')?.props.length).toBe(1);
+        expect(cells.get('0,0')?.modelIds.sort()).toEqual(['rock', 'tree']);
+    });
+
+    it('measures to the nearest edge of a cell', () => {
+        expect(distanceToCell({ x: 0, z: 0 }, 5, 5, 10)).toBe(0);
+        expect(distanceToCell({ x: 2, z: 0 }, 5, 5, 10)).toBe(15);
+        expect(distanceToCell({ x: 1, z: 1 }, 7, 7, 10)).toBeCloseTo(Math.hypot(3, 3));
+    });
+
+    it('loads cells as they come near and keeps them until further away, so a line walked along does not flicker', () => {
+        const cells = partitionIntoCells([], [at('p', 35, 5)], 10);
+        const none: ReadonlySet<string> = new Set();
+        expect(nextActiveCells(cells, none, 5, 5, SETTINGS).size).toBe(0);
+        const near = nextActiveCells(cells, none, 20, 5, SETTINGS);
+        expect(near.has('3,0')).toBe(true);
+        // Past where it loads, inside where it goes: it stays, and the set is the same one, so nothing re-renders.
+        expect(nextActiveCells(cells, near, 8, 5, SETTINGS)).toBe(near);
+        expect(nextActiveCells(cells, near, 0, 5, SETTINGS).size).toBe(0);
+    });
+
+    it('always keeps a cell a little past where it loads, whatever the settings say', () => {
+        const settings = resolveWorldGridSettings({ props: { cellSize: 1, loadDistance: 100, unloadDistance: 50 } });
+        expect(settings.cellSize).toBeGreaterThanOrEqual(4);
+        expect(settings.unloadDistance).toBeGreaterThan(settings.loadDistance);
+    });
+
+    it('finds a level\'s grid only when it is enabled', () => {
+        const objects = [{ components: [{ id: 'x', type: 'worldGrid', enabled: false, props: {} }] }] as never;
+        expect(worldGridSettingsOf(objects)).toBeNull();
+    });
+});
+
 describe('assets in memory', () => {
+    it('never frees what the running level needs or the cells in play draw, to load more for the grid', async () => {
+        const fake = fakeLoader(() => 40 * MB);
+        const residency = new LevelAssetResidency(fake.loader, id => LEVELS[id], () => 40 * MB, 130 * MB);
+        await residency.prepare('a');
+        await residency.requestCellModels(needing('tree'));
+        residency.setCellsInUse(new Set(['tree']));
+        const loaded = await residency.requestCellModels(needing('crate'));
+        expect(fake.released).toEqual([]);
+        expect(loaded.map(model => model.id).sort()).toEqual(['crate', 'tree']);
+        residency.setCellsInUse(new Set(['crate']));
+        await residency.requestCellModels(needing('gun'));
+        expect(fake.released).toEqual(['tree']);
+    });
+
+    it('answers a grid with only the models it asked for and still has', async () => {
+        const fake = fakeLoader(() => MB);
+        const residency = new LevelAssetResidency(fake.loader, id => LEVELS[id], () => MB, 100 * MB);
+        await residency.prepare('a');
+        const loaded = await residency.requestCellModels(needing('crate'));
+        expect(loaded.map(model => model.id)).toEqual(['crate']);
+    });
+
     it('loads a level\'s assets once, and starting it again needs nothing', async () => {
         const fake = fakeLoader(() => MB);
         const residency = new LevelAssetResidency(fake.loader, id => LEVELS[id], () => MB, DEFAULT_ASSET_BUDGET_BYTES);

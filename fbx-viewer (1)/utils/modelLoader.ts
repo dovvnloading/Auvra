@@ -91,6 +91,8 @@ export interface ModelLoadOptions {
   diagnostics?: { operationId: string; traceId: string; spanId?: string; assetAlias: string };
   /** Swap colour and material maps for GPU-compressed textures (the game's Texture compression setting); on by default. */
   compressTextures?: boolean;
+  /** Compressed textures keep the image they were made from for editor tools; a game has no use for it. */
+  keepTextureSources?: boolean;
 }
 
 type WorkerFormat = 'fbx' | 'obj';
@@ -436,7 +438,7 @@ export const loadModelFile = async (file: File, options: ModelLoadOptions = { no
     options.onProgress?.(0.91, 'material_optimization_normalization');
     if (format === 'glb' || format === 'gltf') prepareNativeGltfMaterials(object);
     else optimizeModelMaterials(object);
-    if (options.compressTextures !== false) await compressModelTextures(object);
+    if (options.compressTextures !== false) await compressModelTextures(object, options.keepTextureSources !== false);
     // Hair, lashes and leaf cards draw a solid body, then their soft fringe.
     splitAlphaCards(object);
 

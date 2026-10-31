@@ -22,6 +22,13 @@ export interface GameContent {
     prefabs?: PrefabData[];
     /** Every level's objects by level id, for Level Streaming volumes. */
     levelObjects?: Readonly<Record<string, LevelObject[]>>;
+    /** Models the level left to its World Grid, loaded as their cells come near. A host that loads everything up front has none. */
+    cellModels?: {
+        /** Loads these models and what they need, and resolves with every model loaded this way that is still held. */
+        request(modelIds: readonly string[]): Promise<LoadedModelData[]>;
+        /** The models the cells in play draw, which must not be freed to make room. */
+        setInUse(modelIds: ReadonlySet<string>): void;
+    };
 }
 
 /** One playable level: its objects (already filtered to this level) and its level blueprint. */
