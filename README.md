@@ -216,12 +216,20 @@ npm run diagnostics:verify
 npm run typecheck
 npm run typecheck:strict
 npm test
+npm run rendering:verify
 npm run build
 cd ..
 cargo +1.98.0 build --release --locked --manifest-path native/Cargo.toml
 .\native\target\release\auvra-native.exe --headless-self-test
 .\native\target\release\auvra-native.exe --self-test
 ```
+
+`npm run rendering:verify` draws the fixed scenes in `fbx-viewer (1)/tests/visual`
+(lighting, shadows, reflections, bounce light, materials and post-processing) on a
+software GPU and compares them with the pictures kept beside them. A change that is
+meant to alter a picture keeps the new one with `npm run rendering:verify -- --update`.
+What each scene costs to load and draw is recorded per commit on the
+`rendering-history` branch and shown against `main` on every pull request.
 
 Python environment metadata is locked with uv. Contributors can check the
 managed environment with `uv sync --locked --no-install-project --no-dev`;

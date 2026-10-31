@@ -79,6 +79,7 @@ npm run project:verify
 npm run protocol:verify
 npm run provider:verify
 npm run renderer:verify
+npm run rendering:verify
 ```
 
 Repository status, licensing, and contribution guidance are documented in the

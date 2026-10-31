@@ -69,6 +69,79 @@ jobs:
       - name: Build editor
         run: npm run build
 
+  rendering:
+    name: Rendering pictures
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fbx-viewer (1)
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24.x"
+          cache: npm
+          cache-dependency-path: fbx-viewer (1)/package-lock.json
+
+      - name: Install editor dependencies
+        run: npm ci
+
+      - name: Draw the scenes and compare them with the kept pictures
+        run: npm run rendering:verify
+
+      - name: Compare what they cost with main
+        if: ${{ !cancelled() && hashFiles('fbx-viewer (1)/tests/visual/output/numbers.json') != '' }}
+        run: |
+          history="$RUNNER_TEMP/rendering-history.jsonl"
+          if git fetch --depth=1 origin rendering-history; then git show FETCH_HEAD:history.jsonl > "$history"; fi
+          node scripts/rendering/history.mjs compare tests/visual/output/numbers.json "$history"
+
+      - name: Keep the pictures with the run
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rendering-pictures
+          path: fbx-viewer (1)/tests/visual/output
+          retention-days: 14
+
+  rendering-history:
+    name: Rendering history
+    needs: rendering
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: rendering-history
+      cancel-in-progress: false
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Fetch what the scenes cost
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rendering-pictures
+          path: ${{ runner.temp }}/rendering-pictures
+
+      - name: Add this commit to the history
+        run: |
+          cp "fbx-viewer (1)/scripts/rendering/history.mjs" "$RUNNER_TEMP/history.mjs"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git fetch --depth=1 origin rendering-history; then
+            git switch --force-create rendering-history FETCH_HEAD
+          else
+            git switch --orphan rendering-history
+          fi
+          node "$RUNNER_TEMP/history.mjs" record "$RUNNER_TEMP/rendering-pictures/numbers.json" history.jsonl "$GITHUB_SHA"
+          git add history.jsonl
+          git commit -m "Rendering cost at $GITHUB_SHA"
+          git push origin rendering-history
+
   python-verify:
     name: Python ${{ matrix.python-version }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
