@@ -157,6 +157,10 @@ const syncStateToDB = async (
     const { toDelete, toAdd, toUpdate } = diffLevelObjects(currentState, nextState);
 
     try {
+        if (toAdd.length + toUpdate.length + toDelete.length > 1) {
+            await dbOperations.commitLevelObjects([...toAdd, ...toUpdate], toDelete, activeLease);
+            return !lease || editorSession.isSameSession(lease);
+        }
         // Adds and updates first, deletes last: every intermediate project
         // state then only names parents that still exist.
         for (const object of toAdd) {

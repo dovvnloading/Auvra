@@ -21,6 +21,7 @@ vi.mock('../../utils/db', () => ({
     updateLevelObject: vi.fn(),
     addLevelObject: vi.fn(),
     deleteLevelObject: vi.fn(),
+    commitLevelObjects: vi.fn(),
     getAllNativeLevelObjects: vi.fn(async () => []),
     getAllLevels: vi.fn(async () => []),
     getLevelObjects: vi.fn(async () => []),
@@ -75,6 +76,12 @@ beforeEach(() => {
   vi.mocked(dbOperations.addLevelObject).mockImplementation(async (object, lease) => hostWrite(`add:${object.id}`, lease));
   vi.mocked(dbOperations.updateLevelObject).mockImplementation(async (id, _updates, lease) => hostWrite(`update:${id}`, lease));
   vi.mocked(dbOperations.deleteLevelObject).mockImplementation(async (id, lease) => hostWrite(`delete:${id}`, lease));
+  // One commit moves the project one revision, whatever it holds.
+  vi.mocked(dbOperations.commitLevelObjects).mockImplementation(async (changed, removed, lease) => {
+    const labels = [...changed.map(object => `add:${object.id}`), ...removed.map(id => `delete:${id}`)];
+    mocks.calls.push(...labels.slice(0, -1));
+    await hostWrite(labels[labels.length - 1], lease);
+  });
 });
 
 describe('addLevelObjects', () => {
