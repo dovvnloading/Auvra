@@ -54,6 +54,7 @@ export interface GameSettings {
     window: { fullscreen: boolean };
     /**
      * meshLod: meshes draw simpler levels of themselves as they get smaller on the screen (utils/meshLod.ts).
+     * occlusionCulling: placed props and foliage that nearer surfaces hide skip the camera's draw (runtime/occlusionCulling.ts).
      * textureCompression: colour and material maps load GPU-compressed (utils/textureCompression).
      * antiAliasing: the most a level's Post Process may use, and what the default stack uses (runtime/temporal).
      * renderScale: the share of the display's size the lit scene is drawn at, with temporal anti-aliasing.
@@ -61,7 +62,7 @@ export interface GameSettings {
      * assetMemoryMb: how much a built game holds before freeing what earlier levels used (runtime/assetResidency.ts).
      */
     quality: {
-        shadows: boolean; postProcessing: boolean; maxDpr: number; fov: number; meshLod: boolean; textureCompression: boolean;
+        shadows: boolean; postProcessing: boolean; maxDpr: number; fov: number; meshLod: boolean; occlusionCulling: boolean; textureCompression: boolean;
         antiAliasing: 'temporal' | 'smaa' | 'none'; renderScale: number; loadLevelsOnDemand: boolean; assetMemoryMb: number;
     };
     input: { mouseSensitivity: number; invertY: boolean };
@@ -80,7 +81,7 @@ export const DEFAULT_GAME_SETTINGS: GameSettings = {
     startupLevelId: null,
     playerBlueprintId: null,
     window: { fullscreen: false },
-    quality: { shadows: true, postProcessing: true, maxDpr: 2, fov: 60, meshLod: true, textureCompression: true, antiAliasing: 'temporal', renderScale: 1, loadLevelsOnDemand: true, assetMemoryMb: 2048 },
+    quality: { shadows: true, postProcessing: true, maxDpr: 2, fov: 60, meshLod: true, occlusionCulling: true, textureCompression: true, antiAliasing: 'temporal', renderScale: 1, loadLevelsOnDemand: true, assetMemoryMb: 2048 },
     input: { mouseSensitivity: 0.002, invertY: false },
     audio: { masterVolume: 1 },
     network: DEFAULT_NETWORK_SETTINGS,

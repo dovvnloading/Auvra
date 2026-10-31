@@ -91,6 +91,7 @@ const sanitizeGameSettings = (value: GameSettings): GameSettings => {
       shadows: Boolean(settings.quality.shadows),
       postProcessing: Boolean(settings.quality.postProcessing),
       meshLod: settings.quality.meshLod !== false,
+      occlusionCulling: settings.quality.occlusionCulling !== false,
       textureCompression: settings.quality.textureCompression !== false,
       loadLevelsOnDemand: settings.quality.loadLevelsOnDemand !== false,
       assetMemoryMb: clamp(settings.quality.assetMemoryMb, LIMITS.assetMemoryMb.min, LIMITS.assetMemoryMb.max, defaults.quality.assetMemoryMb),
@@ -279,6 +280,7 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
             <Toggle label="Shadows" checked={draft.quality.shadows} disabled={disabled} onChange={(shadows) => update((current) => ({ ...current, quality: { ...current.quality, shadows } }))} />
             <Toggle label="Post-processing" checked={draft.quality.postProcessing} disabled={disabled} onChange={(postProcessing) => update((current) => ({ ...current, quality: { ...current.quality, postProcessing } }))} />
             <Toggle label="Mesh detail levels" checked={draft.quality.meshLod} disabled={disabled} onChange={(meshLod) => update((current) => ({ ...current, quality: { ...current.quality, meshLod } }))} />
+            <Toggle label="Occlusion culling" checked={draft.quality.occlusionCulling} disabled={disabled} onChange={(occlusionCulling) => update((current) => ({ ...current, quality: { ...current.quality, occlusionCulling } }))} />
             <Toggle label="Load assets by level" checked={draft.quality.loadLevelsOnDemand} disabled={disabled} onChange={(loadLevelsOnDemand) => update((current) => ({ ...current, quality: { ...current.quality, loadLevelsOnDemand } }))} />
             <NumberField label="Asset memory (MB)" value={draft.quality.assetMemoryMb} limits={LIMITS.assetMemoryMb} disabled={disabled} onChange={(assetMemoryMb) => update((current) => ({ ...current, quality: { ...current.quality, assetMemoryMb } }))} />
             <Toggle label="Texture compression" checked={draft.quality.textureCompression} disabled={disabled} onChange={(textureCompression) => update((current) => ({ ...current, quality: { ...current.quality, textureCompression } }))} />

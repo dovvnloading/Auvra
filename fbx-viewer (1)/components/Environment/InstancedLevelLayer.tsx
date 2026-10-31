@@ -4,7 +4,9 @@ import * as THREE from 'three';
 import { ThreeEvent, useFrame } from '@react-three/fiber';
 import { LoadedModelData, LevelObject } from '../../types';
 import { materialGraphOffsetsVertices } from '../../runtime/materials/graphMaterial';
-import { cullViewFor, gateInstanceDraws, INSTANCE_NEEDS, sortPlacedInstances, SPHERE_FLOATS, UNDRAWN_LAYER, writeSortedInstances, type CullView, type PlacedInstances } from '../../utils/instanceCulling';
+import { OCCLUSION_MIN_TRIANGLES, type OcclusionSet } from '../../runtime/occlusionCulling';
+import { OcclusionCullingContext } from '../../runtime/OcclusionCullingLayer';
+import { cullViewFor, gateInstanceDraws, INSTANCE_NEEDS, seenBounds, seenTriangles, sortPlacedInstances, SPHERE_FLOATS, UNDRAWN_LAYER, writeSortedInstances, type CullView, type PlacedInstances } from '../../utils/instanceCulling';
 import { meshLodChain, type MeshLodLevel } from '../../utils/meshLod';
 import { LOD_UPDATE_INTERVAL, MeshLodContext, useMeshLodReady } from '../Scene/useMeshLod';
 
@@ -177,8 +179,21 @@ const LodPartInstancer: React.FC<{
     // The slot each instance was last sorted into (-1: not yet sorted), and how many are in each.
     const assigned = useMemo(() => new Int8Array(placed.count).fill(-1), [placed]);
     const tally = useMemo(() => new Int32Array(levels.length * INSTANCE_NEEDS), [levels]);
-    // What the set in the meshes was last sorted for.
-    const sorted = useRef<{ placed: PlacedInstances | null; view: CullView | null; version: number }>({ placed: null, view: null, version: 0 }).current;
+    // What the set in the meshes was last sorted for, and what the camera's queries say of it.
+    const sorted = useRef<{ placed: PlacedInstances | null; view: CullView | null; version: number; occlusion: OcclusionSet | null }>({ placed: null, view: null, version: 0, occlusion: null }).current;
+    const occlusion = useContext(OcclusionCullingContext);
+
+    useLayoutEffect(() => {
+        if (!occlusion) return;
+        const set = occlusion.add();
+        sorted.occlusion = set;
+        // Its box comes from a sort.
+        sorted.placed = null;
+        return () => {
+            occlusion.remove(set);
+            sorted.occlusion = null;
+        };
+    }, [occlusion, sorted]);
 
     useLayoutEffect(() => {
         const mesh = whole.current;
@@ -197,8 +212,12 @@ const LodPartInstancer: React.FC<{
         sorted.view = view;
         sorted.version = view.version;
         // What a graph offsets can show from anywhere, so such a part is not culled by its bounds.
-        const changed = sortPlacedInstances(placed, levels, view, offsetsVertices(part.material), assigned, tally);
+        const keepAll = offsetsVertices(part.material);
+        const changed = sortPlacedInstances(placed, levels, view, keepAll, assigned, tally);
         writeSortedInstances(placed, assigned, tally, firstSort ? ~0 : changed, meshes.current);
+        if (occlusion && sorted.occlusion && (firstSort || changed)) {
+            occlusion.setDrawn(sorted.occlusion, seenBounds(placed, assigned), keepAll || seenTriangles(levels, tally) < OCCLUSION_MIN_TRIANGLES);
+        }
     });
 
     return (

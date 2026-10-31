@@ -46,6 +46,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/levelAssets.ts': 'pure-utility',
   'runtime/assetResidency.ts': 'pure-utility',
   'runtime/worldGrid.ts': 'pure-utility',
+  'runtime/occlusionCulling.ts': 'hot-loop',
   'utils/projectChangeBatches.ts': 'pure-utility',
   'runtime/WorldGridLayer.tsx': 'hot-loop',
   'runtime/components/worldGridComponent.tsx': 'data-model',

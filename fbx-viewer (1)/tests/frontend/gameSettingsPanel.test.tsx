@@ -148,6 +148,15 @@ describe('Game settings panel draft', () => {
         expect(nameField()).toHaveValue('Arena II');
     });
 
+    it('keeps occlusion culling as saved', async () => {
+        project.document = defaultDocument();
+        render(<GameSettingsPanel onClose={() => undefined} />);
+        expect(screen.getByLabelText('Occlusion culling')).toBeChecked();
+        fireEvent.click(screen.getByLabelText('Occlusion culling'));
+        await save();
+        expect((project.writes[0] as GameSettingsDocument).settings.quality.occlusionCulling).toBe(false);
+    });
+
     it('keeps typed settings when a save fails, then shows the saved values', async () => {
         project.document = documentWith({ name: 'Arena' });
         render(<GameSettingsPanel onClose={() => undefined} />);

@@ -4,7 +4,13 @@ import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import { InstancedLevelLayer } from '../../components/Environment/InstancedLevelLayer';
 import { MeshLodContext } from '../../components/Scene/useMeshLod';
-import { RayScene } from '../../runtime/raytracing/rayScene';
+import { OcclusionCullingLayer } from '../../runtime/OcclusionCullingLayer';
+import { canReceiveDecal } from '../../runtime/components/decalComponent';
+import { drawsSurface } from '../../runtime/gbuffer';
+import { isStaticLightingMesh } from '../../runtime/lighting/bakedLighting';
+import { OCCLUSION_HIDDEN_ANSWERS, OCCLUSION_RENDER_ORDER, OCCLUSION_VISIBLE_INTERVAL } from '../../runtime/occlusionCulling';
+import { raysSeeMaterial, RayScene } from '../../runtime/raytracing/rayScene';
+import { drawsVelocity } from '../../runtime/temporal/velocityBuffer';
 import type { LevelObject, LoadedModelData } from '../../types';
 import { UNDRAWN_LAYER } from '../../utils/instanceCulling';
 import { meshLodReady } from '../../utils/meshLod';
@@ -29,9 +35,15 @@ const THREE_PROPS: [number, number, number][] = [[0, 0, -30], [0, 0, 60], [5, 0,
 
 extend(THREE as unknown as Record<string, new () => unknown>);
 
-const mount = async (element: React.ReactNode) => {
+// A graph with a vertex offset takes a compiled shader to bind; what matters here is what the layer does about one.
+vi.mock('../../runtime/materials/graphMaterial', async (importOriginal) => ({
+    ...await importOriginal<typeof import('../../runtime/materials/graphMaterial')>(),
+    materialGraphOffsetsVertices: (material: THREE.Material) => material.userData.offsetsVertices === true,
+}));
+
+const mount = async (element: React.ReactNode, queryContext?: unknown) => {
     const canvas = document.createElement('canvas');
-    const gl = { render: vi.fn(), setSize: vi.fn(), setPixelRatio: vi.fn(), domElement: canvas, info: { render: { frame: 0 } }, shadowMap: { enabled: true } };
+    const gl = { render: vi.fn(), setSize: vi.fn(), setPixelRatio: vi.fn(), domElement: canvas, info: { render: { frame: 0 } }, shadowMap: { enabled: true }, getContext: () => queryContext };
     const root = createRoot(canvas);
     root.configure({
         gl: gl as unknown as THREE.WebGLRenderer, frameloop: 'never', shadows: true, size: { width: 1600, height: 900, top: 0, left: 0 },
@@ -221,6 +233,171 @@ describe('the instanced layer in play', () => {
         expect(rays.sceneNodes.texture.version).toBe(tree);
         rays.dispose();
         await act(async () => { root.unmount(); });
+    });
+});
+
+describe('the instanced layer behind a wall', () => {
+    const IN_VIEW: [number, number, number][] = [[-2, 0, -40], [2, 0, -40], [0, 2, -50]];
+
+    /** Queries that answer as told; the GPU's depth test is what this stands in for. */
+    const queryContext = () => {
+        const waiting = new Map<object, boolean | null>();
+        return {
+            ANY_SAMPLES_PASSED_CONSERVATIVE: 0x8d6a, QUERY_RESULT: 0x8866, QUERY_RESULT_AVAILABLE: 0x8867,
+            created: 0, deleted: 0,
+            createQuery() { this.created += 1; return {}; },
+            deleteQuery() { this.deleted += 1; },
+            beginQuery: (_target: number, query: object) => { waiting.set(query, null); },
+            endQuery: () => undefined,
+            getQueryParameter: (query: object, pname: number) => (pname === 0x8867 ? waiting.get(query) !== null : waiting.get(query) ? 1 : 0),
+            isContextLost: () => false,
+            answerAll: (passed: boolean) => { for (const query of waiting.keys()) if (waiting.get(query) === null) waiting.set(query, passed); },
+        };
+    };
+
+    const setUp = async (model: LoadedModelData, positions = IN_VIEW, enabled = true) => {
+        const context = queryContext();
+        const mounted = await mount(
+            <OcclusionCullingLayer enabled={enabled}>
+                <InstancedLevelLayer models={[model]} levelObjects={placedAt(...positions)} interactive={false} />
+            </OcclusionCullingLayer>,
+            context,
+        );
+        const renderer = { renderBufferDirect: vi.fn() } as unknown as THREE.WebGLRenderer & { renderBufferDirect: ReturnType<typeof vi.fn> };
+        /** A frame: sorts and answers read, then the camera's pass reaches the queries. */
+        const pass = (answer?: boolean) => {
+            mounted.frame();
+            const driver = mounted.scene.getObjectByName('Occlusion queries') as THREE.Mesh;
+            driver.onBeforeRender(renderer, mounted.scene as THREE.Scene, mounted.camera, driver.geometry, driver.material as THREE.Material, new THREE.Group());
+            if (answer !== undefined) context.answerAll(answer);
+        };
+        const drawn = () => mounted.instanced().slice(0, -1);
+        const whole = () => mounted.instanced().slice(-1)[0];
+        const takenBy = (camera: THREE.Camera, kind: 'draw' | 'shadow') => drawn().reduce((sum, mesh) => sum + taken(mesh, camera, kind), 0);
+        return { ...mounted, context, renderer, pass, drawn, whole, takenBy };
+    };
+
+    const FRAMES_TO_HIDE = OCCLUSION_VISIBLE_INTERVAL + OCCLUSION_HIDDEN_ANSWERS + 3;
+    const detailed = () => modelOf(new THREE.SphereGeometry(1, 32, 32));
+
+    it('skips only the camera\'s own draw while hidden: shadows, rays and other cameras keep them', async () => {
+        const { root, camera, pass, renderer, takenBy, whole } = await setUp(detailed());
+        pass();
+        expect(takenBy(camera, 'draw')).toBe(3);
+        for (let run = 0; run < FRAMES_TO_HIDE; run++) pass(false);
+        expect(renderer.renderBufferDirect).toHaveBeenCalled();
+        expect(takenBy(camera, 'draw')).toBe(0);
+        expect(takenBy(camera, 'shadow')).toBe(3);
+        expect(takenBy(new THREE.PerspectiveCamera(), 'draw')).toBe(3);
+        expect(whole().count).toBe(3);
+        await act(async () => { root.unmount(); });
+    });
+
+    it('comes back on the first answer that shows', async () => {
+        const { root, camera, pass, takenBy } = await setUp(detailed());
+        pass();
+        for (let run = 0; run < FRAMES_TO_HIDE; run++) pass(false);
+        expect(takenBy(camera, 'draw')).toBe(0);
+        pass(true);
+        pass();
+        expect(takenBy(camera, 'draw')).toBe(3);
+        await act(async () => { root.unmount(); });
+    });
+
+    it('draws everything through a jump of the camera, before the next sort or answer', async () => {
+        const { root, camera, pass, takenBy } = await setUp(detailed());
+        pass();
+        for (let run = 0; run < FRAMES_TO_HIDE; run++) pass(false);
+        camera.lookAt(0, 0, 1);
+        camera.updateMatrixWorld();
+        expect(takenBy(camera, 'draw')).toBe(3);
+        pass(false);
+        pass(false);
+        await act(async () => { root.unmount(); });
+    });
+
+    it('never asks about a part whose material moves its own vertices', async () => {
+        const model = detailed();
+        ((model.object.children[0] as THREE.Mesh).material as THREE.Material).userData.offsetsVertices = true;
+        const { root, camera, pass, renderer, takenBy } = await setUp(model);
+        pass();
+        for (let run = 0; run < FRAMES_TO_HIDE; run++) pass(false);
+        expect(renderer.renderBufferDirect).not.toHaveBeenCalled();
+        expect(takenBy(camera, 'draw')).toBe(3);
+        await act(async () => { root.unmount(); });
+    });
+
+    it('never asks about a set too small to be worth it', async () => {
+        const { root, camera, pass, renderer, takenBy } = await setUp(modelOf(new THREE.BoxGeometry(1, 1, 1)));
+        pass();
+        for (let run = 0; run < FRAMES_TO_HIDE; run++) pass(false);
+        expect(renderer.renderBufferDirect).not.toHaveBeenCalled();
+        expect(takenBy(camera, 'draw')).toBe(3);
+        await act(async () => { root.unmount(); });
+    });
+
+    it('goes by the box of what it draws: what is well out of view does not stop it hiding, what is near the edge does', async () => {
+        const { root, camera, pass, takenBy } = await setUp(detailed(), [...IN_VIEW, [0, 0, 60], [400, 0, -50]]);
+        pass();
+        for (let run = 0; run < FRAMES_TO_HIDE; run++) pass(false);
+        expect(takenBy(camera, 'draw')).toBe(0);
+        expect(takenBy(new THREE.PerspectiveCamera(), 'draw')).toBe(5);
+        await act(async () => { root.unmount(); });
+
+        // This one stands just past the edge, close enough to come in on a turn: where the query cannot look.
+        const wide = await setUp(detailed(), [...IN_VIEW, [55, 0, -50]]);
+        wide.pass();
+        for (let run = 0; run < FRAMES_TO_HIDE; run++) wide.pass(false);
+        expect(wide.takenBy(wide.camera, 'draw')).toBe(4);
+        expect(wide.renderer.renderBufferDirect).not.toHaveBeenCalled();
+        await act(async () => { wide.root.unmount(); });
+    });
+
+    it('asks last among the opaque things, so glass and what is transparent can hide nothing', async () => {
+        const { root, scene } = await setUp(detailed());
+        const driver = scene.getObjectByName('Occlusion queries') as THREE.Mesh;
+        const material = driver.material as THREE.MeshBasicMaterial;
+        // three lists by these: what has transmission or is transparent goes in later lists, drawn after this one.
+        expect(material.transparent).toBe(false);
+        expect((material as unknown as { transmission?: number }).transmission ?? 0).toBe(0);
+        // And sorts on the group first, then on the object.
+        expect((driver.parent as THREE.Group).isGroup).toBe(true);
+        expect(driver.parent!.renderOrder).toBe(OCCLUSION_RENDER_ORDER);
+        expect(driver.renderOrder).toBe(OCCLUSION_RENDER_ORDER);
+        expect(driver.frustumCulled).toBe(false);
+        expect(driver.castShadow).toBe(false);
+        await act(async () => { root.unmount(); });
+    });
+
+    it('stays out of everything that reads the scene', async () => {
+        const { root, scene } = await setUp(detailed());
+        const driver = scene.getObjectByName('Occlusion queries') as THREE.Mesh;
+        const material = driver.material as THREE.Material;
+        // The surface buffer hides it, a velocity is not drawn for it, rays do not see it, and a bake leaves it out.
+        expect(drawsSurface(material)).toBe(false);
+        expect(drawsVelocity(material)).toBe(false);
+        expect(raysSeeMaterial(material)).toBe(false);
+        expect(canReceiveDecal(driver)).toBe(false);
+        expect(isStaticLightingMesh(driver, new Set())).toBe(false);
+        await act(async () => { root.unmount(); });
+    });
+
+    it('does nothing with the setting off', async () => {
+        const { root, camera, scene, frame, takenBy, context } = await setUp(detailed(), IN_VIEW, false);
+        frame();
+        expect(scene.getObjectByName('Occlusion queries')).toBeUndefined();
+        expect(takenBy(camera, 'draw')).toBe(3);
+        expect(context.created).toBe(0);
+        await act(async () => { root.unmount(); });
+    });
+
+    it('frees its queries with the scene', async () => {
+        const { root, pass, context } = await setUp(detailed());
+        pass();
+        for (let run = 0; run < FRAMES_TO_HIDE; run++) pass(false);
+        expect(context.created).toBeGreaterThan(0);
+        await act(async () => { root.unmount(); });
+        expect(context.deleted).toBe(context.created);
     });
 });
 
