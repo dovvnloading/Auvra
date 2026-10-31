@@ -37,6 +37,8 @@ export const SCRATCH_WIDTH = SCRATCH_COLUMNS * (IRRADIANCE_CELL + VISIBILITY_CEL
 export const SCRATCH_HEIGHT = Math.ceil(MAX_PROBES_PER_FRAME / SCRATCH_COLUMNS) * VISIBILITY_CELL;
 /** Where probes' moved positions go in the scratch target: below their irradiance cells. */
 const SCRATCH_OFFSET_Y = Math.ceil(MAX_PROBES_PER_FRAME / SCRATCH_COLUMNS) * IRRADIANCE_CELL;
+/** Power of the cosine lobe each visibility texel gathers rays over. */
+const VISIBILITY_SHARPNESS = 64;
 /** How close to a surface a probe may stand, and how far it may move from its place in the grid, in spacings. */
 const PROBE_MARGIN = 0.15;
 const PROBE_MOVE_LIMIT = 0.45;
@@ -370,7 +372,7 @@ void main() {
         vec4 ray = texelFetch( rays, ivec2( r, vProbe ), 0 );
         // Narrow, and each frame's rays turned: a wide lobe would let a probe just over a thin roof, seeing out to
         // the horizon nearby, count everything under the roof as in sight.
-        float weight = pow( max( dot( facing, giTurn( vTurn, rayDirections[ r ].xyz ) ), 0.0 ), 64.0 );
+        float weight = pow( max( dot( facing, giTurn( vTurn, rayDirections[ r ].xyz ) ), 0.0 ), ${VISIBILITY_SHARPNESS.toFixed(1)} );
         // A back is met nearer than it looks, so nothing beyond it is taken to be in sight.
         float distance = min( ray.a < 0.0 ? -ray.a * 0.5 : ray.a, limit );
         sum += vec2( distance, distance * distance ) * weight;
@@ -381,7 +383,12 @@ void main() {
     vec4 before = texelFetch( atlas, vAtlasCorner + texel, 0 );
     // Nothing to ease from in a texel never written, or for a probe that was buried, and saw this from somewhere else.
     bool sound = before.g > 0.0 && texelFetch( atlas, giPlaceOf( vCode ) * ${IRRADIANCE_CELL} + ivec2( 1 ), 0 ).a > 0.0;
-    gl_FragColor = vec4( sound ? mix( before.rg, moments, 0.2 ) : moments, 0.0, 1.0 );
+    // Each frame's rays count by how many landed in this texel's lobe. With few rays often none land near it, and the
+    // nearest, far off to one side, would otherwise speak for it in full: for a probe just over a thin roof that
+    // might be a ray out to the horizon, and everything under the roof would seem to be in sight.
+    float expected = float( rayCount ) / ${(2 * (VISIBILITY_SHARPNESS + 1)).toFixed(1)};
+    float share = min( total / expected, 1.0 );
+    gl_FragColor = vec4( sound ? mix( before.rg, moments, 0.2 * share ) : moments, 0.0, 1.0 );
 }`;
 
 /**
