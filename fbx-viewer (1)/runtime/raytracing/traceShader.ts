@@ -124,7 +124,12 @@ bool rtTrace( vec3 worldOrigin, vec3 worldDirection, float limit, bool anyHit, o
                 vec4 about = texelFetch( rtInstances, rtTexel( int( low.w ) * 4 + 3 ), 0 );
                 int flags = int( about.z );
                 // What casts no shadow when drawn stops no shadow ray.
-                if ( !anyHit || ( flags & RT_INSTANCE_NO_SHADOW ) == 0 ) {
+                bool enter = !anyHit || ( flags & RT_INSTANCE_NO_SHADOW ) == 0;
+                #ifdef RT_SKIP_CHARACTERS
+                // A character is a box to these rays: fine for bounced light, wrong in a mirror.
+                if ( !anyHit && ( flags & RT_INSTANCE_ONE_WAY ) != 0 ) enter = false;
+                #endif
+                if ( enter ) {
                     // Into an instance: the ray in its own space, not normalised, so its distances stay the world's.
                     instance = int( low.w );
                     vec4 row0 = texelFetch( rtInstances, rtTexel( instance * 4 ), 0 );

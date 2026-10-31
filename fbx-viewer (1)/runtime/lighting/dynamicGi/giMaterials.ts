@@ -74,13 +74,30 @@ const grids = Array.from({ length: GI_CASCADES }, () => new SharedVector4(0, 0, 
 /** x: intensity; y: 1 when this frame's scene reads the volume; z: 1 when only indirect light is shown; w: moves the noise on, frame by frame. */
 const params = new SharedVector4(1, 0, 0, 0);
 
+/** x: 1 when rays are drawing this scene's reflections, so lit materials leave them to it. */
+const rays = new SharedVector4(0, 0, 0, 0);
+
 export const DYNAMIC_GI_UNIFORMS = {
     // One texture in an array: three copies arrays by reference to what they hold, and never a render target otherwise.
     auvraGiAtlas: { value: [giAtlas.texture] },
     auvraGiGrid: { value: grids },
     auvraGiParams: { value: params },
     auvraGiCorners: { value: 8 },
+    auvraGiRays: { value: rays },
 };
+
+/**
+ * The mirror ray of a pixel, in view space, rough surfaces scattering it: the noise holds still so the pattern does not
+ * crawl. The screen's trace and the rays carrying it on must follow the same one, or they would not meet without a seam.
+ */
+export const MIRROR_RAY_GLSL = /* glsl */ `
+vec3 auvraMirrorRay( vec3 point, vec3 normal, float roughness, float n0, float n1 ) {
+    vec3 scatter = vec3( n0 - 0.5, n1 - 0.5, fract( n0 + n1 ) - 0.5 ) * roughness * roughness * 0.8;
+    return reflect( normalize( point ), normalize( normal + scatter ) );
+}`;
+
+/** Between these roughnesses, reflections go from wholly the rays' to wholly the environment map's. */
+export const RAY_REFLECTION_ROUGHNESS = [0.35, 0.6] as const;
 
 /**
  * Reads the volume. Needs only `auvraGiAtlas`, `auvraGiGrid` and GLSL ES 3.00, so the passes that gather light
@@ -209,6 +226,7 @@ export const GI_MATERIAL_PARS = /* glsl */ `
 #if ( defined( STANDARD ) || defined( LAMBERT ) || defined( PHONG ) || defined( TOON ) ) && defined( USE_LIGHT_PROBES )
 #define AUVRA_DYNAMIC_GI
 uniform vec4 auvraGiParams;
+uniform vec4 auvraGiRays;
 ${GI_SAMPLE_GLSL}
 #endif
 `;
@@ -241,9 +259,42 @@ export const applySceneGi = (scene: THREE.Object3D): void => {
     if (!state || paused.has(scene)) {
         params.y = 0;
         params.z = 0;
+        rays.x = 0;
         return;
     }
     params.set(state.intensity, 1, state.indirectOnly ? 1 : 0, params.w);
+    rays.x = drawingReflections.has(scene) ? 1 : 0;
+};
+
+/** What the screen pass hands over for rays to carry on from. */
+export interface RayReflectionInputs {
+    /** Half-size screen-space reflections: colour, and how sure each pixel is. */
+    screen: THREE.Texture;
+    depth: THREE.Texture;
+    normalRoughness: THREE.Texture;
+    camera: THREE.Camera;
+}
+
+/** Draws reflections into `target`, where the screen's reflections have nothing. False when it cannot yet. */
+export type RayReflectionTracer = (target: THREE.WebGLRenderTarget, inputs: RayReflectionInputs) => boolean;
+
+const tracers = new Map<THREE.Object3D, RayReflectionTracer>();
+const drawingReflections = new Set<THREE.Object3D>();
+
+/** Offers `scene`'s screen pass rays to carry its reflections on with, until the returned function is called. */
+export const setSceneReflectionTracer = (scene: THREE.Object3D, tracer: RayReflectionTracer): (() => void) => {
+    tracers.set(scene, tracer);
+    return () => {
+        if (tracers.get(scene) === tracer) tracers.delete(scene);
+    };
+};
+
+export const sceneReflectionTracer = (scene: THREE.Object3D): RayReflectionTracer | null => tracers.get(scene) ?? null;
+
+/** The screen pass says whether rays drew this frame's reflections: lit materials draw their own otherwise. */
+export const noteRayReflections = (scene: THREE.Object3D, drawn: boolean): void => {
+    if (drawn) drawingReflections.add(scene);
+    else drawingReflections.delete(scene);
 };
 
 /** Moves the noise that scatters pixels between cascades on, so temporal anti-aliasing can even it out. */

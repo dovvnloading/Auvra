@@ -65,6 +65,7 @@ export const LIGHTING_COMPONENTS: ComponentDefinition[] = [
             { key: 'spacing', label: 'Probe spacing (m)', type: 'number', default: DEFAULT_DYNAMIC_GI_SETTINGS.spacing, min: 0.5, max: 8, step: 0.25 },
             { key: 'intensity', label: 'Intensity', type: 'number', default: DEFAULT_DYNAMIC_GI_SETTINGS.intensity, min: 0, max: 8, step: 0.05 },
             { key: 'bounce', label: 'Later bounces', type: 'number', default: DEFAULT_DYNAMIC_GI_SETTINGS.bounce, min: 0, max: 1, step: 0.05 },
+            { key: 'reflections', label: 'Ray-traced reflections', type: 'boolean', default: DEFAULT_DYNAMIC_GI_SETTINGS.reflections },
             {
                 key: 'view', label: 'Show', type: 'select', default: DEFAULT_DYNAMIC_GI_SETTINGS.view,
                 options: [

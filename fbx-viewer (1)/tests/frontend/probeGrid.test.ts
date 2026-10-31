@@ -201,5 +201,8 @@ describe('settings', () => {
         expect(resolveDynamicGiSettings({ bounce: 5 }).bounce).toBe(1);
         expect(resolveDynamicGiSettings({ view: 'nonsense' }).view).toBe('lit');
         expect(resolveDynamicGiSettings({ view: 'rays' }).view).toBe('rays');
+        expect(resolveDynamicGiSettings(null).reflections).toBe(true);
+        expect(resolveDynamicGiSettings({ reflections: false }).reflections).toBe(false);
+        expect(resolveDynamicGiSettings({ reflections: 'yes' }).reflections).toBe(true);
     });
 });

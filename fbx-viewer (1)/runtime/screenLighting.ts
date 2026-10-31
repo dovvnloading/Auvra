@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Effect } from 'postprocessing';
 import { SurfaceBuffer } from './gbuffer';
-import { DYNAMIC_GI_UNIFORMS, GI_SAMPLE_GLSL, sceneReadsGi } from './lighting/dynamicGi/giMaterials';
+import { DYNAMIC_GI_UNIFORMS, GI_SAMPLE_GLSL, MIRROR_RAY_GLSL, noteRayReflections, sceneReadsGi, sceneReflectionTracer } from './lighting/dynamicGi/giMaterials';
 import { effectTarget, FullscreenPass } from './postEffects';
 
 /**
@@ -24,7 +24,8 @@ import { effectTarget, FullscreenPass } from './postEffects';
  *
  * With Dynamic Global Illumination on (lighting/dynamicGi), the probes have the far light and this keeps the near:
  * the detail between probes, small things touching and close-up colour. A ray that lands still takes what it
- * finds; one that escapes brings what the probes gave this pixel, so that it adds nothing to it.
+ * finds; one that escapes brings what the probes gave this pixel, so that it adds nothing to it. And rays through
+ * the level carry on any reflection the screen could not finish, so a mirror shows what is behind the camera.
  */
 
 const COMMON = /* glsl */ `
@@ -221,6 +222,7 @@ const REFLECTION_TRACE = /* glsl */ `
 ${COMMON}
 uniform sampler2D lit;
 uniform float maxDistance;
+${MIRROR_RAY_GLSL}
 #define STEPS 28
 #define REFINE 5
 void main() {
@@ -230,11 +232,8 @@ void main() {
     if ( depth >= 1.0 || roughness > 0.75 ) { gl_FragColor = vec4( 0.0 ); return; }
     vec3 p = viewAt( vUv, depth );
     vec3 n = normalize( normalRoughness.xyz );
-    // Rough surfaces scatter the mirror ray; the noise holds still so the pattern does not crawl.
     float n0 = noiseAt( gl_FragCoord.xy );
-    float n1 = noiseAt( gl_FragCoord.xy * 1.37 + 17.0 );
-    vec3 scatter = vec3( n0 - 0.5, n1 - 0.5, fract( n0 + n1 ) - 0.5 ) * roughness * roughness * 0.8;
-    vec3 r = reflect( normalize( p ), normalize( n + scatter ) );
+    vec3 r = auvraMirrorRay( p, n, roughness, n0, noiseAt( gl_FragCoord.xy * 1.37 + 17.0 ) );
     if ( dot( r, n ) <= 0.0 ) { gl_FragColor = vec4( 0.0 ); return; }
     vec3 origin = p + n * ( 0.01 - p.z * 0.004 );
     float jitter = n0;
@@ -447,6 +446,8 @@ export class ScreenLightingEffect extends Effect {
     private readonly smoothed: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget] = [effectTarget(1, 1), effectTarget(1, 1)];
     private readonly reflectionRaw = effectTarget(1, 1);
     private readonly reflectionSoft = effectTarget(1, 1);
+    /** Allocated only when rays first draw into it. */
+    private readonly reflectionRays = effectTarget(1, 1);
     private readonly previousView = new THREE.Matrix4();
     private readonly previousViewProjection = new THREE.Matrix4();
     private hasHistory = false;
@@ -522,7 +523,7 @@ export class ScreenLightingEffect extends Effect {
     override setSize(width: number, height: number): void {
         this.surface.setSize(width, height);
         const w = Math.max(1, Math.round(width / 2)), h = Math.max(1, Math.round(height / 2));
-        for (const t of [this.bounceRaw, ...this.history, ...this.smoothed, this.reflectionRaw, this.reflectionSoft]) t.setSize(w, h);
+        for (const t of [this.bounceRaw, ...this.history, ...this.smoothed, this.reflectionRaw, this.reflectionSoft, this.reflectionRays]) t.setSize(w, h);
         (this.uniforms.get('traceTexel')!.value as THREE.Vector2).set(1 / w, 1 / h);
         (this.smooth.material.uniforms.texel.value as THREE.Vector2).set(1 / w, 1 / h);
         (this.reflectionSmooth.material.uniforms.texel.value as THREE.Vector2).set(1 / w, 1 / h);
@@ -537,6 +538,7 @@ export class ScreenLightingEffect extends Effect {
         u.get('active')!.value = active ? 1 : 0;
         if (!active) {
             this.hasHistory = false;
+            noteRayReflections(this.scene, false);
             return;
         }
         camera.updateMatrixWorld();
@@ -590,8 +592,17 @@ export class ScreenLightingEffect extends Effect {
             trace.lit.value = inputBuffer.texture;
             trace.maxDistance.value = this.options.reflectionDistance;
             this.reflectionTrace.render(renderer, this.reflectionRaw);
-            this.reflectionSmooth.material.uniforms.source.value = this.reflectionRaw.texture;
+            const drawn = sceneReflectionTracer(this.scene)?.(this.reflectionRays, {
+                screen: this.reflectionRaw.texture,
+                depth: this.surface.depth,
+                normalRoughness: this.surface.normalRoughness,
+                camera,
+            }) ?? false;
+            noteRayReflections(this.scene, drawn);
+            this.reflectionSmooth.material.uniforms.source.value = drawn ? this.reflectionRays.texture : this.reflectionRaw.texture;
             this.reflectionSmooth.render(renderer, this.reflectionSoft);
+        } else {
+            noteRayReflections(this.scene, false);
         }
 
         this.previousView.copy(camera.matrixWorldInverse);
@@ -665,6 +676,8 @@ export class ScreenLightingEffect extends Effect {
 
     override dispose(): void {
         super.dispose();
+        noteRayReflections(this.scene, false);
+        this.reflectionRays.dispose();
         this.environment.target?.dispose();
         this.pmrem?.dispose();
         this.surface.dispose();

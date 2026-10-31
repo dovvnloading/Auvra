@@ -233,10 +233,12 @@ export interface DynamicGiSettings {
     intensity: number;
     /** How much light carries on after its first bounce. */
     bounce: number;
+    /** Carries reflections on with rays past what the screen shows. */
+    reflections: boolean;
     view: 'lit' | 'probes' | 'rays' | 'lighting';
 }
 
-export const DEFAULT_DYNAMIC_GI_SETTINGS: DynamicGiSettings = { quality: 'medium', spacing: 1, intensity: 1, bounce: 1, view: 'lit' };
+export const DEFAULT_DYNAMIC_GI_SETTINGS: DynamicGiSettings = { quality: 'medium', spacing: 1, intensity: 1, bounce: 1, reflections: true, view: 'lit' };
 
 const QUALITIES: readonly GiQuality[] = ['low', 'medium', 'high'];
 const VIEWS: readonly DynamicGiSettings['view'][] = ['lit', 'probes', 'rays', 'lighting'];
@@ -251,6 +253,7 @@ export const resolveDynamicGiSettings = (props: Record<string, unknown> | null |
         spacing: finite(props?.spacing, defaults.spacing, 0.5, 8),
         intensity: finite(props?.intensity, defaults.intensity, 0, 8),
         bounce: finite(props?.bounce, defaults.bounce, 0, 1),
+        reflections: typeof props?.reflections === 'boolean' ? props.reflections : defaults.reflections,
         view: VIEWS.includes(props?.view as DynamicGiSettings['view']) ? props!.view as DynamicGiSettings['view'] : defaults.view,
     };
 };
