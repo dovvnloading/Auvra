@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { LIGHT_BAKE_VOLUME_COMPONENT_TYPE } from '../lighting/bakedLighting';
+import { DYNAMIC_GI_COMPONENT_TYPE } from '../lighting/dynamicGi/LevelDynamicGi';
+import { DEFAULT_DYNAMIC_GI_SETTINGS } from '../lighting/dynamicGi/probeGrid';
 import type { ComponentDefinition, ComponentRenderProps } from './types';
 
 /**
@@ -47,5 +49,28 @@ export const LIGHTING_COMPONENTS: ComponentDefinition[] = [
             { key: 'size', label: 'Size (m)', type: 'vector3', default: [20, 8, 20] },
         ],
         Render: LightBakeVolumeRender,
+    },
+    {
+        type: DYNAMIC_GI_COMPONENT_TYPE,
+        label: 'Dynamic Global Illumination',
+        description: 'Light that bounces around the level as it plays, gathered by rays from probes around the camera: off-screen surfaces count, and it follows moving lights, objects and the time of day, with no bake.',
+        props: [
+            {
+                key: 'quality', label: 'Quality', type: 'select', default: DEFAULT_DYNAMIC_GI_SETTINGS.quality,
+                options: [{ label: 'Low', value: 'low' }, { label: 'Medium', value: 'medium' }, { label: 'High', value: 'high' }],
+            },
+            { key: 'spacing', label: 'Probe spacing (m)', type: 'number', default: DEFAULT_DYNAMIC_GI_SETTINGS.spacing, min: 0.5, max: 8, step: 0.25 },
+            { key: 'intensity', label: 'Intensity', type: 'number', default: DEFAULT_DYNAMIC_GI_SETTINGS.intensity, min: 0, max: 8, step: 0.05 },
+            { key: 'bounce', label: 'Later bounces', type: 'number', default: DEFAULT_DYNAMIC_GI_SETTINGS.bounce, min: 0, max: 1, step: 0.05 },
+            {
+                key: 'view', label: 'Show', type: 'select', default: DEFAULT_DYNAMIC_GI_SETTINGS.view,
+                options: [
+                    { label: 'The level', value: 'lit' },
+                    { label: 'Indirect light only', value: 'lighting' },
+                    { label: 'Light probes', value: 'probes' },
+                    { label: 'What rays see', value: 'rays' },
+                ],
+            },
+        ],
     },
 ];

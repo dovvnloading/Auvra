@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { LevelObject } from '../../types';
 import { isDynamicObject } from '../levelObjectMotion';
+import { DYNAMIC_GI_UNIFORMS, GI_MATERIAL_PARS, applySceneGi } from './dynamicGi/giMaterials';
 
 /**
  * BAKED LIGHTING
@@ -381,16 +382,15 @@ export const sampleLightVolume = (volume: Pick<LightVolume, 'origin' | 'spacing'
     return irradiance;
 };
 
-const sh = [volumeTexture(), volumeTexture(), volumeTexture()] as const;
+/** Each probe's three vectors of coefficients, in three stacked copies of the grid: one texture unit, not three. */
+const sh = volumeTexture();
 const origin = new SharedVector3();
 const extent = new SharedVector3();
 /** x: intensity, y: 1 when this frame's scene has a volume, z: normal offset, w: edge fade (world units). */
 const params = new SharedVector4(1, 0, 1, 1);
 
 export const BAKED_LIGHTING_UNIFORMS = {
-    bakedGiSh0: { value: sh[0] },
-    bakedGiSh1: { value: sh[1] },
-    bakedGiSh2: { value: sh[2] },
+    bakedGiSh: { value: sh },
     bakedGiOrigin: { value: origin },
     bakedGiExtent: { value: extent },
     bakedGiParams: { value: params },
@@ -399,9 +399,7 @@ export const BAKED_LIGHTING_UNIFORMS = {
 const PARS = /* glsl */`
 #if defined( STANDARD ) || defined( LAMBERT ) || defined( PHONG ) || defined( TOON )
 #define AUVRA_BAKED_GI
-uniform highp sampler3D bakedGiSh0;
-uniform highp sampler3D bakedGiSh1;
-uniform highp sampler3D bakedGiSh2;
+uniform highp sampler3D bakedGiSh;
 uniform vec3 bakedGiOrigin;
 uniform vec3 bakedGiExtent;
 uniform vec4 bakedGiParams;
@@ -413,7 +411,9 @@ float bakedGiWeight( const in vec3 position ) {
 // lies in front of the surface: one behind it (across a wall or floor) counts for next to nothing,
 // so light does not leak through. sampleLightVolume does the same on the CPU.
 vec3 bakedGiIrradiance( const in vec3 position, const in vec3 normal ) {
-	vec3 last = vec3( textureSize( bakedGiSh0, 0 ) - 1 );
+	ivec3 stacked = textureSize( bakedGiSh, 0 );
+	int layers = stacked.z / 3;
+	vec3 last = vec3( stacked.x - 1, stacked.y - 1, layers - 1 );
 	vec3 spacing = bakedGiExtent / max( last, vec3( 1.0 ) );
 	vec3 cell = clamp( ( position + normal * bakedGiParams.z - bakedGiOrigin ) / max( bakedGiExtent, vec3( 1e-4 ) ), 0.0, 1.0 ) * last;
 	vec3 base = min( floor( cell ), max( last - 1.0, vec3( 0.0 ) ) );
@@ -430,9 +430,9 @@ vec3 bakedGiIrradiance( const in vec3 position, const in vec3 normal ) {
 		float facing = dot( toProbe, normal ) / max( length( toProbe ), 1e-4 );
 		float weight = near.x * near.y * near.z * max( smoothstep( ${BEHIND_FACING.toFixed(2)}, ${FRONT_FACING.toFixed(2)}, facing ), ${BEHIND_WEIGHT} );
 		ivec3 texel = ivec3( probe );
-		a += texelFetch( bakedGiSh0, texel, 0 ) * weight;
-		b += texelFetch( bakedGiSh1, texel, 0 ) * weight;
-		c += texelFetch( bakedGiSh2, texel, 0 ) * weight;
+		a += texelFetch( bakedGiSh, texel, 0 ) * weight;
+		b += texelFetch( bakedGiSh, ivec3( texel.xy, texel.z + layers ), 0 ) * weight;
+		c += texelFetch( bakedGiSh, ivec3( texel.xy, texel.z + layers * 2 ), 0 ) * weight;
 		total += weight;
 	}
 	a /= total;
@@ -449,12 +449,22 @@ const BEFORE_MAPS = /* glsl */`
 #if defined( RE_IndirectDiffuse ) && defined( AUVRA_BAKED_GI )
 	float bakedGiBlend = 0.0;
 	vec3 bakedGi = vec3( 0.0 );
-	if ( bakedGiParams.y > 0.5 ) {
+	if ( bakedGiParams.y > 0.5 || auvraGiParams.y > 0.5 ) {
 		vec3 bakedGiPosition = ( vec4( geometryPosition, 0.0 ) * viewMatrix ).xyz + cameraPosition;
 		vec3 bakedGiNormal = inverseTransformDirection( geometryNormal, viewMatrix );
-		bakedGiBlend = bakedGiWeight( bakedGiPosition );
-		bakedGi = bakedGiIrradiance( bakedGiPosition, bakedGiNormal );
-		// The bake holds the sky fill (ambient, hemisphere and environment) as it reaches here.
+		if ( bakedGiParams.y > 0.5 ) {
+			bakedGiBlend = bakedGiWeight( bakedGiPosition );
+			bakedGi = bakedGiIrradiance( bakedGiPosition, bakedGiNormal );
+		}
+		// Light gathered as the level plays comes first. Where it has nothing yet, or does not reach, the bake still stands.
+		if ( auvraGiParams.y > 0.5 ) {
+			vec4 gathered = auvraGiIrradiance( bakedGiPosition, bakedGiNormal, normalize( cameraPosition - bakedGiPosition ) );
+			float bakedShare = bakedGiBlend * ( 1.0 - gathered.a );
+			float together = gathered.a + bakedShare;
+			if ( together > 0.0 ) bakedGi = ( gathered.rgb * auvraGiParams.x * gathered.a + bakedGi * bakedShare ) / together;
+			bakedGiBlend = together;
+		}
+		// Both hold the sky fill (ambient, hemisphere and environment) as it reaches here.
 		irradiance *= 1.0 - bakedGiBlend;
 		#ifndef STANDARD
 			irradiance += bakedGi * bakedGiBlend;
@@ -465,7 +475,30 @@ const BEFORE_MAPS = /* glsl */`
 
 const AFTER_MAPS = /* glsl */`
 #if defined( RE_IndirectDiffuse ) && defined( AUVRA_BAKED_GI ) && defined( STANDARD )
+	// Reflections of the environment fade as a surface loses sight of it: in a dark room a polished floor shows
+	// no sky. How much it lost is the light that got here, against what the open environment would have given.
+	#if defined( USE_ENVMAP ) && defined( RE_IndirectSpecular ) && ! defined( AUVRA_LOCAL_REFLECTION )
+		if ( auvraGiParams.y > 0.5 ) {
+			float auvraGiOpen = dot( iblIrradiance, vec3( 0.2126, 0.7152, 0.0722 ) );
+			float auvraGiSeen = clamp( dot( bakedGi, vec3( 0.2126, 0.7152, 0.0722 ) ) / max( auvraGiOpen, 1e-3 ), 0.0, 1.0 );
+			radiance *= mix( 1.0, auvraGiSeen, bakedGiBlend );
+			#ifdef USE_CLEARCOAT
+				clearcoatRadiance *= mix( 1.0, auvraGiSeen, bakedGiBlend );
+			#endif
+		}
+	#endif
 	iblIrradiance = mix( iblIrradiance, bakedGi, bakedGiBlend );
+#endif
+#if defined( RE_IndirectDiffuse ) && defined( AUVRA_BAKED_GI )
+	// The view that shows only indirect light, on white.
+	if ( auvraGiParams.z > 0.5 ) {
+		reflectedLight.directDiffuse = vec3( 0.0 );
+		reflectedLight.directSpecular = vec3( 0.0 );
+		material.diffuseColor = vec3( 1.0 );
+		#if defined( RE_IndirectSpecular )
+			radiance = vec3( 0.0 );
+		#endif
+	}
 #endif
 `;
 
@@ -483,14 +516,16 @@ export const installBakedLighting = (): void => {
     if (!THREE.ShaderChunk.lights_pars_begin.includes(INSTALLED_MARK)) {
         THREE.ShaderChunk.lights_pars_begin += `
 ${INSTALLED_MARK}
+${GI_MATERIAL_PARS}
 ${PARS}`;
         THREE.ShaderChunk.lights_fragment_maps = BEFORE_MAPS + THREE.ShaderChunk.lights_fragment_maps + AFTER_MAPS;
     }
     for (const name of ['standard', 'physical', 'lambert', 'phong', 'toon'] as const) {
-        Object.assign(THREE.ShaderLib[name].uniforms, BAKED_LIGHTING_UNIFORMS);
+        Object.assign(THREE.ShaderLib[name].uniforms, BAKED_LIGHTING_UNIFORMS, DYNAMIC_GI_UNIFORMS);
     }
     THREE.Scene.prototype.onBeforeRender = function onBeforeRender(this: THREE.Scene) {
         applyLightVolume(this);
+        applySceneGi(this);
     };
 };
 
@@ -536,17 +571,15 @@ const toHalf = THREE.DataUtils.toHalfFloat;
 const upload = (volume: LightVolume): void => {
     const [nx, ny, nz] = volume.counts;
     const probes = nx * ny * nz;
-    const packed = [new Uint16Array(probes * 4), new Uint16Array(probes * 4), new Uint16Array(probes * 4)];
+    const packed = new Uint16Array(probes * 4 * 3);
     for (let probe = 0; probe < probes; probe++) {
         const from = probe * SH_FLOATS_PER_PROBE;
-        for (let k = 0; k < SH_FLOATS_PER_PROBE; k++) packed[k >> 2][probe * 4 + (k & 3)] = toHalf(volume.sh[from + k]);
+        for (let k = 0; k < SH_FLOATS_PER_PROBE; k++) packed[((k >> 2) * probes + probe) * 4 + (k & 3)] = toHalf(volume.sh[from + k]);
     }
-    sh.forEach((texture, index) => {
-        // A new size needs new storage: dispose frees it, and the next draw allocates afresh.
-        texture.dispose();
-        texture.image = { data: packed[index], width: nx, height: ny, depth: nz };
-        texture.needsUpdate = true;
-    });
+    // A new size needs new storage: dispose frees it, and the next draw allocates afresh.
+    sh.dispose();
+    sh.image = { data: packed, width: nx, height: ny, depth: nz * 3 };
+    sh.needsUpdate = true;
     uploaded = volume.sh;
 };
 

@@ -13,6 +13,7 @@ import { TerrainSculptor } from './Terrain/TerrainSculptor';
 import { InstancedLevelLayer } from './InstancedLevelLayer';
 import { LodEditorPreviewContext, useLodEditorPreview } from '../../runtime/components/lodComponents';
 import { AudioSystem } from './AudioSystem';
+import { LevelDynamicGi } from '../../runtime/lighting/dynamicGi/LevelDynamicGi';
 import { LevelLightVolume, LightBakeRunner } from '../../runtime/lighting/LevelLightVolume';
 import { useLevel } from '../../context/LevelContext';
 import { SkySystem } from './SkySystem';
@@ -777,6 +778,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
             {/* Dynamic Sky System */}
             <SkySystem levelObjects={resolvedObjects} />
             <LevelLightVolume bakedLighting={bakedLighting} />
+            <LevelDynamicGi levelObjects={resolvedObjects} />
             <LightBakeRunner />
 
             {/* Grid */}

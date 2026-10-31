@@ -185,7 +185,7 @@ describe('drawing with a volume', () => {
         expect(THREE.ShaderChunk.lights_fragment_maps).toContain('bakedGiBlend');
         for (const name of ['standard', 'physical', 'lambert', 'phong', 'toon'] as const) {
             const copy = THREE.UniformsUtils.clone(THREE.ShaderLib[name].uniforms);
-            expect(copy.bakedGiSh0.value).toBe(BAKED_LIGHTING_UNIFORMS.bakedGiSh0.value);
+            expect(copy.bakedGiSh.value).toBe(BAKED_LIGHTING_UNIFORMS.bakedGiSh.value);
             expect(copy.bakedGiParams.value).toBe(BAKED_LIGHTING_UNIFORMS.bakedGiParams.value);
         }
     });
@@ -199,7 +199,7 @@ describe('drawing with a volume', () => {
         expect(lightVolumeEnabled()).toBe(true);
         expect(BAKED_LIGHTING_UNIFORMS.bakedGiParams.value.x).toBe(1.5);
         expect(BAKED_LIGHTING_UNIFORMS.bakedGiExtent.value.toArray()).toEqual([2, 2, 2]);
-        expect(BAKED_LIGHTING_UNIFORMS.bakedGiSh0.value.image.width).toBe(2);
+        expect(BAKED_LIGHTING_UNIFORMS.bakedGiSh.value.image.width).toBe(2);
         applyLightVolume(other);
         expect(lightVolumeEnabled()).toBe(false);
 
@@ -210,7 +210,7 @@ describe('drawing with a volume', () => {
         const releaseBounce = setSceneLightVolume(scene, bounce);
         releaseNone();
         applyLightVolume(scene);
-        expect(BAKED_LIGHTING_UNIFORMS.bakedGiSh0.value.image.width).toBe(3);
+        expect(BAKED_LIGHTING_UNIFORMS.bakedGiSh.value.image.width).toBe(3);
         releaseBounce();
         expect(lightVolumeFor(scene)).toBe(level);
         releaseLevel();
