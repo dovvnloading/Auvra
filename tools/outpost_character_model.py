@@ -17,7 +17,7 @@ from pathlib import Path
 
 import bmesh
 import bpy
-from mathutils import Matrix, Quaternion, Vector
+from mathutils import Quaternion, Vector
 
 ARGS = sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else []
 OUT_DIR = Path(ARGS[0]) if ARGS else Path(__file__).resolve().parents[1] / 'Auvra' / 'project' / 'templates' / 'outpost' / 'assets'

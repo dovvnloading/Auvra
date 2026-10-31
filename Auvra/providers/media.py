@@ -62,7 +62,6 @@ class MediaDownloader:
     def _stream(self, url, transport, sink, digest, allowed):
         current = url
         for _ in range(3):
-            parsed = urlsplit(current); origin = f"{parsed.scheme}://{parsed.netloc}"
             target = _HashSink(sink, digest, self.max_bytes)
             response = transport.stream(HttpRequest("GET", current, {"Accept": "image/*"}, b""), target, max_bytes=self.max_bytes) if hasattr(transport, "stream") else transport.request(HttpRequest("GET", current, {"Accept": "image/*"}, b""))
             if response.status in {301, 302, 303, 307, 308}:

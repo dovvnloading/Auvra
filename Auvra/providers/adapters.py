@@ -12,7 +12,7 @@ from .commands import CommandProposal, provider_command_schema, validate_provide
 from .descriptors import Capability, ProviderDescriptor, ProviderRegistry
 from .errors import ErrorCode, ProviderError, normalize_error
 from .media import MediaArtifact, MediaDownloader
-from .transport import BoundedTransport, HttpRequest, HttpResponse, Transport
+from .transport import BoundedTransport, HttpRequest, Transport
 from Auvra.diagnostics import trace_public_class
 
 # Schema name (OpenAI-compatible APIs) and tool name (Anthropic) of a HUD command proposal.

@@ -1,6 +1,6 @@
 """Read-only migration readers for the prototype ``.forge`` archive."""
 from __future__ import annotations
-import json, mimetypes, zipfile
+import json, zipfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path

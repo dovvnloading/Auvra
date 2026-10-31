@@ -4,7 +4,7 @@ import hashlib
 import math
 import os
 import re
-import shutil, uuid, stat
+import uuid, stat
 import json
 import struct
 import sys

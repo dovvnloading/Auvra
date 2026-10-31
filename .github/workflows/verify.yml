@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: ["22.12.0", "24.x"]
+        node-version: ["22.13.0", "24.x"]
     defaults:
       run:
         working-directory: fbx-viewer (1)
@@ -50,6 +50,12 @@ jobs:
 
       - name: Verify desktop frame boundaries
         run: node scripts/frame/verify.mjs
+
+      - name: Verify the game player leaves out the editor
+        run: npm run player:verify
+
+      - name: Check for mistakes in the frontend
+        run: npm run lint
 
       - name: Typecheck the full editor program
         run: npm run typecheck
@@ -96,6 +102,19 @@ jobs:
       - name: Run Python tests
         run: uv run --locked --no-sync python -W error::ResourceWarning -m unittest discover -s tests -t . -v
 
+  python-lint:
+    name: Python lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      - name: Check for mistakes in the Python
+        run: uvx ruff@0.14.3 check Auvra tests tools
+
   native-engine-build:
     name: Native engine (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -111,7 +130,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Select pinned Rust toolchain
-        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
 
       - name: Configure headless software Vulkan
         if: runner.os == 'Linux'
@@ -123,6 +142,9 @@ jobs:
 
       - name: Check native formatting
         run: cargo +1.98.0 fmt -- --check
+
+      - name: Check for mistakes in the native engine
+        run: cargo +1.98.0 clippy --locked --all-targets -- -D warnings
 
       - name: Run locked native tests
         run: cargo +1.98.0 test --locked
@@ -152,10 +174,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Select pinned Rust toolchain
-        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
 
       - name: Check player formatting
         run: cargo +1.98.0 fmt -- --check
+
+      - name: Check for mistakes in the player
+        run: cargo +1.98.0 clippy --locked --all-targets -- -D warnings
 
       - name: Run locked player tests
         run: cargo +1.98.0 test --locked
@@ -181,10 +206,13 @@ jobs:
           sudo apt-get install --yes --no-install-recommends pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libdbus-1-dev
 
       - name: Select pinned Rust toolchain
-        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
 
       - name: Check player formatting
         run: cargo +1.98.0 fmt -- --check
+
+      - name: Check for mistakes in the player
+        run: cargo +1.98.0 clippy --locked --all-targets -- -D warnings
 
       - name: Run locked player tests
         run: cargo +1.98.0 test --locked
@@ -281,7 +309,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: "22.12.0"
+          node-version: "22.13.0"
           cache: npm
           cache-dependency-path: fbx-viewer (1)/package-lock.json
 
@@ -336,7 +364,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: "22.12.0"
+          node-version: "22.13.0"
           cache: npm
           cache-dependency-path: fbx-viewer (1)/package-lock.json
 

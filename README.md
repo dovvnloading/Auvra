@@ -31,7 +31,7 @@ are intentionally maintained outside the public repository history.
 - Windows 11 24H2 or newer on x64 for the desktop editor
 - Microsoft Evergreen WebView2 Runtime
 - CPython 3.12, 3.13, or 3.14
-- Node.js 22.12 or newer on the Node 22 LTS line, or Node.js 24
+- Node.js 22.13 or newer on the Node 22 LTS line, or Node.js 24
 - npm 10 or 11
 
 Installed packages carry their own Python runtime, WebView2 runtime and SDK,

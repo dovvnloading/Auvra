@@ -746,7 +746,7 @@ class NativeProviderHost:
         if source_job_id is None:
             raise HostOperationError("approval_required", "Command proposal is unavailable")
         try:
-            source_job = self.jobs.get(source_job_id, project_id=active.project_id)
+            self.jobs.get(source_job_id, project_id=active.project_id)
         except KeyError:
             raise HostOperationError("invalid_project", "Job does not belong to the open project") from None
         proposal: CommandProposal = source["proposal"]
@@ -960,7 +960,7 @@ class NativeProviderHost:
         transport = self.transports.get(provider_id)
         if transport is None:
             transport = StdlibTransport()
-        descriptor = self.registry.get(provider_id)
+        self.registry.get(provider_id)
         credential_store = self._credential_store(provider_id)
         endpoint = self.settings.get(provider_id).endpoint
         cls = _ADAPTERS[provider_id]

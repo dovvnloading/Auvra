@@ -25,7 +25,7 @@ npm ci
 npm run dev
 ```
 
-The supported frontend runtimes are Node.js 22.12+ on the Node 22 LTS line or
+The supported frontend runtimes are Node.js 22.13+ on the Node 22 LTS line or
 Node.js 24, with npm 10 or 11.
 
 Installed packages do not use this development toolchain. They contain the

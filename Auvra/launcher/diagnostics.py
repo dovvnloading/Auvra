@@ -16,12 +16,12 @@ import zipfile
 from typing import Callable
 
 from Auvra.diagnostics.core import (
-    LATEST_RUN_NAME,
-    RUN_MARKER_NAME,
+    LATEST_RUN_NAME,  # noqa: F401 - the command line takes these from here
+    RUN_MARKER_NAME,  # noqa: F401
+    follow_records,  # noqa: F401
     DiagnosticsSession,
     active_diagnostics,
     atomic_json as _core_atomic_json,
-    follow_records,
     inspect_records,
     install_diagnostics,
     latest_run_summary,
@@ -111,10 +111,10 @@ def check_python() -> RuntimeResult:
 def check_node(*, cwd: Path | None = None, runner: Callable[..., subprocess.CompletedProcess[str]] = run_owned_command) -> RuntimeResult:
     raw, detail = _runtime_command("node", cwd=(cwd or Path.cwd()).resolve(), runner=runner)
     parsed = parse_version(raw)
-    ok = bool(parsed and ((parsed >= (22, 12, 0) and parsed < (23, 0, 0)) or
+    ok = bool(parsed and ((parsed >= (22, 13, 0) and parsed < (23, 0, 0)) or
                          (parsed >= (24, 0, 0) and parsed < (25, 0, 0))))
     if not detail and not ok:
-        detail = "supported Node.js range is ^22.12.0 || ^24"
+        detail = "supported Node.js range is ^22.13.0 || ^24"
     return RuntimeResult("node", ok, raw, detail)
 
 

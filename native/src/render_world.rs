@@ -915,16 +915,15 @@ fn validate_input(input: &WorldRenderInput) -> Result<(), RenderExtractionError>
             ));
         }
     }
-    if let Some(ibl) = input.ibl {
-        if ibl.environment_id == 0
+    if let Some(ibl) = input.ibl
+        && (ibl.environment_id == 0
             || ibl.irradiance_id == 0
             || ibl.prefiltered_id == 0
-            || ibl.brdf_lut_id == 0
-        {
-            return Err(RenderExtractionError::Invalid(
-                "IBL handles must be nonzero",
-            ));
-        }
+            || ibl.brdf_lut_id == 0)
+    {
+        return Err(RenderExtractionError::Invalid(
+            "IBL handles must be nonzero",
+        ));
     }
     let mut post_effects = Vec::with_capacity(input.post_effects.len());
     for effect in &input.post_effects {
