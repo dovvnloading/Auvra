@@ -1,12 +1,34 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { rebuildNormalZ } from '../../utils/textureCompression/compressTextures';
+import { closeReplacedImages, rebuildNormalZ } from '../../utils/textureCompression/compressTextures';
 
 const compiled = (material: THREE.Material): string => {
     const shader = { fragmentShader: '#include <normal_fragment_maps>', vertexShader: '', uniforms: {} };
     material.onBeforeCompile(shader as never, null as never);
     return shader.fragmentShader;
 };
+
+describe('decoded images a model has replaced', () => {
+    const decoded = () => ({ width: 4, height: 4, closed: false, close() { this.closed = true; } });
+
+    it('close at once when nothing draws them', () => {
+        const image = decoded();
+        closeReplacedImages(new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial()), new Set([image]));
+        expect(image.closed).toBe(true);
+    });
+
+    it('stay while another slot still draws the same image', () => {
+        const image = decoded();
+        const clearcoat = new THREE.Texture(image as never);
+        const material = new THREE.MeshPhysicalMaterial({ clearcoatMap: clearcoat });
+        closeReplacedImages(new THREE.Mesh(new THREE.BoxGeometry(), material), new Set([image]));
+        expect(image.closed).toBe(false);
+    });
+
+    it('leave alone what cannot be closed, such as an image element', () => {
+        expect(() => closeReplacedImages(new THREE.Group(), new Set([{ width: 4, height: 4 }]))).not.toThrow();
+    });
+});
 
 describe('a material reading a two-channel normal map', () => {
     it('rebuilds the third component', () => {

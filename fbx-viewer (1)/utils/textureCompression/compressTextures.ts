@@ -178,6 +178,24 @@ export interface TextureCompressionReport {
  * Swaps the colour and material maps of every material under `root` for BC-compressed textures,
  * shared textures once. Does nothing where the GPU cannot sample BC textures.
  */
+/**
+ * Lets go of decoded images the model no longer draws. A closed image frees at once; left to the
+ * collector, which does not see their size coming, a few levels of 4096 images at 64 MB each run a
+ * game out of memory. Textures share a decoded image, so one any texture still draws stays.
+ */
+export const closeReplacedImages = (root: THREE.Object3D, replaced: Set<unknown>): void => {
+    root.traverse((node) => {
+        const material = (node as THREE.Mesh).material;
+        if (!material) return;
+        for (const candidate of Array.isArray(material) ? material : [material]) {
+            for (const value of Object.values(candidate)) {
+                if ((value as THREE.Texture | null)?.isTexture) replaced.delete((value as THREE.Texture).image);
+            }
+        }
+    });
+    for (const image of replaced) (image as Partial<ImageBitmap>).close?.();
+};
+
 export const compressModelTextures = async (root: THREE.Object3D, keepSources = true): Promise<TextureCompressionReport> => {
     const report: TextureCompressionReport = { compressed: 0, cached: 0, skipped: 0, bytesBefore: 0, bytesAfter: 0 };
     const supported = typeof Worker !== 'undefined' && typeof createImageBitmap !== 'undefined' ? blockCompressionSupport() : { colour: false, normal: false };
@@ -200,6 +218,7 @@ export const compressModelTextures = async (root: THREE.Object3D, keepSources = 
             }
         }
     });
+    const replaced = new Set<unknown>();
     await Promise.all([...uses].map(async ([texture, { kind, slots }]) => {
         const image = texture.image as { width?: number; height?: number } | null;
         const width = image?.width ?? 0;
@@ -223,9 +242,11 @@ export const compressModelTextures = async (root: THREE.Object3D, keepSources = 
             report.compressed++;
             if (result.cached) report.cached++;
             texture.dispose();
+            replaced.add(image);
         } catch {
             report.skipped++;
         }
     }));
+    if (!keepSources) closeReplacedImages(root, replaced);
     return report;
 };
