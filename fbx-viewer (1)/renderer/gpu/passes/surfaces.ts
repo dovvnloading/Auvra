@@ -68,59 +68,8 @@ const NO_BIAS: GpuDepthOptions = {};
 
 // Comes first in a shader. A surface kind may take a derivative under a branch, and without this that one line stops
 // the whole shader compiling, and everything of that kind is missing from the picture.
-const DERIVATIVES_WGSL = "diagnostic(off, derivative_uniformity);\n";
-
-// Only the instance table in group 1, not the frame's whole scene group: the cull reads no vertices, and with those two
-// tables this would be ten storage buffers where WebGPU only promises eight, and a card with eight could not cull at all.
-const CULL_WGSL = /* wgsl */ `
-${VIEW_WGSL}${INSTANCE_WGSL}${CAMERA_BINDINGS_WGSL}
-
-@group(1) @binding(0) var<storage, read> instances: array<Instance>;
-
-struct DrawArgs {
-  indexCount: u32,
-  instanceCount: atomic<u32>,
-  firstIndex: u32,
-  baseVertex: i32,
-  firstInstance: u32,
-}
-
-struct RetestList { count: atomic<u32>, rows: array<u32> }
-struct RetestDispatch { x: atomic<u32>, y: u32, z: u32 }
-struct RetestRows { count: u32, rows: array<u32> }
-
-@group(2) @binding(0) var<storage, read_write> args: array<DrawArgs>;
-@group(2) @binding(1) var<storage, read_write> visible: array<u32>;
-@group(2) @binding(2) var<storage, read> groupFirst: array<u32>;
-@group(2) @binding(3) var pyramid: texture_2d<f32>;
-@group(2) @binding(4) var<storage, read_write> retest: RetestList;
-@group(2) @binding(5) var<storage, read_write> retestDispatch: RetestDispatch;
-@group(2) @binding(6) var<storage, read> retestRows: RetestRows;
-${LOD_SELECT_WGSL}
-// Into the run of the detail level this row's size on the screen calls for.
-fn append(row: u32) {
-  let instance = instances[row];
-  let run = pickSlot(instance, instance.group);
-  let slot = atomicAdd(&args[run].instanceCount, 1u);
-  visible[groupFirst[run] + slot] = row;
-}
-
-fn viewTakes(flags: u32, layers: u32) -> bool {
-  if ((flags & INSTANCE_ACTIVE) == 0u) { return false; }
-  if ((layers & view.layers) == 0u) { return false; }
-  if (view.kind == 1u && (flags & INSTANCE_CASTS_SHADOW) == 0u) { return false; }
-  return true;
-}
-
-fn inFrustum(sphere: vec4f) -> bool {
-  let count = min(view.planeCount, 6u);
-  for (var index = 0u; index < count; index++) {
-    let plane = view.planes[index];
-    if (dot(plane.xyz, sphere.xyz) + plane.w < -sphere.w) { return false; }
-  }
-  return true;
-}
-
+/** Is a sphere hidden behind what `pyramid` (a binding the shader declares) holds? */
+export const OCCLUDED_WGSL = /* wgsl */ `
 // Whether everything in the footprint of the bounds is nearer than the bounds' nearest point. The sphere is projected
 // as the box around it, which works for any projection and is never smaller than the sphere; the extremes of a box
 // under a projection are at its corners as long as all of it is in front of the eye. Anything unsure answers false.
@@ -175,6 +124,63 @@ fn occluded(clip: mat4x4f, sphere: vec4f) -> bool {
   return nearest < farthest;
 }
 
+`;
+
+const DERIVATIVES_WGSL = "diagnostic(off, derivative_uniformity);\n";
+
+// Only the instance table in group 1, not the frame's whole scene group: the cull reads no vertices, and with those two
+// tables this would be ten storage buffers where WebGPU only promises eight, and a card with eight could not cull at all.
+const CULL_WGSL = /* wgsl */ `
+${VIEW_WGSL}${INSTANCE_WGSL}${CAMERA_BINDINGS_WGSL}
+
+@group(1) @binding(0) var<storage, read> instances: array<Instance>;
+
+struct DrawArgs {
+  indexCount: u32,
+  instanceCount: atomic<u32>,
+  firstIndex: u32,
+  baseVertex: i32,
+  firstInstance: u32,
+}
+
+struct RetestList { count: atomic<u32>, rows: array<u32> }
+struct RetestDispatch { x: atomic<u32>, y: u32, z: u32 }
+struct RetestRows { count: u32, rows: array<u32> }
+
+@group(2) @binding(0) var<storage, read_write> args: array<DrawArgs>;
+@group(2) @binding(1) var<storage, read_write> visible: array<u32>;
+@group(2) @binding(2) var<storage, read> groupFirst: array<u32>;
+@group(2) @binding(3) var pyramid: texture_2d<f32>;
+@group(2) @binding(4) var<storage, read_write> retest: RetestList;
+@group(2) @binding(5) var<storage, read_write> retestDispatch: RetestDispatch;
+@group(2) @binding(6) var<storage, read> retestRows: RetestRows;
+${LOD_SELECT_WGSL}
+// Into the run of the detail level this row's size on the screen calls for.
+fn append(row: u32) {
+  let instance = instances[row];
+  let run = pickSlot(instance, instance.group);
+  let slot = atomicAdd(&args[run].instanceCount, 1u);
+  visible[groupFirst[run] + slot] = row;
+}
+
+fn viewTakes(flags: u32, layers: u32) -> bool {
+  if ((flags & INSTANCE_ACTIVE) == 0u) { return false; }
+  if ((layers & view.layers) == 0u) { return false; }
+  if (view.kind == 1u && (flags & INSTANCE_CASTS_SHADOW) == 0u) { return false; }
+  if (view.kind == 0u && (flags & INSTANCE_CLUSTERED) != 0u) { return false; }
+  return true;
+}
+
+fn inFrustum(sphere: vec4f) -> bool {
+  let count = min(view.planeCount, 6u);
+  for (var index = 0u; index < count; index++) {
+    let plane = view.planes[index];
+    if (dot(plane.xyz, sphere.xyz) + plane.w < -sphere.w) { return false; }
+  }
+  return true;
+}
+
+${OCCLUDED_WGSL}
 // Every row by frustum alone: shadow views and any other view without a pyramid.
 @compute @workgroup_size(${CULL_WORKGROUP}) fn cullAll(@builtin(global_invocation_id) id: vec3u) {
   let row = id.x;

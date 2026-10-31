@@ -482,6 +482,7 @@ export class GpuRenderer implements GpuRendererApi {
     const canvasLoadOp: GPULoadOp = canvasTexture === this.lastCanvasTexture ? "load" : "clear";
     this.lastCanvasTexture = canvasTexture;
     const lodEye = _eye.clone();
+    const afterSubmit: (() => void)[] = [];
     const frame: GpuFrame = {
       core,
       device,
@@ -509,6 +510,7 @@ export class GpuRenderer implements GpuRendererApi {
       sceneBindGroup: this.bindScene(gpuScene),
       drawer: this.builtin.drawer,
       products: this.products,
+      afterSubmit: (run) => afterSubmit.push(run),
     };
     frame.products.set("mainPixelsPerUnit", perspective.isPerspectiveCamera ? targets.height / (2 * Math.tan(THREE.MathUtils.degToRad(perspective.fov) / 2) / perspective.zoom) : 0);
     this.settings.set("toneMappingExposure", this.toneMappingExposure);
@@ -528,6 +530,7 @@ export class GpuRenderer implements GpuRendererApi {
     const readback = this.timings.finish(encoder);
     device.queue.submit([encoder.finish()]);
     this.timings.collect(readback);
+    for (const run of afterSubmit) run();
   }
 
   /** Names each material nothing can draw yet, once: it is absent from the picture, and this is why. */

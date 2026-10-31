@@ -95,6 +95,8 @@ export interface DrawGroup {
   /** The mesh's own geometry. */
   source: GeometryEntry;
   materialRevision: number;
+  /** Drawn by the cluster pass in the main view. */
+  clustered?: boolean;
   /** Always forward, whatever its material: sprites, points and lines. */
   forwardKind: boolean;
   /** A mesh, so its material can turn it into a wireframe. */
@@ -791,7 +793,7 @@ export class GpuScene {
         }
         data[at + ROW_COLOR + 3] = 1;
         uints[at + ROW_GROUP] = part.group.id < 0 ? 0 : part.group.id;
-        uints[at + ROW_FLAGS] = !shown || row >= count ? 0 : rowFlags;
+        uints[at + ROW_FLAGS] = !shown || row >= count ? 0 : rowFlags | (part.group.clustered ? INSTANCE_FLAG.clustered : 0);
         uints[at + ROW_LAYERS] = layers;
         // A Uint32Array wraps a negative number to the same bits an i32 reads back.
         uints[at + ROW_PREVIOUS_OFFSET] = previousOffset;
@@ -926,6 +928,34 @@ export class GpuScene {
         if (!part.count || uints[part.firstInstance * INSTANCE_WORDS + ROW_GROUP] === id) continue;
         for (let row = 0; row < part.count; row++) uints[(part.firstInstance + row) * INSTANCE_WORDS + ROW_GROUP] = id;
         this.instances.markDirty(part.firstInstance, part.count);
+      }
+    }
+  }
+
+  /** Hands the main view's drawing of a group's rows to the cluster pass. */
+  markClustered(group: DrawGroup): void {
+    if (group.clustered) return;
+    group.clustered = true;
+    const uints = this.instances.uints;
+    for (let index = 0; index < this.recordList.length; index++) {
+      for (const part of this.recordList[index].parts) {
+        if (part.group !== group) continue;
+        for (let row = 0; row < part.count; row++) {
+          const at = (part.firstInstance + row) * INSTANCE_WORDS + ROW_FLAGS;
+          if (uints[at]) uints[at] |= INSTANCE_FLAG.clustered;
+        }
+        this.instances.markDirty(part.firstInstance, part.count);
+      }
+    }
+    this.instances.upload(this.instanceBuffer);
+  }
+
+  /** Adds the number of every row that draws a group to `into`. */
+  rowsOf(group: DrawGroup, into: number[]): void {
+    for (let index = 0; index < this.recordList.length; index++) {
+      for (const part of this.recordList[index].parts) {
+        if (part.group !== group) continue;
+        for (let row = 0; row < part.count; row++) into.push(part.firstInstance + row);
       }
     }
   }

@@ -43,6 +43,8 @@ export const INSTANCE_FLAG = {
   alwaysVisible: 8,
   posed: 16,
   moved: 32,
+  /** Drawn by the cluster pass in the main view, so the surface pass leaves it out there. */
+  clustered: 64,
 } as const;
 
 export const INSTANCE_WGSL = /* wgsl */ `
@@ -62,6 +64,7 @@ const INSTANCE_CASTS_SHADOW = ${INSTANCE_FLAG.castsShadow}u;
 const INSTANCE_RECEIVES_SHADOW = ${INSTANCE_FLAG.receivesShadow}u;
 const INSTANCE_ALWAYS_VISIBLE = ${INSTANCE_FLAG.alwaysVisible}u;
 const INSTANCE_POSED = ${INSTANCE_FLAG.posed}u;
+const INSTANCE_CLUSTERED = ${INSTANCE_FLAG.clustered}u;
 `;
 
 export const CAMERA_BINDINGS_WGSL = /* wgsl */ `

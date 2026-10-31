@@ -129,6 +129,8 @@ export interface GpuFrame {
   sceneBindGroup: GPUBindGroup;
   /** Set by the surface pass once registered. */
   drawer: GpuViewDrawer | null;
+  /** Runs once this frame's commands have been submitted: for mapping a buffer they copied into. */
+  afterSubmit(run: () => void): void;
   /** What passes publish for each other. See the pass that writes a name for what it holds. */
   products: Map<string, unknown>;
 }

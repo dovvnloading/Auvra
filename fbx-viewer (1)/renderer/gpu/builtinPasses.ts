@@ -1,3 +1,4 @@
+import { ClusterPass } from "./clusters/clusterPass";
 import type { GpuCore } from "./device";
 import type { GpuPass, GpuViewDrawer } from "./frame";
 import { DeferredLightingPass } from "./passes/deferredLighting";
@@ -28,6 +29,7 @@ export const createBuiltinPasses = (core: GpuCore): BuiltinPasses => {
       new SkinningPass(core),
       new ShadowPass(core),
       surfaces,
+      new ClusterPass(core),
       new LightClusterPass(core),
       new DeferredLightingPass(core),
       new ForwardPass(core),
