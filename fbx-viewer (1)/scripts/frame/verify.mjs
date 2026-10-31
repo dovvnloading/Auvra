@@ -128,6 +128,7 @@ check(source.localEnvironment.includes("export const LocalEnvironment"), "reusab
 for (const name of ["viewerScene", "graphPreview", "retextureEditor", "skySystem"]) check(source[name].includes("LocalEnvironment"), `${name} is missing the local environment replacement`);
 check(source.thumbnailTooltip.includes("model.thumbnail") && !source.thumbnailTooltip.includes("<Canvas") && !source.thumbnailTooltip.includes("LocalEnvironment"), "thumbnail tooltip must use the generated image without owning a live renderer");
 check(source.skySystem.includes("<LocalEnvironment night={isNight}"), "SkySystem no longer distinguishes day and night lighting");
+check(source.skySystem.includes("mesh.geometry.dispose()") && source.skySystem.includes("as THREE.Material).dispose()"), "classic sky must free its mesh: nothing frees a primitive when it leaves");
 check(source.dynamic.indexOf("new TextEncoder().encode(code)") < source.dynamic.indexOf("Babel.transform"), "HUD source size is not checked before Babel");
 check(source.dynamic.includes("boundedExecutionPlugin") && source.dynamic.includes("__auvraHudGuard") && source.dynamic.includes("plugins: [boundedExecutionPlugin]"), "HUD code is not instrumented with an execution budget");
 check(source.hudScript.includes("MAX_EXECUTION_STEPS") && source.hudScript.includes("MAX_EXECUTION_MS") && source.hudScript.includes("createExecutionGuard") && source.hudScript.includes("__auvraHudGuard"), "HUD sandbox does not enforce a step/deadline budget");

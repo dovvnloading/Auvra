@@ -405,6 +405,17 @@ export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects, live = false
         precipitation.dispose();
     }, [clouds, night, bolt, precipitation]);
 
+    // The classic sky reaches the scene as a primitive, and nothing frees a primitive when it leaves.
+    const classicSky = !!skyObject && !atmospheric;
+    useEffect(() => {
+        const mesh = sky.current;
+        if (!classicSky || !mesh) return undefined;
+        return () => {
+            mesh.geometry.dispose();
+            (mesh.material as THREE.Material).dispose();
+        };
+    }, [classicSky]);
+
     // What reacts to the light (vehicle headlights) and the weather (wet surfaces) goes back to normal without a sky.
     useEffect(() => () => {
         publishDaylight(null);
