@@ -1,5 +1,5 @@
 import { TRACE_GLSL } from '../../raytracing/traceShader';
-import { GI_SAMPLE_GLSL } from './giMaterials';
+import { GI_SAMPLE_GLSL, MIRROR_RAY_GLSL, RAY_REFLECTION_ROUGHNESS } from './giMaterials';
 import {
     ATLAS_OFFSET_Y,
     ATLAS_ROWS,
@@ -173,7 +173,9 @@ vec3 giLocal( vec3 point, vec3 normal ) {
     return chosenLight * ( total / chosenWeight );
 }
 
-vec3 giShade( vec3 point, vec3 direction, RtHit hit ) {
+// probeNoise scatters what it reads between cascades: rays gathered by a probe average that out, and a reflection,
+// which has only the one, passes a steady value instead.
+vec3 giShade( vec3 point, vec3 direction, RtHit hit, float probeNoise ) {
     vec3 albedo;
     vec3 emissive;
     int flags;
@@ -182,7 +184,7 @@ vec3 giShade( vec3 point, vec3 direction, RtHit hit ) {
     vec3 normal = hit.front ? hit.normal : -hit.normal;
     vec3 received = giDirectional( point, normal ) + giLocal( point, normal );
     if ( bounce > 0.0 ) {
-        vec4 gathered = auvraGiIrradiance( point, normal, -direction, giRandom() );
+        vec4 gathered = auvraGiIrradiance( point, normal, -direction, probeNoise );
         // Out of range of every probe, the open sky is the best guess there is.
         vec3 fill = giSky( normal ) * PI * ( 1.0 - gathered.a );
         received += ( gathered.rgb * gathered.a + fill ) * bounce;
@@ -214,7 +216,7 @@ void main() {
     int flags;
     rtReadMaterial( hit.material, albedo, emissive, flags );
     bool twoSided = ( flags & RT_MATERIAL_TWO_SIDED ) != 0;
-    vec3 light = hit.front || twoSided ? giShade( origin + direction * hit.distance, direction, hit ) : vec3( 0.0 );
+    vec3 light = hit.front || twoSided ? giShade( origin + direction * hit.distance, direction, hit, giRandom() ) : vec3( 0.0 );
     // A back means the probe may be inside something. For a two-sided material only when it is close: most boxes that
     // come from modelling tools are two-sided, and a probe buried in one must find out, but the walls of a room can
     // be two-sided planes facing away from it, and that room has nothing wrong with it.
@@ -236,10 +238,77 @@ void main() {
     vec4 far = inverseViewProjection * vec4( uv * 2.0 - 1.0, 1.0, 1.0 );
     vec3 direction = normalize( far.xyz / far.w - rayOrigin );
     RtHit hit;
-    vec3 light = rtTrace( rayOrigin, direction, 1e5, false, hit ) ? giShade( rayOrigin + direction * hit.distance, direction, hit ) : giSky( direction );
+    vec3 light = rtTrace( rayOrigin, direction, 1e5, false, hit ) ? giShade( rayOrigin + direction * hit.distance, direction, hit, 0.5 ) : giSky( direction );
     gl_FragColor = vec4( light, 1.0 );
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
+}`;
+
+/**
+ * Reflections carried on past what the screen can show. Each glossy pixel the screen-space trace (screenLighting.ts)
+ * found nothing for follows the same scattered mirror ray through the ray scene, so the two meet without a seam.
+ * The noise holds still from frame to frame, as there, so the pattern does not crawl; and it reads only at half size,
+ * as a ray per pixel at full size would cost several times what all the probes do.
+ */
+export const REFLECTION_RAYS_FRAGMENT = /* glsl */ `
+${SHADE_GLSL}
+uniform sampler2D surfaceDepth;
+uniform sampler2D surfaceNormal;
+uniform sampler2D screenReflection;
+uniform mat4 inverseProjection;
+uniform mat4 cameraWorld;
+uniform vec2 targetSize;
+${MIRROR_RAY_GLSL}
+
+float noiseAt( vec2 pixel ) {
+    return fract( 52.9829189 * fract( dot( pixel, vec2( 0.06711056, 0.00583715 ) ) ) );
+}
+
+// The environment as a mirror shows it, in the renderer's own terms: the fill only where there is no map to show.
+vec3 giSkyMirror( vec3 direction, float roughness ) {
+    #ifdef SKY_ENVIRONMENT
+    return textureCubeUV( envMap, envRotation * direction, roughness ).rgb * envIntensity;
+    #else
+    float weight = clamp( 0.5 + 0.75 * dot( direction, hemiUp ), 0.0, 1.0 );
+    return ( ambientLight + mix( hemiGround, hemiSky, weight ) ) * RECIPROCAL_PI;
+    #endif
+}
+
+void main() {
+    vec2 uv = gl_FragCoord.xy / targetSize;
+    vec4 screen = texture2D( screenReflection, uv );
+    vec4 normalRoughness = texture2D( surfaceNormal, uv );
+    float depth = texture2D( surfaceDepth, uv ).r;
+    float roughness = normalRoughness.w;
+    float cover = 1.0 - smoothstep( ${RAY_REFLECTION_ROUGHNESS[0].toFixed(2)}, ${RAY_REFLECTION_ROUGHNESS[1].toFixed(2)}, roughness );
+    // Open sky, too rough to be the rays' business, or the screen knows already.
+    if ( depth >= 1.0 || cover <= 0.0 || screen.a >= 0.99 ) {
+        gl_FragColor = vec4( screen.rgb, max( screen.a, depth >= 1.0 ? 0.0 : cover ) );
+        return;
+    }
+    vec4 viewPoint = inverseProjection * vec4( uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0 );
+    vec3 p = viewPoint.xyz / viewPoint.w;
+    vec3 n = normalize( normalRoughness.xyz );
+    vec3 r = auvraMirrorRay( p, n, roughness, noiseAt( gl_FragCoord.xy ), noiseAt( gl_FragCoord.xy * 1.37 + 17.0 ) );
+    if ( dot( r, n ) <= 0.0 ) {
+        gl_FragColor = screen;
+        return;
+    }
+    giRng = uint( gl_FragCoord.x ) * 1973u + uint( gl_FragCoord.y ) * 9277u + 1u;
+    vec3 origin = ( cameraWorld * vec4( p + n * ( 0.01 - p.z * 0.004 ), 1.0 ) ).xyz;
+    vec3 direction = normalize( ( cameraWorld * vec4( r, 0.0 ) ).xyz );
+    RtHit hit;
+    vec3 light;
+    if ( !rtTrace( origin, direction, 1e5, false, hit ) ) {
+        light = giSkyMirror( direction, roughness );
+    } else {
+        vec3 albedo;
+        vec3 emissive;
+        int flags;
+        rtReadMaterial( hit.material, albedo, emissive, flags );
+        light = hit.front || ( flags & RT_MATERIAL_TWO_SIDED ) != 0 ? giShade( origin + direction * hit.distance, direction, hit, 0.5 ) : vec3( 0.0 );
+    }
+    gl_FragColor = vec4( mix( min( light, vec3( 8.0 ) ), screen.rgb, screen.a ), max( screen.a, cover ) );
 }`;
 
 /** One quad per probe, placed by its index; the fragment shader knows its cell's corner and which probe it is. */

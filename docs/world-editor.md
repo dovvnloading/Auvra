@@ -433,6 +433,7 @@ Add a **Dynamic Global Illumination** component to any object in the level (one 
 - **It follows the level.** Move the sun, a lamp, a wall or a crate and the light around it starts to change at once, settling over a few seconds as it bounces on. A door that opens lets the light in, and a room sealed shut goes dark.
 - **Glowing surfaces light the room.** A material's emissive colour counts as a light source, with soft shadows, at no cost per surface.
 - **Rooms go dark.** A room with no openings loses the sky, where the unbaked fill would light it like open ground; reflections of the sky fade with it. Characters and moving objects take the light of wherever they stand.
+- **Reflections show what is off screen.** A glossy floor or metal surface reflects what is behind the camera, out of view or hidden, where screen reflections alone would have nothing to show.
 
 | Setting | What it does |
 |---|---|
@@ -440,11 +441,14 @@ Add a **Dynamic Global Illumination** component to any object in the level (one 
 | **Probe spacing** | Metres between the finest probes. Smaller catches smaller rooms and tighter corners, over a smaller area |
 | **Intensity** | Scales all the indirect light |
 | **Later bounces** | How much light carries on past its first bounce. 0 is one bounce only; 1 lets it fade naturally |
+| **Ray-traced reflections** | Carries reflections on with rays where the screen has nothing to show. Needs the Post Process component's **Reflections** on, which play has by default. A slow machine goes without in play |
 | **Show** | **Indirect light only** shows it on white, **Light probes** shows the probes themselves (red ones are stuck inside something), and **What rays see** shows the scene as the rays do, to check what they take in |
 
 Probes sit in nested grids around the camera, each three times the spacing of the last, so at the default spacing they reach about 200 metres out; past that the level's ordinary sky fill applies. A probe buried in a wall or a crate moves out of it by itself.
 
 The rays see props, foliage and terrain, whether they move or not, and characters as a box around their bones. They do not see glass, wireframes, or materials more than half transparent. A surface gives bounced light its average colour, not the detail of its texture. Meshes of more than 48,000 triangles are simplified for the rays, which does not change how they are drawn.
+
+Reflections by ray show a reflected surface's average colour and light, not its texture, and leave characters out, as to the rays they are only a box: what is on screen still reflects in full detail, characters included. Surfaces rougher than about 0.6 keep reflecting the environment map.
 
 With this on, the Post Process **Global illumination** adds the close-range detail between probes rather than a second helping of ambient light, so the two are meant to be used together. It takes priority over [baked lighting](#baked-lighting) where both apply. Baking still works, and bakes without it.
 

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RayScene, type RayFilter, type TextureMean } from '../../raytracing/rayScene';
 import { traceUniforms } from '../../raytracing/traceShader';
-import { giAtlas, holdGiAtlas, setGiGrid, stepGiNoise, DYNAMIC_GI_UNIFORMS } from './giMaterials';
+import { giAtlas, holdGiAtlas, setGiGrid, stepGiNoise, DYNAMIC_GI_UNIFORMS, type RayReflectionInputs } from './giMaterials';
 import {
     CLEAR_FRAGMENT,
     FULLSCREEN_VERTEX,
@@ -11,6 +11,7 @@ import {
     OFFSET_FRAGMENT,
     PROBE_QUAD_VERTEX,
     RAY_VIEW_FRAGMENT,
+    REFLECTION_RAYS_FRAGMENT,
     SCRATCH_HEIGHT,
     SCRATCH_WIDTH,
     STORE_FRAGMENT,
@@ -140,6 +141,7 @@ export class DynamicGi {
     private readonly clearVisibilityMaterial: THREE.ShaderMaterial;
     private readonly clearOffsetMaterial: THREE.ShaderMaterial;
     readonly rayViewMaterial: THREE.ShaderMaterial;
+    private readonly reflectionMaterial: THREE.ShaderMaterial;
 
     private readonly releaseAtlas = holdGiAtlas();
     private traceReady = false;
@@ -148,6 +150,10 @@ export class DynamicGi {
     private compileNumber = 0;
     private compilesRunning = 0;
     private disposed = false;
+    private reflectionsReady = false;
+    private reflectionsCompiling = false;
+    private reflectionCompileNumber = 0;
+    private reflectionCompilesRunning = 0;
     private readonly environment: { source: THREE.Texture | null; version: number; form: number; target: THREE.WebGLRenderTarget | null; pmrem: THREE.PMREMGenerator | null } =
         { source: null, version: -1, form: 0, target: null, pmrem: null };
 
@@ -198,6 +204,16 @@ export class DynamicGi {
             inverseViewProjection: { value: new THREE.Matrix4() },
             rayOrigin: { value: new THREE.Vector3() },
         });
+        this.reflectionMaterial = passMaterial(REFLECTION_RAYS_FRAGMENT, FULLSCREEN_VERTEX, {
+            ...this.common,
+            surfaceDepth: { value: null },
+            surfaceNormal: { value: null },
+            screenReflection: { value: null },
+            inverseProjection: { value: new THREE.Matrix4() },
+            cameraWorld: { value: new THREE.Matrix4() },
+            targetSize: { value: new THREE.Vector2(1, 1) },
+        });
+        this.reflectionMaterial.defines.RT_SKIP_CHARACTERS = '';
         const quad = (cellSize: number, quadMode: number, width: number, height: number) => ({
             targetSize: { value: new THREE.Vector2(width, height) },
             cellSize: { value: cellSize },
@@ -307,6 +323,39 @@ export class DynamicGi {
         };
         void this.gl.compileAsync(this.passScene, this.passCamera).then(ready, ready);
         return false;
+    }
+
+    /**
+     * Carries reflections on past what the screen shows, into `target`. False until its big shader has compiled, in
+     * the background like the trace's, and the probes have something to light what the rays meet.
+     */
+    traceReflections(target: THREE.WebGLRenderTarget, inputs: RayReflectionInputs): boolean {
+        if (!this.traceReady) return false;
+        if (!this.reflectionsReady) {
+            if (this.reflectionsCompiling) return false;
+            this.reflectionsCompiling = true;
+            this.passMesh.material = this.reflectionMaterial;
+            this.passMesh.geometry = this.fullscreen;
+            this.gl.setRenderTarget(target);
+            const number = ++this.reflectionCompileNumber;
+            this.reflectionCompilesRunning++;
+            const ready = () => {
+                this.reflectionCompilesRunning--;
+                if (number === this.reflectionCompileNumber) this.reflectionsReady = true;
+                if (this.disposed && this.reflectionCompilesRunning === 0) this.reflectionMaterial.dispose();
+            };
+            void this.gl.compileAsync(this.passScene, this.passCamera).then(ready, ready);
+            return false;
+        }
+        const uniforms = this.reflectionMaterial.uniforms;
+        uniforms.surfaceDepth.value = inputs.depth;
+        uniforms.surfaceNormal.value = inputs.normalRoughness;
+        uniforms.screenReflection.value = inputs.screen;
+        (uniforms.inverseProjection.value as THREE.Matrix4).copy((inputs.camera as THREE.PerspectiveCamera).projectionMatrixInverse);
+        (uniforms.cameraWorld.value as THREE.Matrix4).copy(inputs.camera.matrixWorld);
+        (uniforms.targetSize.value as THREE.Vector2).set(target.width, target.height);
+        this.draw(target, this.reflectionMaterial, this.fullscreen);
+        return true;
     }
 
     private placeCascades(baseSpacing: number, camera: THREE.Camera): void {
@@ -513,7 +562,7 @@ export class DynamicGi {
         const form = prefiltered ? (prefiltered.image as { height: number }).height : 0;
         if (form === held.form) return;
         held.form = form;
-        for (const material of [this.traceMaterial, this.rayViewMaterial]) {
+        for (const material of [this.traceMaterial, this.rayViewMaterial, this.reflectionMaterial]) {
             const defines = material.defines as Record<string, string | number>;
             for (const key of ['SKY_ENVIRONMENT', 'ENVMAP_TYPE_CUBE_UV', 'CUBEUV_TEXEL_WIDTH', 'CUBEUV_TEXEL_HEIGHT', 'CUBEUV_MAX_MIP']) delete defines[key];
             if (prefiltered) {
@@ -530,6 +579,9 @@ export class DynamicGi {
         // A changed shader: compile it in the background again.
         this.traceReady = false;
         this.traceCompiling = false;
+        this.reflectionsReady = false;
+        this.reflectionsCompiling = false;
+        this.reflectionCompileNumber++;
     }
 
     dispose(): void {
@@ -547,6 +599,7 @@ export class DynamicGi {
         this.meanMaterial?.dispose();
         // Not while three is still waiting on its program: it would read a program that is gone, and throw.
         if (this.compilesRunning === 0) this.traceMaterial.dispose();
+        if (this.reflectionCompilesRunning === 0) this.reflectionMaterial.dispose();
         for (const material of [this.irradianceMaterial, this.visibilityMaterial, this.storeIrradianceMaterial, this.storeVisibilityMaterial, this.offsetMaterial, this.storeOffsetMaterial, this.clearMaterial, this.clearVisibilityMaterial, this.clearOffsetMaterial, this.rayViewMaterial]) material.dispose();
         this.releaseAtlas();
     }

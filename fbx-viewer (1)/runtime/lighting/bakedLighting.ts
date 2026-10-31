@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { LevelObject } from '../../types';
 import { isDynamicObject } from '../levelObjectMotion';
-import { DYNAMIC_GI_UNIFORMS, GI_MATERIAL_PARS, applySceneGi } from './dynamicGi/giMaterials';
+import { DYNAMIC_GI_UNIFORMS, GI_MATERIAL_PARS, RAY_REFLECTION_ROUGHNESS, applySceneGi } from './dynamicGi/giMaterials';
 
 /**
  * BAKED LIGHTING
@@ -489,6 +489,11 @@ const AFTER_MAPS = /* glsl */`
 			float auvraGiOpen = dot( iblIrradiance, vec3( 0.2126, 0.7152, 0.0722 ) );
 			float auvraGiSeen = clamp( dot( bakedGi, vec3( 0.2126, 0.7152, 0.0722 ) ) / max( auvraGiOpen, 1e-3 ), 0.0, 1.0 );
 			radiance *= mix( 1.0, auvraGiSeen, bakedGiBlend );
+			// Where rays draw the reflections instead (screenLighting.ts). The screen pass only knows solid surfaces,
+			// and only their base roughness, so this goes by the same.
+			#ifdef OPAQUE
+				if ( auvraGiRays.x > 0.5 ) radiance *= smoothstep( ${RAY_REFLECTION_ROUGHNESS[0].toFixed(2)}, ${RAY_REFLECTION_ROUGHNESS[1].toFixed(2)}, roughness );
+			#endif
 			#ifdef USE_CLEARCOAT
 				clearcoatRadiance *= mix( 1.0, auvraGiSeen, bakedGiBlend );
 			#endif

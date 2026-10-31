@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import type { LevelObject } from '../../types';
@@ -11,14 +13,18 @@ import {
 import {
     DYNAMIC_GI_UNIFORMS,
     GI_SAMPLE_GLSL,
+    MIRROR_RAY_GLSL,
     applySceneGi,
     giAtlas,
     holdGiAtlas,
+    noteRayReflections,
+    sceneReflectionTracer,
+    setSceneReflectionTracer,
     pauseSceneGi,
     sceneReadsGi,
     setSceneGi,
 } from '../../runtime/lighting/dynamicGi/giMaterials';
-import { IRRADIANCE_FRAGMENT, OFFSET_FRAGMENT, TRACE_FRAGMENT, VISIBILITY_FRAGMENT } from '../../runtime/lighting/dynamicGi/giShaders';
+import { IRRADIANCE_FRAGMENT, OFFSET_FRAGMENT, REFLECTION_RAYS_FRAGMENT, TRACE_FRAGMENT, VISIBILITY_FRAGMENT } from '../../runtime/lighting/dynamicGi/giShaders';
 import { GRID_LIFT, PROBES_X, PROBES_Y, PROBES_Z } from '../../runtime/lighting/dynamicGi/probeGrid';
 
 const object = (id: string, type: LevelObject['type'], components: LevelObject['components'] = []): LevelObject => ({
@@ -173,6 +179,77 @@ describe('which scenes read it', () => {
         const count = (text: string, part: string) => text.split(part).length - 1;
         expect(count(THREE.ShaderChunk.lights_pars_begin, 'auvraGiIrradiance( vec3 point')).toBe(1);
         expect(count(THREE.ShaderChunk.lights_fragment_maps, 'auvraGiIrradiance(')).toBe(1);
+    });
+});
+
+describe('reflections carried on by rays', () => {
+    const handedOver = () => (DYNAMIC_GI_UNIFORMS.auvraGiRays.value as THREE.Vector4).x;
+
+    it('are offered to the screen pass only while a scene has them', () => {
+        const scene = new THREE.Scene();
+        expect(sceneReflectionTracer(scene)).toBeNull();
+        const tracer = () => true;
+        const stop = setSceneReflectionTracer(scene, tracer);
+        expect(sceneReflectionTracer(scene)).toBe(tracer);
+        stop();
+        expect(sceneReflectionTracer(scene)).toBeNull();
+    });
+
+    it('leaves a later tracer alone when an earlier one goes', () => {
+        const scene = new THREE.Scene();
+        const first = setSceneReflectionTracer(scene, () => true);
+        const later = () => false;
+        const stop = setSceneReflectionTracer(scene, later);
+        first();
+        expect(sceneReflectionTracer(scene)).toBe(later);
+        stop();
+    });
+
+    it('take over from lit materials only once they are really drawing, and hand back if they stop', () => {
+        const scene = new THREE.Scene();
+        const stop = setSceneGi(scene, { intensity: 1, indirectOnly: false });
+        applySceneGi(scene);
+        expect(handedOver()).toBe(0);
+        noteRayReflections(scene, true);
+        applySceneGi(scene);
+        expect(handedOver()).toBe(1);
+        noteRayReflections(scene, false);
+        applySceneGi(scene);
+        expect(handedOver()).toBe(0);
+        stop();
+    });
+
+    it('do not reach another scene, or a scene without the volume', () => {
+        const level = new THREE.Scene();
+        const other = new THREE.Scene();
+        const stop = setSceneGi(level, { intensity: 1, indirectOnly: false });
+        noteRayReflections(level, true);
+        applySceneGi(other);
+        expect(handedOver()).toBe(0);
+        applySceneGi(level);
+        expect(handedOver()).toBe(1);
+        stop();
+        applySceneGi(level);
+        expect(handedOver()).toBe(0);
+        noteRayReflections(level, false);
+    });
+
+    it('hand over only the environment reflections of solid surfaces, which are all the screen pass knows of', () => {
+        const maps = THREE.ShaderChunk.lights_fragment_maps;
+        const at = maps.indexOf('auvraGiRays.x > 0.5');
+        expect(at).toBeGreaterThan(0);
+        expect(maps.lastIndexOf('#ifdef OPAQUE', at)).toBeGreaterThan(0);
+    });
+
+    it('follow the same mirror ray as the screen\'s reflections, or the two would not meet without a seam', () => {
+        expect(REFLECTION_RAYS_FRAGMENT).toContain(MIRROR_RAY_GLSL);
+        expect(readFileSync(resolve(__dirname, '../../runtime/screenLighting.ts'), 'utf8')).toContain('auvraMirrorRay( p, n, roughness, n0,');
+        expect(REFLECTION_RAYS_FRAGMENT).toContain('auvraMirrorRay( p, n, roughness, noiseAt( gl_FragCoord.xy ), noiseAt( gl_FragCoord.xy * 1.37 + 17.0 ) )');
+    });
+
+    it('skip characters: to rays they are a box, which would show in a mirror', () => {
+        expect(REFLECTION_RAYS_FRAGMENT).toContain('RT_SKIP_CHARACTERS');
+        expect(TRACE_FRAGMENT.indexOf('RT_INSTANCE_ONE_WAY')).toBeGreaterThan(0);
     });
 });
 

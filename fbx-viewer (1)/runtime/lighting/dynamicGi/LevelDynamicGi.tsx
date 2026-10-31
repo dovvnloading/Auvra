@@ -5,7 +5,7 @@ import type { LevelObject } from '../../../types';
 import { canDrawFloat } from '../../keptDepth';
 import type { RayFilter } from '../../raytracing/rayScene';
 import { ShadowDetailContext } from '../DistanceShadowLights';
-import { DYNAMIC_GI_UNIFORMS, setSceneGi } from './giMaterials';
+import { DYNAMIC_GI_UNIFORMS, setSceneGi, setSceneReflectionTracer } from './giMaterials';
 import { PROBE_VIEW_FRAGMENT, PROBE_VIEW_VERTEX } from './giShaders';
 import { DynamicGi } from './giSystem';
 import { PROBES_PER_CASCADE, resolveDynamicGiSettings, type DynamicGiSettings } from './probeGrid';
@@ -168,6 +168,13 @@ const DynamicGiRunner: React.FC<{ settings: DynamicGiSettings; levelObjects: rea
     state.intensity = settings.intensity;
     state.indirectOnly = settings.view === 'lighting';
     useEffect(() => setSceneGi(scene, state), [scene, state]);
+
+    // Only as the level is meant to look: the other views show the light itself, and a slow machine goes without.
+    const rayReflections = settings.reflections && settings.view === 'lit' && detail !== 'low';
+    useEffect(() => {
+        if (!rayReflections) return undefined;
+        return setSceneReflectionTracer(scene, (target, inputs) => gi.traceReflections(target, inputs));
+    }, [scene, gi, rayReflections]);
 
     // Ahead of the sky's own frame work and every view's draw.
     useFrame(() => {
