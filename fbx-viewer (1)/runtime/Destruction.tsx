@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
+import { isGpuRenderer } from '../renderer/gpu/frame';
+import { particleWorldOf } from '../renderer/gpu/particles/particleWorld';
 import { useRapier } from '@react-three/rapier';
 import type { RapierRigidBody } from '@react-three/rapier';
 import { acquireAudioListener, releaseSound, routeSoundToBus } from './components/audioComponents';
@@ -115,7 +117,8 @@ export const Destruction: React.FC = () => {
     }), [world, rapier]);
 
     const debris = useMemo(() => new DebrisWorld(physics), [physics]);
-    const effects = useMemo(() => new ImpactEffects(), []);
+    const gl = useThree(state => state.gl);
+    const effects = useMemo(() => new ImpactEffects(Math.random, isGpuRenderer(gl) ? particleWorldOf(gl) : null), [gl]);
     const audio = useRef<{ listener: THREE.AudioListener; buffer: AudioBuffer; release: () => void; voices: Set<SpatialPositionalAudio> } | null>(null);
 
     useEffect(() => {

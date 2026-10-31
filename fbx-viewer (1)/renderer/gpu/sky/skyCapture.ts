@@ -378,8 +378,9 @@ export class SkyCapture {
 
   private freeSet(set: CubeSet): void {
     set.raw.destroy();
-    set.specular[0].destroy();
-    set.specular[1].destroy();
+    // A frame being recorded may still hold them, and a destroyed texture would throw that whole frame away.
+    const [first, second] = set.specular;
+    setTimeout(() => { first.destroy(); second.destroy(); }, 500);
     for (const buffer of set.prefilterBuffers) buffer.destroy();
   }
 

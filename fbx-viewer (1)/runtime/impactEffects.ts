@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { computeBurstParts } from '../renderer/gpu/particles/effectParts';
+import type { ParticleWorld } from '../renderer/gpu/particles/particleWorld';
 import { PARTICLE_PRESETS, sanitizeParticleEffect, type BuiltinSprite, type ParticleEffect } from './particleEffect';
 import { ParticleRenderer } from './particleRenderer';
 import { ParticleSimulation, type ParticleRaycast } from './particleSimulation';
@@ -80,8 +82,13 @@ interface Emitter {
 const spriteOf = (effect: ParticleEffect): BuiltinSprite =>
     Object.prototype.hasOwnProperty.call(SPRITE_GRIDS, effect.render.sprite) ? (effect.render.sprite as BuiltinSprite) : 'soft';
 
-const emitter = (effect: ParticleEffect, random: () => number): Emitter => {
+const emitter = (effect: ParticleEffect, random: () => number, world: ParticleWorld | null): Emitter => {
     const own = JSON.parse(JSON.stringify(effect)) as ParticleEffect;
+    if (world) {
+        const sprite = spriteOf(own);
+        const parts = computeBurstParts(world, own, own.maxParticles, builtinSpriteTexture(sprite), SPRITE_GRIDS[sprite]);
+        return { effect: own, simulation: parts.simulation as unknown as ParticleSimulation, renderer: parts.renderer as unknown as ParticleRenderer, colors: own.startColor.join() };
+    }
     const simulation = new ParticleSimulation(own, own.maxParticles, random);
     const renderer = new ParticleRenderer(own.maxParticles);
     const sprite = spriteOf(own);
@@ -122,15 +129,16 @@ export class ImpactEffects {
     private readonly random: () => number;
     private raycast: ParticleRaycast | null = null;
 
-    constructor(random: () => number = Math.random) {
+    /** `world`: on the WebGPU renderer, where the particles run. */
+    constructor(random: () => number = Math.random, world: ParticleWorld | null = null) {
         this.random = random;
-        this.sparks = emitter(SPARKS, random);
-        this.puff = emitter(PUFF, random);
-        this.cloud = emitter(CLOUD, random);
-        this.chips = emitter(CHIPS, random);
-        this.splash = emitter(SPLASH, random);
-        this.fireball = emitter(FIREBALL, random);
-        this.smoke = emitter(SMOKE, random);
+        this.sparks = emitter(SPARKS, random, world);
+        this.puff = emitter(PUFF, random, world);
+        this.cloud = emitter(CLOUD, random, world);
+        this.chips = emitter(CHIPS, random, world);
+        this.splash = emitter(SPLASH, random, world);
+        this.fireball = emitter(FIREBALL, random, world);
+        this.smoke = emitter(SMOKE, random, world);
         this.object.name = 'ImpactEffects';
         this.object.userData.noWeather = true;
         for (const each of this.emitters) this.object.add(each.renderer.object);

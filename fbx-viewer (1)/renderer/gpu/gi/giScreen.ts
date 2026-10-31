@@ -93,7 +93,9 @@ class GiScreenPass implements GpuPass {
 
   private outputFor(width: number, height: number): GPUTextureView {
     if (this.output?.width === width && this.output.height === height) return this.output.view;
-    this.output?.texture.destroy();
+    // This frame's earlier passes may have recorded the old one already, and it has to outlive their submit.
+    const replaced = this.output;
+    if (replaced) setTimeout(() => replaced.texture.destroy(), 500);
     const texture = this.device.createTexture({
       label: "gi screen",
       size: [width, height],
@@ -169,7 +171,9 @@ class GiScreenPass implements GpuPass {
   dispose(): void {
     this.products?.delete("gi");
     this.products = null;
-    this.output?.texture.destroy();
+    // A frame being recorded may still hold it, and a destroyed texture would throw that whole frame away.
+    const output = this.output;
+    if (output) setTimeout(() => output.texture.destroy(), 500);
     this.bakedOnly?.lighting.destroy();
     this.bakedOnly?.atlasTexture.destroy();
   }
