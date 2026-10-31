@@ -71,6 +71,7 @@ const EXEMPT = new Map(Object.entries({
   'utils/viewerModel.ts': 'pure-utility',
   'utils/partCopies.ts': 'pure-utility',
   'utils/meshLod.ts': 'pure-utility',
+  'utils/instanceCulling.ts': 'hot-loop',
   'utils/processing/opacityMaps.ts': 'pure-utility',
   'utils/processing/fbxUnits.ts': 'pure-utility',
   'components/Dialogue/dialogueEditing.ts': 'pure-utility',

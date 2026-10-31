@@ -125,6 +125,9 @@ export const materialGraphAnimated = (material: THREE.Material): boolean => {
     return !!binding && [binding.fragment, binding.vertex, binding.shadow].some(stage => stage?.builtins.has('time'));
 };
 
+/** True when the graph shading `material` offsets its vertices, so what it draws can lie past the geometry's bounds. */
+export const materialGraphOffsetsVertices = (material: THREE.Material): boolean => !!bindings.get(material)?.vertex;
+
 /** Whether the graph shapes the material's shadow (a cut-out, or offset vertices). */
 const shapesShadow = (binding: Pick<GraphBinding, 'settings' | 'vertex'>): boolean => binding.settings.blendMode === 'masked' || binding.vertex !== null;
 

@@ -1,14 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import * as THREE from 'three';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { allowedAntialias } from '../../runtime/components/postProcess';
 import { installMipBias, setTextureMipBias } from '../../runtime/temporal/mipBias';
 import {
     cameraStillnessFor, clampRenderScale, contrastFadeFor, halton, isCameraCut, jitterPhases, MAX_RENDER_SCALE, MIN_RENDER_SCALE, mipBiasFor, renderSizeOf, temporalJitter,
 } from '../../runtime/temporal/temporalSettings';
 import { OUTPUT_FRAGMENT, RESOLVE_FRAGMENT } from '../../runtime/temporal/temporalShaders';
-import { drawsVelocity } from '../../runtime/temporal/velocityBuffer';
+import { drawsVelocity, VelocityBuffer } from '../../runtime/temporal/velocityBuffer';
 import { NORMAL_READ } from '../../utils/textureCompression/compressTextures';
 
 /*
@@ -103,6 +103,33 @@ describe('what owns a velocity', () => {
         expect(drawsVelocity(new THREE.MeshStandardMaterial({ depthTest: false }))).toBe(false);
         expect(drawsVelocity(new THREE.MeshStandardMaterial({ colorWrite: false }))).toBe(false);
         expect(drawsVelocity(new THREE.MeshStandardMaterial({ visible: false }))).toBe(false);
+    });
+
+    it('is what really moved: not instances that only changed places, nor what is never drawn', () => {
+        const draws = (setUp: (mesh: THREE.InstancedMesh) => void) => {
+            const scene = new THREE.Scene();
+            const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial(), 2);
+            setUp(mesh);
+            scene.add(mesh);
+            scene.updateMatrixWorld();
+            const render = vi.fn();
+            const renderer = {
+                autoClear: true, render, clear: () => undefined, getRenderTarget: () => null, setRenderTarget: () => undefined,
+                getClearAlpha: () => 1, getClearColor: (color: THREE.Color) => color, setClearColor: () => undefined,
+            } as unknown as THREE.WebGLRenderer;
+            const camera = new THREE.PerspectiveCamera();
+            const buffer = new VelocityBuffer();
+            const frame = () => buffer.render(renderer, scene, camera, new THREE.Matrix4(), new THREE.Matrix4());
+            frame();
+            expect(render).not.toHaveBeenCalled();
+            mesh.instanceMatrix.needsUpdate = true;
+            frame();
+            buffer.dispose();
+            return render.mock.calls.length;
+        };
+        expect(draws(() => undefined)).toBe(1);
+        expect(draws((mesh) => { mesh.userData.shuffledInstances = true; })).toBe(0);
+        expect(draws((mesh) => { mesh.layers.set(31); })).toBe(0);
     });
 });
 
