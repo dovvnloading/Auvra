@@ -89,6 +89,41 @@ describe('surface buffer', () => {
     expect((mapped.uniforms.mapTransform.value as THREE.Matrix3).elements[4]).toBe(3);
   });
 
+  it('frees a twin with its material, and makes another if the material is used again', () => {
+    const material = new THREE.MeshStandardMaterial();
+    const twin = surfaceTwin(material);
+    let freed = 0;
+    twin.addEventListener('dispose', () => { freed += 1; });
+
+    material.dispose();
+    expect(freed).toBe(1);
+
+    const next = surfaceTwin(material);
+    expect(next).not.toBe(twin);
+    let freedNext = 0;
+    next.addEventListener('dispose', () => { freedNext += 1; });
+    material.dispose();
+    expect(freedNext).toBe(1);
+    expect(freed).toBe(1);
+  });
+
+  it('frees the twin it replaces once, and the current one with its material', () => {
+    const material = new THREE.MeshStandardMaterial();
+    const first = surfaceTwin(material);
+    let freedFirst = 0;
+    first.addEventListener('dispose', () => { freedFirst += 1; });
+
+    material.map = new THREE.Texture();
+    const second = surfaceTwin(material);
+    expect(freedFirst).toBe(1);
+    let freedSecond = 0;
+    second.addEventListener('dispose', () => { freedSecond += 1; });
+
+    material.dispose();
+    expect(freedSecond).toBe(1);
+    expect(freedFirst).toBe(1);
+  });
+
   it('cuts an alpha-tested surface by its alpha map too, following the map\'s transform', () => {
     const material = new THREE.MeshStandardMaterial({ alphaTest: 0.5, alphaMap: new THREE.Texture() });
     material.alphaMap!.repeat.set(4, 1);

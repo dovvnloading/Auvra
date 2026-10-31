@@ -404,12 +404,18 @@ const VIGNETTE_OFFSET = 0.35;
 
 // --- CINEMATIC EFFECTS (runtime/postEffects.ts) ---
 
-/** Ambient occlusion, which frees its targets when it goes, as the component on its own does not. */
+/**
+ * Ambient occlusion, which frees its targets when it goes, as the component on its own does not, and the
+ * materials on its full-screen quads, which the pass's own dispose does not reach.
+ */
 const AmbientOcclusion: React.FC<React.ComponentProps<typeof N8AO>> = (props) => {
     const pass = useRef<{ dispose?: () => void } | null>(null);
     useLayoutEffect(() => {
         const owned = pass.current;
-        return () => owned?.dispose?.();
+        return () => {
+            owned?.dispose?.();
+            for (const part of Object.values(owned ?? {})) (part as { material?: THREE.Material } | null)?.material?.dispose();
+        };
     }, []);
     return <N8AO ref={pass as never} {...props} />;
 };
