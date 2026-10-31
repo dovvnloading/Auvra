@@ -31,6 +31,10 @@ jobs:
           languages: ${{ matrix.language }}
           build-mode: none
           queries: security-and-quality
+          # The generated validators are written by scripts/protocol, so what they trip is not code anyone reads.
+          config: |
+            paths-ignore:
+              - "fbx-viewer (1)/host/generated"
 
       - name: Analyze
         uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
