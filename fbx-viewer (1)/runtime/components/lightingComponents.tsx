@@ -40,6 +40,9 @@ const LightBakeVolumeRender: React.FC<ComponentRenderProps> = ({ component, mode
     );
 };
 
+/** Nothing of its own to draw: it lights the whole level, from LevelDynamicGi, which reads these settings. */
+const DynamicGiRender: React.FC<ComponentRenderProps> = () => null;
+
 export const LIGHTING_COMPONENTS: ComponentDefinition[] = [
     {
         type: LIGHT_BAKE_VOLUME_COMPONENT_TYPE,
@@ -72,5 +75,6 @@ export const LIGHTING_COMPONENTS: ComponentDefinition[] = [
                 ],
             },
         ],
+        Render: DynamicGiRender,
     },
 ];
