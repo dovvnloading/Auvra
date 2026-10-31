@@ -167,6 +167,8 @@ const EXEMPT = new Map(Object.entries({
   'runtime/lighting/dynamicGi/giShaders.ts': 'pure-utility',
   'runtime/lighting/dynamicGi/giSystem.ts': 'hot-loop',
   'runtime/lighting/dynamicGi/probeGrid.ts': 'pure-utility',
+  'components/Scripting/scriptAssistantPrompt.ts': 'pure-utility',
+  'services/providerPricing.ts': 'pure-utility',
   'runtime/raytracing/bvh.ts': 'pure-utility',
   'runtime/raytracing/rayBudget.ts': 'hot-loop',
   'runtime/raytracing/rayScene.ts': 'hot-loop',

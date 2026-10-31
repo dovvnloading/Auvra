@@ -29,6 +29,7 @@ from Auvra.providers import (
 )
 from Auvra.providers.adapters import MediaJob
 from Auvra.providers.credentials import MemoryCredentialStore, WindowsCredentialManager
+from Auvra.providers.fal_catalog import media_output_url, rough_job_cost
 from Auvra.providers.transport import StdlibTransport
 
 from .credential_prompt import CredentialPromptUnavailableError, WinFormsCredentialPrompt
@@ -59,6 +60,11 @@ _PROVIDER_ERRORS = {
     "invalid_request": "invalid_request",
 }
 _SHUTDOWN_GRACE_SECONDS = 5.0
+# How often a queued media job is asked after: soon at first, as a small one is quick, then every couple of seconds.
+_POLL_FIRST_SECONDS = 0.05
+_POLL_MOST_SECONDS = 2.0
+_POLL_LIMIT_SECONDS = 15 * 60
+_MODELS_PAGE = 200
 
 
 def _assert_state_path_safe(path: Path) -> None:
@@ -131,6 +137,7 @@ class NativeProviderHost:
         self._lock = threading.RLock()
         self._closed = False
         self._shutdown_event = threading.Event()
+        self._price_refresh: threading.Thread | None = None
         self._stores_closed = False
         self._stores_closing = False
         self._now = now
@@ -228,6 +235,7 @@ class NativeProviderHost:
                 "settingsHash": self._settings_hash(self.settings.get(job.provider)), "createdAt": job.created_at,
                 "promptHash": job.prompt_hash, "projectRevision": 0,
             }
+            self.registry.discover_models(job.provider, {*self.registry.models(job.provider), job.model})
             with self._lock:
                 self._queue("provider.recovery", {"providerId": job.provider, "jobId": job.job_id, "status": "recovering", "progress": None, "attempt": job.attempt, "retryable": True})
                 self._futures[job.job_id] = self._executor.submit(self._recover_fal_job, job.job_id)
@@ -238,9 +246,9 @@ class NativeProviderHost:
                 return
             job = self.jobs.get(job_id)
             adapter = self._adapter("fal")
-            remote = MediaJob("fal", job.model, job.remote_id or "")
+            remote = MediaJob("fal", job.model, job.remote_id or "", job.reconcile.get("remote_root"))
             self.jobs.transition(job_id, "running")
-            for _ in range(120):
+            for wait in self._poll_waits():
                 if self._shutdown_event.is_set():
                     return
                 state = adapter.status_state(adapter.status(remote))
@@ -255,7 +263,7 @@ class NativeProviderHost:
                     return
                 if state in {"failed", "cancelled"}:
                     raise ProviderError("remote", "durable media request failed", "fal")
-                if self._shutdown_event.wait(0.05):
+                if self._shutdown_event.wait(wait):
                     return
             raise ProviderError("timeout", "durable media request timed out", "fal")
         except Exception as exc:
@@ -462,13 +470,60 @@ class NativeProviderHost:
         # provider adapter. Do not make it depend on an earlier health call or
         # an injected transport; local providers otherwise remain model-less
         # and cannot be configured on a fresh host.
-        models = self._adapter(descriptor.provider_id).list_models()
-        self.registry.discover_models(descriptor.provider_id, models)
+        adapter = self._adapter(descriptor.provider_id)
+        models = adapter.list_models()
+        # An adapter that narrows what each model does has told the registry already.
+        if not hasattr(adapter, "model_details"):
+            self.registry.discover_models(descriptor.provider_id, models)
         capability = payload.get("capability")
-        return {"kind": "provider.models", "providerId": descriptor.provider_id, "models":[
-            {"modelId": model, "displayName": model, "capabilities": sorted(cap.value for cap in descriptor.capabilities if capability is None or cap.value == capability)}
-            for model in models if capability is None or self.registry.supports(descriptor.provider_id, capability, model)
-        ]}
+        offered = [model for model in models if capability is None or self.registry.supports(descriptor.provider_id, capability, model)]
+        try:
+            start = int(payload.get("cursor", "0") or 0)
+        except (TypeError, ValueError) as exc:
+            raise HostOperationError("invalid_request", "Model cursor is invalid") from exc
+        if start < 0:
+            raise HostOperationError("invalid_request", "Model cursor is invalid")
+        page = offered[start:start + _MODELS_PAGE]
+        following = start + len(page)
+        self._refresh_prices_later(descriptor.provider_id, adapter)
+        return {"kind": "provider.models", "providerId": descriptor.provider_id,
+                "models": [self._model_value(descriptor, adapter, model, capability) for model in page],
+                "cursor": str(following) if following < len(offered) else "", "hasMore": following < len(offered)}
+
+    def _model_value(self, descriptor: Any, adapter: Any, model: str, capability: str | None) -> dict[str, Any]:
+        capabilities = sorted(item.value for item in self.registry.model_capabilities(descriptor.provider_id, model)
+                              if capability is None or item.value == capability)
+        value: dict[str, Any] = {"modelId": model, "displayName": model, "capabilities": capabilities}
+        details = adapter.model_details(model) if hasattr(adapter, "model_details") else None
+        if details is not None:
+            value["displayName"] = details.display_name
+            if details.category:
+                value["category"] = details.category
+            if details.description:
+                value["description"] = details.description
+            if details.price_micro_usd is not None:
+                value["priceMicroUsd"] = details.price_micro_usd
+                value["priceUnit"] = details.price_unit
+            if details.output_price_micro_usd is not None:
+                value["outputPriceMicroUsd"] = details.output_price_micro_usd
+        return value
+
+    def _refresh_prices_later(self, provider_id: str, adapter: Any) -> None:
+        """Prices take a while to read, so they come in behind the list; pickers hear when they are in."""
+        catalog = getattr(adapter, "catalog", None)
+        with self._lock:
+            if catalog is None or self._closed or (self._price_refresh is not None and self._price_refresh.is_alive()) or not catalog.prices_stale:
+                return
+
+            def run() -> None:
+                try:
+                    if catalog.refresh_prices(self._shutdown_event):
+                        self._queue("provider.status", {"providerId": provider_id, "status": "ready"})
+                except Exception:
+                    pass
+
+            self._price_refresh = threading.Thread(target=run, daemon=True, name="auvra-provider-prices")
+            self._price_refresh.start()
 
     def _health(self, payload: dict[str, Any]) -> dict[str, Any]:
         descriptor = self.registry.get(payload["providerId"])
@@ -513,9 +568,8 @@ class NativeProviderHost:
         selected = None
         if capability == Capability.COMMANDS:
             hud = self.project_host.service.active.get_domain("hud")
-            main = next((item for item in hud.get("documents", []) if isinstance(item, dict) and item.get("id") == "hud-main"), None)
-            if main is None:
-                raise HostOperationError("invalid_command", "Canonical hud-main document is unavailable")
+            # A project that has never saved a HUD has an empty one, as the HUD editor shows it.
+            main = next((item for item in hud.get("documents", []) if isinstance(item, dict) and item.get("id") == "hud-main"), _empty_main_hud())
             elements = [item for item in main.get("elements", []) if isinstance(item, dict)]
             if (len({item.get("id") for item in elements}) != len(elements) or
                     len({item.get("name") for item in elements}) != len(elements)):
@@ -536,7 +590,7 @@ class NativeProviderHost:
             if callable(resolver):
                 resolver(asset_id, project_id=active.project_id)
         with self._lock:
-            estimated_cost = self._check_budget(descriptor.provider_id, configured, payload.get("estimatedCostMicroUsd"))
+            estimated_cost = self._check_budget(descriptor.provider_id, configured, self._cost_estimate(descriptor.provider_id, configured, payload))
             job = self.jobs.create(provider=descriptor.provider_id, model=payload["modelId"], capability=capability.value, prompt_hash=prompt_hash,
                                    project_id=active.project_id, cost_micro_usd=estimated_cost,
                                    provenance={"route": descriptor.kind, "provider": descriptor.provider_id, "model": payload["modelId"], "capability": capability.value})
@@ -581,7 +635,7 @@ class NativeProviderHost:
         job = self.jobs.request_cancel(job.job_id, project_id=active.project_id)
         if job.remote_id and job.provider == "fal" and job.state.value in {"submitting", "running", "cancel_requested", "recovering"}:
             try:
-                self._adapter("fal").cancel(MediaJob("fal", job.model, job.remote_id))
+                self._adapter("fal").cancel(MediaJob("fal", job.model, job.remote_id, job.reconcile.get("remote_root")))
             except ProviderError as exc:
                 raise self._map_error(exc) from None
         self._queue_job_event(job.job_id, job.state.value, None, self.registry.get(job.provider))
@@ -758,9 +812,10 @@ class NativeProviderHost:
         documents = copy.deepcopy(list(hud.get("documents", [])))
         main_index = next((index for index, item in enumerate(documents)
                            if isinstance(item, dict) and item.get("id") == "hud-main"), None)
-        hud_main = documents[main_index] if main_index is not None else None
-        if hud_main is None:
-            raise HostOperationError("invalid_command", "Canonical hud-main document is unavailable")
+        if main_index is None:
+            documents.append(_empty_main_hud())
+            main_index = len(documents) - 1
+        hud_main = documents[main_index]
         elements = copy.deepcopy(list(hud_main.get("elements", [])))
         if any(not isinstance(item, dict) or not isinstance(item.get("id"), str) or not isinstance(item.get("name"), str)
                for item in elements):
@@ -809,8 +864,7 @@ class NativeProviderHost:
         documents[main_index] = hud_main
         audit = {"id": proposal.proposal_id, "jobId": source_job_id, "providerId": source.get("providerId", "openai"), "modelId": source.get("modelId", "unknown"), "promptSha256": source.get("promptHash", "0" * 64), "operationsSha256": proposal.diff_hash, "appliedAt": self._now()}
         hud_main["commands"] = list(hud_main.get("commands", []))[-63:] + [audit]
-        hud = {"schemaVersion": hud.get("schemaVersion", 1), "documents": documents}
-        result = self.project_host.service.apply_changes({"hud": hud}, project_id=active.project_id, expected_revision=payload["expectedRevision"])
+        result = self.project_host.service.apply_changes({"hud": documents}, project_id=active.project_id, expected_revision=payload["expectedRevision"])
         transaction_id = "transaction-" + uuid.uuid4().hex
         self._last_transaction = {"projectId": active.project_id, "revision": result.revision, "hud": pre_change_hud, "transactionId": transaction_id}
         return {"kind": "command.approve", "projectId": active.project_id, "projectRevision": result.revision, "transactionId": transaction_id}
@@ -822,7 +876,7 @@ class NativeProviderHost:
             raise HostOperationError("invalid_command", "Only the last approved transaction can be undone")
         if payload["expectedRevision"] != transaction["revision"]:
             raise HostOperationError("revision_conflict", "Project changed after the approved transaction")
-        result = self.project_host.service.apply_changes({"hud": copy.deepcopy(transaction["hud"])}, project_id=active.project_id, expected_revision=payload["expectedRevision"])
+        result = self.project_host.service.apply_changes({"hud": copy.deepcopy(transaction["hud"].get("documents", []))}, project_id=active.project_id, expected_revision=payload["expectedRevision"])
         self._last_transaction = None
         return {"kind": "command.undo", "projectId": active.project_id, "projectRevision": result.revision, "transactionId": payload["transactionId"]}
 
@@ -865,28 +919,32 @@ class NativeProviderHost:
                 else:
                     meta["outputText"] = result.text[:65536]
             elif capability in {Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT}:
-                media_payload: dict[str, Any] = {"prompt": meta["prompt"]}
+                references: list[str] = []
+                source_size: tuple[int, int] | None = None
                 if capability == Capability.MEDIA_EDIT:
-                    references = []
                     for asset_id in meta["assetIds"]:
                         reference = self.project_host.service.resolve_reference(asset_id, project_id=meta["projectId"])
                         with self.project_host.service.resolve(asset_id, project_id=meta["projectId"]) as source:
+                            source_size = source_size or _stream_image_size(source, reference.mime)
                             references.append(adapter.upload_input(source=source, size=reference.size, filename="input.bin", content_type=reference.mime or "application/octet-stream"))
-                    if references:
-                        media_payload["image_url"] = references[0]
+                # The model says what it takes; without that, a prompt and the first image.
+                media_payload = (adapter.media_request(model=model, prompt=meta["prompt"], images=references, size=source_size)
+                                 if hasattr(adapter, "media_request") else
+                                 {"prompt": meta["prompt"], **({"image_url": references[0]} if references else {})})
                 result = adapter.submit(model=model, capability=capability, payload=media_payload)
                 if self._shutdown_event.is_set():
                     return
                 request_id = getattr(result, "request_id", None)
-                self.jobs.transition(job_id, "running", remote_id=request_id, reconcile={"durable": True, "remote_request_id": request_id or "", "provider": provider_id, "model": model, "route": meta["route"]})
-                for _ in range(120):
+                self.jobs.transition(job_id, "running", remote_id=request_id, reconcile={"durable": True, "remote_request_id": request_id or "", "remote_root": getattr(result, "queue_root", None), "provider": provider_id, "model": model, "route": meta["route"]})
+                for wait in self._poll_waits():
                     if self._shutdown_event.is_set():
                         return
                     status = adapter.status(result)
                     state = adapter.status_state(status)
                     if state == "succeeded":
                         if status.get("error") or status.get("error_type"):
-                            raise ProviderError("remote", "media provider reported a failed result", provider_id)
+                            detail = status.get("error")
+                            raise ProviderError("remote", detail[:240] if isinstance(detail, str) and detail else "media provider reported a failed result", provider_id)
                         if self.jobs.get(job_id).state.value == "cancel_requested":
                             job = self.jobs.reconcile(job_id, remote_state="succeeded", project_id=meta.get("projectId"))
                             self._queue_job_event(job_id, job.state.value, None, self.registry.get(provider_id))
@@ -898,7 +956,7 @@ class NativeProviderHost:
                             self._queue_job_event(job_id, job.state.value, 1, self.registry.get(provider_id))
                             return
                         raise ProviderError("remote", "media job did not complete", provider_id)
-                    if self._shutdown_event.wait(0.05):
+                    if self._shutdown_event.wait(wait):
                         return
                 else:
                     raise ProviderError("timeout", "media job timed out", provider_id)
@@ -920,6 +978,8 @@ class NativeProviderHost:
                 error = exc if isinstance(exc, ProviderError) else ProviderError("internal", "provider job failed")
                 meta = self._meta.get(job_id, {})
                 meta["errorCode"] = self._map_error(error).code
+                # Only what the provider actually said: the code says the rest better.
+                meta["errorMessage"] = error.message if error.status is None or error.message != "provider request failed" else None
                 meta["retryable"] = bool(error.retryable)
                 self.jobs.transition(job_id, "failed", message="provider job failed",
                                      reconcile={"provider": provider_id, "error_code": meta["errorCode"], "retryable": bool(error.retryable)})
@@ -930,18 +990,14 @@ class NativeProviderHost:
     def _ingest_media(self, job_id: str, output: Mapping[str, Any], adapter: Any, meta: dict[str, Any]) -> None:
         if self.preview_store is None:
             raise ProviderError("remote", "preview storage is unavailable")
-        images = output.get("images")
-        if isinstance(images, list) and images and isinstance(images[0], Mapping):
-            image = images[0]
-            if isinstance(image.get("url"), str):
-                output = {"url": image["url"], "mime": image.get("content_type") or image.get("mime")}
-            if isinstance(image.get("width"), int) and isinstance(image.get("height"), int):
-                meta["dimensions"] = {"width": image["width"], "height": image["height"]}
+        found = media_output_url(output)
         if isinstance(output.get("seed"), int) and not isinstance(output.get("seed"), bool):
             meta["seed"] = output["seed"]
-        url = output.get("url")
-        if not isinstance(url, str):
+        if found is None:
             raise ProviderError("remote", "media response contained no streamed artifact")
+        url, _mime, dimensions = found
+        if dimensions is not None:
+            meta["dimensions"] = dimensions
         import tempfile
         with tempfile.NamedTemporaryFile() as temp:
             artifact = adapter.download_output(url, sink=temp)
@@ -964,7 +1020,8 @@ class NativeProviderHost:
         credential_store = self._credential_store(provider_id)
         endpoint = self.settings.get(provider_id).endpoint
         cls = _ADAPTERS[provider_id]
-        adapter = cls(transport, credential_store=credential_store, registry=self.registry, endpoint=endpoint)
+        extras = {"catalog_path": self.state_root / "fal-catalog.json"} if provider_id == "fal" else {}
+        adapter = cls(transport, credential_store=credential_store, registry=self.registry, endpoint=endpoint, **extras)
         self._adapters[provider_id] = adapter
         return adapter
 
@@ -982,6 +1039,18 @@ class NativeProviderHost:
                 except Exception:
                     continue
         return "absent" if self._vault is not None else "unavailable"
+
+    def _cost_estimate(self, provider_id: str, settings: Any, payload: Mapping[str, Any]) -> Any:
+        """What the request says it costs, or with budgets set, what the catalog does: a limit must see every job."""
+        estimate = payload.get("estimatedCostMicroUsd")
+        if estimate is not None or not all((settings.max_job_cost_micro_usd, settings.max_daily_cost_micro_usd, settings.max_monthly_cost_micro_usd)):
+            return estimate
+        try:
+            adapter = self._adapter(provider_id)
+        except Exception:
+            return None
+        details = adapter.model_details(payload["modelId"]) if hasattr(adapter, "model_details") else None
+        return rough_job_cost(details)
 
     def _check_budget(self, provider_id: str, settings: Any, estimate: Any) -> int:
         """Validate one reservation against durable provider-specific caps."""
@@ -1047,7 +1116,7 @@ class NativeProviderHost:
         job = self.jobs.get(job_id); meta = self._meta.get(job_id, {})
         value = {"jobId": job.job_id, "providerId": job.provider, "modelId": job.model, "capability": job.capability, "route": meta.get("route", job.route), "status": job.state.value, "progress": 1 if job.state.value == "succeeded" else None, "attempt": job.attempt}
         if job.state.value == "failed":
-            value["message"] = str(meta.get("errorCode", job.reconcile.get("error_code", "provider_error")))[:256]
+            value["message"] = str(meta.get("errorMessage") or meta.get("errorCode", job.reconcile.get("error_code", "provider_error")))[:256]
             value["retryable"] = bool(meta.get("retryable", job.reconcile.get("retryable", False)))
         if "outputText" in meta: value["outputText"] = meta["outputText"]
         if "proposal" in meta: value["proposalAvailable"] = True; value["proposalId"] = meta["proposal"].proposal_id
@@ -1095,9 +1164,43 @@ class NativeProviderHost:
         return active.revision
 
     @staticmethod
+    def _poll_waits() -> Any:
+        """Each wait between asking after a queued job, until it has been asked after for long enough."""
+        wait, spent = _POLL_FIRST_SECONDS, 0.0
+        while spent < _POLL_LIMIT_SECONDS:
+            yield wait
+            spent += wait
+            wait = min(wait * 1.5, _POLL_MOST_SECONDS)
+
+    @staticmethod
     def _map_error(exc: ProviderError) -> HostOperationError:
         code = _PROVIDER_ERRORS.get(str(exc.code), "internal_error")
         return HostOperationError(code, str(exc.message)[:256])
+
+
+def _empty_main_hud() -> dict[str, Any]:
+    """The main HUD of a project that has not saved one: what createDefaultMainHUD makes in the HUD editor."""
+    return {"id": "hud-main", "name": "Main HUD", "elements": [], "layout": {"width": 1920, "height": 1080}, "commands": []}
+
+
+def _stream_image_size(stream: Any, mime: str | None) -> tuple[int, int] | None:
+    """An image's size from its header, leaving the stream where it was. None where it cannot be told."""
+    try:
+        start = stream.tell()
+        head = stream.read(256 * 1024)
+        stream.seek(start)
+    except (AttributeError, OSError, ValueError):
+        return None
+    if head[:8] == b"\x89PNG\r\n\x1a\n" and len(head) >= 24:
+        return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+    if head[:2] == b"\xff\xd8":
+        at = 2
+        while at + 9 < len(head) and head[at] == 0xFF:
+            marker, length = head[at + 1], int.from_bytes(head[at + 2:at + 4], "big")
+            if 0xC0 <= marker <= 0xCF and marker not in {0xC4, 0xC8, 0xCC}:
+                return int.from_bytes(head[at + 7:at + 9], "big"), int.from_bytes(head[at + 5:at + 7], "big")
+            at += 2 + length
+    return None
 
 
 def _normalize_proposal_id(value: Any) -> str:

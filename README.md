@@ -200,6 +200,9 @@ credentials can be stored in Windows Credential Manager or kept in memory for
 the current session. Credentials are never written to project files or browser
 storage. Routes are explicit; the host does not silently switch providers.
 
+fal.ai's whole image catalog is offered for retexturing, and its router's language
+models for coding: see [AI tools](docs/ai-tools.md).
+
 Generated media remains a preview until it is committed to the project. Local
 providers use explicitly configured loopback endpoints.
 

@@ -718,7 +718,7 @@ export interface SceneContextType {
   selectModel: (id: string | null) => void;
   addAnimations: (files: File[], modelId: string) => Promise<void>;
   retextureModel: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<void>;
-  previewTexture: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<void>;
+  previewTexture: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<string>;
   resetModelTexture: (modelId: string) => Promise<void>;
   /** Persist a model's material overrides and apply them to its loaded object; rejects when they cannot be saved. */
   updateModelMaterialOverrides: (modelId: string, overrides: MaterialOverrides) => Promise<void>;

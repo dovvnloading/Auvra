@@ -1,8 +1,9 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { BookOpen, FileCode2, Save, X } from 'lucide-react';
+import { BookOpen, FileCode2, Save, Sparkles, X } from 'lucide-react';
 import { SCRIPT_LIMITS } from '../../runtime/scripting/protocol';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
+import { ScriptAssistant } from './ScriptAssistant';
 
 /** One indentation step in the script editor. */
 export const SCRIPT_INDENT = '    ';
@@ -238,6 +239,7 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
     const [confirmingClose, setConfirmingClose] = useState(false);
     // The reference panel starts closed where it would squeeze the text too much.
     const [referenceOpen, setReferenceOpen] = useState(() => window.innerWidth >= REFERENCE_MIN_WINDOW_WIDTH);
+    const [assistantOpen, setAssistantOpen] = useState(false);
     const [tabMovesFocus, setTabMovesFocus] = useState(false);
     const [caret, setCaret] = useState({ line: 1, column: 1 });
     const [saveError, setSaveError] = useState<string | null>(null);
@@ -391,6 +393,19 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
         }
     };
 
+    const insertAtCaret = (text: string) => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        const { selectionStart, selectionEnd } = textarea;
+        const caretAfter = selectionStart + text.length;
+        applyEdit({ from: selectionStart, to: selectionEnd, insert: text, selectionStart: caretAfter, selectionEnd: caretAfter });
+    };
+
+    const replaceScript = (text: string) => {
+        const textarea = textareaRef.current;
+        if (textarea) applyEdit({ from: 0, to: textarea.value.length, insert: text, selectionStart: 0, selectionEnd: 0 });
+    };
+
     const insertReference = (id: string) => {
         const textarea = textareaRef.current;
         if (!textarea) return;
@@ -423,6 +438,14 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => setAssistantOpen(open => !open)}
+                            aria-expanded={assistantOpen}
+                            className={`flex items-center gap-1.5 rounded px-2 py-1 text-[11px] transition-colors ${assistantOpen ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}
+                        >
+                            <Sparkles size={12} /> AI
+                        </button>
                         <button
                             type="button"
                             onClick={() => setReferenceOpen(open => !open)}
@@ -467,6 +490,12 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
                             style={{ ...textStyle, padding: PADDING_PX, tabSize: SCRIPT_INDENT.length }}
                         />
                     </div>
+
+                    {assistantOpen && (
+                        <aside aria-label="Script assistant" className="w-80 shrink-0 overflow-y-auto border-l border-gray-800 bg-gray-900 p-4 custom-scrollbar">
+                            <ScriptAssistant draft={draft} reference={SCRIPT_API_REFERENCE} onReplace={replaceScript} onInsert={insertAtCaret} />
+                        </aside>
+                    )}
 
                     {referenceOpen && (
                         <aside id={referenceId} aria-label="Script API reference" className="w-80 shrink-0 space-y-4 overflow-y-auto border-l border-gray-800 bg-gray-900 p-4 custom-scrollbar">

@@ -749,6 +749,7 @@ export const useModelManager = (
         candidate.side = THREE.DoubleSide; candidate.needsUpdate = true;
       }
     });
+    return newTexture.uuid;
   }, [models]);
 
   const resetModelTexture = useCallback(async (modelId: string) => {

@@ -13,15 +13,16 @@ const MAX_LOCAL_MEDIA_BYTES = 8 * 1024 * 1024;
 export class TextureGenerationService {
   private activeJobId: string | null = null;
   private completedJobId: string | null = null;
+  private previewObjectUrl: string | null = null;
 
-  async generateTexture(sourceImage: string, userPrompt: string, maskReferenceBase64?: string, options: TextureGenerationOptions = {}): Promise<TextureGenerationResult> {
-    if (!sourceImage) throw new Error('Select a source texture before generating.');
+  /** Restyles `sourceImage` as the prompt says, or with none, makes a new image from the prompt alone. */
+  async generateTexture(sourceImage: string | null, userPrompt: string, maskReferenceBase64?: string, options: TextureGenerationOptions = {}): Promise<TextureGenerationResult> {
     if (!userPrompt.trim()) throw new Error('Describe the desired material before generating.');
     if (maskReferenceBase64) throw new HostProviderError('Masked texture generation is not supported by the current host contract.', 'unsupported_capability');
-    const sourceAssetId = await this.ingestLocalAsset(sourceImage, 'source-texture');
+    const sourceAssetId = sourceImage ? await this.ingestLocalAsset(sourceImage, 'source-texture') : null;
     const job = await hostProviderService.submitInference({
-      capability: 'media.edit',
-      input: userPrompt.trim(), assetIds: [sourceAssetId], consent: 'explicit',
+      capability: sourceAssetId ? 'media.edit' : 'media.generate',
+      input: userPrompt.trim(), ...(sourceAssetId ? { assetIds: [sourceAssetId] } : {}), consent: 'explicit',
     });
     this.activeJobId = job.jobId || null; this.completedJobId = null;
     return this.waitForPreview(job, options.onProgress);
@@ -44,7 +45,7 @@ export class TextureGenerationService {
       name: payload.name || 'Generated Texture',
     });
     if (result.assetId && /^[0-9a-f]{64}$/.test(result.assetId)) {
-      const previewUrl = await projectService.resolveAsset(result.assetId);
+      const previewUrl = await this.loadAsset(result.assetId);
       this.activeJobId = null; this.completedJobId = null;
       return { ...result, previewUrl };
     }
@@ -52,23 +53,29 @@ export class TextureGenerationService {
   }
 
   private async waitForPreview(initial: InferenceJob, onProgress?: TextureGenerationOptions['onProgress']): Promise<TextureGenerationResult> {
-    let job = initial;
-    for (let attempt = 0; attempt < 240; attempt += 1) {
-      onProgress?.(typeof job.progress === 'number' ? Math.max(0, Math.min(1, job.progress)) : 0, job);
-      if (job.status === 'succeeded') {
-        const result = job.result && typeof job.result === 'object' ? job.result as MediaPreview : {};
-        const previewAssetId = result.previewAssetId || (Array.isArray((result as { previewAssetIds?: unknown[] }).previewAssetIds) ? String((result as { previewAssetIds: unknown[] }).previewAssetIds[0] || '') : '');
-        if (!/^[0-9a-f]{64}$/.test(previewAssetId)) throw new HostProviderError('The host returned an invalid preview content hash.', 'invalid_preview');
-        let previewUrl = '';
-        try { previewUrl = await projectService.resolveAsset(previewAssetId); } catch { throw new HostProviderError('The host preview asset could not be resolved.', 'invalid_preview'); }
-        this.completedJobId = job.jobId; this.activeJobId = null; return { ...result, assetId: previewAssetId, previewAssetId, previewUrl, jobId: job.jobId };
-      }
-      if (job.status === 'failed' || job.status === 'cancelled') throw new HostProviderError(job.error?.message || 'Texture generation failed.', job.error?.code, job.error?.retryable);
-      if (!job.jobId) throw new HostProviderError('The host did not return a media job id.', 'invalid_job');
-      await new Promise<void>((resolve) => setTimeout(resolve, 250));
-      job = await hostProviderService.getInference(job.jobId);
-    }
-    throw new HostProviderError('Texture generation timed out. You can retry the job.', 'timeout', true);
+    const job = await hostProviderService.waitForJob(initial, (current) => {
+      onProgress?.(typeof current.progress === 'number' ? Math.max(0, Math.min(1, current.progress)) : 0, current);
+    });
+    if (job.status !== 'succeeded') throw new HostProviderError(job.error?.message || 'Texture generation failed.', job.error?.code, job.error?.retryable);
+    const result = job.result && typeof job.result === 'object' ? job.result as MediaPreview : {};
+    const previewAssetId = result.previewAssetId || (Array.isArray((result as { previewAssetIds?: unknown[] }).previewAssetIds) ? String((result as { previewAssetIds: unknown[] }).previewAssetIds[0] || '') : '');
+    if (!/^[0-9a-f]{64}$/.test(previewAssetId)) throw new HostProviderError('The host returned an invalid preview content hash.', 'invalid_preview');
+    let previewUrl = '';
+    try { previewUrl = await this.loadAsset(previewAssetId); } catch { throw new HostProviderError('The host preview asset could not be resolved.', 'invalid_preview'); }
+    this.completedJobId = job.jobId; this.activeJobId = null; return { ...result, assetId: previewAssetId, previewAssetId, previewUrl, jobId: job.jobId };
+  }
+
+  /**
+   * An asset as a local URL. A host ticket can be read only once and images may not be loaded from it directly, while
+   * a preview is both shown in the panel and put on the model.
+   */
+  private async loadAsset(assetId: string): Promise<string> {
+    const response = await fetch(await projectService.resolveAsset(assetId));
+    if (!response.ok) throw new Error('The asset could not be read.');
+    const url = URL.createObjectURL(await response.blob());
+    if (this.previewObjectUrl) URL.revokeObjectURL(this.previewObjectUrl);
+    this.previewObjectUrl = url;
+    return url;
   }
 
   private async ingestLocalAsset(value: string, name: string): Promise<string> {

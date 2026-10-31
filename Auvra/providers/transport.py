@@ -6,7 +6,7 @@ import json
 import http.client
 import ssl
 from dataclasses import dataclass, field
-from typing import BinaryIO, Iterable, Iterator, Mapping, Protocol
+from typing import BinaryIO, Callable, Iterable, Iterator, Mapping, Protocol
 from urllib.parse import urlsplit
 
 from .errors import ErrorCode, ProviderError, from_http_status
@@ -216,9 +216,10 @@ class BoundedTransport:
 
     def __init__(self, transport: Transport, *, max_request_bytes: int = 4 * 1024 * 1024,
                  max_response_bytes: int = 16 * 1024 * 1024, max_timeout: float = 120.0,
-                 allowed_origins: Iterable[str] = ()) -> None:
+                 allowed_origins: Iterable[str] = (), error_detail: Callable[[bytes], str | None] | None = None) -> None:
         if max_request_bytes <= 0 or max_response_bytes <= 0 or max_timeout <= 0:
             raise ValueError("transport limits must be positive")
+        self.error_detail = error_detail
         self.transport, self.max_request_bytes = transport, max_request_bytes
         self.max_response_bytes, self.max_timeout = max_response_bytes, max_timeout
         self.allowed_origins = frozenset(allowed_origins)
@@ -233,7 +234,9 @@ class BoundedTransport:
         if len(response.body) > self.max_response_bytes:
             raise ProviderError(ErrorCode.REMOTE, "provider response exceeded size limit")
         if response.status < 200 or response.status >= 300:
-            raise from_http_status(response.status, provider="provider", retry_after=response.retry_after)
+            detail = self.error_detail(response.body) if self.error_detail is not None else None
+            raise from_http_status(response.status, provider="provider", retry_after=response.retry_after,
+                                   **({"message": detail} if detail else {}))
         return response
 
     def stream(self, request: HttpRequest, sink: BinaryIO, *, max_bytes: int | None = None) -> HttpResponse:

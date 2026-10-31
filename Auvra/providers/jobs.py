@@ -381,10 +381,11 @@ def _is_project_id(value: str) -> bool:
 
 def _safe_json(value: Mapping[str, Any]) -> None:
     if not isinstance(value, Mapping): raise ValueError("metadata must be an object")
-    allowed = {"durable", "restart_pending", "remote_state", "progress", "route", "provider", "model", "capability", "route_consent", "content_hash", "prompt_hash", "remote_request_id", "cost_micro_usd", "error_code", "retryable"}
+    allowed = {"durable", "restart_pending", "remote_state", "progress", "route", "provider", "model", "capability", "route_consent", "content_hash", "prompt_hash", "remote_request_id", "remote_root", "cost_micro_usd", "error_code", "retryable"}
     if any(not isinstance(key, str) or key not in allowed for key in value): raise ValueError("metadata key is not allowlisted")
     if any(not isinstance(item, (str, int, float, bool, type(None))) or (isinstance(item, str) and (len(item) > 512 or "://" in item or "\\" in item)) or (isinstance(item, float) and not math.isfinite(item)) for item in value.values()): raise ValueError("metadata value is not a bounded primitive")
-    if any(isinstance(item, str) and any(token in item.lower() for token in ("api_key", "apikey", "authorization", "bearer ", "credential", "password", "secret", "token=")) for item in value.values()):
+    # An error code is one of ours, and "provider_authorization" is not a secret: refusing it would leave the job running for ever.
+    if any(isinstance(item, str) and key != "error_code" and any(token in item.lower() for token in ("api_key", "apikey", "authorization", "bearer ", "credential", "password", "secret", "token=")) for key, item in value.items()):
         raise ValueError("metadata value contains sensitive data")
     for key in ("prompt_hash", "content_hash"):
         if key in value and not _is_hash(value[key]): raise ValueError("metadata hash is invalid")

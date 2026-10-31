@@ -9,6 +9,11 @@ from .errors import ErrorCode, ProviderError
 from .transport import HttpRequest, Transport
 from Auvra.diagnostics import trace_public_class
 
+# Where fal's models put what they make: its own CDN, and for older models its storage bucket.
+FAL_MEDIA_ORIGINS = ("https://fal.media", "https://v2.fal.media", "https://v3.fal.media", "https://v3b.fal.media",
+                     "https://storage.googleapis.com")
+
+
 @dataclass(frozen=True, slots=True)
 class MediaArtifact:
     artifact_id: str
@@ -19,7 +24,7 @@ class MediaArtifact:
 
 @trace_public_class("provider_media", concise=("download",))
 class MediaDownloader:
-    def __init__(self, *, max_bytes: int = 32 * 1024 * 1024, allowed_origins: tuple[str, ...] = ("https://fal.media", "https://v3.fal.media", "https://v3b.fal.media")):
+    def __init__(self, *, max_bytes: int = 32 * 1024 * 1024, allowed_origins: tuple[str, ...] = FAL_MEDIA_ORIGINS):
         if max_bytes <= 0: raise ValueError("media bound must be positive")
         self.max_bytes, self.allowed_origins = max_bytes, frozenset(allowed_origins)
 
