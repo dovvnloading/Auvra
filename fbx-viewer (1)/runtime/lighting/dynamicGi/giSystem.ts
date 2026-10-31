@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { isGpuRenderer } from '../../../renderer/gpu/frame';
 import { RayScene, type RayFilter, type TextureMean } from '../../raytracing/rayScene';
 import { traceUniforms } from '../../raytracing/traceShader';
 import { giAtlas, holdGiAtlas, setGiGrid, stepGiNoise, DYNAMIC_GI_UNIFORMS, type RayReflectionInputs } from './giMaterials';
@@ -250,6 +251,8 @@ export class DynamicGi {
     /** One frame's gathering. `scene` and `camera` are the view the probes follow. */
     update(scene: THREE.Scene, camera: THREE.Camera, include: RayFilter, settings: DynamicGiSettings): void {
         const gl = this.gl;
+        // LevelDynamicGi does not mount this on the new renderer (canDrawFloat); every draw, compile and prefilter here is WebGL.
+        if (isGpuRenderer(gl)) return;
         const before = gl.getRenderTarget();
         const autoClear = gl.autoClear;
         gl.autoClear = false;

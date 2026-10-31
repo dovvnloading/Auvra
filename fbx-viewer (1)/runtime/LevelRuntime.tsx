@@ -6,6 +6,7 @@ import { PerformanceMonitor } from '@react-three/drei';
 import { Bloom, SMAA, Vignette, ToneMapping } from '@react-three/postprocessing';
 import { ToneMappingMode } from 'postprocessing';
 import { AuvraCanvas } from '../renderer/AuvraCanvas';
+import { isGpuRenderer } from '../renderer/gpu/frame';
 import { ProfilerPanel, ProfilerProbe, useProfilerToggle } from './ProfilerOverlay';
 import { levelVariables } from './levelVariables';
 import { NavMeshContext, useLevelNavMesh, type LevelNavMesh, type NavSettings } from './navigation';
@@ -65,7 +66,7 @@ import { DialogueOverlay } from './DialogueOverlay';
 import { LevelStreamingContext, streamedObjects, streamedRoots, type LevelStreaming } from './levelStreaming';
 import { OwnedComposer, TemporalPipeline } from './temporal/TemporalPipeline';
 import { MIN_RENDER_SCALE } from './temporal/temporalSettings';
-import { AutoExposure, LightShafts, PostProcessAllowedContext, PostProcessQualityContext, ScreenLighting, SunHaze, useAllowedAntialias, usePostProcessClaimed } from './components/postProcess';
+import { AutoExposure, GpuPostProcess, LightShafts, PostProcessAllowedContext, PostProcessQualityContext, ScreenLighting, SunHaze, useAllowedAntialias, usePostProcessClaimed } from './components/postProcess';
 import { MeshLodContext } from '../components/Scene/useMeshLod';
 import { OcclusionCullingLayer } from './OcclusionCullingLayer';
 import type { InputState } from './input';
@@ -738,6 +739,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
     // What enemies hear this session: gunshots and the level's Make Noise nodes.
     const noises = useMemo(() => new NoiseBus(), []);
     const driving = useVehicleSessionState().driving !== null;
+    const gpuDrawn = useThree(state => isGpuRenderer(state.gl));
 
     if (!runtimePlayerModel) return null;
 
@@ -770,7 +772,8 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
                         castShadow
                         receiveShadow
                         sculptingEnabled={false}
-                        lod
+                        // Its chunks swap index buffers over vertices they share, which the GPU renderer's pool keeps once per geometry.
+                        lod={!gpuDrawn}
                     />
                 ))}
 
@@ -933,9 +936,11 @@ const DEFAULT_STACK_SMAA = [...DEFAULT_STACK, <SMAA key="smaa" />];
 const DefaultPostProcess: React.FC = React.memo(() => {
     const quality = useContext(PostProcessQualityContext);
     const camera = useThree(state => state.camera);
+    const gpuDrawn = useThree(state => isGpuRenderer(state.gl));
     const claimed = usePostProcessClaimed();
     const antialias = useAllowedAntialias('temporal', !claimed);
     if (claimed) return null;
+    if (gpuDrawn) return <GpuPostProcess />;
     if (antialias === 'temporal') {
         return <TemporalPipeline key={camera.uuid} renderScale={quality.renderScale} sharpness={0.25} lit={DEFAULT_LIT} display={DEFAULT_DISPLAY} />;
     }
@@ -1052,6 +1057,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
             <AuvraCanvas
                 surfaceId="runtime-level-game-loop"
                 role="runtime"
+                backend={settings.quality.renderer}
                 shadows={settings.quality.shadows}
                 camera={{ fov: settings.quality.fov }}
                 dpr={dpr}

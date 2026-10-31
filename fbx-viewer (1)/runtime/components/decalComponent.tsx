@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import { DecalGeometry } from 'three/examples/jsm/geometries/DecalGeometry.js';
+import { useGpuDecal } from '../../renderer/gpu/effects/decals';
 import type { TextureData } from '../../types';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { useGameContent } from '../GameContentContext';
@@ -707,6 +708,7 @@ const DecalRender: React.FC<ComponentRenderProps> = ({ object, component, mode }
     );
 
     const projector = useMemo(() => new DecalProjector(), []);
+    useGpuDecal(projector);
     useEffect(() => () => projector.dispose(), [projector]);
     useLayoutEffect(() => projector.setAppearance(settings.color, settings.opacity), [projector, settings.color, settings.opacity]);
     // No selection reaches component renders, so the editor always shows the (faint) box.

@@ -17,6 +17,18 @@ Open **Game Settings** in the header. The settings are stored in the project and
 
 Each level should have a **Player Start**; without one the player spawns at the origin (in the editor, under the camera).
 
+## Renderer
+
+**Renderer** under **Window & quality** in Game Settings says what draws your levels: in the world editor's view, in Play and in a built game.
+
+- **WebGL2** (the default): runs on nearly every machine.
+- **WebGPU**: the newer renderer. Where a machine cannot run it, the level draws with WebGL2 instead and the reason goes in the renderer's report.
+- **Auto**: WebGPU where the machine has it, WebGL2 elsewhere.
+
+Two things still need WebGL2. Baking light does: set the Renderer to WebGL2 while you bake, and the baked light then works on either. A Reflection Probe makes no picture on WebGPU, so what it covers reflects the sky instead.
+
+To try a renderer without changing the project, add `?renderer=webgpu`, `?renderer=webgl2` or `?renderer=auto` to the page's address. It wins over the setting for that page.
+
 ## Building
 
 Open **Game Settings**, choose a target under **Build game** and click **Build**, then pick a parent folder. **Build Web** and **Windows** in the header build those two targets straight away. Builds use the saved settings, so save or revert your edits first.

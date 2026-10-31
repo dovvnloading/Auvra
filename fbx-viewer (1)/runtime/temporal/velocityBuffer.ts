@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { isGpuRenderer } from '../../renderer/gpu/frame';
 
 /**
  * VELOCITY BUFFER
@@ -394,6 +395,7 @@ export class VelocityBuffer {
         renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera,
         cleanViewProjection: THREE.Matrix4, previousViewProjection: THREE.Matrix4,
     ): void {
+        if (isGpuRenderer(renderer)) return;
         this.frame += 1;
         this.layers.mask = camera.layers.mask;
         sharedViews.cleanViewProjection.value.copy(cleanViewProjection);

@@ -66,7 +66,7 @@ DEFAULT_GAME_SETTINGS: dict[str, Any] = {
     "startupLevelId": None,
     "playerBlueprintId": None,
     "window": {"fullscreen": False},
-    "quality": {"shadows": True, "postProcessing": True, "maxDpr": 2, "fov": 60, "meshLod": True, "occlusionCulling": True, "textureCompression": True, "antiAliasing": "temporal", "renderScale": 1, "loadLevelsOnDemand": True, "assetMemoryMb": 2048},
+    "quality": {"shadows": True, "postProcessing": True, "maxDpr": 2, "fov": 60, "meshLod": True, "occlusionCulling": True, "textureCompression": True, "antiAliasing": "temporal", "renderScale": 1, "loadLevelsOnDemand": True, "assetMemoryMb": 2048, "renderer": "webgl2"},
     "input": {"mouseSensitivity": 0.002, "invertY": False},
     "audio": {"masterVolume": 1},
     "network": {"enabled": False, "serverUrl": "ws://127.0.0.1:7777", "room": "main", "maxPlayers": 8},

@@ -2,6 +2,7 @@ import React, { useContext, useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import type { LevelComponent } from '../../types';
+import { isGpuRenderer } from '../../renderer/gpu/frame';
 import { ComponentHostContext } from './builtins';
 import type { ComponentDefinition, ComponentRenderProps } from './types';
 
@@ -192,7 +193,9 @@ const ReflectionProbeRender: React.FC<ComponentRenderProps> = ({ component, mode
     }), [component.id, settings.radius, settings.intensity]);
     const timing = useRef({ sinceMount: 0, sinceCapture: null as number | null, sinceScan: Infinity });
 
+    // A WebGL cube and prefilter: on the new renderer the probe makes no picture, and materials keep the sky's reflections.
     const capture = useMemo(() => {
+        if (isGpuRenderer(gl)) return null;
         const cubeTarget = new THREE.WebGLCubeRenderTarget(settings.resolution, { type: THREE.HalfFloatType, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
         const camera = new THREE.CubeCamera(0.05, 1000, cubeTarget);
         const pmrem = new THREE.PMREMGenerator(gl);
@@ -209,9 +212,9 @@ const ReflectionProbeRender: React.FC<ComponentRenderProps> = ({ component, mode
     }, [entry]);
 
     useEffect(() => () => {
-        capture.filtered?.dispose();
-        capture.cubeTarget.dispose();
-        capture.pmrem.dispose();
+        capture?.filtered?.dispose();
+        capture?.cubeTarget.dispose();
+        capture?.pmrem.dispose();
     }, [capture]);
 
     useFrame((_state, delta) => {
@@ -225,7 +228,7 @@ const ReflectionProbeRender: React.FC<ComponentRenderProps> = ({ component, mode
         entry.host = object;
         object.getWorldPosition(entry.position);
 
-        if (shouldCapture(settings.update, time.sinceCapture, settings.interval, time.sinceMount)) {
+        if (capture && shouldCapture(settings.update, time.sinceCapture, settings.interval, time.sinceMount)) {
             // The probe's own object (its gizmo, its model) stays out of its picture.
             const wasVisible = object.visible;
             object.visible = false;

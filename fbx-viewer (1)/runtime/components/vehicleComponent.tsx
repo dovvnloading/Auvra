@@ -10,6 +10,8 @@ import { useGameContent } from '../GameContentContext';
 import { objectIdFromCollider, objectIdFromRigidBody, PLAYER_PHYSICS_ID, usePhysicsAvailable, usePhysicsQueries } from '../physics';
 import { useRuntimeServices } from '../RuntimeServicesContext';
 import { SpatialParamWriter, SpatialPositionalAudio } from '../spatialAudio';
+import { GpuSkidMarks } from '../../renderer/gpu/effects/skidMarks';
+import { isGpuRenderer } from '../../renderer/gpu/frame';
 import { releaseSkidMarks, skidMarks } from '../skidMarks';
 import { SURFACES, surfaceOfHit, type SurfaceKind } from '../surfaces';
 import { createWorldSplineFrame, getLiveSpline, liveSplineWorldScale, sampleLiveSpline, type LiveSpline } from '../splineRegistry';
@@ -1174,9 +1176,10 @@ const VehicleRender: React.FC<ComponentRenderProps> = ({ object, component, mode
 
 /** The play session's tyre marks, laid by every vehicle. Mount once per play session; they go when it ends. */
 export const VehicleSkidMarks: React.FC = () => {
-    const mesh = useMemo(() => skidMarks().mesh, []);
+    const marks = useMemo(() => skidMarks(), []);
+    const gpuDrawn = useThree(state => isGpuRenderer(state.gl));
     useEffect(() => () => releaseSkidMarks(), []);
-    return <primitive object={mesh} />;
+    return gpuDrawn ? <GpuSkidMarks source={marks} /> : <primitive object={marks.mesh} />;
 };
 
 // ---------------------------------------------------------------------------

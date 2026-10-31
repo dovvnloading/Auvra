@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CLOUD_EDGE, cloudThreshold, GROUND_RADIUS, TOP_RADIUS, type AtmosphereCoefficients } from '../../../runtime/sky/atmosphere';
 import type { CloudQuality } from '../../../runtime/sky/skySettings';
 import { skyAtlas } from '../../../runtime/lighting/skyScene';
+import { isGpuRenderer } from '../../../renderer/gpu/frame';
 import {
     COPY_FRAGMENT, FULLSCREEN_VERTEX, MULTISCATTER_FRAGMENT, SKY_DOME_FRAGMENT, SKY_DOME_VERTEX, SKY_VIEW_FRAGMENT,
     TRANSMITTANCE_FRAGMENT,
@@ -407,6 +408,11 @@ export class SkyRenderer {
 
     /** Brings the tables and clouds up to `frame`. Call once a frame, before anything draws. */
     update(gl: THREE.WebGLRenderer, frame: SkyFrame): void {
+        // The tables, clouds and their mips below are all WebGL draws; the new renderer's sky is a pass of its own.
+        if (isGpuRenderer(gl)) {
+            this.setDomeUniforms(frame);
+            return;
+        }
         const state = this.stateFor(gl);
         const drawnAlready = state.lastTime === frame.time;
         this.setDomeUniforms(frame);
@@ -668,6 +674,10 @@ export class SkyRenderer {
      * often for what has moved. Returns the map's corner, side and height origin.
      */
     updateVisibility(gl: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera, halfSide: number, dt: number, time: number, out: { x: number; z: number; size: number; y: number }): void {
+        if (isGpuRenderer(gl)) {
+            out.x = out.z = out.size = out.y = 0;
+            return;
+        }
         const state = this.stateFor(gl);
         // The first view of a frame looks after the map, and all the views read it: there is one, in the atlas.
         if (state.visibilityTime !== time) {

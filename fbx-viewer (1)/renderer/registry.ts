@@ -144,7 +144,8 @@ class RendererCoordinator {
       tier: registration.tier ?? "compatibility",
       fallbackReason: registration.fallbackReason ?? null,
       recoveryCount: this.recoveryCounts.get(id) ?? 0,
-      capabilities: { ...detectCapabilities(registration.canvas), ...registration.capabilities },
+      // Asking a canvas with a webgpu context for webgl2 only returns null, which would read as "no WebGL".
+      capabilities: { ...(registration.selectedBackend === "webgpu" ? DEFAULT_CAPABILITIES : detectCapabilities(registration.canvas)), ...registration.capabilities },
       metrics: emptyMetrics(),
     };
     this.surfaces.set(id, snapshot);
@@ -235,7 +236,8 @@ class RendererCoordinator {
     if (!canvas) return false;
     let context: WebGLRenderingContext | WebGL2RenderingContext | null = null;
     try {
-      context = canvas.getContext("webgl2") as WebGL2RenderingContext | null;
+      // A webgpu canvas has no webgl2 context to lose; the synthetic event below stands in for it.
+      context = this.surfaces.get(id)?.selectedBackend === "webgpu" ? null : canvas.getContext("webgl2") as WebGL2RenderingContext | null;
       const loss = context?.getExtension("WEBGL_lose_context") as { loseContext: () => void; restoreContext: () => void } | null;
       if (loss) {
         loss.loseContext();

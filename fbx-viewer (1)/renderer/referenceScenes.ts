@@ -240,7 +240,7 @@ fn fragmentMain(input: VertexOutput) -> @location(0) vec4f {
 `;
 
 async function measureWebGPU(): Promise<ReferenceMeasurement> {
-  const gpu = typeof navigator !== "undefined" ? (navigator as Navigator & { gpu?: WebGpuApi }).gpu : undefined;
+  const gpu = typeof navigator !== "undefined" ? (navigator as unknown as { gpu?: WebGpuApi }).gpu : undefined;
   if (!gpu) return unavailableMeasurement("webgpu", "WebGPU is unavailable", "webgl2");
   let device: WebGpuDeviceAdapter | null = null;
   let context: WebGpuCanvasContextAdapter | null = null;
@@ -305,7 +305,7 @@ export async function runReferenceSuite(request: ReferenceBackendRequest = {}): 
   }
   const probe = document.createElement("canvas");
   const webgl2 = Boolean(probe.getContext("webgl2"));
-  const webgpu = typeof navigator !== "undefined" && Boolean((navigator as Navigator & { gpu?: WebGpuApi }).gpu);
+  const webgpu = typeof navigator !== "undefined" && Boolean((navigator as unknown as { gpu?: WebGpuApi }).gpu);
   const capabilities: RendererCapabilities = { webgl2, webgpu, timerQuery: false };
   const choice = selectBackend(request, capabilities);
   let selected = choice.selected;

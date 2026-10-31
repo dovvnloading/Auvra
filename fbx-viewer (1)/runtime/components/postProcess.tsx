@@ -13,6 +13,7 @@ import { OwnedComposer, TemporalPipeline } from '../temporal/TemporalPipeline';
 import { MAX_RENDER_SCALE, MIN_RENDER_SCALE } from '../temporal/temporalSettings';
 import { canDrawFloat } from '../keptDepth';
 import { RENDER_CONVENTIONS } from '../../renderer/conventions';
+import { isGpuRenderer } from '../../renderer/gpu/frame';
 import type { LevelComponent } from '../../types';
 import type { ComponentDefinition, ComponentPropSchema, ComponentRenderProps } from './types';
 
@@ -313,7 +314,8 @@ export const useAllowedAntialias = (wanted: PostProcessAntialias, running = true
     const gl = useThree(state => state.gl);
     const { antialias: allowed, temporalStacks } = useContext(PostProcessQualityContext);
     const chosen = allowedAntialias(wanted, allowed);
-    const antialias = chosen === 'temporal' && !canDrawFloat(gl) ? 'smaa' : chosen;
+    // The GPU renderer's temporal resolve has no WebGL float target to ask about.
+    const antialias = chosen === 'temporal' && !isGpuRenderer(gl) && !canDrawFloat(gl) ? 'smaa' : chosen;
     const temporal = running && antialias === 'temporal';
     useLayoutEffect(() => {
         if (!temporal || !temporalStacks) return undefined;
@@ -583,12 +585,41 @@ const stackEffects = (settings: PostProcessSettings, cameraId: string, antialias
     return { lit, effects, all, key: `${cameraId}/${all.map(effect => effect.key).join(',')}` };
 };
 
+/** The GPU renderer's stack and screen lighting, which only a canvas drawing with WebGPU loads. */
+const GpuStack = React.lazy(async () => {
+    const [post, tuning, screen, passes] = await Promise.all([
+        import('../../renderer/gpu/post/GpuPostStack'),
+        import('../../renderer/gpu/post/postSettings'),
+        import('../../renderer/gpu/screen/GpuScreenLighting'),
+        import('../../renderer/gpu/screen/screenPasses'),
+    ]);
+    const Stack: React.FC<{ settings?: PostProcessSettings }> = ({ settings }) => {
+        const stack = settings ?? tuning.GPU_DEFAULT_SETTINGS;
+        return (
+            <>
+                <post.GpuPostStack settings={stack} tuning={settings ? tuning.GPU_POST_TUNING : tuning.GPU_DEFAULT_TUNING} />
+                <screen.GpuScreenLighting {...passes.screenSettingsFromStack(stack)} />
+            </>
+        );
+    };
+    return { default: Stack };
+});
+
+/** What stands in for the stack on the GPU renderer: a level's settings, or without them the runtime's own stack. */
+export const GpuPostProcess: React.FC<{ settings?: PostProcessSettings }> = ({ settings }) => (
+    <React.Suspense fallback={null}>
+        <GpuStack settings={settings} />
+    </React.Suspense>
+);
+
 /** Mounts the stack for the canvas's post-process owner; the owner's transform plays no part. */
 const PostProcessRender: React.FC<ComponentRenderProps> = ({ component }) => {
     const allowed = useContext(PostProcessAllowedContext);
     const active = useActivePostProcess(allowed);
     const settings = useMemo(() => resolvePostProcessSettings(component), [component]);
-    return active ? <PostProcessStack settings={settings} /> : null;
+    const gpuDrawn = useThree(state => isGpuRenderer(state.gl));
+    if (!active) return null;
+    return gpuDrawn ? <GpuPostProcess settings={settings} /> : <PostProcessStack settings={settings} />;
 };
 
 // --- DEFINITION ---

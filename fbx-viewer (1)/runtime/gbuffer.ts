@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { isGpuRenderer } from '../renderer/gpu/frame';
 
 /**
  * SURFACE BUFFER
@@ -206,6 +207,7 @@ export class SurfaceBuffer {
 
     /** Draws the scene's lit surfaces from `camera`, leaving the renderer and the scene as they were. */
     render(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera): void {
+        if (isGpuRenderer(renderer)) return;
         scene.traverseVisible(object => {
             const mesh = object as THREE.Mesh;
             if (!mesh.isMesh) {

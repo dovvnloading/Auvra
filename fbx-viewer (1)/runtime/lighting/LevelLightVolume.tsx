@@ -11,6 +11,7 @@ import {
 import { loadLightVolume } from './lightVolumeLoader';
 import { lightBakeJobs, type LightBakeJob } from './lightBakeJobs';
 import { LightBaker } from './lightBaker';
+import { isGpuRenderer } from '../../renderer/gpu/frame';
 
 /** Lights the scene with a level's baked volume while mounted; nothing until it has loaded. */
 export const LevelLightVolume: React.FC<{ bakedLighting?: LevelBakedLighting | null }> = ({ bakedLighting }) => {
@@ -72,6 +73,11 @@ export const LightBakeRunner: React.FC = () => {
             active.current = current = null;
         }
         if (!job) return;
+        // The baker captures cubes and reads them back with WebGL. Said out loud, or the panel would wait on it for ever.
+        if (isGpuRenderer(gl)) {
+            if (!job.started) lightBakeJobs.fail(job, new Error('Light baking needs the WebGL renderer for now.'));
+            return;
+        }
         try {
             if (!current) {
                 // Several views of one level each run a runner; the first to see the bake takes it.
