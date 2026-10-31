@@ -84,6 +84,7 @@ fn applyPhysical(in: SurfaceIn, plain: SurfaceOut) -> SurfaceOut {
     if ((material.flags & ${MATERIAL_FLAG.transparent}u) == 0u && view.kind == 0u) {
       out.alphaTest = max(out.alphaTest, surfaceStipple(in));
     }
+    out.keepsReflections = (material.flags & ${MATERIAL_FLAG.transparent}u) != 0u;
   }
   return out;
 }

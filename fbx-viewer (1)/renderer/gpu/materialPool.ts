@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { GrowableBuffer, RangeAllocator } from "./buffers";
 import { reportGpu } from "./report";
 import { STANDARD_SURFACE, type SurfaceKind } from "./surfaces";
+import { skipsToneMapping } from "./surfaces/builtinLooks";
 import type { TextureEntry, TexturePool } from "./texturePool";
 
 /**
@@ -120,7 +121,7 @@ const stateOf = (material: THREE.Material): MaterialState => {
     depthTest: material.depthTest,
     depthWrite: material.depthWrite,
     blend: material.transparent ? blendOf(material) : null,
-    toneMapped: material.toneMapped,
+    toneMapped: material.toneMapped && !skipsToneMapping(material),
     wireframe: !!standard.wireframe,
     depthBias: material.polygonOffset ? material.polygonOffsetUnits : 0,
     depthBiasSlope: material.polygonOffset ? material.polygonOffsetFactor : 0,

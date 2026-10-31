@@ -3,6 +3,7 @@ import type * as THREE from "three";
 import type { GpuRendererApi } from "../frame";
 import { registerSurfaceKind, type MaterialEntry, type MaterialPool } from "../materialPool";
 import type { SurfaceKind } from "../surfaces";
+import { BUILTIN_LOOKS } from "./builtinLooks";
 import { graphSurfaceFor, setGraphDevice } from "./graph";
 import { IMPOSTOR_SURFACE, isImpostorMaterial } from "./impostor";
 import { LIT_SURFACES, isLitMaterial, litSurfaceFor, setPicturesPerShader } from "./lit";
@@ -33,6 +34,7 @@ const registerSurfaceKinds = (): void => {
   for (const kind of [...LIT_SURFACES, TERRAIN_LAYERS_SURFACE, TERRAIN_GROUND_SURFACE, WATER_SURFACE, IMPOSTOR_SURFACE]) {
     registerSurfaceKind((material) => surfaceKindFor(material) === kind, kind);
   }
+  for (const { test, kind } of BUILTIN_LOOKS) registerSurfaceKind(test, kind);
 };
 
 const followed = new WeakSet<MaterialPool>();

@@ -157,7 +157,7 @@ const SURFACE_PATH_WGSL = /* wgsl */ `
   let input = surfaceInput(in, frontFacing);
   let s = surface(input);
   if (s.opacity < s.alphaTest) { discard; }
-  return finishColor(shade(s, input, in), s.opacity);
+  return finishColor(shade(s, input, in), shownOpacity(s, input, in));
 }
 `;
 
@@ -165,6 +165,8 @@ const UNLIT_SHADE_WGSL = /* wgsl */ `
 fn shade(s: SurfaceOut, input: SurfaceIn, in: SurfaceVarying) -> vec3f {
   return s.albedo + s.emissive;
 }
+
+fn shownOpacity(s: SurfaceOut, input: SurfaceIn, in: SurfaceVarying) -> f32 { return s.opacity; }
 `;
 
 // A surface that says it is unlit is here only for its fog. Baked light is counted the way the surface buffer counts it.
@@ -181,9 +183,18 @@ fn shade(s: SurfaceOut, input: SurfaceIn, in: SurfaceVarying) -> vec3f {
     light.receivesShadow = RECEIVES_SHADOW;
     color = lightSurface(light) + s.emissive;
     if (s.hasBakedLight) { color += s.bakedLight * s.albedo * (1.0 - s.metalness) / 3.14159265; }
+    // Blending takes the colour down by the opacity, and what a pane of glass mirrors is not dimmed by being clear.
+    if (s.keepsReflections) { color /= max(s.opacity, 0.05); }
   }
+  if (s.catchesShadow) { color = s.albedo; }
   if (FOGGED) { color = lightingApplyFog(color, input.worldPosition); }
   return color;
+}
+
+fn shownOpacity(s: SurfaceOut, input: SurfaceIn, in: SurfaceVarying) -> f32 {
+  if (!s.catchesShadow) { return s.opacity; }
+  let light = lightingInput(input.worldPosition, s.normal, input.viewDirection, s.albedo, s.roughness, s.metalness, in.clip.xy);
+  return s.opacity * (1.0 - lightingSunShadowOf(light));
 }
 `;
 

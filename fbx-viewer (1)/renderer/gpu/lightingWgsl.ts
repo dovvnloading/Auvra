@@ -520,6 +520,15 @@ fn lightingAttenuation(light: LocalLight, gap: f32) -> f32 {
   return falloff;
 }
 
+// How much of the sun that casts shadows reaches a surface, whatever else lights it: 1 in the open, 0 in full shadow.
+fn lightingSunShadowOf(s: LightingInput) -> f32 {
+  if (lighting.cascadeSun < 0) { return 1.0; }
+  let toLight = lighting.suns[u32(lighting.cascadeSun)].direction;
+  let dotNL = saturate(dot(s.normal, toLight));
+  if (dotNL <= 0.0) { return 0.0; }
+  return lightingSunShadow(s, lightingViewDepth(s.worldPosition), toLight, dotNL, lightingNoiseDirection(s.pixel));
+}
+
 // The light a surface reflects toward the eye. What it emits and fog are the caller's to add.
 fn lightSurface(s: LightingInput) -> vec3f {
   var m: LightingMaterial;

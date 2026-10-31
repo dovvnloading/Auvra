@@ -106,6 +106,10 @@ struct SurfaceOut {
   bakedLight: vec3f,
   hasBakedLight: bool,
   unlit: bool,
+  // It shows only as much as the sun's shadow falls on it.
+  catchesShadow: bool,
+  // See-through as it is, what it mirrors stays at full strength.
+  keepsReflections: bool,
 }
 
 fn surfaceDefaults(in: SurfaceIn) -> SurfaceOut {
@@ -121,6 +125,8 @@ fn surfaceDefaults(in: SurfaceIn) -> SurfaceOut {
   out.bakedLight = vec3f(0.0);
   out.hasBakedLight = false;
   out.unlit = false;
+  out.catchesShadow = false;
+  out.keepsReflections = false;
   return out;
 }
 

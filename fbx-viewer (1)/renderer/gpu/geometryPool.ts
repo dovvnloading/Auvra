@@ -563,7 +563,7 @@ export class GeometryPool {
     }
     const floats = this.scratchFloats;
     const words = this.scratchWords;
-    const { position, normal, tangent, uv, uv1, color } = geometry.attributes as Record<string, AnyAttribute | undefined>;
+    const { position, normal, tangent, uv, uv1, color, lineDistance } = geometry.attributes as Record<string, AnyAttribute | undefined>;
     const fastPosition = position && !(position as THREE.InterleavedBufferAttribute).isInterleavedBufferAttribute
       && position.array instanceof Float32Array && position.itemSize === 3 ? position.array as Float32Array : null;
     const end = firstVertex + vertexCount;
@@ -587,7 +587,8 @@ export class GeometryPool {
       }
       floats[at + 5] = uv ? uv.getX(vertex) : 0;
       floats[at + 6] = uv ? uv.getY(vertex) : 0;
-      floats[at + 7] = uv1 ? uv1.getX(vertex) : (uv ? uv.getX(vertex) : 0);
+      // A dashed line's length so far has nowhere else to go, and a line has no use for a second set of uvs.
+      floats[at + 7] = uv1 ? uv1.getX(vertex) : lineDistance ? lineDistance.getX(vertex) : (uv ? uv.getX(vertex) : 0);
       floats[at + 8] = uv1 ? uv1.getY(vertex) : (uv ? uv.getY(vertex) : 0);
       if (color) {
         const alpha = color.itemSize >= 4 ? color.getW(vertex) : 1;
