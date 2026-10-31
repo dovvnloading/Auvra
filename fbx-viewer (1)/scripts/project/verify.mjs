@@ -103,7 +103,7 @@ if (!/const runProjectAction = \(action: \(\) => Promise<unknown>\) => \{[\s\S]*
 }
 mustNotContain(service, /beginAssetUpload\(assetId|sha256\s*[,}]/, 'asset upload precomputed identity');
 mustNotContain(service, /fetch\([^)]*assets\.auvra\.local[^)]*\{[^}]*method:\s*['"](?!GET|PUT)/i, 'asset transport method');
-for (const method of ['project.create', 'project.open', 'project.openRecent', 'project.close', 'project.getSnapshot', 'project.applyChanges', 'project.save', 'project.saveAs', 'project.exportPack', 'project.importPack', 'project.importLegacy', 'asset.beginUpload', 'asset.resolve']) {
+for (const method of ['project.create', 'project.open', 'project.openRecent', 'project.close', 'project.getSnapshot', 'project.applyChanges', 'project.save', 'project.saveAs', 'project.exportPack', 'project.importPack', 'project.importLegacy', 'asset.beginUpload', 'asset.resolve', 'asset.queryPrepared', 'asset.beginPreparedUpload']) {
   if (!service.includes(`'${method}'`)) failures.push(`project service: missing ${method}`);
 }
 for (const token of ['expectedRevision', 'documentId', 'blob', 'data', 'file']) {

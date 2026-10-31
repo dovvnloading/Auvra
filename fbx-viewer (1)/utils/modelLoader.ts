@@ -4,6 +4,8 @@ import { LoadedModelData } from '../types';
 import { optimizeModelMaterials, splitAlphaCards } from './processing/ModelMaterials';
 import { compressModelTextures } from './textureCompression/compressTextures';
 import { withGltfDecoders } from './gltfDecoders';
+import { decodeDataUri, GLB_JSON_CHUNK, GLB_MAGIC, parseGltfJson, readGlb, type GltfDocument, type GltfResource } from './gltfContainer';
+import { preparedModelPlugin, readPreparedMetadata } from './preparedModels/preparedLoader';
 import { normalizeModel, SOURCE_METRES_PER_UNIT } from './processing/ModelTransforms';
 import { disposeObject } from './processing/ModelLifecycle';
 import { UV_ORIGIN_TOP_LEFT_KEY } from './materialOverrides';
@@ -91,6 +93,11 @@ export interface ModelLoadOptions {
   diagnostics?: { operationId: string; traceId: string; spanId?: string; assetAlias: string };
   /** Swap colour and material maps for GPU-compressed textures (the game's Texture compression setting); on by default. */
   compressTextures?: boolean;
+  /**
+   * The file is a model prepared when the game was built (utils/preparedModels), whatever its name
+   * says: its file keeps the source's name, so that name would send it to the FBX worker.
+   */
+  prepared?: boolean;
 }
 
 type WorkerFormat = 'fbx' | 'obj';
@@ -102,6 +109,14 @@ type WorkerResponse =
 
 type ParsedGltf = Awaited<ReturnType<GLTFLoader['parseAsync']>>;
 
+export interface ConvertedModel {
+  glb: ArrayBuffer;
+  itemCount: number;
+  clipCount: number;
+  missingTextures: number;
+  metresPerUnit: number | null;
+}
+
 interface ParsedModel {
   object: THREE.Group;
   animations: THREE.AnimationClip[];
@@ -109,6 +124,8 @@ interface ParsedModel {
   missingTextures?: number;
   /** Metres per unit the source says it is authored in (FBX), when it says. */
   metresPerUnit?: number | null;
+  /** What a prepared model was made from, which decides how it is treated from here on. */
+  sourceFormat?: ModelFormat;
 }
 
 const abortError = (): DOMException => new DOMException('Asset import was cancelled.', 'AbortError');
@@ -123,8 +140,10 @@ const throwIfAborted = (signal?: AbortSignal): void => {
  * callers stop waiting immediately, and a scene that finishes afterwards is
  * disposed. `release` runs once the parser itself has settled.
  */
-const materializeGltf = async (data: ArrayBuffer | string, signal?: AbortSignal, release?: () => void): Promise<ParsedGltf> => {
-  const parsedPromise = withGltfDecoders(new GLTFLoader()).parseAsync(data, '').then((loaded) => {
+const materializeGltf = async (data: ArrayBuffer | string, signal?: AbortSignal, release?: () => void, plugin?: typeof preparedModelPlugin): Promise<ParsedGltf> => {
+  const loader = withGltfDecoders(new GLTFLoader());
+  if (plugin) loader.register(plugin);
+  const parsedPromise = loader.parseAsync(data, '').then((loaded) => {
     if (signal?.aborted) {
       try { disposeObject(loaded.scene); } catch { /* best effort on cancellation */ }
       throw abortError();
@@ -146,13 +165,18 @@ const materializeGltf = async (data: ArrayBuffer | string, signal?: AbortSignal,
   return Promise.race([parsedPromise, cancelled]);
 };
 
-const parseOffThread = async (
+/**
+ * Converts FBX or OBJ to a GLB in the import worker. `weld` shares its meshes' corners first, which
+ * a model prepared for a build wants and a loading one leaves to its first drawn frame.
+ */
+export const convertOffThread = async (
   source: ArrayBuffer,
   format: WorkerFormat,
   signal?: AbortSignal,
   onProgress?: (progress: number, phase: ImportPhase) => void,
   diagnostics?: { operationId: string; traceId: string; spanId?: string; assetAlias: string },
-): Promise<ParsedModel> => {
+  weld = false,
+): Promise<ConvertedModel> => {
   const label = format.toUpperCase();
   const parsePhase: ImportPhase = format === 'fbx' ? 'fbx_structure_parse' : 'model_structure_parse';
   if (typeof Worker === 'undefined') throw new Error(`Background ${label} processing is unavailable in this environment.`);
@@ -163,7 +187,7 @@ const parseOffThread = async (
     phase: 'worker_creation', workerState: 'created', queueState: 'worker_active', assetAlias: diagnostics.assetAlias, progressBucket: 0,
   }, diagnostics);
   try {
-    const converted = await new Promise<{ glb: ArrayBuffer; itemCount: number; clipCount: number; missingTextures: number; metresPerUnit: number | null }>((resolve, reject) => {
+    return await new Promise<ConvertedModel>((resolve, reject) => {
       const onAbort = () => {
         worker.terminate();
         reject(abortError());
@@ -202,78 +226,32 @@ const parseOffThread = async (
           resolve(message);
         }
       };
-      worker.postMessage({ type: 'parse', buffer: source, format }, [source]);
+      worker.postMessage({ type: 'parse', buffer: source, format, weld }, [source]);
     });
-    throwIfAborted(signal);
-    onProgress?.(0.86, 'viewport_materialization');
-    const loaded = await materializeGltf(converted.glb, signal);
-    throwIfAborted(signal);
-    const object = loaded.scene;
-    object.animations = loaded.animations;
-    if (converted.missingTextures > 0) frontendDiagnostics.warning('model_textures_missing', converted.missingTextures);
-    return { object, animations: loaded.animations, missingTextures: converted.missingTextures, metresPerUnit: converted.metresPerUnit };
   } finally {
     worker.terminate();
   }
 };
 
+const parseOffThread = async (
+  source: ArrayBuffer,
+  format: WorkerFormat,
+  signal?: AbortSignal,
+  onProgress?: (progress: number, phase: ImportPhase) => void,
+  diagnostics?: { operationId: string; traceId: string; spanId?: string; assetAlias: string },
+): Promise<ParsedModel> => {
+  const converted = await convertOffThread(source, format, signal, onProgress, diagnostics);
+  throwIfAborted(signal);
+  onProgress?.(0.86, 'viewport_materialization');
+  const loaded = await materializeGltf(converted.glb, signal);
+  throwIfAborted(signal);
+  const object = loaded.scene;
+  object.animations = loaded.animations;
+  if (converted.missingTextures > 0) frontendDiagnostics.warning('model_textures_missing', converted.missingTextures);
+  return { object, animations: loaded.animations, missingTextures: converted.missingTextures, metresPerUnit: converted.metresPerUnit };
+};
+
 // --- NATIVE glTF / GLB ---
-
-interface GltfResource { uri?: string; mimeType?: string }
-interface GltfDocument {
-  asset?: { version?: string };
-  buffers?: GltfResource[];
-  images?: GltfResource[];
-  extensionsUsed?: string[];
-  extensionsRequired?: string[];
-}
-
-const GLB_MAGIC = 0x46546c67; // 'glTF'
-const GLB_JSON_CHUNK = 0x4e4f534a; // 'JSON'
-
-const invalidGltf = (detail: string): Error => new Error(`This file is not a valid glTF 2.0 model: ${detail}.`);
-
-const parseGltfJson = (text: string): GltfDocument => {
-  let json: unknown;
-  try { json = JSON.parse(text); } catch { throw invalidGltf('its JSON could not be parsed'); }
-  if (!json || typeof json !== 'object' || Array.isArray(json)) throw invalidGltf('its JSON is not an object');
-  const document = json as GltfDocument;
-  const major = Number.parseInt(String(document.asset?.version ?? ''), 10);
-  if (major !== 2) throw new Error('Only glTF 2.0 models are supported; re-export as glTF 2.0.');
-  // Draco, meshopt and Basis compression are decoded as the model loads (utils/gltfDecoders.ts).
-  return document;
-};
-
-const readGlb = (source: ArrayBuffer): { json: GltfDocument; jsonEnd: number } => {
-  if (source.byteLength < 20) throw invalidGltf('the binary header is truncated');
-  const view = new DataView(source);
-  if (view.getUint32(0, true) !== GLB_MAGIC) throw invalidGltf('the binary header is missing');
-  if (view.getUint32(4, true) < 2) throw new Error('Only glTF 2.0 models are supported; re-export as glTF 2.0.');
-  const jsonLength = view.getUint32(12, true);
-  const jsonEnd = 20 + jsonLength;
-  if (view.getUint32(16, true) !== GLB_JSON_CHUNK || jsonEnd > source.byteLength) throw invalidGltf('the JSON chunk is malformed');
-  return { json: parseGltfJson(new TextDecoder().decode(new Uint8Array(source, 20, jsonLength))), jsonEnd };
-};
-
-const decodeDataUri = (uri: string): { bytes: Uint8Array<ArrayBuffer>; mimeType: string } => {
-  const comma = uri.indexOf(',');
-  if (comma < 0) throw invalidGltf('an embedded resource is malformed');
-  const [mimeType, ...parameters] = uri.slice(5, comma).split(';');
-  const payload = uri.slice(comma + 1);
-  const isBase64 = parameters.some((parameter) => parameter.trim().toLowerCase() === 'base64');
-  let binary: string;
-  try {
-    // Percent-decoding to code units (not UTF-8) keeps %XX bytes intact.
-    binary = isBase64
-      ? atob(payload.replace(/\s+/g, ''))
-      : payload.replace(/%([0-9a-f]{2})/gi, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
-  } catch {
-    throw invalidGltf('an embedded resource is not valid base64');
-  }
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index) & 0xff;
-  return { bytes, mimeType: mimeType || 'application/octet-stream' };
-};
 
 /**
  * Only self-contained glTF is importable: an imported File has no sibling
@@ -350,6 +328,24 @@ const parseGltfNative = async (
   return { object, animations: loaded.animations };
 };
 
+/** A model prepared when the game was built: what it records about its source stands in for the source. */
+const parsePreparedModel = async (
+  source: ArrayBuffer,
+  signal?: AbortSignal,
+  onProgress?: (progress: number, phase: ImportPhase) => void,
+): Promise<ParsedModel> => {
+  onProgress?.(0.12, 'model_structure_parse');
+  const metadata = readPreparedMetadata(readGlb(source).json);
+  throwIfAborted(signal);
+  onProgress?.(0.4, 'viewport_materialization');
+  const loaded = await materializeGltf(source, signal, undefined, preparedModelPlugin);
+  throwIfAborted(signal);
+  const object = loaded.scene;
+  object.animations = loaded.animations;
+  if (metadata.missingTextures > 0) frontendDiagnostics.warning('model_textures_missing', metadata.missingTextures);
+  return { object, animations: loaded.animations, missingTextures: metadata.missingTextures, metresPerUnit: metadata.metresPerUnit, sourceFormat: metadata.sourceFormat };
+};
+
 /**
  * Authored glTF materials are already metal/rough PBR with correct colour
  * spaces, alpha modes and sidedness; the FBX repair heuristics would force
@@ -413,16 +409,20 @@ export const loadModelFile = async (file: File, options: ModelLoadOptions = { no
     options.onProgress?.(0.03, 'source_read');
     const source = await file.arrayBuffer();
     throwIfAborted(options.signal);
-    const format = detectModelFormat(file) ?? sniffModelFormat(source) ?? 'fbx';
+    const fileFormat = options.prepared ? 'glb' : detectModelFormat(file) ?? sniffModelFormat(source) ?? 'fbx';
 
     // FBXLoader.load() fetches asynchronously but invokes its CPU-heavy
     // parse() synchronously on the calling renderer thread. FBX (and OBJ)
     // parse and compact conversion therefore happen in an isolated worker;
     // only the optimized GLB handoff is materialized into Three objects here.
-    const parsed = format === 'glb' || format === 'gltf'
-      ? await parseGltfNative(source, format, options.signal, options.onProgress)
-      : await parseOffThread(source, format, options.signal, options.onProgress, options.diagnostics);
+    const parsed = options.prepared
+      ? await parsePreparedModel(source, options.signal, options.onProgress)
+      : fileFormat === 'glb' || fileFormat === 'gltf'
+        ? await parseGltfNative(source, fileFormat, options.signal, options.onProgress)
+        : await parseOffThread(source, fileFormat, options.signal, options.onProgress, options.diagnostics);
     object = parsed.object;
+    // A prepared FBX is an FBX from here on: as native glTF, every override texture would flip.
+    const format = parsed.sourceFormat ?? fileFormat;
 
     // --- FILTER ANIMATIONS ---
     // Reject only empty/invalid clips. Short authored clips are valid assets.

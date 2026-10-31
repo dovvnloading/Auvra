@@ -174,6 +174,11 @@ export interface GamePackManifest {
     domains: string[];
     /** Every shipped asset: id is the project asset id, file is relative to game/assets/. */
     assets: { id: string; file: string; mime: string; size: number }[];
+    /**
+     * Models prepared when the game was built (utils/preparedModels), each an ordinary entry of
+     * `assets` standing in for its source. Left out of a pack that has none.
+     */
+    prepared?: { version: number; textures: 'bc' | 'none'; models: { source: string; asset: string }[] };
 }
 
 /** A document in the project 'hud' domain: the game HUD ('hud-main') or an authored menu ('menu-title', 'menu-pause'). */

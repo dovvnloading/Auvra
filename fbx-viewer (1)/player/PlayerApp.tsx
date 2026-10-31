@@ -9,7 +9,8 @@ import { gameState, useGameState } from '../runtime/gameState';
 import type { LoadedGameContent, PlayerStart, RuntimeHost, RuntimeLevel, RuntimeSaveState, SaveGameData } from '../runtime/types';
 import { createGameContentLoader, readGameDocuments, type GameContentLoader } from '../utils/projectHydration';
 import { HUDRenderer } from '../components/HUDEditor/HUDRenderer';
-import { loadGamePack, type GamePackSource } from './gamePack';
+import { blockCompressionSupport } from '../utils/textureCompression/compressTextures';
+import { loadGamePack, usablePreparedModels, type GamePackSource } from './gamePack';
 import { OptionsMenu } from './OptionsMenu';
 import {
     AuthoredMenu,
@@ -94,9 +95,11 @@ export const PlayerApp: React.FC = () => {
                 localization.scopeToGame(source.manifest.gameId);
                 localization.load(localizationSettingsFromDocuments(source.domains.metadata));
                 const domains = source.domains as Record<string, any[]>;
+                const prepared = usablePreparedModels(source.manifest, blockCompressionSupport());
                 const loader = createGameContentLoader(domains, {
                     resolveAssetUrl: source.resolveAssetUrl,
                     releaseAssetUrl: source.releaseAssetUrl,
+                    preparedAssetFor: assetId => prepared.get(assetId),
                     dropSourceFiles: true,
                     generateThumbnails: false,
                     // The player has no level manager to load terrain heights and paint later.
@@ -116,7 +119,10 @@ export const PlayerApp: React.FC = () => {
                     residency: new LevelAssetResidency(
                         loader,
                         needsOf,
-                        (kind, id) => sizes.get(assetIds.get(`${kind}:${id}`) as string) ?? 0,
+                        (kind, id) => {
+                            const assetId = assetIds.get(`${kind}:${id}`) as string;
+                            return sizes.get(prepared.get(assetId) ?? assetId) ?? 0;
+                        },
                         documents.settings.quality.assetMemoryMb * 1024 * 1024,
                     ),
                     refresh: () => contentSnapshot(documents, loader),

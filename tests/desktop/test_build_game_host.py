@@ -3,12 +3,14 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
 
-from Auvra.desktop.assets import AssetTransferRegistry
+from Auvra.desktop.assets import AssetTransferRegistry, AssetTransportError, AssetUpload
 from Auvra.desktop.dialogs import DialogSelection, WinFormsProjectDialogs
+from Auvra.desktop.prepared_models import PreparedModelStore
 from Auvra.desktop.project_host import NativeProjectHost
 from Auvra.host.validation import validate_message
 from Auvra.host.dispatcher import HostOperationError
@@ -21,6 +23,8 @@ TEMPLATE_FILES = {
     "assets/player.js": b"console.log('player');",
 }
 MODEL_BYTES = b"fbx-model-bytes"
+PREPARED_BYTES = b"prepared-model-bytes"
+KEY = "e" * 64
 
 
 class _BuildDialogs:
@@ -216,6 +220,118 @@ class BuildGameHostTests(unittest.TestCase):
         self.assertTrue(all(dialog.disposed for dialog in forms.created))
         cancelled = _Forms(result=0, folder=str(self.builds), file="")
         self.assertIsNone(WinFormsProjectDialogs(lambda: cancelled).choose_build_destination("Demo Game"))
+
+    def _upload_prepared(self, key: str, data: bytes = PREPARED_BYTES) -> None:
+        ticket = self.host.handle("asset.beginPreparedUpload", {"projectId": self.project_id, "key": key, "size": len(data)})
+        validate_message({"protocol": "auvra.host/1", "type": "response", "id": "r1", "session": "s1",
+                          "revision": 1, "ok": True, "result": ticket})
+        self.assertEqual((ticket["method"], ticket["mime"], ticket["size"]), ("PUT", "model/gltf-binary", len(data)))
+        response = self.registry.handle(
+            method="PUT", url=ticket["url"],
+            headers={"Origin": "http://127.0.0.1:3000", "Content-Type": "model/gltf-binary", "Content-Length": str(len(data))},
+            body=io.BytesIO(data),
+        )
+        self.assertEqual(response.status, 204)
+
+    def _prepared_payload(self, key: str) -> dict:
+        return {"version": 1, "textures": "bc", "models": [{"source": self._source_id(), "asset": key}]}
+
+    def _source_id(self) -> str:
+        models = self.host.service.active.get_domain("models")["documents"]
+        return models[0]["assetId"]
+
+    def _query(self, *keys: str) -> list[str]:
+        result = self.host.handle("asset.queryPrepared", {"projectId": self.project_id, "keys": list(keys)})
+        validate_message({"protocol": "auvra.host/1", "type": "response", "id": "r1", "session": "s1",
+                          "revision": 1, "ok": True, "result": result})
+        return result["preparedKeys"]
+
+    def test_prepared_models_upload_outside_the_project_and_go_into_a_build(self) -> None:
+        self.assertEqual(self._query(KEY), [])
+        self._upload_prepared(KEY)
+        self.assertEqual(self._query(KEY, "f" * 64), [KEY])
+        # The store is the host's: nothing of it enters the project, whose revision stands still.
+        self.assertEqual(self.host.service.active.revision, self.revision)
+        self.assertFalse(self.host.service.active.assets.path_for(hashlib.sha256(PREPARED_BYTES).hexdigest()).exists())
+        self.assertFalse(list(self.registry.root.glob("*.upload")))
+
+        result = self._build(prepared=self._prepared_payload(KEY))
+        self.assertEqual(result["report"]["preparedModels"], 1)
+        self.assertEqual(result["report"]["assets"], 2)
+        destination = self.builds / "Demo Game-Web" / "game"
+        manifest = json.loads((destination / "game.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["prepared"], self._prepared_payload(KEY))
+        self.assertEqual((destination / "assets" / f"{KEY}.glb").read_bytes(), PREPARED_BYTES)
+        validate_message({"protocol": "auvra.host/1", "type": "response", "id": "r1", "session": "s1",
+                          "revision": 1, "ok": True, "result": result})
+
+    def test_a_build_without_prepared_models_is_todays_pack(self) -> None:
+        result = self._build()
+        self.assertNotIn("preparedModels", result["report"])
+        manifest = json.loads((self.builds / "Demo Game-Web" / "game" / "game.json").read_text(encoding="utf-8"))
+        self.assertNotIn("prepared", manifest)
+
+    def test_read_only_projects_can_prepare_and_are_never_purged(self) -> None:
+        self.host.service.active.read_only = True
+        self._upload_prepared(KEY)
+        self.assertEqual(self._query(KEY), [KEY])
+        self.assertEqual(self._build(prepared=self._prepared_payload(KEY))["report"]["preparedModels"], 1)
+
+    def test_prepared_models_are_shared_across_projects(self) -> None:
+        self._upload_prepared(KEY)
+        self.host.handle("project.close", {"projectId": self.project_id, "expectedRevision": self.revision})
+        self.dialogs.projects = self.root / "projects-2"
+        self.project_id, self.revision = self._create_game_project()
+        self.assertEqual(self._query(KEY), [KEY])
+
+    def test_a_prepared_model_that_changed_on_disk_is_deleted_and_the_source_is_used(self) -> None:
+        self._upload_prepared(KEY)
+        stored = self.root / "state" / "prepared-models" / f"{KEY}.glb"
+        self.assertEqual(stored.read_bytes(), PREPARED_BYTES)
+        stored.write_bytes(b"something else")
+
+        result = self._build(prepared=self._prepared_payload(KEY))
+        self.assertEqual(result["report"]["preparedModels"], 0)
+        manifest = json.loads((self.builds / "Demo Game-Web" / "game" / "game.json").read_text(encoding="utf-8"))
+        self.assertNotIn("prepared", manifest)
+        self.assertEqual(self.dialogs.build_requests, ["Demo Game"])
+        self.assertFalse(stored.exists())
+        self.assertEqual(self._query(KEY), [])
+
+    def test_oversized_and_malformed_uploads_are_refused(self) -> None:
+        with self.assertRaises(HostOperationError):
+            self.host.handle("asset.beginPreparedUpload", {"projectId": self.project_id, "key": "../escape", "size": 4})
+        with self.assertRaises(HostOperationError):
+            self.host.handle("asset.queryPrepared", {"projectId": self.project_id, "keys": ["../escape"]})
+        with self.assertRaises(HostOperationError):
+            self.host.handle("asset.beginPreparedUpload", {"projectId": "other-project", "key": KEY, "size": 4})
+        ticket = self.host.handle("asset.beginPreparedUpload", {"projectId": self.project_id, "key": KEY, "size": 2})
+        with self.assertRaises(AssetTransportError):
+            self.registry.handle(
+                method="PUT", url=ticket["url"],
+                headers={"Origin": "http://127.0.0.1:3000", "Content-Type": "model/gltf-binary"},
+                body=io.BytesIO(b"too long"),
+            )
+        self.assertEqual(self._query(KEY), [])
+
+    def test_the_store_trims_what_was_used_longest_ago_and_keeps_this_builds_models(self) -> None:
+        store = PreparedModelStore(self.root / "trimmed", capacity_bytes=20)
+        keys = ["1" * 64, "2" * 64, "3" * 64]
+        for age, key in enumerate(keys):
+            data = bytes(8)
+            source = self.root / f"upload-{age}"
+            source.write_bytes(data)
+            store.ingest(key, AssetUpload(source, len(data), hashlib.sha256(data).hexdigest(), "model/gltf-binary"))
+            os.utime(self.root / "trimmed" / f"{key}.glb", (1000 + age, 1000 + age))
+        self.assertEqual(store.available(keys[:1]), keys[:1])
+        # That read made the first the most recently used; the second is the oldest now.
+        store.trim(keep=keys[2:])
+        self.assertEqual(store.available(keys), [keys[0], keys[2]])
+        self.assertFalse((self.root / "trimmed" / f"{keys[1]}.glb").exists())
+        self.assertFalse((self.root / "trimmed" / f"{keys[1]}.sha256").exists())
+        # A build's own models stay, even past the size.
+        PreparedModelStore(self.root / "trimmed", capacity_bytes=0).trim(keep=keys)
+        self.assertEqual(store.available(keys), [keys[0], keys[2]])
 
 
 if __name__ == "__main__":

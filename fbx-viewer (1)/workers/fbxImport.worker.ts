@@ -6,11 +6,12 @@ import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { fbxMetresPerUnit } from '../utils/processing/fbxUnits';
 import { writeOpacity } from '../utils/processing/opacityMaps';
+import { weldMeshes } from '../utils/preparedModels/weldMeshes';
 
 // Despite the file name this worker converts every format whose loader parses
 // synchronously (FBX and OBJ) into a GLB handoff for the renderer thread.
 type ImportFormat = 'fbx' | 'obj';
-type ImportRequest = { type: 'parse'; buffer: ArrayBuffer; format?: ImportFormat };
+type ImportRequest = { type: 'parse'; buffer: ArrayBuffer; format?: ImportFormat; weld?: boolean };
 type ImportPhase = 'fbx_structure_parse' | 'model_structure_parse' | 'embedded_texture_decode' | 'runtime_asset_construction' | 'runtime_asset_transfer';
 type ImportProgress = { type: 'progress'; progress: number; phase: ImportPhase; workerState: 'parsing' | 'decoding' | 'constructing' | 'transferring' };
 type ImportComplete = { type: 'complete'; glb: ArrayBuffer; itemCount: number; clipCount: number; missingTextures: number; metresPerUnit: number | null };
@@ -236,6 +237,7 @@ scope.onmessage = async (event: MessageEvent<ImportRequest>) => {
       bakeOpacityMaps(object, bitmaps);
     }
     report(0.64, 'runtime_asset_construction', 'constructing');
+    if (event.data.weld) weldMeshes(object);
     const exported = await new GLTFExporter().parseAsync(object, {
       binary: true,
       animations: object.animations || [],

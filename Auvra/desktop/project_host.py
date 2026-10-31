@@ -43,6 +43,7 @@ from Auvra.project.schemas import DOMAIN_NAMES
 from .assets import AssetResourceRequest, AssetTransferRegistry, AssetUpload
 from .dialogs import DialogSelection, WinFormsProjectDialogs, _validated_name
 from .native_engine import NativeEngineState, NativeEngineUnavailableHost
+from .prepared_models import PREPARED_MODEL_MIME, PreparedModelStore
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -138,6 +139,7 @@ class NativeProjectHost:
         # Opaque build handles map to a chosen parent folder for one session;
         # paths never cross the protocol.
         self._build_destinations: dict[str, tuple[str, Path]] = {}
+        self.prepared_models = PreparedModelStore(state_root / "prepared-models")
         self.assets = asset_registry
         self.dialogs = dialogs or WinFormsProjectDialogs()
         self.service = service or ProjectService(ProjectIndex(state_root / "projects.sqlite3"))
@@ -212,6 +214,8 @@ class NativeProjectHost:
             "project.importLegacy": self._import_legacy,
             "asset.beginUpload": self._begin_upload,
             "asset.resolve": self._resolve_asset,
+            "asset.queryPrepared": self._query_prepared,
+            "asset.beginPreparedUpload": self._begin_prepared_upload,
         }.get(method)
         if handler is None:
             raise HostOperationError("unknown_method", "Unknown project method")
@@ -1011,6 +1015,7 @@ class NativeProjectHost:
             active, parent, _validated_name(f"{game_name[:80]}-{suffix}", f"AuvraGame-{suffix}"),
         )
         store = active.assets
+        prepared = payload.get("prepared")
 
         def read_asset(asset_id: str) -> tuple[bytes, str]:
             # ValueError (bad id, missing metadata) becomes invalid_project.
@@ -1029,9 +1034,13 @@ class NativeProjectHost:
                 build_id=secrets.token_hex(16),
                 game_id=project_id,
                 player_executable=player,
+                prepared=prepared,
+                read_prepared=self.prepared_models.read,
             )
         except GameBuildError as exc:
             raise self._build_error(exc) from None
+        # Only now, so a project holding more than the store's size keeps what this build used.
+        self.prepared_models.trim(keep=(entry["asset"] for entry in (prepared or {}).get("models", ())))
         self._build_destinations[handle] = (project_id, parent)
         self._queue("project.status", self._status_value(busy=False, progress=None))
         return self._status_value(
@@ -1044,6 +1053,8 @@ class NativeProjectHost:
                 "sizeBytes": report.bytes,
                 "assets": report.assets,
                 "levels": report.levels,
+                # Host warnings do not reach the editor, so it compares this with what it asked for.
+                **({"preparedModels": report.prepared_models} if prepared else {}),
             },
         )
 
@@ -1212,6 +1223,34 @@ class NativeProjectHost:
             method=ticket.method,
             assetId=asset_id,
             mime=mime,
+            size=size,
+        )
+
+    def _query_prepared(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require(payload)
+        keys = payload["keys"]
+        if not all(isinstance(key, str) and _SHA256.fullmatch(key) for key in keys):
+            raise HostOperationError("invalid_request", "Prepared model key is invalid")
+        return self._status_value(preparedKeys=self.prepared_models.available(keys))
+
+    def _begin_prepared_upload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        # Not asset.beginUpload: a read-only project can still be built, and uploads the project
+        # does not reference are purged. A prepared model is the store's, not the project's.
+        self._require(payload)
+        key = payload["key"]
+        if not isinstance(key, str) or not _SHA256.fullmatch(key):
+            raise HostOperationError("invalid_request", "Prepared model key is invalid")
+        size = int(payload["size"])
+        ticket = self.assets.issue_upload(
+            mime_type=PREPARED_MODEL_MIME,
+            max_size=size,
+            ttl=60,
+            on_upload=lambda upload: self.prepared_models.ingest(key, upload),
+        )
+        return self._status_value(
+            url=ticket.url,
+            method=ticket.method,
+            mime=PREPARED_MODEL_MIME,
             size=size,
         )
 

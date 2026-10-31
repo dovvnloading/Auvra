@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { chooseLodLevel, lodPixelsPerUnit, meshLodChain, meshLodReady, MIN_LOD_TRIANGLES, type MeshLodLevel } from '../../utils/meshLod';
+import { chooseLodLevel, lodPixelsPerUnit, meshLodChain, meshLodReady, MIN_LOD_TRIANGLES, seedMeshLodChain, type MeshLodLevel } from '../../utils/meshLod';
 
 beforeAll(async () => { await meshLodReady; });
 
@@ -60,6 +60,27 @@ describe('mesh level of detail chain', () => {
     const box = new THREE.BoxGeometry(1, 1, 1, 2, 2, 2);
     expect(box.index!.count / 3).toBeLessThan(MIN_LOD_TRIANGLES);
     expect(meshLodChain(box)).toHaveLength(1);
+  });
+
+  it('takes levels made ahead of time, over the same vertices, and frees them with the mesh', () => {
+    const sphere = new THREE.SphereGeometry(1, 16, 12);
+    seedMeshLodChain(sphere, [{ indices: new Uint16Array([0, 1, 2, 2, 1, 3]), error: 0.5 }, { indices: new Uint32Array([0, 1, 2]), error: 2 }]);
+    const levels = meshLodChain(sphere);
+    expect(levels.map(level => [level.error, level.triangles])).toEqual([[0, sphere.index!.count / 3], [0.5, 2], [2, 1]]);
+    expect(levels[0].geometry).toBe(sphere);
+    expect(levels[1].geometry.attributes.position).toBe(sphere.attributes.position);
+    // Over few vertices, whatever the width it was made at.
+    expect(levels[2].geometry.index!.array).toBeInstanceOf(Uint16Array);
+    let freed = 0;
+    for (const level of levels.slice(1)) level.geometry.addEventListener('dispose', () => { freed += 1; });
+    sphere.dispose();
+    expect(freed).toBe(2);
+  });
+
+  it('takes the answer that a mesh could not be reduced, so nothing tries again', () => {
+    const sphere = new THREE.SphereGeometry(1, 32, 24);
+    seedMeshLodChain(sphere, []);
+    expect(meshLodChain(sphere)).toHaveLength(1);
   });
 });
 

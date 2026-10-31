@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { AttachmentData, AudioData, Blueprint, LevelData, LevelObject, LoadedModelData, PrefabData, SocketData, TerrainData, TextureData } from '../types';
-import { importPhaseLabel, loadFBXFile } from './modelLoader';
+import { importPhaseLabel, loadFBXFile, type ModelLoadOptions } from './modelLoader';
 import { resolveTerrainHeightfield } from './terrainHeightfield';
 import { isTerrainHeightfieldPending } from './terrainHeightfieldCodec';
 import { resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplat';
@@ -59,6 +59,8 @@ export interface LoadGameContentOptions {
   releaseAssetUrl?(assetId: string): void;
   /** Models keep their source file for reimporting and for attachments copied from them, which only the editor does. */
   dropSourceFiles?: boolean;
+  /** The asset holding a model's prepared copy, for a game built with them (utils/preparedModels). */
+  preparedAssetFor?(assetId: string): string | undefined;
 }
 
 /** Which of a project's assets to load or free, by document id. A kind left out means none of it. */
@@ -116,7 +118,7 @@ export function createGameContentLoader(
   domains: Record<string, any[]>,
   options: LoadGameContentOptions,
 ): GameContentLoader {
-  const { resolveAssetUrl, generateThumbnails, onProgress, signal, diagnostics, isCurrent, resolveTerrains = false, releaseAssetUrl, dropSourceFiles = false } = options;
+  const { resolveAssetUrl, generateThumbnails, onProgress, signal, diagnostics, isCurrent, resolveTerrains = false, releaseAssetUrl, dropSourceFiles = false, preparedAssetFor } = options;
   const assertCurrent = () => {
     throwIfAborted(signal);
     if (isCurrent && !isCurrent()) throw new DOMException('Project loading was superseded.', 'AbortError');
@@ -138,6 +140,29 @@ export function createGameContentLoader(
     releaseAssetUrl?.(assetId);
     assertCurrent();
     return new File([blob], name, { type: response.headers.get('Content-Type') || 'application/octet-stream' });
+  };
+  /**
+   * Reads and loads a model file: its prepared copy where the game has one. A copy that cannot be
+   * read or parsed is logged and the source used, so only the source failing fails the asset.
+   */
+  const loadModelAsset = async (assetId: string, name: string, trace: DiagnosticContext | undefined, loadOptions: ModelLoadOptions, onRead: (file: File) => void): Promise<LoadedModelData> => {
+    const preparedId = preparedAssetFor?.(assetId);
+    if (preparedId) {
+      try {
+        const file = await loadProjectAssetFile(preparedId, name, trace);
+        assertCurrent();
+        onRead(file);
+        return await loadFBXFile(file, { ...loadOptions, prepared: true });
+      } catch (error) {
+        assertCurrent();
+        if (diagnosticErrorType(error) === 'AbortError') throw error;
+        recordAssetDiagnostic('prepared_model_unreadable', error, 'source_read', { fallback: 'source' });
+      }
+    }
+    const file = await loadProjectAssetFile(assetId, name, trace);
+    assertCurrent();
+    onRead(file);
+    return loadFBXFile(file, loadOptions);
   };
   const loadProjectAssetUrl = async (assetId: string, trace?: DiagnosticContext): Promise<string> => {
     const file = await loadProjectAssetFile(assetId, assetId, trace);
@@ -274,10 +299,7 @@ export function createGameContentLoader(
       let loadedModel: LoadedModelData | null = null;
       try {
         report(`Downloading model — ${item.name}`, 0.05, activePhase, diagnostic);
-        const sourceFile = await loadProjectAssetFile(item.assetId, item.name, traceAsset(assetAlias));
-        assertCurrent();
-        diagnostic = assetDiagnosticAttributes(sourceFile, item.category === 'Animation' ? 'animation' : 'model', assetAlias);
-        const loaded = await loadFBXFile(sourceFile, {
+        const loaded = await loadModelAsset(item.assetId, item.name, traceAsset(assetAlias), {
           normalize: item.category !== 'Animation',
           manualId: item.id,
           // An animation model keeps only its clips, so compressing its textures would be wasted.
@@ -288,7 +310,7 @@ export function createGameContentLoader(
             activePhase = phase;
             report(`${importPhaseLabel(phase)} — ${item.name}`, progress * 0.8 + 0.1, phase, diagnostic);
           },
-        });
+        }, (file) => { diagnostic = assetDiagnosticAttributes(file, item.category === 'Animation' ? 'animation' : 'model', assetAlias); });
         loadedModel = loaded;
         assertCurrent();
         dropSourceFile(loaded);
@@ -354,12 +376,9 @@ export function createGameContentLoader(
           try {
             const animationName = animation.name || 'animation.fbx';
             report(`Downloading animation — ${animationName}`, 0.05, animationPhase, animationDiagnostic);
-            const animationFile = await loadProjectAssetFile(animation.assetId, animationName, traceAsset(animationAlias));
-            assertCurrent();
-            animationDiagnostic = assetDiagnosticAttributes(animationFile, 'animation', animationAlias);
             let animationModel: LoadedModelData | null = null;
             try {
-              animationModel = await loadFBXFile(animationFile, {
+              animationModel = await loadModelAsset(animation.assetId, animationName, traceAsset(animationAlias), {
                 normalize: false,
                 // Only its clips are kept.
                 compressTextures: false,
@@ -369,7 +388,7 @@ export function createGameContentLoader(
                   animationPhase = phase;
                   report(`${importPhaseLabel(phase)} — ${animationName}`, progress * 0.85 + 0.1, phase, animationDiagnostic);
                 },
-              });
+              }, (file) => { animationDiagnostic = assetDiagnosticAttributes(file, 'animation', animationAlias); });
               assertCurrent();
               animationPhase = 'animation_binding';
               report(`Binding animation — ${animationName}`, 0.96, animationPhase, animationDiagnostic);
@@ -407,10 +426,7 @@ export function createGameContentLoader(
       let loadedAttachment: LoadedModelData | null = null;
       try {
         report(`Downloading attachment — ${item.name}`, 0.05, activePhase, diagnostic);
-        const sourceFile = await loadProjectAssetFile(item.assetId, item.name, traceAsset(assetAlias));
-        assertCurrent();
-        diagnostic = assetDiagnosticAttributes(sourceFile, 'attachment', assetAlias);
-        const loaded = await loadFBXFile(sourceFile, {
+        const loaded = await loadModelAsset(item.assetId, item.name, traceAsset(assetAlias), {
           normalize: false,
           manualId: item.id,
           compressTextures,
@@ -420,7 +436,7 @@ export function createGameContentLoader(
             activePhase = phase;
             report(`${importPhaseLabel(phase)} — ${item.name}`, progress * 0.85 + 0.1, phase, diagnostic);
           },
-        });
+        }, (file) => { diagnostic = assetDiagnosticAttributes(file, 'attachment', assetAlias); });
         loadedAttachment = loaded;
         assertCurrent();
         dropSourceFile(loaded);

@@ -214,6 +214,70 @@ class GameBuildTests(unittest.TestCase):
         self.assertEqual(self.load("game/game.json")["buildId"], "build-1")
         self.assert_no_leftovers()
 
+    def test_a_build_without_prepared_models_is_the_sources_alone(self):
+        report = self.build()
+        self.assertNotIn("prepared", self.load("game/game.json"))
+        self.assertEqual(report.prepared_models, 0)
+
+    def test_prepared_models_go_beside_their_sources_as_ordinary_assets(self):
+        prepared_id = "e" * 64
+        report = self.build(
+            prepared={"version": 1, "textures": "bc", "models": [{"source": MODEL_ID, "asset": prepared_id}]},
+            read_prepared={prepared_id: b"glb-bytes"}.get,
+        )
+        manifest = self.load("game/game.json")
+        self.assertEqual(manifest["schema"], 1)
+        self.assertEqual(manifest["prepared"], {"version": 1, "textures": "bc", "models": [{"source": MODEL_ID, "asset": prepared_id}]})
+        self.assertIn({"id": prepared_id, "file": f"{prepared_id}.glb", "mime": "model/gltf-binary", "size": 9}, manifest["assets"])
+        self.assertIn(MODEL_ID, [asset["id"] for asset in manifest["assets"]])
+        self.assertEqual((self.destination / "game/assets" / f"{prepared_id}.glb").read_bytes(), b"glb-bytes")
+        self.assertIn(f"game/assets/{prepared_id}.glb", [item["path"] for item in self.load(BUILD_MARKER)["files"]])
+        self.assertEqual((report.assets, report.prepared_models, report.warnings), (4, 1, ()))
+
+    def test_a_prepared_model_shared_by_two_sources_is_written_once(self):
+        prepared_id = "e" * 64
+        self.build(
+            prepared={"version": 1, "textures": "none", "models": [
+                {"source": MODEL_ID, "asset": prepared_id}, {"source": TEXTURE_ID, "asset": prepared_id},
+            ]},
+            read_prepared={prepared_id: b"glb-bytes"}.get,
+        )
+        manifest = self.load("game/game.json")
+        self.assertEqual([asset["id"] for asset in manifest["assets"]].count(prepared_id), 1)
+        self.assertEqual(len(manifest["prepared"]["models"]), 2)
+        self.assertEqual(manifest["prepared"]["textures"], "none")
+
+    def test_preparation_never_fails_a_build(self):
+        usable, unusable, unread = "e" * 64, "f" * 64, "9" * 64
+
+        def read_prepared(asset):
+            if asset == unusable:
+                return None
+            if asset == unread:
+                raise OSError("gone")
+            return b"glb-bytes"
+
+        report = self.build(
+            prepared={"version": 1, "textures": "bc", "models": [
+                {"source": MODEL_ID, "asset": usable},
+                {"source": TEXTURE_ID, "asset": unusable},
+                {"source": HEIGHTFIELD_ID, "asset": unread},
+                # A source the project no longer uses, and a name that cannot be a file.
+                {"source": UNUSED_ID, "asset": "8" * 64},
+                {"source": MODEL_ID, "asset": "../escape"},
+            ]},
+            read_prepared=read_prepared,
+        )
+        manifest = self.load("game/game.json")
+        self.assertEqual(manifest["prepared"]["models"], [{"source": MODEL_ID, "asset": usable}])
+        self.assertEqual(report.prepared_models, 1)
+        self.assertEqual(len(report.warnings), 2)
+        self.assertNotIn("8" * 64, [asset["id"] for asset in manifest["assets"]])
+        self.assertFalse((self.output / "escape.glb").exists())
+        # Nothing usable leaves the field out altogether.
+        self.build("build-2", prepared={"version": 1, "textures": "bc", "models": [{"source": MODEL_ID, "asset": unusable}]}, read_prepared=read_prepared)
+        self.assertNotIn("prepared", self.load("game/game.json"))
+
 
 if __name__ == "__main__":
     unittest.main()

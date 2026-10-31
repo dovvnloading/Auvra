@@ -8,11 +8,11 @@ Open **Game Settings** in the header. The settings are stored in the project and
 - **Startup level**: the first level the game opens (defaults to the first level).
 - **Player blueprint**: the character the player controls.
 - **Window, quality and input defaults**: fullscreen, shadows, post-processing, maximum resolution scale, field of view, mouse sensitivity, invert Y and master volume. Players can change the input and volume settings in Options.
-- **Mesh detail levels** (on by default): every mesh with a few hundred triangles or more gets simpler versions of itself, made when its model loads, and draws the simplest one whose difference from the full mesh, in shape, texture placement and shading, stays under a pixel on the screen. It covers props, foliage, characters and what they carry, in play and in built games. In the starter level it cut the triangles drawn per frame from about 2.4 million to about 217 thousand.
+- **Mesh detail levels** (on by default): every mesh with a few hundred triangles or more gets simpler versions of itself, made when its model loads, and draws the simplest one whose difference from the full mesh, in shape, texture placement and shading, stays under a pixel on the screen. A built game has them ready; a mesh nothing prepared gets them when it is first drawn. It covers props, foliage, characters and what they carry, in play and in built games. In the starter level it cut the triangles drawn per frame from about 2.4 million to about 217 thousand.
 - **Navigation**: the agent levels' navmeshes are baked for: its radius, height, steepest slope and tallest step (see [Enemy navigation](characters.md#enemy-navigation)).
 - **Load assets by level** (on by default): a built game opens straight to its title screen and loads each level's assets when that level starts, with a loading bar. Everything a level names counts: its objects' models, what its prefabs, spawners, scripts and timelines name, the levels its Level Streaming volumes bring in, and the player and enemy characters. A script that builds an asset's name while it runs cannot be seen ahead of time, so a game that does that should turn this off, and then loads all of its assets when the first level starts. The editor always loads the whole project.
 - **Asset memory** (2048 MB by default): what earlier levels used stays in memory so going back is quick, until holding it would pass this much. What was used longest ago then goes first. A level always gets what it needs, even past this.
-- **Texture compression** (on by default): models load with their textures compressed the way graphics cards read them directly: colour, roughness, metalness, occlusion and emissive maps to BC1 (BC3 where they have transparency), normal maps to BC5, each with its mip levels. They take a fifth to an eighth of the graphics memory and look the same. Each texture is compressed once, the first time it loads, and kept in the editor's cache after that. Devices without these formats load textures as they are. In the starter level, texture memory went from about 273 MB to about 50 MB.
+- **Texture compression** (on by default): models load with their textures compressed the way graphics cards read them directly: colour, roughness, metalness, occlusion and emissive maps to BC1 (BC3 where they have transparency), normal maps to BC5, each with its mip levels. They take a fifth to an eighth of the graphics memory and look the same. Each texture is compressed once, the first time it loads or a game is built, and kept in the editor's cache after that. Devices without these formats load textures as they are; a built game then reads its source files. In the starter level, texture memory went from about 273 MB to about 50 MB.
 
 Each level should have a **Player Start**; without one the player spawns at the origin (in the editor, under the camera).
 
@@ -34,6 +34,18 @@ The desktop targets copy a prebuilt Auvra game player for that system, so you ca
 
 Every build carries a `THIRD_PARTY_NOTICES.txt` covering the players it includes, and an `auvra-build.json` marker that lists each file with its size and hash.
 
+### Prepared models
+
+A build does the slow work on each model once, so the game does not repeat it on every launch. Before it asks where to put the game, Auvra prepares each model, attachment and animation file the project uses, one at a time in the background, and the game then loads those prepared files. Each is a GLB beside its source file, holding:
+
+- The geometry, with shared corners welded, and its detail levels.
+- The textures compressed the way graphics cards read them, where **Texture compression** is on.
+- The clips. An animation file keeps only its skeleton and clips, so it is much smaller.
+
+The first build of a project takes longer because of this. Later builds, of this project or another using the same files, reuse what was prepared, which is kept with your Auvra settings and never added to a project or its package. Prepared files are made again when a model's source file changes, when **Texture compression** or **Mesh detail levels** changes, or after an Auvra update changes what they hold. Renaming a model, changing its materials, or changing its import settings prepares nothing again, because those are applied as the game loads.
+
+The source files stay in the build. A game reads a model's source file instead when the model has no prepared file, when the prepared file cannot be read, or on a device that cannot read its compressed textures. Preparing a model never stops a build: a model that could not be prepared, or a GLB whose geometry is Draco or meshopt compressed, goes in as its source file alone, and Auvra tells you which ones when the build ends.
+
 ## Build for the web
 
 The `<Game Name>-Web` folder contains:
@@ -43,7 +55,7 @@ The `<Game Name>-Web` folder contains:
 | `index.html`, `assets/` | The game player |
 | `game/game.json` | Game manifest: name, levels, settings, asset list |
 | `game/content/` | The project's documents, without editor-only data |
-| `game/assets/` | Only the assets the game uses |
+| `game/assets/` | Only the assets the game uses, and the [prepared models](#prepared-models) |
 | `THIRD_PARTY_NOTICES.txt` | Licenses of the open-source packages in the player |
 | `auvra-build.json` | Build marker with every file's size and hash |
 
