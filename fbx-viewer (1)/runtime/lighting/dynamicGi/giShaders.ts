@@ -182,7 +182,7 @@ vec3 giShade( vec3 point, vec3 direction, RtHit hit ) {
     vec3 normal = hit.front ? hit.normal : -hit.normal;
     vec3 received = giDirectional( point, normal ) + giLocal( point, normal );
     if ( bounce > 0.0 ) {
-        vec4 gathered = auvraGiIrradiance( point, normal, -direction );
+        vec4 gathered = auvraGiIrradiance( point, normal, -direction, giRandom() );
         // Out of range of every probe, the open sky is the best guess there is.
         vec3 fill = giSky( normal ) * PI * ( 1.0 - gathered.a );
         received += ( gathered.rgb * gathered.a + fill ) * bounce;
@@ -336,8 +336,8 @@ void main() {
         // which it follows quickly. One probe's rays can easily be a third out on their own.
         float largest = max( max( before.r, before.g ), max( before.b, 0.05 ) );
         vec3 gap = abs( irradiance - before.rgb ) / largest;
-        float change = smoothstep( 0.4, 1.0, max( max( gap.r, gap.g ), gap.b ) );
-        result = mix( before.rgb, irradiance, mix( blend * 0.3, blend, change ) );
+        float change = smoothstep( 0.3, 0.9, max( max( gap.r, gap.g ), gap.b ) );
+        result = mix( before.rgb, irradiance, mix( blend * 0.35, blend, change ) );
     }
     // More than a quarter of its rays met backs: it stands inside something.
     gl_FragColor = vec4( result, backs * 4 > rayCount ? 0.0 : 1.0 );

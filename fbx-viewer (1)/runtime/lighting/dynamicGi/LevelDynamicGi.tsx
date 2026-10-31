@@ -112,6 +112,7 @@ const ProbeView: React.FC = () => {
         uniforms: {
             auvraGiAtlas: DYNAMIC_GI_UNIFORMS.auvraGiAtlas,
             auvraGiGrid: DYNAMIC_GI_UNIFORMS.auvraGiGrid,
+            auvraGiCorners: DYNAMIC_GI_UNIFORMS.auvraGiCorners,
             cascadeShown: { value: 0 },
         },
     }), []);
@@ -161,6 +162,8 @@ const DynamicGiRunner: React.FC<{ settings: DynamicGiSettings; levelObjects: rea
         };
     }, [gl, gi, runner]);
 
+    // Nothing in it, so it adds no light: it is what makes lit materials compile with the volume (see giMaterials.ts).
+    const compilesWithVolume = useMemo(() => new THREE.LightProbe(), []);
     const state = useMemo(() => ({ intensity: 1, indirectOnly: false }), []);
     state.intensity = settings.intensity;
     state.indirectOnly = settings.view === 'lighting';
@@ -175,6 +178,7 @@ const DynamicGiRunner: React.FC<{ settings: DynamicGiSettings; levelObjects: rea
 
     return (
         <>
+            <primitive object={compilesWithVolume} />
             {settings.view === 'rays' && <RayView gi={gi} />}
             {settings.view === 'probes' && <ProbeView />}
         </>

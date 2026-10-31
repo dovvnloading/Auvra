@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RayScene, type RayFilter, type TextureMean } from '../../raytracing/rayScene';
 import { traceUniforms } from '../../raytracing/traceShader';
-import { giAtlas, holdGiAtlas, setGiGrid, DYNAMIC_GI_UNIFORMS } from './giMaterials';
+import { giAtlas, holdGiAtlas, setGiGrid, stepGiNoise, DYNAMIC_GI_UNIFORMS } from './giMaterials';
 import {
     CLEAR_FRAGMENT,
     FULLSCREEN_VERTEX,
@@ -45,8 +45,11 @@ import {
  * See probeGrid.ts for where the probes are, and giShaders.ts for the passes.
  */
 
-/** Seconds a change takes to settle at each cascade, if nothing else had a say. */
-const SETTLE_SECONDS = 1;
+/**
+ * Seconds a large change takes to settle at each cascade. Light carries on bouncing through what the probes hold, so a
+ * room takes a few of these to fill or to drain.
+ */
+const SETTLE_SECONDS = 0.5;
 const ASSUMED_FRAMES_PER_SECOND = 60;
 /** How wide the sun looks, as the sine of its angle: rays aim anywhere on it, which softens the shadows they find. */
 const SUN_RADIUS = 0.02;
@@ -170,6 +173,7 @@ export class DynamicGi {
             ...traceUniforms(this.rayScene),
             auvraGiAtlas: DYNAMIC_GI_UNIFORMS.auvraGiAtlas,
             auvraGiGrid: DYNAMIC_GI_UNIFORMS.auvraGiGrid,
+            auvraGiCorners: DYNAMIC_GI_UNIFORMS.auvraGiCorners,
             ambientLight: { value: this.lights.ambientLight },
             hemiSky: { value: this.lights.hemiSky },
             hemiGround: { value: this.lights.hemiGround },
@@ -236,6 +240,7 @@ export class DynamicGi {
         this.meansLeft = MEANS_PER_FRAME;
         this.rayScene.update(scene, include, this.textureMean, 4);
         this.frame++;
+        stepGiNoise(this.frame);
         this.common.frame.value = this.frame;
         this.common.bounce.value = settings.bounce;
         this.syncEnvironment(scene);

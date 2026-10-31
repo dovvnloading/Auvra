@@ -54,9 +54,9 @@ export interface GiQualityPlan {
 }
 
 export const GI_QUALITY: Record<GiQuality, GiQualityPlan> = {
-    low: { rays: 32, probes: [48, 16, 8, 4] },
-    medium: { rays: 48, probes: [96, 40, 16, 8] },
-    high: { rays: 64, probes: [128, 64, 32, 16] },
+    low: { rays: 32, probes: [64, 24, 8, 4] },
+    medium: { rays: 64, probes: [192, 32, 16, 8] },
+    high: { rays: 96, probes: [192, 40, 16, 8] },
 };
 
 /** Positive remainder for the grid's power-of-two sizes. */

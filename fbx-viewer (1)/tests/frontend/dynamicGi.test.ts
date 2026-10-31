@@ -158,6 +158,17 @@ describe('which scenes read it', () => {
         expect(Object.keys(BAKED_LIGHTING_UNIFORMS).filter(key => key.startsWith('bakedGiSh'))).toEqual(['bakedGiSh']);
     });
 
+    it('compiles the volume only into scenes that read it: it more than doubles how long a lit shader takes', () => {
+        expect(THREE.ShaderChunk.lights_pars_begin).toContain('defined( USE_LIGHT_PROBES )');
+        const beforeMaps = THREE.ShaderChunk.lights_fragment_maps;
+        const uses = beforeMaps.split('auvraGiParams').length - 1;
+        // Every reading of it sits behind the define: a shader without it does not declare it.
+        const guarded = beforeMaps.split('#ifdef AUVRA_DYNAMIC_GI').length + beforeMaps.split('defined( AUVRA_DYNAMIC_GI )').length - 2;
+        expect(uses).toBeGreaterThan(0);
+        expect(guarded).toBeGreaterThanOrEqual(3);
+        expect(beforeMaps).not.toMatch(/#else\s+if \( auvraGiParams/);
+    });
+
     it('patches every lit material\'s shader once', () => {
         const count = (text: string, part: string) => text.split(part).length - 1;
         expect(count(THREE.ShaderChunk.lights_pars_begin, 'auvraGiIrradiance( vec3 point')).toBe(1);

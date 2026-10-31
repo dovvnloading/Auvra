@@ -449,7 +449,11 @@ const BEFORE_MAPS = /* glsl */`
 #if defined( RE_IndirectDiffuse ) && defined( AUVRA_BAKED_GI )
 	float bakedGiBlend = 0.0;
 	vec3 bakedGi = vec3( 0.0 );
+	#ifdef AUVRA_DYNAMIC_GI
 	if ( bakedGiParams.y > 0.5 || auvraGiParams.y > 0.5 ) {
+	#else
+	if ( bakedGiParams.y > 0.5 ) {
+	#endif
 		vec3 bakedGiPosition = ( vec4( geometryPosition, 0.0 ) * viewMatrix ).xyz + cameraPosition;
 		vec3 bakedGiNormal = inverseTransformDirection( geometryNormal, viewMatrix );
 		if ( bakedGiParams.y > 0.5 ) {
@@ -457,13 +461,16 @@ const BEFORE_MAPS = /* glsl */`
 			bakedGi = bakedGiIrradiance( bakedGiPosition, bakedGiNormal );
 		}
 		// Light gathered as the level plays comes first. Where it has nothing yet, or does not reach, the bake still stands.
+		#ifdef AUVRA_DYNAMIC_GI
 		if ( auvraGiParams.y > 0.5 ) {
-			vec4 gathered = auvraGiIrradiance( bakedGiPosition, bakedGiNormal, normalize( cameraPosition - bakedGiPosition ) );
+			float auvraGiNoise = fract( 52.9829189 * fract( dot( gl_FragCoord.xy + auvraGiParams.w * 5.588238, vec2( 0.06711056, 0.00583715 ) ) ) );
+			vec4 gathered = auvraGiIrradiance( bakedGiPosition, bakedGiNormal, normalize( cameraPosition - bakedGiPosition ), auvraGiNoise );
 			float bakedShare = bakedGiBlend * ( 1.0 - gathered.a );
 			float together = gathered.a + bakedShare;
 			if ( together > 0.0 ) bakedGi = ( gathered.rgb * auvraGiParams.x * gathered.a + bakedGi * bakedShare ) / together;
 			bakedGiBlend = together;
 		}
+		#endif
 		// Both hold the sky fill (ambient, hemisphere and environment) as it reaches here.
 		irradiance *= 1.0 - bakedGiBlend;
 		#ifndef STANDARD
@@ -477,7 +484,7 @@ const AFTER_MAPS = /* glsl */`
 #if defined( RE_IndirectDiffuse ) && defined( AUVRA_BAKED_GI ) && defined( STANDARD )
 	// Reflections of the environment fade as a surface loses sight of it: in a dark room a polished floor shows
 	// no sky. How much it lost is the light that got here, against what the open environment would have given.
-	#if defined( USE_ENVMAP ) && defined( RE_IndirectSpecular ) && ! defined( AUVRA_LOCAL_REFLECTION )
+	#if defined( AUVRA_DYNAMIC_GI ) && defined( USE_ENVMAP ) && defined( RE_IndirectSpecular ) && ! defined( AUVRA_LOCAL_REFLECTION )
 		if ( auvraGiParams.y > 0.5 ) {
 			float auvraGiOpen = dot( iblIrradiance, vec3( 0.2126, 0.7152, 0.0722 ) );
 			float auvraGiSeen = clamp( dot( bakedGi, vec3( 0.2126, 0.7152, 0.0722 ) ) / max( auvraGiOpen, 1e-3 ), 0.0, 1.0 );
@@ -489,7 +496,7 @@ const AFTER_MAPS = /* glsl */`
 	#endif
 	iblIrradiance = mix( iblIrradiance, bakedGi, bakedGiBlend );
 #endif
-#if defined( RE_IndirectDiffuse ) && defined( AUVRA_BAKED_GI )
+#if defined( RE_IndirectDiffuse ) && defined( AUVRA_DYNAMIC_GI )
 	// The view that shows only indirect light, on white.
 	if ( auvraGiParams.z > 0.5 ) {
 		reflectedLight.directDiffuse = vec3( 0.0 );

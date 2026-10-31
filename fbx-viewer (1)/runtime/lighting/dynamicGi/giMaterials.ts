@@ -24,6 +24,11 @@ import {
  * see the surface, from the distances it recorded around itself. That last test is what keeps light from
  * leaking through walls without any seams or hand-placed volumes.
  *
+ * Only a scene that reads the volume compiles any of this: it holds a light probe with nothing in it (see
+ * LevelDynamicGi.tsx), which is what makes three build its shaders with USE_LIGHT_PROBES, and so a separate set of
+ * programs. Reading the volume more than doubles how long a lit shader takes to compile, and a level without it
+ * should not pay that.
+ *
  * Atlas (half-float), in each map's cells (see probeGrid.ts):
  *   left:  each probe's irradiance over the directions a surface may face; a holds 1 where it is sound, 0 where
  *          it stands inside something, and -1 until it has been traced
@@ -66,7 +71,7 @@ class SharedVector4 extends THREE.Vector4 {
 
 /** xyz: each cascade's lowest probe, in the world; w: the distance between its probes. */
 const grids = Array.from({ length: GI_CASCADES }, () => new SharedVector4(0, 0, 0, 1));
-/** x: intensity; y: 1 when this frame's scene reads the volume; z: 1 when only indirect light is shown. */
+/** x: intensity; y: 1 when this frame's scene reads the volume; z: 1 when only indirect light is shown; w: moves the noise on, frame by frame. */
 const params = new SharedVector4(1, 0, 0, 0);
 
 export const DYNAMIC_GI_UNIFORMS = {
@@ -74,6 +79,7 @@ export const DYNAMIC_GI_UNIFORMS = {
     auvraGiAtlas: { value: [giAtlas.texture] },
     auvraGiGrid: { value: grids },
     auvraGiParams: { value: params },
+    auvraGiCorners: { value: 8 },
 };
 
 /**
@@ -83,6 +89,9 @@ export const DYNAMIC_GI_UNIFORMS = {
 export const GI_SAMPLE_GLSL = /* glsl */ `
 uniform highp sampler2D auvraGiAtlas[ 1 ];
 uniform vec4 auvraGiGrid[ ${GI_CASCADES} ];
+// Always 8: a loop bound the shader compiler cannot see, as on Windows it would otherwise copy out the loop's body for
+// each pass round it, and take several times as long.
+uniform int auvraGiCorners;
 
 // A direction folded flat, each coordinate -1 to 1.
 vec2 auvraGiFold( vec3 direction ) {
@@ -123,7 +132,7 @@ vec4 auvraGiCascade( int cascade, vec3 point, vec3 normal, vec3 toViewer ) {
     vec2 row = vec2( 0.0, float( cascade * ${ATLAS_ROWS} ) );
     vec3 sum = vec3( 0.0 );
     float total = 0.0;
-    for ( int i = 0; i < 8; i++ ) {
+    for ( int i = 0; i < auvraGiCorners; i++ ) {
         ivec3 corner = ivec3( i & 1, ( i >> 1 ) & 1, ( i >> 2 ) & 1 );
         vec3 probe = grid.xyz + ( base + vec3( corner ) ) * spacing;
         vec2 place = auvraGiPlace( low + corner ) + row;
@@ -163,7 +172,10 @@ vec4 auvraGiCascade( int cascade, vec3 point, vec3 normal, vec3 toViewer ) {
 }
 
 // The light reaching a surface, and in a how far it holds: 0 where nothing has been gathered yet or out of range.
-vec4 auvraGiIrradiance( vec3 point, vec3 normal, vec3 toViewer ) {
+// Between two cascades a pixel reads one or the other, as noise (0 to 1) falls, and temporal anti-aliasing evens them
+// out: reading both would cost twice as much at run time, and far more than that to compile. A cascade with nothing
+// sound in this cell gives way to the next.
+vec4 auvraGiIrradiance( vec3 point, vec3 normal, vec3 toViewer, float noise ) {
     int inside = -1;
     float reach = 0.0;
     for ( int cascade = 0; cascade < ${GI_CASCADES}; cascade++ ) {
@@ -179,20 +191,22 @@ vec4 auvraGiIrradiance( vec3 point, vec3 normal, vec3 toViewer ) {
     }
     if ( inside < 0 ) return vec4( 0.0 );
     float settle = smoothstep( 0.5, 2.0, reach );
-    vec4 here = auvraGiCascade( inside, point, normal, toViewer );
-    if ( settle >= 1.0 && here.a > 0.0 ) return here;
-    if ( inside == ${GI_CASCADES - 1} ) return vec4( here.rgb, here.a * settle );
-    vec4 wider = auvraGiCascade( inside + 1, point, normal, toViewer );
-    // One side may have nothing yet: then the other stands alone.
-    if ( here.a <= 0.0 ) return wider;
-    if ( wider.a <= 0.0 ) return here;
-    return mix( wider, here, settle );
+    if ( inside < ${GI_CASCADES - 1} && noise > settle ) inside++;
+    // The outermost has nothing beyond it to hand over to, so it fades.
+    float share = inside == ${GI_CASCADES - 1} ? settle : 1.0;
+    vec4 here = vec4( 0.0 );
+    for ( int cascade = inside; cascade < auvraGiCorners; cascade++ ) {
+        if ( cascade >= ${GI_CASCADES} ) break;
+        here = auvraGiCascade( cascade, point, normal, toViewer );
+        if ( here.a > 0.0 ) break;
+    }
+    return vec4( here.rgb, here.a * share );
 }
 `;
 
 /** Where lit materials take in the volume's light, before the renderer adds its own fill. */
 export const GI_MATERIAL_PARS = /* glsl */ `
-#if defined( STANDARD ) || defined( LAMBERT ) || defined( PHONG ) || defined( TOON )
+#if ( defined( STANDARD ) || defined( LAMBERT ) || defined( PHONG ) || defined( TOON ) ) && defined( USE_LIGHT_PROBES )
 #define AUVRA_DYNAMIC_GI
 uniform vec4 auvraGiParams;
 ${GI_SAMPLE_GLSL}
@@ -229,7 +243,12 @@ export const applySceneGi = (scene: THREE.Object3D): void => {
         params.z = 0;
         return;
     }
-    params.set(state.intensity, 1, state.indirectOnly ? 1 : 0, 0);
+    params.set(state.intensity, 1, state.indirectOnly ? 1 : 0, params.w);
+};
+
+/** Moves the noise that scatters pixels between cascades on, so temporal anti-aliasing can even it out. */
+export const stepGiNoise = (frame: number): void => {
+    params.w = frame % 64;
 };
 
 /** Points every material at where each cascade's probes are now. */

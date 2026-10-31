@@ -430,7 +430,7 @@ If the frame rate stays low, play first lowers the resolution, and turns these e
 Add a **Dynamic Global Illumination** component to any object in the level (one is enough; it applies to the whole level). Light then bounces as the level plays, with nothing to bake:
 
 - **It sees what is off screen.** A sunlit red wall tints the room whether or not it is in view, unlike the screen-space **Global illumination** of the Post Process component.
-- **It follows the level.** Move the sun, a lamp, a wall or a crate and the light around it changes within about a second. Doors that open let the light in.
+- **It follows the level.** Move the sun, a lamp, a wall or a crate and the light around it starts to change at once, settling over a few seconds as it bounces on. A door that opens lets the light in, and a room sealed shut goes dark.
 - **Glowing surfaces light the room.** A material's emissive colour counts as a light source, with soft shadows, at no cost per surface.
 - **Rooms go dark.** A room with no openings loses the sky, where the unbaked fill would light it like open ground; reflections of the sky fade with it. Characters and moving objects take the light of wherever they stand.
 

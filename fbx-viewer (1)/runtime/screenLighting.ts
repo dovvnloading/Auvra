@@ -120,7 +120,7 @@ void main() {
     #ifdef AUVRA_DYNAMIC_GI
     vec3 worldPoint = ( cameraWorld * vec4( p, 1.0 ) ).xyz;
     vec3 toCamera = normalize( ( cameraWorld * vec4( -p, 0.0 ) ).xyz );
-    vec4 gathered4 = auvraGiIrradiance( worldPoint, worldNormal, toCamera );
+    vec4 gathered4 = auvraGiIrradiance( worldPoint, worldNormal, toCamera, n0 );
     vec3 probeLight = gathered4.rgb * auvraGiParams.x * RECIPROCAL_PI;
     #endif
     vec3 sum = vec3( 0.0 );
@@ -480,7 +480,7 @@ export class ScreenLightingEffect extends Effect {
             ambientLight: uniform(new THREE.Color()), hemiSky: uniform(new THREE.Color()), hemiGround: uniform(new THREE.Color()),
             hemiUp: uniform(new THREE.Vector3(0, 1, 0)), envMap: uniform<THREE.Texture | null>(null),
             envRotation: uniform(new THREE.Matrix3()), envIntensity: uniform(1),
-            auvraGiAtlas: DYNAMIC_GI_UNIFORMS.auvraGiAtlas, auvraGiGrid: DYNAMIC_GI_UNIFORMS.auvraGiGrid, auvraGiParams: DYNAMIC_GI_UNIFORMS.auvraGiParams,
+            auvraGiAtlas: DYNAMIC_GI_UNIFORMS.auvraGiAtlas, auvraGiGrid: DYNAMIC_GI_UNIFORMS.auvraGiGrid, auvraGiParams: DYNAMIC_GI_UNIFORMS.auvraGiParams, auvraGiCorners: DYNAMIC_GI_UNIFORMS.auvraGiCorners,
         });
         this.accumulate = new FullscreenPass(ACCUMULATE, {
             ...c, current: uniform(null), history: uniform(null), cameraWorld: uniform(new THREE.Matrix4()),
