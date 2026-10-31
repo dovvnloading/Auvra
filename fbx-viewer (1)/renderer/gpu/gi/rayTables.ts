@@ -205,7 +205,6 @@ export class GpuRayScene {
   private readonly queue: { key: string; build: () => BuiltShape | null }[] = [];
   private readonly queued = new Set<string>();
   private readonly materialSlots = new Map<string, number>();
-  private materialCount = 0;
   private frame = 0;
   private movesSinceBuild = 0;
   private layoutChanged = true;
@@ -365,7 +364,6 @@ export class GpuRayScene {
       for (const child of node.children) visit(child);
     };
     visit(root);
-    this.materialCount = materialCount;
 
     for (const [owner, entry] of this.tracked) {
       if (entry.seen === frame) continue;

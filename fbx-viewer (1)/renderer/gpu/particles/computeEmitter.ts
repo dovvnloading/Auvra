@@ -224,7 +224,6 @@ export class ComputeEmitter {
   private bursts: Burst[] = [];
   private needsClear = true;
   private warm = false;
-  private burstSalt = 1;
 
   private spawnTotal = 0;
   /** Whether this frame's compute includes a step for this emitter. */
