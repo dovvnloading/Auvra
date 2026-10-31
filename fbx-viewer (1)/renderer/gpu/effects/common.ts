@@ -1,4 +1,5 @@
 /// <reference types="@webgpu/types" />
+import { retire } from "../buffers";
 import { useEffect } from "react";
 import type * as THREE from "three";
 import { useThree } from "@react-three/fiber";
@@ -199,9 +200,13 @@ export class BindGroupCache {
   }
 }
 
+/** How many sizes a copy is kept at, and for how many frames undrawn: as long as the renderer keeps the targets themselves. */
+const COPIES_KEPT = 6;
+const COPIES_KEPT_FRAMES = 240;
+
 /** A texture the size of the targets that a target is copied into, one per size in use. */
 export class TargetCopy {
-  private readonly copies = new Map<string, { texture: GPUTexture; view: GPUTextureView }>();
+  private readonly copies = new Map<string, { texture: GPUTexture; view: GPUTextureView; used: number }>();
 
   constructor(private readonly device: GPUDevice, private readonly label: string, private readonly format: GPUTextureFormat) {}
 
@@ -209,23 +214,46 @@ export class TargetCopy {
   take(frame: GpuFrame, source: GPUTexture): GPUTextureView {
     const { width, height } = frame.targets;
     const key = `${width}x${height}`;
+    for (const [other, kept] of this.copies) {
+      if (other !== key && frame.frameNumber - kept.used > COPIES_KEPT_FRAMES) {
+        retire(kept.texture);
+        this.copies.delete(other);
+      }
+    }
     let copy = this.copies.get(key);
     if (!copy) {
+      // A window being resized goes through a new size every frame, and each of these is as big as the screen.
+      while (this.copies.size >= COPIES_KEPT) this.dropOldest();
       const texture = this.device.createTexture({
         label: this.label,
         size: [width, height],
         format: this.format,
         usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
       });
-      copy = { texture, view: texture.createView() };
+      copy = { texture, view: texture.createView(), used: 0 };
       this.copies.set(key, copy);
     }
+    copy.used = frame.frameNumber;
     frame.encoder.copyTextureToTexture({ texture: source }, { texture: copy.texture }, [width, height]);
     return copy.view;
   }
 
+  private dropOldest(): void {
+    let oldest = "";
+    let oldestUsed = Infinity;
+    for (const [key, copy] of this.copies) {
+      if (copy.used < oldestUsed) {
+        oldest = key;
+        oldestUsed = copy.used;
+      }
+    }
+    const copy = this.copies.get(oldest);
+    if (copy) retire(copy.texture);
+    this.copies.delete(oldest);
+  }
+
   destroy(): void {
-    for (const copy of this.copies.values()) copy.texture.destroy();
+    for (const copy of this.copies.values()) retire(copy.texture);
     this.copies.clear();
   }
 }
@@ -255,7 +283,7 @@ export class UniformSlices {
 
   ensure(count: number): void {
     if (count <= this.capacity) return;
-    this.buffer.destroy();
+    retire(this.buffer);
     this.capacity = Math.max(count, this.capacity * 2);
     this.buffer = this.make();
     this.generation++;

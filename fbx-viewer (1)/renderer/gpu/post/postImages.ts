@@ -1,4 +1,5 @@
 /// <reference types="@webgpu/types" />
+import { retire } from "../buffers";
 
 /**
  * THE POST STACK'S PICTURES
@@ -33,14 +34,22 @@ export interface PostImage {
 
 interface PooledImage {
   image: PostImage;
+  size: string;
   lastUsed: number;
 }
 
 /** A size unused for this many frames was a window that was resized, or an effect that was turned off. */
 const IMAGES_KEPT_FRAMES = 240;
+/**
+ * How many sizes are kept whatever their age. Four views at a few sizes each fit, and a window whose edge is being dragged
+ * goes through new sizes every frame: without this it holds a whole stack of pictures for each until they age out.
+ */
+const SIZES_KEPT = 16;
 
 export class ImagePool {
   private readonly images = new Map<string, PooledImage>();
+  /** Each size in the pool and when it was last asked for. */
+  private readonly sizes = new Map<string, number>();
   private frame = 0;
   /** Goes up whenever an image is destroyed, so what was bound to it binds again. */
   generation = 0;
@@ -54,7 +63,10 @@ export class ImagePool {
   image(name: string, width: number, height: number, mipLevelCount = 1): PostImage {
     const w = Math.max(1, width);
     const h = Math.max(1, height);
-    const key = `${name}:${w}x${h}`;
+    const size = `${w}x${h}`;
+    const key = `${name}:${size}`;
+    if (!this.sizes.has(size) && this.sizes.size >= SIZES_KEPT) this.dropOldestSize();
+    this.sizes.set(size, this.frame);
     const pooled = this.images.get(key);
     if (pooled) {
       pooled.lastUsed = this.frame;
@@ -70,23 +82,45 @@ export class ImagePool {
     const levels: GPUTextureView[] = [];
     for (let level = 0; level < mipLevelCount; level++) levels.push(texture.createView({ baseMipLevel: level, mipLevelCount: 1 }));
     const image: PostImage = { texture, view: levels[0], width: w, height: h, levels };
-    this.images.set(key, { image, lastUsed: this.frame });
+    this.images.set(key, { image, size, lastUsed: this.frame });
     return image;
+  }
+
+  private dropOldestSize(): void {
+    let oldest = "";
+    let oldestUsed = Infinity;
+    for (const [size, used] of this.sizes) {
+      if (used < oldestUsed) {
+        oldest = size;
+        oldestUsed = used;
+      }
+    }
+    for (const [key, pooled] of this.images) {
+      if (pooled.size === oldest) this.drop(key, pooled);
+    }
+    this.sizes.delete(oldest);
+  }
+
+  private drop(key: string, pooled: PooledImage): void {
+    retire(pooled.image.texture);
+    this.images.delete(key);
+    this.generation++;
   }
 
   /** Frees what has not been asked for lately. */
   sweep(): void {
     for (const [key, pooled] of this.images) {
-      if (this.frame - pooled.lastUsed <= IMAGES_KEPT_FRAMES) continue;
-      pooled.image.texture.destroy();
-      this.images.delete(key);
-      this.generation++;
+      if (this.frame - pooled.lastUsed > IMAGES_KEPT_FRAMES) this.drop(key, pooled);
+    }
+    for (const [size, used] of this.sizes) {
+      if (this.frame - used > IMAGES_KEPT_FRAMES) this.sizes.delete(size);
     }
   }
 
   dispose(): void {
-    for (const pooled of this.images.values()) pooled.image.texture.destroy();
+    for (const pooled of this.images.values()) retire(pooled.image.texture);
     this.images.clear();
+    this.sizes.clear();
     this.generation++;
   }
 }

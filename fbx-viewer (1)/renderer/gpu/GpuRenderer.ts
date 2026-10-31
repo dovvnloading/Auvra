@@ -4,6 +4,7 @@ import { createBuiltinPasses, type BuiltinPasses } from "./builtinPasses";
 import { holdGpuCore, type GpuCore } from "./device";
 import { FrameTimings } from "./frameTimings";
 import { STAGE_ORDER, TARGET_FORMATS, type GpuFrame, type GpuPass, type GpuRendererApi, type GpuStage, type GpuTarget, type GpuTargets, type GpuViewSpec } from "./frame";
+import { retire } from "./buffers";
 import { GeometryPool } from "./geometryPool";
 import { GpuScene } from "./gpuScene";
 import { MaterialPool } from "./materialPool";
@@ -33,6 +34,12 @@ interface FrameCapture {
   onlyPasses: ReadonlySet<string>;
   finish(encoder: GPUCommandEncoder, targets: GpuTargets): void;
 }
+/**
+ * How many sizes of screen targets are kept. Four editor views can be four sizes in one frame, a probe's capture is one
+ * more, and dragging a window's edge goes through a new size every frame: each set is as much memory as the screen is big.
+ */
+const TARGET_SETS_KEPT = 6;
+/** Frames a size may go undrawn before its targets are given back, however few there are. */
 const TARGETS_KEPT_FRAMES = 240;
 /** Frames a scene may go undrawn before its tables are given back. Every editor view on screen is a frame of its own. */
 const SCENE_KEPT_FRAMES = 1200;
@@ -345,19 +352,32 @@ export class GpuRenderer implements GpuRendererApi {
     const set = this.targetSets.get(key);
     if (!set) return;
     const { targets } = set;
-    for (const target of [targets.albedo, targets.normal, targets.emissive, targets.motion, targets.depth, targets.hdr]) target.texture.destroy();
+    for (const target of [targets.albedo, targets.normal, targets.emissive, targets.motion, targets.depth, targets.hdr]) retire(target.texture);
     this.targetSets.delete(key);
   }
 
   private ensureTargets(width: number, height: number, frame: number): GpuTargets {
     const key = `${width}x${height}`;
+    for (const [other, set] of this.targetSets) {
+      if (other !== key && frame - set.lastUsed > TARGETS_KEPT_FRAMES) this.destroyTargetSet(other);
+    }
     const existing = this.targetSets.get(key);
     if (existing) {
       existing.lastUsed = frame;
       return existing.targets;
     }
-    // A size unused for a while is a window that was resized; its memory goes back.
-    for (const [other, set] of this.targetSets) if (frame - set.lastUsed > TARGETS_KEPT_FRAMES) this.destroyTargetSet(other);
+    // The size unused the longest goes first; its memory comes back as a window is being resized.
+    while (this.targetSets.size >= TARGET_SETS_KEPT) {
+      let oldest = "";
+      let oldestUsed = Infinity;
+      for (const [other, set] of this.targetSets) {
+        if (set.lastUsed < oldestUsed) {
+          oldest = other;
+          oldestUsed = set.lastUsed;
+        }
+      }
+      this.destroyTargetSet(oldest);
+    }
     const targets: GpuTargets = {
       width,
       height,
@@ -377,12 +397,12 @@ export class GpuRenderer implements GpuRendererApi {
     const canvas = this.domElement;
     const rect = this.scissorTest ? this.scissor : this.viewport;
     const ratio = this.pixelRatio;
-    const left = Math.max(0, Math.floor(rect.x * ratio));
+    const left = Math.min(canvas.width - 1, Math.max(0, Math.floor(rect.x * ratio)));
     const width = Math.max(1, Math.min(canvas.width - left, Math.floor(rect.z * ratio)));
-    const height = Math.max(1, Math.min(canvas.height, Math.floor(rect.w * ratio)));
-    // three.js measures y from the bottom of the canvas.
-    const top = Math.max(0, canvas.height - Math.floor(rect.y * ratio) - height);
-    return { x: left, y: top, width, height };
+    const wanted = Math.max(1, Math.min(canvas.height, Math.floor(rect.w * ratio)));
+    // three.js measures y from the bottom of the canvas. A view set up before the canvas last changed size may not fit it.
+    const top = Math.min(canvas.height - 1, Math.max(0, canvas.height - Math.floor(rect.y * ratio) - wanted));
+    return { x: left, y: top, width, height: Math.min(wanted, canvas.height - top) };
   }
 
   /** Fills one view's uniform slice and returns its dynamic offset. Depth is reversed here, for everything. */
