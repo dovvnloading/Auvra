@@ -243,6 +243,7 @@ export class GpuScene {
   private readonly levelQueue: DrawGroup[] = [];
   private renderer: unknown = null;
   private camera: THREE.Camera | null = null;
+  private viewer: THREE.Camera | null = null;
   private scene: THREE.Scene | null = null;
   private readonly brokenCallbacks = new WeakSet<THREE.Object3D>();
   private readonly refused = new WeakMap<THREE.Object3D, number>();
@@ -287,11 +288,13 @@ export class GpuScene {
   /**
    * Walks the scene: rows for what is new or moved, lights gathered, and what went away forgotten. The scene's own and
    * each object's `onBeforeRender` run here, once a frame, as three's renderer would run them; objects' are only run
-   * given a `camera`, since that is what they look at.
+   * given a `camera`, since that is what they look at. `viewer` is who the frame is for: a light it cannot see does not
+   * light its picture, and a level-of-detail object chooses by its distance, as three's renderer has it.
    */
-  extract(scene: THREE.Scene, frame: number, renderer?: unknown, camera?: THREE.Camera): void {
+  extract(scene: THREE.Scene, frame: number, renderer?: unknown, camera?: THREE.Camera, viewer?: THREE.Camera): void {
     this.renderer = renderer ?? null;
     this.camera = camera ?? null;
+    this.viewer = viewer ?? null;
     this.scene = scene;
     this.directional.length = 0;
     this.local.length = 0;
@@ -350,7 +353,9 @@ export class GpuScene {
     if (mesh.isMesh || isLine(object) || isPoints(object) || isSprite(object)) {
       if (mesh.geometry && mesh.material) this.visit(mesh, frame);
     } else if ((object as THREE.Light).isLight) {
-      this.gatherLight(object as THREE.Light);
+      if (!this.viewer || object.layers.test(this.viewer.layers)) this.gatherLight(object as THREE.Light);
+    } else if ((object as THREE.LOD).isLOD && (object as THREE.LOD).autoUpdate && this.viewer) {
+      (object as THREE.LOD).update(this.viewer);
     }
     const { children } = object;
     for (let index = 0; index < children.length; index++) this.walk(children[index], frame);

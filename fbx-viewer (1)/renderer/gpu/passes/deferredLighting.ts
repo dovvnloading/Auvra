@@ -80,7 +80,7 @@ fn lightPixels(@builtin(global_invocation_id) id: vec3u) {
   let world = reached.xyz / reached.w;
 
   let emissive = textureLoad(surfaceEmissive, at, 0);
-  if (emissive.a > 0.75) {
+  if (emissive.a > 0.875) {
     textureStore(litTarget, at, vec4f(lightingApplyFog(emissive.rgb, world), 1.0));
     return;
   }
@@ -95,7 +95,8 @@ fn lightPixels(@builtin(global_invocation_id) id: vec3u) {
   );
   var input = lightingInput(world, decodeOctahedral(packed.xy), toEye, albedo.rgb, packed.z, packed.w, vec2f(id.xy) + 0.5);
   input.occlusion = albedo.a * loadScreenInput(screenOcclusion, uv).r;
-  input.hasBakedLight = emissive.a > 0.25;
+  input.hasBakedLight = emissive.a > 0.375;
+  input.receivesShadow = fract(emissive.a * 2.0) < 0.25;
   if (deferred.hasIndirect != 0u && !input.hasBakedLight) {
     input.indirectIrradiance = loadScreenInput(screenIndirect, uv).rgb;
     input.hasIndirect = true;

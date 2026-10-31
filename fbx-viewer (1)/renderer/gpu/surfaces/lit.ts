@@ -25,12 +25,17 @@ import { INSTANCE_INVERSE_WGSL, STIPPLE_WGSL, worldBindEntries, worldLayoutEntri
  *   buffer to show, is stippled away by what lets light through, and the temporal resolve smooths that into glass.
  * Index of refraction, specular tint, iridescence and anisotropy change the lobe itself, which the surface buffer does
  * not hold.
+ *
+ * Drawn in the forward pass, a physical material has all its maps and all the frame's lighting in one shader, three
+ * pictures more than the sixteen every card promises. On a card with no more than that it goes by its numbers alone.
  */
 
 const STANDARD_TEXTURES = 8;
 const PHYSICAL_TEXTURES = 3;
+/** How many pictures a forward shader needs with a physical material's maps in it: those, the world's and the lighting's. */
+const FORWARD_PHYSICAL_PICTURES = 19;
 
-const PHYSICAL_WGSL = /* wgsl */ `
+const PHYSICAL_MAPS_WGSL = /* wgsl */ `
 @group(2) @binding(${1 + STANDARD_TEXTURES * 2}) var clearcoatTexture: texture_2d<f32>;
 @group(2) @binding(${2 + STANDARD_TEXTURES * 2}) var clearcoatSampler: sampler;
 @group(2) @binding(${3 + STANDARD_TEXTURES * 2}) var sheenTexture: texture_2d<f32>;
@@ -38,12 +43,27 @@ const PHYSICAL_WGSL = /* wgsl */ `
 @group(2) @binding(${5 + STANDARD_TEXTURES * 2}) var transmissionTexture: texture_2d<f32>;
 @group(2) @binding(${6 + STANDARD_TEXTURES * 2}) var transmissionSampler: sampler;
 
+fn physicalTexels(in: SurfaceIn) -> mat3x3f {
+  let uv = mapUv(in, 0u);
+  return mat3x3f(
+    vec3f(textureSample(clearcoatTexture, clearcoatSampler, uv).r),
+    textureSample(sheenTexture, sheenSampler, uv).rgb,
+    vec3f(textureSample(transmissionTexture, transmissionSampler, uv).r),
+  );
+}
+`;
+
+const PHYSICAL_NO_MAPS_WGSL = /* wgsl */ `
+fn physicalTexels(in: SurfaceIn) -> mat3x3f { return mat3x3f(vec3f(1.0), vec3f(1.0), vec3f(1.0)); }
+`;
+
+const PHYSICAL_WGSL = /* wgsl */ `
 fn applyPhysical(in: SurfaceIn, plain: SurfaceOut) -> SurfaceOut {
   var out = plain;
-  let uv = mapUv(in, 0u);
-  let coatTexel = textureSample(clearcoatTexture, clearcoatSampler, uv).r;
-  let sheenTexel = textureSample(sheenTexture, sheenSampler, uv).rgb;
-  let transmissionTexel = textureSample(transmissionTexture, transmissionSampler, uv).r;
+  let texels = physicalTexels(in);
+  let coatTexel = texels[0].x;
+  let sheenTexel = texels[1];
+  let transmissionTexel = texels[2].x;
   let facing = clamp(dot(out.normal, in.viewDirection), 0.0, 1.0);
   let edge = pow(1.0 - facing, 5.0);
   let reflected = 0.04 + 0.96 * edge;
@@ -76,13 +96,13 @@ fn displace(local: vec3f, normal: vec3f, instance: Instance, time: f32) -> vec3f
 }
 `;
 
-const litWgsl = (physical: boolean, sways: boolean, worldBinding: number): string => /* wgsl */ `
+const litWgsl = (physical: boolean, maps: boolean, sways: boolean, worldBinding: number): string => /* wgsl */ `
 ${STANDARD_BODY_WGSL}
 ${worldWgsl(worldBinding)}
 ${STIPPLE_WGSL}
 ${WEATHER_WGSL}
 ${BAKED_VOLUME_WGSL}
-${physical ? PHYSICAL_WGSL : ""}
+${physical ? `${maps ? PHYSICAL_MAPS_WGSL : PHYSICAL_NO_MAPS_WGSL}${PHYSICAL_WGSL}` : ""}
 ${sways ? `${INSTANCE_INVERSE_WGSL}${WIND_WGSL}${SWAY_WGSL}` : ""}
 fn surface(in: SurfaceIn) -> SurfaceOut {
   var out = standardSurface(in);
@@ -130,18 +150,18 @@ const packLit = (physical: boolean, sways: boolean): SurfaceKind["pack"] => (mat
   }
 };
 
-const litKind = (physical: boolean, sways: boolean): SurfaceKind => {
-  const textures = STANDARD_TEXTURES + (physical ? PHYSICAL_TEXTURES : 0);
+const litKind = (physical: boolean, sways: boolean, maps = physical): SurfaceKind => {
+  const textures = STANDARD_TEXTURES + (maps ? PHYSICAL_TEXTURES : 0);
   const worldBinding = 1 + textures * 2;
   return {
-    id: `lit${physical ? "+physical" : ""}${sways ? "+wind" : ""}`,
-    wgsl: litWgsl(physical, sways, worldBinding),
+    id: `lit${physical ? "+physical" : ""}${physical && !maps ? "-maps" : ""}${sways ? "+wind" : ""}`,
+    wgsl: litWgsl(physical, maps, sways, worldBinding),
     displaces: sways,
     layoutEntries: () => [...textureLayoutEntries(textures), ...worldLayoutEntries(worldBinding)],
-    textures: physical ? physicalMaps : standardMaps,
+    textures: maps ? physicalMaps : standardMaps,
     bindGroupEntries: (input) => {
       const { white } = input.pool;
-      const fallbacks = physical ? [...standardFallbacks(input.pool), white, white, white] : standardFallbacks(input.pool);
+      const fallbacks = maps ? [...standardFallbacks(input.pool), white, white, white] : standardFallbacks(input.pool);
       return [...textureBindEntries(input, fallbacks), ...worldBindEntries(input.pool, worldBinding)];
     },
     pack: packLit(physical, sways),
@@ -152,8 +172,19 @@ export const LIT_SURFACE = litKind(false, false);
 export const LIT_WIND_SURFACE = litKind(false, true);
 export const LIT_PHYSICAL_SURFACE = litKind(true, false);
 export const LIT_PHYSICAL_WIND_SURFACE = litKind(true, true);
+const LIT_PHYSICAL_NO_MAPS_SURFACE = litKind(true, false, false);
+const LIT_PHYSICAL_NO_MAPS_WIND_SURFACE = litKind(true, true, false);
 
-export const LIT_SURFACES: readonly SurfaceKind[] = [LIT_SURFACE, LIT_WIND_SURFACE, LIT_PHYSICAL_SURFACE, LIT_PHYSICAL_WIND_SURFACE];
+export const LIT_SURFACES: readonly SurfaceKind[] = [
+  LIT_SURFACE, LIT_WIND_SURFACE, LIT_PHYSICAL_SURFACE, LIT_PHYSICAL_WIND_SURFACE, LIT_PHYSICAL_NO_MAPS_SURFACE, LIT_PHYSICAL_NO_MAPS_WIND_SURFACE,
+];
+
+let forwardHoldsPhysicalMaps = true;
+
+/** Says how many pictures one shader may read on this device. */
+export const setPicturesPerShader = (pictures: number): void => {
+  forwardHoldsPhysicalMaps = pictures >= FORWARD_PHYSICAL_PICTURES;
+};
 
 /** The materials three lights, and so the materials the baked light and the weather reach. */
 export const isLitMaterial = (material: THREE.Material): boolean => {
@@ -165,6 +196,7 @@ export const litSurfaceFor = (material: THREE.Material): SurfaceKind => {
   const m = material as LitMaterial;
   const physical = m.isMeshPhysicalMaterial === true && (m.clearcoat > 0 || m.sheen > 0 || m.transmission > 0);
   const sways = swayOf(material) !== null;
+  if (physical && !forwardHoldsPhysicalMaps && (material.transparent || !material.toneMapped || m.wireframe)) return sways ? LIT_PHYSICAL_NO_MAPS_WIND_SURFACE : LIT_PHYSICAL_NO_MAPS_SURFACE;
   if (physical) return sways ? LIT_PHYSICAL_WIND_SURFACE : LIT_PHYSICAL_SURFACE;
   return sways ? LIT_WIND_SURFACE : LIT_SURFACE;
 };

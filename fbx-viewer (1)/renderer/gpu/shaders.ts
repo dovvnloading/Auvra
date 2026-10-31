@@ -207,6 +207,7 @@ struct SurfaceVarying {
   @location(5) instanceColor: vec4f,
   @location(6) motionNow: vec4f,
   @location(7) motionThen: vec4f,
+  @location(8) @interpolate(flat) flags: u32,
 }
 
 fn surfaceVarying(draw: DrawIn) -> SurfaceVarying {
@@ -231,6 +232,7 @@ fn surfaceVarying(draw: DrawIn) -> SurfaceVarying {
   out.instanceColor = instance.color;
   out.motionNow = view.unjitteredViewProjection * vec4f(world, 1.0);
   out.motionThen = view.previousViewProjection * vec4f(previousWorldOf(instance, previousLocal), 1.0);
+  out.flags = instance.flags;
   return out;
 }
 
@@ -280,15 +282,19 @@ fn encodeOctahedral(n: vec3f) -> vec2f {
   var out: GBuffer;
   out.albedo = vec4f(s.albedo, s.occlusion);
   out.normalRoughnessMetal = vec4f(encodeOctahedral(s.normal), s.roughness, s.metalness);
-  // Alpha: 0 lit, 1 unlit. A surface with baked light carries it here, on top of what it gives off, and says so.
+  // Alpha: 0 lit, 1 unlit. A surface with baked light carries it here, on top of what it gives off, and says so with 0.5.
+  // A quarter more says it takes no shadows.
   var emitted = s.emissive;
   var model = 0.0;
   if (s.unlit) {
     emitted += s.albedo;
     model = 1.0;
-  } else if (s.hasBakedLight) {
-    emitted += s.bakedLight * s.albedo * (1.0 - s.metalness) / 3.14159265;
-    model = 0.5;
+  } else {
+    if (s.hasBakedLight) {
+      emitted += s.bakedLight * s.albedo * (1.0 - s.metalness) / 3.14159265;
+      model = 0.5;
+    }
+    if ((in.flags & INSTANCE_RECEIVES_SHADOW) == 0u) { model += 0.25; }
   }
   out.emissive = vec4f(emitted, model);
   let now = in.motionNow.xy / in.motionNow.w;

@@ -5,7 +5,7 @@ import { registerSurfaceKind, type MaterialEntry, type MaterialPool } from "../m
 import type { SurfaceKind } from "../surfaces";
 import { graphSurfaceFor, setGraphDevice } from "./graph";
 import { IMPOSTOR_SURFACE, isImpostorMaterial } from "./impostor";
-import { LIT_SURFACES, isLitMaterial, litSurfaceFor } from "./lit";
+import { LIT_SURFACES, isLitMaterial, litSurfaceFor, setPicturesPerShader } from "./lit";
 import { TERRAIN_GROUND_SURFACE, TERRAIN_LAYERS_SURFACE, terrainSurfaceFor } from "./terrain";
 import { WATER_SURFACE, isWaterMaterial } from "./water";
 import { createSurfaceWorldPass, ensureSurfaceWorld } from "./world";
@@ -59,6 +59,7 @@ const followKinds = (pool: MaterialPool): void => {
 /** Everything surfaces need of a renderer. Call it once, as the renderer is made, before anything is drawn. */
 export const installSurfaces = (renderer: GpuRendererApi): void => {
   registerSurfaceKinds();
+  setPicturesPerShader(renderer.core.device.limits.maxSampledTexturesPerShaderStage);
   setGraphDevice(renderer.core.device);
   ensureSurfaceWorld(renderer.core.device, renderer.textures);
   followKinds(renderer.materials);

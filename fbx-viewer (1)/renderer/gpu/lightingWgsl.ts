@@ -6,7 +6,7 @@ import type { GpuFrame } from "./frame";
 import type { ShadowMapsProduct } from "./passes/shadows";
 import { reportGpu } from "./report";
 import { MAX_PROBES, type ProbesProduct } from "./probes";
-import type { SkyFogProduct } from "./sky/skySettings";
+import type { CloudShadowProduct, SkyFogProduct, SkyVisibilityProduct } from "./sky/skySettings";
 
 /**
  * LIGHTING
@@ -31,6 +31,8 @@ import type { SkyFogProduct } from "./sky/skySettings";
  * Products read here:
  *   "environment" = `EnvironmentProduct`, image-based light.
  *   "shadowMaps"  = `ShadowMapsProduct` (passes/shadows.ts), the sun's cascades and the local lights' atlas.
+ *   "cloudShadow" = `CloudShadowProduct`, how the clouds overhead shade the sun.
+ *   "skyVisibility" = `SkyVisibilityProduct`, how much of the sky each place can see.
  */
 
 export const LIGHTING_GROUP = 3;
@@ -43,7 +45,7 @@ export const SHADOW_TAPS = 16;
 const BITS_PER_WORD = 32;
 const MAX_WORDS_PER_CLUSTER = Math.ceil(MAX_LOCAL_LIGHTS / BITS_PER_WORD);
 const LOCAL_LIGHT_WORDS = 24;
-const UNIFORM_WORDS = 304;
+const UNIFORM_WORDS = 320;
 const CASCADES = 4;
 const POINT_LIGHT_CONE = -2;
 const NOISE_FRAMES = 64;
@@ -150,6 +152,14 @@ struct LightingUniforms {
   // Where each reflection probe is and how far it reaches, then its strength.
   probeSpheres: array<vec4f, ${MAX_PROBES}>,
   probeIntensities: array<vec4f, ${MAX_PROBES}>,
+  // The clouds' weather map: tiles per metre, its drift, and the amount under which there is no cloud.
+  cloudMap: vec4f,
+  // How the sun's rays lean per metre of height, the clouds' height, how dark their shadow (0: none).
+  cloudSun: vec4f,
+  // The sky visibility map: its corner in the world's x and z, 1 / its side, the height its heights count from.
+  skyArea: vec4f,
+  // How far covered places lose the sky, the least they keep, the width of a cloud's edge, 1 with the map on.
+  skyLimits: vec4f,
 }
 `;
 
@@ -201,6 +211,9 @@ const LIGHTING_BINDINGS_WGSL = /* wgsl */ `
 @group(${LIGHTING_GROUP}) @binding(10) var lightingSkyView: texture_2d<f32>;
 @group(${LIGHTING_GROUP}) @binding(11) var lightingSkyViewSampler: sampler;
 @group(${LIGHTING_GROUP}) @binding(12) var lightingProbes: texture_cube_array<f32>;
+@group(${LIGHTING_GROUP}) @binding(13) var lightingCloudWeather: texture_2d<f32>;
+@group(${LIGHTING_GROUP}) @binding(14) var lightingCloudSampler: sampler;
+@group(${LIGHTING_GROUP}) @binding(15) var lightingSkySeen: texture_2d<f32>;
 `;
 
 const LIGHTING_FUNCTIONS_WGSL = /* wgsl */ `
@@ -308,6 +321,32 @@ fn lightingSpecularOcclusion(dotNV: f32, occlusion: f32, roughness: f32) -> f32 
   return saturate(pow(dotNV + occlusion, exp2(-16.0 * roughness - 1.0)) - 1.0 + occlusion);
 }
 
+// How much of the sky a point can see: over the top of what stands there, or from under it by how open the place around
+// is. A wall is read a little out from itself, where the map shows the ground it stands on and not its own top.
+fn lightingSkyVisibility(point: vec3f, normal: vec3f) -> f32 {
+  if (lighting.skyLimits.w <= 0.0) { return 1.0; }
+  let area = lighting.skyArea;
+  let uv = (point.xz + normal.xz * 3.0 / (512.0 * area.z) - area.xy) * area.z;
+  let inside = min(uv, vec2f(1.0) - uv);
+  let fade = smoothstep(0.0, 0.08, min(inside.x, inside.y));
+  if (fade <= 0.0) { return 1.0; }
+  let sampled = textureSampleLevel(lightingSkySeen, lightingEnvironmentSampler, clamp(uv, vec2f(0.001), vec2f(0.999)), 0.0).rgb;
+  let under = sampled.b - (point.y - area.w);
+  var seen = mix(sampled.r, sampled.g, smoothstep(0.3, 1.4, under));
+  // A wall only ever faced half the sky: it loses less of what it had than the ground does.
+  seen = mix(sqrt(seen), seen, abs(normal.y));
+  return max(mix(1.0, seen, fade * lighting.skyLimits.x), lighting.skyLimits.y);
+}
+
+// How much the clouds overhead let the sun through at a point.
+fn lightingCloudShade(point: vec3f) -> f32 {
+  let strength = lighting.cloudSun.w;
+  if (strength <= 0.0) { return 1.0; }
+  let at = (point.xz + lighting.cloudSun.xy * (lighting.cloudSun.z - point.y)) * lighting.cloudMap.x + lighting.cloudMap.yz;
+  let amount = textureSampleLevel(lightingCloudWeather, lightingCloudSampler, at, 0.0).r;
+  return 1.0 - strength * smoothstep(lighting.cloudMap.w, lighting.cloudMap.w + lighting.skyLimits.z, amount);
+}
+
 // All that does not come straight from a light: ambient, hemisphere, gathered light and the environment.
 fn lightingIndirect(s: LightingInput, m: LightingMaterial) -> vec3f {
   var irradiance = vec3f(0.0);
@@ -323,6 +362,9 @@ fn lightingIndirect(s: LightingInput, m: LightingMaterial) -> vec3f {
       environmentIrradiance = lightingIrradianceSH(m.normal);
     }
   }
+  // What the sky gives a place is only what it can see of the sky. Gathered light has already seen for itself.
+  let skySeen = lightingSkyVisibility(s.worldPosition, m.normal);
+  if (!s.hasIndirect) { environmentIrradiance *= skySeen; }
 
   var radiance = vec3f(0.0);
   // The nearest reflection probe holding this point sees what is really around it, where the sky would not.
@@ -345,7 +387,7 @@ fn lightingIndirect(s: LightingInput, m: LightingMaterial) -> vec3f {
       radiance = textureSampleLevel(lightingProbes, lightingEnvironmentSampler, reflected * vec3f(1.0, 1.0, -1.0), probe, level).rgb * lighting.probeIntensities[probe].x;
     } else {
       let level = m.roughness * (lighting.environmentMips - 1.0);
-      radiance = textureSampleLevel(lightingEnvironment, lightingEnvironmentSampler, reflected, level).rgb;
+      radiance = textureSampleLevel(lightingEnvironment, lightingEnvironmentSampler, reflected, level).rgb * skySeen;
     }
   }
 
@@ -499,7 +541,7 @@ fn lightSurface(s: LightingInput) -> vec3f {
     if (dotNL <= 0.0) { continue; }
     var color = lighting.suns[index].color;
     if (s.receivesShadow && i32(index) == lighting.cascadeSun) {
-      color *= lightingSunShadow(s, lightingViewDepth(s.worldPosition), toLight, dotNL, start);
+      color *= lightingSunShadow(s, lightingViewDepth(s.worldPosition), toLight, dotNL, start) * lightingCloudShade(s.worldPosition);
     }
     result += lightingDirect(m, toLight, dotNL, color);
   }
@@ -587,6 +629,9 @@ export const createLightingLayout = (device: GPUDevice): GPUBindGroupLayout => {
       { binding: 10, visibility, texture: { sampleType: "float", viewDimension: "2d" } },
       { binding: 11, visibility, sampler: { type: "filtering" } },
       { binding: 12, visibility, texture: { sampleType: "float", viewDimension: "cube-array" } },
+      { binding: 13, visibility, texture: { sampleType: "float", viewDimension: "2d" } },
+      { binding: 14, visibility, sampler: { type: "filtering" } },
+      { binding: 15, visibility, texture: { sampleType: "float", viewDimension: "2d" } },
     ],
   });
 };
@@ -658,7 +703,7 @@ export class LightingResources {
     this.fallbackComparison = device.createSampler({ label: "gpu no shadow", compare: "greater" });
     this.environmentSampler = device.createSampler({ label: "gpu environment", magFilter: "linear", minFilter: "linear", mipmapFilter: "linear" });
 
-    this.bindGroup = this.makeBindGroup(this.fallbackEnvironment, this.fallbackCascades, this.fallbackComparison, this.fallbackAtlas, this.fallbackComparison, this.fallbackSkyView, this.environmentSampler, this.fallbackProbes);
+    this.bindGroup = this.makeBindGroup(this.fallbackEnvironment, this.fallbackCascades, this.fallbackComparison, this.fallbackAtlas, this.fallbackComparison, this.fallbackSkyView, this.environmentSampler, this.fallbackProbes, this.fallbackSkyView, this.environmentSampler, this.fallbackSkyView);
     this.product = { layout: this.layout, bindGroup: this.bindGroup, wgsl: LIGHTING_WGSL, resources: this };
   }
 
@@ -870,6 +915,24 @@ export class LightingResources {
       floats.set(probes.spheres, 240);
       floats.set(probes.intensities, 272);
     }
+    const cloud = frame.products.get("cloudShadow") as CloudShadowProduct | undefined;
+    floats[304] = cloud?.tiling ?? 0;
+    floats[305] = cloud?.driftU ?? 0;
+    floats[306] = cloud?.driftV ?? 0;
+    floats[307] = cloud?.threshold ?? 0;
+    floats[308] = cloud?.leanX ?? 0;
+    floats[309] = cloud?.leanZ ?? 0;
+    floats[310] = cloud?.height ?? 0;
+    floats[311] = cloud?.strength ?? 0;
+    const seen = frame.products.get("skyVisibility") as SkyVisibilityProduct | undefined;
+    floats[312] = seen?.cornerX ?? 0;
+    floats[313] = seen?.cornerZ ?? 0;
+    floats[314] = seen?.inverseSide ?? 0;
+    floats[315] = seen?.originY ?? 0;
+    floats[316] = seen?.occlusion ?? 0;
+    floats[317] = seen?.floor ?? 1;
+    floats[318] = cloud?.edge ?? 0;
+    floats[319] = seen ? 1 : 0;
 
     const shadowMaps = frame.products.get("shadowMaps") as ShadowMapsProduct | undefined;
     const cascades = shadowMaps?.cascades ?? null;
@@ -901,19 +964,22 @@ export class LightingResources {
       skyFog?.view ?? this.fallbackSkyView,
       skyFog?.sampler ?? this.environmentSampler,
       probes?.view ?? this.fallbackProbes,
+      cloud?.weather ?? this.fallbackSkyView,
+      cloud?.sampler ?? this.environmentSampler,
+      seen?.view ?? this.fallbackSkyView,
     );
     this.product.bindGroup = next;
   }
 
-  private makeOrReuseBindGroup(environment: GPUTextureView, cascades: GPUTextureView, cascadeSampler: GPUSampler, atlas: GPUTextureView, atlasSampler: GPUSampler, skyView: GPUTextureView, skySampler: GPUSampler, probes: GPUTextureView): GPUBindGroup {
-    const wanted = [environment, cascades, cascadeSampler, atlas, atlasSampler, skyView, skySampler, probes, this.shadowEntries.buffer];
+  private makeOrReuseBindGroup(environment: GPUTextureView, cascades: GPUTextureView, cascadeSampler: GPUSampler, atlas: GPUTextureView, atlasSampler: GPUSampler, skyView: GPUTextureView, skySampler: GPUSampler, probes: GPUTextureView, cloudWeather: GPUTextureView, cloudSampler: GPUSampler, skySeen: GPUTextureView): GPUBindGroup {
+    const wanted = [environment, cascades, cascadeSampler, atlas, atlasSampler, skyView, skySampler, probes, cloudWeather, cloudSampler, skySeen, this.shadowEntries.buffer];
     if (wanted.every((resource, index) => resource === this.bound[index])) return this.bindGroup;
-    this.bindGroup = this.makeBindGroup(environment, cascades, cascadeSampler, atlas, atlasSampler, skyView, skySampler, probes);
+    this.bindGroup = this.makeBindGroup(environment, cascades, cascadeSampler, atlas, atlasSampler, skyView, skySampler, probes, cloudWeather, cloudSampler, skySeen);
     return this.bindGroup;
   }
 
-  private makeBindGroup(environment: GPUTextureView, cascades: GPUTextureView, cascadeSampler: GPUSampler, atlas: GPUTextureView, atlasSampler: GPUSampler, skyView: GPUTextureView, skySampler: GPUSampler, probes: GPUTextureView): GPUBindGroup {
-    this.bound = [environment, cascades, cascadeSampler, atlas, atlasSampler, skyView, skySampler, probes, this.shadowEntries.buffer];
+  private makeBindGroup(environment: GPUTextureView, cascades: GPUTextureView, cascadeSampler: GPUSampler, atlas: GPUTextureView, atlasSampler: GPUSampler, skyView: GPUTextureView, skySampler: GPUSampler, probes: GPUTextureView, cloudWeather: GPUTextureView, cloudSampler: GPUSampler, skySeen: GPUTextureView): GPUBindGroup {
+    this.bound = [environment, cascades, cascadeSampler, atlas, atlasSampler, skyView, skySampler, probes, cloudWeather, cloudSampler, skySeen, this.shadowEntries.buffer];
     return this.device.createBindGroup({
       label: "gpu lighting",
       layout: this.layout,
@@ -931,6 +997,9 @@ export class LightingResources {
         { binding: 10, resource: skyView },
         { binding: 11, resource: skySampler },
         { binding: 12, resource: probes },
+        { binding: 13, resource: cloudWeather },
+        { binding: 14, resource: cloudSampler },
+        { binding: 15, resource: skySeen },
       ],
     });
   }

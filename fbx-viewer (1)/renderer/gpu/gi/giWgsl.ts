@@ -664,7 +664,7 @@ fn composeReflections(in: FullscreenOut) -> @location(0) vec4f {
   let depth = textureLoad(surfaceDepth, at, 0);
   if (depth <= 0.0) { discard; }
   let emissive = textureLoad(surfaceEmissive, at, 0);
-  if (emissive.a > 0.75) { discard; }
+  if (emissive.a > 0.875) { discard; }
   let uv = (vec2f(at) + 0.5) / vec2f(size);
   let world = worldOfPixel(uv, depth);
   let surface = textureLoad(surfaceNormal, at, 0);
@@ -691,7 +691,7 @@ fn composeReflections(in: FullscreenOut) -> @location(0) vec4f {
   }
   var wanted = environment;
   // A surface with baked light took none of the gathered light, and goes by its own.
-  if (emissive.a <= 0.25) {
+  if (emissive.a <= 0.375) {
     let reached = textureLoad(gathered, at, 0);
     let seen = saturate(dot(reached.rgb, vec3f(0.2126, 0.7152, 0.0722)) / max(openness, 1e-3));
     wanted *= mix(1.0, seen, reached.a);

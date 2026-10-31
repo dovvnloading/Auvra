@@ -746,7 +746,7 @@ fn traceRay(reach: f32) -> f32 {
   let depth = textureLoad(depthTexture, pixel, 0);
   let surface = textureLoad(normalTexture, pixel, 0);
   let roughness = surface.z;
-  if (depth <= 0.0 || roughness > 0.75 || textureLoad(emissiveTexture, pixel, 0).a > 0.75) { return; }
+  if (depth <= 0.0 || roughness > 0.75 || textureLoad(emissiveTexture, pixel, 0).a > 0.875) { return; }
   let world = worldAt(uvOfPixel(pixel), depth);
   let normal = decodeNormal(surface.xy);
   // The noise holds still, so that the pattern on a rough surface does not crawl.
@@ -907,7 +907,7 @@ fn specularOcclusion(dotNV: f32, occlusion: f32, roughness: f32) -> f32 {
   if (any(id.xy >= dims)) { return; }
   let depth = textureLoad(depthTexture, id.xy, 0);
   let model = textureLoad(emissiveTexture, id.xy, 0).a;
-  if (depth <= 0.0 || model > 0.75) { return; }
+  if (depth <= 0.0 || model > 0.875) { return; }
   let uv = (vec2f(id.xy) + 0.5) / vec2f(dims);
   let surface = textureLoad(normalTexture, id.xy, 0);
   let albedo = textureLoad(albedoTexture, id.xy, 0);

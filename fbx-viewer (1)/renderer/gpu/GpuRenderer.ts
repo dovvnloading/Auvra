@@ -537,7 +537,7 @@ export class GpuRenderer implements GpuRendererApi {
     kept.lastDrawn = frameNumber;
     this.forgetIdleScenes(frameNumber);
     const gpuScene = kept.gpu;
-    gpuScene.extract(scene, frameNumber);
+    gpuScene.extract(scene, frameNumber, undefined, undefined, camera);
     this.reportUnsupported();
     this.info.memory.geometries = this.geometries.count;
     this.info.memory.textures = this.textures.count;

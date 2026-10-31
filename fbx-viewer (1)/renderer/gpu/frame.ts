@@ -43,7 +43,7 @@ export const TARGET_FORMATS = {
   albedo: "rgba8unorm-srgb",
   /** Octahedral normal, roughness, metalness. */
   normal: "rgba16float",
-  /** Emitted light (and unlit colour); alpha is 0 lit, 0.5 baked light included, 1 unlit. */
+  /** Emitted light (and unlit colour); alpha is 0 lit, 0.5 baked light included, 1 unlit, and a quarter more for no shadows. */
   emissive: "rgba16float",
   /** Screen-space motion: where this pixel was last frame minus where it is, in uv. */
   motion: "rg16float",
