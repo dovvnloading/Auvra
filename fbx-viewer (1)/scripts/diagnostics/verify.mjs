@@ -88,6 +88,7 @@ const EXEMPT = new Map(Object.entries({
   'renderer/gpu/surfaces/bakedVolume.ts': 'hot-loop',
   'renderer/gpu/surfaces/glslToWgsl.ts': 'hot-loop',
   'renderer/gpu/surfaces/graph.ts': 'hot-loop',
+  'renderer/gpu/surfaces/builtinLooks.ts': 'hot-loop',
   'renderer/gpu/surfaces/impostor.ts': 'hot-loop',
   'renderer/gpu/surfaces/index.ts': 'hot-loop',
   'renderer/gpu/surfaces/lit.ts': 'hot-loop',

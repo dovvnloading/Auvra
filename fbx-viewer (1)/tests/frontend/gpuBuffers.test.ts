@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { RangeAllocator, RecordTable } from "../../renderer/gpu/buffers";
+import { GrowableBuffer, RangeAllocator, RecordTable } from "../../renderer/gpu/buffers";
+import { ImagePool } from "../../renderer/gpu/post/postImages";
+
+// What the tests below need of a browser with no WebGPU in it.
+Object.assign(globalThis, {
+  GPUBufferUsage: { STORAGE: 128, COPY_SRC: 4, COPY_DST: 8 },
+  GPUTextureUsage: { TEXTURE_BINDING: 4, STORAGE_BINDING: 8 },
+});
 
 describe("RangeAllocator", () => {
   it("hands out runs one after another", () => {
@@ -56,5 +63,53 @@ describe("RecordTable", () => {
     expect(writes).toEqual([[16, 16, 24]]);
     table.upload(target as never);
     expect(writes.length).toBe(1);
+  });
+});
+
+const fakeDevice = (limits: Partial<GPUSupportedLimits> = {}) => {
+  const destroyed: string[] = [];
+  const stamp = (label: string | undefined) => ({ label, destroy: () => destroyed.push(label ?? ""), createView: () => ({}) });
+  const device = {
+    limits: { maxBufferSize: 1 << 30, maxStorageBufferBindingSize: 1 << 30, ...limits },
+    createBuffer: (descriptor: GPUBufferDescriptor) => stamp(descriptor.label),
+    createTexture: (descriptor: GPUTextureDescriptor) => stamp(descriptor.label),
+    createCommandEncoder: () => ({ copyBufferToBuffer: () => undefined, finish: () => ({}) }),
+    queue: { submit: () => undefined },
+  };
+  return { device: device as unknown as GPUDevice, destroyed };
+};
+
+describe("GrowableBuffer", () => {
+  it("cannot grow a buffer a shader reads whole past what a shader may bind", () => {
+    const { device } = fakeDevice({ maxBufferSize: 1024, maxStorageBufferBindingSize: 256 });
+    const buffer = new GrowableBuffer(device, "table", GPUBufferUsage.STORAGE, 64);
+    expect(() => buffer.ensure(512)).toThrow(RangeError);
+    expect(buffer.ensure(200)).toBe(true);
+    expect(buffer.bytes).toBeLessThanOrEqual(256);
+  });
+
+  it("keeps the old buffer until what is being recorded has been handed over", async () => {
+    const { device, destroyed } = fakeDevice();
+    const buffer = new GrowableBuffer(device, "table", GPUBufferUsage.STORAGE, 64);
+    buffer.ensure(1024);
+    expect(destroyed).toEqual([]);
+    await Promise.resolve();
+    expect(destroyed).toEqual(["table"]);
+  });
+});
+
+describe("ImagePool", () => {
+  it("does not keep a whole stack of pictures for every size a dragged window goes through", async () => {
+    const { device, destroyed } = fakeDevice();
+    const pool = new ImagePool(device);
+    pool.beginFrame(1);
+    for (let width = 100; width < 140; width++) {
+      pool.beginFrame(width);
+      pool.image("history", width, 100);
+    }
+    await Promise.resolve();
+    expect(destroyed.length).toBeGreaterThanOrEqual(24);
+    const kept = pool.image("history", 139, 100);
+    expect(kept.width).toBe(139);
   });
 });

@@ -1,6 +1,6 @@
 /// <reference types="@webgpu/types" />
 import * as THREE from "three";
-import { CLOUD_EDGE, GROUND_RADIUS, TOP_RADIUS } from "../../../runtime/sky/atmosphere";
+import { CLOUD_EDGE } from "../../../runtime/sky/atmosphere";
 import type { GpuCore } from "../device";
 import type { GpuFrame, GpuPass, GpuRendererApi, GpuStage } from "../frame";
 import { CAMERA_BINDINGS_WGSL, VIEW_WGSL } from "../shaders";
@@ -11,7 +11,7 @@ import { NEUTRAL_CAPTURE, SkyCapture } from "./skyCapture";
 import { SkyOverlay } from "./skyOverlay";
 import {
   SKY_PASS_SETTING, SKY_SETTINGS,
-  type CloudShadowProduct, type GpuClassicSky, type GpuSkySettings, type SkyFogProduct, type SkyTransmittanceProduct, type SkyVisibilityProduct,
+  type CloudShadowProduct, type GpuClassicSky, type GpuSkySettings, type SkyFogProduct, type SkyVisibilityProduct,
 } from "./skySettings";
 import { SkyVisibility } from "./skyVisibility";
 
@@ -331,14 +331,6 @@ export class SkyPass implements GpuPass {
     const { tables, clouds, visibility } = this;
     const atmospheric = settings?.model === "atmosphere" && !!tables;
     if (atmospheric && tables && settings) {
-      const transmittance: SkyTransmittanceProduct = {
-        view: tables.transmittance.view,
-        sampler: tables.clampSampler,
-        groundRadius: GROUND_RADIUS,
-        topRadius: TOP_RADIUS,
-        viewRadius: tables.viewRadius,
-      };
-      products.set("skyTransmittance", transmittance);
       const values = settings.scene;
       const fog: SkyFogProduct = {
         view: tables.skyView.view,
@@ -350,7 +342,6 @@ export class SkyPass implements GpuPass {
       };
       products.set("skyFog", fog);
     } else {
-      products.delete("skyTransmittance");
       products.delete("skyFog");
     }
     if (atmospheric && settings && clouds?.weatherReady && settings.scene.cloudStrength > 0) {
