@@ -27,7 +27,7 @@ describe('component registry', () => {
       'rotator', 'mover', 'pointLight', 'spotLight', 'camera', 'collider', 'rigidBody', 'joint', 'navLink', 'navObstacle',
       'spline', 'splineMesh', 'splineScatter', 'followSpline', 'proceduralScatter', 'vehicle', 'destructible', 'cloth', 'windZone', 'windSway', 'springBones', 'particles', 'decal', 'water', 'audioSource',
       'reverbZone', 'musicPlayer',
-      'postProcess', 'reflectionProbe', 'lightBakeVolume', 'lodGroup', 'distanceCull', 'levelStreaming', 'animation', 'lookAtIK', 'footIK', 'twoBoneIK', 'proceduralRig', 'script', 'netSync', 'timeline',
+      'postProcess', 'reflectionProbe', 'lightBakeVolume', 'dynamicGi', 'lodGroup', 'distanceCull', 'levelStreaming', 'animation', 'lookAtIK', 'footIK', 'twoBoneIK', 'proceduralRig', 'script', 'netSync', 'timeline',
       'dialogue', 'pickup', 'abilities',
     ]);
     for (const definition of COMPONENT_DEFINITIONS) {
