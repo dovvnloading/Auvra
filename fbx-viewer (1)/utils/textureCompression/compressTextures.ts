@@ -73,8 +73,10 @@ const rebuildsNormals = new WeakSet<THREE.Material>();
 /**
  * Makes `material` rebuild its normal map's third component from the first two, as a BC5 normal map
  * keeps only those. It gives the same result for a full normal map, so it stays if the map changes.
+ * A copy of the material needs it too: copying leaves a compile hook behind, and the copy would read
+ * a third component the map does not have.
  */
-const rebuildNormalZ = (material: THREE.Material): void => {
+export const rebuildNormalZ = (material: THREE.Material): void => {
     if (rebuildsNormals.has(material)) return;
     rebuildsNormals.add(material);
     const previous = material.onBeforeCompile;
@@ -84,6 +86,12 @@ const rebuildNormalZ = (material: THREE.Material): void => {
     };
     const previousKey = material.customProgramCacheKey.bind(material);
     material.customProgramCacheKey = () => `${previousKey()}|normal-rg`;
+    const previousClone = material.clone.bind(material);
+    material.clone = () => {
+        const copy = previousClone();
+        rebuildNormalZ(copy);
+        return copy;
+    };
     material.needsUpdate = true;
 };
 
