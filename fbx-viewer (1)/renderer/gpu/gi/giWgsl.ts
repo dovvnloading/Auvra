@@ -510,6 +510,7 @@ ${DECODE_NORMAL_WGSL}
 @group(3) @binding(1) var surfaceNormal: texture_2d<f32>;
 @group(3) @binding(2) var screenReflections: texture_2d<f32>;
 @group(3) @binding(3) var reflectionOut: texture_storage_2d<rgba16float, write>;
+@group(3) @binding(4) var<uniform> reflectionTurn: vec4f;
 
 fn noiseAt(pixel: vec2f) -> f32 {
   return fract(52.9829189 * fract(dot(pixel, vec2f(0.06711056, 0.00583715))));
@@ -534,6 +535,8 @@ fn traceReflections(@builtin(global_invocation_id) id: vec3u) {
     textureStore(reflectionOut, id.xy, vec4f(0.0));
     return;
   }
+  // Only the frame's share of the pixels send a ray, a new scatter of them each frame: the rest keep what they last held.
+  if (fract(noiseAt(vec2f(id.xy)) + reflectionTurn.y) >= reflectionTurn.x) { return; }
   let world = worldOfPixel(uv, depth);
   let normal = decodeOctahedral(surface.xy);
   // The noise holds still, so that the pattern on a rough surface does not crawl.

@@ -1,6 +1,7 @@
 /// <reference types="@webgpu/types" />
 import type * as THREE from "three";
 import type { GpuCore } from "./device";
+import type { FrameTimings } from "./frameTimings";
 import type { GeometryPool } from "./geometryPool";
 import type { GpuScene } from "./gpuScene";
 import type { MaterialPool } from "./materialPool";
@@ -151,6 +152,7 @@ export interface GpuRendererApi {
   readonly geometries: GeometryPool;
   readonly materials: MaterialPool;
   readonly textures: TexturePool;
+  readonly timings: FrameTimings;
   /** Called once if this renderer cannot draw on this machine after all, so that the surface can go to another. */
   onGiveUp: ((reason: string) => void) | null;
   addPass(pass: GpuPass): void;

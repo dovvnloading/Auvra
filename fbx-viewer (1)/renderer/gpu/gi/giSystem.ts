@@ -6,6 +6,7 @@ import {
   CASCADE_RATIO,
   GI_CASCADES,
   GI_QUALITY,
+  budgetedPlan,
   MAX_PROBES_PER_FRAME,
   MAX_RAYS_PER_PROBE,
   PROBES_PER_CASCADE,
@@ -14,8 +15,10 @@ import {
   type DynamicGiSettings,
   type ScheduledProbe,
 } from "../../../runtime/lighting/dynamicGi/probeGrid";
+import { FramePressure, RayBudget } from "../../../runtime/raytracing/rayBudget";
 import type { RayFilter } from "../../../runtime/raytracing/rayScene";
 import type { GpuFrame, GpuPass } from "../frame";
+import type { FrameTimings } from "../frameTimings";
 import type { LightingProduct } from "../lightingWgsl";
 import type { SkyEnvironmentProduct } from "../sky/skySettings";
 import type { GiProbesProduct, GiProduct } from "./giScreen";
@@ -88,6 +91,16 @@ const ORTHOGRAPHIC_PATIENCE = 30;
 const CLEAR_CAPACITY = GI_CASCADES * PROBES_PER_CASCADE;
 /** Frames per second are smoothed so a hitch does not lurch the light. */
 const FPS_SMOOTHING = 0.05;
+/** The most of the frame's GPU time limit the probes may take: reflections have what they leave. */
+const GATHER_PART = 0.5;
+/** Reflection rays a frame sends at the most, whatever the clock says: a limit a very large window cannot pass, and the only one on the first frames. */
+const MAX_REFLECTION_RAYS = 1 << 20;
+/** A pixel keeps its reflection until its next turn: with turns further apart than this it trails behind a moving camera, and the screen's alone looks better. */
+const LEAST_REFLECTION_SHARE = 1 / 8;
+/** Moves each pixel's turn along each frame: the golden ratio spreads them evenly over any number of frames. */
+const GOLDEN_STEP = 0.61803399;
+const GATHER_SPAN = "gi gather";
+const REFLECTION_SPAN = "gi reflections";
 const COMPUTE = GPUShaderStage.COMPUTE;
 
 const read = (binding: number): GPUBindGroupLayoutEntry => ({ binding, visibility: COMPUTE, buffer: { type: "read-only-storage" } });
@@ -153,8 +166,14 @@ export class GpuGi {
   private gatheredTick = -1;
   private perspectiveTick = -1000;
   private disposed = false;
+  private rayLimit = 0;
+  private readonly gatherBudget = new RayBudget();
+  readonly reflectionBudget = new RayBudget(LEAST_REFLECTION_SHARE);
+  private readonly pressure = new FramePressure();
 
-  constructor(private readonly device: GPUDevice) {
+  constructor(private readonly device: GPUDevice, readonly timings: FrameTimings) {
+    timings.onSpan(GATHER_SPAN, (ms, share) => this.gatherBudget.noteSpent(ms, share));
+    timings.onSpan(REFLECTION_SPAN, (ms, share) => this.reflectionBudget.noteSpent(ms, share));
     this.rayScene = new GpuRayScene(device);
     this.lighting = new GiLighting(device);
     this.means = new TextureMeans(device, () => this.rayScene.lookAgain());
@@ -224,7 +243,24 @@ export class GpuGi {
       traceReady: this.tracePipeline !== null,
       waiting: this.cascades.reduce((sum, cascade) => sum + cascade.pending, 0),
       frame: this.frameCount,
+      budget: {
+        timed: this.timings.timed,
+        limitMs: this.rayLimit * this.pressure.value,
+        pressure: this.pressure.value,
+        gather: { share: this.gatherBudget.share, ms: this.gatherBudget.spentMs },
+        reflections: { share: this.reflectionBudget.affordable ? this.reflectionBudget.share : 0, ms: this.reflectionBudget.affordable ? this.reflectionBudget.spentMs : 0 },
+      },
     };
+  }
+
+  /** Takes in what the card's clock and the time between frames say, and sets how much of its work the coming frame does. */
+  private settleBudgets(rayLimit: number, delta: number): void {
+    this.pressure.noteFrame(delta * 1000);
+    this.rayLimit = rayLimit;
+    const limit = rayLimit * this.pressure.value;
+    const forGather = limit * GATHER_PART;
+    this.gatherBudget.settle(forGather, this.pressure.value);
+    this.reflectionBudget.settle(limit - Math.min(this.gatherBudget.spentMs, forGather), this.pressure.value);
   }
 
   /** Whether rays can be traced yet: reflections wait for the probes, which light what they meet. */
@@ -248,6 +284,7 @@ export class GpuGi {
     this.rayScene.update(frame.scene, run.include, this.means.mean, posedLookupOf(frame));
 
     const { settings } = run;
+    this.settleBudgets(settings.rayLimit, frame.delta);
     frame.camera.getWorldPosition(_position);
     const cleared = this.placeCascades(settings.spacing, _position);
     const environment = frame.products.get("environment") as SkyEnvironmentProduct | undefined;
@@ -299,7 +336,8 @@ export class GpuGi {
 
   private trace(frame: GpuFrame, settings: DynamicGiSettings, pipeline: GPUComputePipeline, environment: SkyEnvironmentProduct | undefined): void {
     const { device, encoder } = frame;
-    const plan = GI_QUALITY[settings.quality];
+    const share = this.gatherBudget.share;
+    const plan = budgetedPlan(GI_QUALITY[settings.quality], share);
     const rayCount = Math.min(plan.rays, MAX_RAYS_PER_PROBE);
     const { scheduled } = this;
     scheduled.length = 0;
@@ -335,7 +373,8 @@ export class GpuGi {
     device.queue.writeBuffer(this.gatherParams, 0, paramsData);
 
     // Each step its own pass: what one writes the next reads, and a pass tracks what is bound as one.
-    const tracing = encoder.beginComputePass({ label: "gi trace" });
+    const span = this.timings.span(GATHER_SPAN, share);
+    const tracing = encoder.beginComputePass({ label: "gi trace", timestampWrites: span.first });
     tracing.setPipeline(pipeline);
     tracing.setBindGroup(0, this.lighting.bindGroup(this.atlasView, this.lighting.environmentView(environment)));
     tracing.setBindGroup(1, this.rayScene.bindGroup());
@@ -353,7 +392,7 @@ export class GpuGi {
     integrating.dispatchWorkgroups(Math.ceil(count / 16));
     integrating.end();
 
-    const storing = encoder.beginComputePass({ label: "gi store" });
+    const storing = encoder.beginComputePass({ label: "gi store", timestampWrites: span.last });
     storing.setPipeline(this.storeProbes);
     storing.setBindGroup(0, this.storeGroup);
     storing.dispatchWorkgroups(1, 1, count);
@@ -372,6 +411,8 @@ export class GpuGi {
 
   destroy(): void {
     this.disposed = true;
+    this.timings.onSpan(GATHER_SPAN, null);
+    this.timings.onSpan(REFLECTION_SPAN, null);
     this.rayScene.destroy();
     this.lighting.destroy();
     this.means.destroy();
@@ -414,8 +455,11 @@ class GiReflectionPass implements GpuPass {
   private groups: { trace: GPUBindGroup; smooth: GPUBindGroup; views: GPUTextureView[] } | null = null;
   private products: GpuFrame["products"] | null = null;
   private disposed = false;
+  private readonly turnData = new Float32Array(4);
+  private readonly turn: GPUBuffer;
 
   constructor(private readonly device: GPUDevice, private readonly gi: GpuGi, private readonly run: GiRun) {
+    this.turn = device.createBuffer({ label: "gi reflection turn", size: this.turnData.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const unfiltered: GPUTextureBindingLayout = { sampleType: "unfilterable-float" };
     const depth: GPUTextureBindingLayout = { sampleType: "depth" };
     this.inputLayout = device.createBindGroupLayout({
@@ -425,6 +469,7 @@ class GiReflectionPass implements GpuPass {
         { binding: 1, visibility: COMPUTE, texture: unfiltered },
         { binding: 2, visibility: COMPUTE, texture: unfiltered },
         atlasWrite(3),
+        uniform(4),
       ],
     });
     this.smoothLayout = device.createBindGroupLayout({
@@ -478,7 +523,7 @@ class GiReflectionPass implements GpuPass {
 
   execute(frame: GpuFrame): void {
     this.products = frame.products;
-    if (!this.run.reflections) {
+    if (!this.run.reflections || !this.gi.reflectionBudget.affordable) {
       frame.products.delete("rayReflections");
       return;
     }
@@ -497,7 +542,10 @@ class GiReflectionPass implements GpuPass {
         trace: this.device.createBindGroup({
           label: "gi reflection rays",
           layout: this.inputLayout,
-          entries: [targets.depth.view, targets.normal.view, screen, images.rawView].map((resource, binding) => ({ binding, resource })),
+          entries: [
+            ...[targets.depth.view, targets.normal.view, screen, images.rawView].map((resource, binding) => ({ binding, resource })),
+            { binding: 4, resource: { buffer: this.turn } },
+          ],
         }),
         smooth: this.device.createBindGroup({
           label: "gi reflection smooth",
@@ -508,7 +556,12 @@ class GiReflectionPass implements GpuPass {
     }
     const environment = frame.products.get("environment") as SkyEnvironmentProduct | undefined;
     const { lighting } = this.gi;
-    const tracing = frame.encoder.beginComputePass({ label: "gi reflection rays" });
+    const share = Math.min(this.gi.reflectionBudget.share, MAX_REFLECTION_RAYS / (images.width * images.height));
+    this.turnData[0] = share;
+    this.turnData[1] = (frame.frameNumber * GOLDEN_STEP) % 1;
+    this.device.queue.writeBuffer(this.turn, 0, this.turnData);
+    const span = this.gi.timings.span(REFLECTION_SPAN, share);
+    const tracing = frame.encoder.beginComputePass({ label: "gi reflection rays", timestampWrites: span.first });
     tracing.setPipeline(this.tracePipeline);
     tracing.setBindGroup(0, frame.cameraBindGroup, [frame.mainViewOffset]);
     tracing.setBindGroup(1, lighting.bindGroup(this.gi.atlasView, lighting.environmentView(environment)));
@@ -516,7 +569,7 @@ class GiReflectionPass implements GpuPass {
     tracing.setBindGroup(3, this.groups.trace);
     tracing.dispatchWorkgroups(Math.ceil(images.width / 8), Math.ceil(images.height / 8));
     tracing.end();
-    const smoothing = frame.encoder.beginComputePass({ label: "gi reflection smooth" });
+    const smoothing = frame.encoder.beginComputePass({ label: "gi reflection smooth", timestampWrites: span.last });
     smoothing.setPipeline(this.smoothPipeline);
     smoothing.setBindGroup(0, this.groups.smooth);
     smoothing.dispatchWorkgroups(Math.ceil(images.width / 8), Math.ceil(images.height / 8));
@@ -530,6 +583,7 @@ class GiReflectionPass implements GpuPass {
     this.products = null;
     this.images?.raw.destroy();
     this.images?.smooth.destroy();
+    this.turn.destroy();
   }
 }
 

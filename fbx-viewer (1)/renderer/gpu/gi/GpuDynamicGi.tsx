@@ -38,7 +38,7 @@ const acquire = (renderer: GpuRendererApi, settings: DynamicGiSettings, include:
   const existing = shared.get(renderer);
   if (existing) return existing;
   const { device } = renderer.core;
-  const gi = new GpuGi(device);
+  const gi = new GpuGi(device, renderer.timings);
   const run: GiRun = { settings, include, reflections: false, tick: 0 };
   const passes = createGiPasses(device, gi, run);
   for (const pass of passes) renderer.addPass(pass);
