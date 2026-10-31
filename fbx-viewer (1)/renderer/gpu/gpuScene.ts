@@ -32,6 +32,8 @@ const MIN_GROUP_CAPACITY = 8;
 const FORGET_AFTER = 120;
 /** Frames before an object nothing can draw yet is looked at again. */
 const RETRY_AFTER = 30;
+/** Frames before an object that failed outright is tried again. */
+const REFUSED_FOR = 600;
 /** Milliseconds a frame may spend making detail levels; the rest wait for later frames and draw in full meanwhile. */
 const LEVEL_BUDGET_MS = 2;
 
@@ -241,6 +243,7 @@ export class GpuScene {
   private camera: THREE.Camera | null = null;
   private scene: THREE.Scene | null = null;
   private readonly brokenCallbacks = new WeakSet<THREE.Object3D>();
+  private readonly refused = new WeakMap<THREE.Object3D, number>();
 
   constructor(
     private readonly device: GPUDevice,
@@ -360,7 +363,21 @@ export class GpuScene {
     return !!instanced.isInstancedMesh && instanced.instanceMatrix.count !== record.parts[0].count;
   }
 
+  /** One object that cannot be made sense of is left out of the picture, and named once. Nothing else goes with it. */
   private visit(mesh: THREE.Mesh, frame: number): void {
+    const held = this.refused.get(mesh);
+    if (held !== undefined && frame < held) return;
+    try {
+      this.draw(mesh, frame);
+    } catch (error) {
+      this.refused.set(mesh, frame + REFUSED_FOR);
+      reportGpu(`[gpu] "${mesh.name || mesh.type}" could not be drawn:`, error);
+      const record = this.records.get(mesh);
+      if (record) this.forget(record);
+    }
+  }
+
+  private draw(mesh: THREE.Mesh, frame: number): void {
     let record = this.records.get(mesh);
     if (record && this.stale(record, mesh, frame)) {
       this.forget(record);
@@ -522,18 +539,24 @@ export class GpuScene {
     };
 
     const materials = mesh.material;
-    if (Array.isArray(materials)) {
-      const { groups } = mesh.geometry;
-      if (groups.length) {
-        groups.forEach((part, index) => {
-          const material = materials[part.materialIndex ?? 0];
-          if (material) add(material, part.start, part.count, index, true);
-        });
-      } else if (materials[0]) {
-        add(materials[0], 0, Infinity, 0, true);
+    try {
+      if (Array.isArray(materials)) {
+        const { groups } = mesh.geometry;
+        if (groups.length) {
+          groups.forEach((part, index) => {
+            const material = materials[part.materialIndex ?? 0];
+            if (material) add(material, part.start, part.count, index, true);
+          });
+        } else if (materials[0]) {
+          add(materials[0], 0, Infinity, 0, true);
+        }
+      } else {
+        add(materials, 0, Infinity, 0, false);
       }
-    } else {
-      add(materials, 0, Infinity, 0, false);
+    } catch (error) {
+      // Part way through: what the parts made so far took is given back.
+      this.giveBack(record);
+      throw error;
     }
     this.instances.ensure(this.allocator.end);
     return record;
@@ -839,10 +862,11 @@ export class GpuScene {
     }
   }
 
-  private forget(record: ObjectRecord): void {
+  /** What an object's parts hold in the tables. */
+  private giveBack(record: ObjectRecord): void {
     for (let index = 0; index < record.parts.length; index++) {
       const part = record.parts[index];
-      this.hideRows(part);
+      if (part.firstInstance + part.count <= this.instances.capacity) this.hideRows(part);
       this.allocator.release(part.firstInstance, part.count);
       part.group.instances -= part.count;
       if (part.group.instances <= 0) {
@@ -850,7 +874,13 @@ export class GpuScene {
         this.layoutDirty = true;
       }
     }
+    record.parts.length = 0;
     if (record.posed) this.geometries.releasePosed(record.posed.vertexBase, record.posed.previousBase, record.posed.vertexCount);
+    record.posed = null;
+  }
+
+  private forget(record: ObjectRecord): void {
+    this.giveBack(record);
     const list = this.recordList;
     const last = list.pop() as ObjectRecord;
     if (last !== record) {

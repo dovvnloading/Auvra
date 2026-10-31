@@ -151,6 +151,8 @@ export interface GpuRendererApi {
   readonly geometries: GeometryPool;
   readonly materials: MaterialPool;
   readonly textures: TexturePool;
+  /** Called once if this renderer cannot draw on this machine after all, so that the surface can go to another. */
+  onGiveUp: ((reason: string) => void) | null;
   addPass(pass: GpuPass): void;
   removePass(pass: GpuPass): void;
   /** Named settings level components hand to passes: sky, post stack, GI and so on. */

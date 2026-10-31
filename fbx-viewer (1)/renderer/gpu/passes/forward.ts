@@ -9,6 +9,7 @@ import type { GpuScene } from "../gpuScene";
 import type { LightingProduct } from "../lightingWgsl";
 import type { MaterialEntry } from "../materialPool";
 import { FULLSCREEN_WGSL, INSTANCE_FLAG, INSTANCE_WORDS, forwardHead } from "../shaders";
+import { reportGpu } from "../report";
 import { STANDARD_SURFACE, type SurfaceKind } from "../surfaces";
 
 /**
@@ -374,6 +375,8 @@ export class ForwardPipelines {
   readonly quadLayout: GPUBindGroupLayout;
   private readonly modules = new Map<string, GPUShaderModule>();
   private readonly pipelines = new Map<string, GPURenderPipeline>();
+  /** Null until the driver has finished compiling it, and for good if that failed. */
+  private readonly materialPipelines = new Map<string, GPURenderPipeline | null>();
   private readonly lightingCode = new Map<string, number>();
   private ambient: AmbientLighting | null = null;
 
@@ -416,8 +419,12 @@ export class ForwardPipelines {
     return this.ambient;
   }
 
-  /** The pipeline that draws a pool material by `spec`. */
-  material(frame: GpuFrame, entry: MaterialEntry, spec: ForwardDrawSpec): GPURenderPipeline {
+  /**
+   * The pipeline that draws a pool material by `spec`, or null until it is ready. A material's shader can be anyone's
+   * work, so it is compiled off the frame: a slow one holds up nothing, and one that fails is left out of the picture
+   * rather than throwing away the whole frame it was bound in.
+   */
+  material(frame: GpuFrame, entry: MaterialEntry, spec: ForwardDrawSpec): GPURenderPipeline | null {
     const { path, format, topology } = spec;
     const frontFace = spec.frontFace ?? "ccw";
     const lighting = path === "surface" ? spec.lighting ?? null : null;
@@ -425,7 +432,15 @@ export class ForwardPipelines {
     const { material } = entry;
     const received = lighting && spec.receivesShadow !== false ? 1 : 0;
     const key = `${path}|${entry.kind.id}|${light}|${received}|${fogs(material) ? 1 : 0}|${format}|${topology}|${frontFace}|${entry.stateKey}|${material.depthFunc}|${material.colorWrite ? 1 : 0}|${material.premultipliedAlpha ? 1 : 0}`;
-    return this.shared(key, () => this.makeMaterialPipeline(frame, entry, spec, frontFace, lighting, light));
+    const known = this.materialPipelines.get(key);
+    if (known !== undefined) return known;
+    this.materialPipelines.set(key, null);
+    this.device.createRenderPipelineAsync(this.describeMaterialPipeline(frame, entry, spec, frontFace, lighting, light)).then((pipeline) => {
+      this.materialPipelines.set(key, pipeline);
+    }).catch((error: unknown) => {
+      reportGpu(`[gpu] forward pipeline ${entry.kind.id} failed`, error);
+    });
+    return null;
   }
 
   /** Lighting code is told apart by what it says, so a lighting pass made again keeps its pipelines. */
@@ -445,7 +460,7 @@ export class ForwardPipelines {
     return this.module(`lit ${light} ${kind.id}`, () => `${head}${lighting.wgsl}${LIT_SHADE_WGSL}${SURFACE_PATH_WGSL}`);
   }
 
-  private makeMaterialPipeline(frame: GpuFrame, entry: MaterialEntry, spec: ForwardDrawSpec, frontFace: GPUFrontFace, lighting: ForwardLighting | null, light: number): GPURenderPipeline {
+  private describeMaterialPipeline(frame: GpuFrame, entry: MaterialEntry, spec: ForwardDrawSpec, frontFace: GPUFrontFace, lighting: ForwardLighting | null, light: number): GPURenderPipelineDescriptor {
     const { path, format, topology } = spec;
     const { kind, state, material } = entry;
     const module = this.moduleFor(kind, path, lighting, light);
@@ -465,7 +480,7 @@ export class ForwardPipelines {
       constants.FOGGED = fogs(material) ? 1 : 0;
       constants.RECEIVES_SHADOW = spec.receivesShadow === false ? 0 : 1;
     }
-    return this.device.createRenderPipeline({
+    return {
       label: `gpu forward ${path} ${kind.id} ${format}`,
       layout: this.device.createPipelineLayout({ label: `gpu forward ${path} ${kind.id}`, bindGroupLayouts }),
       vertex: {
@@ -484,7 +499,7 @@ export class ForwardPipelines {
         ? { topology, cullMode: filled ? state.cull : "none", frontFace }
         : { topology: "triangle-list", cullMode: "none" },
       depthStencil: forwardDepthState(entry, topology),
-    });
+    };
   }
 }
 
@@ -872,6 +887,7 @@ class ForwardDrawList {
         lighting: item.lit ? lighting : null,
         receivesShadow: item.receivesShadow,
       });
+      if (!pipeline || !item.entry.bindGroup) continue;
       if (pipeline !== boundPipeline) {
         pass.setPipeline(pipeline);
         boundPipeline = pipeline;

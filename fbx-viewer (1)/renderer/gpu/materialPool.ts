@@ -1,6 +1,7 @@
 /// <reference types="@webgpu/types" />
 import * as THREE from "three";
 import { GrowableBuffer, RangeAllocator } from "./buffers";
+import { reportGpu } from "./report";
 import { STANDARD_SURFACE, type SurfaceKind } from "./surfaces";
 import type { TextureEntry, TexturePool } from "./texturePool";
 
@@ -149,6 +150,11 @@ export class MaterialPool {
   readonly unsupported = new Set<string>();
   /** Each material's last packed words, compared so that a slice is only sent when it changed. */
   private readonly lastPacks = new Map<number, Float32Array>();
+  /**
+   * Revisions count up across the pool. A material disposed while still drawn comes back as a new entry, and the new
+   * entry's revision must differ from the old one's for anything recorded over the old bind group to be recorded again.
+   */
+  private nextRevision = 1;
 
   constructor(private readonly device: GPUDevice, private readonly textures: TexturePool) {
     this.buffer = new GrowableBuffer(device, "gpu materials", GPUBufferUsage.UNIFORM, INITIAL_SLICES * SLICE_BYTES);
@@ -175,11 +181,23 @@ export class MaterialPool {
       }
       entry = this.create(material, kind);
       this.entries.set(material, entry);
-      material.addEventListener("dispose", () => this.release(material));
+      material.addEventListener("dispose", this.onDispose);
     }
-    if (entry.packedFrame !== frame) this.refresh(entry, frame);
+    if (entry.packedFrame !== frame) {
+      // A kind reads what the material holds, which can be anything: one that cannot make sense of it is that material's trouble.
+      try {
+        this.refresh(entry, frame);
+      } catch (error) {
+        reportGpu(`[gpu] material "${material.name || material.type}" could not be prepared:`, error);
+        if (!entry.bindGroup) return null;
+      }
+    }
     return entry;
   }
+
+  private readonly onDispose = (event: { target?: unknown }): void => {
+    this.release(event.target as THREE.Material);
+  };
 
   private create(material: THREE.Material, kind: SurfaceKind): MaterialEntry {
     const slot = this.slices.allocate(1);
@@ -191,7 +209,7 @@ export class MaterialPool {
       state,
       stateKey: stateKeyOf(state),
       slot,
-      revision: 0,
+      revision: this.nextRevision++,
       textures: [],
       textureRevisions: [],
       bufferGeneration: -1,
@@ -209,7 +227,7 @@ export class MaterialPool {
     if (stateKey !== entry.stateKey) {
       entry.state = state;
       entry.stateKey = stateKey;
-      entry.revision++;
+      entry.revision = this.nextRevision++;
     }
 
     const maps = kind.textures(material).map((texture) => this.textures.acquire(texture));
@@ -231,7 +249,7 @@ export class MaterialPool {
           material,
         }),
       });
-      entry.revision++;
+      entry.revision = this.nextRevision++;
       this.lastPacks.delete(entry.slot);
     }
 
@@ -257,6 +275,7 @@ export class MaterialPool {
   }
 
   private release(material: THREE.Material): void {
+    material.removeEventListener("dispose", this.onDispose);
     const entry = this.entries.get(material);
     if (!entry) return;
     this.entries.delete(material);

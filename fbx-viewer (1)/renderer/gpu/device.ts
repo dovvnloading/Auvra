@@ -7,6 +7,9 @@ import { reportGpu } from "./report";
  * One WebGPU device for the whole page, asked for once and shared by every surface that draws with it.
  * Everything the renderer needs of the graphics card beyond the WebGPU baseline is asked for here and
  * written down in `features`, so the passes read one place rather than each probing for itself.
+ *
+ * A surface closing leaves the device alone: what was uploaded stays there for the next surface, which is what moving
+ * between editor tabs asks for. Only when none has been back for a while is the device let go, and its memory with it.
  */
 
 /** Features taken when the adapter has them; none of them is required to draw. */
@@ -43,7 +46,7 @@ export interface GpuCore {
   readonly lost: Promise<GPUDeviceLostInfo>;
 }
 
-export type GpuUnavailableReason = "no-webgpu" | "no-adapter" | "device-failed";
+export type GpuUnavailableReason = "no-webgpu" | "no-adapter" | "software-adapter" | "device-failed";
 
 export interface GpuCoreResult {
   core: GpuCore | null;
@@ -70,13 +73,25 @@ const requestLimits = (adapter: GPUAdapter): Record<string, number> => {
   };
 };
 
+/** How long the device outlives the last surface drawing with it. */
+const LET_GO_AFTER_MS = 30_000;
+
 let pending: Promise<GpuCoreResult> | null = null;
+let surfaces = 0;
+let letGo: ReturnType<typeof setTimeout> | null = null;
+
+const stayAwake = (): void => {
+  if (letGo) clearTimeout(letGo);
+  letGo = null;
+};
 
 const requestCore = async (): Promise<GpuCoreResult> => {
   const gpu = typeof navigator === "undefined" ? undefined : navigator.gpu;
   if (!gpu) return { core: null, reason: "no-webgpu" };
   const adapter = await gpu.requestAdapter({ powerPreference: "high-performance" }).catch(() => null);
   if (!adapter) return { core: null, reason: "no-adapter" };
+  // A graphics card emulated on the processor: everything this renderer does there is many times slower than WebGL2's path.
+  if (adapter.info?.isFallbackAdapter) return { core: null, reason: "software-adapter" };
   const requiredFeatures = OPTIONAL_FEATURES.filter((feature) => adapter.features.has(feature));
   const device = await adapter.requestDevice({ requiredFeatures, requiredLimits: requestLimits(adapter) }).catch(() => null);
   if (!device) return { core: null, reason: "device-failed" };
@@ -112,6 +127,26 @@ const requestCore = async (): Promise<GpuCoreResult> => {
 
 /** The page's device, asked for the first time it is wanted. */
 export const acquireGpuCore = (): Promise<GpuCoreResult> => {
+  stayAwake();
   if (!pending) pending = requestCore();
   return pending;
+};
+
+/** Says a surface is drawing with the device, for as long as it takes to call what this returns. */
+export const holdGpuCore = (core: GpuCore): (() => void) => {
+  stayAwake();
+  surfaces++;
+  let held = true;
+  return () => {
+    if (!held) return;
+    held = false;
+    surfaces--;
+    if (surfaces > 0) return;
+    stayAwake();
+    letGo = setTimeout(() => {
+      letGo = null;
+      pending = null;
+      core.device.destroy();
+    }, LET_GO_AFTER_MS);
+  };
 };

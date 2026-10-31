@@ -49,6 +49,7 @@ const DEVICES_KEEP_FAILING = "The graphics device was lost repeatedly; using the
 const GPU_UNAVAILABLE: Record<GpuUnavailableReason, string> = {
   "no-webgpu": "This browser has no WebGPU; using the WebGL2 renderer",
   "no-adapter": "No graphics adapter here offers WebGPU; using the WebGL2 renderer",
+  "software-adapter": "The only WebGPU adapter here runs on the processor; using the WebGL2 renderer",
   "device-failed": "The graphics adapter refused a WebGPU device; using the WebGL2 renderer",
 };
 
@@ -69,6 +70,7 @@ const attemptGpu = async (): Promise<GpuAttempt> => {
     const { GpuRenderer: Renderer } = await import("./gpu/GpuRenderer");
     return { createRenderer: (canvas) => new Renderer(canvas as HTMLCanvasElement, core) };
   } catch {
+    // Fails only if the code cannot be fetched or the card turns it down outright; either way WebGL2 can still draw.
     return { failure: { code: "renderer_load_failed", reason: "The WebGPU renderer could not be loaded; using the WebGL2 renderer" } };
   }
 };
@@ -96,7 +98,8 @@ const RendererLifecycleBridge: React.FC<{
   recoveryTimeoutMs: number;
   remount: () => void;
   onDeviceLost: (reason: string | undefined) => void;
-}> = ({ surfaceId, role, requestedBackend, fallbackReasonOverride, recoveryTimeoutMs, remount, onDeviceLost }) => {
+  onGpuGiveUp: (reason: string) => void;
+}> = ({ surfaceId, role, requestedBackend, fallbackReasonOverride, recoveryTimeoutMs, remount, onDeviceLost, onGpuGiveUp }) => {
   const { gl } = useThree();
   const recoveryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -125,6 +128,7 @@ const RendererLifecycleBridge: React.FC<{
       rendererCoordinator.markContextRestoring(surfaceId);
       onDeviceLost(info.reason);
     });
+    if (gpu) gpu.onGiveUp = onGpuGiveUp;
     const onLost = (event: Event) => {
       event.preventDefault();
       rendererCoordinator.markContextLost(surfaceId);
@@ -165,7 +169,7 @@ const RendererLifecycleBridge: React.FC<{
       recoveryTimer.current = null;
       rendererCoordinator.unregisterSurface(surfaceId);
     };
-  }, [fallbackReasonOverride, gl, onDeviceLost, recoveryTimeoutMs, remount, requestedBackend, role, surfaceId]);
+  }, [fallbackReasonOverride, gl, onDeviceLost, onGpuGiveUp, recoveryTimeoutMs, remount, requestedBackend, role, surfaceId]);
   return <RendererMetricsReporter surfaceId={surfaceId} />;
 };
 
@@ -232,15 +236,30 @@ export const AuvraCanvas: React.FC<AuvraCanvasProps> = ({
     remount();
   }, [remount]);
 
+  // Frames that keep failing are a card this renderer cannot draw on, and a black picture helps nobody: WebGL2 takes over.
+  const [gaveUpBecause, setGaveUpBecause] = useState<string | null>(null);
+  const onGpuGiveUp = useCallback((reason: string) => {
+    frontendDiagnostics.record("renderer", "renderer.backend_failed", {
+      backend: "webgpu",
+      fallback: true,
+      code: "frames_failing",
+      errorType: "WebGpuFramesFailing",
+      surfaceRole: role,
+    }, {}, true);
+    setGaveUpBecause(reason);
+    setGpuGivenUp(true);
+    remount();
+  }, [remount, role]);
+
   if (wantsGpu && !attempt) return null;
 
   const webBackend = requestedBackend === "native" ? "auto" : requestedBackend;
-  const gpuFallback = gpuGivenUp ? DEVICES_KEEP_FAILING : requestedBackend === "webgpu" ? failure?.reason ?? null : null;
+  const gpuFallback = gpuGivenUp ? gaveUpBecause ?? DEVICES_KEEP_FAILING : requestedBackend === "webgpu" ? failure?.reason ?? null : null;
   const reportedFallback = fallbackReason ?? gpuFallback ?? (requestedBackend === "native"
     ? "This surface is not owned by the separate native viewport; using the web compatibility renderer"
     : null);
   const createRenderer = attempt?.createRenderer;
-  return <Canvas key={`${surfaceId}:${generation}${createRenderer ? ":gpu" : ""}`} {...props} gl={createRenderer ?? gl}><RendererLifecycleBridge surfaceId={surfaceId} role={role} requestedBackend={webBackend} fallbackReasonOverride={reportedFallback} recoveryTimeoutMs={recoveryTimeoutMs} remount={remount} onDeviceLost={onDeviceLost} /><MaterialClock />{children}</Canvas>;
+  return <Canvas key={`${surfaceId}:${generation}${createRenderer ? ":gpu" : ""}`} {...props} gl={createRenderer ?? gl}><RendererLifecycleBridge surfaceId={surfaceId} role={role} requestedBackend={webBackend} fallbackReasonOverride={reportedFallback} recoveryTimeoutMs={recoveryTimeoutMs} remount={remount} onDeviceLost={onDeviceLost} onGpuGiveUp={onGpuGiveUp} /><MaterialClock />{children}</Canvas>;
 };
 
 export default AuvraCanvas;

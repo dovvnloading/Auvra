@@ -1,7 +1,7 @@
 /// <reference types="@webgpu/types" />
 import * as THREE from "three";
 import { createBuiltinPasses, type BuiltinPasses } from "./builtinPasses";
-import type { GpuCore } from "./device";
+import { holdGpuCore, type GpuCore } from "./device";
 import { FrameTimings } from "./frameTimings";
 import { STAGE_ORDER, TARGET_FORMATS, type GpuFrame, type GpuPass, type GpuRendererApi, type GpuStage, type GpuTarget, type GpuTargets, type GpuViewSpec } from "./frame";
 import { GeometryPool } from "./geometryPool";
@@ -34,6 +34,12 @@ interface FrameCapture {
   finish(encoder: GPUCommandEncoder, targets: GpuTargets): void;
 }
 const TARGETS_KEPT_FRAMES = 240;
+/** Frames a scene may go undrawn before its tables are given back. Every editor view on screen is a frame of its own. */
+const SCENE_KEPT_FRAMES = 1200;
+/** Frames in a row that come to nothing before this renderer is given up on: a card that cannot do it, not a bad moment. */
+const FAILED_FRAMES_TO_GIVE_UP = 60;
+/** The passes without which there is no picture at all. */
+const VITAL_PASSES: ReadonlySet<string> = new Set(["surfaces", "deferred-lighting", "present"]);
 const VISIBILITY_ALL = 7; // vertex | fragment | compute
 
 interface SharedPools {
@@ -82,7 +88,9 @@ export class GpuRenderer implements GpuRendererApi {
     programs: [] as unknown[],
     reset() { /* counts are made by the passes */ },
   };
-  readonly capabilities = { isWebGL2: false, maxTextureSize: 8192, getMaxAnisotropy: () => 16, logarithmicDepthBuffer: false, precision: "highp" };
+  readonly capabilities: { isWebGL2: false; maxTextureSize: number; getMaxAnisotropy: () => number; logarithmicDepthBuffer: false; precision: string };
+  /** Called once if this renderer cannot draw on this machine after all, so that the surface can go to another. */
+  onGiveUp: ((reason: string) => void) | null = null;
   autoClear = true;
   autoClearColor = true;
   autoClearDepth = true;
@@ -115,7 +123,8 @@ export class GpuRenderer implements GpuRendererApi {
   private readonly cameraBindGroup: GPUBindGroup;
   private sceneBindGroup: GPUBindGroup | null = null;
   private sceneBindKey = "";
-  private readonly gpuScenes = new WeakMap<THREE.Scene, GpuScene>();
+  /** A map rather than a weak one so that a scene no longer drawn gives back what it holds in the shared pools. */
+  private readonly gpuScenes = new Map<THREE.Scene, { gpu: GpuScene; lastDrawn: number }>();
   /** Targets by size: four editor views can be four sizes in one frame. */
   private readonly targetSets = new Map<string, { targets: GpuTargets; lastUsed: number }>();
   private lastCanvasTexture: GPUTexture | null = null;
@@ -124,6 +133,14 @@ export class GpuRenderer implements GpuRendererApi {
   private readonly startTime = performance.now();
   private lastTime = performance.now();
   private disposed = false;
+  /** Lets the device go when nothing else is drawing with it. */
+  private readonly releaseCore: () => void;
+  /** The pass the frame's encoder has open, to be closed if whatever opened it fails before it does. */
+  private openPass: GPURenderPassEncoder | GPUComputePassEncoder | null = null;
+  /** A pass without which there is no picture failed in this frame. */
+  private vitalPassFailed = false;
+  private failedFrames = 0;
+  private gaveUp = false;
   /** How long each stage takes: read by the profiler overlay. */
   readonly timings: FrameTimings;
   private readonly probes: ProbeStore;
@@ -136,9 +153,17 @@ export class GpuRenderer implements GpuRendererApi {
     this.materials = shared.materials;
     this.textures = shared.textures;
     const { device } = core;
+    this.capabilities = {
+      isWebGL2: false,
+      maxTextureSize: device.limits.maxTextureDimension2D,
+      getMaxAnisotropy: () => 16,
+      logarithmicDepthBuffer: false,
+      precision: "highp",
+    };
     const context = canvas.getContext("webgpu");
     if (!context) throw new Error("The canvas has no webgpu context");
     this.context = context;
+    this.releaseCore = holdGpuCore(core);
     context.configure({ device, format: core.presentFormat, alphaMode: "opaque" });
     this.viewBuffer = device.createBuffer({ label: "gpu views", size: MAX_VIEWS * VIEW_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.cameraLayout = device.createBindGroupLayout({
@@ -193,8 +218,10 @@ export class GpuRenderer implements GpuRendererApi {
     this.width = width;
     this.height = height;
     const canvas = this.domElement;
-    canvas.width = Math.max(1, Math.floor(width * this.pixelRatio));
-    canvas.height = Math.max(1, Math.floor(height * this.pixelRatio));
+    // A canvas past what a texture can be has nothing to draw into; it is stretched to fit instead.
+    const largest = this.core.device.limits.maxTextureDimension2D;
+    canvas.width = Math.max(1, Math.min(largest, Math.floor(width * this.pixelRatio)));
+    canvas.height = Math.max(1, Math.min(largest, Math.floor(height * this.pixelRatio)));
     if (updateStyle) {
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
@@ -273,19 +300,30 @@ export class GpuRenderer implements GpuRendererApi {
 
   readRenderTargetPixels(): void { /* no WebGL targets exist here */ }
 
+  /**
+   * What @react-three/fiber calls when a canvas closes, and all it calls. The device is shared, so this surface only
+   * gives back what is its own.
+   */
   forceContextLoss(): void {
-    this.core.device.destroy();
+    this.dispose();
   }
 
   dispose(): void {
+    if (this.disposed) return;
     this.disposed = true;
     for (const list of this.passes.values()) for (const pass of list) pass.dispose?.();
     this.passes.clear();
     this.destroyTargets();
+    for (const { gpu } of this.gpuScenes.values()) gpu.destroy();
+    this.gpuScenes.clear();
+    this.sceneBindGroup = null;
+    this.boundScene = null;
     this.viewBuffer.destroy();
     this.timings.destroy();
     this.probes.destroy();
     this.context.unconfigure();
+    this.onGiveUp = null;
+    this.releaseCore();
   }
 
   private makeTarget(label: string, width: number, height: number, format: GPUTextureFormat, extraUsage = 0): GpuTarget {
@@ -469,6 +507,17 @@ export class GpuRenderer implements GpuRendererApi {
 
   /** One frame, for the canvas or, with `capture`, into targets of its own size and nowhere else. */
   private runFrame(scene: THREE.Scene, camera: THREE.Camera, capture: FrameCapture | null): void {
+    // Whatever goes wrong in a frame stays in that frame: this is called from the page's render loop, which would stop for good.
+    try {
+      this.drawFrame(scene, camera, capture);
+    } catch (error) {
+      reportGpu("[gpu] a frame failed", error);
+      this.closeOpenPass();
+      this.frameEnded(true);
+    }
+  }
+
+  private drawFrame(scene: THREE.Scene, camera: THREE.Camera, capture: FrameCapture | null): void {
     if (this.disposed) return;
     if (this.renderTarget) return; // Nothing drawn here goes to a WebGL target; what asks for one has its own path.
     const canvas = this.domElement;
@@ -479,13 +528,18 @@ export class GpuRenderer implements GpuRendererApi {
     const { device } = core;
 
     const frameNumber = ++this.info.render.frame;
-    let gpuScene = this.gpuScenes.get(scene);
-    if (!gpuScene) {
-      gpuScene = new GpuScene(device, this.geometries, this.materials);
-      this.gpuScenes.set(scene, gpuScene);
+    let kept = this.gpuScenes.get(scene);
+    if (!kept) {
+      kept = { gpu: new GpuScene(device, this.geometries, this.materials), lastDrawn: frameNumber };
+      this.gpuScenes.set(scene, kept);
     }
+    kept.lastDrawn = frameNumber;
+    this.forgetIdleScenes(frameNumber);
+    const gpuScene = kept.gpu;
     gpuScene.extract(scene, frameNumber);
     this.reportUnsupported();
+    this.info.memory.geometries = this.geometries.count;
+    this.info.memory.textures = this.textures.count;
 
     const scale = this.settings.get("temporal.renderScale");
     const renderScale = typeof scale === "number" && scale > 0 ? Math.min(scale, 1) : 1;
@@ -531,7 +585,8 @@ export class GpuRenderer implements GpuRendererApi {
       stored.multiplyMatrices(_unjittered, camera.matrixWorldInverse);
     }
 
-    const encoder = device.createCommandEncoder({ label: "gpu frame" });
+    const encoder = this.watched(device.createCommandEncoder({ label: "gpu frame" }));
+    this.vitalPassFailed = false;
     // A capture has no business with the canvas: taking its texture here would make the frame's own view keep what is there.
     const canvasTexture = capture ? null : this.context.getCurrentTexture();
     const canvasLoadOp: GPULoadOp = canvasTexture && canvasTexture === this.lastCanvasTexture ? "load" : "clear";
@@ -578,7 +633,7 @@ export class GpuRenderer implements GpuRendererApi {
         if (list) for (const pass of list) if (capture.onlyPasses.has(pass.id)) this.runPass(pass, frame);
       }
       capture.finish(encoder, targets);
-      device.queue.submit([encoder.finish()]);
+      this.submit(encoder);
       for (const run of afterSubmit) run();
       return;
     }
@@ -596,9 +651,71 @@ export class GpuRenderer implements GpuRendererApi {
       this.timings.end(encoder, stage);
     }
     const readback = this.timings.finish(encoder);
-    device.queue.submit([encoder.finish()]);
+    this.submit(encoder);
     this.timings.collect(readback);
     for (const run of afterSubmit) run();
+  }
+
+  /** Hands the frame over and finds out whether it held together: a bad command spoils everything recorded with it. */
+  private submit(encoder: GPUCommandEncoder): void {
+    const { device } = this.core;
+    const vital = this.vitalPassFailed;
+    device.pushErrorScope("validation");
+    device.queue.submit([encoder.finish()]);
+    void device.popErrorScope().then((error) => {
+      if (error) reportGpu("[gpu] a frame was thrown away:", error.message);
+      this.frameEnded(!!error || vital);
+    }, () => {
+      // A lost device has no scopes left to pop, and says so through `core.lost`.
+    });
+  }
+
+  /** Counts frames that came to nothing. A run of them goes on for good, so the surface moves to a renderer that can draw. */
+  private frameEnded(failed: boolean): void {
+    if (!failed) {
+      this.failedFrames = 0;
+      return;
+    }
+    this.failedFrames++;
+    if (this.gaveUp || this.failedFrames < FAILED_FRAMES_TO_GIVE_UP) return;
+    this.gaveUp = true;
+    reportGpu("[gpu] giving up on this renderer: every frame is failing");
+    this.onGiveUp?.("Frames kept failing on the WebGPU renderer; using the WebGL2 renderer");
+  }
+
+  /** Gives back the tables of a scene no longer drawn. Anything that draws it again makes them anew. */
+  private forgetIdleScenes(frameNumber: number): void {
+    for (const [scene, kept] of this.gpuScenes) {
+      if (frameNumber - kept.lastDrawn <= SCENE_KEPT_FRAMES) continue;
+      kept.gpu.destroy();
+      this.gpuScenes.delete(scene);
+    }
+  }
+
+  /** Has the encoder say which pass it has open. Only one can be, so one slot holds it. */
+  private watched(encoder: GPUCommandEncoder): GPUCommandEncoder {
+    this.openPass = null;
+    const track = <P extends GPURenderPassEncoder | GPUComputePassEncoder>(pass: P): P => {
+      this.openPass = pass;
+      const end = pass.end.bind(pass);
+      pass.end = () => {
+        end();
+        this.openPass = null;
+      };
+      return pass;
+    };
+    const beginRender = encoder.beginRenderPass.bind(encoder);
+    const beginCompute = encoder.beginComputePass.bind(encoder);
+    encoder.beginRenderPass = (descriptor) => track(beginRender(descriptor));
+    encoder.beginComputePass = (descriptor) => track(beginCompute(descriptor));
+    return encoder;
+  }
+
+  /** Ends a pass whose code threw part way, without which nothing else in the frame could be recorded. */
+  private closeOpenPass(): void {
+    const open = this.openPass;
+    this.openPass = null;
+    open?.end();
   }
 
   /** What a capture's passes read: the frame's, without what describes the screen. */
@@ -624,6 +741,8 @@ export class GpuRenderer implements GpuRendererApi {
     try {
       pass.execute(frame);
     } catch (error) {
+      this.closeOpenPass();
+      if (VITAL_PASSES.has(pass.id)) this.vitalPassFailed = true;
       if (!this.failedPasses.has(pass.id)) {
         this.failedPasses.add(pass.id);
         reportGpu(`[gpu] pass ${pass.id} failed`, error);

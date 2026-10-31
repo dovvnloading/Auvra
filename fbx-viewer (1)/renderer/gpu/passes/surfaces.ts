@@ -1,5 +1,6 @@
 /// <reference types="@webgpu/types" />
 import * as THREE from "three";
+import { retire } from "../buffers";
 import type { GpuCore } from "../device";
 import { TARGET_FORMATS, type GpuFrame, type GpuPass, type GpuTarget, type GpuViewDrawer } from "../frame";
 import { DRAW_ARGS_WORDS, type DrawGroup, type GpuScene } from "../gpuScene";
@@ -314,13 +315,13 @@ class CullList {
     const listBytes = gpuScene.visibleCapacity * ID_BYTES;
     if (argBytes > this.args.size) {
       const size = fourBytes(Math.max(argBytes, this.args.size * GROWTH));
-      this.args.destroy();
+      retire(this.args);
       this.args = this.makeArgs(size);
       this.revision++;
     }
     if (listBytes > this.visible.size) {
       const size = fourBytes(Math.max(listBytes, this.visible.size * GROWTH));
-      this.visible.destroy();
+      retire(this.visible);
       this.visible = this.makeVisible(size);
       this.revision++;
     }
@@ -328,8 +329,8 @@ class CullList {
   }
 
   destroy(): void {
-    this.args.destroy();
-    this.visible.destroy();
+    retire(this.args);
+    retire(this.visible);
   }
 }
 
@@ -366,7 +367,7 @@ class MainView {
     const bytes = ID_BYTES + Math.max(rows, 1) * ID_BYTES;
     if (!this.retest || bytes > this.retest.size) {
       const size = fourBytes(Math.max(bytes, (this.retest?.size ?? 0) * GROWTH));
-      this.retest?.destroy();
+      if (this.retest) retire(this.retest);
       this.retest = this.device.createBuffer({ label: "gpu retest rows", size, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
       this.retestGeneration++;
     }
@@ -379,8 +380,8 @@ class MainView {
     this.pyramid.destroy();
     this.early.destroy();
     this.late.destroy();
-    this.retest?.destroy();
-    this.retestDispatch.destroy();
+    if (this.retest) retire(this.retest);
+    retire(this.retestDispatch);
   }
 }
 

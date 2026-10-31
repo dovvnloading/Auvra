@@ -12,6 +12,14 @@
 const GROWTH = 1.5;
 const COPY_ALIGNMENT = 4;
 
+/**
+ * Destroys a buffer or texture once the frame being recorded has been handed over. A frame's commands reach the queue
+ * in one go, and a command already recorded over the old object would fail the whole frame if it were gone by then.
+ */
+export const retire = (resource: { destroy(): void }): void => {
+  queueMicrotask(() => resource.destroy());
+};
+
 export class GrowableBuffer {
   buffer: GPUBuffer;
   bytes: number;
@@ -31,18 +39,25 @@ export class GrowableBuffer {
   /** Makes room for `bytes`, keeping what the buffer holds. Returns whether the GPU buffer changed. */
   ensure(bytes: number): boolean {
     if (bytes <= this.bytes) return false;
-    const limit = this.device.limits.maxBufferSize;
-    const size = alignBytes(Math.min(limit, Math.max(bytes, Math.ceil(this.bytes * GROWTH))));
-    if (size < bytes) throw new RangeError(`${this.label} would need ${bytes} bytes, past the device's ${limit}`);
+    const limit = this.largest();
+    if (bytes > limit) throw new RangeError(`${this.label} would need ${bytes} bytes, past the device's ${limit}`);
+    const size = Math.min(limit, alignBytes(Math.max(bytes, Math.ceil(this.bytes * GROWTH))));
     const next = this.device.createBuffer({ label: this.label, size, usage: this.usage | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
     const encoder = this.device.createCommandEncoder({ label: `${this.label} growth` });
     encoder.copyBufferToBuffer(this.buffer, 0, next, 0, this.bytes);
     this.device.queue.submit([encoder.finish()]);
-    this.buffer.destroy();
+    retire(this.buffer);
     this.buffer = next;
     this.bytes = size;
     this.generation++;
     return true;
+  }
+
+  /** The most this buffer can hold on this device. One a shader reads whole cannot pass what a shader may bind. */
+  private largest(): number {
+    const { maxBufferSize, maxStorageBufferBindingSize } = this.device.limits;
+    const limit = this.usage & GPUBufferUsage.STORAGE ? Math.min(maxBufferSize, maxStorageBufferBindingSize) : maxBufferSize;
+    return Math.floor(limit / COPY_ALIGNMENT) * COPY_ALIGNMENT;
   }
 
   write(byteOffset: number, data: ArrayBufferView, dataOffset = 0, dataBytes?: number): void {
@@ -52,7 +67,7 @@ export class GrowableBuffer {
   }
 
   destroy(): void {
-    this.buffer.destroy();
+    retire(this.buffer);
   }
 }
 

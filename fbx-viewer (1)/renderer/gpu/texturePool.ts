@@ -1,13 +1,21 @@
 /// <reference types="@webgpu/types" />
 import * as THREE from "three";
+import { retire } from "./buffers";
 import type { GpuFeatures } from "./device";
+import { reportGpu } from "./report";
 
 /**
  * THE TEXTURE POOL
  *
  * three.js textures as GPU textures and samplers: images and canvases copied up, compressed mip chains uploaded
  * as they are, data textures written directly, and mips made on the GPU where the source has none. A texture
- * whose `version` moves is uploaded again; one that is disposed frees its memory.
+ * whose `version` moves is written again in place when it is still the same shape, which is what a video or a painted
+ * map does every frame; one that is disposed frees its memory.
+ *
+ * Textures over one source and read the same way share one picture on the graphics card, as they do in three.js: a
+ * model's maps cloned for other uv settings cost one upload. A picture that cannot be made (too large, a closed bitmap,
+ * a form nothing reads) is named once and the material goes on without it: an unusable texture bound to a draw would
+ * throw away the whole frame.
  */
 
 export interface TextureEntry {
@@ -17,6 +25,33 @@ export interface TextureEntry {
   version: number;
   /** Goes up when the view changes, so bind groups holding it are made again. */
   revision: number;
+  /** The shared picture behind it. Absent on the pool's own solid colours. */
+  image?: GpuImage;
+}
+
+/** One picture on the graphics card and how many textures draw from it. */
+interface GpuImage {
+  texture: GPUTexture;
+  view: GPUTextureView;
+  source: THREE.Source<unknown>;
+  key: string;
+  width: number;
+  height: number;
+  mips: number;
+  bytes: number;
+  users: number;
+  sourceVersion: number;
+}
+
+/** What a texture needs on the card: its shape, and how to fill a GPU texture of that shape. */
+interface ImagePlan {
+  format: GPUTextureFormat;
+  width: number;
+  height: number;
+  mips: number;
+  usage: GPUTextureUsageFlags;
+  bytesPerTexel: number;
+  fill(texture: GPUTexture): void;
 }
 
 interface CompressedFormat {
@@ -84,6 +119,10 @@ const imageSize = (image: ImageLike): { width: number; height: number } => {
 
 export class TexturePool {
   private readonly entries = new WeakMap<THREE.Texture, TextureEntry>();
+  /** By source and then by how it is read: one source can be needed both as colour and as data. */
+  private readonly images = new WeakMap<THREE.Source<unknown>, Map<string, GpuImage>>();
+  /** The version of each texture that could not be made, so that it is not tried again until it changes. */
+  private readonly refused = new WeakMap<THREE.Texture, number>();
   private readonly samplers = new Map<string, GPUSampler>();
   private readonly mipPipelines = new Map<GPUTextureFormat, GPURenderPipeline>();
   private mipSampler: GPUSampler | null = null;
@@ -93,6 +132,9 @@ export class TexturePool {
   readonly flatNormal: TextureEntry;
   readonly black: TextureEntry;
   readonly defaultSampler: GPUSampler;
+  /** How many pictures are on the card, and roughly what they take. */
+  count = 0;
+  bytes = 0;
 
   constructor(private readonly device: GPUDevice, private readonly features: GpuFeatures) {
     this.defaultSampler = device.createSampler({ label: "gpu default sampler", magFilter: "linear", minFilter: "linear", mipmapFilter: "linear", addressModeU: "repeat", addressModeV: "repeat" });
@@ -112,11 +154,21 @@ export class TexturePool {
     if (!texture) return null;
     const entry = this.entries.get(texture);
     if (entry && entry.version === texture.version) return entry;
-    if (texture.version === 0) return entry ?? null;
-    const made = this.upload(texture, entry);
-    if (made && !entry) texture.addEventListener("dispose", () => this.release(texture));
+    if (texture.version === 0 || this.refused.get(texture) === texture.version) return entry ?? null;
+    let made: TextureEntry | null = null;
+    try {
+      made = this.upload(texture, entry);
+    } catch (error) {
+      this.refused.set(texture, texture.version);
+      reportGpu(`[gpu] texture "${texture.name || texture.uuid}" could not be made:`, error);
+    }
+    if (made && !entry) texture.addEventListener("dispose", this.onDispose);
     return made ?? entry ?? null;
   }
+
+  private readonly onDispose = (event: { target?: unknown }): void => {
+    this.release(event.target as THREE.Texture);
+  };
 
   private samplerFor(texture: THREE.Texture, mipped: boolean): GPUSampler {
     const anisotropy = Math.max(1, Math.min(16, texture.anisotropy || 1));
@@ -142,107 +194,197 @@ export class TexturePool {
 
   private upload(texture: THREE.Texture, previous: TextureEntry | undefined): TextureEntry | null {
     const compressed = texture as THREE.CompressedTexture;
-    let entry: TextureEntry | null;
-    if (compressed.isCompressedTexture) entry = this.uploadCompressed(compressed, previous);
-    else if (isCopyable(texture.image)) entry = this.uploadImage(texture, texture.image, previous);
-    else if ((texture as THREE.DataTexture).isDataTexture || (texture.image as { data?: unknown } | null)?.data) entry = this.uploadData(texture, previous);
+    let plan: ImagePlan | null;
+    if (compressed.isCompressedTexture) plan = this.planCompressed(compressed);
+    else if (isCopyable(texture.image)) plan = this.planImage(texture, texture.image);
+    else if ((texture as THREE.DataTexture).isDataTexture || (texture.image as { data?: unknown } | null)?.data) plan = this.planData(texture);
     else return null;
-    if (!entry) return null;
+    if (!plan) return null;
+    const image = this.place(texture, plan, previous?.image);
+    const sampler = this.samplerFor(texture, plan.mips > 1);
+    if (previous && previous.image === image && previous.sampler === sampler) {
+      previous.version = texture.version;
+      return previous;
+    }
+    const entry: TextureEntry = {
+      texture: image.texture,
+      view: image.view,
+      sampler,
+      version: texture.version,
+      revision: (previous?.revision ?? 0) + 1,
+      image,
+    };
     this.entries.set(texture, entry);
     return entry;
   }
 
-  private finish(texture: THREE.Texture, gpu: GPUTexture, mips: number, previous: TextureEntry | undefined): TextureEntry {
-    previous?.texture.destroy();
-    return {
-      texture: gpu,
-      view: gpu.createView(),
-      sampler: this.samplerFor(texture, mips > 1),
-      version: texture.version,
-      revision: (previous?.revision ?? 0) + 1,
-    };
+  /** The picture a texture draws from: the one its source already has where that fits, written again if it has changed. */
+  private place(texture: THREE.Texture, plan: ImagePlan, held: GpuImage | undefined): GpuImage {
+    const { source } = texture;
+    let forSource = this.images.get(source);
+    if (!forSource) {
+      forSource = new Map();
+      this.images.set(source, forSource);
+    }
+    const key = `${plan.format}|${plan.mips}|${texture.flipY ? 1 : 0}|${texture.premultiplyAlpha ? 1 : 0}`;
+    let image = forSource.get(key);
+    if (image && image.width === plan.width && image.height === plan.height) {
+      if (image.sourceVersion !== source.version) {
+        plan.fill(image.texture);
+        image.sourceVersion = source.version;
+      }
+    } else {
+      const gpu = this.device.createTexture({
+        label: texture.name || "gpu image",
+        size: [plan.width, plan.height],
+        format: plan.format,
+        mipLevelCount: plan.mips,
+        usage: plan.usage,
+      });
+      plan.fill(gpu);
+      // A picture of the old shape stays for the textures still on it, and goes with the last of them.
+      image = {
+        texture: gpu,
+        view: gpu.createView(),
+        source,
+        key,
+        width: plan.width,
+        height: plan.height,
+        mips: plan.mips,
+        bytes: Math.ceil(plan.width * plan.height * plan.bytesPerTexel * (plan.mips > 1 ? 4 / 3 : 1)),
+        users: 0,
+        sourceVersion: source.version,
+      };
+      forSource.set(key, image);
+      this.count++;
+      this.bytes += image.bytes;
+    }
+    if (image !== held) {
+      image.users++;
+      if (held) this.letGo(held);
+    }
+    return image;
   }
 
-  private uploadImage(texture: THREE.Texture, image: ImageLike, previous: TextureEntry | undefined): TextureEntry | null {
-    const { width, height } = imageSize(image);
-    if (!width || !height) return null;
+  private letGo(image: GpuImage): void {
+    if (--image.users > 0) return;
+    const forSource = this.images.get(image.source);
+    if (forSource?.get(image.key) === image) forSource.delete(image.key);
+    this.count--;
+    this.bytes -= image.bytes;
+    retire(image.texture);
+  }
+
+  private planImage(texture: THREE.Texture, image: ImageLike): ImagePlan | null {
+    const size = imageSize(image);
+    if (!size.width || !size.height) return null;
+    const { source, width, height } = this.fitted(texture, image, size.width, size.height);
     const srgb = texture.colorSpace === THREE.SRGBColorSpace;
     const format: GPUTextureFormat = srgb ? "rgba8unorm-srgb" : "rgba8unorm";
     const wantsMips = texture.generateMipmaps && texture.minFilter !== THREE.NearestFilter && texture.minFilter !== THREE.LinearFilter;
     const mips = wantsMips ? mipCount(width, height) : 1;
-    const gpu = this.device.createTexture({
-      label: texture.name || "gpu image",
-      size: [width, height],
+    return {
       format,
-      mipLevelCount: mips,
+      width,
+      height,
+      mips,
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-    this.device.queue.copyExternalImageToTexture(
-      { source: image, flipY: texture.flipY },
-      { texture: gpu, premultipliedAlpha: texture.premultiplyAlpha, colorSpace: "srgb" },
-      [width, height],
-    );
-    if (mips > 1) this.generateMips(gpu, format, mips);
-    return this.finish(texture, gpu, mips, previous);
+      bytesPerTexel: 4,
+      fill: (gpu) => {
+        this.device.queue.copyExternalImageToTexture(
+          { source, flipY: texture.flipY },
+          { texture: gpu, premultipliedAlpha: texture.premultiplyAlpha, colorSpace: "srgb" },
+          [width, height],
+        );
+        if (mips > 1) this.generateMips(gpu, format, mips);
+      },
+    };
   }
 
-  private uploadCompressed(texture: THREE.CompressedTexture, previous: TextureEntry | undefined): TextureEntry | null {
+  /** An image past what this card can hold is drawn smaller first; a texture that size could not be made at all. */
+  private fitted(texture: THREE.Texture, image: ImageLike, width: number, height: number): { source: ImageLike; width: number; height: number } {
+    const largest = this.device.limits.maxTextureDimension2D;
+    if (Math.max(width, height) <= largest) return { source: image, width, height };
+    const scale = largest / Math.max(width, height);
+    const fitWidth = Math.max(1, Math.floor(width * scale));
+    const fitHeight = Math.max(1, Math.floor(height * scale));
+    reportGpu(`[gpu] texture "${texture.name || texture.uuid}" is ${width}x${height}, past this card's ${largest}: it draws at ${fitWidth}x${fitHeight}`);
+    const canvas = new OffscreenCanvas(fitWidth, fitHeight);
+    canvas.getContext("2d")?.drawImage(image, 0, 0, fitWidth, fitHeight);
+    return { source: canvas, width: fitWidth, height: fitHeight };
+  }
+
+  private planCompressed(texture: THREE.CompressedTexture): ImagePlan | null {
     const description = COMPRESSED[texture.format as number];
-    if (!description || !this.features[description.feature]) return null;
+    if (!description || !this.features[description.feature]) {
+      throw new Error(`this card cannot read its compressed format (${texture.format})`);
+    }
     const levels = texture.mipmaps as unknown as { data: ArrayBufferView; width: number; height: number }[];
     if (!levels?.length) return null;
+    // A chain too large for this card starts at its first level that fits.
+    const largest = this.device.limits.maxTextureDimension2D;
+    let top = 0;
+    while (top < levels.length - 1 && Math.max(levels[top].width, levels[top].height) > largest) top++;
+    if (Math.max(levels[top].width, levels[top].height) > largest) throw new Error(`it is larger than this card's ${largest}`);
     const srgb = texture.colorSpace === THREE.SRGBColorSpace && description.srgb;
     const format = srgb ? description.srgb! : description.format;
     const { blockSize, blockBytes } = description;
     // A compressed texture must be whole blocks; the mips past the last that is are left out.
-    const roundedWidth = Math.ceil(levels[0].width / blockSize) * blockSize;
-    const roundedHeight = Math.ceil(levels[0].height / blockSize) * blockSize;
-    const mips = Math.min(levels.length, mipCount(roundedWidth, roundedHeight));
-    const gpu = this.device.createTexture({
-      label: texture.name || "gpu compressed",
-      size: [roundedWidth, roundedHeight],
+    const roundedWidth = Math.ceil(levels[top].width / blockSize) * blockSize;
+    const roundedHeight = Math.ceil(levels[top].height / blockSize) * blockSize;
+    const mips = Math.min(levels.length - top, mipCount(roundedWidth, roundedHeight));
+    return {
       format,
-      mipLevelCount: mips,
+      width: roundedWidth,
+      height: roundedHeight,
+      mips,
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-    });
-    for (let mip = 0; mip < mips; mip++) {
-      const { data } = levels[mip];
-      const mipWidth = Math.max(1, roundedWidth >> mip);
-      const mipHeight = Math.max(1, roundedHeight >> mip);
-      const blocksWide = Math.ceil(mipWidth / blockSize);
-      const blocksHigh = Math.ceil(mipHeight / blockSize);
-      this.device.queue.writeTexture(
-        { texture: gpu, mipLevel: mip },
-        data as unknown as GPUAllowSharedBufferSource,
-        { bytesPerRow: blocksWide * blockBytes, rowsPerImage: blocksHigh },
-        [blocksWide * blockSize, blocksHigh * blockSize],
-      );
-    }
-    return this.finish(texture, gpu, mips, previous);
+      bytesPerTexel: blockBytes / (blockSize * blockSize),
+      fill: (gpu) => {
+        for (let mip = 0; mip < mips; mip++) {
+          const { data } = levels[top + mip];
+          const mipWidth = Math.max(1, roundedWidth >> mip);
+          const mipHeight = Math.max(1, roundedHeight >> mip);
+          const blocksWide = Math.ceil(mipWidth / blockSize);
+          const blocksHigh = Math.ceil(mipHeight / blockSize);
+          this.device.queue.writeTexture(
+            { texture: gpu, mipLevel: mip },
+            data as unknown as GPUAllowSharedBufferSource,
+            { bytesPerRow: blocksWide * blockBytes, rowsPerImage: blocksHigh },
+            [blocksWide * blockSize, blocksHigh * blockSize],
+          );
+        }
+      },
+    };
   }
 
-  private uploadData(texture: THREE.Texture, previous: TextureEntry | undefined): TextureEntry | null {
-    const image = texture.image as { data: ArrayBufferView & ArrayLike<number>; width: number; height: number } | undefined;
+  private planData(texture: THREE.Texture): ImagePlan | null {
+    const image = texture.image as { data: ArrayBufferView & ArrayLike<number>; width: number; height: number; depth?: number } | undefined;
     if (!image?.data || !image.width || !image.height) return null;
-    const layout = dataLayout(texture, image.data);
-    if (!layout) return null;
+    if ((image.depth ?? 1) > 1) throw new Error("it has layers, and a surface reads flat pictures");
+    const largest = this.device.limits.maxTextureDimension2D;
+    if (Math.max(image.width, image.height) > largest) throw new Error(`it is ${image.width}x${image.height}, past this card's ${largest}`);
+    const layout = dataLayout(texture, image.data, this.features.float32Filterable);
+    if (!layout) throw new Error(`nothing reads format ${texture.format} of type ${texture.type}`);
     const { width, height } = image;
     const srgb = texture.colorSpace === THREE.SRGBColorSpace && layout.format === "rgba8unorm";
     const format: GPUTextureFormat = srgb ? "rgba8unorm-srgb" : layout.format;
     const wantsMips = texture.generateMipmaps && layout.renderable && texture.minFilter !== THREE.NearestFilter && texture.minFilter !== THREE.LinearFilter;
     const mips = wantsMips ? mipCount(width, height) : 1;
-    const gpu = this.device.createTexture({
-      label: texture.name || "gpu data",
-      size: [width, height],
+    return {
       format,
-      mipLevelCount: mips,
+      width,
+      height,
+      mips,
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | (layout.renderable ? GPUTextureUsage.RENDER_ATTACHMENT : 0),
-    });
-    let bytes = layout.expand ? layout.expand(image.data) : image.data as unknown as ArrayBufferView;
-    if (texture.flipY && height > 1) bytes = flipRows(bytes, width * layout.bytesPerTexel, height);
-    this.device.queue.writeTexture({ texture: gpu }, bytes as unknown as GPUAllowSharedBufferSource, { bytesPerRow: width * layout.bytesPerTexel, rowsPerImage: height }, [width, height]);
-    if (mips > 1) this.generateMips(gpu, format, mips);
-    return this.finish(texture, gpu, mips, previous);
+      bytesPerTexel: layout.bytesPerTexel,
+      fill: (gpu) => {
+        let bytes = layout.expand ? layout.expand(image.data) : image.data as unknown as ArrayBufferView;
+        if (texture.flipY && height > 1) bytes = flipRows(bytes, width * layout.bytesPerTexel, height);
+        this.device.queue.writeTexture({ texture: gpu }, bytes as unknown as GPUAllowSharedBufferSource, { bytesPerRow: width * layout.bytesPerTexel, rowsPerImage: height }, [width, height]);
+        if (mips > 1) this.generateMips(gpu, format, mips);
+      },
+    };
   }
 
   /** Each mip drawn from the one above it. */
@@ -283,10 +425,12 @@ export class TexturePool {
   }
 
   private release(texture: THREE.Texture): void {
+    texture.removeEventListener("dispose", this.onDispose);
+    this.refused.delete(texture);
     const entry = this.entries.get(texture);
     if (!entry) return;
     this.entries.delete(texture);
-    entry.texture.destroy();
+    if (entry.image) this.letGo(entry.image);
   }
 }
 
@@ -297,23 +441,30 @@ interface DataLayout {
   expand?: (data: ArrayLike<number>) => ArrayBufferView;
 }
 
-const dataLayout = (texture: THREE.Texture, data: ArrayBufferView): DataLayout | null => {
+/** Floats as half floats, for a card that cannot filter the full kind: a surface reads every texture through a filter. */
+const toHalves = (data: ArrayLike<number>): Uint16Array => {
+  const halves = new Uint16Array(data.length);
+  for (let at = 0; at < data.length; at++) halves[at] = THREE.DataUtils.toHalfFloat(Math.max(-65504, Math.min(65504, data[at])));
+  return halves;
+};
+
+const dataLayout = (texture: THREE.Texture, data: ArrayBufferView, floatsFilter: boolean): DataLayout | null => {
   const { format, type } = texture;
   const float = type === THREE.FloatType;
   const half = type === THREE.HalfFloatType;
   const bytes = type === THREE.UnsignedByteType || data instanceof Uint8Array || data instanceof Uint8ClampedArray;
   if (format === THREE.RGBAFormat) {
-    if (float) return { format: "rgba32float", bytesPerTexel: 16, renderable: false };
+    if (float) return floatsFilter ? { format: "rgba32float", bytesPerTexel: 16, renderable: false } : { format: "rgba16float", bytesPerTexel: 8, renderable: true, expand: toHalves };
     if (half) return { format: "rgba16float", bytesPerTexel: 8, renderable: true };
     if (bytes) return { format: "rgba8unorm", bytesPerTexel: 4, renderable: true };
   }
   if (format === THREE.RGFormat) {
-    if (float) return { format: "rg32float", bytesPerTexel: 8, renderable: false };
+    if (float) return floatsFilter ? { format: "rg32float", bytesPerTexel: 8, renderable: false } : { format: "rg16float", bytesPerTexel: 4, renderable: true, expand: toHalves };
     if (half) return { format: "rg16float", bytesPerTexel: 4, renderable: true };
     if (bytes) return { format: "rg8unorm", bytesPerTexel: 2, renderable: true };
   }
   if (format === THREE.RedFormat) {
-    if (float) return { format: "r32float", bytesPerTexel: 4, renderable: false };
+    if (float) return floatsFilter ? { format: "r32float", bytesPerTexel: 4, renderable: false } : { format: "r16float", bytesPerTexel: 2, renderable: true, expand: toHalves };
     if (half) return { format: "r16float", bytesPerTexel: 2, renderable: true };
     if (bytes) return { format: "r8unorm", bytesPerTexel: 1, renderable: true };
   }

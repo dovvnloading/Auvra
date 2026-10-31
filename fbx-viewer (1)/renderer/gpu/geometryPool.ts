@@ -235,6 +235,8 @@ export class GeometryPool {
   private readonly changedRanges: number[] = [];
   /** Each entry and run is looked at for changes once per stamp. */
   private stamp = 0;
+  /** How many geometries are on the card. */
+  count = 0;
 
   /** Goes up when any of the buffers changed, so bind groups over them are made again. */
   get generation(): number {
@@ -252,6 +254,18 @@ export class GeometryPool {
   /** Starts a frame's looking: from here on each geometry is compared with what was sent once. */
   beginFrame(): void {
     this.stamp++;
+  }
+
+  /** A run of `count` in the table `buffer` holds, which grows to fit. If it cannot, nothing is kept and this throws. */
+  private place(allocator: RangeAllocator, buffer: GrowableBuffer, count: number, bytesEach: number): number {
+    const base = allocator.allocate(count);
+    try {
+      buffer.ensure((base + count) * bytesEach);
+    } catch (error) {
+      allocator.release(base, count);
+      throw error;
+    }
+    return base;
   }
 
   /** The geometry's place in the pool, uploaded or brought up to date as needed. */
@@ -338,6 +352,7 @@ export class GeometryPool {
     this.useIndex(entry, geometry.index);
     entry.version = run.version + versionOf(geometry.index);
     this.entries.set(geometry, entry);
+    this.count++;
     geometry.addEventListener("dispose", this.onDispose);
     return entry;
   }
@@ -373,8 +388,7 @@ export class GeometryPool {
     const morphs = geometry.morphAttributes as Record<string, AnyAttribute[] | undefined>;
     const position = attributes.position as AnyAttribute;
     const vertexCount = position.count;
-    const vertexBase = this.vertexAllocator.allocate(vertexCount);
-    this.vertices.ensure((vertexBase + vertexCount) * VERTEX_BYTES);
+    const vertexBase = this.place(this.vertexAllocator, this.vertices, vertexCount, VERTEX_BYTES);
     this.writeVertices(geometry, vertexBase, vertexCount);
     const run: VertexRun = {
       position,
@@ -453,10 +467,10 @@ export class GeometryPool {
       run.morphTargets = 0;
     }
     if (resized) {
+      const vertexBase = this.place(this.vertexAllocator, this.vertices, vertexCount, VERTEX_BYTES);
       this.vertexAllocator.release(run.vertexBase, run.vertexCount);
-      run.vertexBase = this.vertexAllocator.allocate(vertexCount);
+      run.vertexBase = vertexBase;
       run.vertexCount = vertexCount;
-      this.vertices.ensure((run.vertexBase + vertexCount) * VERTEX_BYTES);
       this.writeVertices(geometry, run.vertexBase, vertexCount);
     } else if (!this.writeChangedRanges(run, geometry)) {
       this.writeVertices(geometry, run.vertexBase, vertexCount);
@@ -603,8 +617,7 @@ export class GeometryPool {
       }
     }
     const count = index ? index.count : vertexCount;
-    const base = this.indexAllocator.allocate(count);
-    this.indices.ensure((base + count) * 4);
+    const base = this.place(this.indexAllocator, this.indices, count, 4);
     this.fillIndices(index, base, count);
     const list: IndexList = { source: index, base, count, refs: 1, version: index ? index.version : 0 };
     if (index) this.indexLists.set(index, list);
@@ -638,9 +651,8 @@ export class GeometryPool {
   private writeSkin(geometry: THREE.BufferGeometry, run: VertexRun): void {
     const { skinIndex, skinWeight } = geometry.attributes as Record<string, AnyAttribute | undefined>;
     if (!skinIndex || !skinWeight) return;
+    run.skinBase = this.place(this.skinAllocator, this.skins, run.vertexCount, SKIN_WORDS * 4);
     run.skinCount = run.vertexCount;
-    run.skinBase = this.skinAllocator.allocate(run.skinCount);
-    this.skins.ensure((run.skinBase + run.skinCount) * SKIN_WORDS * 4);
     const data = new Uint32Array(run.skinCount * SKIN_WORDS);
     for (let vertex = 0, at = 0; vertex < run.skinCount; vertex++, at += SKIN_WORDS) {
       data[at] = ((skinIndex.getX(vertex) & 0xffff) | (skinIndex.getY(vertex) << 16)) >>> 0;
@@ -658,9 +670,8 @@ export class GeometryPool {
     const baseNormal = geometry.attributes.normal as AnyAttribute | undefined;
     const relative = geometry.morphTargetsRelative;
     const targets = positions.length;
+    run.morphBase = this.place(this.morphAllocator, this.morphs, targets * run.vertexCount, MORPH_WORDS * 4);
     run.morphTargets = targets;
-    run.morphBase = this.morphAllocator.allocate(targets * run.vertexCount);
-    this.morphs.ensure((run.morphBase + targets * run.vertexCount) * MORPH_WORDS * 4);
     const data = new Float32Array(targets * run.vertexCount * MORPH_WORDS);
     let at = 0;
     for (let target = 0; target < targets; target++) {
@@ -699,8 +710,7 @@ export class GeometryPool {
       add(b, c);
       add(c, a);
     }
-    const firstIndex = this.indexAllocator.allocate(edges.length);
-    this.indices.ensure((firstIndex + edges.length) * 4);
+    const firstIndex = this.place(this.indexAllocator, this.indices, edges.length, 4);
     this.device.queue.writeBuffer(this.indices.buffer, firstIndex * 4, new Uint32Array(edges));
     entry.wire = { firstIndex, indexCount: edges.length };
     return entry.wire;
@@ -715,8 +725,7 @@ export class GeometryPool {
     const segments: number[] = [];
     for (let at = 0; at + 1 < count; at++) segments.push(read(at), read(at + 1));
     if (loop && count > 2) segments.push(read(count - 1), read(0));
-    const firstIndex = this.indexAllocator.allocate(segments.length);
-    this.indices.ensure((firstIndex + segments.length) * 4);
+    const firstIndex = this.place(this.indexAllocator, this.indices, segments.length, 4);
     this.device.queue.writeBuffer(this.indices.buffer, firstIndex * 4, new Uint32Array(segments));
     entry.strip = { firstIndex, indexCount: segments.length };
     return entry.strip;
@@ -724,11 +733,13 @@ export class GeometryPool {
 
   /** A run of vertex slots for a posed copy of a skinned mesh, and one for its previous positions. */
   allocatePosed(vertexCount: number): { vertexBase: number; previousBase: number } {
-    const vertexBase = this.vertexAllocator.allocate(vertexCount);
-    this.vertices.ensure((vertexBase + vertexCount) * VERTEX_BYTES);
-    const previousBase = this.previousAllocator.allocate(vertexCount);
-    this.previousPositions.ensure((previousBase + vertexCount) * 12);
-    return { vertexBase, previousBase };
+    const vertexBase = this.place(this.vertexAllocator, this.vertices, vertexCount, VERTEX_BYTES);
+    try {
+      return { vertexBase, previousBase: this.place(this.previousAllocator, this.previousPositions, vertexCount, 12) };
+    } catch (error) {
+      this.vertexAllocator.release(vertexBase, vertexCount);
+      throw error;
+    }
   }
 
   releasePosed(vertexBase: number, previousBase: number, vertexCount: number): void {
@@ -740,6 +751,7 @@ export class GeometryPool {
     const entry = this.entries.get(geometry);
     if (!entry) return;
     this.entries.delete(geometry);
+    this.count--;
     entry.released = true;
     this.leaveRun(entry);
     this.dropEdges(entry);
