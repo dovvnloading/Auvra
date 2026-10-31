@@ -258,6 +258,8 @@ uniform sampler2D screenReflection;
 uniform mat4 inverseProjection;
 uniform mat4 cameraWorld;
 uniform vec2 targetSize;
+uniform float rayShare;
+uniform float rayPhase;
 ${MIRROR_RAY_GLSL}
 
 float noiseAt( vec2 pixel ) {
@@ -286,6 +288,8 @@ void main() {
         gl_FragColor = vec4( screen.rgb, max( screen.a, depth >= 1.0 ? 0.0 : cover ) );
         return;
     }
+    // Only the frame's share of the pixels send a ray, a new scatter of them each frame: the rest keep what they last held, as nothing clears this target.
+    if ( fract( noiseAt( gl_FragCoord.xy ) + rayPhase ) >= rayShare ) discard;
     vec4 viewPoint = inverseProjection * vec4( uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0 );
     vec3 p = viewPoint.xyz / viewPoint.w;
     vec3 n = normalize( normalRoughness.xyz );
