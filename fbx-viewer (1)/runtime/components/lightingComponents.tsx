@@ -66,6 +66,7 @@ export const LIGHTING_COMPONENTS: ComponentDefinition[] = [
             { key: 'intensity', label: 'Intensity', type: 'number', default: DEFAULT_DYNAMIC_GI_SETTINGS.intensity, min: 0, max: 8, step: 0.05 },
             { key: 'bounce', label: 'Later bounces', type: 'number', default: DEFAULT_DYNAMIC_GI_SETTINGS.bounce, min: 0, max: 1, step: 0.05 },
             { key: 'reflections', label: 'Ray-traced reflections', type: 'boolean', default: DEFAULT_DYNAMIC_GI_SETTINGS.reflections },
+            { key: 'rayLimit', label: 'GPU time limit (ms)', type: 'number', default: DEFAULT_DYNAMIC_GI_SETTINGS.rayLimit, min: 0.5, max: 33, step: 0.5 },
             {
                 key: 'view', label: 'Show', type: 'select', default: DEFAULT_DYNAMIC_GI_SETTINGS.view,
                 options: [

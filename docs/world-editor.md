@@ -442,6 +442,7 @@ Add a **Dynamic Global Illumination** component to any object in the level (one 
 | **Intensity** | Scales all the indirect light |
 | **Later bounces** | How much light carries on past its first bounce. 0 is one bounce only; 1 lets it fade naturally |
 | **Ray-traced reflections** | Carries reflections on with rays where the screen has nothing to show. Needs the Post Process component's **Reflections** on, which play has by default. A slow machine goes without in play |
+| **GPU time limit** | Milliseconds of the GPU's time all of this may take in a frame, measured on the machine it runs on. Over it, fewer probes update and then each sends fewer rays, so the light follows more slowly, and fewer pixels send reflection rays each frame, until reflections go back to what the screen shows for as long as they will not fit. Frames running slow lower the limit, and where a GPU cannot time itself their speed alone decides |
 | **Show** | **Indirect light only** shows it on white, **Light probes** shows the probes themselves (red ones are stuck inside something), and **What rays see** shows the scene as the rays do, to check what they take in |
 
 Probes sit in nested grids around the camera, each three times the spacing of the last, so at the default spacing they reach about 200 metres out; past that the level's ordinary sky fill applies. A probe buried in a wall or a crate moves out of it by itself.
