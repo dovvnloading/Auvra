@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import React from 'react';
 import * as THREE from 'three';
 import { ToneMappingMode } from 'postprocessing';
@@ -297,6 +299,17 @@ describe('post process ownership', () => {
     view.rerender(React.createElement(PostProcessAllowedContext.Provider, { value: true }, stackElement(componentWith(defaults()))));
     expect(harness.mountedComposers).toBe(1);
     view.unmount();
+  });
+});
+
+describe('quad view', () => {
+  it('turns the stack off while four views share the canvas', () => {
+    // A composer's single full-canvas picture would clear what the views drew in their own rectangles.
+    const viewport = readFileSync(resolve(__dirname, '../../components/Environment/EnvironmentViewport.tsx'), 'utf8');
+    expect(viewport).toContain("<PostProcessAllowedContext.Provider value={layout === 'single'}>");
+    const provider = viewport.indexOf('<PostProcessAllowedContext.Provider');
+    expect(provider).toBeLessThan(viewport.indexOf("{layout === 'single' && ("));
+    expect(viewport.indexOf('</PostProcessAllowedContext.Provider>')).toBeGreaterThan(viewport.indexOf("{layout === 'quad' && ("));
   });
 });
 

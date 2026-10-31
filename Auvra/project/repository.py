@@ -379,7 +379,7 @@ class ProjectRepository:
         parent = destination.parent; parent.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}.saveas-", dir=parent))
         try:
-            shutil.copytree(self.path, staging, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".auvra"))
+            shutil.copytree(self.path, staging, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".auvra", ".incoming"))
             descriptor_files = [p for p in staging.glob("*.auvra") if p.is_file()]
             if len(descriptor_files) != 1: raise InvalidProjectError("source has no unique descriptor")
             descriptor = load_json(descriptor_files[0]); descriptor.update(
