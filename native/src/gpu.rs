@@ -1644,7 +1644,7 @@ mod tests {
                     .as_chunks::<4>()
                     .0
                     .iter()
-                    .map(|chunk| f32::from_ne_bytes(chunk.try_into().unwrap()))
+                    .map(|chunk| f32::from_ne_bytes(*chunk))
                     .collect()
             };
             for (index, vertex) in vertices.iter().enumerate() {
