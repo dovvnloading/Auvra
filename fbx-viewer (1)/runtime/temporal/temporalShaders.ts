@@ -24,16 +24,6 @@ vec3 compressColour( vec3 c ) { return c / ( 1.0 + max( c.r, max( c.g, c.b ) ) )
 vec3 expandColour( vec3 c ) { return c / max( 1.0 - max( c.r, max( c.g, c.b ) ), 1e-3 ); }
 `;
 
-/** Keeps the scene's depth: the passes that follow draw into the buffer it belongs to, and clear it. */
-export const DEPTH_COPY_FRAGMENT = /* glsl */ `
-precision highp float;
-precision highp sampler2D;
-layout( location = 0 ) out vec4 copied;
-uniform sampler2D depthMap;
-void main() {
-    copied = vec4( texelFetch( depthMap, ivec2( gl_FragCoord.xy ), 0 ).r, 0.0, 0.0, 1.0 );
-}`;
-
 export const RESOLVE_FRAGMENT = /* glsl */ `
 precision highp float;
 precision highp sampler2D;
@@ -59,6 +49,8 @@ uniform vec2 blendFloor;
 uniform vec2 clipSpread;
 /** What remembered contrast keeps of itself each frame. */
 uniform float contrastFade;
+/** 1 with the camera standing still, down to 0 as it moves through the world. */
+uniform float cameraStillness;
 /** From depth to distance along the view: A and B of B / ( z + A ); the third turns the distance test on. */
 uniform vec3 depthToDistance;
 ${COMPRESSION}
@@ -201,8 +193,10 @@ void main() {
 
     float motion = smoothstep( 0.25, 4.0, speed );
     // Memory rides with the surface behind: under a moving view a silhouette slides across that surface, and
-    // what it left there would hold the box open behind it as a wake. It is only good while things hold still.
-    float remembered = max( seenContrast, texture( companionHistory, historyUv ).r * contrastFade * ( 1.0 - motion ) );
+    // what it left there would hold the box open behind it as a wake. It is only good while things hold still,
+    // the camera included: moving through the world leaves a far surface like the sky still on screen, while
+    // everything nearer slides across it.
+    float remembered = max( seenContrast, texture( companionHistory, historyUv ).r * contrastFade * ( 1.0 - motion ) * cameraStillness );
     // A line hit by one sample of the nine shows a deviation of about a third of its contrast, so reaching three
     // times the remembered figure spans the whole way from the line's colour to what lies behind it.
     vec3 extent = max( deviation * mix( clipSpread.x, clipSpread.y, motion ), vec3( remembered * mix( 3.0, 1.0, motion ) ) );

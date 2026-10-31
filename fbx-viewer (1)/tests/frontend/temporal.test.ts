@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { allowedAntialias } from '../../runtime/components/postProcess';
 import { installMipBias, setTextureMipBias } from '../../runtime/temporal/mipBias';
 import {
-    clampRenderScale, contrastFadeFor, halton, isCameraCut, jitterPhases, MAX_RENDER_SCALE, MIN_RENDER_SCALE, mipBiasFor, renderSizeOf, temporalJitter,
+    cameraStillnessFor, clampRenderScale, contrastFadeFor, halton, isCameraCut, jitterPhases, MAX_RENDER_SCALE, MIN_RENDER_SCALE, mipBiasFor, renderSizeOf, temporalJitter,
 } from '../../runtime/temporal/temporalSettings';
 import { OUTPUT_FRAGMENT, RESOLVE_FRAGMENT } from '../../runtime/temporal/temporalShaders';
 import { drawsVelocity } from '../../runtime/temporal/velocityBuffer';
@@ -81,6 +81,16 @@ describe('camera cuts', () => {
         expect(isCameraCut(3, 0.95)).toBe(false);
         expect(isCameraCut(30, 1)).toBe(true);
         expect(isCameraCut(0, 0.2)).toBe(true);
+    });
+});
+
+describe('a camera holding still', () => {
+    it('keeps a slow drift, and counts walking pace as moving', () => {
+        expect(cameraStillnessFor(0)).toBe(1);
+        expect(cameraStillnessFor(0.002)).toBe(1);
+        expect(cameraStillnessFor(0.0175)).toBeCloseTo(0.5);
+        expect(cameraStillnessFor(0.03)).toBe(0);
+        expect(cameraStillnessFor(0.09)).toBe(0);
     });
 });
 
@@ -168,6 +178,6 @@ describe('the shaders', () => {
 
     it('remember contrast only from what holds still', () => {
         expect(RESOLVE_FRAGMENT).toMatch(/seenContrast = depthEdge && !objectNear \? deviation\.x \* \( 1\.0 - smoothstep/);
-        expect(RESOLVE_FRAGMENT).toMatch(/contrastFade \* \( 1\.0 - motion \)/);
+        expect(RESOLVE_FRAGMENT).toMatch(/contrastFade \* \( 1\.0 - motion \) \* cameraStillness/);
     });
 });

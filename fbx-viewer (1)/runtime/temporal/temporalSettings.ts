@@ -59,6 +59,16 @@ export const temporalJitter = <T extends { x: number; y: number }>(frame: number
 /** What remembered contrast keeps of itself per frame, so half of it is left after one cycle of jitter. */
 export const contrastFadeFor = (scale: number): number => Math.pow(0.5, 1 / jitterPhases(scale));
 
+/** How far the camera may move in a frame, in metres, and still count as holding still: fully, then not at all. */
+const STILL_CAMERA_DISTANCE = 0.005;
+const MOVING_CAMERA_DISTANCE = 0.03;
+
+/** 1 for a camera standing still, down to 0 as it moves through the world, from how far it went in a frame. */
+export const cameraStillnessFor = (distance: number): number => {
+    const t = Math.min(1, Math.max(0, (distance - STILL_CAMERA_DISTANCE) / (MOVING_CAMERA_DISTANCE - STILL_CAMERA_DISTANCE)));
+    return 1 - t * t * (3 - 2 * t);
+};
+
 /** Mip levels to shift texture lookups by, so a smaller picture keeps the texture detail of the output size. */
 export const mipBiasFor = (scale: number): number => Math.log2(clampRenderScale(scale)) + GATHERED_MIP_BIAS;
 

@@ -161,6 +161,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/lighting/bakedLighting.ts': 'pure-utility',
   'runtime/lighting/distanceShadows.ts': 'hot-loop',
   'runtime/lighting/skyScene.ts': 'hot-loop',
+  'runtime/keptDepth.ts': 'hot-loop',
   'runtime/temporal/mipBias.ts': 'pure-utility',
   'runtime/temporal/temporalSettings.ts': 'pure-utility',
   'runtime/temporal/temporalShaders.ts': 'pure-utility',
