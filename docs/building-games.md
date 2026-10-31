@@ -25,7 +25,7 @@ Each level should have a **Player Start**; without one the player spawns at the 
 - **WebGPU**: the newer renderer. Where a machine cannot run it, the level draws with WebGL2 instead and the reason goes in the renderer's report.
 - **Auto**: WebGPU where the machine has it, WebGL2 elsewhere.
 
-Two things still need WebGL2. Baking light does: set the Renderer to WebGL2 while you bake, and the baked light then works on either. A Reflection Probe makes no picture on WebGPU, so what it covers reflects the sky instead.
+A Reflection Probe makes no picture on WebGPU yet, so what it covers reflects the sky instead.
 
 To try a renderer without changing the project, add `?renderer=webgpu`, `?renderer=webgl2` or `?renderer=auto` to the page's address. It wins over the setting for that page.
 

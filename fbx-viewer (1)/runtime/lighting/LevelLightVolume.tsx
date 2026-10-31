@@ -13,6 +13,9 @@ import { lightBakeJobs, type LightBakeJob } from './lightBakeJobs';
 import { LightBaker } from './lightBaker';
 import { isGpuRenderer } from '../../renderer/gpu/frame';
 
+const GpuLightVolumeBinding = React.lazy(() => import('../../renderer/gpu/gi/GpuBakedLighting').then(module => ({ default: module.GpuLightVolumeBinding })));
+const GpuLightBakeRunner = React.lazy(() => import('../../renderer/gpu/gi/GpuBakedLighting').then(module => ({ default: module.GpuLightBakeRunner })));
+
 /** Lights the scene with a level's baked volume while mounted; nothing until it has loaded. */
 export const LevelLightVolume: React.FC<{ bakedLighting?: LevelBakedLighting | null }> = ({ bakedLighting }) => {
     const scene = useThree(state => state.scene);
@@ -41,14 +44,23 @@ export const LevelLightVolume: React.FC<{ bakedLighting?: LevelBakedLighting | n
             intensity,
         });
     }, [scene, probes, loaded, intensity]);
-    return null;
+    const onGpuRenderer = useThree(state => isGpuRenderer(state.gl));
+    if (!onGpuRenderer) return null;
+    return <React.Suspense fallback={null}><GpuLightVolumeBinding /></React.Suspense>;
 };
 
 /** Milliseconds of each frame given to a bake. */
 const BAKE_BUDGET_MS = 20;
 
-/** Bakes the light a panel asks for (lightBakeJobs) in this view's scene, a few probes a frame. */
+/** Bakes the light a panel asks for (lightBakeJobs) in this view's scene, with whichever renderer draws it. */
 export const LightBakeRunner: React.FC = () => {
+    const onGpuRenderer = useThree(state => isGpuRenderer(state.gl));
+    if (onGpuRenderer) return <React.Suspense fallback={null}><GpuLightBakeRunner /></React.Suspense>;
+    return <WebglLightBakeRunner />;
+};
+
+/** The bake on WebGL2, a few probes a frame. */
+const WebglLightBakeRunner: React.FC = () => {
     const gl = useThree(state => state.gl);
     const scene = useThree(state => state.scene);
     const invalidate = useThree(state => state.invalidate);
@@ -73,11 +85,6 @@ export const LightBakeRunner: React.FC = () => {
             active.current = current = null;
         }
         if (!job) return;
-        // The baker captures cubes and reads them back with WebGL. Said out loud, or the panel would wait on it for ever.
-        if (isGpuRenderer(gl)) {
-            if (!job.started) lightBakeJobs.fail(job, new Error('Light baking needs the WebGL renderer for now.'));
-            return;
-        }
         try {
             if (!current) {
                 // Several views of one level each run a runner; the first to see the bake takes it.
