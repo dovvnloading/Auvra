@@ -7,9 +7,9 @@ from dataclasses import dataclass
 import json
 import errno
 import os
+import shutil  # noqa: F401 - tests hold this module's `shutil.which` to prove it is never trusted
 from pathlib import Path
 import re
-import shutil
 import stat
 import sys
 import time

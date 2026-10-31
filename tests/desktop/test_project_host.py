@@ -848,7 +848,7 @@ class NativeProjectHostTests(unittest.TestCase):
             self._assert_native_failure("project.importPack", {"sourceHandle": "pack"}, destination)
 
         self.host._native_engine = None
-        created = self.host.handle("project.create", {"name": "LegacyFailure"})
+        self.host.handle("project.create", {"name": "LegacyFailure"})
         legacy_path = self.host.service.active.path
         native.fail_hydrate = True
         self.host._native_engine = native
@@ -898,7 +898,7 @@ class NativeProjectHostTests(unittest.TestCase):
     def test_import_pack_and_legacy_each_hydrate_once(self) -> None:
         native = _NativeRecorder()
         self.host.set_native_engine_host(native)
-        created = self.host.handle("project.create", {"name": "ImportTarget"})
+        self.host.handle("project.create", {"name": "ImportTarget"})
         native.hydrations.clear()
         source = self.root / "source.auvrapack"
         source.write_bytes(b"placeholder")

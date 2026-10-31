@@ -1195,8 +1195,8 @@ const text = (value: unknown): string => (typeof value === 'string' ? value.trim
 const runUseAbility: WorldNodeExecutor = (_node, ctx) => {
     const actor = toActorId(ctx.evaluate('Actor'));
     const ability = text(ctx.evaluate('Ability'));
-    const use = ctx.services.useAbility;
-    const reason = actor && ability && use ? use(actor, ability, toActorId(ctx.evaluate('Target'))) : 'unknown';
+    const activate = ctx.services.useAbility;
+    const reason = actor && ability && activate ? activate(actor, ability, toActorId(ctx.evaluate('Target'))) : 'unknown';
     finish(ctx, { Used: reason === null, Reason: reason ?? '' });
 };
 

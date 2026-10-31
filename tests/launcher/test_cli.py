@@ -82,12 +82,15 @@ class CliParserTests(unittest.TestCase):
         self.assertEqual(cli.main(["start", "--port", "not-a-port"]), cli.ExitCode.USAGE)
 
     def test_supported_and_unsupported_runtime_version_parsing(self) -> None:
-        self.assertEqual(diagnostics.parse_version("v22.12.0"), (22, 12, 0))
+        self.assertEqual(diagnostics.parse_version("v22.13.0"), (22, 13, 0))
         self.assertEqual(diagnostics.parse_version("npm 11.6.2"), (11, 6, 2))
         self.assertIsNone(diagnostics.parse_version("version unknown"))
-        completed = mock.Mock(returncode=0, stdout="v22.12.0\n")
+        completed = mock.Mock(returncode=0, stdout="v22.13.0\n")
         with mock.patch.object(diagnostics.shutil, "which", return_value="node.exe"):
             self.assertTrue(diagnostics.check_node(runner=mock.Mock(return_value=completed)).ok)
+        completed.stdout = "v22.12.0\n"
+        with mock.patch.object(diagnostics.shutil, "which", return_value="node.exe"):
+            self.assertFalse(diagnostics.check_node(runner=mock.Mock(return_value=completed)).ok)
         completed.stdout = "v23.0.0\n"
         with mock.patch.object(diagnostics.shutil, "which", return_value="node.exe"):
             self.assertFalse(diagnostics.check_node(runner=mock.Mock(return_value=completed)).ok)
@@ -102,7 +105,7 @@ class CliParserTests(unittest.TestCase):
 
         def owned_runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
             calls.append((argv, kwargs))
-            return subprocess.CompletedProcess(argv, 0, "v22.12.0\n", "")
+            return subprocess.CompletedProcess(argv, 0, "v22.13.0\n", "")
 
         with mock.patch.object(diagnostics.shutil, "which", return_value="node.exe"):
             result = diagnostics.check_node(runner=owned_runner)

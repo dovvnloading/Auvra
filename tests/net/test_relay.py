@@ -19,7 +19,7 @@ class Client:
     async def connect(cls, port: int, origin: str | None = None) -> "Client":
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
         key = base64.b64encode(os.urandom(16)).decode("ascii")
-        headers = [f"GET / HTTP/1.1", f"Host: 127.0.0.1:{port}", "Upgrade: websocket", "Connection: Upgrade",
+        headers = ["GET / HTTP/1.1", f"Host: 127.0.0.1:{port}", "Upgrade: websocket", "Connection: Upgrade",
                    f"Sec-WebSocket-Key: {key}", "Sec-WebSocket-Version: 13"]
         if origin:
             headers.append(f"Origin: {origin}")

@@ -2,18 +2,15 @@ from __future__ import annotations
 
 import os
 import sys
-import tempfile
 import threading
-import time
 import types
 import unittest
 from unittest import mock
-from pathlib import Path
 
-from Auvra.desktop.contracts import FrameConfig, FrameMode, FrameStartupError, FrameState, FrameUnavailableError
+from Auvra.desktop.contracts import FrameConfig, FrameMode, FrameStartupError, FrameState
 from Auvra.desktop.assets import ASSET_ORIGIN, AssetResourceResponse
 from Auvra.desktop.webview2 import WebView2Frame
-from .fakes import EventArgs, download, frame_navigation, message, navigation, new_window, permission, resource
+from .fakes import EventArgs, download, message, navigation, new_window, permission, resource
 
 
 class WebView2HandlerTests(unittest.TestCase):

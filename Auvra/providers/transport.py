@@ -7,7 +7,7 @@ import http.client
 import ssl
 from dataclasses import dataclass, field
 from typing import BinaryIO, Iterable, Iterator, Mapping, Protocol
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlsplit
 
 from .errors import ErrorCode, ProviderError, from_http_status
 from Auvra.diagnostics import trace_public_class

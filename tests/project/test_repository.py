@@ -3,7 +3,7 @@ import io, json, os, subprocess, sys, tempfile, time, unittest, zipfile
 from pathlib import Path
 from unittest import mock
 
-from Auvra.project import ProjectRepository, AssetStore, ProjectIndex, ProjectService, canonical_json
+from Auvra.project import ProjectRepository, ProjectIndex, ProjectService, canonical_json
 import Auvra.project.repository as repository_module
 from Auvra.project.errors import (ArchiveValidationError, InvalidProjectError,
                                   ReadOnlyError, RecoveryRequiredError, RevisionConflictError)

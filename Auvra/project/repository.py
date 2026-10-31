@@ -1,8 +1,7 @@
 """Transactional native project repository."""
 from __future__ import annotations
 
-import copy, hashlib, json, os, re, shutil, tempfile, time, uuid, zipfile
-import stat
+import copy, hashlib, os, re, shutil, tempfile, time, uuid, zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -17,7 +16,7 @@ from .locking import ProjectLock
 from . import migrations as _migrations
 from .schemas import (DOMAIN_NAMES, domain_document, validate_domain,
                       validate_project_descriptor, validate_project_references)
-from .serialization import atomic_dump_json, canonical_json, dump_json, load_json
+from .serialization import atomic_dump_json, dump_json, load_json
 
 FORMAT = "auvra.project"
 VERSION = 1

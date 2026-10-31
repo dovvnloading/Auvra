@@ -16,7 +16,12 @@ interface AnimationControlsProps {
   onSpeedChange: (speed: number) => void;
 }
 
-export const AnimationControls: React.FC<AnimationControlsProps> = ({
+export const AnimationControls: React.FC<AnimationControlsProps> = ({ model, ...rest }) => {
+  if (!model) return null;
+  return <LoadedAnimationControls model={model} {...rest} />;
+};
+
+const LoadedAnimationControls: React.FC<AnimationControlsProps & { model: NonNullable<AnimationControlsProps['model']> }> = ({
   model,
   activeClip,
   isPlaying,
@@ -26,8 +31,6 @@ export const AnimationControls: React.FC<AnimationControlsProps> = ({
   onSpeedChange
 }) => {
   const { models, addAnimations, isLoading, mirrorClip } = useScene();
-
-  if (!model) return null;
 
   // Aggregate animations from the current model and all other models in the scene
   const allClips = useMemo(() => {

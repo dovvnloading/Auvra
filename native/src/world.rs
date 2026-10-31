@@ -392,7 +392,7 @@ impl World {
     pub fn snapshot_page(&self, offset: usize, limit: usize) -> WorldSnapshot {
         let total = self.entities.len();
         let offset = offset.min(total);
-        let limit = limit.max(1).min(256);
+        let limit = limit.clamp(1, 256);
         let entities = self
             .entities
             .values()
@@ -723,7 +723,7 @@ fn compute_partition_motion(
 }
 
 fn canonical_commands(mut commands: Vec<WorldCommand>) -> Result<Vec<WorldCommand>, WorldError> {
-    commands.sort_by(|left, right| command_key(left).cmp(&command_key(right)));
+    commands.sort_by_key(command_key);
     let mut previous = None;
     for command in &commands {
         let key = command_key(command);
@@ -805,14 +805,14 @@ fn apply_command(
 }
 
 fn check_generation(id: &str, actual: u32, expected: Option<u32>) -> Result<(), WorldError> {
-    if let Some(expected) = expected {
-        if expected != actual {
-            return Err(WorldError::GenerationConflict {
-                id: id.into(),
-                expected,
-                actual,
-            });
-        }
+    if let Some(expected) = expected
+        && expected != actual
+    {
+        return Err(WorldError::GenerationConflict {
+            id: id.into(),
+            expected,
+            actual,
+        });
     }
     Ok(())
 }
@@ -859,10 +859,10 @@ fn validate_entity(entity: &Entity) -> Result<(), WorldError> {
     validate_rotation(entity.rotation)?;
     validate_scale(entity.scale)?;
     validate_velocity(entity.velocity)?;
-    if let Some(render) = &entity.render {
-        if let Some(hash) = &render.asset_hash {
-            validate_asset_hash(hash)?;
-        }
+    if let Some(render) = &entity.render
+        && let Some(hash) = &render.asset_hash
+    {
+        validate_asset_hash(hash)?;
     }
     if let Some(light) = &entity.light {
         validate_light(light)?;

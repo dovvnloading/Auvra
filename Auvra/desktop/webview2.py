@@ -349,7 +349,7 @@ class WebView2Frame:
             self._fail("runtime_unavailable", "Auvra WebView2 frame is available on Windows only")
             raise FrameStartupError("Auvra WebView2 frame is available on Windows only")
         try:
-            import clr  # type: ignore[import-not-found]
+            import clr  # type: ignore[import-not-found]  # noqa: F401
             from System.Threading import ApartmentState, Thread, ThreadStart  # type: ignore[import-not-found]
             thread = Thread(ThreadStart(self._run_native))
             # SetApartmentState must happen before Start. WinForms requires an
@@ -426,7 +426,7 @@ class WebView2Frame:
                 raise FrameUnavailableError("the WebView2 native loader directory could not be secured") from exc
             clr.AddReference(str(self._sdk.core_assembly))
             clr.AddReference(str(self._sdk.winforms_assembly))
-            from System import Action  # type: ignore[import-not-found]
+            from System import Action  # type: ignore[import-not-found]  # noqa: F401
             from System.Windows.Forms import Application, DockStyle, Form  # type: ignore[import-not-found]
             from Microsoft.Web.WebView2.Core import CoreWebView2Environment  # type: ignore[import-not-found]
             from Microsoft.Web.WebView2.WinForms import (  # type: ignore[import-not-found]

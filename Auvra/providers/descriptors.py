@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Iterable, Mapping
+from typing import Iterable
 from urllib.parse import urlsplit
 
 

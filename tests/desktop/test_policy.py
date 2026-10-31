@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import Auvra.desktop.contracts as contracts
-from Auvra.desktop.controller import _new_profile
+from Auvra.desktop.controller import _new_profile, _remove_profile
 from Auvra.desktop.contracts import FrameConfig, FrameConfigurationError, FrameMode
 from Auvra.desktop.policy import FramePolicy
 
@@ -93,7 +93,6 @@ class PolicyTests(unittest.TestCase):
                                      development_origin="http://127.0.0.1:3000",
                                      user_data_folder=lease.path)
                 self.assertEqual(config.user_data_folder, lease.path)
-                from Auvra.desktop.controller import _remove_profile
                 _remove_profile(lease)
 
     def test_profile_marker_without_lease_cannot_authorize_cleanup(self):
@@ -101,7 +100,6 @@ class PolicyTests(unittest.TestCase):
             forged = Path(temp) / "webview2-forged"
             forged.mkdir()
             (forged / contracts._PROFILE_LEASE_MARKER).write_text("A" * 43 + "\n", encoding="ascii")
-            from Auvra.desktop.controller import _remove_profile
             _remove_profile(type("ForgedLease", (), {"path": forged, "token": "A" * 43})())
             self.assertTrue(forged.exists())
 
@@ -110,7 +108,6 @@ class PolicyTests(unittest.TestCase):
             lease = _new_profile(Path(temp))
             marker = lease.path / contracts._PROFILE_LEASE_MARKER
             marker.write_text("wrong-token\n", encoding="ascii")
-            from Auvra.desktop.controller import _remove_profile
             _remove_profile(lease)
             self.assertTrue(lease.path.exists())
             marker.unlink()
@@ -143,7 +140,6 @@ class PolicyTests(unittest.TestCase):
                 self.skipTest("directory symlinks unavailable")
             original = lease.path
             lease.path = alias
-            from Auvra.desktop.controller import _remove_profile
             _remove_profile(lease)
             lease.path = original
             self.assertTrue(target.exists())
