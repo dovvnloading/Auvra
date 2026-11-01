@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Bot, Box, Plus, Send, Target, Terminal } from 'lucide-react';
 import { HUDElement } from './types';
-import { hostProviderService, CommandProposal, InferenceJob } from '../../services/HostProviderService';
+import { hostProviderService, CommandProposal } from '../../services/HostProviderService';
+import { AiRouteBar } from '../Settings/AiRouteBar';
 
 interface AIChatPanelProps {
     elements: HUDElement[];
@@ -46,17 +47,6 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
 
-    const waitForJob = async (initial: InferenceJob): Promise<InferenceJob> => {
-        let job = initial;
-        for (let attempt = 0; attempt < 120; attempt += 1) {
-            if (job.status === 'succeeded' || job.status === 'failed' || job.status === 'cancelled') return job;
-            if (!job.jobId) throw new Error('The host did not return a command job id.');
-            await new Promise<void>((resolve) => setTimeout(resolve, 250));
-            job = await hostProviderService.getInference(job.jobId);
-        }
-        throw new Error('Command proposal timed out.');
-    };
-
     const handleSubmit = async (event: React.FormEvent) => {
         event.preventDefault();
 
@@ -73,7 +63,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
                 ...(activeContextId === 'create' ? {} : { targetElementId: activeContextId }),
                 consent: 'explicit',
             });
-            const completed = await waitForJob(job);
+            const completed = await hostProviderService.waitForJob(job);
             if (completed.status !== 'succeeded') throw new Error(completed.error?.message || 'The command job failed.');
             const proposal = await hostProviderService.previewCommand({ jobId: completed.jobId });
             setProposalState({ proposal, jobId: completed.jobId });
@@ -108,6 +98,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
     return (
         <div className="flex flex-col h-full bg-gray-900 border-t border-gray-800">
             <div className="p-4 bg-gray-800/30 border-b border-gray-800 space-y-3 shrink-0">
+                <AiRouteBar capability="commands" label="HUD model" />
                 <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded bg-gray-900 border border-gray-700 flex items-center justify-center shrink-0">
                         <Terminal size={16} className="text-blue-400" />

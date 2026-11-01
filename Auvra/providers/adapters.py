@@ -11,6 +11,7 @@ from urllib.parse import unquote, urlsplit
 from .commands import CommandProposal, provider_command_schema, validate_provider_command
 from .descriptors import Capability, ProviderDescriptor, ProviderRegistry
 from .errors import ErrorCode, ProviderError, normalize_error
+from .fal_catalog import SEED_MODELS, CatalogModel, FalCatalog, build_media_request
 from .media import MediaArtifact, MediaDownloader
 from .transport import BoundedTransport, HttpRequest, Transport
 from Auvra.diagnostics import trace_public_class
@@ -21,6 +22,14 @@ _COMMAND_TOOL_DESCRIPTION = "Propose HUD element commands for the host to review
 # Forced tool_choice ("tool"/"any") is rejected by the newest Claude models, so tool routes ask with
 # "auto" and this instruction; a reply without the call fails host validation like any bad proposal.
 _COMMAND_TOOL_INSTRUCTION = f"Reply only by calling the {COMMAND_TOOL_NAME} tool once with the proposed commands."
+# A long answer can take a while, and nothing comes back until it has all been written.
+_TEXT_TIMEOUT_SECONDS = 120.0
+_FAL_RUN_ORIGIN = "https://fal.run"
+# fal's router into OpenRouter's language models, which speaks the OpenAI chat format.
+_FAL_CHAT_PATH = "/openrouter/router/openai/v1/chat/completions"
+_FAL_MAX_OUTPUT_TOKENS = 8192
+_FAL_MEDIA_MAX_BYTES = 128 * 1024 * 1024
+_FAL_MODEL_PATH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)+\Z")
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +51,8 @@ class MediaJob:
     provider: str
     model: str
     request_id: str
+    # Where the job is followed, when the provider has said: not always under the model's own name.
+    queue_root: str | None = None
 
     def __repr__(self) -> str:
         return f"MediaJob(provider={self.provider!r}, model={self.model!r}, request_id_present={bool(self.request_id)})"
@@ -112,11 +123,12 @@ class Adapter:
         if self.provider_id == "openrouter": return "/api/v1/models"
         return "/v1/models"
 
-    def _json(self, method: str, path: str, payload: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
-        url = self.endpoint.rstrip("/") + "/" + path.lstrip("/")
+    def _json(self, method: str, path: str, payload: Mapping[str, Any] | None = None, *,
+              origin: str | None = None, timeout: float = 30.0) -> Mapping[str, Any]:
+        url = (origin or self.endpoint).rstrip("/") + "/" + path.lstrip("/")
         # GET requests have no object body in any provider contract.
         body = b"" if method.upper() == "GET" else json.dumps(payload or {}, separators=(",", ":")).encode()
-        response = self.transport.request(HttpRequest(method, url, self._headers(), body))
+        response = self.transport.request(HttpRequest(method, url, self._headers(), body, timeout))
         value = response.json()
         if not isinstance(value, Mapping): raise ProviderError(ErrorCode.REMOTE, "provider returned an invalid object", self.provider_id)
         return value
@@ -135,7 +147,7 @@ class TextAdapter(Adapter):
         try: capability = Capability(capability)
         except (TypeError, ValueError) as exc: raise ProviderError(ErrorCode.UNSUPPORTED_CAPABILITY, "capability is not supported", self.provider_id) from exc
         if structured_command: capability = Capability.COMMANDS
-        if capability not in {Capability.TEXT, Capability.CODE, Capability.COMMANDS} or model not in self.models or not self.descriptor.supports(capability):
+        if capability not in {Capability.TEXT, Capability.CODE, Capability.COMMANDS} or not self.registry.supports(self.provider_id, capability, model):
             raise ProviderError(ErrorCode.UNSUPPORTED_CAPABILITY, "provider/model does not support requested capability", self.provider_id)
         try: value = self._complete_json(model=model, prompt=prompt, system=system, temperature=temperature,
                                          structured_command=structured_command)
@@ -172,7 +184,7 @@ class TextAdapter(Adapter):
             if system: payload["instructions"] = system
             if temperature is not None: payload["temperature"] = temperature
             if schema is not None: payload["text"] = {"format": {"type": "json_schema", "name": COMMAND_TOOL_NAME, "strict": True, "schema": schema}}
-        elif self.provider_id == "openrouter":
+        elif self.provider_id in {"openrouter", "fal"}:
             payload["provider"] = {"allow_fallbacks": False, "require_parameters": True, "data_collection": "deny"}
             if schema is not None and model.startswith("anthropic/"):
                 # Claude endpoints cannot compile the strict schema (see the anthropic branch below),
@@ -207,7 +219,10 @@ class TextAdapter(Adapter):
             path = "/api/v1/chat/completions"
         elif self.provider_id == "llama.cpp":
             path = "/v1/chat/completions"
-        return self._json("POST", path, payload)
+        elif self.provider_id == "fal":
+            payload["max_tokens"] = _FAL_MAX_OUTPUT_TOKENS
+            return self._json("POST", _FAL_CHAT_PATH, payload, origin=_FAL_RUN_ORIGIN, timeout=_TEXT_TIMEOUT_SECONDS)
+        return self._json("POST", path, payload, timeout=_TEXT_TIMEOUT_SECONDS)
 
     def _extract_text(self, value: Mapping[str, Any]) -> str:
         if self.provider_id == "anthropic":
@@ -261,29 +276,60 @@ class LlamaCppAdapter(TextAdapter): provider_id = "llama.cpp"
 
 
 @trace_public_class("provider_adapter", concise=(
-    "submit", "status", "result", "cancel", "upload_input", "download_output",
+    "submit", "status", "result", "cancel", "upload_input", "download_output", "media_request",
 ))
-class FalAdapter(Adapter):
+class FalAdapter(TextAdapter):
+    """Media through fal's queue, and language models through its router into OpenRouter's."""
     provider_id = "fal"
+
+    def __init__(self, transport: Transport, *, credential_store: Any = None, registry: ProviderRegistry | None = None,
+                 endpoint: str | None = None, catalog_path: Any = None) -> None:
+        super().__init__(transport, credential_store=credential_store, registry=registry, endpoint=endpoint)
+        self.transport = BoundedTransport(transport, allowed_origins=self.descriptor.origins, error_detail=_fal_error_detail)
+        self.catalog = FalCatalog(transport, key=self._catalog_key, cache_path=catalog_path)
+        self.registry.discover_models(self.provider_id, self.registry.models(self.provider_id), SEED_MODELS)
+
+    def _catalog_key(self) -> str | None:
+        return self.credentials.read(self.descriptor.credential_name) if self.credentials is not None else None
+
+    def list_models(self) -> tuple[str, ...]:
+        """Every model on offer. What a route already names stays allowed if it has since left the catalog."""
+        capabilities = {**SEED_MODELS, **{model.model_id: model.capabilities for model in self.catalog.models()}}
+        self._models.update(capabilities, self.registry.models(self.provider_id))
+        self.registry.discover_models(self.provider_id, self._models, capabilities)
+        return tuple(sorted(self._models))
+
+    def model_details(self, model: str) -> CatalogModel | None:
+        return self.catalog.get(model)
+
+    def media_request(self, *, model: str, prompt: str, images: list[str], size: tuple[int, int] | None = None) -> dict[str, Any]:
+        """What to send `model` for this job, in the shape it says it takes."""
+        return build_media_request(self.catalog.request_schema(model), model=model, prompt=prompt, images=images, size=size)
 
     def submit(self, *, model: str, payload: Mapping[str, Any], capability: Capability | str = Capability.MEDIA_GENERATE) -> MediaJob:
         try: capability = Capability(capability)
         except (TypeError, ValueError) as exc: raise ProviderError(ErrorCode.UNSUPPORTED_CAPABILITY, "fal capability is not supported", self.provider_id) from exc
         if not isinstance(payload, Mapping):
             raise ProviderError(ErrorCode.INVALID_REQUEST, "fal request payload is invalid", self.provider_id)
-        if capability not in {Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT} or not self.descriptor.supports(capability, model):
+        if capability not in {Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT} or not self.registry.supports(self.provider_id, capability, model):
             raise ProviderError(ErrorCode.UNSUPPORTED_CAPABILITY, "fal model is not registered", self.provider_id)
-        if capability == Capability.MEDIA_EDIT and model != "fal-ai/flux/dev/image-to-image": raise ProviderError(ErrorCode.UNSUPPORTED_CAPABILITY, "fal edit model is not supported", self.provider_id)
-        if capability == Capability.MEDIA_GENERATE and model != "fal-ai/flux/dev": raise ProviderError(ErrorCode.UNSUPPORTED_CAPABILITY, "fal generation model is not supported", self.provider_id)
+        if _FAL_MODEL_PATH.fullmatch(model) is None:
+            raise ProviderError(ErrorCode.ENDPOINT_NOT_ALLOWED, "fal job endpoint is not allowed", self.provider_id)
         result = self._json("POST", f"/{model}", payload)
         request_id = result.get("request_id") or result.get("id")
         if not _valid_remote_id(request_id):
             raise ProviderError(ErrorCode.REMOTE, "fal response contained no request id", self.provider_id)
-        return MediaJob(self.provider_id, model, request_id)
+        return MediaJob(self.provider_id, model, request_id, _fal_queue_root(result.get("status_url"), request_id))
+
+    @staticmethod
+    def _queue_root(job: MediaJob) -> str:
+        # A job is followed under its app, as fal says when it takes it: fal-ai/flux/dev/image-to-image answers at
+        # fal-ai/flux, and an alias at the name of what it stands for.
+        return job.queue_root or "/".join(job.model.split("/")[:2])
 
     def status(self, job: MediaJob) -> Mapping[str, Any]:
         self._validate_job(job)
-        return self._json("GET", f"/{job.model}/requests/{job.request_id}/status")
+        return self._json("GET", f"/{self._queue_root(job)}/requests/{job.request_id}/status")
 
     @staticmethod
     def status_state(value: Mapping[str, Any]) -> str:
@@ -292,11 +338,11 @@ class FalAdapter(Adapter):
 
     def result(self, job: MediaJob) -> Mapping[str, Any]:
         self._validate_job(job)
-        return self._json("GET", f"/{job.model}/requests/{job.request_id}")
+        return self._json("GET", f"/{self._queue_root(job)}/requests/{job.request_id}")
 
     def cancel(self, job: MediaJob) -> bool:
         self._validate_job(job)
-        url = self.endpoint.rstrip("/") + f"/{job.model}/requests/{job.request_id}/cancel"
+        url = self.endpoint.rstrip("/") + f"/{self._queue_root(job)}/requests/{job.request_id}/cancel"
         response = self.transport.request(HttpRequest("PUT", url, self._headers(), b""))
         if response.status not in {200, 202, 204}: raise ProviderError(ErrorCode.REMOTE, "fal cancellation failed", self.provider_id, response.status >= 500, response.status)
         return True
@@ -316,7 +362,7 @@ class FalAdapter(Adapter):
     def download_output(self, url: str, *, sink, expected_sha256: str | None = None,
                         expected_size: int | None = None) -> MediaArtifact:
         """Stream one Fal CDN artifact through the dedicated media policy."""
-        return MediaDownloader(max_bytes=128 * 1024 * 1024).download(
+        return MediaDownloader(max_bytes=_FAL_MEDIA_MAX_BYTES).download(
             url, transport=self._raw_transport, sink=sink,
             expected_sha256=expected_sha256, expected_size=expected_size,
             allowed_content_types=("image/",),
@@ -325,13 +371,43 @@ class FalAdapter(Adapter):
     def _validate_job(self, job: MediaJob) -> None:
         if not isinstance(job, MediaJob) or job.provider != self.provider_id:
             raise ProviderError(ErrorCode.INVALID_REQUEST, "fal job is invalid", self.provider_id)
-        # Models are registered route segments (and may contain one slash),
-        # while request IDs are a single opaque path segment. Re-check both
-        # here because MediaJob is public and can be constructed by callers.
-        if job.model not in self.descriptor.models or any(part in {"", ".", ".."} for part in job.model.split("/")):
+        # Models are registered route segments, while request IDs are a single
+        # opaque path segment. Re-check both here because MediaJob is public
+        # and can be constructed by callers.
+        roots = (job.model, job.queue_root) if job.queue_root is not None else (job.model,)
+        if job.model not in self.registry.models(self.provider_id) or any(_FAL_MODEL_PATH.fullmatch(item) is None or ".." in item.split("/") for item in roots):
             raise ProviderError(ErrorCode.ENDPOINT_NOT_ALLOWED, "fal job endpoint is not allowed", self.provider_id)
         if not _valid_remote_id(job.request_id):
             raise ProviderError(ErrorCode.ENDPOINT_NOT_ALLOWED, "fal job endpoint is not allowed", self.provider_id)
+
+
+def _fal_queue_root(status_url: Any, request_id: str) -> str | None:
+    """The app a job is followed under, from the status URL fal gave for it. None for anything else."""
+    if not isinstance(status_url, str):
+        return None
+    try:
+        parsed = urlsplit(status_url)
+    except ValueError:
+        return None
+    suffix = f"/requests/{request_id}/status"
+    if parsed.scheme != "https" or parsed.netloc != "queue.fal.run" or not parsed.path.endswith(suffix):
+        return None
+    root = parsed.path[1:-len(suffix)]
+    return root if _FAL_MODEL_PATH.fullmatch(root) is not None and ".." not in root.split("/") else None
+
+
+def _fal_error_detail(body: bytes) -> str | None:
+    """What fal says went wrong, for the person who asked: a bad input, an empty balance."""
+    try:
+        value = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    detail = value.get("detail", value.get("error", value.get("message"))) if isinstance(value, Mapping) else None
+    if isinstance(detail, Mapping):
+        detail = detail.get("message")
+    if isinstance(detail, list) and detail and isinstance(detail[0], Mapping):
+        detail = detail[0].get("msg")
+    return " ".join(detail.split())[:240] or None if isinstance(detail, str) else None
 
 
 _UPLOAD_MIME_RE = re.compile(r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$")

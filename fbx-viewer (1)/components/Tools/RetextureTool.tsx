@@ -5,8 +5,11 @@ import { useScene } from '../../context/SceneContext';
 import { extractTextureFromModel } from '../../utils/textureUtils';
 import { useTextureGeneration } from '../../hooks/useTextureGeneration';
 import { useNotification } from '../../context/NotificationContext';
+import { AiRouteBar } from '../Settings/AiRouteBar';
 
-const isRenderablePreview = (value: string | null): value is string => Boolean(value && /^https:\/\/assets\.auvra\.local\/v1\/get\/[A-Za-z0-9_-]{43}$/.test(value));
+const isRenderablePreview = (value: string | null): value is string => Boolean(value?.startsWith('blob:'));
+// The map a model carries comes out as a data URL, and is only ever shown, not applied.
+const isShowable = (value: string | null): value is string => Boolean(value && (value.startsWith('data:image/') || isRenderablePreview(value)));
 
 interface RetextureToolProps {
   onClose: () => void;
@@ -45,7 +48,8 @@ export const RetextureTool: React.FC<RetextureToolProps> = ({ onClose }) => {
     } else {
        setCurrentTexture(null);
     }
-  }, [selectedModel, setCurrentTexture, isGenerating, generatedTextureUrl]);
+    // Only when the model changes: this also clears any error, which a job that just failed has only now set.
+  }, [selectedModel, setCurrentTexture]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 2. Auto-Preview Effect
   useEffect(() => {
@@ -100,7 +104,7 @@ export const RetextureTool: React.FC<RetextureToolProps> = ({ onClose }) => {
             
             {/* Preview Area */}
             <div className="texture-preview-surface aspect-square bg-gray-950 rounded border border-gray-800 relative group overflow-hidden">
-                {displayImage && isRenderablePreview(displayImage) ? (
+                {isShowable(displayImage) ? (
                     <img 
                         src={displayImage} 
                         alt="Texture Map" 
@@ -160,6 +164,7 @@ export const RetextureTool: React.FC<RetextureToolProps> = ({ onClose }) => {
                  </div>
             ) : (
                 <div className="space-y-3">
+                    <AiRouteBar capability="media.edit" label="Retexture model" />
                     <div className="space-y-1">
                         <label className="text-[10px] uppercase font-bold text-gray-500 tracking-wider">
                             Material Prompt

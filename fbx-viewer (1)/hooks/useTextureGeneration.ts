@@ -12,7 +12,8 @@ interface UseTextureGenerationResult {
   isGenerating: boolean;
   error: string | null;
   setCurrentTexture: (data: string | null) => void;
-  generate: (prompt: string, sourceImage: string, maskImage?: string) => Promise<void>;
+  /** With no source image, makes a new one from the prompt alone. */
+  generate: (prompt: string, sourceImage: string | null, maskImage?: string) => Promise<void>;
   apply: () => string | null;
   commit: (payload?: Record<string, unknown>) => Promise<string | null>;
   discard: () => Promise<void>;
@@ -28,9 +29,9 @@ export const useTextureGeneration = (initialTexture: string | null = null): UseT
   const [jobId, setJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const generate = useCallback(async (prompt: string, sourceImage: string, maskImage?: string) => {
+  const generate = useCallback(async (prompt: string, sourceImage: string | null, maskImage?: string) => {
     
-    if (!sourceImage || !prompt) return;
+    if (!prompt) return;
 
     setIsGenerating(true); setError(null); setProgress(0); setPreview(null);
 

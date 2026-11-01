@@ -272,6 +272,8 @@ _SCHEMA_PROFILES = {
     "llama.cpp": _SchemaProfile(strict=False, unsupported=frozenset({"multipleOf", "minProperties", "maxProperties"}), number_ranges=False, lengths_with_pattern=False),
 }
 _SCHEMA_PROFILES["ollama"] = _SCHEMA_PROFILES["llama.cpp"]
+# fal's language models are OpenRouter's, through its router.
+_SCHEMA_PROFILES["fal"] = _SCHEMA_PROFILES["openrouter"]
 COMMAND_SCHEMA_PROVIDERS = frozenset(_SCHEMA_PROFILES)
 
 def provider_command_schema(provider_id: str) -> dict[str, Any]:
