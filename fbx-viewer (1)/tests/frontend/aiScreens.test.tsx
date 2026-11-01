@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { applyKeptChanges, changesIn, diffScript, withEndingOf } from '../../components/Scripting/scriptDiff';
 import { ScriptChanges } from '../../components/Scripting/ScriptChanges';
 import { describeHudChange } from '../../components/HUDEditor/AIChatPanel';
 import { graphFromTextures } from '../../components/Materials/graphFromTextures';
 import { compileMaterialGraph, normalizeMaterialGraph } from '../../runtime/materials/materialGraph';
+import { SettingsModal } from '../../components/Settings/SettingsModal';
+import { hostProviderService } from '../../services/HostProviderService';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -76,6 +78,49 @@ describe('reviewing a proposed script', () => {
     screen.getByText('The answer is the same as the script');
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(onDiscard).toHaveBeenCalled();
+  });
+});
+
+describe('adding a key', () => {
+  const FAL = { id: 'fal', name: 'fal.ai', route: 'cloud' };
+
+  const openKeysPage = async () => {
+    let tell: (event: { event: string; payload: unknown }) => void = () => undefined;
+    vi.spyOn(hostProviderService, 'listProviders').mockResolvedValue([FAL] as never);
+    vi.spyOn(hostProviderService, 'getProviderStatus').mockResolvedValue({ id: 'fal', credentialStatus: 'absent' } as never);
+    vi.spyOn(hostProviderService, 'subscribeProviderEvents').mockImplementation((listener) => { tell = listener; return () => undefined; });
+    render(<SettingsModal onClose={() => undefined} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Keys' }));
+    return (event: { event: string; payload: unknown }) => tell(event);
+  };
+
+  it('points at the key window until it closes', async () => {
+    const tell = await openKeysPage();
+    vi.spyOn(hostProviderService, 'configureCredential').mockResolvedValue({ waiting: true });
+    fireEvent.click(await screen.findByRole('button', { name: 'Add key' }));
+    expect(await screen.findByText('Paste the key in the window that opened')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Add key' }) as HTMLButtonElement).disabled).toBe(true);
+    act(() => tell({ event: 'provider.status', payload: { providerId: 'fal', status: 'unconfigured', operation: 'key.cancelled' } }));
+    expect(await screen.findByText('No key')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('says what went wrong when the key could not be kept', async () => {
+    const tell = await openKeysPage();
+    vi.spyOn(hostProviderService, 'configureCredential').mockResolvedValue({ waiting: true });
+    fireEvent.click(await screen.findByRole('button', { name: 'Add key' }));
+    await screen.findByText('Paste the key in the window that opened');
+    act(() => tell({ event: 'provider.status', payload: { providerId: 'fal', status: 'unconfigured', operation: 'key.failed', message: 'The key could not be saved on this computer.' } }));
+    expect(await screen.findByText('The key could not be saved on this computer.')).toBeTruthy();
+    expect(screen.queryByText('Paste the key in the window that opened')).toBeNull();
+  });
+
+  it('has nothing to wait for when a host answers at once', async () => {
+    await openKeysPage();
+    vi.spyOn(hostProviderService, 'configureCredential').mockResolvedValue({});
+    fireEvent.click(await screen.findByRole('button', { name: 'Add key' }));
+    expect(await screen.findByText('No key')).toBeTruthy();
+    expect(screen.queryByText('Paste the key in the window that opened')).toBeNull();
   });
 });
 

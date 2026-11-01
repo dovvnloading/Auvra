@@ -79,7 +79,7 @@ export const AiRouteBar: React.FC<AiRouteBarProps> = ({ capability, label, onMod
   const addKey = async () => {
     setBusy(true); setMessage(null);
     try {
-      await hostProviderService.configureCredential(providerId, { remember: true });
+      await hostProviderService.addKey(providerId, { remember: true });
       await loadProviders();
     } catch (cause) {
       setMessage(cause instanceof Error ? cause.message : 'The key was not added.');

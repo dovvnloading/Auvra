@@ -123,6 +123,8 @@ class NativeProviderHost:
         # provider's durable settings row, never in a process-global budget.
         self.route_policy = RoutePolicy(self.registry)
         self.prompt = credential_prompt or WinFormsCredentialPrompt()
+        self._ui_invoker: Callable[[Callable[[], Any]], Any] = lambda callback: callback()
+        self._key_window: threading.Thread | None = None
         self.transports = dict(transports or {})
         self._adapters = dict(adapters or {})
         self._executor = executor or ThreadPoolExecutor(max_workers=2, thread_name_prefix="auvra-provider")
@@ -144,6 +146,10 @@ class NativeProviderHost:
         self._initialize_vault()
         self._restore_configured_models()
         self._recover_restart_jobs()
+
+    def set_ui_invoker(self, invoker: Callable[[Callable[[], Any]], Any]) -> None:
+        """Bind the frame's UI thread, where the key window belongs."""
+        self._ui_invoker = invoker
 
     def _initialize_vault(self) -> None:
         """Initialize and probe the OS vault before serving provider calls.
@@ -383,22 +389,38 @@ class NativeProviderHost:
                 raise HostOperationError("credential_unavailable", "Operating-system credential storage is unavailable") from exc
         else:
             raise HostOperationError("invalid_request", "Credential storage mode is invalid")
+        with self._lock:
+            if self._key_window is not None:
+                raise HostOperationError("locking", "A key window is already open")
+            self._key_window = threading.Thread(target=self._ask_for_key, args=(descriptor, store), daemon=True, name="auvra-key-window")
+            self._key_window.start()
+        status = self._credential_status(descriptor.provider_id)
+        return {"kind": "provider.credential", "providerId": descriptor.provider_id, "storageMode": mode,
+                "configured": status in {"configured", "memoryOnly"}, "credentialStatus": status, "waiting": True}
+
+    def _ask_for_key(self, descriptor: Any, store: Any) -> None:
+        """Wait for the key window apart from the host's one worker: finding a key can take a person a while, and saves go on meanwhile."""
+        operation, message = "key.saved", None
         try:
-            value = self.prompt.prompt(descriptor.display_name)
-        except CredentialPromptUnavailableError as exc:
-            raise HostOperationError("credential_unavailable", "Native credential entry is unavailable") from exc
-        if value is None:
-            raise HostOperationError("cancelled", "Credential entry was cancelled")
-        try:
-            store.write(descriptor.credential_name, value)
-        except Exception as exc:
-            raise HostOperationError("credential_unavailable", "Credential storage failed") from exc
-        finally:
-            value = ""
-        if descriptor.provider_id not in self._provided_adapters:
-            self._adapters.pop(descriptor.provider_id, None)
-        return {"kind": "provider.credential", "providerId": descriptor.provider_id,
-                "storageMode": mode, "configured": True, "credentialStatus": self._credential_status(descriptor.provider_id)}
+            value = self._ui_invoker(lambda: self.prompt.prompt(descriptor.display_name))
+            if value is None:
+                operation = "key.cancelled"
+            else:
+                try:
+                    store.write(descriptor.credential_name, value)
+                finally:
+                    value = ""
+        except CredentialPromptUnavailableError:
+            operation, message = "key.failed", "The key window could not open on this computer."
+        except Exception:
+            operation, message = "key.failed", "The key could not be saved on this computer."
+        with self._lock:
+            self._key_window = None
+            if operation == "key.saved" and descriptor.provider_id not in self._provided_adapters:
+                self._adapters.pop(descriptor.provider_id, None)
+        configured = self._credential_status(descriptor.provider_id) in {"configured", "memoryOnly"}
+        self._queue("provider.status", {"providerId": descriptor.provider_id, "status": "ready" if configured else "unconfigured",
+                                        "operation": operation, **({"message": message} if message else {})})
 
     def _delete_credential(self, payload: dict[str, Any]) -> dict[str, Any]:
         descriptor = self.registry.get(payload["providerId"])
