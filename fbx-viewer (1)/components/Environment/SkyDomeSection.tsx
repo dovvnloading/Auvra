@@ -1,3 +1,7 @@
+import { useAssets } from '../../context/AssetContext';
+import { textureService } from '../../services/TextureGenerationService';
+import { DescribeWithAI, nameFromWords } from '../Tools/DescribeWithAI';
+import { seamlessPanorama, skyInstruction, SKY_MEGAPIXELS } from '../Tools/paintedPictures';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Cloud, Moon, Pause, Play, Sparkles, Sun, SunDim, Wind } from 'lucide-react';
 import type { SkyConfig } from '../../types';
@@ -118,6 +122,29 @@ const PresetGallery: React.FC<{ current: string | undefined; onPick: (preset: Sk
     );
 };
 
+/** Paints a panorama from a description and keeps it in the project, its edges made to meet. */
+const SkyFromDescription: React.FC<{ onPainted: (textureId: string) => void }> = ({ onPainted }) => {
+    const { adoptHostTexture } = useAssets();
+    return (
+        <DescribeWithAI
+            capability="media.sky"
+            title="New sky from a description"
+            hint="A 360 degree panorama, its edges made to meet, kept with the project's textures."
+            placeholder="For example: a stormy sunset over a flat desert"
+            instruction={skyInstruction}
+            megapixels={SKY_MEGAPIXELS}
+            onPainted={async ({ job, preview, words }) => {
+                const name = nameFromWords(words);
+                const { picture, width, height } = await seamlessPanorama(preview.previewUrl);
+                const finishedAssetId = await textureService.ingestPicture(picture);
+                await textureService.commit(job.jobId, preview.previewAssetId, { name, finishedAssetId, textureId: finishedAssetId });
+                await adoptHostTexture(finishedAssetId, name, finishedAssetId, { width, height });
+                onPainted(finishedAssetId);
+            }}
+        />
+    );
+};
+
 /**
  * The sky's look: what draws it, a gallery of ready-made skies, and each of the things they set (the sun's
  * path, the air, the clouds and the night), then the Sky Light it lights the level with.
@@ -173,6 +200,10 @@ export const SkyDomeSection: React.FC<SkyDomeSectionProps> = ({ config, onScrub,
                                         {textures.map(texture => <option key={texture.id} value={texture.id}>{texture.name}</option>)}
                                     </select>
                                 </Row>
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="text-2xs text-gray-500">Or paint one</span>
+                                    <SkyFromDescription onPainted={(textureId) => onCommit({ ...config, panorama: { ...panorama, textureId } })} />
+                                </div>
                                 <Scrub label="Rotation °" value={panorama.rotation} step={1} onChange={(v) => setPanorama({ rotation: v })} />
                                 <Scrub label="Brightness" value={panorama.brightness} step={0.05} onChange={(v) => setPanorama({ brightness: Math.max(0, v) })} />
                             </div>

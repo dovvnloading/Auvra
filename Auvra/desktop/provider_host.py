@@ -29,7 +29,7 @@ from Auvra.providers import (
 )
 from Auvra.providers.adapters import MediaJob
 from Auvra.providers.credentials import MemoryCredentialStore, WindowsCredentialManager
-from Auvra.providers.fal_catalog import media_output_url, media_outputs, rough_job_cost
+from Auvra.providers.fal_catalog import SKY_SIZE, media_output_url, media_outputs, rough_job_cost
 from Auvra.providers.transport import StdlibTransport
 
 from .previews import PreviewError
@@ -698,7 +698,7 @@ class NativeProviderHost:
     def _commit_media(self, payload: dict[str, Any]) -> dict[str, Any]:
         active = self._require_project(payload, expected=True)
         job = self._require_job_project(payload)
-        if job.state.value != "succeeded" or job.capability not in {Capability.MEDIA_GENERATE.value, Capability.MEDIA_EDIT.value, Capability.MEDIA_MAPS.value, Capability.MEDIA_MESH.value, Capability.MEDIA_MATERIAL.value}:
+        if job.state.value != "succeeded" or job.capability not in {Capability.MEDIA_GENERATE.value, Capability.MEDIA_EDIT.value, Capability.MEDIA_MAPS.value, Capability.MEDIA_MESH.value, Capability.MEDIA_MATERIAL.value, Capability.MEDIA_SKY.value, Capability.MEDIA_DECAL.value}:
             raise HostOperationError("invalid_job", "Media job is not complete")
         meta = self._meta.get(job.job_id, {})
         # The picture as it was finished in the editor, already uploaded, which can be kept again after the preview has gone.
@@ -995,9 +995,9 @@ class NativeProviderHost:
                     meta["proposalId"] = meta["proposal"].proposal_id
                 else:
                     meta["outputText"] = result.text[:65536]
-            elif capability in {Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT, Capability.MEDIA_MAPS, Capability.MEDIA_MESH, Capability.MEDIA_MATERIAL}:
+            elif capability in {Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT, Capability.MEDIA_MAPS, Capability.MEDIA_MESH, Capability.MEDIA_MATERIAL, Capability.MEDIA_SKY, Capability.MEDIA_DECAL}:
                 references: list[str] = []
-                source_size: tuple[int, int] | None = None
+                source_size: tuple[int, int] | None = SKY_SIZE if capability == Capability.MEDIA_SKY else None
                 mesh_reference: str | None = None
                 if capability == Capability.MEDIA_MESH:
                     if not meta["assetIds"]:

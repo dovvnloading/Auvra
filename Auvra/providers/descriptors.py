@@ -21,6 +21,10 @@ class Capability(StrEnum):
     MEDIA_MESH = "media.mesh"
     # A description in, a seamless texture and its surface maps out.
     MEDIA_MATERIAL = "media.material"
+    # A description in, a 360 degree panorama out.
+    MEDIA_SKY = "media.sky"
+    # A description in, a picture on a transparent background out.
+    MEDIA_DECAL = "media.decal"
     # Compatibility spellings are aliases, not additional routable capabilities.
     STRUCTURED_COMMAND = "commands"
     MEDIA_GENERATION = "media.generate"
@@ -96,7 +100,7 @@ def _valid_origin(origin: str, kind: str) -> bool:
 _DESCRIPTORS = (
     # The whole catalog is discovered (see fal_catalog.py); these two are what is known before that.
     ProviderDescriptor("fal", "fal.ai", 1, "cloud", ("https://queue.fal.run", "https://rest.fal.ai", "https://fal.run"),
-                       frozenset({Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT, Capability.MEDIA_MAPS, Capability.MEDIA_MESH, Capability.MEDIA_MATERIAL, Capability.TEXT, Capability.CODE, Capability.COMMANDS}),
+                       frozenset({Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT, Capability.MEDIA_MAPS, Capability.MEDIA_MESH, Capability.MEDIA_MATERIAL, Capability.MEDIA_SKY, Capability.MEDIA_DECAL, Capability.TEXT, Capability.CODE, Capability.COMMANDS}),
                        ("fal-ai/flux/dev", "fal-ai/flux/dev/image-to-image"), "fal_api_key",
                        frozenset({ProviderFeature.QUEUE, ProviderFeature.CANCEL, ProviderFeature.DURABLE, ProviderFeature.UPLOAD, ProviderFeature.STRUCTURED_OUTPUT})),
     ProviderDescriptor("openai", "OpenAI", 1, "cloud", ("https://api.openai.com",),

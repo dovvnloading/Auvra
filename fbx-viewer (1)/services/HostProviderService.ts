@@ -15,7 +15,7 @@ const QUIET_PROVIDER_METHODS = new Set([
  * module into browser storage.
  */
 export type ProviderRoute = 'cloud' | 'local';
-export type ProviderCapability = 'media.generate' | 'media.edit' | 'media.maps' | 'media.mesh' | 'media.material' | 'text' | 'code' | 'commands';
+export type ProviderCapability = 'media.generate' | 'media.edit' | 'media.maps' | 'media.mesh' | 'media.material' | 'media.sky' | 'media.decal' | 'text' | 'code' | 'commands';
 export type CredentialStatus = 'configured' | 'memoryOnly' | 'absent' | 'notRequired' | 'unavailable';
 
 export interface ProviderSettings {
@@ -372,7 +372,7 @@ export class HostProviderService {
     this.clearConfiguration(providerId);
     if (settings?.enabled === false) return;
     const routes = Array.isArray(settings?.routes) ? settings.routes as Array<{ capability?: string; modelId?: string }> : [];
-    routes.forEach(({ capability, modelId }) => { if (capability && modelId && ['text', 'code', 'commands', 'media.generate', 'media.edit', 'media.maps', 'media.mesh', 'media.material'].includes(capability)) this.configuredModels[capability as ProviderCapability] = { providerId, modelId, route }; });
+    routes.forEach(({ capability, modelId }) => { if (capability && modelId && ['text', 'code', 'commands', 'media.generate', 'media.edit', 'media.maps', 'media.mesh', 'media.material', 'media.sky', 'media.decal'].includes(capability)) this.configuredModels[capability as ProviderCapability] = { providerId, modelId, route }; });
   }
   clearConfiguration(providerId: string): void { Object.keys(this.configuredModels).forEach((capability) => { if (this.configuredModels[capability as ProviderCapability]?.providerId === providerId) delete this.configuredModels[capability as ProviderCapability]; }); }
 

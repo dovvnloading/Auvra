@@ -19,8 +19,10 @@ const RECEIVER_MODES: readonly DecalReceiverMode[] = ['parent', 'scene'];
 export interface DecalSettings {
     /** Texture asset id or name; empty (or unknown) draws the tint alone. */
     textureId: string;
-    /** Projection box in metres, centred on the object's origin: width (local X), height (local Y), depth (local Z). */
+    /** Projection box in metres: width (local X), height (local Y), depth (local Z). */
     size: Vec3;
+    /** Where the box's centre is from the object's origin, in metres along its local axes: most props have their origin at their base. */
+    offset: Vec3;
     /** 0..1, multiplied with the texture's own alpha. */
     opacity: number;
     /** Tint multiplied with the texture. */
@@ -28,7 +30,7 @@ export interface DecalSettings {
     receivers: DecalReceiverMode;
 }
 
-export const DECAL_DEFAULTS: DecalSettings = { textureId: '', size: [1, 1, 0.5], opacity: 1, color: '#ffffff', receivers: 'parent' };
+export const DECAL_DEFAULTS: DecalSettings = { textureId: '', size: [1, 1, 3], offset: [0, 0, 0], opacity: 1, color: '#ffffff', receivers: 'parent' };
 
 /** Smallest side of the projection box, in metres. */
 export const MIN_DECAL_SIZE = 0.01;
@@ -46,6 +48,13 @@ const readSize = (value: unknown): Vec3 => {
     return [side(x), side(y), side(z)];
 };
 
+const readOffset = (value: unknown): Vec3 => {
+    const valid = Array.isArray(value) && value.length === 3 && value.every(v => typeof v === 'number' && Number.isFinite(v));
+    const [x, y, z] = valid ? value as Vec3 : DECAL_DEFAULTS.offset;
+    const axis = (length: number) => clamp(length, -MAX_DECAL_SIZE, MAX_DECAL_SIZE);
+    return [axis(x), axis(y), axis(z)];
+};
+
 /**
  * Stored decal props to settings: missing or invalid values fall back to the defaults, box sides
  * are made positive and clamped to MIN_DECAL_SIZE..MAX_DECAL_SIZE, opacity to 0..1.
@@ -55,6 +64,7 @@ export const resolveDecalSettings = (props: Record<string, unknown>): DecalSetti
     return {
         textureId: typeof textureId === 'string' ? textureId.trim() : DECAL_DEFAULTS.textureId,
         size: readSize(props.size),
+        offset: readOffset(props.offset),
         opacity: typeof opacity === 'number' && Number.isFinite(opacity) ? clamp(opacity, 0, 1) : DECAL_DEFAULTS.opacity,
         color: typeof color === 'string' && HEX_COLOR.test(color) ? color : DECAL_DEFAULTS.color,
         receivers: typeof receivers === 'string' && (RECEIVER_MODES as readonly string[]).includes(receivers)
@@ -474,11 +484,14 @@ const sameMatrix = (a: THREE.Matrix4, b: THREE.Matrix4): boolean => {
 /** What a decal projects with; DecalProjector.update re-projects when any of it changes. */
 export interface DecalRequest extends DecalReceiverOptions {
     size: Vec3;
+    /** From the owner's origin to the box's centre, along the owner's axes. */
+    offset?: Vec3;
 }
 
 const sameRequest = (a: DecalRequest, b: DecalRequest): boolean =>
     a.mode === b.mode && a.objectId === b.objectId && (a.model ?? null) === (b.model ?? null)
-    && a.size[0] === b.size[0] && a.size[1] === b.size[1] && a.size[2] === b.size[2];
+    && a.size[0] === b.size[0] && a.size[1] === b.size[1] && a.size[2] === b.size[2]
+    && (a.offset?.[0] ?? 0) === (b.offset?.[0] ?? 0) && (a.offset?.[1] ?? 0) === (b.offset?.[1] ?? 0) && (a.offset?.[2] ?? 0) === (b.offset?.[2] ?? 0);
 
 interface BuiltDecal {
     request: DecalRequest;
@@ -508,6 +521,7 @@ const createVolumeGeometry = (): THREE.BufferGeometry => {
 const _hostPosition = new THREE.Vector3();
 const _hostQuaternion = new THREE.Quaternion();
 const _hostScale = new THREE.Vector3();
+const _hostOffset = new THREE.Vector3();
 const _volumeScale = new THREE.Matrix4();
 const _trackInstance = new THREE.Matrix4();
 const _trackWorld = new THREE.Matrix4();
@@ -618,6 +632,7 @@ export class DecalProjector {
         if (!reconfigured && !moved && this.frame !== 0 && !this.receiversChanged()) return false;
 
         world.decompose(_hostPosition, _hostQuaternion, _hostScale);
+        if (request.offset) _hostPosition.add(_hostOffset.fromArray(request.offset).applyQuaternion(_hostQuaternion));
         this.projector.compose(_hostPosition, _hostQuaternion, UNIT_SCALE);
         this.toProjector.copy(this.projector).invert();
         this.toLocal.copy(world).invert();
@@ -636,7 +651,7 @@ export class DecalProjector {
 
         this.setGeometry(buildDecalGeometry(this.receivers, this.projector, request.size, this.toLocal));
         this.built = {
-            request: { mode: request.mode, objectId: request.objectId, model: request.model ?? null, size: [...request.size] },
+            request: { mode: request.mode, objectId: request.objectId, model: request.model ?? null, size: [...request.size], offset: request.offset ? [...request.offset] : undefined },
             keys,
             relatives,
             local: this.localProjector.clone()
@@ -700,8 +715,8 @@ const DecalRender: React.FC<ComponentRenderProps> = ({ object, component, mode }
         [models, object.modelId]
     );
     const request = useMemo<DecalRequest>(
-        () => ({ size: settings.size, mode: settings.receivers, objectId: object.id, model }),
-        [settings.size, settings.receivers, object.id, model]
+        () => ({ size: settings.size, offset: settings.offset, mode: settings.receivers, objectId: object.id, model }),
+        [settings.size, settings.offset, settings.receivers, object.id, model]
     );
 
     const projector = useMemo(() => new DecalProjector(), []);
@@ -746,12 +761,13 @@ const DecalRender: React.FC<ComponentRenderProps> = ({ object, component, mode }
 export const DECAL_COMPONENT: ComponentDefinition = {
     type: 'decal',
     label: 'Decal',
-    description: 'Projects a texture along the object\'s local -Z (rotate the object to aim it) onto surfaces inside a box centred on its origin. '
-        + 'Size is the box\'s width, height and depth in metres, whatever the object\'s scale. This Object projects onto the object\'s own model; '
+    description: 'Projects a texture along the object\'s local -Z (rotate the object to aim it) onto surfaces inside a box. '
+        + 'Size is the box\'s width, height and depth in metres, whatever the object\'s scale, and Offset moves it from the object\'s origin. This Object projects onto the object\'s own model; '
         + 'Whole Scene onto any surface the box touches. Skinned (animated) meshes never receive decals.',
     props: [
-        { key: 'textureId', label: 'Texture (id or name)', type: 'string', default: DECAL_DEFAULTS.textureId },
+        { key: 'textureId', label: 'Texture', type: 'texture', default: DECAL_DEFAULTS.textureId },
         { key: 'size', label: 'Size (W, H, Depth)', type: 'vector3', default: DECAL_DEFAULTS.size, min: MIN_DECAL_SIZE, max: MAX_DECAL_SIZE, step: 0.05 },
+        { key: 'offset', label: 'Offset (X, Y, Z)', type: 'vector3', default: DECAL_DEFAULTS.offset, min: -MAX_DECAL_SIZE, max: MAX_DECAL_SIZE, step: 0.05 },
         { key: 'opacity', label: 'Opacity', type: 'number', default: DECAL_DEFAULTS.opacity, min: 0, max: 1, step: 0.05 },
         { key: 'color', label: 'Tint', type: 'color', default: DECAL_DEFAULTS.color },
         {
