@@ -25,6 +25,7 @@ const PAGES: readonly { id: SettingsPage; label: string }[] = [
 const JOBS: readonly { capability: ProviderCapability; label: string; hint: string }[] = [
   { capability: 'media.edit', label: 'Restyling textures', hint: 'Retexture, from what a part has now' },
   { capability: 'media.generate', label: 'New textures', hint: 'Retexture, from a description alone' },
+  { capability: 'media.mesh', label: 'Whole models', hint: 'Retexture, painting a whole model at once' },
   { capability: 'code', label: 'Writing scripts', hint: 'The AI panel in the script editor' },
   { capability: 'commands', label: 'Changing the HUD', hint: 'The AI Coder in the HUD editor' },
   { capability: 'text', label: 'Plain text', hint: 'Anything else that needs words' },

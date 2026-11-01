@@ -44,24 +44,22 @@ const countTriangles = (object: THREE.Object3D): number => {
 };
 
 /** Draws the model twice, split at a line: the left as it was, the right with what is being tried on. */
-const ComparePass: React.FC<{ split: number; part: SessionPart; before: THREE.Texture; after: THREE.Texture | null }> = ({ split, part, before, after }) => {
-  const latest = useRef({ split, part, before, after });
-  latest.current = { split, part, before, after };
+const ComparePass: React.FC<{ split: number; drawBefore: () => void; drawAfter: () => void }> = ({ split, drawBefore, drawAfter }) => {
+  const latest = useRef({ split, drawBefore, drawAfter });
+  latest.current = { split, drawBefore, drawAfter };
   useFrame(({ gl, scene, camera, size }) => {
     const now = latest.current;
     const line = Math.round(size.width * now.split);
     gl.setScissorTest(true);
-    for (const [map, x, width] of [[now.before, 0, line], [now.after, line, size.width - line]] as const) {
-      for (const material of now.part.materials) if (map) material.map = map;
-      gl.setScissor(x, 0, width, size.height);
-      gl.render(scene, camera);
-    }
+    now.drawBefore();
+    gl.setScissor(0, 0, line, size.height);
+    gl.render(scene, camera);
+    now.drawAfter();
+    gl.setScissor(line, 0, size.width - line, size.height);
+    gl.render(scene, camera);
     gl.setScissorTest(false);
   }, 1);
-  useEffect(() => () => {
-    const { part: shown, after: wearing, before: original } = latest.current;
-    for (const material of shown.materials) material.map = wearing ?? original;
-  }, []);
+  useEffect(() => () => latest.current.drawAfter(), []);
   return null;
 };
 
@@ -179,7 +177,7 @@ export interface RetextureStageProps {
   floor: boolean;
   turntable: boolean;
   frameSignal: number;
-  compare: { split: number; part: SessionPart; before: THREE.Texture; after: THREE.Texture | null } | null;
+  compare: { split: number; drawBefore: () => void; drawAfter: () => void } | null;
 }
 
 /** The model on a lit stage with a floor, in a view that frames it whatever its size. */
@@ -252,7 +250,7 @@ export const RetextureStage: React.FC<RetextureStageProps> = ({ modelId, object,
 
         <OrbitControls makeDefault enableDamping autoRotate={turntable} autoRotateSpeed={1.1} minPolarAngle={0} maxPolarAngle={Math.PI / 2.02} />
         <PartHover object={object} parts={parts} onHover={handleHover} />
-        {compare && <ComparePass split={compare.split} part={compare.part} before={compare.before} after={compare.after} />}
+        {compare && <ComparePass split={compare.split} drawBefore={compare.drawBefore} drawAfter={compare.drawAfter} />}
       </AuvraCanvas>
       {hovered && (
         <div style={{ left: hovered.x + 14, top: hovered.y + 14 }} className="pointer-events-none absolute z-10 rounded bg-ground/90 px-1.5 py-0.5 text-2xs text-ink">

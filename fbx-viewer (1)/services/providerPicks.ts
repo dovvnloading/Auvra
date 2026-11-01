@@ -30,6 +30,10 @@ const MODEL_PICKS: Readonly<Record<string, Partial<Record<ProviderCapability, re
       { id: 'fal-ai/flux-2', tier: 'Balanced', note: 'Cleaner detail' },
       { id: 'fal-ai/flux-2-pro', tier: 'Best quality', note: 'Fine detail, follows the description closely' },
     ],
+    'media.mesh': [
+      { id: 'meshy/v6-lite/retexture', tier: 'Fast', note: 'Quicker, less detail' },
+      { id: 'meshy/v7/retexture', tier: 'Best quality', note: 'Newest, sharpest detail' },
+    ],
     code: LANGUAGE_PICKS,
     commands: LANGUAGE_PICKS,
     text: LANGUAGE_PICKS,

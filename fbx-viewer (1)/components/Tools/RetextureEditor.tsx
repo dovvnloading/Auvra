@@ -1,18 +1,19 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type * as THREE from 'three';
 import { AlertTriangle, Box, Check, ChevronsLeftRight, Columns2, Grid3x3, Maximize, Palette, Plus, RotateCw, Save, Trash2, X } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
 import { useNotification } from '../../context/NotificationContext';
 import type { ProviderModel } from '../../services/HostProviderService';
 import { materialLibrary } from '../../runtime/materials/materialLibrary';
-import { formatCost } from '../../services/providerPricing';
+import { estimateJobCost, formatCost } from '../../services/providerPricing';
 import { AiRouteBar } from '../Settings/AiRouteBar';
-import { Button, IconButton, PanelEdge, PanelTitle, Section, Segmented, TextArea, Tooltip, usePanelWidth } from '../UI/kit';
+import { Button, IconButton, PanelEdge, PanelTitle, Section, Segmented, Spinner, TextArea, Tooltip, usePanelWidth } from '../UI/kit';
 import { AssetRail } from './Retexture/AssetRail';
 import { RetextureStage, type StageLighting } from './Retexture/RetextureStage';
-import { retextureSessions, useRetextureSessions, type RetextureMode, type SessionPart, type Take } from './Retexture/retextureSession';
+import { capabilityOfMode, retextureSessions, useRetextureSessions, type RetextureMode, type SessionPart, type SurfaceRole, type Take } from './Retexture/retextureSession';
 import { STATE_WORDS, TakesStrip } from './Retexture/TakesStrip';
+
+const SURFACE_WORDS: Record<SurfaceRole, string> = { normal: 'Normal', roughness: 'Roughness', metalness: 'Metal' };
 
 const COUNTS = [{ value: '1', label: '1' }, { value: '2', label: '2' }, { value: '4', label: '4' }] as const;
 
@@ -51,7 +52,7 @@ export const RetextureEditor: React.FC = () => {
   const model = paintable.find((item) => item.id === modelId) ?? paintable[0] ?? null;
   useEffect(() => { lastModelId = model?.id ?? null; }, [model?.id]);
 
-  const session = useMemo(() => (model ? sessions.open(model.id, model.name, model.object, model.textureOverrides) : null),
+  const session = useMemo(() => (model ? sessions.open(model.id, model.name, model.object, model.textureOverrides, model.materialOverrides) : null),
     // Only a different model or a newly loaded one starts a session; saving changes the overrides and is not that.
     [model?.id, model?.object, sessions]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -71,8 +72,11 @@ export const RetextureEditor: React.FC = () => {
   const [prompt, setPromptState] = useState(draftPrompt);
   const setPrompt = (value: string) => { draftPrompt = value; setPromptState(value); };
   const [wantedMode, setMode] = useState<RetextureMode>('restyle');
+  // A model drawn with several textures comes back from whole-model painting merged and without its rig.
+  const textured = session?.parts.filter((item) => item.texture).length ?? 0;
+  const wholeAllowed = textured === 1;
   // A part with nothing on it has nothing to restyle.
-  const mode: RetextureMode = part && !part.texture ? 'new' : wantedMode;
+  const mode: RetextureMode = wantedMode === 'whole' ? (wholeAllowed ? 'whole' : 'restyle') : part && !part.texture ? 'new' : wantedMode;
   const [routeModel, setRouteModel] = useState<ProviderModel | null>(null);
   const [count, setCount] = useState<'1' | '2' | '4'>('1');
   const [message, setMessage] = useState<string | null>(null);
@@ -87,15 +91,19 @@ export const RetextureEditor: React.FC = () => {
   // Before and after, either side of a line dragged across the model.
   const [compareOn, setCompareOn] = useState(false);
   const [split, setSplit] = useState(0.5);
-  const [wornTexture, setWornTexture] = useState<THREE.Texture | null>(null);
+  const [wornReady, setWornReady] = useState(false);
   useEffect(() => {
     let current = true;
-    if (session && worn) void sessions.textureOf(session, worn).then((texture) => { if (current) setWornTexture(texture); });
-    else setWornTexture(null);
+    setWornReady(false);
+    if (session && worn) void sessions.textureOf(session, worn).then((texture) => { if (current) setWornReady(Boolean(texture)); });
     return () => { current = false; };
   }, [session, sessions, worn]);
-  const canCompare = Boolean(part?.texture && worn && wornTexture);
-  const compare = compareOn && canCompare && part?.texture ? { split, part, before: part.texture, after: wornTexture } : null;
+  const canCompare = Boolean(part && worn && wornReady);
+  const compare = useMemo(() => (compareOn && canCompare && part && worn ? {
+    split,
+    drawBefore: () => sessions.showNow(part, null),
+    drawAfter: () => sessions.showNow(part, worn),
+  } : null), [canCompare, compareOn, part, sessions, split, worn]);
   const stage = useRef<HTMLDivElement>(null);
 
   const startSplitDrag = (event: React.PointerEvent<HTMLElement>) => {
@@ -145,7 +153,7 @@ export const RetextureEditor: React.FC = () => {
   const saveOnModel = (take: Take | null) => {
     if (!session || !part || !model) return;
     void act(async () => {
-      await sessions.saveOnModel(session, part, take, model.textureOverrides, (overrides) => setModelTextureOverrides(model.id, overrides));
+      await sessions.saveOnModel(session, part, take, { overrides: model.textureOverrides, materials: model.materialOverrides }, (overrides) => setModelTextureOverrides(model.id, overrides), (overrides) => updateModelMaterialOverrides(model.id, overrides));
       addNotification({ message: take ? `${part.name} now wears result ${take.number}.` : `${part.name} is back to its original.`, type: 'info' });
     }, 'This could not be saved on the model.');
   };
@@ -204,13 +212,19 @@ export const RetextureEditor: React.FC = () => {
     }, 'The material could not be taken off.');
   };
 
+  const [mapsModel, setMapsModel] = useState<ProviderModel | null>(null);
+  useEffect(() => { void sessions.mapsModel().then(setMapsModel); }, [sessions]);
+  const mapsCost = mapsModel && focused?.size ? estimateJobCost(mapsModel, (focused.size.width * focused.size.height) / 1_000_000) : mapsModel ? estimateJobCost(mapsModel) : null;
+
   const failed = focused?.state === 'failed' ? focused : null;
   const shownError = message ?? failed?.error ?? null;
   const shownPicture = focused?.state === 'ready' && focused.url ? focused.url : part ? sessions.previewOf(part) : null;
   const shownSize = focused?.state === 'ready' ? focused.size ?? part?.size : part?.size;
   const placeholder = mode === 'restyle'
     ? 'How should it change? For example: faded blue denim, worn at the knees'
-    : 'What should it be? For example: seamless polished walnut';
+    : mode === 'whole'
+      ? 'What should the whole model look like? For example: battered army green steel with worn edges'
+      : 'What should it be? For example: seamless polished walnut';
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-ground text-ink">
@@ -328,6 +342,7 @@ export const RetextureEditor: React.FC = () => {
                 options={[
                   { value: 'restyle', label: 'Restyle', disabled: !part?.texture, hint: part?.texture ? 'Change what is on this part now, keeping its layout' : 'This part has no texture to restyle' },
                   { value: 'new', label: 'New', hint: 'Paint a texture from the description alone' },
+                  { value: 'whole', label: 'Whole model', disabled: !wholeAllowed, hint: wholeAllowed ? 'Paint the model as a shape, seen from every side, with surface maps to match' : `Works on a model with one texture. This one has ${textured}.` },
                 ]}
               />
               <TextArea
@@ -340,7 +355,7 @@ export const RetextureEditor: React.FC = () => {
               />
             </div>
             <div className="flex w-56 shrink-0 flex-col justify-end gap-1.5">
-              <AiRouteBar capability={mode === 'new' ? 'media.generate' : 'media.edit'} label={mode === 'new' ? 'Image model' : 'Retexture model'} onModelChange={setRouteModel} placement="top-end" />
+              <AiRouteBar capability={capabilityOfMode(mode)} label={mode === 'new' ? 'Image model' : mode === 'whole' ? 'Whole-model model' : 'Retexture model'} onModelChange={setRouteModel} placement="top-end" />
               <div className="flex h-5 items-center justify-between gap-2 text-2xs text-ink-3">
                 <span className="truncate tabular-nums">{cost === null ? (routeModel ? 'Price not known yet' : '') : `About ${formatCost(cost * runs)}${runs > 1 ? ` for ${runs}` : ''}`}</span>
                 <Tooltip text="How many results to paint"><span><Segmented label="How many results" value={count} onChange={setCount} options={COUNTS} /></span></Tooltip>
@@ -388,6 +403,34 @@ export const RetextureEditor: React.FC = () => {
             </Section>
           )}
 
+          {focused?.state === 'ready' && (focused.maps.length > 0 || focused.mapsState !== 'none' || mapsModel) && (
+            <Section
+              title="Surface maps"
+              actions={focused.mapsState === 'none' && mapsCost !== null ? <span className="text-2xs tabular-nums text-ink-3">About {formatCost(mapsCost)}</span> : undefined}
+            >
+              {focused.maps.length > 0 ? (
+                <div className="grid grid-cols-3 gap-1.5">
+                  {focused.maps.map((surface) => (
+                    <figure key={surface.role} className="min-w-0">
+                      <img src={surface.url} alt="" draggable={false} className="aspect-square w-full rounded-sm bg-well object-cover" />
+                      <figcaption className="mt-0.5 truncate text-2xs text-ink-3">{SURFACE_WORDS[surface.role]}</figcaption>
+                    </figure>
+                  ))}
+                </div>
+              ) : focused.mapsState === 'making' ? (
+                <div className="flex items-center gap-2 text-2xs text-ink-3"><Spinner className="text-accent" /> Making them</div>
+              ) : (
+                <>
+                  <p className="mb-1.5 text-2xs leading-4 text-ink-3">Normal, roughness and metal maps made from this result, so light falls on it as it would on the real thing.</p>
+                  {focused.mapsState === 'failed' && <p role="alert" className="selectable mb-1.5 text-2xs text-bad">{focused.mapsError}</p>}
+                  <Button size="sm" disabled={!mapsModel} onClick={() => session && part && mapsModel && void sessions.makeMaps(session, part, focused, mapsModel)}>
+                    {focused.mapsState === 'failed' ? 'Try again' : 'Make matching maps'}
+                  </Button>
+                </>
+              )}
+            </Section>
+          )}
+
           {focused && (
             <Section
               title={`Result ${focused.number}`}
@@ -396,7 +439,7 @@ export const RetextureEditor: React.FC = () => {
               <p className="selectable text-xs leading-[18px] text-ink">{focused.prompt}</p>
               <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-2xs">
                 <dt className="text-ink-3">Model</dt><dd className="truncate text-ink-2" title={focused.modelName}>{focused.modelName}</dd>
-                <dt className="text-ink-3">From</dt><dd className="text-ink-2">{focused.mode === 'new' ? 'The description alone' : focused.fromTake ? `Result ${focused.fromTake}` : 'The original'}</dd>
+                <dt className="text-ink-3">From</dt><dd className="text-ink-2">{focused.mode === 'new' ? 'The description alone' : focused.mode === 'whole' ? 'The whole model' : focused.fromTake ? `Result ${focused.fromTake}` : 'The original'}</dd>
                 {focused.costMicroUsd !== null && <><dt className="text-ink-3">Cost</dt><dd className="tabular-nums text-ink-2">About {formatCost(focused.costMicroUsd)}</dd></>}
                 {focused.finishedAt && <><dt className="text-ink-3">Took</dt><dd className="tabular-nums text-ink-2">{Math.round((focused.finishedAt - focused.startedAt) / 1000)} s</dd></>}
               </dl>
@@ -406,7 +449,7 @@ export const RetextureEditor: React.FC = () => {
         </div>
         {sessions.runs > 0 && (
           <div title="Worked out from catalog prices: provider accounts cannot be read from here" className="shrink-0 border-t border-line px-3 py-1.5 text-2xs tabular-nums text-ink-3">
-            {sessions.runs} {sessions.runs === 1 ? 'result' : 'results'} this session, about {formatCost(sessions.spentMicroUsd)}
+            {sessions.runs} {sessions.runs === 1 ? 'run' : 'runs'} this session{sessions.unpricedRuns === sessions.runs ? '' : `, about ${formatCost(sessions.spentMicroUsd)}`}{sessions.unpricedRuns > 0 && sessions.unpricedRuns < sessions.runs ? ` and ${sessions.unpricedRuns} not priced yet` : ''}
           </div>
         )}
       </aside>

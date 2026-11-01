@@ -29,7 +29,7 @@ from Auvra.providers import (
 )
 from Auvra.providers.adapters import MediaJob
 from Auvra.providers.credentials import MemoryCredentialStore, WindowsCredentialManager
-from Auvra.providers.fal_catalog import media_output_url, rough_job_cost
+from Auvra.providers.fal_catalog import media_output_url, media_outputs, rough_job_cost
 from Auvra.providers.transport import StdlibTransport
 
 from .credential_prompt import CredentialPromptUnavailableError, WinFormsCredentialPrompt
@@ -675,7 +675,7 @@ class NativeProviderHost:
     def _commit_media(self, payload: dict[str, Any]) -> dict[str, Any]:
         active = self._require_project(payload, expected=True)
         job = self._require_job_project(payload)
-        if job.state.value != "succeeded" or job.capability not in {Capability.MEDIA_GENERATE.value, Capability.MEDIA_EDIT.value}:
+        if job.state.value != "succeeded" or job.capability not in {Capability.MEDIA_GENERATE.value, Capability.MEDIA_EDIT.value, Capability.MEDIA_MAPS.value, Capability.MEDIA_MESH.value}:
             raise HostOperationError("invalid_job", "Media job is not complete")
         meta = self._meta.get(job.job_id, {})
         preview = (self.preview_store.get(job.job_id, payload["previewAssetId"], project_id=active.project_id)
@@ -953,17 +953,25 @@ class NativeProviderHost:
                     meta["proposalId"] = meta["proposal"].proposal_id
                 else:
                     meta["outputText"] = result.text[:65536]
-            elif capability in {Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT}:
+            elif capability in {Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT, Capability.MEDIA_MAPS, Capability.MEDIA_MESH}:
                 references: list[str] = []
                 source_size: tuple[int, int] | None = None
-                if capability == Capability.MEDIA_EDIT:
+                mesh_reference: str | None = None
+                if capability == Capability.MEDIA_MESH:
+                    if not meta["assetIds"]:
+                        raise ProviderError("invalid_request", "this model needs a model to work on", provider_id)
+                    reference = self.project_host.service.resolve_reference(meta["assetIds"][0], project_id=meta["projectId"])
+                    with self.project_host.service.resolve(meta["assetIds"][0], project_id=meta["projectId"]) as source:
+                        filename = _mesh_filename(source)
+                        mesh_reference = adapter.upload_input(source=source, size=reference.size, filename=filename, content_type="application/octet-stream")
+                elif capability in {Capability.MEDIA_EDIT, Capability.MEDIA_MAPS}:
                     for asset_id in meta["assetIds"]:
                         reference = self.project_host.service.resolve_reference(asset_id, project_id=meta["projectId"])
                         with self.project_host.service.resolve(asset_id, project_id=meta["projectId"]) as source:
                             source_size = source_size or _stream_image_size(source, reference.mime)
                             references.append(adapter.upload_input(source=source, size=reference.size, filename="input.bin", content_type=reference.mime or "application/octet-stream"))
                 # The model says what it takes; without that, a prompt and the first image.
-                media_payload = (adapter.media_request(model=model, prompt=meta["prompt"], images=references, size=source_size)
+                media_payload = (adapter.media_request(model=model, prompt=meta["prompt"], images=references, size=source_size, mesh=mesh_reference)
                                  if hasattr(adapter, "media_request") else
                                  {"prompt": meta["prompt"], **({"image_url": references[0]} if references else {})})
                 result = adapter.submit(model=model, capability=capability, payload=media_payload)
@@ -1025,9 +1033,13 @@ class NativeProviderHost:
     def _ingest_media(self, job_id: str, output: Mapping[str, Any], adapter: Any, meta: dict[str, Any]) -> None:
         if self.preview_store is None:
             raise ProviderError("remote", "preview storage is unavailable")
-        found = media_output_url(output)
         if isinstance(output.get("seed"), int) and not isinstance(output.get("seed"), bool):
             meta["seed"] = output["seed"]
+        maps = media_outputs(output)
+        if maps:
+            self._ingest_maps(job_id, maps, adapter, meta)
+            return
+        found = media_output_url(output)
         if found is None:
             raise ProviderError("remote", "media response contained no streamed artifact")
         url, _mime, dimensions = found
@@ -1044,6 +1056,23 @@ class NativeProviderHost:
             )
         meta["artifactHash"] = record.asset_id
         meta["preview"] = record
+
+    def _ingest_maps(self, job_id: str, maps: list[tuple[str, str, str | None, dict[str, int] | None]], adapter: Any, meta: dict[str, Any]) -> None:
+        """A job that makes several maps: each becomes a preview of its own, and the first stands for the job."""
+        import tempfile
+        records: list[tuple[str, Any]] = []
+        for role, url, _mime, _dimensions in maps:
+            with tempfile.NamedTemporaryFile() as temp:
+                artifact = adapter.download_output(url, sink=temp)
+                temp.flush(); temp.seek(0)
+                records.append((role, self.preview_store.ingest(
+                    job_id, temp, project_id=meta.get("projectId"),
+                    declared_mime=artifact.content_type,
+                    provenance=self._preview_provenance(job_id, meta),
+                )))
+        meta["artifactHash"] = records[0][1].asset_id
+        meta["preview"] = records[0][1]
+        meta["previewMaps"] = records
 
     def _adapter(self, provider_id: str) -> Any:
         if provider_id in self._adapters:
@@ -1157,6 +1186,8 @@ class NativeProviderHost:
         if "proposal" in meta: value["proposalAvailable"] = True; value["proposalId"] = meta["proposal"].proposal_id
         if "preview" in meta:
             preview = meta["preview"]; value["preview"] = {"previewAssetId": preview.asset_id, "mime": preview.mime, "size": preview.size, "dimensions": {"width": preview.width, "height": preview.height}}
+            if meta.get("previewMaps"):
+                value["previewMaps"] = [{"role": role, "previewAssetId": record.asset_id, "mime": record.mime, "size": record.size, "dimensions": {"width": record.width, "height": record.height}} for role, record in meta["previewMaps"]]
         return value
 
     def _queue_job_event(self, job_id: str, status: str, progress: float | None, descriptor: Any, *, message: str | None = None, retryable: bool = False) -> None:
@@ -1220,6 +1251,18 @@ _PROPOSAL_PREVIEW_MAX_CHARACTERS = 128 * 1024
 def _empty_main_hud() -> dict[str, Any]:
     """The main HUD of a project that has not saved one: what createDefaultMainHUD makes in the HUD editor."""
     return {"id": "hud-main", "name": "Main HUD", "elements": [], "layout": {"width": 1920, "height": 1080}, "commands": []}
+
+
+def _mesh_filename(stream: Any) -> str:
+    """A name for a model's upload, from its first bytes, leaving the stream where it was: providers go by the extension."""
+    start = stream.tell()
+    head = stream.read(32)
+    stream.seek(start)
+    if head.startswith(b"glTF"):
+        return "model.glb"
+    if head.startswith(b"Kaydara FBX Binary") or head.lstrip().startswith(b"; FBX"):
+        return "model.fbx"
+    return "model.obj"
 
 
 def _stream_image_size(stream: Any, mime: str | None) -> tuple[int, int] | None:

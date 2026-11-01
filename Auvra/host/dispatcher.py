@@ -543,7 +543,7 @@ class HostDispatcher:
     # Production adapters bind through ``provider_service``; these handlers
     # make protocol and UI tests useful without network access or secrets.
     _PROVIDERS = (
-        ("fal", "fal.ai", "cloud", ("media.generate", "media.edit", "text", "code", "commands")),
+        ("fal", "fal.ai", "cloud", ("media.generate", "media.edit", "media.maps", "media.mesh", "text", "code", "commands")),
         ("openai", "OpenAI", "cloud", ("text", "code", "commands")),
         ("anthropic", "Anthropic", "cloud", ("text", "code", "commands")),
         ("xai", "xAI", "cloud", ("text", "code", "commands")),
