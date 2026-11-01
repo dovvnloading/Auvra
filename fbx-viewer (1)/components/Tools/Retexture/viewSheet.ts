@@ -38,7 +38,7 @@ export interface BakeStyle {
 /** Only broad colour moves in a change to a map, so a long blend hides any difference between the views. */
 const CHANGING: BakeStyle = { handover: 3, leastFacing: 0, outlinePx: 0 };
 /** Painted from nothing, a picture goes on as it is: a long blend would show two views' detail at once, and what is picked up from the backdrop would stay. What no view can answer for then takes its colour from what is next to it. */
-export const PAINTING: BakeStyle = { handover: 8, leastFacing: 0.2, outlinePx: 2 };
+const PAINTING: BakeStyle = { handover: 8, leastFacing: 0.2, outlinePx: 2 };
 
 const VIEW_DIRECTIONS: readonly [number, number, number][] = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0], [0, -1, 0]];
 
@@ -142,20 +142,25 @@ const clayLight = (): THREE.DataTexture => {
   return texture;
 };
 
+/** What the part being worked on is shown as: a plain shape to paint, or wearing a given map, rather than what is on it now. */
+export type SheetLook = { asShape: true } | { map: THREE.Texture };
+
 /**
  * Draws the object as it looks without any light, its materials put back after. With `shapeOf`, that part and whatever else
- * has no picture of its own are drawn as a plain shape instead, for painting from nothing.
+ * has no picture of its own are drawn as a plain shape instead, for painting from nothing. With a `look` wearing a map, the
+ * part draws with that.
  */
-const drawCells = (renderer: THREE.WebGLRenderer, object: THREE.Object3D, cells: readonly SheetCell[], cell: number, target: THREE.WebGLRenderTarget, shapeOf?: ModelPart) => {
+const drawCells = (renderer: THREE.WebGLRenderer, object: THREE.Object3D, cells: readonly SheetCell[], cell: number, target: THREE.WebGLRenderTarget, part?: ModelPart, look?: SheetLook) => {
   const undo: (() => void)[] = [];
   const flatOf = new Map<THREE.Material, THREE.Material>();
-  const clay = shapeOf ? clayLight() : null;
+  const clay = look && 'asShape' in look ? clayLight() : null;
   const flat = (from: THREE.Material): THREE.Material => {
     let copy = flatOf.get(from);
     if (!copy) {
       const source = from as PartMaterial & { alphaMap?: THREE.Texture | null };
-      copy = clay && (!source.map || shapeOf?.materials.includes(source)) ? new THREE.MeshMatcapMaterial({ matcap: clay, side: THREE.DoubleSide }) : new THREE.MeshBasicMaterial({
-        map: source.map ?? null,
+      const inPart = part?.materials.includes(source) ?? false;
+      copy = clay && (!source.map || inPart) ? new THREE.MeshMatcapMaterial({ matcap: clay, side: THREE.DoubleSide }) : new THREE.MeshBasicMaterial({
+        map: (inPart && look && 'map' in look ? look.map : source.map) ?? null,
         alphaMap: source.alphaMap ?? null,
         color: source.color ?? 0xffffff,
         side: THREE.DoubleSide,
@@ -208,8 +213,8 @@ const sheetTarget = (width: number, height: number, withDepth: boolean) => {
   return target;
 };
 
-/** The object from every side, as a model is to be shown it, or null where it cannot be drawn. With `asShape`, `part` is shown as a plain shape to paint. */
-export const renderViewSheet = (object: THREE.Object3D, part: ModelPart, asShape = false): ViewSheet | null => withRenderer((renderer) => {
+/** The object from every side, as a model is to be shown it, or null where it cannot be drawn. */
+export const renderViewSheet = (object: THREE.Object3D, part: ModelPart, look?: SheetLook): ViewSheet | null => withRenderer((renderer) => {
   const cell = CELL_PX;
   const width = cell * SHEET_COLUMNS;
   const height = cell * SHEET_ROWS;
@@ -218,7 +223,7 @@ export const renderViewSheet = (object: THREE.Object3D, part: ModelPart, asShape
   object.updateMatrixWorld(true);
   const target = sheetTarget(width, height, true);
   try {
-    drawCells(renderer, object, cells, cell, target, asShape ? part : undefined);
+    drawCells(renderer, object, cells, cell, target, part, look);
     const drawn = new Uint8Array(width * height * 4);
     renderer.readRenderTargetPixels(target, 0, 0, width, height, drawn);
     const canvas = document.createElement('canvas');
@@ -325,6 +330,11 @@ const BAKE_FRAGMENT = /* glsl */ `
   uniform float handover;
   uniform float leastFacing;
   uniform vec2 outlineReach;
+  uniform float flipV;
+  #ifdef AS_NORMALS
+    uniform sampler2D broadColors;
+    uniform mat3 frames[6];
+  #endif
   varying vec3 vWorld;
   varying vec3 vFacing;
   void main() {
@@ -345,15 +355,34 @@ const BAKE_FRAGMENT = /* glsl */ `
         || texture2D(depths, at + vec2(outlineReach.x, -outlineReach.y)).r >= 1.0 || texture2D(depths, at - vec2(outlineReach.x, -outlineReach.y)).r >= 1.0
       )) continue;
       float weight = pow(toward, handover) + 0.001;
+      #ifdef AS_NORMALS
+        // A normal map's picture tells of the view it was drawn from. The mesh has the large shapes itself, so only what differs
+        // from the normals around it is wanted, as a turn of the surface along that view's own right and up.
+        vec3 told = (texture2D(colors, at).rgb - texture2D(broadColors, at).rgb) * 2.0;
+        vec3 seen = frames[view][0] * told.x + frames[view][1] * told.y;
+      #else
+        vec3 seen = texture2D(colors, at).rgb;
+      #endif
       if (toward < leastFacing) {
-        edgeOnSum += texture2D(colors, at).rgb * weight;
+        edgeOnSum += seen * weight;
         edgeOnWeights += weight;
       } else {
-        sum += texture2D(colors, at).rgb * weight;
+        sum += seen * weight;
         weights += weight;
       }
     }
-    gl_FragColor = weights > 0.0 ? vec4(sum / weights, 1.0) : edgeOnWeights > 0.0 ? vec4(edgeOnSum / edgeOnWeights, 1.0) : vec4(0.0);
+    #ifdef AS_NORMALS
+      // A normal map tells of the surface along its map's own directions, which is how each triangle lies on the map: the place
+      // being drawn here. Which way the object was seen from means nothing to it.
+      vec3 turn = weights > 0.0 ? sum / weights : edgeOnWeights > 0.0 ? edgeOnSum / edgeOnWeights : vec3(0.0);
+      vec3 turned = normalize(facing + turn);
+      vec3 across = normalize(dFdx(vWorld));
+      vec3 along = normalize(dFdy(vWorld)) * (flipV > 0.5 ? -1.0 : 1.0);
+      float seenAtAll = weights + edgeOnWeights > 0.0 ? 1.0 : 0.0;
+      gl_FragColor = vec4(vec3(dot(turned, across), dot(turned, along), dot(turned, facing)) * 0.5 + 0.5, seenAtAll);
+    #else
+      gl_FragColor = weights > 0.0 ? vec4(sum / weights, 1.0) : edgeOnWeights > 0.0 ? vec4(edgeOnSum / edgeOnWeights, 1.0) : vec4(0.0);
+    #endif
   }
 `;
 
@@ -366,8 +395,19 @@ export interface BakedViews {
   painted: Uint8Array;
 }
 
-/** Puts an edited sheet back on a part's map through the cameras that made it, or null where that cannot be drawn. */
-export const bakeViews = (object: THREE.Object3D, part: ModelPart, sheet: ViewSheet, painted: Pixels, width: number, height: number, style: BakeStyle = CHANGING): BakedViews | null => withRenderer((renderer) => {
+/** What a bake can draw on a map. */
+interface BakeSources {
+  painted: THREE.Texture;
+  /** The broad colour of a sheet's cells, of what was painted and of what was shown. */
+  broadAfter: () => THREE.Texture;
+  broadBefore: () => THREE.Texture;
+}
+
+/** Sets up putting a sheet's picture back on a part's map through the cameras that made it, and hands `work` the means to draw that. */
+const withBake = <T>(
+  object: THREE.Object3D, part: ModelPart, sheet: ViewSheet, painted: Pixels, width: number, height: number, style: BakeStyle, asNormals: boolean,
+  work: (read: (colors: THREE.Texture) => Uint8Array, sources: BakeSources) => T,
+): T | null => withRenderer((renderer) => {
   const fromBottom = new Uint8Array(sheet.width * sheet.height * 4);
   for (let y = 0; y < sheet.height; y += 1) {
     fromBottom.set(painted.data.subarray(y * sheet.width * 4, (y + 1) * sheet.width * 4), (sheet.height - 1 - y) * sheet.width * 4);
@@ -379,11 +419,23 @@ export const bakeViews = (object: THREE.Object3D, part: ModelPart, sheet: ViewSh
   paintedTexture.minFilter = THREE.LinearFilter;
   paintedTexture.magFilter = THREE.LinearFilter;
   paintedTexture.needsUpdate = true;
-  const broadAfter = broadSheet(sheet, fromBottom);
-  const broadBefore = broadSheet(sheet, sheet.drawn);
+  const made: THREE.Texture[] = [];
+  const once = (make: () => THREE.Texture) => {
+    let texture: THREE.Texture | null = null;
+    return () => {
+      if (!texture) {
+        texture = make();
+        made.push(texture);
+      }
+      return texture;
+    };
+  };
+  const broadAfter = once(() => broadSheet(sheet, fromBottom));
+  const broadBefore = once(() => broadSheet(sheet, sheet.drawn));
   const material = new THREE.ShaderMaterial({
     vertexShader: BAKE_VERTEX,
     fragmentShader: BAKE_FRAGMENT,
+    defines: asNormals ? { AS_NORMALS: 1 } : {},
     side: THREE.DoubleSide,
     depthTest: false,
     depthWrite: false,
@@ -399,6 +451,10 @@ export const bakeViews = (object: THREE.Object3D, part: ModelPart, sheet: ViewSh
       outlineReach: { value: new THREE.Vector2(style.outlinePx / sheet.width, style.outlinePx / sheet.height) },
       // The way round the picture of the map is, which a compressed texture cannot say.
       flipV: { value: overrideTextureFlipY(object) ? 1 : 0 },
+      ...(asNormals ? {
+        broadColors: { value: broadAfter() },
+        frames: { value: sheet.cells.map((view) => new THREE.Matrix3().setFromMatrix4(view.camera.matrixWorld)) },
+      } : {}),
     },
   });
   const nothing = new THREE.MeshBasicMaterial({ visible: false });
@@ -427,7 +483,7 @@ export const bakeViews = (object: THREE.Object3D, part: ModelPart, sheet: ViewSh
   };
   try {
     renderer.autoClear = false;
-    return { broad: read(broadAfter), before: read(broadBefore), painted: read(paintedTexture) };
+    return work(read, { painted: paintedTexture, broadAfter, broadBefore });
   } finally {
     undo.forEach((step) => step());
     renderer.setRenderTarget(null);
@@ -435,9 +491,23 @@ export const bakeViews = (object: THREE.Object3D, part: ModelPart, sheet: ViewSh
     depth.depthTexture?.dispose();
     depth.dispose();
     paintedTexture.dispose();
-    broadAfter.dispose();
-    broadBefore.dispose();
+    made.forEach((texture) => texture.dispose());
     material.dispose();
     nothing.dispose();
   }
 });
+
+/** Puts an edit of a sheet back on a part's map through the cameras that made it, or null where that cannot be drawn. */
+export const bakeViews = (object: THREE.Object3D, part: ModelPart, sheet: ViewSheet, painted: Pixels, width: number, height: number): BakedViews | null => (
+  withBake(object, part, sheet, painted, width, height, CHANGING, false, (read, { painted: picture, broadAfter, broadBefore }) => ({ broad: read(broadAfter()), before: read(broadBefore()), painted: read(picture) }))
+);
+
+/** Puts a sheet painted from nothing on a part's map as it is, or null where that cannot be drawn: RGBA, alpha saying whether any camera saw that pixel. */
+export const bakePainted = (object: THREE.Object3D, part: ModelPart, sheet: ViewSheet, painted: Pixels, width: number, height: number): Uint8Array | null => (
+  withBake(object, part, sheet, painted, width, height, PAINTING, false, (read, { painted: picture }) => read(picture))
+);
+
+/** Puts a sheet's normals on a part's map as a normal map of its fine detail, or null where that cannot be drawn. */
+export const bakeNormals = (object: THREE.Object3D, part: ModelPart, sheet: ViewSheet, painted: Pixels, width: number, height: number): Uint8Array | null => (
+  withBake(object, part, sheet, painted, width, height, PAINTING, true, (read, { painted: picture }) => read(picture))
+);
