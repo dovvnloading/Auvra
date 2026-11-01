@@ -7,9 +7,9 @@ import { estimateJobCost } from '../../../services/providerPricing';
 import { picksFor } from '../../../services/providerPicks';
 import { textureService } from '../../../services/TextureGenerationService';
 import { overrideTextureFlipY, tagOverrideTexture, type MaterialOverrides, type MaterialTextureSlot } from '../../../utils/materialOverrides';
-import { DEFAULT_KEEP, OriginalDetail, ViewedDetail, type DetailMix, type Pixels } from './keepOriginal';
-import { bakeViews, renderViewSheet, SHEET_MEGAPIXELS, type ViewSheet } from './viewSheet';
-import { listModelParts, texturePicture, usedAreaOfPart, type ModelPart, type PartMaterial, type PictureSize } from './parts';
+import { DEFAULT_KEEP, OriginalDetail, PaintedMap, ViewedDetail, type DetailMix, type Pixels } from './keepOriginal';
+import { bakeViews, PAINTING, renderViewSheet, SHEET_MEGAPIXELS, type ViewSheet } from './viewSheet';
+import { listModelParts, mapIsLaidOutOverObject, texturePicture, usedAreaOfPart, type ModelPart, type PartMaterial, type PictureSize } from './parts';
 
 export type RetextureMode = 'restyle' | 'new' | 'whole';
 export type TakeState = 'starting' | 'queued' | 'painting' | 'ready' | 'failed';
@@ -47,7 +47,7 @@ export interface Take {
   finished?: Blob;
   /** The map a restyle was worked from. */
   source?: PictureSize & { url: string };
-  /** The views of the object a model was shown, where it was not shown the map itself. */
+  /** The views of the object a model was shown, where it was not shown the map itself. Without `source`, they show its shape alone. */
   sheet?: ViewSheet;
   /** How much of that map's fine detail stays, from 0 to 1. */
   keepOriginal: number;
@@ -99,6 +99,8 @@ export interface SessionPart extends ModelPart {
   followNext: boolean;
   nextNumber: number;
   showRequest: number;
+  /** Whether its map is laid out across the object, once that has been worked out. */
+  laidOut?: boolean;
 }
 
 export interface ModelSession {
@@ -165,8 +167,26 @@ const pixelsOf = async (url: string, width: number, height: number): Promise<Pix
 export const viewsInstruction = (words: string): string =>
   `This image shows one object from six sides on a plain grey background. Change its surface to: ${words.trim()}, the same on every side. Keep its exact shape, outline, size and position in each view, and all of its markings and details. Keep the grey background. No new elements.`;
 
-/** Models that earlier suggested themselves for this tool, which are put aside once for the ones suggested now. */
-const SUPERSEDED_EDIT_MODELS: ReadonlySet<string> = new Set(['fal-ai/flux-2/flash/edit', 'fal-ai/flux-2/edit', 'fal-ai/flux-2-pro/edit', 'alibaba/qwen-image-3/edit', 'fal-ai/flux-2/klein/9b/edit']);
+/** What a model is told along with the words when shown a part as a plain shape from every side. */
+export const paintInstruction = (words: string): string =>
+  `This image shows one object from six sides, as a plain clay model on a plain grey background. Paint its whole surface as: ${words.trim()}, with the real colours and materials that has, the same object on every side. Keep its exact shape, outline, size and position in each view. Even, shadowless light. Keep the grey background. No new elements and no text.`;
+
+/** What a model is told along with the words when painting a picture of a surface for faces that share one map. */
+export const surfaceInstruction = (words: string): string =>
+  `A seamless texture of ${words.trim()}: the surface alone, seen straight on and filling the whole picture, in even, shadowless light. No objects, no perspective, no text.`;
+
+const instructionOf = (take: Take): string => {
+  if (take.mode === 'whole') return take.prompt;
+  if (take.mode === 'new') return take.sheet ? paintInstruction(take.prompt) : surfaceInstruction(take.prompt);
+  return take.sheet ? viewsInstruction(take.prompt) : restyleInstruction(take.prompt);
+};
+
+/** Models that earlier suggested themselves for each job of this tool, which are put aside once for the ones suggested now. */
+const SUPERSEDED_MODELS: readonly [ProviderCapability, ReadonlySet<string>][] = [
+  ['media.edit', new Set(['fal-ai/flux-2/flash/edit', 'fal-ai/flux-2/edit', 'fal-ai/flux-2-pro/edit', 'alibaba/qwen-image-3/edit', 'fal-ai/flux-2/klein/9b/edit'])],
+  ['media.generate', new Set(['fal-ai/flux/schnell', 'fal-ai/flux/dev', 'fal-ai/flux-2', 'fal-ai/flux-2-pro'])],
+  ['media.mesh', new Set(['meshy/v6-lite/retexture'])],
+];
 const CAPABLE_MODEL_NOTED = 'retexture.capableModel';
 
 /** Long enough to let a slider come to rest before writing out the picture. */
@@ -176,7 +196,10 @@ const BAKE_DELAY_MS = 250;
 const MAX_SOURCE_EDGE = 2048;
 const THUMBNAIL_EDGE = 96;
 const PREVIEW_EDGE = 512;
-const NEW_TEXTURE_MEGAPIXELS = 1.05;
+/** What the host asks for a new picture at. */
+const NEW_TEXTURE_MEGAPIXELS = 4;
+/** The size of a map painted through views of an object. A model's answer is no sharper than its views, whatever this is. */
+const PAINTED_MAP_EDGE = 2048;
 const MAX_LIBRARY_NAME = 128;
 /** Which model makes surface maps, where a provider has one. */
 const MAPS_PROVIDER = 'fal';
@@ -429,9 +452,15 @@ class RetextureSessions {
   }
 
   /** What one run of a model would come to, or null while the price is not known. */
-  estimate(request: Pick<GenerateRequest, 'mode' | 'model'>): number | null {
+  estimate(request: Pick<GenerateRequest, 'mode' | 'model'>, onObject = request.mode === 'restyle'): number | null {
     if (!request.model) return null;
-    return estimateJobCost(request.model, request.mode === 'restyle' ? SHEET_MEGAPIXELS : NEW_TEXTURE_MEGAPIXELS);
+    return estimateJobCost(request.model, onObject ? SHEET_MEGAPIXELS : NEW_TEXTURE_MEGAPIXELS);
+  }
+
+  /** Whether painting a part from nothing goes through views of the object, which a model edits, or is one picture of a surface. */
+  paintsOnObject(session: ModelSession, part: SessionPart): boolean {
+    part.laidOut ??= mapIsLaidOutOverObject(session.object, part);
+    return part.laidOut;
   }
 
   async generate(session: ModelSession, part: SessionPart, request: GenerateRequest): Promise<void> {
@@ -449,8 +478,12 @@ class RetextureSessions {
       source = textureService.ingestLocalAsset(sheet?.picture ?? found.picture.url);
     } else if (request.mode === 'whole') {
       source = textureService.modelFileAsset(session.modelId);
+    } else if (this.paintsOnObject(session, part)) {
+      sheet = renderViewSheet(session.object, part, true) ?? undefined;
+      if (!sheet) throw new Error('This part could not be drawn to paint it.');
+      source = textureService.ingestLocalAsset(sheet.picture);
     }
-    const cost = this.estimate(request);
+    const cost = this.estimate(request, Boolean(sheet) || request.mode === 'restyle');
     part.followNext = true;
     for (let index = 0; index < request.count; index += 1) {
       this.sequence += 1;
@@ -480,8 +513,7 @@ class RetextureSessions {
 
   private async run(session: ModelSession, part: SessionPart, take: Take, source: Promise<string | null>) {
     try {
-      const told = take.mode !== 'restyle' ? take.prompt : take.sheet ? viewsInstruction(take.prompt) : restyleInstruction(take.prompt);
-      const job = await textureService.submit(await source, told, capabilityOfMode(take.mode));
+      const job = await textureService.submit(await source, instructionOf(take), take.sheet ? 'media.edit' : capabilityOfMode(take.mode));
       take.jobId = job.jobId;
       const preview = await textureService.follow(job, (current) => {
         const state = stateOfJob(current.status);
@@ -491,7 +523,7 @@ class RetextureSessions {
       take.rawUrl = preview.previewUrl;
       take.url = preview.previewUrl;
       take.size = preview.dimensions;
-      if (take.source) await this.finish(session, part, take);
+      if (take.source || take.sheet) await this.finish(session, part, take);
       // A whole-model job makes the surface maps along with the colour.
       take.maps = surfaceMapsOf(job.jobId, preview.maps);
       take.mapsState = take.maps.length ? 'ready' : 'none';
@@ -517,17 +549,17 @@ class RetextureSessions {
   private mixOf(session: ModelSession, part: SessionPart, take: Take): Promise<TakeMix> {
     if (this.mixing?.take === take) return this.mixing.ready;
     const ready = (async (): Promise<TakeMix> => {
-      if (!take.source || !take.rawUrl) throw new Error('This result can no longer be read.');
-      const { width, height } = take.source;
-      const original = await pixelsOf(take.source.url, width, height);
-      const used = usedAreaOfPart(session.object, part, width, height);
+      if ((!take.source && !take.sheet) || !take.rawUrl) throw new Error('This result can no longer be read.');
+      const { width, height } = take.source ?? { width: PAINTED_MAP_EDGE, height: PAINTED_MAP_EDGE };
+      const original = take.source ? await pixelsOf(take.source.url, width, height) : null;
+      const used = original ? usedAreaOfPart(session.object, part, width, height) : null;
       let detail: DetailMix;
       if (take.sheet) {
-        const baked = bakeViews(session.object, part, take.sheet, await pixelsOf(take.rawUrl, take.sheet.width, take.sheet.height), width, height);
+        const baked = bakeViews(session.object, part, take.sheet, await pixelsOf(take.rawUrl, take.sheet.width, take.sheet.height), width, height, original ? undefined : PAINTING);
         if (!baked) throw new Error('The result could not be put back on the map.');
-        detail = new ViewedDetail(original.data, baked.broad, baked.before, baked.painted, used);
+        detail = original ? new ViewedDetail(original.data, baked.broad, baked.before, baked.painted, used, width) : new PaintedMap(baked.painted, width, height);
       } else {
-        detail = await OriginalDetail.prepare(original, await pixelsOf(take.rawUrl, width, height), used);
+        detail = await OriginalDetail.prepare(original!, await pixelsOf(take.rawUrl, width, height), used);
       }
       const canvas = document.createElement('canvas');
       canvas.width = width;
@@ -612,19 +644,22 @@ class RetextureSessions {
     await textureService.cancel(take.jobId);
   }
 
-  /** Puts this tool on a capable model where it has none, or once where it is on one chosen for it before those were known. */
+  /** Puts each of this tool's jobs on a capable model where it has none, or once where it is on one chosen for it before those were known. */
   async chooseCapableModel() {
-    try {
-      const pick = picksFor(MAPS_PROVIDER, 'media.edit', await hostProviderService.listModels(MAPS_PROVIDER, 'media.edit'))[0];
-      if (!pick) return;
-      const route = await hostProviderService.loadConfiguredRoute('media.edit');
-      let noted = false;
-      try { noted = localStorage.getItem(CAPABLE_MODEL_NOTED) === pick.id; } catch { /* Then it is put forward again next time, and that is all. */ }
-      if (route && (noted || !SUPERSEDED_EDIT_MODELS.has(route.modelId))) return;
-      await hostProviderService.routeCapability(MAPS_PROVIDER, 'media.edit', pick.id);
-      try { localStorage.setItem(CAPABLE_MODEL_NOTED, pick.id); } catch { /* As above. */ }
-    } catch (error) {
-      frontendDiagnostics.failure('retexture_model_choice_failed', error);
+    for (const [capability, superseded] of SUPERSEDED_MODELS) {
+      try {
+        const pick = picksFor(MAPS_PROVIDER, capability, await hostProviderService.listModels(MAPS_PROVIDER, capability))[0];
+        if (!pick) continue;
+        const route = await hostProviderService.loadConfiguredRoute(capability);
+        const key = `${CAPABLE_MODEL_NOTED}.${capability}`;
+        let noted = false;
+        try { noted = localStorage.getItem(key) === pick.id; } catch { /* Then it is put forward again next time, and that is all. */ }
+        if (route && (noted || !superseded.has(route.modelId))) continue;
+        await hostProviderService.routeCapability(MAPS_PROVIDER, capability, pick.id);
+        try { localStorage.setItem(key, pick.id); } catch { /* As above. */ }
+      } catch (error) {
+        frontendDiagnostics.failure('retexture_model_choice_failed', error);
+      }
     }
   }
 

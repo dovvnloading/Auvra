@@ -127,7 +127,9 @@ export const RetextureEditor: React.FC = () => {
     handle.addEventListener('pointercancel', end);
   };
 
-  const cost = part ? sessions.estimate({ mode, model: routeModel }) : null;
+  // Painting from nothing goes through the object wherever its map is laid out over it, as a change to a map does.
+  const onObject = Boolean(session && part && mode === 'new' && sessions.paintsOnObject(session, part));
+  const cost = part ? sessions.estimate({ mode, model: routeModel }, onObject || mode === 'restyle') : null;
   const runs = everyPart ? texturedParts.length : Number(count);
   const canGenerate = Boolean(session && part && routeModel && prompt.trim());
 
@@ -231,7 +233,9 @@ export const RetextureEditor: React.FC = () => {
     ? 'How should it change? For example: faded blue denim, worn at the knees'
     : mode === 'whole'
       ? 'What should the whole model look like? For example: battered army green steel with worn edges'
-      : 'What should it be? For example: seamless polished walnut';
+      : onObject
+        ? 'What should it be? For example: battered army green steel with worn edges'
+        : 'What should it be? For example: polished walnut';
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-ground text-ink">
@@ -360,7 +364,7 @@ export const RetextureEditor: React.FC = () => {
                   disabled={!part}
                   className="self-start"
                   options={[
-                    { value: 'new', label: 'New', hint: 'This part has no texture to work from, so it is painted from the description' },
+                    { value: 'new', label: 'New', hint: onObject ? 'This part has no texture, so it is painted on its shape, seen from every side' : 'This part has no texture and its faces share one map, so that is painted as a surface' },
                     { value: 'whole', label: 'Whole model', disabled: !wholeAllowed, hint: wholeAllowed ? 'Paint the model as a shape, seen from every side, with surface maps to match' : 'Only for a model with no textures: the others keep what they have and change from it' },
                   ]}
                 />
@@ -375,7 +379,7 @@ export const RetextureEditor: React.FC = () => {
               />
             </div>
             <div className="flex w-56 shrink-0 flex-col justify-end gap-1.5">
-              <AiRouteBar capability={capabilityOfMode(mode)} label={mode === 'new' ? 'Image model' : mode === 'whole' ? 'Whole-model model' : 'Retexture model'} onModelChange={setRouteModel} placement="top-end" />
+              <AiRouteBar capability={onObject ? 'media.edit' : capabilityOfMode(mode)} label={mode === 'new' && !onObject ? 'Image model' : mode === 'whole' ? 'Whole-model model' : 'Retexture model'} onModelChange={setRouteModel} placement="top-end" />
               <div className="flex h-5 items-center justify-between gap-2 text-2xs text-ink-3">
                 <span className="truncate tabular-nums">{cost === null ? (routeModel ? 'Price not known yet' : '') : `About ${formatCost(cost * runs)}${runs > 1 ? ` for ${runs}` : ''}`}</span>
                 {!everyPart && <Tooltip text="How many results to paint"><span><Segmented label="How many results" value={count} onChange={setCount} options={COUNTS} /></span></Tooltip>}
@@ -477,7 +481,7 @@ export const RetextureEditor: React.FC = () => {
               <p className="selectable text-xs leading-[18px] text-ink">{focused.prompt}</p>
               <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-2xs">
                 <dt className="text-ink-3">Model</dt><dd className="truncate text-ink-2" title={focused.modelName}>{focused.modelName}</dd>
-                <dt className="text-ink-3">From</dt><dd className="text-ink-2">{focused.mode === 'new' ? 'The description alone' : focused.mode === 'whole' ? 'The whole model' : focused.fromTake ? `Result ${focused.fromTake}` : 'The original'}</dd>
+                <dt className="text-ink-3">From</dt><dd className="text-ink-2">{focused.mode === 'new' ? (focused.sheet ? 'Its shape and the description' : 'The description alone') : focused.mode === 'whole' ? 'The whole model' : focused.fromTake ? `Result ${focused.fromTake}` : 'The original'}</dd>
                 {focused.costMicroUsd !== null && <><dt className="text-ink-3">Cost</dt><dd className="tabular-nums text-ink-2">About {formatCost(focused.costMicroUsd)}</dd></>}
                 {focused.finishedAt && <><dt className="text-ink-3">Took</dt><dd className="tabular-nums text-ink-2">{Math.round((focused.finishedAt - focused.startedAt) / 1000)} s</dd></>}
               </dl>

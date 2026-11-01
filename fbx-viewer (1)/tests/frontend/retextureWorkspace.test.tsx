@@ -5,9 +5,9 @@ import { hostProviderService, type ProviderModel } from '../../services/HostProv
 import { estimateJobCost, formatCost } from '../../services/providerPricing';
 import { isUtilityModel, modelSample, picksFor } from '../../services/providerPicks';
 import { ModelPicker } from '../../components/Settings/ModelPicker';
-import { listModelParts, partDisplayName, partOfHit, usedAreaOfPart } from '../../components/Tools/Retexture/parts';
-import { libraryName, restyleInstruction, retextureSessions, viewsInstruction } from '../../components/Tools/Retexture/retextureSession';
-import { OriginalDetail, ViewedDetail, type Pixels } from '../../components/Tools/Retexture/keepOriginal';
+import { listModelParts, mapIsLaidOutOverObject, partDisplayName, partOfHit, usedAreaOfPart } from '../../components/Tools/Retexture/parts';
+import { libraryName, paintInstruction, restyleInstruction, retextureSessions, surfaceInstruction, viewsInstruction } from '../../components/Tools/Retexture/retextureSession';
+import { OriginalDetail, PaintedMap, ViewedDetail, type Pixels } from '../../components/Tools/Retexture/keepOriginal';
 import { bindMaterialGraph } from '../../runtime/materials/graphMaterial';
 import { NativeHostTransport } from '../../host/nativeTransport';
 import { textureSourceFlipY } from '../../utils/textureCompression/compressTextures';
@@ -93,13 +93,26 @@ describe('working from the map on a part', () => {
     const before = new Uint8Array([...pixel(100, 100, 100), ...pixel(100, 100, 100), ...pixel(0, 0, 0, 0)]);
     const painted = new Uint8Array([...pixel(1, 2, 3), ...pixel(4, 5, 6), ...pixel(0, 0, 0, 0)]);
     const into = new Uint8ClampedArray(original.length);
-    new ViewedDetail(original, broad, before, painted, null).mix(1, into);
+    new ViewedDetail(original, broad, before, painted, null, 3).mix(1, into);
     expect([...into.slice(0, 3)]).toEqual([60, 120, 60]);
     expect([...into.slice(4, 7)]).toEqual([100, 120, 20]);
-    // What no camera saw moves by the same on average.
+    // What no camera saw moves as what is next to it did.
     expect([...into.slice(8, 11)]).toEqual([0, 40, 0]);
-    new ViewedDetail(original, broad, before, painted, null).mix(0, into);
+    new ViewedDetail(original, broad, before, painted, null, 3).mix(0, into);
     expect([...into.slice(0, 3)]).toEqual([1, 2, 3]);
+  });
+
+  it('moves a pixel along a seam with what is next to it, not with the whole object', () => {
+    const pixel = (r: number, g: number, b: number, a = 255) => [r, g, b, a];
+    const grey = pixel(100, 100, 100);
+    // Two pieces of a layout that change very differently, with an unseen pixel on the edge of each.
+    const original = new Uint8ClampedArray([...grey, ...grey, ...grey, ...grey]);
+    const broad = new Uint8Array([...pixel(200, 100, 100), ...pixel(0, 0, 0, 0), ...pixel(0, 0, 0, 0), ...pixel(100, 100, 0)]);
+    const before = new Uint8Array([...grey, ...pixel(0, 0, 0, 0), ...pixel(0, 0, 0, 0), ...grey]);
+    const into = new Uint8ClampedArray(original.length);
+    new ViewedDetail(original, broad, before, broad.slice(), null, 4).mix(1, into);
+    expect([...into.slice(4, 7)]).toEqual([200, 100, 100]);
+    expect([...into.slice(8, 11)]).toEqual([100, 100, 0]);
   });
 
   it('leaves alone what the model does not use, and what is cut out, when working through views', () => {
@@ -107,7 +120,7 @@ describe('working from the map on a part', () => {
     const broad = new Uint8Array([200, 200, 200, 255, 200, 200, 200, 255]);
     const before = new Uint8Array([50, 60, 70, 255, 50, 60, 70, 255]);
     const into = new Uint8ClampedArray(8);
-    new ViewedDetail(original, broad, before, broad, new Uint8Array([255, 0])).mix(1, into);
+    new ViewedDetail(original, broad, before, broad.slice(), new Uint8Array([255, 0]), 2).mix(1, into);
     expect(into[3]).toBe(0);
     expect(into[0]).toBe(200);
     expect([...into.slice(4, 8)]).toEqual([50, 60, 70, 255]);
@@ -117,6 +130,45 @@ describe('working from the map on a part', () => {
     const told = viewsInstruction(' green steel ');
     expect(told).toContain('green steel, the same on every side');
     expect(told).toMatch(/exact shape/);
+  });
+
+  it('tells a model shown a plain shape to paint it, keeping the shape', () => {
+    const told = paintInstruction(' green steel ');
+    expect(told).toContain('clay');
+    expect(told).toContain('green steel,');
+    expect(told).toMatch(/exact shape/);
+    expect(told).toMatch(/shadowless/);
+  });
+
+  it('asks for a surface alone when faces share one map', () => {
+    const told = surfaceInstruction(' polished walnut ');
+    expect(told).toContain('seamless texture of polished walnut:');
+    expect(told).toMatch(/No objects/);
+  });
+
+  it('paints from nothing what a camera saw, and takes the rest from the nearest place one did', () => {
+    // Four across and two down: only the top left and bottom right were seen.
+    const seen = (r: number, g: number, b: number) => [r, g, b, 255];
+    const unseen = [0, 0, 0, 0];
+    const painted = new Uint8Array([
+      ...seen(200, 10, 10), ...unseen, ...unseen, ...unseen,
+      ...unseen, ...unseen, ...unseen, ...seen(10, 200, 10),
+    ]);
+    const into = new Uint8ClampedArray(painted.length);
+    new PaintedMap(painted, 4, 2).mix(0.75, into);
+    const pixel = (x: number, y: number) => [...into.slice((y * 4 + x) * 4, (y * 4 + x) * 4 + 4)];
+    expect(pixel(0, 0)).toEqual([200, 10, 10, 255]);
+    expect(pixel(3, 1)).toEqual([10, 200, 10, 255]);
+    expect(pixel(1, 0)).toEqual([200, 10, 10, 255]);
+    expect(pixel(2, 1)).toEqual([10, 200, 10, 255]);
+    // Nothing is left clear, so nothing dark shows along a seam.
+    expect(pixel(0, 1)[3]).toBe(255);
+  });
+
+  it('copes with a map no camera saw anything of', () => {
+    const into = new Uint8ClampedArray(8);
+    new PaintedMap(new Uint8Array(8), 2, 1).mix(0, into);
+    expect([...into]).toEqual([128, 128, 128, 255, 128, 128, 128, 255]);
   });
 
   it('refuses a result of another size', async () => {
@@ -142,6 +194,40 @@ describe('what the model uses of a map', () => {
     expect(used[10 * 100 + 90]).toBe(0);
     expect(used[90 * 100 + 90]).toBe(0);
     expect(used[10 * 100 + 41]).toBe(255);
+  });
+
+  describe('whether a map is laid out over its object', () => {
+    /** Two triangles over a square of the map, at some place on it. */
+    const square = (left: number, bottom: number, size: number) => [
+      left, bottom, left + size, bottom, left + size, bottom + size,
+      left, bottom, left + size, bottom + size, left, bottom + size,
+    ];
+
+    it('is, where each place on it has one place on the object', () => {
+      const { root, part } = meshWithUvs([...square(0, 0, 0.4), ...square(0.5, 0.5, 0.4)]);
+      expect(mapIsLaidOutOverObject(root, part)).toBe(true);
+    });
+
+    it('still is on a mirrored model, whose two halves share one side of the map', () => {
+      const { root, part } = meshWithUvs([...square(0, 0, 0.5), ...square(0, 0, 0.5)]);
+      expect(mapIsLaidOutOverObject(root, part)).toBe(true);
+    });
+
+    it('is not on a box, whose faces each use the whole of it', () => {
+      const uvs = Array.from({ length: 6 }, () => square(0, 0, 1)).flat();
+      const { root, part } = meshWithUvs(uvs);
+      expect(mapIsLaidOutOverObject(root, part)).toBe(false);
+    });
+
+    it('is not where it repeats, or there are no UVs', () => {
+      const { root, part } = meshWithUvs([0, 0, 2, 0, 0, 2]);
+      expect(mapIsLaidOutOverObject(root, part)).toBe(false);
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3));
+      const bare = new THREE.Group();
+      bare.add(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ name: 'Wood' })));
+      expect(mapIsLaidOutOverObject(bare, listModelParts(bare)[0])).toBe(false);
+    });
   });
 
   it('says which way up a plain texture is read', () => {
@@ -352,6 +438,22 @@ describe('choosing a model', () => {
     const picks = picksFor('fal', 'media.edit', catalog);
     expect(picks.map((pick) => [pick.tier, pick.id])).toEqual([['Best quality', 'blackforestlabs/flux-3/edit-image'], ['Balanced', 'google/nano-banana-2.1/edit']]);
     expect(picksFor('other', 'media.edit', catalog)).toEqual([]);
+  });
+
+  it('moves each of the tool\'s jobs off a model it once suggested, once, and leaves one someone chose', async () => {
+    localStorage.clear();
+    const routes: Record<string, string> = { 'media.generate': 'fal-ai/flux/schnell', 'media.edit': 'acme/painter' };
+    vi.spyOn(hostProviderService, 'listModels').mockResolvedValue([model('blackforestlabs/flux-3/text-to-image'), model('blackforestlabs/flux-3/edit-image'), model('meshy/v6-lite/retexture'), model('meshy/v7/retexture')]);
+    vi.spyOn(hostProviderService, 'loadConfiguredRoute').mockImplementation(async (capability) => (routes[capability] ? { providerId: 'fal', modelId: routes[capability], route: 'cloud' } : null));
+    vi.spyOn(hostProviderService, 'routeCapability').mockImplementation(async (_provider, capability, id) => { routes[capability] = id; });
+    await retextureSessions.chooseCapableModel();
+    expect(routes['media.generate']).toBe('blackforestlabs/flux-3/text-to-image');
+    expect(routes['media.edit']).toBe('acme/painter');
+    expect(routes['media.mesh']).toBe('meshy/v7/retexture');
+    // Going back to it after that is someone's own choice.
+    routes['media.generate'] = 'fal-ai/flux/schnell';
+    await retextureSessions.chooseCapableModel();
+    expect(routes['media.generate']).toBe('fal-ai/flux/schnell');
   });
 
   it('has a sample for a suggested image model and none for an unknown one', () => {

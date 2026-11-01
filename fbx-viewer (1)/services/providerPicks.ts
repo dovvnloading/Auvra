@@ -26,10 +26,9 @@ const MODEL_PICKS: Readonly<Record<string, Partial<Record<ProviderCapability, re
       { id: 'google/nano-banana-2.1/edit', tier: 'Balanced', note: 'Quick, and stays nearest the original' },
     ],
     'media.generate': [
-      { id: 'fal-ai/flux/schnell', tier: 'Fast', note: 'Quick drafts' },
+      { id: 'blackforestlabs/flux-3/text-to-image', tier: 'Best quality', note: 'The sharpest detail, follows the description closely' },
+      { id: 'fal-ai/flux-2-max', tier: 'Best quality', note: 'Rich, even surfaces' },
       { id: 'fal-ai/patina/material', tier: 'Balanced', note: 'Seamless, with surface maps' },
-      { id: 'fal-ai/flux-2', tier: 'Balanced', note: 'Cleaner detail' },
-      { id: 'fal-ai/flux-2-pro', tier: 'Best quality', note: 'Fine detail, follows the description closely' },
     ],
     // Both were run against others: they paint a true panorama, where most paint a wide photograph.
     'media.sky': [
@@ -40,8 +39,8 @@ const MODEL_PICKS: Readonly<Record<string, Partial<Record<ProviderCapability, re
       { id: 'fal-ai/ideogram/v3/generate-transparent', tier: 'Best quality', note: 'Really transparent, and good with lettering and graphics' },
     ],
     'media.mesh': [
-      { id: 'meshy/v6-lite/retexture', tier: 'Fast', note: 'Quicker, less detail' },
       { id: 'meshy/v7/retexture', tier: 'Best quality', note: 'Newest, sharpest detail' },
+      { id: 'meshy/v6-lite/retexture', tier: 'Fast', note: 'Quicker, less detail' },
     ],
     code: LANGUAGE_PICKS,
     commands: LANGUAGE_PICKS,

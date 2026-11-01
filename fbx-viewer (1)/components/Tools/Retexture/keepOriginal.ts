@@ -118,27 +118,84 @@ export class OriginalDetail implements DetailMix {
 }
 
 /**
+ * For each pixel of a picture whose alpha says which were seen, the nearest one that was, or -1 with none at all. One sweep
+ * each way carries them across the picture, closely enough for what is out of sight.
+ */
+const nearestSeen = (seen: Uint8Array, width: number, height: number): Int32Array => {
+  const count = width * height;
+  const nearest = new Int32Array(count).fill(-1);
+  const distance = new Float64Array(count).fill(Infinity);
+  for (let index = 0; index < count; index += 1) {
+    if (!seen[index * 4 + 3]) continue;
+    nearest[index] = index;
+    distance[index] = 0;
+  }
+  const consider = (index: number, x: number, y: number, fromX: number, fromY: number) => {
+    if (fromX < 0 || fromX >= width || fromY < 0 || fromY >= height) return;
+    const from = nearest[fromY * width + fromX];
+    if (from < 0) return;
+    const dx = (from % width) - x;
+    const dy = Math.floor(from / width) - y;
+    const away = dx * dx + dy * dy;
+    if (away < distance[index]) { distance[index] = away; nearest[index] = from; }
+  };
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = y * width + x;
+      if (!distance[index]) continue;
+      consider(index, x, y, x - 1, y);
+      consider(index, x, y, x, y - 1);
+      consider(index, x, y, x - 1, y - 1);
+      consider(index, x, y, x + 1, y - 1);
+    }
+  }
+  for (let y = height - 1; y >= 0; y -= 1) {
+    for (let x = width - 1; x >= 0; x -= 1) {
+      const index = y * width + x;
+      if (!distance[index]) continue;
+      consider(index, x, y, x + 1, y);
+      consider(index, x, y, x, y + 1);
+      consider(index, x, y, x + 1, y + 1);
+      consider(index, x, y, x - 1, y + 1);
+    }
+  }
+  return nearest;
+};
+
+/**
  * The same mix for an edit made through views of the object: the map's own pixels moved by how much the edit changed the
- * colour around them on the object. No camera saw a pixel inside something or underneath, so those move by the average.
+ * colour around them on the object. No camera saw a pixel inside something or underneath, or some along a seam: those move
+ * as the nearest one a camera did see. By what the whole object moved, they would show up as lines along every seam.
  */
 export class ViewedDetail implements DetailMix {
-  private readonly average: [number, number, number];
-
+  /** `broad`, `before` and `painted` are taken over and filled in. `width` is the map's. */
   constructor(
     private readonly original: Uint8ClampedArray,
     private readonly broad: Uint8Array,
     private readonly before: Uint8Array,
     private readonly painted: Uint8Array,
     private readonly used: Uint8Array | null,
+    width: number,
   ) {
-    const totals = [0, 0, 0];
-    let seen = 0;
-    for (let at = 0; at < broad.length; at += 4) {
-      if (!broad[at + 3]) continue;
-      seen += 1;
-      for (let channel = 0; channel < 3; channel += 1) totals[channel] += broad[at + channel] - before[at + channel];
+    const count = broad.length / 4;
+    const nearest = nearestSeen(broad, width, count / width);
+    for (let index = 0; index < count; index += 1) {
+      const from = nearest[index];
+      if (from === index) continue;
+      for (let channel = 0; channel < 3; channel += 1) {
+        const at = index * 4 + channel;
+        if (from < 0) {
+          // Nothing was seen at all, so nothing changes.
+          broad[at] = 0;
+          before[at] = 0;
+          painted[at] = original[at];
+        } else {
+          broad[at] = broad[from * 4 + channel];
+          before[at] = before[from * 4 + channel];
+          painted[at] = painted[from * 4 + channel];
+        }
+      }
     }
-    this.average = [totals[0] / (seen || 1), totals[1] / (seen || 1), totals[2] / (seen || 1)];
   }
 
   mix(keep: number, into: Uint8ClampedArray): void {
@@ -154,11 +211,40 @@ export class ViewedDetail implements DetailMix {
         into[at + 2] = this.original[at + 2];
         continue;
       }
-      const seen = this.broad[at + 3] > 0;
       for (let channel = 0; channel < 3; channel += 1) {
-        const moved = this.original[at + channel] + (seen ? this.broad[at + channel] - this.before[at + channel] : this.average[channel]);
-        into[at + channel] = moved * amount + (seen ? this.painted[at + channel] : moved) * rest;
+        const moved = this.original[at + channel] + this.broad[at + channel] - this.before[at + channel];
+        into[at + channel] = moved * amount + this.painted[at + channel] * rest;
       }
     }
+  }
+}
+
+/** What a pixel holds where nothing was ever seen at all. */
+const NOTHING_SEEN = 128;
+
+/**
+ * A map painted through views of an object that had none: what the views show, with what no camera saw taken from the
+ * nearest place one did. That covers what is inside or underneath, and the gaps around each piece of the layout, which are
+ * read from at a distance, so that nothing dark shows along a seam.
+ */
+export class PaintedMap implements DetailMix {
+  private readonly filled: Uint8ClampedArray;
+
+  /** `painted` is RGBA, its alpha saying whether any camera saw that pixel. */
+  constructor(painted: Uint8Array, width: number, height: number) {
+    const count = width * height;
+    const nearest = nearestSeen(painted, width, height);
+    this.filled = new Uint8ClampedArray(count * 4);
+    for (let index = 0; index < count; index += 1) {
+      const from = nearest[index];
+      const at = index * 4;
+      for (let channel = 0; channel < 3; channel += 1) this.filled[at + channel] = from < 0 ? NOTHING_SEEN : painted[from * 4 + channel];
+      this.filled[at + 3] = 255;
+    }
+  }
+
+  /** There is no original to keep anything of, so `keep` changes nothing. */
+  mix(_keep: number, into: Uint8ClampedArray): void {
+    into.set(this.filled);
   }
 }

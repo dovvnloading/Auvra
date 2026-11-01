@@ -494,6 +494,8 @@ def media_output_url(output: Mapping[str, Any]) -> tuple[str, str | None, dict[s
 # What a sky is painted at: a panorama is twice as wide as it is tall. The largest that shape within the four megapixels
 # the sky models paint at: asked for more, one changes the shape instead of refusing.
 SKY_SIZE = (2816, 1408)
+# What a new picture of a surface is painted at: the largest square within the same four megapixels.
+NEW_TEXTURE_SIZE = (2000, 2000)
 
 _MAP_ROLES = {"basecolor": "color", "base_color": "color", "albedo": "color", "normal": "normal", "roughness": "roughness",
               "metalness": "metalness", "metallic": "metalness"}

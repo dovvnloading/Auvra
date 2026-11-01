@@ -22,7 +22,7 @@ Top models are suggested for this, as the job is to change a surface without dis
 
 **Keep original detail** under a result says how much of the fine detail stays the original's. It works at once and costs nothing, as nothing goes back to the provider.
 
-A map that repeats across a surface is a picture of that surface already, so a model is shown it directly. A part with no texture has nothing to start from and is painted from the description (**New**), and a model with no textures at all can be painted as a shape (**Whole model**).
+A map that repeats across a surface is a picture of that surface already, so a model is shown it directly. A part with no texture has nothing to start from, so **New** paints it from the description: on its shape, seen from every side and put on its map through the same views, or as one picture of a surface where its faces share one map, as a box's do. A model with no textures at all can also go whole to a model made for that (**Whole model**).
 
 Every result stays in the strip under the model. Click one to try it on, or step through them with the left and right arrow keys. Nothing is saved until you say so:
 
