@@ -109,6 +109,51 @@ class AdapterTests(unittest.TestCase):
             with mock.patch.dict("os.environ", {"AUVRA_REFRAME_HOME": raw}):
                 self.assertEqual(find_home(), Path(raw))
 
+    def _reframe_in(self, folder: Path) -> Path:
+        engine = folder / "gi_renderer" / "engine"
+        engine.mkdir(parents=True)
+        (engine / "render.py").write_text("")
+        return folder
+
+    def test_it_finds_reframe_where_someone_chose(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            kept = self._reframe_in(root / "kept here")
+            with mock.patch.dict("os.environ", {"AUVRA_REFRAME_HOME": ""}), mock.patch("Auvra.providers.reframe.Path.home", return_value=root / "nobody"), mock.patch("Auvra.providers.reframe.find_python", return_value="python"):
+                adapter = self.adapter(root)
+                self.assertFalse(adapter.health())
+                self.assertTrue(adapter.choose_home(kept))
+                self.assertTrue(adapter.health())
+                # It is still known after a restart.
+                self.assertTrue(self.adapter(root).health())
+
+    def test_it_refuses_a_folder_reframe_is_not_in_and_keeps_what_it_had(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            kept = self._reframe_in(root / "kept here")
+            (root / "empty").mkdir()
+            with mock.patch.dict("os.environ", {"AUVRA_REFRAME_HOME": ""}), mock.patch("Auvra.providers.reframe.Path.home", return_value=root / "nobody"), mock.patch("Auvra.providers.reframe.find_python", return_value="python"):
+                adapter = self.adapter(root)
+                self.assertTrue(adapter.choose_home(kept))
+                self.assertFalse(adapter.choose_home(root / "empty"))
+                self.assertTrue(adapter.health())
+
+    def test_a_chosen_folder_that_has_gone_is_looked_past(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            usual = self._reframe_in(root / "home" / "source" / "repos" / "Reframe-Diffused" / "Reframe-Diffused")
+            self.assertEqual(usual.name, "Reframe-Diffused")
+            with mock.patch.dict("os.environ", {"AUVRA_REFRAME_HOME": ""}), mock.patch("Auvra.providers.reframe.Path.home", return_value=root / "home"):
+                self.assertEqual(find_home(root / "gone"), usual)
+
+    def test_the_variable_wins_over_a_chosen_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            named = self._reframe_in(root / "named")
+            chosen = self._reframe_in(root / "chosen")
+            with mock.patch.dict("os.environ", {"AUVRA_REFRAME_HOME": str(named)}):
+                self.assertEqual(find_home(chosen), named)
+
     def test_a_job_id_cannot_leave_the_jobs_folder(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             adapter = self.adapter(Path(raw))

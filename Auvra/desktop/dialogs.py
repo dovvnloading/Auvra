@@ -43,7 +43,7 @@ def _free_folder(parent: Path, name: str) -> Path:
 @trace_public_class("project_dialogs", concise=(
     "choose_create_location", "choose_open_project", "choose_save_as_location",
     "choose_export_pack", "choose_import_pack", "choose_import_legacy",
-    "choose_build_destination",
+    "choose_build_destination", "choose_folder",
 ))
 class WinFormsProjectDialogs:
     """Use the already-approved Windows/.NET dialog surface lazily."""
@@ -129,6 +129,21 @@ class WinFormsProjectDialogs:
             dialog.Description = f"Choose where to build {_validated_name(suggested_name, 'the game')}"
             dialog.ShowNewFolderButton = True
             if not self._accepted(forms, dialog):
+                return None
+            return self._selection(dialog.SelectedPath)
+        finally:
+            dialog.Dispose()
+
+    def choose_folder(self, description: str) -> DialogSelection | None:
+        """An existing folder, in a window that opens over the editor's. Call it on the frame's UI thread."""
+        forms = self._backend_loader()
+        owner = next(iter(forms.Application.OpenForms), None)
+        dialog = forms.FolderBrowserDialog()
+        try:
+            dialog.Description = description
+            dialog.ShowNewFolderButton = False
+            answer = dialog.ShowDialog(owner) if owner is not None else dialog.ShowDialog()
+            if answer != forms.DialogResult.OK:
                 return None
             return self._selection(dialog.SelectedPath)
         finally:
