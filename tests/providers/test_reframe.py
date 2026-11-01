@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import math
 import json
 import struct
 import tempfile
@@ -11,6 +12,7 @@ from unittest import mock
 from Auvra.providers.adapters import MediaJob
 from Auvra.providers.errors import ProviderError
 from Auvra.providers.reframe import MODEL, ReframeAdapter, _Blobs, build_render_config, find_home, read_bundle_header
+from Auvra.providers.reframe_worker import fog_transmittance, sky_light_share
 from Auvra.providers.transport import StdlibTransport
 
 
@@ -60,13 +62,65 @@ class BundleTests(unittest.TestCase):
             config = self.config({"meshes": [dict(MESH, material={"baseColorTexture": picture, "opacityTexture": picture})]}, bytes(96), Path(raw))
             self.assertTrue(config["objects"][0]["material"]["opacityTexture"].startswith("data:image/png;base64,"))
 
+    def _config(self, **extra: object) -> dict:
+        with tempfile.TemporaryDirectory() as raw:
+            data = bundle({"meshes": [MESH], **extra}, bytes(96))
+            path = Path(raw) / "bundle.bin"
+            path.write_bytes(data)
+            with path.open("rb") as stream:
+                header, start = read_bundle_header(stream)
+                return build_render_config(header, {}, _Blobs(stream, start, len(data), Path(raw)))
+
+    def test_it_matches_the_views_exposure_and_limits_fireflies(self) -> None:
+        self.assertAlmostEqual(self._config(exposure=1.5)["exposure"], 1.5)
+        self.assertAlmostEqual(self._config()["exposure"], 0.737)
+        self.assertGreater(self._config()["firefly_clamp"], 0)
+        self.assertLessEqual(self._config(exposure=1e9)["exposure"], 20)
+
+    def test_a_views_fog_goes_to_the_worker_in_its_own_kind(self) -> None:
+        self.assertNotIn("volumetric_fog", self._config())
+        squared = self._config(fog={"color": [0.1, 0.2, 0.3], "density": 0.01})["volumetric_fog"]
+        self.assertEqual((squared["kind"], squared["density"], squared["enabled"]), ("squared", 0.01, True))
+        self.assertEqual(squared["color"], [0.1, 0.2, 0.3])
+        linear = self._config(fog={"color": [0, 0, 0], "near": 10, "far": 90})["volumetric_fog"]
+        self.assertEqual((linear["kind"], linear["near"], linear["far"]), ("linear", 10.0, 90.0))
+
+    def test_fog_that_would_do_nothing_is_left_out(self) -> None:
+        self.assertNotIn("volumetric_fog", self._config(fog={"color": [0, 0, 0], "density": 0}))
+        self.assertNotIn("volumetric_fog", self._config(fog={"color": [0, 0, 0], "near": 50, "far": 50}))
+        self.assertNotIn("volumetric_fog", self._config(fog="thick"))
+
+    def test_what_the_sky_stands_in_for_reaches_the_worker_with_or_without_fog(self) -> None:
+        alone = self._config(skyFill=0.2)["volumetric_fog"]
+        self.assertEqual((alone["enabled"], alone["kind"], alone["sky_fill"]), (True, "none", 0.2))
+        both = self._config(skyFill=0.2, fog={"color": [0, 0, 0], "density": 0.01})["volumetric_fog"]
+        self.assertEqual((both["kind"], both["sky_fill"]), ("squared", 0.2))
+        self.assertNotIn("volumetric_fog", self._config(skyFill="bright"))
+
+    def test_a_sky_gives_what_the_viewports_fill_gives(self) -> None:
+        self.assertAlmostEqual(sky_light_share(0.2, 0.8), 0.25)
+        # Never more than it has, never quite nothing, and a black sky has nothing to share out.
+        self.assertEqual(sky_light_share(5.0, 0.8), 1.0)
+        self.assertEqual(sky_light_share(0.0, 0.8), 0.05)
+        self.assertEqual(sky_light_share(0.2, 0.0), 1.0)
+
+    def test_the_worker_thins_fog_by_the_viewports_law(self) -> None:
+        clip = lambda value, low, high: max(low, min(high, value))  # noqa: E731
+        squared = {"kind": "squared", "density": 0.01}
+        self.assertAlmostEqual(fog_transmittance(0.0, squared, math.exp, clip), 1.0)
+        self.assertAlmostEqual(fog_transmittance(100.0, squared, math.exp, clip), math.exp(-1.0))
+        linear = {"kind": "linear", "near": 10.0, "far": 30.0}
+        self.assertAlmostEqual(fog_transmittance(5.0, linear, math.exp, clip), 1.0)
+        self.assertAlmostEqual(fog_transmittance(20.0, linear, math.exp, clip), 0.5)
+        self.assertAlmostEqual(fog_transmittance(99.0, linear, math.exp, clip), 0.0)
+
     def test_settings_stay_within_what_a_renderer_can_do(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             config = self.config({"meshes": [MESH]}, bytes(96), Path(raw), {"width": 10 ** 9, "height": -5, "samples": "lots", "bounces": True})
             self.assertEqual((config["width"], config["height"]), (8192, 16))
             self.assertEqual((config["samples_per_pixel"], config["max_bounces"]), (64, 6))
-            self.assertIs(config["denoise"], False)
-            self.assertIs(self.config({"meshes": [MESH]}, bytes(96), Path(raw), {"denoise": True})["denoise"], True)
+            self.assertEqual(config["denoise"], {"enabled": False, "provider": "oidn"})
+            self.assertEqual(self.config({"meshes": [MESH]}, bytes(96), Path(raw), {"denoise": True})["denoise"], {"enabled": True, "provider": "oidn"})
 
     def test_parts_outside_the_bundle_are_refused(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

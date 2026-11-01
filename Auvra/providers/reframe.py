@@ -44,6 +44,11 @@ _ENGINE_FILE = Path("gi_renderer") / "engine" / "render.py"
 _RENDER_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 # How long a render gets to stop by itself. It only looks between samples, and not at all while compiling kernels.
 _STOP_GRACE_SECONDS = 5.0
+# The most light one sample may bring. Sun off bright ground is a rare bright path in a shadow: a speck that no number of samples
+# quite averages away. This takes a little of the very brightest light, in a picture that tone maps that to white anyway.
+_FIREFLY_LIMIT = 1.5
+# What brings the renderer's filmic curve to the viewport's at the viewport's usual settings.
+_VIEWPORT_EXPOSURE = 0.737
 _MATERIAL_TEXTURES = {"baseColorTexture": "baseColorTexture", "normalTexture": "normalMap", "roughnessTexture": "roughnessTexture", "metallicTexture": "metallicTexture", "opacityTexture": "opacityTexture"}
 
 
@@ -154,6 +159,27 @@ def _material(raw: Any, blobs: _Blobs) -> dict[str, Any]:
     return material
 
 
+def _fog(source: Any) -> dict[str, Any]:
+    """A view's fog for the worker to put on the frame, in whichever of the viewport's two kinds it is."""
+    if not isinstance(source, Mapping):
+        return {"kind": "none"}
+    color = _triple(source.get("color"), (0.5, 0.5, 0.5), 0.0, 100.0)
+    if "density" in source:
+        density = _number(source.get("density"), 0.0, 0.0, 100.0)
+        return {"kind": "squared", "color": color, "density": density} if density > 0.0 else {"kind": "none"}
+    near, far = _number(source.get("near"), 0.0, 0.0), _number(source.get("far"), 0.0, 0.0)
+    return {"kind": "linear", "color": color, "near": near, "far": far} if far > near else {"kind": "none"}
+
+
+def _finish(header: Mapping[str, Any]) -> dict[str, Any] | None:
+    """What the worker is to do to a frame to bring it to the view: its fog, and how much light the sky stands in for. The renderer hands over the depth for it only with fog asked for."""
+    finish = _fog(header.get("fog"))
+    fill = header.get("skyFill")
+    if isinstance(fill, (int, float)) and not isinstance(fill, bool):
+        finish["sky_fill"] = _number(fill, 0.0, 0.0, 100.0)
+    return {**finish, "enabled": True} if finish["kind"] != "none" or "sky_fill" in finish else None
+
+
 def build_render_config(header: Mapping[str, Any], settings: Mapping[str, Any], blobs: _Blobs) -> dict[str, Any]:
     """The renderer's settings for a scene: only what is known, and only paths to files made here."""
     meshes = header.get("meshes")
@@ -193,8 +219,11 @@ def build_render_config(header: Mapping[str, Any], settings: Mapping[str, Any], 
     if raw_environment.get("panorama") is not None:
         environment["hdri_path"] = str(blobs.write(raw_environment["panorama"], ".png"))
         environment["rotation_deg"] = _number(raw_environment.get("rotation"), 0.0, -360000.0, 360000.0)
+    finish = _finish(header)
     return {
-        "scene": "custom", "schema_version": 1, "device": "gpu", "backend": "cuda", "tone_map": "aces", "denoise": settings.get("denoise") is True,
+        "scene": "custom", "schema_version": 1, "device": "gpu", "backend": "cuda", "tone_map": "aces", "denoise": {"enabled": settings.get("denoise") is True, "provider": "oidn"},
+        "exposure": _number(header.get("exposure"), _VIEWPORT_EXPOSURE, -20.0, 20.0), "firefly_clamp": _FIREFLY_LIMIT,
+        **({"volumetric_fog": finish} if finish else {}),
         "width": int(_number(settings.get("width"), 960, 16, _MAX_SIZE)),
         "height": int(_number(settings.get("height"), 540, 16, _MAX_SIZE)),
         "samples_per_pixel": int(_number(settings.get("samples"), 64, 1, _MAX_SAMPLES)),

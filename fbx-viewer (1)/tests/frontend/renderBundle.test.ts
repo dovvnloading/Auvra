@@ -71,6 +71,36 @@ describe('gathering the view for a render', () => {
     }
   });
 
+  it('sends the view\'s fog, of either kind, and none where it has none', async () => {
+    view(new THREE.Mesh(triangle(), new THREE.MeshStandardMaterial()));
+    expect((await readBundle()).header.fog).toBeUndefined();
+    renderView.scene!.fog = new THREE.FogExp2(0x336699, 0.01);
+    const squared = (await readBundle()).header.fog;
+    expect(squared.density).toBeCloseTo(0.01);
+    expect(squared.near).toBeUndefined();
+    expect(squared.color[2]).toBeCloseTo(new THREE.Color(0x336699).b, 5);
+    renderView.scene!.fog = new THREE.Fog(0xffffff, 10, 90);
+    const linear = (await readBundle()).header.fog;
+    expect([linear.near, linear.far, linear.density]).toEqual([10, 90, undefined]);
+  });
+
+  it('sends the brightness that brings the renderer\'s curve to the view\'s', async () => {
+    view(new THREE.Mesh(triangle(), new THREE.MeshStandardMaterial()));
+    expect((await readBundle()).header.exposure).toBeCloseTo(Math.log2(1 / 0.6), 5);
+    renderView.renderer = { toneMappingExposure: 2, getClearAlpha: () => 1 } as unknown as THREE.WebGLRenderer;
+    expect((await readBundle()).header.exposure).toBeCloseTo(Math.log2(2 / 0.6), 5);
+  });
+
+  it('sends how much a plain fill lights a level, unless the sky itself does', async () => {
+    const hemisphere = new THREE.HemisphereLight(0xffffff, 0x000000, 2);
+    view(new THREE.Mesh(triangle(), new THREE.MeshStandardMaterial()), hemisphere, new THREE.AmbientLight(0xffffff, 1));
+    // Half of the hemisphere's 2, as its ground is black, and the ambient's 1, over pi as a white surface sends it back.
+    expect((await readBundle()).header.skyFill).toBeCloseTo(2 / Math.PI, 5);
+    renderView.skyLights = true;
+    expect((await readBundle()).header.skyFill).toBeUndefined();
+    renderView.skyLights = false;
+  });
+
   it('leaves a surface that has no bones as it is', async () => {
     const mesh = new THREE.Mesh(triangle(), new THREE.MeshStandardMaterial());
     mesh.rotation.z = Math.PI / 2;
