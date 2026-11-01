@@ -156,6 +156,7 @@ export class HostProviderService {
   private readonly progressListeners = new Set<(job: InferenceJob) => void>();
   private readonly providerEventListeners = new Set<(event: { event: string; payload: unknown }) => void>();
   private readonly providerRoutes = new Map<string, ProviderRoute>();
+  private readonly modelLists = new Map<string, Promise<ProviderModel[]>>();
   private configuredModels: Partial<Record<ProviderCapability, { providerId: string; modelId: string; route: ProviderRoute }>> = {};
   private configurationHydrated = false;
   private configurationLoad: Promise<void> | null = null;
@@ -213,7 +214,18 @@ export class HostProviderService {
     return result;
   }
 
-  async listModels(providerId: string, capability?: ProviderCapability): Promise<ProviderModel[]> {
+  /** A provider's models, read once until the host says something changed (prices coming in, say). */
+  listModels(providerId: string, capability?: ProviderCapability): Promise<ProviderModel[]> {
+    const key = `${providerId}\n${capability ?? ''}`;
+    const known = this.modelLists.get(key);
+    if (known) return known;
+    const reading = this.readModels(providerId, capability);
+    this.modelLists.set(key, reading);
+    reading.catch(() => { if (this.modelLists.get(key) === reading) this.modelLists.delete(key); });
+    return reading;
+  }
+
+  private async readModels(providerId: string, capability?: ProviderCapability): Promise<ProviderModel[]> {
     if (!providerId) throw new HostProviderError('Choose a provider before listing models.', 'provider_unavailable');
     const models: ProviderModel[] = [];
     let cursor = '';
@@ -332,7 +344,7 @@ export class HostProviderService {
     this.providerEventListeners.forEach((listener) => listener({ event: 'provider.status', payload: { providerId } }));
   }
 
-  dispose(): void { this.unsubscribe?.(); this.unsubscribe = null; this.progressListeners.clear(); this.providerEventListeners.clear(); this.providerRoutes.clear(); this.configuredModels = {}; this.configurationHydrated = false; this.configurationLoad = null; }
+  dispose(): void { this.unsubscribe?.(); this.unsubscribe = null; this.modelLists.clear(); this.progressListeners.clear(); this.providerEventListeners.clear(); this.providerRoutes.clear(); this.configuredModels = {}; this.configurationHydrated = false; this.configurationLoad = null; }
 
   getConfiguredRoute(capability: ProviderCapability): { providerId: string; modelId: string; route: ProviderRoute } | null { return this.configuredModels[capability] || null; }
   hydrateConfiguration(providerId: string, route: ProviderRoute, settings?: ProviderSettingsResult | Record<string, unknown>): void {
@@ -423,6 +435,7 @@ export class HostProviderService {
     if (typeof value.revision === 'number') this.revision = value.revision;
     if (value.event !== 'provider.progress' && value.event !== 'provider.job' && value.event !== 'provider.status' && value.event !== 'provider.recovery') return;
     const payload = value.payload && typeof value.payload === 'object' ? value.payload : {};
+    if (value.event === 'provider.status') this.modelLists.clear();
     this.providerEventListeners.forEach((listener) => listener({ event: value.event || 'provider.status', payload }));
     const job = normalizeJob(payload);
     if (job.jobId) this.progressListeners.forEach((listener) => listener(job));

@@ -792,7 +792,8 @@ class NativeProviderHost:
                 operation = "remove" if command["op"] == "delete" else "upsert"
             diff.append({"domain": "hud", "documentId": "hud-main", "operation": operation, "summary": summary[:256]})
         self._meta[job.job_id]["proposalId"] = proposal_id
-        return {"kind": "command.preview", "projectId": payload["projectId"], "projectRevision": active.revision, "proposalId": proposal_id, "diff": diff}
+        preview = self._proposal_preview(proposal, self._meta[job.job_id])
+        return {"kind": "command.preview", "projectId": payload["projectId"], "projectRevision": active.revision, "proposalId": proposal_id, "diff": diff, **({"preview": preview} if preview is not None else {})}
 
     def _approve_command(self, payload: dict[str, Any]) -> dict[str, Any]:
         active = self._require_project(payload, expected=True)
@@ -827,8 +828,23 @@ class NativeProviderHost:
             raise HostOperationError("invalid_command", "HUD element identity is invalid")
         if len({item["id"] for item in elements}) != len(elements) or len({item["name"] for item in elements}) != len(elements):
             raise HostOperationError("invalid_command", "HUD element identities collide")
+        by_name, _, _ = self._elements_with_proposal(elements, proposal, source)
+        hud_main = dict(hud_main); hud_main["elements"] = list(by_name.values())
+        documents[main_index] = hud_main
+        audit = {"id": proposal.proposal_id, "jobId": source_job_id, "providerId": source.get("providerId", "openai"), "modelId": source.get("modelId", "unknown"), "promptSha256": source.get("promptHash", "0" * 64), "operationsSha256": proposal.diff_hash, "appliedAt": self._now()}
+        hud_main["commands"] = list(hud_main.get("commands", []))[-63:] + [audit]
+        result = self.project_host.service.apply_changes({"hud": documents}, project_id=active.project_id, expected_revision=payload["expectedRevision"])
+        transaction_id = "transaction-" + uuid.uuid4().hex
+        self._last_transaction = {"projectId": active.project_id, "revision": result.revision, "hud": pre_change_hud, "transactionId": transaction_id}
+        return {"kind": "command.approve", "projectId": active.project_id, "projectRevision": result.revision, "transactionId": transaction_id}
+
+    @staticmethod
+    def _elements_with_proposal(elements: list[dict[str, Any]], proposal: CommandProposal, source: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], list[str], list[str]]:
+        """The HUD's elements by name with a proposal's commands applied, and the names it changes and the ids it removes."""
         by_name = {item["name"]: item for item in elements}
         by_id = {item["id"]: item for item in elements}
+        changed: list[str] = []
+        removed_ids: list[str] = []
         target_id = source.get("targetElementId")
         target_name = source.get("targetElementName")
         if target_id is not None:
@@ -842,6 +858,9 @@ class NativeProviderHost:
                     raise HostOperationError("invalid_command", "HUD delete target is unavailable")
                 removed = by_name.pop(name)
                 by_id.pop(removed["id"], None)
+                removed_ids.append(removed["id"])
+                if name in changed:
+                    changed.remove(name)
             elif command["op"] == "create":
                 element = dict(command["element"])
                 name = element["name"]
@@ -854,6 +873,7 @@ class NativeProviderHost:
                 element["id"] = name
                 by_name[element["name"]] = element
                 by_id[element["id"]] = element
+                changed.append(name)
             else:
                 name = command["name"]
                 existing = by_name.get(name)
@@ -865,14 +885,24 @@ class NativeProviderHost:
                     merged_props = dict(existing.get("props", {})); merged_props.update(delta["props"])
                     delta = dict(delta); delta["props"] = merged_props
                 existing.update(delta); by_name[name] = existing; by_id[existing["id"]] = existing
-        hud_main = dict(hud_main); hud_main["elements"] = list(by_name.values())
-        documents[main_index] = hud_main
-        audit = {"id": proposal.proposal_id, "jobId": source_job_id, "providerId": source.get("providerId", "openai"), "modelId": source.get("modelId", "unknown"), "promptSha256": source.get("promptHash", "0" * 64), "operationsSha256": proposal.diff_hash, "appliedAt": self._now()}
-        hud_main["commands"] = list(hud_main.get("commands", []))[-63:] + [audit]
-        result = self.project_host.service.apply_changes({"hud": documents}, project_id=active.project_id, expected_revision=payload["expectedRevision"])
-        transaction_id = "transaction-" + uuid.uuid4().hex
-        self._last_transaction = {"projectId": active.project_id, "revision": result.revision, "hud": pre_change_hud, "transactionId": transaction_id}
-        return {"kind": "command.approve", "projectId": active.project_id, "projectRevision": result.revision, "transactionId": transaction_id}
+                if name not in changed:
+                    changed.append(name)
+        return by_name, changed, removed_ids
+
+    def _proposal_preview(self, proposal: CommandProposal, source: dict[str, Any]) -> dict[str, Any] | None:
+        """What a proposal would do to the HUD, to show before it is applied, or None when it cannot be shown."""
+        try:
+            hud = self.project_host.service.active.get_domain("hud")
+            main = next((item for item in hud.get("documents", []) if isinstance(item, dict) and item.get("id") == "hud-main"), None) or _empty_main_hud()
+            elements = copy.deepcopy(list(main.get("elements", [])))
+            if any(not isinstance(item, dict) or not isinstance(item.get("id"), str) or not isinstance(item.get("name"), str) for item in elements):
+                return None
+            by_name, changed, removed = self._elements_with_proposal(elements, proposal, source)
+        except (AttributeError, HostOperationError):
+            # Applying it will say what is wrong; a proposal without a picture can still be read.
+            return None
+        preview = {"changed": [by_name[name] for name in changed], "removed": removed}
+        return preview if len(json.dumps(preview)) <= _PROPOSAL_PREVIEW_MAX_CHARACTERS else None
 
     def _undo_command(self, payload: dict[str, Any]) -> dict[str, Any]:
         active = self._require_project(payload, expected=True)
@@ -1181,6 +1211,10 @@ class NativeProviderHost:
     def _map_error(exc: ProviderError) -> HostOperationError:
         code = _PROVIDER_ERRORS.get(str(exc.code), "internal_error")
         return HostOperationError(code, str(exc.message)[:256])
+
+
+# Most of what one host message may carry, leaving room for the rest of the answer.
+_PROPOSAL_PREVIEW_MAX_CHARACTERS = 128 * 1024
 
 
 def _empty_main_hud() -> dict[str, Any]:

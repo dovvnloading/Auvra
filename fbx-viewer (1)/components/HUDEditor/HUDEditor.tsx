@@ -1,8 +1,8 @@
 
-import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { HUDCanvas } from './HUDCanvas';
 import { HUDLibrary } from './HUDLibrary';
-import { AIChatPanel } from './AIChatPanel';
+import { AIChatPanel, type HUDProposalPreview } from './AIChatPanel';
 import { HUDActionField, describeMenuAction } from './HUDActionField';
 import { bindablePropsFor, HUDBindingField, hudBindingPath, withHUDBinding } from './HUDBindingField';
 import { clampHUDPosition, HUD_REFERENCE_SIZE, HUDElement, normalizeHUDLayout } from './types';
@@ -305,6 +305,14 @@ export const HUDEditor: React.FC = () => {
     // The host's AI commands read and write the canonical game HUD only.
     const aiAvailable = descriptor.id === HUD_MAIN_DOCUMENT_ID;
     const elements = document.elements;
+    // A proposal under review shows on the canvas, on top of the document, which it has not touched.
+    const [proposal, setProposal] = useState<HUDProposalPreview | null>(null);
+    const proposedIds = useMemo(() => (proposal ? { changed: new Set(proposal.changed.map((element) => element.id)), removed: new Set(proposal.removed) } : null), [proposal]);
+    const shownElements = useMemo(() => {
+        if (!proposal) return elements;
+        const replaced = new Map(proposal.changed.map((element) => [element.id, element]));
+        return [...elements.map((element) => replaced.get(element.id) ?? element), ...proposal.changed.filter((element) => !elements.some((existing) => existing.id === element.id))];
+    }, [elements, proposal]);
     const layout = normalizeHUDLayout(document.layout);
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [rightPanelTab, setRightPanelTab] = useState<'ai' | 'props'>('props');
@@ -583,7 +591,8 @@ export const HUDEditor: React.FC = () => {
                     </div>
                 )}
                 <HUDCanvas
-                    elements={elements}
+                    elements={shownElements}
+                    proposed={proposedIds}
                     selectedId={selectedId}
                     onSelect={setSelectedId}
                     onUpdate={applyElementUpdate}
@@ -621,6 +630,7 @@ export const HUDEditor: React.FC = () => {
                             selectedElementId={selectedId}
                             onSelectElement={setSelectedId}
                             onRefresh={handleRefresh}
+                            onPreviewChange={setProposal}
                             onUpdateElement={handleUpdateElement}
                             onAgentCreate={(type, overrides) => handleAddElement(type, { ...overrides, id: 'ai' })}
                         />

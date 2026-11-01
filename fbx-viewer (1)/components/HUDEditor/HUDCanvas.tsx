@@ -14,9 +14,11 @@ interface HUDCanvasProps {
     onDragStart?: (id: string) => void;
     /** Fired once when an element drag ends (pointer released). */
     onDragEnd?: (id: string) => void;
+    /** Elements a proposal under review would change or remove: shown as such, and not to be dragged. */
+    proposed?: { changed: ReadonlySet<string>; removed: ReadonlySet<string> } | null;
 }
 
-export const HUDCanvas: React.FC<HUDCanvasProps> = ({ elements, selectedId, onSelect, onUpdate, layout, onScaleChange, onDragStart, onDragEnd }) => {
+export const HUDCanvas: React.FC<HUDCanvasProps> = ({ elements, selectedId, onSelect, onUpdate, layout, onScaleChange, onDragStart, onDragEnd, proposed }) => {
     const canvasRef = useRef<HTMLDivElement>(null);
     const stageRef = useRef<HTMLDivElement>(null);
     const normalizedLayout = useMemo(() => normalizeHUDLayout(layout || HUD_REFERENCE_SIZE), [layout]);
@@ -43,7 +45,7 @@ export const HUDCanvas: React.FC<HUDCanvasProps> = ({ elements, selectedId, onSe
     }, [scale]);
 
     const handlePointerDown = (e: React.PointerEvent, element: HUDElement, position: HUDElement['position']) => {
-        if (element.isLocked) return;
+        if (element.isLocked || proposed?.changed.has(element.id) || proposed?.removed.has(element.id)) return;
         
         e.stopPropagation();
         e.preventDefault();
@@ -100,8 +102,12 @@ export const HUDCanvas: React.FC<HUDCanvasProps> = ({ elements, selectedId, onSe
         }
     };
 
+    const markScale = Math.max(scale, 0.05);
+
     const renderElement = (el: HUDElement, position: HUDElement['position'], content: React.ReactNode) => {
         const isSelected = selectedId === el.id;
+        const proposedChange = proposed?.changed.has(el.id);
+        const proposedRemoval = proposed?.removed.has(el.id);
         return (
             <div
                 data-hud-element={el.id}
@@ -132,9 +138,24 @@ export const HUDCanvas: React.FC<HUDCanvasProps> = ({ elements, selectedId, onSe
                 )}
 
                 {/* Component Render */}
-                <div className="w-full h-full overflow-hidden">
+                <div className={`w-full h-full overflow-hidden ${proposedRemoval ? 'opacity-40' : ''}`}>
                     {content}
                 </div>
+
+                {(proposedChange || proposedRemoval) && (
+                    <>
+                        <div
+                            className={`pointer-events-none absolute border-dashed ${proposedRemoval ? 'border-bad' : 'border-accent'}`}
+                            style={{ inset: -3 / markScale, borderWidth: 1.5 / markScale }}
+                        />
+                        <div
+                            className={`pointer-events-none absolute left-0 whitespace-nowrap rounded-sm ${proposedRemoval ? 'bg-bad text-ground' : 'bg-accent text-accent-ink'}`}
+                            style={{ top: -22 / markScale, fontSize: 11 / markScale, lineHeight: `${16 / markScale}px`, paddingInline: 4 / markScale }}
+                        >
+                            {proposedRemoval ? 'To remove' : 'Proposed'}: {el.name}
+                        </div>
+                    </>
+                )}
 
                 {/* Label on Hover */}
                 <div className="absolute -top-5 left-0 bg-blue-600 text-accent-ink text-[9px] px-1 rounded opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity">

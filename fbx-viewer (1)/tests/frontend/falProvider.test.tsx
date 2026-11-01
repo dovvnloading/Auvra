@@ -93,6 +93,26 @@ describe('the host provider service', () => {
     expect(calls[1].payload.cursor).toBe('1');
   });
 
+  it('reads a catalog once however many tools ask, until the host says it changed', async () => {
+    let emit: (event: unknown) => void = () => undefined;
+    const calls: string[] = [];
+    const host = {
+      session: 's', currentRevision: 1,
+      subscribe: (listener: (event: unknown) => void) => { emit = listener; return () => undefined; },
+      request: async (request: { method: string }) => {
+        calls.push(request.method);
+        return { ok: true, result: { models: [{ modelId: 'a', displayName: 'A', capabilities: ['media.edit'] }], cursor: '', hasMore: false } };
+      },
+    };
+    const service = new HostProviderService(host as never);
+    await Promise.all([service.listModels('fal', 'media.edit'), service.listModels('fal', 'media.edit')]);
+    await service.listModels('fal', 'media.edit');
+    expect(calls).toHaveLength(1);
+    emit({ event: 'provider.status', payload: {} });
+    await service.listModels('fal', 'media.edit');
+    expect(calls).toHaveLength(2);
+  });
+
   it('moves a capability to one provider, the other keeping its other routes', async () => {
     const settings = (routes: { capability: string; modelId: string }[]) => ({
       enabled: true, routes, fallbackPolicy: 'none', requireCostConfirmation: true,

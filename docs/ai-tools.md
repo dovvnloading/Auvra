@@ -7,10 +7,10 @@ The editor can use AI models for texturing and for code. Nothing here is needed 
 | Tool | Where | What it does |
 |---|---|---|
 | **Retexture** | Retexture tab | Restyles a part of a model from a description, or paints it a new texture, and compares the results on the model |
-| **AI Coder** | HUD/UI tab, right-hand panel | Proposes HUD elements and changes for you to approve. Approved changes can be undone |
-| **AI** | Script editor, top right | Writes or changes a script. You choose to replace the script or insert the answer, and the editor's undo takes it back |
+| **AI Coder** | HUD/UI tab, right-hand panel | Proposes HUD elements and changes, shown dashed on the canvas until you apply them. Applied changes can be undone |
+| **AI** | Script editor, top right | Writes or changes a script. Its changes appear in the code for you to keep or leave out one by one, and the editor's undo takes them back |
 
-Each tool shows the model it will use and what that model costs. Click it to change the model there and then, or use **Settings: AI providers** to see everything together.
+Each tool shows the model it will use and what that model costs. Click it to change the model there and then, or use **Settings: AI providers** to see everything together: which model does each job, the keys, and spending limits.
 
 ## Retexture
 
@@ -29,7 +29,7 @@ A part shaded by a material from the Materials tab will not show a texture. The 
 
 ## fal.ai
 
-One [fal.ai](https://fal.ai) key covers all of these tools. Choose fal.ai in a tool's model list and click **Add key**, or use **Configure Key** in Settings. The key goes into a native prompt and is kept by Windows Credential Manager, or for that session only if you untick **Keep in OS vault**. It never reaches the editor's page or the project.
+One [fal.ai](https://fal.ai) key covers all of these tools. Choose fal.ai in a tool's model list and click **Add key**, or use the **Keys** page in Settings. The key goes into a native prompt and is kept by Windows Credential Manager, or until the editor closes if you untick **Keep keys in the Windows vault**. It never reaches the editor's page or the project.
 
 **Image models.** Every active image model in fal's catalog is offered and kept up to date from fal itself: image-to-image models for restyling, and text-to-image models for painting new maps. Prices come in over the first couple of minutes after the list first opens. **Suggested** gives a short list by purpose, with a sample each model painted from the same picture and description. **All** has the rest, sorted by **Cheapest** or by name, and searching looks through everything. Models that do not paint from a description, such as upscalers and background removers, stay out of the way until you tick them in.
 
@@ -43,4 +43,4 @@ Models that take a mesh and give back a mesh, such as fal's 3D retexturing model
 
 ## Budgets
 
-**Settings: AI providers** can limit what a provider spends per job, per day and per month, in millionths of a dollar. Once all three are set, each image job is checked against them using the catalog's price before it is sent. Language model jobs are not counted, as their cost depends on the length of the answer.
+The **Spending** page in Settings can limit what a provider spends per job, per day and per month. Once all three are set, each image job is checked against them using the catalog's price before it is sent. Language model jobs are not counted, as their cost depends on the length of the answer.
