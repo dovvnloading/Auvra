@@ -29,8 +29,8 @@ export class TextureGenerationService {
   }
 
   /** Follows a job to its end, and loads the picture of one that succeeded. */
-  async follow(initial: InferenceJob, onUpdate?: (job: InferenceJob) => void): Promise<TexturePreview> {
-    const job = await hostProviderService.waitForJob(initial, onUpdate);
+  async follow(initial: InferenceJob, onUpdate?: (job: InferenceJob) => void, waitMs?: number): Promise<TexturePreview> {
+    const job = await hostProviderService.waitForJob(initial, onUpdate, waitMs);
     if (job.status !== 'succeeded') throw new HostProviderError(job.error?.message || 'Texture generation failed.', job.error?.code, job.error?.retryable);
     const result = job.result && typeof job.result === 'object' ? job.result as MediaPreview : {};
     const previewAssetId = result.previewAssetId || (Array.isArray((result as { previewAssetIds?: unknown[] }).previewAssetIds) ? String((result as { previewAssetIds: unknown[] }).previewAssetIds[0] || '') : '');

@@ -79,7 +79,7 @@
     "assetResolvePayload": {"type":"object","required":["projectId","assetId"],"properties":{"projectId":{"$ref":"#/$defs/projectId"},"assetId":{"$ref":"#/$defs/sha256"}},"additionalProperties":false},
     "providerId": {"type":"string","minLength":1,"maxLength":64,"pattern":"^[a-z][a-z0-9._-]{0,63}$"},
     "modelId": {"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"},
-    "capability": {"enum":["text","code","commands","media.generate","media.edit","media.maps","media.mesh","media.material","media.sky","media.decal"]},
+    "capability": {"enum":["text","code","commands","media.generate","media.edit","media.maps","media.mesh","media.material","media.sky","media.decal","media.render"]},
     "jobId": {"type":"string","minLength":1,"maxLength":128,"pattern":"^job-[A-Za-z0-9_-]{8,124}$"},
     "proposalId": {"type":"string","minLength":9,"maxLength":128,"pattern":"^proposal-[A-Za-z0-9_-]{8,119}$"},
     "transactionId": {"type":"string","minLength":11,"maxLength":128,"pattern":"^transaction-[A-Za-z0-9_-]{8,117}$"},

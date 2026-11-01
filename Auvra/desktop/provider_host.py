@@ -28,6 +28,7 @@ from Auvra.providers import (
     RouteRequest, SQLiteJobStore, XAIAdapter, validate_command, validate_update,
 )
 from Auvra.providers.adapters import MediaJob
+from Auvra.providers.reframe import ReframeAdapter
 from Auvra.providers.credentials import MemoryCredentialStore, WindowsCredentialManager
 from Auvra.providers.fal_catalog import SKY_SIZE, media_output_url, media_outputs, rough_job_cost
 from Auvra.providers.transport import StdlibTransport
@@ -44,6 +45,7 @@ _ADAPTERS = {
     "ollama": OllamaAdapter,
     "llama.cpp": LlamaCppAdapter,
     "fal": FalAdapter,
+    "reframe": ReframeAdapter,
 }
 _PROVIDER_ERRORS = {
     "unsupported_capability": "unsupported_capability",
@@ -557,7 +559,7 @@ class NativeProviderHost:
             # must not manufacture one; credential availability is the safe
             # host-level health signal until a real request is reconciled.
             healthy = self._credential_status(descriptor.provider_id) in {"configured", "memoryOnly"}
-        elif descriptor.kind == "local" and descriptor.provider_id not in self.transports and descriptor.provider_id not in self._adapters:
+        elif descriptor.kind == "local" and descriptor.provider_id != "reframe" and descriptor.provider_id not in self.transports and descriptor.provider_id not in self._adapters:
             healthy = False
         else:
             healthy = bool(self._adapter(descriptor.provider_id).health())
@@ -659,9 +661,9 @@ class NativeProviderHost:
         # state cancel_requested until a later remote reconciliation confirms
         # cancellation.
         job = self.jobs.request_cancel(job.job_id, project_id=active.project_id)
-        if job.remote_id and job.provider == "fal" and job.state.value in {"submitting", "running", "cancel_requested", "recovering"}:
+        if job.remote_id and job.provider in {"fal", "reframe"} and job.state.value in {"submitting", "running", "cancel_requested", "recovering"}:
             try:
-                self._adapter("fal").cancel(MediaJob("fal", job.model, job.remote_id, job.reconcile.get("remote_root")))
+                self._adapter(job.provider).cancel(MediaJob(job.provider, job.model, job.remote_id, job.reconcile.get("remote_root")))
             except ProviderError as exc:
                 raise self._map_error(exc) from None
         self._queue_job_event(job.job_id, job.state.value, None, self.registry.get(job.provider))
@@ -698,7 +700,7 @@ class NativeProviderHost:
     def _commit_media(self, payload: dict[str, Any]) -> dict[str, Any]:
         active = self._require_project(payload, expected=True)
         job = self._require_job_project(payload)
-        if job.state.value != "succeeded" or job.capability not in {Capability.MEDIA_GENERATE.value, Capability.MEDIA_EDIT.value, Capability.MEDIA_MAPS.value, Capability.MEDIA_MESH.value, Capability.MEDIA_MATERIAL.value, Capability.MEDIA_SKY.value, Capability.MEDIA_DECAL.value}:
+        if job.state.value != "succeeded" or job.capability not in {Capability.MEDIA_GENERATE.value, Capability.MEDIA_EDIT.value, Capability.MEDIA_MAPS.value, Capability.MEDIA_MESH.value, Capability.MEDIA_MATERIAL.value, Capability.MEDIA_SKY.value, Capability.MEDIA_DECAL.value, Capability.MEDIA_RENDER.value}:
             raise HostOperationError("invalid_job", "Media job is not complete")
         meta = self._meta.get(job.job_id, {})
         # The picture as it was finished in the editor, already uploaded, which can be kept again after the preview has gone.
@@ -995,7 +997,7 @@ class NativeProviderHost:
                     meta["proposalId"] = meta["proposal"].proposal_id
                 else:
                     meta["outputText"] = result.text[:65536]
-            elif capability in {Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT, Capability.MEDIA_MAPS, Capability.MEDIA_MESH, Capability.MEDIA_MATERIAL, Capability.MEDIA_SKY, Capability.MEDIA_DECAL}:
+            elif capability in {Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT, Capability.MEDIA_MAPS, Capability.MEDIA_MESH, Capability.MEDIA_MATERIAL, Capability.MEDIA_SKY, Capability.MEDIA_DECAL, Capability.MEDIA_RENDER}:
                 references: list[str] = []
                 source_size: tuple[int, int] | None = SKY_SIZE if capability == Capability.MEDIA_SKY else None
                 mesh_reference: str | None = None
@@ -1006,7 +1008,7 @@ class NativeProviderHost:
                     with self.project_host.service.resolve(meta["assetIds"][0], project_id=meta["projectId"]) as source:
                         filename = _mesh_filename(source)
                         mesh_reference = adapter.upload_input(source=source, size=reference.size, filename=filename, content_type="application/octet-stream")
-                elif capability in {Capability.MEDIA_EDIT, Capability.MEDIA_MAPS}:
+                elif capability in {Capability.MEDIA_EDIT, Capability.MEDIA_MAPS, Capability.MEDIA_RENDER}:
                     for asset_id in meta["assetIds"]:
                         reference = self.project_host.service.resolve_reference(asset_id, project_id=meta["projectId"])
                         with self.project_host.service.resolve(asset_id, project_id=meta["projectId"]) as source:
@@ -1021,11 +1023,13 @@ class NativeProviderHost:
                     return
                 request_id = getattr(result, "request_id", None)
                 self.jobs.transition(job_id, "running", remote_id=request_id, reconcile={"durable": True, "remote_request_id": request_id or "", "remote_root": getattr(result, "queue_root", None), "provider": provider_id, "model": model, "route": meta["route"]})
-                for wait in self._poll_waits():
+                for wait in self._poll_waits(getattr(adapter, "poll_limit_seconds", _POLL_LIMIT_SECONDS)):
                     if self._shutdown_event.is_set():
                         return
                     status = adapter.status(result)
                     state = adapter.status_state(status)
+                    if state == "running" and isinstance(status.get("progress"), (int, float)):
+                        self._queue_job_event(job_id, "running", max(0.0, min(1.0, float(status["progress"]))), self.registry.get(provider_id))
                     if state == "succeeded":
                         if status.get("error") or status.get("error_type"):
                             detail = status.get("error")
@@ -1040,7 +1044,8 @@ class NativeProviderHost:
                             job = self.jobs.reconcile(job_id, remote_state="cancelled", project_id=meta.get("projectId"))
                             self._queue_job_event(job_id, job.state.value, 1, self.registry.get(provider_id))
                             return
-                        raise ProviderError("remote", "media job did not complete", provider_id)
+                        said = status.get("error") if provider_id == "reframe" else None
+                        raise ProviderError("remote", said[:240] if isinstance(said, str) and said else "media job did not complete", provider_id)
                     if self._shutdown_event.wait(wait):
                         return
                 else:
@@ -1126,7 +1131,9 @@ class NativeProviderHost:
         credential_store = self._credential_store(provider_id)
         endpoint = self.settings.get(provider_id).endpoint
         cls = _ADAPTERS[provider_id]
-        extras = {"catalog_path": self.state_root / "fal-catalog.json"} if provider_id == "fal" else {}
+        extras: dict[str, Any] = {"catalog_path": self.state_root / "fal-catalog.json"} if provider_id == "fal" else {}
+        if provider_id == "reframe":
+            extras["jobs_root"] = self.state_root / "render-jobs"
         adapter = cls(transport, credential_store=credential_store, registry=self.registry, endpoint=endpoint, **extras)
         self._adapters[provider_id] = adapter
         return adapter
@@ -1272,10 +1279,10 @@ class NativeProviderHost:
         return active.revision
 
     @staticmethod
-    def _poll_waits() -> Any:
+    def _poll_waits(limit: float = _POLL_LIMIT_SECONDS) -> Any:
         """Each wait between asking after a queued job, until it has been asked after for long enough."""
         wait, spent = _POLL_FIRST_SECONDS, 0.0
-        while spent < _POLL_LIMIT_SECONDS:
+        while spent < limit:
             yield wait
             spent += wait
             wait = min(wait * 1.5, _POLL_MOST_SECONDS)

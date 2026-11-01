@@ -25,6 +25,8 @@ class Capability(StrEnum):
     MEDIA_SKY = "media.sky"
     # A description in, a picture on a transparent background out.
     MEDIA_DECAL = "media.decal"
+    # A scene in, a finished frame out.
+    MEDIA_RENDER = "media.render"
     # Compatibility spellings are aliases, not additional routable capabilities.
     STRUCTURED_COMMAND = "commands"
     MEDIA_GENERATION = "media.generate"
@@ -127,6 +129,10 @@ _DESCRIPTORS = (
                        frozenset({Capability.TEXT, Capability.CODE, Capability.COMMANDS}),
                        (), None,
                        frozenset({ProviderFeature.STREAMING, ProviderFeature.STRUCTURED_OUTPUT})),
+    # Run as a process of its own rather than reached over the network: its origin is never connected to.
+    ProviderDescriptor("reframe", "Reframe", 1, "local", ("http://127.0.0.1:0",),
+                       frozenset({Capability.MEDIA_RENDER}), ("path-tracer",), None,
+                       frozenset({ProviderFeature.CANCEL})),
 )
 
 

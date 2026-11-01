@@ -60,6 +60,8 @@
     <Compile Include="host\generated\protocol_v1.py" />
     <Compile Include="providers\__init__.py" />
     <Compile Include="providers\adapters.py" />
+    <Compile Include="providers\reframe.py" />
+    <Compile Include="providers\reframe_worker.py" />
     <Compile Include="providers\commands.py" />
     <Compile Include="providers\credentials.py" />
     <Compile Include="providers\descriptors.py" />

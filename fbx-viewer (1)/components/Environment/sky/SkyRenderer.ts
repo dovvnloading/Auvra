@@ -640,6 +640,11 @@ export class SkyRenderer {
         return state.environment.texture;
     }
 
+    /** The sky as it stands onto `onto`, for whatever needs it as a picture, with or without a Sky Light. */
+    drawSkyOnto(gl: THREE.WebGLRenderer, onto: THREE.WebGLCubeRenderTarget): void {
+        new THREE.CubeCamera(0.1, 10, onto).update(gl, this.captureScene);
+    }
+
     /** Whether `gl` holds a capture: none at first, after a release and after its context came back. */
     hasSkyLight(gl: THREE.WebGLRenderer): boolean {
         return !!this.states.get(gl)?.environment;

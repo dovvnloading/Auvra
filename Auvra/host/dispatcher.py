@@ -544,6 +544,7 @@ class HostDispatcher:
     # make protocol and UI tests useful without network access or secrets.
     _PROVIDERS = (
         ("fal", "fal.ai", "cloud", ("media.generate", "media.edit", "media.maps", "media.mesh", "media.material", "media.sky", "media.decal", "text", "code", "commands")),
+        ("reframe", "Reframe", "local", ("media.render",)),
         ("openai", "OpenAI", "cloud", ("text", "code", "commands")),
         ("anthropic", "Anthropic", "cloud", ("text", "code", "commands")),
         ("xai", "xAI", "cloud", ("text", "code", "commands")),

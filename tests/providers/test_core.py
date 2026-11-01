@@ -39,7 +39,7 @@ class FakeCredentials:
 
 class ProviderCoreTests(unittest.TestCase):
     def test_registry_is_static_and_capability_features_are_separate(self):
-        self.assertEqual(set(PROVIDER_REGISTRY), {"fal", "openai", "anthropic", "xai", "openrouter", "ollama", "llama.cpp"})
+        self.assertEqual(set(PROVIDER_REGISTRY), {"fal", "openai", "anthropic", "xai", "openrouter", "ollama", "llama.cpp", "reframe"})
         self.assertIn(ProviderFeature.QUEUE, PROVIDER_REGISTRY["fal"].features)
         self.assertNotIn(ProviderFeature.QUEUE.value, {x.value for x in PROVIDER_REGISTRY["fal"].capabilities})
 

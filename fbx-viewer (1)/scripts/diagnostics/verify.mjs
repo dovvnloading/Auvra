@@ -25,6 +25,7 @@ const EXEMPT = new Map(Object.entries({
   'components/Materials/graphFromTextures.ts': 'pure-utility',
   'components/Tools/Retexture/keepOriginal.ts': 'pure-utility',
   'components/Tools/paintedPictures.ts': 'pure-utility',
+  'components/Environment/renderBundle.ts': 'pure-utility',
   'components/Tools/Retexture/viewSheet.ts': 'pure-utility',
   'utils/projectRecords.ts': 'pure-utility',
   'components/Scripting/scriptDiff.ts': 'pure-utility',
