@@ -242,8 +242,8 @@ export const Popover: React.FC<{
   useEffect(() => {
     if (!open) return;
     const onPress = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (panel.current?.contains(target) || anchor.current?.contains(target)) return;
+      const target = event.target as Element;
+      if (panel.current?.contains(target) || anchor.current?.contains(target) || target.closest?.('[role="listbox"]')) return;
       onClose();
     };
     const onKey = (event: KeyboardEvent) => {

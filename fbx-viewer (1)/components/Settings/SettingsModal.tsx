@@ -1,142 +1,269 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Cloud, Cpu, KeyRound, RefreshCw, Settings2, ShieldAlert, Trash2, X } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Cloud, Cpu, RefreshCw, X } from 'lucide-react';
 import {
   hostProviderService,
   ProviderDescriptor,
   ProviderCapability,
   ProviderHealth,
-  ProviderRoute,
+  ProviderModel,
+  ProviderSettings,
 } from '../../services/HostProviderService';
-import { ModelPicker } from './ModelPicker';
+import { Button, IconButton } from '../UI/kit';
+import { AiRouteBar } from './AiRouteBar';
 
 interface SettingsModalProps { onClose: () => void; }
 
-const routeLabel = (route: ProviderRoute) => route === 'local' ? 'LOCAL · loopback only' : 'CLOUD · explicit budget';
+type SettingsPage = 'models' | 'keys' | 'spending';
 
-const MODEL_ROWS: readonly { capability: ProviderCapability; label: string }[] = [
-  { capability: 'media.edit', label: 'Retexture' },
-  { capability: 'media.generate', label: 'New images' },
-  { capability: 'code', label: 'Coding' },
-  { capability: 'commands', label: 'HUD chat' },
-  { capability: 'text', label: 'Text' },
+const PAGES: readonly { id: SettingsPage; label: string }[] = [
+  { id: 'models', label: 'Models' },
+  { id: 'keys', label: 'Keys' },
+  { id: 'spending', label: 'Spending' },
 ];
 
+const JOBS: readonly { capability: ProviderCapability; label: string; hint: string }[] = [
+  { capability: 'media.edit', label: 'Restyling textures', hint: 'Retexture, from what a part has now' },
+  { capability: 'media.generate', label: 'New textures', hint: 'Retexture, from a description alone' },
+  { capability: 'code', label: 'Writing scripts', hint: 'The AI panel in the script editor' },
+  { capability: 'commands', label: 'Changing the HUD', hint: 'The AI Coder in the HUD editor' },
+  { capability: 'text', label: 'Plain text', hint: 'Anything else that needs words' },
+];
+
+const KEY_WORDS: Record<string, { text: string; good: boolean }> = {
+  configured: { text: 'Key saved on this computer', good: true },
+  memoryOnly: { text: 'Key held until the editor closes', good: true },
+  notRequired: { text: 'No key needed', good: true },
+  unavailable: { text: 'This computer cannot keep keys', good: false },
+  absent: { text: 'No key', good: false },
+};
+
+const dollarsOf = (microUsd: number | undefined): string => (microUsd ? String(microUsd / 1_000_000) : '');
+const microUsdOf = (dollars: string): number => Math.max(0, Math.round((Number(dollars) || 0) * 1_000_000));
+
+/** An amount in dollars that saves when left. Empty means no limit. */
+const LimitField: React.FC<{ label: string; value: number | undefined; onCommit: (microUsd: number) => void }> = ({ label, value, onCommit }) => {
+  const [text, setText] = useState(dollarsOf(value));
+  useEffect(() => { setText(dollarsOf(value)); }, [value]);
+  return (
+    <div className="relative">
+      <span className="pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2 text-2xs text-ink-3">$</span>
+      <input
+        type="number"
+        min={0}
+        step={0.01}
+        aria-label={label}
+        placeholder="No limit"
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        onBlur={() => { if (microUsdOf(text) !== (value ?? 0)) onCommit(microUsdOf(text)); }}
+        className="h-6 w-full rounded border border-line bg-well pl-4 pr-1 text-xs tabular-nums text-ink placeholder:text-ink-3 hover:border-gray-700 focus:border-accent/70 focus:outline-none"
+      />
+    </div>
+  );
+};
+
+/** Which model does which job, the keys that pay for them, and how much they may spend. */
 export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
+  const [page, setPage] = useState<SettingsPage>('models');
   const [providers, setProviders] = useState<ProviderDescriptor[]>([]);
-  const [pickingFor, setPickingFor] = useState<ProviderCapability | null>(null);
   const [health, setHealth] = useState<Record<string, ProviderHealth>>({});
-  const [selectedId, setSelectedId] = useState('');
   const [rememberCredential, setRememberCredential] = useState(true);
-  const [selectedModels, setSelectedModels] = useState<Record<string, string>>({});
-  const [budgets, setBudgets] = useState({ perJob: 0, daily: 0, monthly: 0 });
-  const [requireCostConfirmation, setRequireCostConfirmation] = useState(true);
-  const [enabled, setEnabled] = useState(false);
-  const [settingsRevision, setSettingsRevision] = useState(0);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [, setRoutesSeen] = useState(0);
 
   const refresh = useCallback(async () => {
-    setBusy(true); setMessage(null);
+    setBusy(true);
     try {
       const listed = await hostProviderService.listProviders();
-      setProviders(listed);
-      if (!selectedId && listed.length) setSelectedId(listed.find((provider) => provider.id === 'fal')?.id || listed[0].id);
-      const [statusRows, healthRows] = await Promise.all([
-        Promise.all(listed.map((provider) => hostProviderService.getProviderStatus(provider.id))),
-        Promise.all(listed.map((provider) => hostProviderService.health(provider.id))),
-      ]);
-      setProviders((previous) => previous.map((provider) => {
-        const row = statusRows.find((candidate) => candidate.id === provider.id);
-        if (row?.settings) hostProviderService.hydrateConfiguration(provider.id, provider.route, row.settings);
-        if (provider.id === selectedId && row?.settingsRevision !== undefined) {
-          setSettingsRevision(row.settingsRevision);
-          const routes = Array.isArray(row.settings?.routes) ? row.settings.routes as Array<{ capability?: string; modelId?: string }> : [];
-          const nextModels: Record<string, string> = {};
-          routes.forEach((route) => { if (route.modelId && route.capability) nextModels[route.capability] = route.modelId; });
-          setSelectedModels(nextModels);
-          if (typeof row.settings?.enabled === 'boolean') setEnabled(row.settings.enabled);
-          if (typeof row.settings?.requireCostConfirmation === 'boolean') setRequireCostConfirmation(row.settings.requireCostConfirmation);
-          const configuredBudgets = row.settings?.budgets as { perJobMicroUsd?: unknown; dailyMicroUsd?: unknown; monthlyMicroUsd?: unknown } | undefined;
-          if (configuredBudgets) setBudgets({ perJob: Number(configuredBudgets.perJobMicroUsd) || 0, daily: Number(configuredBudgets.dailyMicroUsd) || 0, monthly: Number(configuredBudgets.monthlyMicroUsd) || 0 });
-        }
-        return row ? { ...provider, configured: row.configured, credentialStatus: row.credentialStatus, settingsRevision: row.settingsRevision, settings: row.settings } : provider;
+      const statuses = await Promise.all(listed.map((provider) => hostProviderService.getProviderStatus(provider.id)));
+      setProviders(listed.map((provider) => {
+        const status = statuses.find((row) => row.id === provider.id);
+        if (status?.settings) hostProviderService.hydrateConfiguration(provider.id, provider.route, status.settings);
+        return status ? { ...provider, ...status, name: provider.name, route: provider.route } : provider;
       }));
-      setHealth(Object.fromEntries(healthRows.filter((row) => row?.providerId).map((row) => [row.providerId, row])));
+      const local = listed.filter((provider) => provider.route === 'local');
+      const rows = await Promise.all(local.map((provider) => hostProviderService.health(provider.id)));
+      setHealth(Object.fromEntries(rows.filter((row) => row?.providerId).map((row) => [row.providerId, row])));
     } catch (cause) {
-      setMessage(cause instanceof Error ? cause.message : 'Provider settings are unavailable until the native host is ready.');
+      setMessage(cause instanceof Error ? cause.message : 'These settings are unavailable until the editor has finished starting.');
     } finally { setBusy(false); }
-  }, [selectedId]);
+  }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => hostProviderService.subscribeProviderEvents((event) => { if (event.event === 'provider.status' || event.event === 'provider.recovery') void refresh(); }), [refresh]);
 
-  const selected = useMemo(() => providers.find((provider) => provider.id === selectedId), [providers, selectedId]);
-  const selectedHealth = health[selectedId];
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.stopPropagation(); onClose(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
 
-  const persistConfiguration = async (nextModels = selectedModels, nextBudgets = budgets, nextCost = requireCostConfirmation, nextEnabled = enabled) => {
-    if (!selected) return;
+  const save = async (provider: ProviderDescriptor, changes: Partial<ProviderSettings>) => {
+    setMessage(null);
     try {
-      const routes = Object.entries(nextModels).filter(([, modelId]) => modelId).map(([capability, modelId]) => ({ capability: capability as ProviderCapability, modelId }));
-      const result = await hostProviderService.configure(selected.id, {
-        enabled: nextEnabled,
-        routes,
+      const settings = provider.settings;
+      await hostProviderService.configure(provider.id, {
+        enabled: settings?.enabled ?? false,
+        routes: Array.isArray(settings?.routes) ? settings.routes : [],
         fallbackPolicy: 'none',
-        requireCostConfirmation: nextCost,
-        budgets: { perJobMicroUsd: nextBudgets.perJob, dailyMicroUsd: nextBudgets.daily, monthlyMicroUsd: nextBudgets.monthly },
-      }, settingsRevision);
-      if (result && typeof result === 'object' && typeof (result as { settingsRevision?: unknown }).settingsRevision === 'number') setSettingsRevision((result as { settingsRevision: number }).settingsRevision);
-      setMessage('Provider configuration saved by the native host.');
-    } catch (cause) { setMessage(cause instanceof Error ? cause.message : 'Provider configuration was rejected.'); }
+        requireCostConfirmation: settings?.requireCostConfirmation ?? true,
+        budgets: settings?.budgets ?? { perJobMicroUsd: 0, dailyMicroUsd: 0, monthlyMicroUsd: 0 },
+        ...changes,
+      }, provider.settingsRevision ?? 0);
+      await refresh();
+    } catch (cause) { setMessage(cause instanceof Error ? cause.message : 'That could not be saved.'); }
   };
 
-  const configureCredential = async () => {
+  const addKey = async (provider: ProviderDescriptor) => {
     setBusy(true); setMessage(null);
     try {
-      await hostProviderService.configureCredential(selectedId, { remember: rememberCredential, memoryOnly: !rememberCredential });
-      setMessage('Native credential prompt completed. The key remains host-owned.');
+      await hostProviderService.configureCredential(provider.id, { remember: rememberCredential, memoryOnly: !rememberCredential });
       await refresh();
-    } catch (cause) { setMessage(cause instanceof Error ? cause.message : 'Credential configuration was cancelled.'); setBusy(false); }
+    } catch (cause) { setMessage(cause instanceof Error ? cause.message : 'The key was not added.'); setBusy(false); }
   };
 
-  const removeCredential = async () => {
+  const removeKey = async (provider: ProviderDescriptor) => {
     setBusy(true); setMessage(null);
-    try { await hostProviderService.deleteCredential(selectedId); hostProviderService.clearConfiguration(selectedId); setMessage('Credential removed from the host vault.'); await refresh(); }
-    catch (cause) { setMessage(cause instanceof Error ? cause.message : 'Credential could not be removed.'); setBusy(false); }
+    try {
+      await hostProviderService.deleteCredential(provider.id);
+      hostProviderService.clearConfiguration(provider.id);
+      await refresh();
+    } catch (cause) { setMessage(cause instanceof Error ? cause.message : 'The key could not be removed.'); setBusy(false); }
   };
 
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-label="Provider settings">
-      <div className="w-full max-w-3xl max-h-[90vh] overflow-hidden rounded-xl border border-gray-700 bg-gray-900 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-gray-800 bg-gray-950 px-5 py-4">
-          <div className="flex items-center gap-3"><Settings2 size={18} className="text-blue-400" /><div><h2 className="text-sm font-bold text-white">Provider Settings</h2><p className="text-[10px] text-gray-500">Host-owned credentials · explicit routing · no browser secrets</p></div></div>
-          <button type="button" onClick={onClose} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white" aria-label="Close settings"><X size={16} /></button>
-        </div>
-        <div className="grid min-h-0 md:grid-cols-[220px_1fr]">
-          <div className="max-h-[70vh] overflow-y-auto border-r border-gray-800 p-3 space-y-1">
-            {providers.length === 0 && <div className="p-3 text-xs text-gray-500">No provider registry is available yet.</div>}
-            {providers.map((provider) => {
-              const isSelected = provider.id === selectedId;
-              const status = provider.credentialStatus || (provider.configured ? 'configured' : 'absent');
-              return <button type="button" key={provider.id} onClick={() => setSelectedId(provider.id)} className={`w-full rounded-lg border p-3 text-left transition-colors ${isSelected ? 'border-blue-500/60 bg-blue-950/30' : 'border-transparent hover:border-gray-700 hover:bg-gray-800'}`}>
-                <div className="flex items-center gap-2 text-xs font-bold text-gray-200">{provider.route === 'local' ? <Cpu size={13} /> : <Cloud size={13} />}{provider.name || provider.id}</div>
-                <div className="mt-1 text-[9px] uppercase tracking-wider text-gray-500">{routeLabel(provider.route)}</div>
-                <div className={`mt-2 text-[9px] ${provider.route === 'local' || status === 'configured' || status === 'memoryOnly' || status === 'notRequired' ? 'text-emerald-400' : status === 'unavailable' ? 'text-red-400' : 'text-amber-400'}`}>{provider.route === 'local' || status === 'notRequired' ? 'No key required' : status === 'configured' ? 'Configured' : status === 'memoryOnly' ? 'Key held for this session' : status === 'unavailable' ? 'Credential vault unavailable' : 'Credential absent'}</div>
-              </button>;
-            })}
+  const cloudProviders = useMemo(() => providers.filter((provider) => provider.route === 'cloud'), [providers]);
+  const localProviders = useMemo(() => providers.filter((provider) => provider.route === 'local'), [providers]);
+  const providerName = (id?: string) => providers.find((provider) => provider.id === id)?.name ?? id;
+  const noteRoute = useCallback((_model: ProviderModel | null) => setRoutesSeen((value) => value + 1), []);
+
+  const keyRow = (provider: ProviderDescriptor) => {
+    const local = provider.route === 'local';
+    const words = local ? null : KEY_WORDS[provider.credentialStatus ?? 'absent'] ?? KEY_WORDS.absent;
+    const hasKey = provider.credentialStatus === 'configured' || provider.credentialStatus === 'memoryOnly';
+    const running = health[provider.id]?.status === 'healthy';
+    return (
+      <li key={provider.id} className="flex h-10 items-center gap-2.5 px-4">
+        <span className="shrink-0 text-ink-3">{local ? <Cpu size={14} /> : <Cloud size={14} />}</span>
+        <span className="w-28 shrink-0 truncate text-xs text-ink">{provider.name || provider.id}</span>
+        <span className={`min-w-0 flex-1 truncate text-2xs ${local ? (running ? 'text-ok' : 'text-ink-3') : words?.good ? 'text-ok' : 'text-ink-3'}`}>
+          {local ? (running ? 'Running on this computer' : 'Not running on this computer') : words?.text}
+        </span>
+        {!local && hasKey && <Button variant="ghost" size="sm" disabled={busy} onClick={() => void removeKey(provider)}>Remove</Button>}
+        {!local && <Button size="sm" disabled={busy || provider.credentialStatus === 'unavailable'} onClick={() => void addKey(provider)}>{hasKey ? 'Replace key' : 'Add key'}</Button>}
+        <label className="flex shrink-0 items-center gap-1 text-2xs text-ink-3" title="Off, this provider does no work, whatever it has been chosen for">
+          <input type="checkbox" className="accent-accent" checked={Boolean(provider.settings?.enabled)} onChange={(event) => void save(provider, { enabled: event.target.checked })} /> On
+        </label>
+      </li>
+    );
+  };
+
+  // On the page itself: inside the top bar it would sit under anything a tab raises above the bar.
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 p-4" role="dialog" aria-modal="true" aria-label="AI settings">
+      <div className="flex h-[min(560px,90vh)] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-[0_24px_64px_rgb(0_0_0/0.6)]">
+        <div className="flex h-10 shrink-0 items-center justify-between border-b border-line pl-4 pr-2">
+          <h2 className="text-xs font-semibold text-ink">AI settings</h2>
+          <div className="flex items-center gap-0.5">
+            <IconButton label="Check again" disabled={busy} onClick={() => void refresh()}><RefreshCw size={13} className={busy ? 'animate-spin' : ''} /></IconButton>
+            <IconButton label="Close settings" onClick={onClose}><X size={15} /></IconButton>
           </div>
-          <div className="max-h-[70vh] overflow-y-auto p-5 space-y-5">
-            {selected ? <>
-              <div className="flex items-start justify-between"><div><h3 className="text-base font-bold text-white">{selected.name || selected.id}</h3><p className="mt-1 text-[10px] uppercase tracking-wider text-blue-300">{routeLabel(selected.route)}</p></div><div className="flex items-center gap-3"><label className="flex items-center gap-1 text-[10px] text-gray-400"><input type="checkbox" checked={enabled} onChange={(event) => { setEnabled(event.target.checked); void persistConfiguration(selectedModels, budgets, requireCostConfirmation, event.target.checked); }} /> Enabled</label><div className={`flex items-center gap-1 text-[10px] ${selectedHealth?.status === 'healthy' ? 'text-emerald-400' : 'text-gray-500'}`}>{selectedHealth?.status === 'healthy' ? <CheckCircle2 size={13} /> : <ShieldAlert size={13} />}{selectedHealth?.status || 'Health not checked'}</div></div></div>
-              <div><div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-gray-500">Capabilities</div><div className="flex flex-wrap gap-1.5">{(selected.capabilities || []).map((capability) => <span key={capability} className="rounded border border-gray-700 bg-gray-950 px-2 py-1 text-[10px] text-gray-300">{capability}</span>)}</div></div>
-              <div><div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-gray-500">Selected models</div><div className="space-y-2">{MODEL_ROWS.filter(({ capability }) => selected.capabilities?.includes(capability)).map(({ capability, label }) => <div key={capability} className="space-y-1.5"><div className="flex items-center gap-2 text-xs text-gray-300"><span className="w-20 shrink-0 text-[10px] uppercase text-gray-500">{label}</span><span className="min-w-0 flex-1 truncate font-mono text-[10px] text-gray-300" title={selectedModels[capability]}>{selectedModels[capability] || 'None chosen'}</span><button type="button" aria-expanded={pickingFor === capability} onClick={() => setPickingFor(pickingFor === capability ? null : capability)} className="shrink-0 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-300 hover:bg-gray-800">{pickingFor === capability ? 'Close' : 'Choose'}</button></div>{pickingFor === capability && <ModelPicker providerId={selected.id} capability={capability} value={selectedModels[capability]} onChoose={(model) => { const next = { ...selectedModels, [capability]: model.id }; setSelectedModels(next); setEnabled(true); setPickingFor(null); void persistConfiguration(next, budgets, requireCostConfirmation, true); }} />}</div>)}</div></div>
-              <div className="rounded-lg border border-gray-800 bg-gray-950/60 p-3 space-y-3"><div className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Routing & budget controls (microUSD)</div><div className="rounded border border-gray-800 bg-gray-950 px-2 py-1.5 text-[10px] text-gray-500">Fallback routing is disabled. Each job stays on its explicitly configured provider route.</div><label className="flex items-center justify-between gap-3 text-xs text-gray-300"><span>Confirm cloud cost per job</span><input type="checkbox" checked={requireCostConfirmation} onChange={(event) => { setRequireCostConfirmation(event.target.checked); void persistConfiguration(selectedModels, budgets, event.target.checked); }} /></label><div className="grid grid-cols-3 gap-2">{(['perJob','daily','monthly'] as const).map((key) => <label key={key} className="text-[9px] uppercase text-gray-500">{key}<input type="number" min={0} step={1} value={budgets[key]} onChange={(event) => setBudgets((current) => ({ ...current, [key]: Math.max(0, Math.floor(Number(event.target.value) || 0)) }))} onBlur={() => void persistConfiguration()} className="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white" /></label>)}</div><button type="button" onClick={() => void persistConfiguration()} className="rounded bg-gray-800 px-3 py-1.5 text-[10px] font-bold text-gray-300 hover:bg-gray-700">Save host configuration</button></div>
-              <div className="flex flex-wrap items-center gap-2">{selected.route === 'local' ? <span className="text-[10px] text-emerald-400">No key required.</span> : <><label className="flex items-center gap-2 text-[10px] text-gray-400"><input type="checkbox" checked={rememberCredential} onChange={(event) => setRememberCredential(event.target.checked)} /> Keep in OS vault</label><button type="button" disabled={busy} onClick={() => void configureCredential()} className="flex items-center gap-2 rounded bg-blue-600 px-3 py-2 text-xs font-bold text-accent-ink hover:bg-blue-500 disabled:opacity-50"><KeyRound size={13} /> Configure Key…</button><button type="button" disabled={busy} onClick={() => void removeCredential()} className="flex items-center gap-2 rounded border border-gray-700 px-3 py-2 text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-50"><Trash2 size={13} /> Remove Key</button></>}<button type="button" disabled={busy} onClick={() => void refresh()} className="ml-auto rounded border border-gray-700 p-2 text-gray-400 hover:bg-gray-800 hover:text-white disabled:opacity-50" aria-label="Refresh providers"><RefreshCw size={13} className={busy ? 'animate-spin' : ''} /></button></div>
-              <p className="text-[10px] text-gray-600">{selected.route === 'local' ? 'Local adapters are restricted to loopback endpoints and never fall back to cloud.' : 'Cloud work is host-mediated and budget-limited. The browser never receives the credential.'}</p>
-            </> : <div className="py-10 text-center text-xs text-gray-500">Provider selection is unavailable.</div>}
-            {message && <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs text-gray-300">{message}</div>}
+        </div>
+        <div className="flex min-h-0 flex-1">
+          <nav aria-label="Settings pages" className="w-36 shrink-0 border-r border-line py-1.5">
+            {PAGES.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                aria-current={page === item.id ? 'page' : undefined}
+                onClick={() => setPage(item.id)}
+                className={`flex h-7 w-full items-center px-4 text-left text-xs transition-colors duration-75 ${page === item.id ? 'bg-accent/15 text-ink' : 'text-ink-2 hover:bg-white/5 hover:text-ink'}`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {page === 'models' && (
+              <>
+                <p className="px-4 pb-1 pt-3 text-2xs text-ink-3">Which model does each job. Each tool also has this choice where it is used.</p>
+                <ul>
+                  {JOBS.map((job) => {
+                    const route = hostProviderService.getConfiguredRoute(job.capability);
+                    return (
+                      <li key={job.capability} className="flex items-center gap-4 px-4 py-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-xs text-ink">{job.label}</div>
+                          <div className="truncate text-2xs text-ink-3">{route ? `${job.hint}, on ${providerName(route.providerId)}` : job.hint}</div>
+                        </div>
+                        <div className="w-64 shrink-0"><AiRouteBar capability={job.capability} label={job.label} onModelChange={noteRoute} placement="bottom-end" /></div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
+
+            {page === 'keys' && (
+              <>
+                <p className="px-4 pb-1 pt-3 text-2xs text-ink-3">A key goes into a Windows prompt, and never reaches the editor's page or the project.</p>
+                <label className="flex items-center gap-2 px-4 pb-2 text-2xs text-ink-2">
+                  <input type="checkbox" className="accent-accent" checked={rememberCredential} onChange={(event) => setRememberCredential(event.target.checked)} />
+                  Keep keys in the Windows vault. Off, a new key lasts until the editor closes.
+                </label>
+                <ul className="border-t border-line">{cloudProviders.map(keyRow)}</ul>
+                {localProviders.length > 0 && (
+                  <>
+                    <p className="border-t border-line px-4 pb-1 pt-3 text-2xs text-ink-3">These run on this computer. Nothing leaves it, and they never fall back to the cloud.</p>
+                    <ul>{localProviders.map(keyRow)}</ul>
+                  </>
+                )}
+              </>
+            )}
+
+            {page === 'spending' && (
+              <>
+                <p className="px-4 pb-2 pt-3 text-2xs text-ink-3">
+                  Set all three for a provider and each image job is checked against them using the catalog's price before it is sent. Language model jobs are not counted, as their cost depends on the answer.
+                </p>
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-y border-line text-left text-2xs text-ink-3">
+                      <th className="px-4 py-1.5 font-normal">Provider</th>
+                      <th className="w-24 py-1.5 pr-2 font-normal">Per job</th>
+                      <th className="w-24 py-1.5 pr-2 font-normal">Per day</th>
+                      <th className="w-24 py-1.5 pr-4 font-normal">Per month</th>
+                      <th className="w-20 py-1.5 pr-4 text-center font-normal" title="Each job asks first">Confirm</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cloudProviders.map((provider) => {
+                      const budgets = provider.settings?.budgets ?? { perJobMicroUsd: 0, dailyMicroUsd: 0, monthlyMicroUsd: 0 };
+                      return (
+                        <tr key={provider.id}>
+                          <td className="px-4 py-1 text-ink">{provider.name || provider.id}</td>
+                          <td className="py-1 pr-2"><LimitField label={`${provider.name} per job`} value={budgets.perJobMicroUsd} onCommit={(value) => void save(provider, { budgets: { ...budgets, perJobMicroUsd: value } })} /></td>
+                          <td className="py-1 pr-2"><LimitField label={`${provider.name} per day`} value={budgets.dailyMicroUsd} onCommit={(value) => void save(provider, { budgets: { ...budgets, dailyMicroUsd: value } })} /></td>
+                          <td className="py-1 pr-4"><LimitField label={`${provider.name} per month`} value={budgets.monthlyMicroUsd} onCommit={(value) => void save(provider, { budgets: { ...budgets, monthlyMicroUsd: value } })} /></td>
+                          <td className="py-1 pr-4 text-center">
+                            <input type="checkbox" className="accent-accent" aria-label={`Confirm the cost of each ${provider.name} job`} checked={provider.settings?.requireCostConfirmation ?? true} onChange={(event) => void save(provider, { requireCostConfirmation: event.target.checked })} />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </>
+            )}
           </div>
         </div>
+        {message && <div role="alert" className="selectable shrink-0 border-t border-line bg-bad/10 px-4 py-1.5 text-2xs text-ink">{message}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };

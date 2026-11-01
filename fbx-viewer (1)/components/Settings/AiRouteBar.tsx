@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, KeyRound } from 'lucide-react';
 import { hostProviderService, ProviderCapability, ProviderDescriptor, ProviderModel } from '../../services/HostProviderService';
-import { formatModelPrice } from '../../services/providerPricing';
+import { formatModelPrice, formatShortPrice } from '../../services/providerPricing';
 import { Button, Popover, type PopoverPlacement } from '../UI/kit';
 import { Select } from '../UI/Select';
 import { ModelPicker } from './ModelPicker';
@@ -40,6 +40,7 @@ export const AiRouteBar: React.FC<AiRouteBarProps> = ({ capability, label, onMod
       const active = await hostProviderService.loadConfiguredRoute(capability);
       if (!active) { setRoute(null); return; }
       setProviderId(active.providerId);
+      setRoute((current) => ({ providerId: active.providerId, modelId: active.modelId, model: current?.modelId === active.modelId ? current.model : undefined }));
       const models = await hostProviderService.listModels(active.providerId, capability).catch(() => [] as ProviderModel[]);
       setRoute({ providerId: active.providerId, modelId: active.modelId, model: models.find((model) => model.id === active.modelId) });
     } catch {
@@ -69,8 +70,11 @@ export const AiRouteBar: React.FC<AiRouteBarProps> = ({ capability, label, onMod
 
   const provider = useMemo(() => providers.find((item) => item.id === providerId), [providers, providerId]);
   const needsKey = Boolean(provider?.requiresCredential) && provider?.credentialStatus !== 'configured' && provider?.credentialStatus !== 'memoryOnly';
-  const price = route?.model ? formatModelPrice(route.model) : null;
+  const price = route?.model ? formatShortPrice(route.model) : null;
   const name = route ? route.model?.name || route.modelId : null;
+  // "OpenAI: gpt-oss-20b": the model is what tells them apart here.
+  const shortName = name?.replace(/^[^:/]+:\s*/, '') ?? null;
+  const description = route?.model ? [route.model.id, formatModelPrice(route.model)].filter(Boolean).join(', ') : route?.modelId;
 
   const addKey = async () => {
     setBusy(true); setMessage(null);
@@ -104,11 +108,11 @@ export const AiRouteBar: React.FC<AiRouteBarProps> = ({ capability, label, onMod
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-label={`${label}: ${name ?? 'none chosen'}`}
-        title={route?.modelId ? `${label}: ${route.modelId}` : label}
+        title={description ? `${label}: ${description}` : label}
         className={`flex h-7 w-full min-w-0 items-center gap-2 rounded border bg-well px-2 text-left transition-colors duration-75 ${open ? 'border-accent/70' : 'border-line hover:border-gray-700'} ${className}`}
       >
-        <span className={`min-w-0 flex-1 truncate text-xs ${name ? 'text-ink' : 'text-accent'}`}>{name ?? 'Choose a model'}</span>
-        {price && <span className="max-w-[45%] shrink-0 truncate text-2xs tabular-nums text-ink-3">{price}</span>}
+        <span className={`min-w-0 flex-1 truncate text-xs ${name ? 'text-ink' : 'text-accent'}`}>{shortName ?? 'Choose a model'}</span>
+        {price && <span className="shrink-0 whitespace-nowrap text-2xs tabular-nums text-ink-3">{price}</span>}
         <ChevronDown size={12} className="shrink-0 text-ink-3" />
       </button>
       {message && <div role="alert" className="mt-1 text-2xs text-bad">{message}</div>}

@@ -4,6 +4,8 @@ import { BookOpen, FileCode2, Save, Sparkles, X } from 'lucide-react';
 import { SCRIPT_LIMITS } from '../../runtime/scripting/protocol';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { ScriptAssistant } from './ScriptAssistant';
+import { ScriptChanges } from './ScriptChanges';
+import { withEndingOf } from './scriptDiff';
 
 /** One indentation step in the script editor. */
 export const SCRIPT_INDENT = '    ';
@@ -240,6 +242,8 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
     // The reference panel starts closed where it would squeeze the text too much.
     const [referenceOpen, setReferenceOpen] = useState(() => window.innerWidth >= REFERENCE_MIN_WINDOW_WIDTH);
     const [assistantOpen, setAssistantOpen] = useState(false);
+    // A script the model proposes, while its changes are looked over.
+    const [proposal, setProposal] = useState<string | null>(null);
     const [tabMovesFocus, setTabMovesFocus] = useState(false);
     const [caret, setCaret] = useState({ line: 1, column: 1 });
     const [saveError, setSaveError] = useState<string | null>(null);
@@ -393,14 +397,6 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
         }
     };
 
-    const insertAtCaret = (text: string) => {
-        const textarea = textareaRef.current;
-        if (!textarea) return;
-        const { selectionStart, selectionEnd } = textarea;
-        const caretAfter = selectionStart + text.length;
-        applyEdit({ from: selectionStart, to: selectionEnd, insert: text, selectionStart: caretAfter, selectionEnd: caretAfter });
-    };
-
     const replaceScript = (text: string) => {
         const textarea = textareaRef.current;
         if (textarea) applyEdit({ from: 0, to: textarea.value.length, insert: text, selectionStart: 0, selectionEnd: 0 });
@@ -460,7 +456,9 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
                 </div>
 
                 <div className="flex min-h-0 flex-1">
-                    <div className="flex min-w-0 flex-1 bg-gray-950">
+                    <div className="flex min-w-0 flex-1 flex-col">
+                    {/* The text area stays under a proposal: its undo history is what takes an applied one back. */}
+                    <div className="relative flex min-h-0 flex-1 bg-gray-950">
                         <div className="relative shrink-0 select-none overflow-hidden border-r border-gray-800 bg-gray-950 font-mono text-gray-500" style={{ width: gutterWidth, fontSize: 12 }} aria-hidden="true">
                             <div ref={gutterRef} data-testid="script-gutter" className="absolute inset-x-0 top-0 will-change-transform">
                                 <div
@@ -489,13 +487,17 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
                             className="min-w-0 flex-1 resize-none overflow-auto whitespace-pre bg-transparent font-mono text-gray-100 caret-blue-400 outline-none"
                             style={{ ...textStyle, padding: PADDING_PX, tabSize: SCRIPT_INDENT.length }}
                         />
+                        {proposal !== null && (
+                            <ScriptChanges
+                                before={draft}
+                                after={proposal}
+                                onApply={(text) => { setProposal(null); replaceScript(text); }}
+                                onDiscard={() => { setProposal(null); textareaRef.current?.focus(); }}
+                            />
+                        )}
                     </div>
-
-                    {assistantOpen && (
-                        <aside aria-label="Script assistant" className="w-80 shrink-0 overflow-y-auto border-l border-gray-800 bg-gray-900 p-4 custom-scrollbar">
-                            <ScriptAssistant draft={draft} reference={SCRIPT_API_REFERENCE} onReplace={replaceScript} onInsert={insertAtCaret} />
-                        </aside>
-                    )}
+                    {assistantOpen && <ScriptAssistant draft={draft} reference={SCRIPT_API_REFERENCE} onProposal={(code) => setProposal(withEndingOf(draft, code))} />}
+                    </div>
 
                     {referenceOpen && (
                         <aside id={referenceId} aria-label="Script API reference" className="w-80 shrink-0 space-y-4 overflow-y-auto border-l border-gray-800 bg-gray-900 p-4 custom-scrollbar">

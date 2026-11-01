@@ -72,9 +72,14 @@ body {
   cursor: not-allowed;
 }
 
-.editor-shell :focus-visible {
+.editor-shell :focus-visible:not(input, textarea, [contenteditable="true"]) {
   outline: 1px solid rgb(var(--accent));
   outline-offset: 1px;
+}
+
+.editor-shell input:focus-visible,
+.editor-shell textarea:focus-visible {
+  outline: none;
 }
 
 ::selection {

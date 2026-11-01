@@ -29,6 +29,12 @@ export const formatModelPrice = (model: ProviderModel): string | null => {
   return `${dollars(model.priceMicroUsd)}/${unit?.label ?? (model.priceUnit || 'run')}`;
 };
 
+/** A price for a tight space: a language model's as input / output, without its unit. */
+export const formatShortPrice = (model: ProviderModel): string | null => {
+  if (typeof model.priceMicroUsd === 'number' && typeof model.outputPriceMicroUsd === 'number') return `${dollars(model.priceMicroUsd)} / ${dollars(model.outputPriceMicroUsd)}`;
+  return formatModelPrice(model);
+};
+
 /**
  * About what one job of a media model comes to, in micro-USD, for a picture of so many megapixels. Null for a language
  * model, or while the price is not known.
