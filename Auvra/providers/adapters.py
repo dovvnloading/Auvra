@@ -311,7 +311,7 @@ class FalAdapter(TextAdapter):
         except (TypeError, ValueError) as exc: raise ProviderError(ErrorCode.UNSUPPORTED_CAPABILITY, "fal capability is not supported", self.provider_id) from exc
         if not isinstance(payload, Mapping):
             raise ProviderError(ErrorCode.INVALID_REQUEST, "fal request payload is invalid", self.provider_id)
-        if capability not in {Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT, Capability.MEDIA_MAPS, Capability.MEDIA_MESH, Capability.MEDIA_MATERIAL} or not self.registry.supports(self.provider_id, capability, model):
+        if capability not in {Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT, Capability.MEDIA_MAPS, Capability.MEDIA_MESH, Capability.MEDIA_MATERIAL, Capability.MEDIA_SKY, Capability.MEDIA_DECAL} or not self.registry.supports(self.provider_id, capability, model):
             raise ProviderError(ErrorCode.UNSUPPORTED_CAPABILITY, "fal model is not registered", self.provider_id)
         if _FAL_MODEL_PATH.fullmatch(model) is None:
             raise ProviderError(ErrorCode.ENDPOINT_NOT_ALLOWED, "fal job endpoint is not allowed", self.provider_id)

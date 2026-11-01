@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import math
 import re
 import threading
 import time
@@ -35,6 +36,11 @@ MEDIA_CATEGORIES: Mapping[str, Capability] = {
 MAP_MODELS = frozenset({"fal-ai/patina"})
 # Models that paint a seamless material from a description, with its surface maps.
 MATERIAL_MODELS = frozenset({"fal-ai/patina/material"})
+# Models that were found to paint a true panorama when asked: the horizon across the middle and the ground stretched as it
+# should be. Others paint a wide photograph, which falls apart wrapped around a level.
+SKY_MODELS = frozenset({"fal-ai/flux-2-max", "blackforestlabs/flux-3/text-to-image"})
+# Models that really answer with a transparent background. Others take the setting and paint on white.
+DECAL_MODELS = frozenset({"fal-ai/ideogram/v3/generate-transparent"})
 # Of the models that take a mesh, these paint it from a description and can keep its own texture layout, so what they
 # make fits the model as it is. The others need a reference picture, or give back a different mesh.
 MESH_MODELS = frozenset({"meshy/v7/retexture", "meshy/v6/retexture", "meshy/v6-lite/retexture"})
@@ -50,7 +56,7 @@ _PRICE_BATCH = 40
 _PRICE_PAUSE_SECONDS = 0.6
 _RATE_LIMIT_TRIES = 6
 _STALE_SECONDS = 24 * 60 * 60
-_CACHE_VERSION = 3
+_CACHE_VERSION = 4
 _DESCRIPTION_LENGTH = 200
 _TOKENS_PRICED = 1_000_000
 
@@ -96,7 +102,13 @@ def parse_media_model(row: Any) -> CatalogModel | None:
         return None
     if endpoint in MAP_MODELS:
         capability = Capability.MEDIA_MAPS
-    capabilities = {capability, Capability.MEDIA_MATERIAL} if endpoint in MATERIAL_MODELS else {capability}
+    capabilities = {capability}
+    if endpoint in MATERIAL_MODELS:
+        capabilities.add(Capability.MEDIA_MATERIAL)
+    if endpoint in SKY_MODELS:
+        capabilities.add(Capability.MEDIA_SKY)
+    if endpoint in DECAL_MODELS:
+        capabilities.add(Capability.MEDIA_DECAL)
     return CatalogModel(endpoint, _text(metadata.get("display_name"), 128) or endpoint, frozenset(capabilities),
                         str(metadata["category"]), _text(metadata.get("description"), _DESCRIPTION_LENGTH))
 
@@ -452,6 +464,13 @@ def build_media_request(schema: Mapping[str, Any] | None, *, model: str, prompt:
     for name in ("thinking_level", "quality"):
         if name in properties and _allows_value(properties[name], "high"):
             request[name] = "high"
+    if "rendering_speed" in properties and _allows_value(properties["rendering_speed"], "QUALITY"):
+        request["rendering_speed"] = "QUALITY"
+    if size is not None and not images and "aspect_ratio" in properties:
+        divisor = math.gcd(size[0], size[1])
+        ratio = f"{size[0] // divisor}:{size[1] // divisor}"
+        if _allows_value(properties["aspect_ratio"], ratio):
+            request["aspect_ratio"] = ratio
     return request
 
 
@@ -471,6 +490,10 @@ def media_output_url(output: Mapping[str, Any]) -> tuple[str, str | None, dict[s
             return item["url"], mime if isinstance(mime, str) else None, dimensions
     return None
 
+
+# What a sky is painted at: a panorama is twice as wide as it is tall. The largest that shape within the four megapixels
+# the sky models paint at: asked for more, one changes the shape instead of refusing.
+SKY_SIZE = (2816, 1408)
 
 _MAP_ROLES = {"basecolor": "color", "base_color": "color", "albedo": "color", "normal": "normal", "roughness": "roughness",
               "metalness": "metalness", "metallic": "metalness"}

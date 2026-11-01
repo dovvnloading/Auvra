@@ -31,6 +31,14 @@ const MODEL_PICKS: Readonly<Record<string, Partial<Record<ProviderCapability, re
       { id: 'fal-ai/flux-2', tier: 'Balanced', note: 'Cleaner detail' },
       { id: 'fal-ai/flux-2-pro', tier: 'Best quality', note: 'Fine detail, follows the description closely' },
     ],
+    // Both were run against others: they paint a true panorama, where most paint a wide photograph.
+    'media.sky': [
+      { id: 'fal-ai/flux-2-max', tier: 'Best quality', note: 'A true panorama, the horizon across the middle' },
+      { id: 'blackforestlabs/flux-3/text-to-image', tier: 'Best quality', note: 'The sharpest clouds. The horizon can sit a little high' },
+    ],
+    'media.decal': [
+      { id: 'fal-ai/ideogram/v3/generate-transparent', tier: 'Best quality', note: 'Really transparent, and good with lettering and graphics' },
+    ],
     'media.mesh': [
       { id: 'meshy/v6-lite/retexture', tier: 'Fast', note: 'Quicker, less detail' },
       { id: 'meshy/v7/retexture', tier: 'Best quality', note: 'Newest, sharpest detail' },

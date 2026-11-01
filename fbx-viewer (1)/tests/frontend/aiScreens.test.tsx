@@ -5,6 +5,8 @@ import { ScriptChanges } from '../../components/Scripting/ScriptChanges';
 import { describeHudChange } from '../../components/HUDEditor/AIChatPanel';
 import { graphFromTextures } from '../../components/Materials/graphFromTextures';
 import { compileMaterialGraph, normalizeMaterialGraph } from '../../runtime/materials/materialGraph';
+import { closeWrapSeam, decalInstruction, skyInstruction } from '../../components/Tools/paintedPictures';
+import { nameFromWords } from '../../components/Tools/DescribeWithAI';
 import { SettingsModal } from '../../components/Settings/SettingsModal';
 import { hostProviderService } from '../../services/HostProviderService';
 
@@ -121,6 +123,37 @@ describe('adding a key', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Add key' }));
     expect(await screen.findByText('No key')).toBeTruthy();
     expect(screen.queryByText('Paste the key in the window that opened')).toBeNull();
+  });
+});
+
+describe('a panorama painted from a description', () => {
+  it('asks for a panorama, and a decal for a transparent background', () => {
+    expect(skyInstruction(' a red dawn ')).toContain('equirectangular panorama of a red dawn,');
+    expect(decalInstruction(' a wolf ')).toContain('a wolf, isolated on a transparent background');
+  });
+
+  it('makes its edges meet, and leaves its middle alone', () => {
+    const width = 100;
+    const height = 20;
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) data.set([x < 50 ? 100 : 140, 90, 90, 255], (y * width + x) * 4);
+    }
+    closeWrapSeam(data, width, height);
+    const at = (x: number, y: number, channel = 0) => data[(y * width + x) * 4 + channel];
+    expect(at(0, 10)).toBe(at(99, 10));
+    expect(at(0, 10)).toBe(120);
+    expect(at(50, 10)).toBe(140);
+    expect(at(30, 10)).toBe(100);
+    expect(at(0, 10, 1)).toBe(90);
+    expect(at(0, 10, 3)).toBe(255);
+  });
+});
+
+describe('a name from a description', () => {
+  it('leaves out what a file name could not hold, and fits', () => {
+    expect(nameFromWords('a "red": dawn/dusk\n')).toBe('a red dawn dusk');
+    expect(nameFromWords('x'.repeat(200), ' normal')).toHaveLength(128);
   });
 });
 

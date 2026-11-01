@@ -37,6 +37,12 @@ Every result stays in the strip under the model. Click one to try it on, or step
 
 A part shaded by a material from the Materials tab will not show a texture. The tool says so and can take the material off.
 
+## Skies and decals
+
+In the Environment tab, a sky drawn with **Image** has **Describe** under its panorama. It paints a 360 degree panorama with the horizon across the middle, makes its left and right edges meet so that no line runs down the sky, keeps it with the project's textures and puts it on the sky. Models were tested for this: most paint a wide photograph, which falls apart wrapped around a level, so the ones offered first are those that paint a true panorama.
+
+A **Decal** component has **Describe** under its texture too. It paints the picture on a really transparent background, so only the picture lands on the surface. Few models do this: most accept the setting and paint on white. **Offset** moves the decal from the object's origin, which on most props is at their base.
+
 ## Materials
 
 In the Materials tab, **Describe** paints a seamless texture from a description, with normal, roughness and metal maps, for about a cent. It keeps them in the project and makes a new material with each one wired to the input it is for, ready to change like any other node graph.

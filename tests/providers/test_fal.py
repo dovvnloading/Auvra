@@ -411,6 +411,18 @@ class SurfaceMapAndWholeModelTests(unittest.TestCase):
         request = build_media_request(schema, model="m", prompt="p", images=[], size=(2048, 2048))
         self.assertEqual((request["thinking_level"], request["quality"], request["resolution"]), ("high", "high", "2K"))
 
+    def test_a_panorama_is_asked_for_at_its_shape_and_a_models_best(self):
+        schema = {"properties": {"prompt": {"type": "string"}, "aspect_ratio": {"enum": ["1:1", "2:1", "16:9"]}, "resolution": {"enum": ["1k", "2k"]},
+                                 "rendering_speed": {"enum": ["TURBO", "BALANCED", "QUALITY"]}}}
+        request = build_media_request(schema, model="m", prompt="p", images=[], size=(2048, 1024))
+        self.assertEqual((request["aspect_ratio"], request["resolution"], request["rendering_speed"]), ("2:1", "2k", "QUALITY"))
+
+    def test_the_models_for_skies_and_decals_do_those_jobs_too(self):
+        sky = parse_media_model(media_row("fal-ai/flux-2-max", "text-to-image"))
+        self.assertEqual(sky.capabilities, {Capability.MEDIA_GENERATE, Capability.MEDIA_SKY})
+        decal = parse_media_model(media_row("fal-ai/ideogram/v3/generate-transparent", "text-to-image"))
+        self.assertEqual(decal.capabilities, {Capability.MEDIA_GENERATE, Capability.MEDIA_DECAL})
+
     def test_an_answer_with_one_picture_has_no_maps(self):
         self.assertEqual(media_outputs({"images": [{"url": "https://v3.fal.media/a.png"}]}), [])
 

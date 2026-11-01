@@ -3,6 +3,11 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Box, Move, RotateCw, Scaling, Trash2, X, RotateCcw, Skull, Timer, Users, UserPlus, Hash, Music, Volume2, Radio, Ear, Repeat, VolumeX, Mountain, Layers, Plus, CircleDashed, Hammer, ArrowUp, ArrowDown, Minus, Activity, Wind, AlertTriangle, Grid, Sun, CloudFog, PersonStanding, Puzzle, GitBranch, Boxes, Brush, Route } from 'lucide-react';
 import { EditorState } from '../types';
+import { useAssets } from '../../../context/AssetContext';
+import { useGameContent } from '../../../runtime/GameContentContext';
+import { textureService } from '../../../services/TextureGenerationService';
+import { DescribeWithAI, nameFromWords } from '../../Tools/DescribeWithAI';
+import { decalInstruction } from '../../Tools/paintedPictures';
 import { PrefabInstanceSection } from '../PrefabInstanceSection';
 import { LevelComponent, LevelObject, SpawnConfig } from '../../../types';
 import { EnvironmentBrushPanel } from '../EnvironmentBrushPanel';
@@ -476,6 +481,45 @@ const PropRow: React.FC<{ label: string; children: React.ReactNode }> = ({ label
     </div>
 );
 
+/** A texture from the project, or one painted from a description with a transparent background. */
+const TexturePropField: React.FC<{ label: string; value: string; onChange: (value: string) => void }> = ({ label, value, onChange }) => {
+    const { textures } = useGameContent();
+    const { adoptHostTexture } = useAssets();
+    const known = textures.some(texture => texture.id === value || texture.name === value);
+    return (
+        <div className="space-y-1">
+            <PropRow label={label}>
+                <select
+                    value={textures.find(texture => texture.name === value)?.id ?? value}
+                    onChange={(e) => onChange(e.target.value)}
+                    className="w-32 bg-gray-950 border border-gray-800 rounded px-1 h-7 text-2xs text-white focus:outline-none focus:border-blue-500"
+                    aria-label={label}
+                >
+                    <option value="">None</option>
+                    {!known && value && <option value={value}>{value}</option>}
+                    {textures.map(texture => <option key={texture.id} value={texture.id}>{texture.name}</option>)}
+                </select>
+            </PropRow>
+            <div className="flex items-center justify-between gap-2">
+                <span className="text-2xs text-gray-500">Or paint one</span>
+                <DescribeWithAI
+                    capability="media.decal"
+                    title="New decal from a description"
+                    hint="Painted on a transparent background, so only the picture lands on the surface."
+                    placeholder="For example: a spray painted wolf's head with drips"
+                    instruction={decalInstruction}
+                    onPainted={async ({ job, preview, words }) => {
+                        const name = nameFromWords(words);
+                        await textureService.commit(job.jobId, preview.previewAssetId, { name });
+                        await adoptHostTexture(preview.previewAssetId, name, preview.previewAssetId, preview.dimensions ?? { width: 1024, height: 1024 });
+                        onChange(preview.previewAssetId);
+                    }}
+                />
+            </div>
+        </div>
+    );
+};
+
 /** One generated field for a ComponentPropSchema; `continuous` marks scrub/typing edits. */
 const ComponentPropField: React.FC<{
     schema: ComponentPropSchema;
@@ -565,6 +609,8 @@ const ComponentPropField: React.FC<{
                 </div>
             );
         }
+        case 'texture':
+            return <TexturePropField label={schema.label} value={readString(value, schema.default)} onChange={(next) => onChange(next, false)} />;
         case 'select':
             return (
                 <PropRow label={schema.label}>
