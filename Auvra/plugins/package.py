@@ -25,7 +25,7 @@ _KEY_ID = re.compile(r"^[0-9a-f]{64}$")
 _SEMVER = re.compile(r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:[-+][0-9A-Za-z.-]+)?$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _ALGORITHMS = {"ECDSA-P256-SHA256"}
-_CAPABILITIES = {"text", "code", "commands", "media.generate", "media.edit", "media.maps", "media.mesh"}
+_CAPABILITIES = {"text", "code", "commands", "media.generate", "media.edit", "media.maps", "media.mesh", "media.material"}
 _PERMISSIONS = {"networkProxy", "credentialUse", "assetRead", "assetWrite", "cache"}
 _WINDOWS_DEVICES = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
 

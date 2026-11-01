@@ -5,7 +5,7 @@ import type { HostTransport } from "./transport";
 const PROJECT_METHODS = ["project.getStatus", "project.create", "project.open", "project.openRecent", "project.close", "project.getSnapshot", "project.applyChanges", "project.save", "project.saveAs", "project.exportPack", "project.buildGame", "project.importPack", "project.importLegacy", "asset.beginUpload", "asset.resolve"] as const;
 const PROVIDER_METHODS = ["provider.list", "provider.getStatus", "provider.configureCredential", "provider.deleteCredential", "provider.configure", "provider.listModels", "provider.health", "inference.submit", "inference.get", "inference.list", "inference.cancel", "inference.retry", "media.discard", "media.commit", "command.preview", "command.approve", "command.undo"] as const;
 const ENGINE_METHODS = ["engine.getStatus", "engine.getSnapshot", "engine.applyChanges", "engine.openViewport", "engine.closeViewport", "engine.renderReference", "engine.getMetrics", "engine.recover"] as const;
-const MEDIA_CAPABILITIES = ["media.generate", "media.edit", "media.maps", "media.mesh"] as const;
+const MEDIA_CAPABILITIES = ["media.generate", "media.edit", "media.maps", "media.mesh", "media.material"] as const;
 const ENGINE_FEATURES = ["pbr_metallic_roughness", "skeletal_animation", "frustum_culling", "deterministic_lod", "instance_batching", "directional_lights", "point_lights", "spot_lights", "shadow_maps", "image_based_lighting", "entity_picking", "editor_gizmos", "hdr_intermediate", "aces_tone_mapping", "msaa_or_fxaa", "post_processing_chain"] as const;
 type Payload = Record<string, unknown>;
 
@@ -108,7 +108,7 @@ export class FakeHost implements HostTransport {
       case "asset.beginUpload": { this.requireMutation(payload); const token = "A".repeat(43); this.tickets.set(token, { method: "PUT", size: Number(payload.size), mime: String(payload.mime), expiresAt: this.clock + 300, consumed: false }); this.projectRevision++; this.revision++; return this.result({ uploadId: token, size: Number(payload.size), mime: String(payload.mime), method: "PUT", expiresAt: this.clock + 300, url: `https://assets.auvra.local/v1/put/${token}` }); }
       case "asset.resolve": { this.requireProject(payload); const assetId = String(payload.assetId); if (!this.uploaded.has(assetId)) throw { code: "invalid_project", message: "Asset is unavailable" }; const token = "B".repeat(43); this.tickets.set(token, { method: "GET", size: 0, mime: "application/octet-stream", expiresAt: this.clock + 300, consumed: false, sha256: assetId }); return this.result({ assetId, method: "GET", expiresAt: this.clock + 300, url: `https://assets.auvra.local/v1/get/${token}` }); }
       case "provider.list": return { kind: "provider.list", providers: [
-        ["fal", "fal.ai", "cloud", ["media.generate", "media.edit", "media.maps", "media.mesh", "text", "code", "commands"]], ["openai", "OpenAI", "cloud", ["text", "code", "commands"]],
+        ["fal", "fal.ai", "cloud", ["media.generate", "media.edit", "media.maps", "media.mesh", "media.material", "text", "code", "commands"]], ["openai", "OpenAI", "cloud", ["text", "code", "commands"]],
         ["anthropic", "Anthropic", "cloud", ["text", "code", "commands"]], ["xai", "xAI", "cloud", ["text", "code", "commands"]],
         ["openrouter", "OpenRouter", "cloud", ["text", "code", "commands"]], ["ollama", "Ollama", "local", ["text", "code", "commands"]],
         ["llama.cpp", "llama.cpp", "local", ["text", "code", "commands"]],

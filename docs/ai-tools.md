@@ -31,6 +31,10 @@ Every result stays in the strip under the model. Click one to try it on, or step
 
 A part shaded by a material from the Materials tab will not show a texture. The tool says so and can take the material off.
 
+## Materials
+
+In the Materials tab, **Describe** paints a seamless texture from a description, with normal, roughness and metal maps, for about a cent. It keeps them in the project and makes a new material with each one wired to the input it is for, ready to change like any other node graph.
+
 ## fal.ai
 
 One [fal.ai](https://fal.ai) key covers all of these tools. Choose fal.ai in a tool's model list and click **Add key**, or use the **Keys** page in Settings. The key goes into a native prompt and is kept by Windows Credential Manager, or until the editor closes if you untick **Keep keys in the Windows vault**. It never reaches the editor's page or the project.

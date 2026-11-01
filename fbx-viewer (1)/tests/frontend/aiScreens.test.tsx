@@ -3,6 +3,8 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { applyKeptChanges, changesIn, diffScript, withEndingOf } from '../../components/Scripting/scriptDiff';
 import { ScriptChanges } from '../../components/Scripting/ScriptChanges';
 import { describeHudChange } from '../../components/HUDEditor/AIChatPanel';
+import { graphFromTextures } from '../../components/Materials/graphFromTextures';
+import { compileMaterialGraph, normalizeMaterialGraph } from '../../runtime/materials/materialGraph';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -74,6 +76,32 @@ describe('reviewing a proposed script', () => {
     screen.getByText('The answer is the same as the script');
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(onDiscard).toHaveBeenCalled();
+  });
+});
+
+describe('a material painted from a description', () => {
+  it('wires each texture to the input it is for', () => {
+    const graph = graphFromTextures({ color: 'c', normal: 'n', roughness: 'r', metalness: 'm' });
+    const into = (input: string) => graph.links.find((link) => link.toInput === input)?.fromNode;
+    expect(into('baseColor')).toBe('color');
+    expect(into('normal')).toBe('normal');
+    expect(into('roughness')).toBe('roughness');
+    expect(into('metalness')).toBe('metalness');
+  });
+
+  it('reads colour as colour and the others as data', () => {
+    const graph = graphFromTextures({ color: 'c', roughness: 'r' });
+    const params = (id: string) => graph.nodes.find((node) => node.id === id)?.params;
+    expect(params('color')).toMatchObject({ texture: 'c', space: 'color' });
+    expect(params('roughness')).toMatchObject({ texture: 'r', space: 'data' });
+  });
+
+  it('leaves out what was not painted, and still compiles', () => {
+    const graph = graphFromTextures({ color: 'c' });
+    expect(graph.links).toHaveLength(1);
+    const normalized = normalizeMaterialGraph(graph);
+    expect(normalized.nodes).toHaveLength(2);
+    expect(compileMaterialGraph(normalized).outputs.baseColor).toBeTruthy();
   });
 });
 
