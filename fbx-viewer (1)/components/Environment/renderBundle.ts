@@ -45,6 +45,8 @@ interface MeshChunk {
 
 const _corner = new THREE.Vector3();
 const _normal = new THREE.Vector3();
+const _foot = new THREE.Vector3();
+const _tip = new THREE.Vector3();
 const _instance = new THREE.Matrix4();
 const _world = new THREE.Matrix4();
 const _normalMatrix = new THREE.Matrix3();
@@ -53,8 +55,10 @@ const chunkOf = (mesh: THREE.Mesh, start: number, end: number, indexOf: (corner:
   const instanced = mesh as THREE.InstancedMesh;
   const copies = instanced.isInstancedMesh ? instanced.count : 1;
   const corners = end - start;
+  const position = mesh.geometry.getAttribute('position');
   const normal = mesh.geometry.getAttribute('normal');
   const uv = mesh.geometry.getAttribute('uv');
+  const skinned = (mesh as THREE.SkinnedMesh).isSkinnedMesh ? mesh as THREE.SkinnedMesh : null;
   const chunks: MeshChunk[] = [];
   for (let copy = 0; copy < copies; copy += 1) {
     if (instanced.isInstancedMesh) {
@@ -74,7 +78,14 @@ const chunkOf = (mesh: THREE.Mesh, start: number, end: number, indexOf: (corner:
       chunk.positions.set([_corner.x, _corner.y, _corner.z], at * 3);
       bounds.expandByPoint(_corner);
       if (normal) {
-        _normal.fromBufferAttribute(normal, vertex).applyMatrix3(_normalMatrix).normalize();
+        _normal.fromBufferAttribute(normal, vertex);
+        if (skinned) {
+          // Bones turn a surface as well as moving it: where a normal's tip goes, from where its foot goes.
+          _foot.fromBufferAttribute(position, vertex);
+          _tip.copy(_foot).add(_normal);
+          _normal.subVectors(skinned.applyBoneTransform(vertex, _tip), skinned.applyBoneTransform(vertex, _foot));
+        }
+        _normal.applyMatrix3(_normalMatrix).normalize();
         chunk.normals.set([_normal.x, _normal.y, _normal.z], at * 3);
       }
       if (uv) chunk.uvs.set([uv.getX(vertex), uv.getY(vertex)], at * 2);
