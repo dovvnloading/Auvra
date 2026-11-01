@@ -91,14 +91,14 @@ export const WeaponsPanel: React.FC<WeaponsPanelProps> = ({ weapons, attachments
 
     return (
         <div className="space-y-2">
-            <label className="text-[10px] uppercase font-bold text-gray-500 flex items-center gap-2">
+            <label className="text-2xs font-bold text-gray-500 flex items-center gap-2">
                 <Crosshair size={12} /> Weapons
             </label>
             <div className="bg-gray-800/50 rounded p-3 border border-gray-800 space-y-3">
                 {weapons.map((weapon, index) => (
                     <div key={weapon.id} data-testid="weapon-entry" className="space-y-2 pb-3 border-b border-gray-800 last:border-b-0 last:pb-0">
                         <div className="flex items-center gap-2">
-                            <span className="text-[9px] font-mono text-gray-500 w-4">{index + 1}</span>
+                            <span className="text-2xs font-mono text-gray-500 w-4">{index + 1}</span>
                             <input
                                 aria-label="Weapon name"
                                 value={weapon.name}
@@ -192,12 +192,12 @@ export const WeaponsPanel: React.FC<WeaponsPanelProps> = ({ weapons, attachments
                                         <button
                                             type="button"
                                             onClick={() => setSeatStatus(status => ({ ...status, [weapon.id]: onSeat(weapon) }))}
-                                            className="px-2 py-0.5 text-[10px] text-gray-200 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded"
+                                            className="px-2 py-0.5 text-2xs text-gray-200 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded"
                                             title="Moves the carried weapon straight out from or in toward the bone until it rests against the body, keeping its rotation"
                                         >
                                             Seat on the body
                                         </button>
-                                        {seatStatus[weapon.id] && <span className="text-[10px] text-gray-400 leading-tight">{seatStatus[weapon.id]}</span>}
+                                        {seatStatus[weapon.id] && <span className="text-2xs text-gray-400 leading-tight">{seatStatus[weapon.id]}</span>}
                                     </div>
                                 )}
                             </div>
@@ -217,7 +217,7 @@ export const WeaponsPanel: React.FC<WeaponsPanelProps> = ({ weapons, attachments
                                         <button
                                             type="button"
                                             onClick={() => setFitStatus(status => ({ ...status, [weapon.id]: onFit(weapon) }))}
-                                            className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-accent-ink bg-blue-600 hover:bg-blue-500 rounded"
+                                            className="px-2 py-0.5 text-2xs font-bold text-accent-ink bg-blue-600 hover:bg-blue-500 rounded"
                                             title="Places the weapon in the hands as its Idle while held clip (else its Aim clip) poses them: its grip where the fingers close, its barrel through the other hand, or ahead"
                                         >
                                             Fit
@@ -231,13 +231,13 @@ export const WeaponsPanel: React.FC<WeaponsPanelProps> = ({ weapons, attachments
                                         <div key={field} className="space-y-1" title={title}>
                                             <div className="flex items-center gap-2">
                                                 <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
-                                                <span className="text-[10px] text-gray-400 w-16 shrink-0">{label}</span>
-                                                <span className="flex-1 text-[10px] font-mono text-gray-500 truncate">{point ? point.map(value => value.toFixed(3)).join(', ') : 'not set'}</span>
+                                                <span className="text-2xs text-gray-400 w-16 shrink-0">{label}</span>
+                                                <span className="flex-1 text-2xs font-mono text-gray-500 truncate">{point ? point.map(value => value.toFixed(3)).join(', ') : 'not set'}</span>
                                                 <button
                                                     type="button"
                                                     aria-label={`Pick the ${label.toLowerCase()} point on the weapon`}
                                                     onClick={() => onFocus(picking ? { weaponId: weapon.id, field: null } : { weaponId: weapon.id, field })}
-                                                    className={`px-1.5 py-0.5 text-[10px] rounded border ${picking ? 'border-blue-500 text-blue-300' : 'border-gray-700 text-gray-300 hover:text-white'}`}
+                                                    className={`px-1.5 py-0.5 text-2xs rounded border ${picking ? 'border-blue-500 text-blue-300' : 'border-gray-700 text-gray-300 hover:text-white'}`}
                                                 >
                                                     {picking ? 'Click the weapon' : 'Pick'}
                                                 </button>
@@ -263,7 +263,7 @@ export const WeaponsPanel: React.FC<WeaponsPanelProps> = ({ weapons, attachments
                                         </div>
                                     );
                                 })}
-                                {fitStatus[weapon.id] && <p className="text-[10px] text-gray-400 leading-tight">{fitStatus[weapon.id]}</p>}
+                                {fitStatus[weapon.id] && <p className="text-2xs text-gray-400 leading-tight">{fitStatus[weapon.id]}</p>}
                             </div>
                         )}
 <div className="flex items-center justify-between gap-4">
@@ -280,7 +280,7 @@ export const WeaponsPanel: React.FC<WeaponsPanelProps> = ({ weapons, attachments
                         </div>
                         <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
                             {NUMBER_FIELDS.map(field => (
-                                <label key={field.key} title={field.title} className="flex items-center justify-between gap-2 text-[10px] text-gray-400">
+                                <label key={field.key} title={field.title} className="flex items-center justify-between gap-2 text-2xs text-gray-400">
                                     <span className="truncate">{field.label}</span>
                                     <input
                                         type="number"
@@ -320,11 +320,11 @@ export const WeaponsPanel: React.FC<WeaponsPanelProps> = ({ weapons, attachments
                 <button
                     type="button"
                     onClick={addWeapon}
-                    className="w-full flex items-center justify-center gap-1.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-gray-300 bg-gray-900 hover:bg-gray-800 border border-gray-700 rounded"
+                    className="w-full flex items-center justify-center gap-1.5 py-1.5 text-2xs font-bold text-gray-300 bg-gray-900 hover:bg-gray-800 border border-gray-700 rounded"
                 >
                     <Plus size={12} /> Add Weapon
                 </button>
-                <p className="text-[9px] text-gray-500 leading-tight">
+                <p className="text-2xs text-gray-500 leading-tight">
                     {weapons.length
                         ? 'The player starts holding the first weapon carried from the start; the others come from pickups, Give Weapon nodes or scripts. Next Weapon(Q) switches, Reload (R) reloads, and an empty magazine reloads when you fire. Only the held weapon’s model shows.'
                         : 'Without weapons the player fires an automatic with unlimited ammunition. Add one to set its rate, damage, magazine and model.'}

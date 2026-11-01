@@ -142,7 +142,7 @@ export const renameLevelVariableReferences = (nodes: LogicNode[], from: string, 
     return changed ? next : nodes;
 };
 
-const INPUT_CLASS = 'min-w-0 bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px] text-white focus:outline-none focus:border-sky-500';
+const INPUT_CLASS = 'min-w-0 bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-2xs text-white focus:outline-none focus:border-sky-500';
 
 /** Name input that only commits a valid, changed name (on blur or Enter); Escape restores the saved name. */
 const NameField: React.FC<{
@@ -177,7 +177,7 @@ const NameField: React.FC<{
                 }}
                 className={`${INPUT_CLASS} w-full font-bold ${error ? 'border-amber-600 focus:border-amber-500' : ''}`}
             />
-            {error && <div role="alert" className="mt-0.5 text-[9px] leading-tight text-amber-300">{error}</div>}
+            {error && <div role="alert" className="mt-0.5 text-2xs leading-tight text-amber-300">{error}</div>}
         </div>
     );
 };
@@ -235,7 +235,7 @@ export const LevelVariablesPanel: React.FC<LevelVariablesPanelProps> = ({ variab
             <div className="px-4 py-2 bg-gray-950 border-b border-gray-800 flex items-center justify-between">
                 <span className="text-xs font-bold text-gray-200 tracking-wider flex items-center gap-1.5">
                     <Variable size={12} className="text-sky-400" /> VARIABLES
-                    {variables.length > 0 && <span className="text-[10px] font-normal text-gray-500">({variables.length})</span>}
+                    {variables.length > 0 && <span className="text-2xs font-normal text-gray-500">({variables.length})</span>}
                 </span>
                 <button
                     onClick={handleAdd}
@@ -248,7 +248,7 @@ export const LevelVariablesPanel: React.FC<LevelVariablesPanelProps> = ({ variab
             </div>
             <div className="min-h-0 overflow-y-auto custom-scrollbar p-2">
                 {variables.length === 0 ? (
-                    <div className="px-1 text-[10px] text-gray-500 leading-snug">
+                    <div className="px-1 text-2xs text-gray-500 leading-snug">
                         No level variables. Declared variables start every play session at their default; Get/Set Level Variable nodes use them by name and HUD text binds to vars.&lt;name&gt;.
                     </div>
                 ) : (
@@ -286,9 +286,9 @@ export const LevelVariablesPanel: React.FC<LevelVariablesPanelProps> = ({ variab
                                         </button>
                                     </div>
                                     <div className="flex items-center gap-1">
-                                        <span className="text-[9px] text-gray-500 uppercase tracking-wider w-10 shrink-0">Default</span>
+                                        <span className="text-2xs text-gray-500 w-10 shrink-0">Default</span>
                                         {type === 'Boolean' ? (
-                                            <label className="flex-1 flex items-center gap-1.5 text-[11px] text-gray-300">
+                                            <label className="flex-1 flex items-center gap-1.5 text-2xs text-gray-300">
                                                 <input
                                                     type="checkbox"
                                                     aria-label="Default value"
@@ -312,8 +312,8 @@ export const LevelVariablesPanel: React.FC<LevelVariablesPanelProps> = ({ variab
                                         )}
                                         {onAddNode && name && (
                                             <div className="flex shrink-0 rounded border border-gray-700 overflow-hidden">
-                                                <button onClick={() => onAddNode('GetLevelVariable', name)} title={`Add Get Level Variable (${name})`} className="px-1.5 py-1 hover:bg-gray-700 text-[8px] text-gray-400 hover:text-white uppercase font-bold transition-colors">Get</button>
-                                                <button onClick={() => onAddNode('SetLevelVariable', name)} title={`Add Set Level Variable (${name})`} className="px-1.5 py-1 border-l border-gray-700 hover:bg-gray-700 text-[8px] text-gray-400 hover:text-white uppercase font-bold transition-colors">Set</button>
+                                                <button onClick={() => onAddNode('GetLevelVariable', name)} title={`Add Get Level Variable (${name})`} className="px-1.5 py-1 hover:bg-gray-700 text-2xs text-gray-400 hover:text-white font-bold transition-colors">Get</button>
+                                                <button onClick={() => onAddNode('SetLevelVariable', name)} title={`Add Set Level Variable (${name})`} className="px-1.5 py-1 border-l border-gray-700 hover:bg-gray-700 text-2xs text-gray-400 hover:text-white font-bold transition-colors">Set</button>
                                             </div>
                                         )}
                                     </div>

@@ -27,7 +27,7 @@ const StatusRow: React.FC<{ label: string; value: string; isReady: boolean; icon
                 {icon}
             </div>
             <div className="flex flex-col">
-                <span className="text-[9px] uppercase font-bold text-gray-500 tracking-wider leading-none mb-0.5">{label}</span>
+                <span className="text-2xs font-bold text-gray-500 leading-none mb-0.5">{label}</span>
                 <span className={`text-xs font-medium truncate max-w-[120px] ${isReady ? 'text-gray-200' : 'text-red-400'}`}>
                     {value || 'Missing'}
                 </span>
@@ -69,7 +69,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
     // --- GAME OVER SCREEN ---
     if (isGameOver) {
         return (
-            <div className="absolute inset-0 z-[100] bg-black/90 backdrop-blur-sm flex flex-col items-center justify-center animate-in fade-in duration-500 pointer-events-auto cursor-default">
+            <div className="absolute inset-0 z-[100] bg-black/90 flex flex-col items-center justify-center animate-in fade-in duration-500 pointer-events-auto cursor-default">
                 
                 <div className="flex flex-col items-center text-center space-y-2 mb-10">
                     <div className="text-red-600 animate-pulse mb-2">
@@ -79,7 +79,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                         GAME OVER
                     </h1>
                     <div className="h-px w-64 bg-red-900/50 mt-4 mb-4"></div>
-                    <p className="text-xs text-red-400 font-mono tracking-widest uppercase">
+                    <p className="text-xs text-red-400 font-mono ">
                         The player was defeated
                     </p>
                 </div>
@@ -87,7 +87,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                 <div className="flex gap-6">
                     <button 
                         onClick={handleStart}
-                        className="group relative px-8 py-3 bg-white text-black font-bold text-sm uppercase tracking-widest hover:bg-gray-200 transition-all clip-path-slant"
+                        className="group relative px-8 py-3 bg-white text-black font-bold text-sm hover:bg-gray-200 transition-all clip-path-slant"
                     >
                         <span className="flex items-center gap-2">
                             <RotateCcw size={16} /> Restart
@@ -97,7 +97,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
 
                     <button 
                         onClick={onStop}
-                        className="group px-8 py-3 bg-transparent text-gray-500 hover:text-red-500 font-bold text-sm uppercase tracking-widest border border-gray-800 hover:border-red-900 transition-all"
+                        className="group px-8 py-3 bg-transparent text-gray-500 hover:text-red-500 font-bold text-sm border border-gray-800 hover:border-red-900 transition-all"
                     >
                         <span className="flex items-center gap-2">
                             <XCircle size={16} /> Exit
@@ -126,18 +126,18 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
     // --- LOBBY SCREEN ---
     if (!isPlaying) {
         return (
-            <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="absolute inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
                 <div className="w-[500px] bg-gray-900 border border-gray-700 rounded-lg shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
                     
                     {/* Header */}
                     <div className="h-10 bg-gray-950 border-b border-gray-800 flex items-center justify-between px-4 shrink-0">
                         <div className="flex items-center gap-2 text-gray-200 font-bold text-xs tracking-wide">
                             <Gamepad2 size={14} className="text-blue-500" />
-                            <span>SIMULATION CONFIG</span>
+                            <span>Simulation</span>
                         </div>
                         <div className="flex items-center gap-1.5">
                             <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 animate-pulse"></span>
-                            <span className="text-[9px] font-mono text-gray-500 uppercase">Standby</span>
+                            <span className="text-2xs font-mono text-gray-500 ">Standby</span>
                         </div>
                     </div>
 
@@ -148,7 +148,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                         <div className="grid grid-cols-2 gap-4">
                             {/* Player Config */}
                             <div className="space-y-2">
-                                <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
+                                <div className="text-2xs font-bold text-gray-500 flex items-center gap-1.5">
                                     <User size={10} /> Active Player
                                 </div>
                                 <div className="space-y-1">
@@ -169,7 +169,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
 
                             {/* Enemy Config */}
                             <div className="space-y-2">
-                                <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
+                                <div className="text-2xs font-bold text-gray-500 flex items-center gap-1.5">
                                     <Skull size={10} /> Opponent
                                 </div>
                                 <div className="space-y-1">
@@ -194,14 +194,14 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                         {/* Controls Reference & Quality Toggle */}
                         <div className="flex gap-4">
                             <div className="flex-1 bg-gray-950/50 rounded border border-gray-800/50 p-3">
-                                <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                                <div className="text-2xs font-bold text-gray-500 mb-2 flex items-center gap-1.5">
                                     <Keyboard size={10} /> Input Map
                                 </div>
                                 <div className="grid grid-cols-2 gap-y-2 gap-x-4">
-                                    <div className="flex items-center justify-between text-[10px] group"><span className="text-gray-500">Move</span><span className="font-mono text-gray-300">WASD</span></div>
-                                    <div className="flex items-center justify-between text-[10px] group"><span className="text-gray-500">Fire</span><span className="font-mono text-gray-300">Mouse 1</span></div>
-                                    <div className="flex items-center justify-between text-[10px] group"><span className="text-gray-500">Scope</span><span className="font-mono text-gray-300">F</span></div>
-                                    <div className="flex items-center justify-between text-[10px] group"><span className="text-gray-500">Jump</span><span className="font-mono text-gray-300">Space</span></div>
+                                    <div className="flex items-center justify-between text-2xs group"><span className="text-gray-500">Move</span><span className="font-mono text-gray-300">WASD</span></div>
+                                    <div className="flex items-center justify-between text-2xs group"><span className="text-gray-500">Fire</span><span className="font-mono text-gray-300">Mouse 1</span></div>
+                                    <div className="flex items-center justify-between text-2xs group"><span className="text-gray-500">Scope</span><span className="font-mono text-gray-300">F</span></div>
+                                    <div className="flex items-center justify-between text-2xs group"><span className="text-gray-500">Jump</span><span className="font-mono text-gray-300">Space</span></div>
                                 </div>
                             </div>
 
@@ -211,7 +211,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                                     className={`w-24 flex flex-col items-center justify-center gap-2 rounded border transition-all ${highQuality ? 'bg-blue-900/20 border-blue-500/50 text-blue-400' : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300'}`}
                                 >
                                     {highQuality ? <Zap size={20} /> : <ZapOff size={20} />}
-                                    <div className="text-[9px] font-bold uppercase">{highQuality ? 'HQ Rendering' : 'Low Perf'}</div>
+                                    <div className="text-2xs font-bold ">{highQuality ? 'HQ Rendering' : 'Low Perf'}</div>
                                 </button>
                             )}
                         </div>
@@ -230,7 +230,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                             `}
                         >
                             <Play size={14} fill="currentColor" />
-                            Initialize Session
+                            Start simulation
                         </button>
                     </div>
                 </div>
@@ -265,10 +265,10 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                 <div className="flex flex-col gap-1 w-56">
                     <div className="flex flex-col gap-1">
                         <div className="flex justify-between items-end px-0.5">
-                            <span className="text-[9px] font-bold text-gray-400 tracking-wider flex items-center gap-1 uppercase">
+                            <span className="text-2xs font-bold text-gray-400 flex items-center gap-1 ">
                                 <HeartPulse size={10} className="text-red-500" /> HP
                             </span>
-                            <span className="text-[10px] font-mono font-bold text-gray-300">
+                            <span className="text-2xs font-mono font-bold text-gray-300">
                                 {Math.ceil(health)} <span className="text-gray-600">/</span> {maxHealth}
                             </span>
                         </div>
@@ -292,8 +292,8 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
 
             {/* Held weapon (Bottom Left) */}
             {showWeapon && (
-                <div data-testid="hud-weapon" className="absolute bottom-6 left-6 flex flex-col items-start gap-0.5 px-3 py-2 bg-gray-950/70 border border-gray-800 rounded backdrop-blur-sm">
-                    <span className="text-[9px] font-bold text-gray-400 tracking-wider uppercase">{weaponName}</span>
+                <div data-testid="hud-weapon" className="absolute bottom-6 left-6 flex flex-col items-start gap-0.5 px-3 py-2 bg-gray-950/70 border border-gray-800 rounded">
+                    <span className="text-2xs font-bold text-gray-400 ">{weaponName}</span>
                     {magazine > 0 ? (
                         <span className="font-mono font-bold text-gray-100 text-lg leading-none">
                             {playerStats?.ammo ?? 0}
@@ -302,7 +302,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                     ) : (
                         <span className="font-mono font-bold text-gray-100 text-lg leading-none">{'\u221e'}</span>
                     )}
-                    {playerStats?.reloading && <span className="text-[9px] font-bold text-amber-400 tracking-wider uppercase">Reloading</span>}
+                    {playerStats?.reloading && <span className="text-2xs font-bold text-amber-400 ">Reloading</span>}
                 </div>
             )}
 
@@ -310,7 +310,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
             <div className="absolute bottom-6 right-6 z-50 pointer-events-auto">
                 <button 
                     onClick={onStop}
-                    className="flex items-center gap-2 px-4 py-2 bg-gray-900/90 hover:bg-gray-800 text-red-400 hover:text-red-300 font-bold text-[10px] uppercase tracking-wider rounded border border-gray-700 shadow-xl transition-all backdrop-blur-sm"
+                    className="flex items-center gap-2 px-4 py-2 bg-gray-900/90 hover:bg-gray-800 text-red-400 hover:text-red-300 font-bold text-2xs rounded border border-gray-700 shadow-xl transition-all"
                 >
                     <Square size={10} fill="currentColor" /> Stop Simulation
                 </button>

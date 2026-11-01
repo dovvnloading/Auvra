@@ -12,9 +12,9 @@ import {
     type RigTarget,
 } from '../../runtime/proceduralRig';
 
-const FIELD = 'w-full bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-[11px] text-gray-200 focus:outline-none focus:border-amber-500';
-const BUTTON = 'flex items-center justify-center gap-1 px-2 py-0.5 rounded border border-gray-700 bg-gray-800 hover:bg-gray-700 text-[10px] text-gray-200';
-const LABEL = 'text-[10px] text-gray-400';
+const FIELD = 'w-full bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-2xs text-gray-200 focus:outline-none focus:border-amber-500';
+const BUTTON = 'flex items-center justify-center gap-1 px-2 py-0.5 rounded border border-gray-700 bg-gray-800 hover:bg-gray-700 text-2xs text-gray-200';
+const LABEL = 'text-2xs text-gray-400';
 
 const KIND_LABELS: Record<RigConstraintKind, string> = {
     aim: 'Aim at', copyRotation: 'Copy rotation', offset: 'Offset', limit: 'Limit', lag: 'Lag behind', twist: 'Twist from',
@@ -116,7 +116,7 @@ export const ProceduralRigInspector: React.FC<ComponentInspectorProps> = ({ comp
                     )}
                     {c.kind === 'copyRotation' && (
                         <Row label="Axes">
-                            <div className="flex items-center gap-2 text-[10px] text-gray-300">
+                            <div className="flex items-center gap-2 text-2xs text-gray-300">
                                 {(['X', 'Y', 'Z'] as const).map((axis, i) => (
                                     <label key={axis} className="flex items-center gap-1">
                                         <input type="checkbox" aria-label={`Constraint ${index + 1} copies ${axis}`} checked={c.axes[i]}
@@ -154,7 +154,7 @@ export const ProceduralRigInspector: React.FC<ComponentInspectorProps> = ({ comp
             {constraints.length < 32 && (
                 <button type="button" className={BUTTON} onClick={() => commit([...constraints, { ...DEFAULT_RIG_CONSTRAINT, bone: 'Head' }])}><Plus size={10} /> Constraint</button>
             )}
-            <p className="text-[10px] text-gray-500">Bones are found by name ('Head' finds 'mixamorig:Head'). Constraints apply top to bottom, after the animation and before the IK components that follow.</p>
+            <p className="text-2xs text-gray-500">Bones are found by name ('Head' finds 'mixamorig:Head'). Constraints apply top to bottom, after the animation and before the IK components that follow.</p>
         </div>
     );
 };

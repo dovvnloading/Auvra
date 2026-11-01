@@ -23,7 +23,7 @@ interface TerrainLayerPanelProps {
     onSculptSettingsChange: (settings: TerrainBrushSettings) => void;
 }
 
-const SECTION_TITLE = 'flex items-center gap-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider border-b border-gray-800 pb-1';
+const SECTION_TITLE = 'flex items-center gap-2 text-2xs font-bold text-gray-500 border-b border-gray-800 pb-1';
 // Splat channel N weights layer N.
 const CHANNEL_COLORS = ['bg-red-500', 'bg-green-500', 'bg-blue-500', 'bg-gray-300'];
 
@@ -107,13 +107,13 @@ export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, s
             </div>
 
             {layers.length === 0 && (
-                <p className="text-[11px] text-gray-500 leading-relaxed">
+                <p className="text-2xs text-gray-500 leading-relaxed">
                     No layers: the terrain uses its flat material. Add a layer to texture it, then add more and paint them on.
                 </p>
             )}
 
             {splatPending && layers.length > 0 && (
-                <p className="text-[11px] text-amber-400/90 leading-relaxed">
+                <p className="text-2xs text-amber-400/90 leading-relaxed">
                     Painted layer weights are loading; painting is unavailable until they arrive.
                 </p>
             )}
@@ -139,7 +139,7 @@ export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, s
                                     <div className="text-xs font-bold text-gray-200">
                                         Layer {index + 1}{index === 0 && <span className="ml-1 font-normal text-gray-500">(base)</span>}
                                     </div>
-                                    <div className="text-[10px] text-gray-500 truncate">{texture ? texture.name : 'No texture'}</div>
+                                    <div className="text-2xs text-gray-500 truncate">{texture ? texture.name : 'No texture'}</div>
                                 </div>
                                 <button
                                     type="button"
@@ -165,14 +165,14 @@ export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, s
                             </div>
 
                             <label className="flex items-center justify-between gap-2">
-                                <span className="text-[11px] text-gray-400">Texture</span>
+                                <span className="text-2xs text-gray-400">Texture</span>
                                 <select
                                     value={layer.textureId ?? ''}
                                     onChange={(event) => {
                                         const textureId = event.target.value;
                                         commitLayers(replaceLayer(index, textureId ? { textureId, tiling: layer.tiling } : { tiling: layer.tiling }));
                                     }}
-                                    className="w-36 bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px] text-gray-200 focus:outline-none focus:border-amber-500"
+                                    className="w-36 bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-2xs text-gray-200 focus:outline-none focus:border-amber-500"
                                 >
                                     <option value="">None</option>
                                     {textureOptions.map(option => (
@@ -182,7 +182,7 @@ export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, s
                             </label>
 
                             <div className="flex items-center justify-between gap-2">
-                                <span className="text-[11px] text-gray-400">Tiling</span>
+                                <span className="text-2xs text-gray-400">Tiling</span>
                                 <div className="w-24">
                                     <ScrubbableInput
                                         label="x"
@@ -205,7 +205,7 @@ export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, s
                 type="button"
                 onClick={addLayer}
                 disabled={layers.length >= MAX_TERRAIN_LAYERS || !terrainData}
-                className="w-full py-1.5 rounded border border-dashed border-gray-700 text-[10px] font-bold uppercase tracking-wider text-gray-400 hover:text-white hover:border-gray-500 transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="w-full py-1.5 rounded border border-dashed border-gray-700 text-2xs font-bold text-gray-400 hover:text-white hover:border-gray-500 transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
             >
                 <Plus size={12} /> Add Layer
             </button>

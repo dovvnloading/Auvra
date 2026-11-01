@@ -10,7 +10,7 @@ export const LevelStreamingInspector: React.FC<ComponentInspectorProps> = ({ com
     const choices = levels.filter(level => level.id !== currentLevelId);
     return (
         <div className="space-y-1">
-            <label className="flex items-center gap-1 text-[10px] text-gray-400"><Layers size={10} /> Level to load</label>
+            <label className="flex items-center gap-1 text-2xs text-gray-400"><Layers size={10} /> Level to load</label>
             <select
                 aria-label="Level to load"
                 value={levelId}
@@ -21,7 +21,7 @@ export const LevelStreamingInspector: React.FC<ComponentInspectorProps> = ({ com
                 {levelId && !choices.some(level => level.id === levelId) && <option value={levelId}>Missing level</option>}
                 {choices.map(level => <option key={level.id} value={level.id}>{level.name}</option>)}
             </select>
-            {!levelId && <p className="text-[10px] text-amber-400">Pick the level whose objects this volume loads.</p>}
+            {!levelId && <p className="text-2xs text-amber-400">Pick the level whose objects this volume loads.</p>}
         </div>
     );
 };

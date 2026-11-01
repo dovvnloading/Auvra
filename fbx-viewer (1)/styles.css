@@ -82,6 +82,28 @@ body {
   outline: none;
 }
 
+/* The browser's own controls, wherever a panel still uses them, in the editor's colours. */
+.editor-shell select {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, rgb(var(--ink-3)) 50%), linear-gradient(135deg, rgb(var(--ink-3)) 50%, transparent 50%);
+  background-position: right 11px center, right 7px center;
+  background-repeat: no-repeat;
+  background-size: 4px 4px;
+  padding-right: 22px;
+}
+
+.editor-shell select option {
+  background: rgb(var(--panel));
+  color: rgb(var(--ink));
+}
+
+.editor-shell input[type="checkbox"],
+.editor-shell input[type="radio"],
+.editor-shell input[type="range"],
+.editor-shell progress {
+  accent-color: rgb(var(--accent));
+}
+
 ::selection {
   background: rgb(var(--accent) / 0.35);
 }

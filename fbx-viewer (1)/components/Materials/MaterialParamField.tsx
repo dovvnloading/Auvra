@@ -28,7 +28,7 @@ const ScrubLabel: React.FC<{ label: string; value: number; step: number; onChang
     }, [onChange, step]);
     return (
         <span
-            className="cursor-ew-resize select-none text-[10px] uppercase text-gray-500 hover:text-gray-300"
+            className="cursor-ew-resize select-none text-2xs text-gray-500 hover:text-gray-300"
             title="Drag sideways to change (Shift: finer)"
             onMouseDown={(event) => {
                 event.preventDefault();
@@ -84,7 +84,7 @@ const RampEditor: React.FC<{ label: string; ramp: MaterialRamp; onChange: (ramp:
     const stop = stops[index];
     return (
         <div className="space-y-1">
-            <span className="text-[10px] uppercase text-gray-500">{label}</span>
+            <span className="text-2xs text-gray-500">{label}</span>
             <div
                 ref={bar}
                 role="slider"
@@ -124,7 +124,7 @@ const RampEditor: React.FC<{ label: string; ramp: MaterialRamp; onChange: (ramp:
                         setSelected(order.findIndex(entry => entry.at === index));
                         onChange({ stops: order.map(entry => entry.candidate) });
                     }} />
-                <span className="flex-1 text-[10px] text-gray-500">{stops.length}/{MAX_RAMP_STOPS} stops</span>
+                <span className="flex-1 text-2xs text-gray-500">{stops.length}/{MAX_RAMP_STOPS} stops</span>
                 <button aria-label={`Remove ${label} stop`} disabled={stops.length <= 1} className="rounded p-1 text-gray-500 hover:text-red-400 disabled:opacity-30"
                     onClick={() => { onChange({ stops: stops.filter((_, at) => at !== index) }); setSelected(Math.max(0, index - 1)); }}>
                     <Trash2 size={12} />
@@ -141,7 +141,7 @@ const CodeField: React.FC<{ label: string; code: string; onChange: (code: string
     const dirty = draft !== code;
     return (
         <label className="block space-y-1">
-            <span className="text-[10px] uppercase text-gray-500">{label}</span>
+            <span className="text-2xs text-gray-500">{label}</span>
             <textarea
                 aria-label={label}
                 value={draft}
@@ -158,11 +158,11 @@ const CodeField: React.FC<{ label: string; code: string; onChange: (code: string
                         requestAnimationFrame(() => { target.selectionStart = target.selectionEnd = at + 4; });
                     }
                 }}
-                className="w-full resize-y rounded border border-gray-700 bg-gray-950 p-1.5 font-mono text-[11px] leading-4 text-emerald-200 outline-none focus:border-blue-600"
+                className="w-full resize-y rounded border border-gray-700 bg-gray-950 p-1.5 font-mono text-2xs leading-4 text-emerald-200 outline-none focus:border-blue-600"
             />
             <div className="flex items-center justify-between">
-                <span className="text-[10px] text-gray-500">{dirty ? 'Not applied yet (Ctrl+Enter)' : 'Applied'}</span>
-                <button disabled={!dirty} onClick={() => onChange(draft)} className="rounded bg-blue-600 px-2 py-0.5 text-[11px] font-bold text-accent-ink hover:bg-blue-500 disabled:opacity-40">Apply</button>
+                <span className="text-2xs text-gray-500">{dirty ? 'Not applied yet (Ctrl+Enter)' : 'Applied'}</span>
+                <button disabled={!dirty} onClick={() => onChange(draft)} className="rounded bg-blue-600 px-2 py-0.5 text-2xs font-bold text-accent-ink hover:bg-blue-500 disabled:opacity-40">Apply</button>
             </div>
         </label>
     );
@@ -175,7 +175,7 @@ export const ParamField: React.FC<{
     onChange: (value: unknown) => void;
 }> = ({ param, value, textures, onChange }) => {
     const current = readParam(param, value);
-    const label = <span className="text-[10px] uppercase text-gray-500">{param.label}</span>;
+    const label = <span className="text-2xs text-gray-500">{param.label}</span>;
     switch (param.kind) {
         case 'texture':
             return (

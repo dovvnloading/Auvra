@@ -266,7 +266,7 @@ export const LogicNodeComponent: React.FC<LogicNodeProps> = ({
                     <span className="text-xs font-bold text-gray-100 truncate">{node.name}</span>
                 </div>
                 {isPure && (
-                    <span className="shrink-0 ml-1 px-1 rounded bg-black/30 text-[8px] font-bold tracking-wider text-gray-400" title="Pure node: evaluated when an output is read">PURE</span>
+                    <span className="shrink-0 ml-1 px-1 rounded bg-black/30 text-2xs font-bold tracking-wider text-gray-400" title="Pure node: evaluated when an output is read">Pure</span>
                 )}
                 {/* Optional Status Icon */}
                 {node.data?.targetBlueprintType && (
@@ -303,7 +303,7 @@ export const LogicNodeComponent: React.FC<LogicNodeProps> = ({
                                 )}
                             </div>
                             {/* Label */}
-                            <span className="text-[10px] text-gray-300 font-mono ml-2 truncate">{pin.name}</span>
+                            <span className="text-2xs text-gray-300 font-mono ml-2 truncate">{pin.name}</span>
                         </div>
                     ))}
                 </div>
@@ -317,7 +317,7 @@ export const LogicNodeComponent: React.FC<LogicNodeProps> = ({
                             style={{ height: PIN_ROW_HEIGHT }}
                         >
                             {/* Label */}
-                            {!isCompact && <span className="text-[10px] text-gray-300 font-mono mr-2 truncate">{pin.name}</span>}
+                            {!isCompact && <span className="text-2xs text-gray-300 font-mono mr-2 truncate">{pin.name}</span>}
                             
                             {/* Pin Graphic */}
                             <div 
@@ -350,7 +350,7 @@ export const LogicNodeComponent: React.FC<LogicNodeProps> = ({
                                     className="flex items-center gap-2 bg-black/40 border border-gray-600 rounded px-2 py-1 cursor-pointer"
                                     onPointerDown={(e) => e.stopPropagation()}
                                 >
-                                    <span className={`text-[10px] font-bold ${node.data?.value ? 'text-green-400' : 'text-red-400'}`}>
+                                    <span className={`text-2xs font-bold ${node.data?.value ? 'text-green-400' : 'text-red-400'}`}>
                                         {node.data?.value ? 'TRUE' : 'FALSE'}
                                     </span>
                                     <input 
@@ -365,7 +365,7 @@ export const LogicNodeComponent: React.FC<LogicNodeProps> = ({
                                     value={node.data?.value ?? ''}
                                     onChange={(e) => onNodeUpdate(node.id, { value: node.type === 'LiteralString' ? e.target.value : parseFloat(e.target.value) })}
                                     onPointerDown={(e) => e.stopPropagation()}
-                                    className="w-full bg-black/40 border border-gray-600 rounded px-1 py-0.5 text-[10px] text-center text-white focus:outline-none focus:border-white font-mono"
+                                    className="w-full bg-black/40 border border-gray-600 rounded px-1 py-0.5 text-2xs text-center text-white focus:outline-none focus:border-white font-mono"
                                 />
                             )}
                         </div>
@@ -373,7 +373,7 @@ export const LogicNodeComponent: React.FC<LogicNodeProps> = ({
 
                     {overlapTarget && onNodeUpdate && (
                         <select
-                            className="w-full bg-black/40 border border-gray-700 text-[9px] text-gray-300 rounded px-1 py-1 mt-1 focus:outline-none focus:border-red-500"
+                            className="w-full bg-black/40 border border-gray-700 text-2xs text-gray-300 rounded px-1 py-1 mt-1 focus:outline-none focus:border-red-500"
                             value={selectedOverlapActorId(overlapTarget)}
                             onChange={(e) => {
                                 const actor = levelObjects.find(obj => obj.id === e.target.value);
@@ -388,14 +388,14 @@ export const LogicNodeComponent: React.FC<LogicNodeProps> = ({
                     )}
 
                     {overlapWarning && (
-                        <div role="alert" title={overlapWarning} className="mt-1 flex items-start gap-1 text-[9px] leading-tight text-amber-300">
+                        <div role="alert" title={overlapWarning} className="mt-1 flex items-start gap-1 text-2xs leading-tight text-amber-300">
                             <AlertTriangle size={10} className="shrink-0 mt-px" />
                             <span className="line-clamp-2">{overlapWarning}</span>
                         </div>
                     )}
 
                     {node.data?.printMessage && (
-                        <div className="pt-1 text-[9px] text-pink-300 font-mono text-center italic truncate opacity-80">
+                        <div className="pt-1 text-2xs text-pink-300 font-mono text-center italic truncate opacity-80">
                             "{node.data.printMessage}"
                         </div>
                     )}

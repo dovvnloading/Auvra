@@ -91,7 +91,7 @@ export const AssetContextMenu: React.FC<AssetContextMenuProps> = ({
                 style={style}
                 onContextMenu={(event) => event.preventDefault()}
             >
-                <div className="px-3 py-1.5 text-[10px] uppercase text-gray-500 font-bold tracking-wider border-b border-gray-700/50 mb-1 truncate" title={assetName}>
+                <div className="px-3 py-1.5 text-2xs text-gray-500 font-bold border-b border-gray-700/50 mb-1 truncate" title={assetName}>
                     {assetName}
                 </div>
                 {mode === 'main' ? (
@@ -106,7 +106,7 @@ export const AssetContextMenu: React.FC<AssetContextMenuProps> = ({
                         <button
                             type="button"
                             onClick={() => setMode('main')}
-                            className="w-full flex items-center gap-1 px-2 py-1 text-[10px] text-gray-400 hover:text-white"
+                            className="w-full flex items-center gap-1 px-2 py-1 text-2xs text-gray-400 hover:text-white"
                         >
                             <ChevronLeft size={12} /> Back
                         </button>

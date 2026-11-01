@@ -101,7 +101,7 @@ export const FolderTree: React.FC<FolderTreeProps> = ({
                     {...dropHandlers(path)}
                     onClick={() => onNavigate(path)}
                     title={isRoot ? ROOT_FOLDER_LABEL : path}
-                    className={`group flex items-center gap-1 pr-1 h-6 rounded cursor-pointer text-[11px] select-none transition-colors ${
+                    className={`group flex items-center gap-1 pr-1 h-6 rounded cursor-pointer text-2xs select-none transition-colors ${
                         isDropTarget ? 'bg-blue-600/40 text-white ring-1 ring-blue-400'
                             : isCurrent ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
                     }`}

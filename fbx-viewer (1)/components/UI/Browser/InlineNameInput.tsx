@@ -67,11 +67,11 @@ export const InlineNameInput: React.FC<InlineNameInputProps> = ({
                     }}
                     onBlur={() => settle(() => onCommit(value, 'blur'))}
                     onDragStart={(event) => { event.preventDefault(); event.stopPropagation(); }}
-                    className="flex-1 min-w-0 bg-transparent px-1 py-0.5 text-[11px] text-white focus:outline-none"
+                    className="flex-1 min-w-0 bg-transparent px-1 py-0.5 text-2xs text-white focus:outline-none"
                 />
-                {suffix && <span className="pr-1 text-[10px] text-gray-500 shrink-0">{suffix}</span>}
+                {suffix && <span className="pr-1 text-2xs text-gray-500 shrink-0">{suffix}</span>}
             </div>
-            {error && <span role="alert" className="text-[9px] leading-tight text-red-400 break-words">{error}</span>}
+            {error && <span role="alert" className="text-2xs leading-tight text-red-400 break-words">{error}</span>}
         </div>
     );
 };

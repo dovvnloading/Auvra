@@ -61,7 +61,7 @@ export const ModelCard: React.FC<ModelCardProps> = ({
                 )}
 
                 {/* Type Badge */}
-                <div className="absolute top-1 right-1 p-1 bg-gray-900/80 backdrop-blur rounded text-gray-400">
+                <div className="absolute top-1 right-1 p-1 bg-gray-900/80 rounded text-gray-400">
                     {getIcon(model.category)}
                 </div>
 
@@ -72,7 +72,7 @@ export const ModelCard: React.FC<ModelCardProps> = ({
                         aria-label={`Hide ${model.name} from the viewer`}
                         title="Shown in the viewer. Click to hide it."
                         onClick={(e) => { e.stopPropagation(); onRemoveFromScene?.(); }}
-                        className="absolute top-1 left-1 z-10 p-1 bg-blue-900/80 backdrop-blur rounded text-blue-400 border border-blue-800 hover:bg-blue-800 hover:text-white"
+                        className="absolute top-1 left-1 z-10 p-1 bg-blue-900/80 rounded text-blue-400 border border-blue-800 hover:bg-blue-800 hover:text-white"
                     >
                         <Eye size={10} />
                     </button>
@@ -84,14 +84,14 @@ export const ModelCard: React.FC<ModelCardProps> = ({
                         {!model.isPlacedInScene ? (
                             <button
                                 onClick={(e) => { e.stopPropagation(); onPlaceInScene(); }}
-                                className="px-3 py-1.5 bg-white hover:bg-blue-500 hover:text-white text-black text-[10px] font-bold rounded shadow-lg transition-all transform hover:scale-105"
+                                className="px-3 py-1.5 bg-white hover:bg-blue-500 hover:text-white text-black text-2xs font-bold rounded shadow-lg transition-all transform hover:scale-105"
                             >
                                 Add to Scene
                             </button>
                         ) : (
                             <button
                                 onClick={(e) => { e.stopPropagation(); onSelect(); }}
-                                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-accent-ink text-[10px] font-bold rounded shadow-lg transition-all"
+                                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-accent-ink text-2xs font-bold rounded shadow-lg transition-all"
                             >
                                 Select
                             </button>
@@ -103,7 +103,7 @@ export const ModelCard: React.FC<ModelCardProps> = ({
                 <span
                     onDoubleClick={onRenameRequest}
                     title={model.name}
-                    className={`text-[11px] truncate px-0.5 text-center ${model.isPlacedInScene ? 'text-blue-400 font-medium' : 'text-gray-400 group-hover:text-white'}`}
+                    className={`text-2xs truncate px-0.5 text-center ${model.isPlacedInScene ? 'text-blue-400 font-medium' : 'text-gray-400 group-hover:text-white'}`}
                 >
                     {model.name}
                 </span>

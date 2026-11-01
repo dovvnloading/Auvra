@@ -47,7 +47,7 @@ export const KeyRecorder: React.FC<KeyRecorderProps> = ({ value, onChange }) => 
                 setIsListening(true);
             }}
             className={`
-                h-6 px-2 min-w-[60px] rounded text-[10px] font-bold uppercase tracking-wider border transition-all flex items-center justify-center
+                h-6 px-2 min-w-[60px] rounded text-2xs font-bold uppercase tracking-wider border transition-all flex items-center justify-center
                 ${isListening 
                     ? 'bg-white text-black border-white shadow-[0_0_10px_rgba(255,255,255,0.3)]' 
                     : 'bg-gray-900 text-gray-400 border-gray-700 hover:border-gray-500 hover:text-white'

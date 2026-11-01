@@ -27,9 +27,9 @@ import { DEFAULT_SPLINE_TERRAIN_BRUSH, flattenTerrainAlongSpline, paintTerrainAl
  * Follow Spline follows.
  */
 
-const FIELD = 'w-full bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-[11px] text-gray-200 focus:outline-none focus:border-fuchsia-500';
-const BUTTON = 'flex items-center justify-center gap-1 px-2 py-1 rounded border border-gray-700 bg-gray-800 hover:bg-gray-700 text-[10px] text-gray-200 disabled:opacity-40 disabled:hover:bg-gray-800 transition-colors';
-const LABEL = 'text-[10px] text-gray-400';
+const FIELD = 'w-full bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-2xs text-gray-200 focus:outline-none focus:border-fuchsia-500';
+const BUTTON = 'flex items-center justify-center gap-1 px-2 py-1 rounded border border-gray-700 bg-gray-800 hover:bg-gray-700 text-2xs text-gray-200 disabled:opacity-40 disabled:hover:bg-gray-800 transition-colors';
+const LABEL = 'text-2xs text-gray-400';
 
 const MODE_LABELS: Record<SplinePointMode, string> = { auto: 'Smooth', linear: 'Corner', custom: 'Custom tangent' };
 
@@ -45,7 +45,7 @@ const NumberField: React.FC<{ label: string; value: number; onCommit: (value: nu
     };
     return (
         <label className="flex items-center gap-1 min-w-0">
-            <span className="text-[9px] text-gray-500 shrink-0">{label}</span>
+            <span className="text-2xs text-gray-500 shrink-0">{label}</span>
             <input
                 aria-label={label}
                 type="number"
@@ -145,8 +145,8 @@ export const SplineInspector: React.FC<ComponentInspectorProps> = ({ object, com
 
     return (
         <div className="space-y-2">
-            {otherSpline && <p className="text-[10px] text-amber-400">Spline Mesh, Scatter and Follow Spline use the object's first Spline; this one is drawn but not used.</p>}
-            <div className="flex items-center justify-between text-[10px] text-gray-400">
+            {otherSpline && <p className="text-2xs text-amber-400">Spline Mesh, Scatter and Follow Spline use the object's first Spline; this one is drawn but not used.</p>}
+            <div className="flex items-center justify-between text-2xs text-gray-400">
                 <span className="flex items-center gap-1"><Route size={10} /> {format(spline.length)} m</span>
                 <span>{data.points.length} points{data.closed ? ', closed' : ''}</span>
             </div>
@@ -159,7 +159,7 @@ export const SplineInspector: React.FC<ComponentInspectorProps> = ({ object, com
                         role="option"
                         aria-selected={selected === index}
                         onClick={() => choose(index)}
-                        className={`w-full flex items-center gap-2 px-2 py-0.5 text-left text-[10px] font-mono ${selected === index ? 'bg-fuchsia-900/30 text-white' : 'text-gray-400 hover:bg-gray-800'}`}
+                        className={`w-full flex items-center gap-2 px-2 py-0.5 text-left text-2xs font-mono ${selected === index ? 'bg-fuchsia-900/30 text-white' : 'text-gray-400 hover:bg-gray-800'}`}
                     >
                         <span className={`w-5 ${index === 0 ? 'text-green-400' : ''}`}>{index + 1}</span>
                         <span className="flex-1 truncate">{entry.position.map(format).join(', ')}</span>
@@ -207,7 +207,7 @@ export const SplineInspector: React.FC<ComponentInspectorProps> = ({ object, com
 
             {point && selected !== null ? (
                 <div className="space-y-1.5 rounded border border-fuchsia-900/50 bg-fuchsia-950/10 p-2">
-                    <div className="text-[10px] font-bold text-fuchsia-200">Point {selected + 1}</div>
+                    <div className="text-2xs font-bold text-fuchsia-200">Point {selected + 1}</div>
                     <VectorFields label="Position" value={point.position} onCommit={(position) => editPoint({ position })} />
                     <label className="flex items-center justify-between gap-2">
                         <span className={LABEL}>Type</span>
@@ -233,14 +233,14 @@ export const SplineInspector: React.FC<ComponentInspectorProps> = ({ object, com
                     </div>
                 </div>
             ) : (
-                <p className="text-[10px] text-gray-500 leading-snug">
+                <p className="text-2xs text-gray-500 leading-snug">
                     Click a point in the viewport or the list to move, turn (tangent and roll) or scale it with the gizmo.
                     Alt-drag a point to add one; Ctrl-click the curve to add one there; Delete removes the selected point.
                 </p>
             )}
 
             <div className="space-y-1.5 pt-1 border-t border-gray-800/60">
-                <div className="flex items-center gap-1 text-[10px] font-bold text-gray-300"><Mountain size={10} /> Terrain</div>
+                <div className="flex items-center gap-1 text-2xs font-bold text-gray-300"><Mountain size={10} /> Terrain</div>
                 <div className="grid grid-cols-3 gap-1">
                     <NumberField label="Width" value={brush.width} onCommit={(width) => setBrush({ ...brush, width: Math.max(0.1, width) })} />
                     <NumberField label="Falloff" value={brush.falloff} onCommit={(falloff) => setBrush({ ...brush, falloff: Math.max(0, falloff) })} />
@@ -256,7 +256,7 @@ export const SplineInspector: React.FC<ComponentInspectorProps> = ({ object, com
                     </select>
                     <button type="button" className={`${BUTTON} flex-1`} onClick={() => shapeTerrain('paint')}><Paintbrush size={10} /> Paint under</button>
                 </div>
-                {notice && <p className="text-[10px] text-gray-400">{notice}</p>}
+                {notice && <p className="text-2xs text-gray-400">{notice}</p>}
             </div>
         </div>
     );
@@ -273,7 +273,7 @@ export const SplineModelInspector: React.FC<ComponentInspectorProps> = ({ object
     const hasSpline = findSplineComponent(object) !== null;
     return (
         <div className="space-y-1">
-            <label className="flex items-center gap-1 text-[10px] text-gray-400"><Box size={10} /> Model</label>
+            <label className="flex items-center gap-1 text-2xs text-gray-400"><Box size={10} /> Model</label>
             <select
                 aria-label="Model"
                 value={modelId}
@@ -284,8 +284,8 @@ export const SplineModelInspector: React.FC<ComponentInspectorProps> = ({ object
                 {!known && <option value={modelId}>Missing model</option>}
                 {choices.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
             </select>
-            {!modelId && <p className="text-[10px] text-amber-400">Pick the model to lay along the spline.</p>}
-            {!hasSpline && <p className="text-[10px] text-amber-400">Add a Spline component to this object: this lays its model along it.</p>}
+            {!modelId && <p className="text-2xs text-amber-400">Pick the model to lay along the spline.</p>}
+            {!hasSpline && <p className="text-2xs text-amber-400">Add a Spline component to this object: this lays its model along it.</p>}
         </div>
     );
 };
@@ -300,14 +300,14 @@ export const FollowSplineInspector: React.FC<ComponentInspectorProps> = ({ objec
     const known = !target || choices.some(candidate => candidate.id === target);
     return (
         <div className="space-y-1">
-            <label className="flex items-center gap-1 text-[10px] text-gray-400"><Route size={10} /> Spline to follow</label>
+            <label className="flex items-center gap-1 text-2xs text-gray-400"><Route size={10} /> Spline to follow</label>
             <select aria-label="Spline to follow" value={target} onChange={(event) => onChangeProps({ spline: event.target.value })} className={FIELD}>
                 <option value="">None</option>
                 {!known && <option value={target}>Missing spline</option>}
                 {choices.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
             </select>
-            {choices.length === 0 && <p className="text-[10px] text-amber-400">No other object in the level has a Spline component.</p>}
-            {choices.length > 0 && !target && <p className="text-[10px] text-amber-400">Pick the object whose spline this one moves along.</p>}
+            {choices.length === 0 && <p className="text-2xs text-amber-400">No other object in the level has a Spline component.</p>}
+            {choices.length > 0 && !target && <p className="text-2xs text-amber-400">Pick the object whose spline this one moves along.</p>}
         </div>
     );
 };

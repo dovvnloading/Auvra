@@ -65,7 +65,7 @@ export const TakesStrip: React.FC<{
           {part.thumbnail
             ? <img src={part.thumbnail} alt="" draggable={false} className="h-full w-full object-cover" />
             : <span className="flex h-full w-full items-center justify-center text-ink-3"><ImageIcon size={14} /></span>}
-          <span className="absolute inset-x-0 bottom-0 bg-ground/75 py-px text-center text-[10px] leading-3 text-ink-2">Original</span>
+          <span className="absolute inset-x-0 bottom-0 bg-ground/75 py-px text-center text-2xs leading-3 text-ink-2">Original</span>
         </Tile>
         {count > 0 && <span className="mx-0.5 h-8 w-px shrink-0 bg-line" />}
         {part.takes.map((take) => (
@@ -82,10 +82,10 @@ export const TakesStrip: React.FC<{
             {take.state !== 'ready' && take.state !== 'failed' && (
               <span className="flex h-full w-full flex-col items-center justify-center gap-1 text-ink-2">
                 <Spinner className="text-accent" />
-                <span className="text-[10px] leading-3 tabular-nums">{seconds(take, now)}</span>
+                <span className="text-2xs leading-3 tabular-nums">{seconds(take, now)}</span>
               </span>
             )}
-            <span className="absolute bottom-0 left-0 rounded-tr-sm bg-ground/75 px-1 text-[10px] leading-3 tabular-nums text-ink-2">{take.number}</span>
+            <span className="absolute bottom-0 left-0 rounded-tr-sm bg-ground/75 px-1 text-2xs leading-3 tabular-nums text-ink-2">{take.number}</span>
           </Tile>
         ))}
       </div>

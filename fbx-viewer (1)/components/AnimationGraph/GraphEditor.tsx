@@ -132,20 +132,20 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
           
           {/* CONTEXT SELECTOR HEADER - Always Visible */}
           <div className="p-3 border-b border-gray-800 bg-gray-950 space-y-2">
-              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
+              <label className="text-2xs font-bold text-gray-500 flex items-center gap-2">
                   <Network size={12} /> Graph Context
               </label>
               
               <div className="flex bg-gray-900 rounded-lg border border-gray-800 p-0.5">
                   <button 
                     onClick={() => { setContextType('model'); setSelectedContextId(null); }}
-                    className={`flex-1 flex items-center justify-center gap-2 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded transition-all ${contextType === 'model' ? 'bg-gray-800 text-white shadow' : 'text-gray-500 hover:text-gray-300'}`}
+                    className={`flex-1 flex items-center justify-center gap-2 py-1.5 text-2xs font-bold rounded transition-all ${contextType === 'model' ? 'bg-gray-800 text-white shadow' : 'text-gray-500 hover:text-gray-300'}`}
                   >
                       <Component size={12} /> Models
                   </button>
                   <button 
                     onClick={() => { setContextType('blueprint'); setSelectedContextId(null); }}
-                    className={`flex-1 flex items-center justify-center gap-2 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded transition-all ${contextType === 'blueprint' ? 'bg-gray-800 text-white shadow' : 'text-gray-500 hover:text-gray-300'}`}
+                    className={`flex-1 flex items-center justify-center gap-2 py-1.5 text-2xs font-bold rounded transition-all ${contextType === 'blueprint' ? 'bg-gray-800 text-white shadow' : 'text-gray-500 hover:text-gray-300'}`}
                   >
                       <FileCode size={12} /> Blueprints
                   </button>
@@ -167,13 +167,13 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
                 <div className="flex border-b border-gray-800 bg-gray-950 shrink-0">
                         <button 
                             onClick={() => setActiveSidebarTab('blackboard')}
-                            className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 flex items-center justify-center gap-2 ${activeSidebarTab === 'blackboard' ? 'border-blue-500 text-white bg-gray-900' : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-900'}`}
+                            className={`flex-1 py-3 text-2xs font-bold transition-colors border-b-2 flex items-center justify-center gap-2 ${activeSidebarTab === 'blackboard' ? 'border-blue-500 text-white bg-gray-900' : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-900'}`}
                         >
                             <BoxSelect size={12} /> Blackboard
                         </button>
                         <button 
                             onClick={() => setActiveSidebarTab('inspector')}
-                            className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 flex items-center justify-center gap-2 ${activeSidebarTab === 'inspector' ? 'border-blue-500 text-white bg-gray-900' : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-900'}`}
+                            className={`flex-1 py-3 text-2xs font-bold transition-colors border-b-2 flex items-center justify-center gap-2 ${activeSidebarTab === 'inspector' ? 'border-blue-500 text-white bg-gray-900' : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-900'}`}
                         >
                             <Settings size={12} /> Inspector
                         </button>
@@ -211,7 +211,7 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
       </div>
 
       {/* MAIN WORKSPACE */}
-      <div className="flex-1 flex flex-col min-w-0 bg-[#111111]">
+      <div className="flex-1 flex flex-col min-w-0 bg-well">
           {selectedContextId ? (
             <>
                 {/* Live Preview */}
@@ -233,7 +233,7 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
 
                 {/* Which state machine the canvas shows */}
                 {crumbs.length > 0 && (
-                    <nav aria-label="State machine path" className="flex items-center gap-1 px-3 py-1.5 bg-gray-950 border-b border-gray-800 text-[11px] shrink-0">
+                    <nav aria-label="State machine path" className="flex items-center gap-1 px-3 py-1.5 bg-gray-950 border-b border-gray-800 text-2xs shrink-0">
                         <button type="button" onClick={() => { setMachinePath([]); setSelectedNodeId(null); }} className="px-1.5 py-0.5 rounded text-gray-400 hover:text-white hover:bg-gray-800">
                             Graph
                         </button>

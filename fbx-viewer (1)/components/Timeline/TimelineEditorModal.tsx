@@ -133,8 +133,8 @@ export const animatedObjects = (objects: readonly LevelObject[]): LevelObject[] 
 export const cameraObjects = (objects: readonly LevelObject[]): LevelObject[] =>
     objects.filter(object => object.components?.some(component => component.type === 'camera' && component.enabled !== false));
 
-const SECTION_TITLE = 'text-[10px] font-bold text-gray-500 uppercase tracking-wider';
-const FIELD_CLASS = 'bg-gray-950 border border-gray-800 rounded px-1.5 h-6 text-[11px] text-white focus:outline-none focus:border-blue-500';
+const SECTION_TITLE = 'text-2xs font-bold text-gray-500 ';
+const FIELD_CLASS = 'bg-gray-950 border border-gray-800 rounded px-1.5 h-6 text-2xs text-white focus:outline-none focus:border-blue-500';
 
 // --- PURE HELPERS ---
 
@@ -348,7 +348,7 @@ const NumberField: React.FC<{
 }> = ({ label, ariaLabel, value, onChange, min = -Infinity, max = Infinity, suffix, labelClass = 'text-gray-400' }) => {
     const [text, setText] = useState<string | null>(null);
     return (
-        <label className="flex items-center gap-1.5 text-[10px]">
+        <label className="flex items-center gap-1.5 text-2xs">
             <span className={labelClass}>{label}</span>
             <input
                 type="text"
@@ -402,11 +402,11 @@ const KeyDetails: React.FC<{
                 <NumberField label="Speed" ariaLabel="Clip speed" value={value.speed} min={-10} max={10} onChange={(speed) => set({ speed })} />
                 <NumberField label="Blend in" ariaLabel="Clip blend in" value={value.blendIn} min={0} max={MAX_DURATION} suffix="s" onChange={(blendIn) => set({ blendIn: round3(blendIn) })} />
                 <NumberField label="Blend out" ariaLabel="Clip blend out" value={value.blendOut} min={0} max={MAX_DURATION} suffix="s" onChange={(blendOut) => set({ blendOut: round3(blendOut) })} />
-                <label className="flex items-center gap-2 text-[11px] text-gray-300">
+                <label className="flex items-center gap-2 text-2xs text-gray-300">
                     <input type="checkbox" checked={value.loop} onChange={(event) => set({ loop: event.target.checked })} className="rounded bg-gray-800 border-gray-600 text-blue-500 focus:ring-0" />
                     Loop the clip
                 </label>
-                <p className="text-[10px] leading-snug text-gray-500">Overlapping clips crossfade; where no clip plays, the character's own animation shows. The blends ease to and from it.</p>
+                <p className="text-2xs leading-snug text-gray-500">Overlapping clips crossfade; where no clip plays, the character's own animation shows. The blends ease to and from it.</p>
             </div>
         );
     } else if (typeof value === 'object' && !Array.isArray(value) && 'sound' in value) {
@@ -426,11 +426,11 @@ const KeyDetails: React.FC<{
         const set = (change: Partial<TimelineLineValue>) => onChange({ ...timelineKey, value: { ...value, ...change } });
         editor = (
             <div className="space-y-1.5">
-                <label className="block text-[10px] text-gray-400">
+                <label className="block text-2xs text-gray-400">
                     Speaker
                     <input type="text" aria-label="Speaker" value={value.speaker} onChange={(event) => set({ speaker: event.target.value })} className={`mt-1 w-full ${FIELD_CLASS}`} />
                 </label>
-                <label className="block text-[10px] text-gray-400">
+                <label className="block text-2xs text-gray-400">
                     Line
                     <textarea aria-label="Line" value={value.text} rows={3} onChange={(event) => set({ text: event.target.value })} className={`mt-1 w-full resize-y py-1 ${FIELD_CLASS} h-auto`} />
                 </label>
@@ -459,7 +459,7 @@ const KeyDetails: React.FC<{
         );
     } else if (typeof value === 'boolean') {
         editor = (
-            <label className="flex items-center gap-2 text-[11px] text-gray-300">
+            <label className="flex items-center gap-2 text-2xs text-gray-300">
                 <input
                     type="checkbox"
                     checked={value}
@@ -488,7 +488,7 @@ const KeyDetails: React.FC<{
         );
     } else {
         editor = (
-            <label className="block text-[10px] text-gray-400">
+            <label className="block text-2xs text-gray-400">
                 Event name
                 <input
                     type="text"
@@ -534,14 +534,14 @@ const KeyDetails: React.FC<{
                         {INTERPOLATIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
                     </select>
                 ) : (
-                    <p className="text-[10px] text-gray-500">{
+                    <p className="text-2xs text-gray-500">{
                         track.kind === 'animation' ? 'Clips blend by their own blend in and out.'
                             : track.kind === 'audio' || track.kind === 'subtitle' ? 'It starts at its key and lasts its length.'
                                 : `${track.kind === 'event' ? 'Event' : track.kind === 'camera' ? 'Camera' : 'Visibility'} keys always step: the value holds until the next key.`
                     }</p>
                 )}
                 {blends(track) && (
-                    <p className="text-[10px] text-gray-500 leading-snug">How the value moves from this key to the next: a straight line, a hold, or an ease in and out.</p>
+                    <p className="text-2xs text-gray-500 leading-snug">How the value moves from this key to the next: a straight line, a hold, or an ease in and out.</p>
                 )}
             </div>
             <button
@@ -852,7 +852,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                         <Film size={18} className="text-blue-400 shrink-0" />
                         <div className="min-w-0">
                             <h2 className="text-sm font-bold text-white">Timeline</h2>
-                            <p className="text-[10px] text-gray-500 truncate">
+                            <p className="text-2xs text-gray-500 truncate">
                                 {subtitle ? `${subtitle} · ` : ''}The viewport shows the playhead · double-click a row to key there · drag keys to move (Shift: free timing) · Delete removes
                             </p>
                         </div>
@@ -873,14 +873,14 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                     type="button"
                                     onClick={() => addTrack(kind)}
                                     aria-label={`Add ${label} track`}
-                                    className="flex items-center gap-1 rounded border border-gray-700 bg-gray-800 px-2 h-6 text-[11px] text-gray-300 hover:bg-gray-700 transition-colors"
+                                    className="flex items-center gap-1 rounded border border-gray-700 bg-gray-800 px-2 h-6 text-2xs text-gray-300 hover:bg-gray-700 transition-colors"
                                 >
                                     <Plus size={11} /><Icon size={11} className={text} /> {label}
                                 </button>
                             );
                         })}
                     </div>
-                    <label className="ml-auto flex items-center gap-2 text-[10px] text-gray-400">
+                    <label className="ml-auto flex items-center gap-2 text-2xs text-gray-400">
                         Zoom
                         <input type="range" aria-label="Zoom" min={MIN_ZOOM} max={MAX_ZOOM} step={1} value={zoom} onChange={(event) => setZoom(clamp(Number(event.target.value), MIN_ZOOM, MAX_ZOOM))} className="w-28" />
                     </label>
@@ -890,7 +890,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                     <div className="min-w-0 flex-1 overflow-auto custom-scrollbar">
                         <div className="relative min-h-full" style={{ width: contentWidth }}>
                             <div className="sticky top-0 z-30 flex h-7 border-b border-gray-800 bg-gray-950" style={{ width: contentWidth }}>
-                                <div className="sticky left-0 z-40 flex shrink-0 items-center border-r border-gray-800 bg-gray-950 px-3 text-[10px] font-bold uppercase tracking-wider text-gray-500" style={{ width: HEADER_WIDTH }}>
+                                <div className="sticky left-0 z-40 flex shrink-0 items-center border-r border-gray-800 bg-gray-950 px-3 text-2xs font-bold text-gray-500" style={{ width: HEADER_WIDTH }}>
                                     Tracks
                                 </div>
                                 <div
@@ -930,7 +930,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                     <div className="absolute inset-y-0 right-0 bg-black/40" style={{ width: LANE_TAIL }} />
                                     {ticks.map(tick => (
                                         <div key={tick} className="absolute bottom-0 h-full border-l border-gray-700/80 pointer-events-none" style={{ left: xAt(tick) }}>
-                                            <span className="absolute top-0.5 left-1 text-[9px] font-mono text-gray-500">{tick.toFixed(tickDecimals)}</span>
+                                            <span className="absolute top-0.5 left-1 text-2xs font-mono text-gray-500">{tick.toFixed(tickDecimals)}</span>
                                         </div>
                                     ))}
                                     <div className="absolute bottom-0 -ml-1.5 h-0 w-0 border-x-[6px] border-t-[8px] border-x-transparent border-t-amber-400 pointer-events-none" style={{ left: xAt(playhead) }} />
@@ -969,7 +969,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                                         value={track.label ?? ''}
                                                         placeholder={name}
                                                         onChange={(event) => { const label = event.target.value; changeTrack(track.id, current => ({ ...current, label })); }}
-                                                        className="h-5 min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 text-[11px] text-gray-100 placeholder-gray-400 hover:border-gray-700 focus:border-blue-500 focus:outline-none"
+                                                        className="h-5 min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 text-2xs text-gray-100 placeholder-gray-400 hover:border-gray-700 focus:border-blue-500 focus:outline-none"
                                                     />
                                                     <button
                                                         type="button"
@@ -1054,7 +1054,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                                     </div>
                                                 )}
                                                 {track.kind === 'fade' && (
-                                                    <label className="flex items-center gap-1 px-1 text-[10px] text-gray-400">
+                                                    <label className="flex items-center gap-1 px-1 text-2xs text-gray-400">
                                                         Colour
                                                         <input
                                                             type="color"
@@ -1069,7 +1069,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                                     </label>
                                                 )}
                                                 {track.kind === 'subtitle' && (
-                                                    <div className="px-1 text-[10px] leading-snug text-gray-500">Shows each line for its length; translate them as timeline.&lt;object&gt;.&lt;track&gt;.&lt;ms&gt;.</div>
+                                                    <div className="px-1 text-2xs leading-snug text-gray-500">Shows each line for its length; translate them as timeline.&lt;object&gt;.&lt;track&gt;.&lt;ms&gt;.</div>
                                                 )}
                                                 {track.kind === 'variable' && (
                                                     <input
@@ -1086,10 +1086,10 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                                     />
                                                 )}
                                                 {track.kind === 'event' && (
-                                                    <div className="px-1 text-[10px] leading-snug text-gray-500">Raises each key's name as an event when playback passes it.</div>
+                                                    <div className="px-1 text-2xs leading-snug text-gray-500">Raises each key's name as an event when playback passes it.</div>
                                                 )}
                                                 {track.kind === 'camera' && (
-                                                    <label className="flex items-center gap-1 px-1 text-[10px] text-gray-400">
+                                                    <label className="flex items-center gap-1 px-1 text-2xs text-gray-400">
                                                         Blend
                                                         <input
                                                             type="number"
@@ -1108,7 +1108,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                                     </label>
                                                 )}
                                                 {track.kind === 'camera' && cameraOptions.length === 0 && (
-                                                    <div className="px-1 text-[10px] leading-snug text-amber-400">Add a Camera component to an object to cut to it.</div>
+                                                    <div className="px-1 text-2xs leading-snug text-amber-400">Add a Camera component to an object to cut to it.</div>
                                                 )}
                                                 {track.kind === 'transform' && (
                                                     <button
@@ -1116,7 +1116,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                                         onClick={() => recordFromObject(track.id)}
                                                         disabled={!objectsById.has(track.objectId)}
                                                         title="Key the target's current position, rotation and scale at the playhead"
-                                                        className="flex h-5 w-full items-center justify-center gap-1 rounded border border-gray-700 bg-gray-800 text-[10px] text-gray-300 hover:bg-gray-700 disabled:opacity-40 transition-colors"
+                                                        className="flex h-5 w-full items-center justify-center gap-1 rounded border border-gray-700 bg-gray-800 text-2xs text-gray-300 hover:bg-gray-700 disabled:opacity-40 transition-colors"
                                                     >
                                                         <Crosshair size={10} /> Add key from object
                                                     </button>
@@ -1124,7 +1124,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                             </div>
                                             <div className="flex w-16 shrink-0 flex-col border-l border-gray-800/60">
                                                 {lanes.map(lane => (
-                                                    <div key={lane.channel} className="flex flex-1 items-center justify-end border-b border-gray-800/40 px-1.5 text-[9px] uppercase tracking-wider text-gray-500 last:border-b-0">
+                                                    <div key={lane.channel} className="flex flex-1 items-center justify-end border-b border-gray-800/40 px-1.5 text-2xs text-gray-500 last:border-b-0">
                                                         {lane.label}
                                                     </div>
                                                 ))}
@@ -1160,7 +1160,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                                                     aria-label={`${name} ${lane.label} ${label} at ${formatTime(key.time)}`}
                                                                     aria-pressed={isSelected}
                                                                     title={`${formatTime(key.time)} · ${describeValue(key.value)}`}
-                                                                    className={`absolute top-1 bottom-1 overflow-hidden rounded border px-1.5 text-left text-[10px] leading-[18px] text-gray-950 cursor-ew-resize focus:outline-none ${isSelected ? 'z-10 border-amber-300 ring-2 ring-amber-400/60' : 'border-black/40 hover:brightness-110'} ${info.fill} bg-opacity-80`}
+                                                                    className={`absolute top-1 bottom-1 overflow-hidden rounded border px-1.5 text-left text-2xs leading-[18px] text-gray-950 cursor-ew-resize focus:outline-none ${isSelected ? 'z-10 border-amber-300 ring-2 ring-amber-400/60' : 'border-black/40 hover:brightness-110'} ${info.fill} bg-opacity-80`}
                                                                     style={{ left: xAt(key.time), width: Math.max(8, span * zoom) }}
                                                                     onPointerDown={(event) => startKeyDrag(event, ref, key.time)}
                                                                     onPointerMove={moveKeyDrag}
@@ -1219,7 +1219,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                 sounds={sounds}
                             />
                         ) : (
-                            <div className="space-y-2 text-[11px] leading-snug text-gray-500">
+                            <div className="space-y-2 text-2xs leading-snug text-gray-500">
                                 <div className={SECTION_TITLE}>No key selected</div>
                                 <p>Click a key to edit its time, value and interpolation.</p>
                                 <p>Double-click a row to add a key at the playhead. Drag keys to move them; they snap to {SNAP_STEP} s unless Shift is held.</p>
@@ -1230,7 +1230,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                 </div>
 
                 <div className="flex items-center justify-between gap-3 border-t border-gray-800 bg-gray-950 px-5 py-3">
-                    <div className="flex min-w-0 items-center gap-3 text-[11px]">
+                    <div className="flex min-w-0 items-center gap-3 text-2xs">
                         <span className={dirty ? 'text-amber-400' : 'text-gray-500'}>{dirty ? 'Unsaved changes' : 'No changes'}</span>
                         {lateKeys > 0 && (
                             <span className="flex items-center gap-1 text-amber-300 truncate">
@@ -1248,7 +1248,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                     <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60">
                         <div role="alertdialog" aria-modal="true" aria-label="Discard changes" className="w-80 space-y-3 rounded-lg border border-gray-700 bg-gray-900 p-4 shadow-2xl">
                             <div className="flex items-center gap-2 text-sm font-bold text-white"><AlertTriangle size={14} className="text-amber-400" /> Discard changes?</div>
-                            <p className="text-[11px] text-gray-400">The edits made to this timeline have not been saved.</p>
+                            <p className="text-2xs text-gray-400">The edits made to this timeline have not been saved.</p>
                             <div className="flex justify-end gap-2">
                                 <button type="button" autoFocus onClick={keepEditing} className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800">Keep Editing</button>
                                 <button type="button" onClick={onClose} className="rounded bg-red-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-red-500">Discard</button>

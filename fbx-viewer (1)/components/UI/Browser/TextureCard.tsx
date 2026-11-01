@@ -27,12 +27,12 @@ export const TextureCard: React.FC<TextureCardProps> = ({ texture, onDelete, nam
                 </div>
 
                 {/* Type Badge */}
-                <div className="absolute top-1 right-1 p-1 bg-gray-900/80 backdrop-blur rounded text-gray-400">
+                <div className="absolute top-1 right-1 p-1 bg-gray-900/80 rounded text-gray-400">
                     <Palette size={10} />
                 </div>
 
                 {/* Resolution Badge */}
-                <div className="absolute bottom-1 left-1 px-1.5 py-0.5 bg-black/60 backdrop-blur rounded text-[8px] text-gray-300 font-mono">
+                <div className="absolute bottom-1 left-1 px-1.5 py-0.5 bg-black/60 rounded text-2xs text-gray-300 font-mono">
                     {texture.dimensions.width}x{texture.dimensions.height}
                 </div>
 
@@ -57,12 +57,12 @@ export const TextureCard: React.FC<TextureCardProps> = ({ texture, onDelete, nam
                 </div>
             </div>
             {nameEditor ?? (
-                <span onDoubleClick={onRenameRequest} title={texture.name} className="text-[11px] truncate px-0.5 text-center text-gray-400 group-hover:text-white">
+                <span onDoubleClick={onRenameRequest} title={texture.name} className="text-2xs truncate px-0.5 text-center text-gray-400 group-hover:text-white">
                     {texture.name}
                 </span>
             )}
             {showPreview && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-8" role="dialog" aria-label={`${texture.name} preview`} onClick={() => setShowPreview(false)}>
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-8" role="dialog" aria-label={`${texture.name} preview`} onClick={() => setShowPreview(false)}>
                     <div className="texture-preview-surface relative max-w-3xl max-h-full rounded border border-gray-600 p-3 shadow-2xl" onClick={(e) => e.stopPropagation()}>
                         <button type="button" aria-label="Close preview" className="absolute right-2 top-2 rounded bg-gray-900/90 px-2 py-1 text-xs text-white" onClick={() => setShowPreview(false)}>Close</button>
                         <img src={texture.url} alt={texture.name} className="max-h-[75vh] max-w-[80vw] object-contain" />

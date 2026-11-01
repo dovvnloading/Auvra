@@ -134,7 +134,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
 
     return (
         <div 
-             className="flex-1 relative overflow-hidden bg-[#0F0F0F] cursor-grab active:cursor-grabbing" 
+             className="flex-1 relative overflow-hidden bg-well cursor-grab active:cursor-grabbing" 
              ref={canvasRef} 
              onWheel={(e) => handleWheel(e, canvasRef.current)}
              onPointerDown={onPointerDown}
@@ -256,7 +256,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
                                 type="button"
                                 onPointerDown={(e) => e.stopPropagation()}
                                 onClick={(e) => { e.stopPropagation(); onSelectNode(transition.id); }}
-                                className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider border transition-colors ${selectedNodeId === transition.id ? 'bg-blue-600 border-blue-400 text-accent-ink' : flash?.id === transition.id ? 'bg-green-700 border-green-400 text-accent-ink' : 'bg-gray-800 border-gray-600 text-gray-300 hover:border-blue-500'}`}
+                                className={`px-1.5 py-0.5 rounded text-2xs font-bold border transition-colors ${selectedNodeId === transition.id ? 'bg-blue-600 border-blue-400 text-accent-ink' : flash?.id === transition.id ? 'bg-green-700 border-green-400 text-accent-ink' : 'bg-gray-800 border-gray-600 text-gray-300 hover:border-blue-500'}`}
                                 title="Any State transition: fires from every other state"
                             >
                                 Any &rarr;
@@ -288,7 +288,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
                 ))}
             </div>
             
-            <div className="absolute bottom-4 left-4 z-20 text-[10px] text-gray-600 select-none pointer-events-none font-mono bg-black/50 p-2 rounded backdrop-blur-sm">
+            <div className="absolute bottom-4 left-4 z-20 text-2xs text-gray-600 select-none pointer-events-none font-mono bg-black/50 p-2 rounded">
                Pan: Drag BG <br/> Zoom: Wheel <br/> Move Node: Drag Node <br/> Connect: Shift+Click{onUndo && <><br/> Undo: Ctrl+Z / Redo: Ctrl+Y</>}
             </div>
         </div>

@@ -72,20 +72,20 @@ const LoadedAnimationControls: React.FC<AnimationControlsProps & { model: NonNul
         <div className="flex items-center justify-between">
            <div className="flex items-center gap-2 text-gray-400">
              <Film size={14} />
-             <span className="text-xs font-semibold tracking-wider">ANIMATION</span>
+             <span className="text-xs font-semibold tracking-wider">Animation</span>
            </div>
            
            <div className="flex items-center bg-gray-800 rounded-lg p-0.5 border border-gray-700">
              <button 
                 onClick={() => onSpeedChange(0.5)}
                 disabled={!hasAnimations}
-                className={`text-[10px] px-2 py-1 rounded transition-colors ${timeScale === 0.5 ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}
+                className={`text-2xs px-2 py-1 rounded transition-colors ${timeScale === 0.5 ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}
              >0.5x</button>
              <div className="w-px h-3 bg-gray-700 mx-0.5"></div>
              <button 
                 onClick={() => onSpeedChange(1.5)}
                 disabled={!hasAnimations}
-                className={`text-[10px] px-2 py-1 rounded transition-colors ${timeScale === 1.5 ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}
+                className={`text-2xs px-2 py-1 rounded transition-colors ${timeScale === 1.5 ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}
              >1.5x</button>
            </div>
         </div>
@@ -113,13 +113,13 @@ const LoadedAnimationControls: React.FC<AnimationControlsProps & { model: NonNul
         {/* Animation List - Fixed Height Container */}
         <div className="space-y-2">
             <div className="flex items-center justify-between px-1">
-                <div className="text-[10px] text-gray-500 font-medium uppercase tracking-wider">
+                <div className="text-2xs text-gray-500 font-medium ">
                     Clips ({allClips.length})
                 </div>
                 
                 {/* Import Animation Button */}
                 <label className={`
-                    flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 
+                    flex items-center gap-1 text-2xs px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 
                     text-gray-400 hover:text-white cursor-pointer transition-colors border border-gray-700
                     ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}
                 `}>
@@ -188,7 +188,7 @@ const LoadedAnimationControls: React.FC<AnimationControlsProps & { model: NonNul
                                 </div>
                                 
                                 {isExternal && (
-                                    <div className="flex items-center gap-1 text-[9px] text-gray-500 group-hover:text-gray-400">
+                                    <div className="flex items-center gap-1 text-2xs text-gray-500 group-hover:text-gray-400">
                                         <CornerDownRight size={10} />
                                         <span className="truncate">From: {item.sourceModelName}</span>
                                     </div>

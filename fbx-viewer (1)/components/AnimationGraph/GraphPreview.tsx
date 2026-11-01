@@ -371,13 +371,13 @@ export const PreviewStatusBadge: React.FC<{ status: PreviewStatus; modelName?: s
     const style = STATUS_STYLE[status];
     return (
         <div className="absolute top-4 left-4 z-10 flex flex-col items-start gap-1.5 max-w-[70%] pointer-events-none">
-            <div role="status" className={`bg-gray-900/80 backdrop-blur px-3 py-1.5 rounded-full text-[10px] font-bold border border-gray-700 flex items-center gap-2 shadow-lg ${style.text}`}>
+            <div role="status" className={`bg-gray-900/80 px-3 py-1.5 rounded-full text-2xs font-bold border border-gray-700 flex items-center gap-2 shadow-lg ${style.text}`}>
                 <span className={`w-2 h-2 rounded-full shrink-0 ${style.dot}`}></span>
-                <span className="uppercase tracking-wider">{label}</span>
+                <span className=" ">{label}</span>
                 {modelName && status !== 'no-mesh' && <span className="font-normal text-gray-400 truncate">{modelName}</span>}
             </div>
             {hint && (
-                <p className="bg-gray-900/80 backdrop-blur px-3 py-1.5 rounded-lg text-[10px] text-gray-400 border border-gray-800 shadow-lg">
+                <p className="bg-gray-900/80 px-3 py-1.5 rounded-lg text-2xs text-gray-400 border border-gray-800 shadow-lg">
                     {hint}
                 </p>
             )}
@@ -388,7 +388,7 @@ export const PreviewStatusBadge: React.FC<{ status: PreviewStatus; modelName?: s
 // Transport clicks keep keyboard focus where it was, so the preview's key bindings keep working.
 const keepFocus = (e: React.MouseEvent) => e.preventDefault();
 
-const transportButton = 'flex items-center justify-center gap-1.5 h-7 px-2 rounded-full text-[10px] font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
+const transportButton = 'flex items-center justify-center gap-1.5 h-7 px-2 rounded-full text-2xs font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
 
 interface PreviewTransportProps {
     paused: boolean;
@@ -412,7 +412,7 @@ export const PreviewTransport: React.FC<PreviewTransportProps> = ({
     onSpeedChange,
     onToggleFollow
 }) => (
-    <div className="absolute bottom-3 left-3 z-10 flex items-center gap-1 bg-gray-900/85 backdrop-blur px-1.5 py-1 rounded-full border border-gray-700 shadow-lg text-gray-300">
+    <div className="absolute bottom-3 left-3 z-10 flex items-center gap-1 bg-gray-900/85 px-1.5 py-1 rounded-full border border-gray-700 shadow-lg text-gray-300">
         <button
             type="button"
             onMouseDown={keepFocus}

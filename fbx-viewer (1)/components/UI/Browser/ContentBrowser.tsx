@@ -554,7 +554,7 @@ export const ContentBrowser: React.FC = () => {
 
     return (
         <div
-            className="h-64 bg-gray-900/95 backdrop-blur-md border-t border-white/10 flex flex-col shadow-[0_-4px_16px_rgba(0,0,0,0.5)] z-10"
+            className="h-64 bg-gray-900/95 border-t border-white/10 flex flex-col shadow-[0_-4px_16px_rgba(0,0,0,0.5)] z-10"
             onMouseMove={handleMouseMove}
         >
             <BrowserToolbar
@@ -653,14 +653,14 @@ export const ContentBrowser: React.FC = () => {
 
             {/* Status Bar */}
             <div className="h-6 bg-gray-950/80 border-t border-white/10 flex items-center px-3 justify-between shrink-0">
-                <div className="text-[10px] text-gray-500">
+                <div className="text-2xs text-gray-500">
                     {activeTab === 'models'
                         ? `${filteredLibraryItems.length} Items${visibleSubfolders.length ? `, ${visibleSubfolders.length} Folders` : ''}`
                         : `${blueprints.length} Blueprints`
                     }
                 </div>
                 {isLoading && (
-                    <div className="flex items-center gap-2 text-[10px] text-white">
+                    <div className="flex items-center gap-2 text-2xs text-white">
                         <span className="w-2 h-2 rounded-full bg-white animate-pulse"></span>
                         Processing...
                     </div>

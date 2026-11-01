@@ -20,12 +20,12 @@ export const BlueprintCard: React.FC<BlueprintCardProps> = ({ blueprint, onSelec
                     : <Skull size={32} className="text-gray-600 group-hover:text-red-400 transition-colors" />
                 }
                 <div className="absolute top-2 right-2 flex flex-col gap-1">
-                    <span className="text-[8px] uppercase font-bold text-gray-500 bg-gray-900/80 px-1 rounded border border-gray-700">
+                    <span className="text-2xs font-bold text-gray-500 bg-gray-900/80 px-1 rounded border border-gray-700">
                         {blueprint.type === 'Player Character' ? 'PLAYER' : 'AI'}
                     </span>
                 </div>
             </div>
-            <span className="text-[11px] font-bold text-gray-300 group-hover:text-white truncate px-0.5 text-center">
+            <span className="text-2xs font-bold text-gray-300 group-hover:text-white truncate px-0.5 text-center">
                 {blueprint.name}
             </span>
         </div>

@@ -189,7 +189,7 @@ const PropertyInput: React.FC<{
     if (Array.isArray(options)) {
         return (
             <label className="block space-y-1">
-                <span className="text-[10px] text-gray-500 font-bold uppercase">{label}</span>
+                <span className="text-2xs text-gray-500 font-bold ">{label}</span>
                 <select
                     value={String(value ?? '')}
                     aria-describedby={describedBy}
@@ -206,11 +206,11 @@ const PropertyInput: React.FC<{
     if (isMultiline) {
         return (
             <div className="space-y-1">
-                <span className="text-[10px] text-gray-500 font-bold uppercase">{label}</span>
+                <span className="text-2xs text-gray-500 font-bold ">{label}</span>
                 <textarea 
                     value={value} 
                     onChange={(e) => onChange(e.target.value)} 
-                    className="w-full bg-gray-950 border border-gray-700 rounded p-2 text-[10px] font-mono text-blue-300 focus:outline-none focus:border-blue-500 h-48 resize-y leading-tight"
+                    className="w-full bg-gray-950 border border-gray-700 rounded p-2 text-2xs font-mono text-blue-300 focus:outline-none focus:border-blue-500 h-48 resize-y leading-tight"
                     spellCheck={false}
                 />
             </div>
@@ -220,9 +220,9 @@ const PropertyInput: React.FC<{
     if (isColor) {
         return (
             <div className="flex items-center justify-between bg-gray-800 p-2 rounded border border-gray-700">
-                <span className="text-[10px] text-gray-400 font-medium uppercase truncate mr-2">{label}</span>
+                <span className="text-2xs text-gray-400 font-medium truncate mr-2">{label}</span>
                 <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-mono text-gray-500 uppercase">{value}</span>
+                    <span className="text-2xs font-mono text-gray-500 ">{value}</span>
                     <input 
                         type="color" 
                         value={value} 
@@ -237,7 +237,7 @@ const PropertyInput: React.FC<{
     if (type === 'boolean') {
         return (
             <label className="flex items-center justify-between bg-gray-800 p-2 rounded border border-gray-700 cursor-pointer hover:border-gray-600 transition-colors">
-                <span className="text-[10px] text-gray-400 font-medium uppercase">{label}</span>
+                <span className="text-2xs text-gray-400 font-medium ">{label}</span>
                 <div className={`w-8 h-4 rounded-full relative transition-colors ${value ? 'bg-blue-500' : 'bg-gray-600'}`}>
                     <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${value ? 'left-4.5' : 'left-0.5'}`} style={{ left: value ? 'calc(100% - 14px)' : '2px' }} />
                 </div>
@@ -254,7 +254,7 @@ const PropertyInput: React.FC<{
     if (type === 'number') {
         return (
             <div className="flex items-center justify-between bg-gray-800 p-1 pl-2 rounded border border-gray-700">
-                <span className="text-[10px] text-gray-400 font-medium uppercase mr-2">{label}</span>
+                <span className="text-2xs text-gray-400 font-medium mr-2">{label}</span>
                 <div className="w-20">
                     <ScrubbableInput 
                         label="" 
@@ -271,7 +271,7 @@ const PropertyInput: React.FC<{
     // Default String/Text
     return (
         <label className="block space-y-1">
-            <span className="text-[10px] text-gray-500 font-bold uppercase">{label}</span>
+            <span className="text-2xs text-gray-500 font-bold ">{label}</span>
             <input
                 type="text"
                 value={value ?? ''}
@@ -540,8 +540,8 @@ export const HUDEditor: React.FC = () => {
             />
 
             {/* Center: Canvas */}
-            <div className="flex-1 flex flex-col min-w-0 bg-[#111111]">
-                <div className="h-8 bg-[#1a1a1a] border-b border-gray-800 flex items-center px-4 justify-between shrink-0">
+            <div className="flex-1 flex flex-col min-w-0 bg-well">
+                <div className="h-8 bg-panel border-b border-gray-800 flex items-center px-4 justify-between shrink-0">
                     <div className="flex items-center gap-3">
                         <div role="tablist" aria-label="HUD document" className="flex items-center gap-0.5 rounded bg-gray-950 p-0.5 border border-gray-800">
                             {HUD_DOCUMENTS.map(option => (
@@ -551,7 +551,7 @@ export const HUDEditor: React.FC = () => {
                                     role="tab"
                                     aria-selected={option.id === descriptor.id}
                                     onClick={() => handleSwitchDocument(option.id)}
-                                    className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider transition-colors ${option.id === descriptor.id ? 'bg-blue-600 text-accent-ink' : 'text-gray-500 hover:text-gray-200 hover:bg-gray-800'}`}
+                                    className={`px-2 py-0.5 rounded text-2xs font-bold transition-colors ${option.id === descriptor.id ? 'bg-blue-600 text-accent-ink' : 'text-gray-500 hover:text-gray-200 hover:bg-gray-800'}`}
                                 >
                                     {option.label}
                                 </button>
@@ -579,12 +579,12 @@ export const HUDEditor: React.FC = () => {
                                 <Redo2 size={12} />
                             </button>
                         </div>
-                        <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Canvas: {Math.round(layout.width)} x {Math.round(layout.height)}</span>
+                        <span className="text-2xs text-gray-500 font-bold ">Canvas: {Math.round(layout.width)} x {Math.round(layout.height)}</span>
                     </div>
-                    <div className="text-[10px] text-gray-600">Zoom: {Math.round(canvasScale * 100)}%</div>
+                    <div className="text-2xs text-gray-600">Zoom: {Math.round(canvasScale * 100)}%</div>
                 </div>
                 {missingMenuActions && (
-                    <div role="status" className="flex items-center gap-2 px-4 py-1.5 bg-amber-950/60 border-b border-amber-900/60 text-[10px] text-amber-200 shrink-0">
+                    <div role="status" className="flex items-center gap-2 px-4 py-1.5 bg-amber-950/60 border-b border-amber-900/60 text-2xs text-amber-200 shrink-0">
                         <AlertTriangle size={12} className="shrink-0" />
                         The player keeps its built-in {descriptor.label.toLowerCase()} until a visible element here has
                         a {listActions(missingMenuActions)} action.
@@ -608,7 +608,7 @@ export const HUDEditor: React.FC = () => {
                 <div className="flex border-b border-gray-800 bg-gray-950 shrink-0">
                     <button 
                         onClick={() => setRightPanelTab('props')}
-                        className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 border-b-2 transition-colors ${rightPanelTab === 'props' ? 'border-blue-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+                        className={`flex-1 py-3 text-2xs font-bold flex items-center justify-center gap-2 border-b-2 transition-colors ${rightPanelTab === 'props' ? 'border-blue-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
                     >
                         <Settings2 size={12} /> Properties
                     </button>
@@ -616,7 +616,7 @@ export const HUDEditor: React.FC = () => {
                         onClick={() => setRightPanelTab('ai')}
                         disabled={!aiAvailable}
                         title={aiAvailable ? undefined : 'AI Coder edits the Game HUD only'}
-                        className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 border-b-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${rightPanelTab === 'ai' && aiAvailable ? 'border-blue-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+                        className={`flex-1 py-3 text-2xs font-bold flex items-center justify-center gap-2 border-b-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${rightPanelTab === 'ai' && aiAvailable ? 'border-blue-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
                     >
                         <Code size={12} /> AI Coder
                     </button>
@@ -655,7 +655,7 @@ export const HUDEditor: React.FC = () => {
                                     {/* 2. Transform */}
                                     <div className="space-y-3">
                                         <div className="flex items-center justify-between pb-1 border-b border-gray-800">
-                                            <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1">
+                                            <span className="text-2xs font-bold text-gray-500 flex items-center gap-1">
                                                 <Move size={10} /> Position
                                             </span>
                                         </div>
@@ -675,7 +675,7 @@ export const HUDEditor: React.FC = () => {
                                         </div>
 
                                         <div className="flex items-center justify-between pb-1 border-b border-gray-800 mt-2">
-                                            <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1">
+                                            <span className="text-2xs font-bold text-gray-500 flex items-center gap-1">
                                                 <Scaling size={10} /> Dimensions
                                             </span>
                                         </div>
@@ -698,7 +698,7 @@ export const HUDEditor: React.FC = () => {
                                     {/* 3. Component Props */}
                                     <div className="space-y-3 pt-2">
                                         <div className="flex items-center justify-between pb-1 border-b border-gray-800">
-                                            <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1">
+                                            <span className="text-2xs font-bold text-gray-500 flex items-center gap-1">
                                                 {selectedElement.type === 'Text' ? <Type size={10} /> : <Palette size={10} />} 
                                                 {selectedElement.type === 'Custom' ? 'Source Code' : 'Attributes'}
                                             </span>
@@ -719,7 +719,7 @@ export const HUDEditor: React.FC = () => {
                                                             options={selectedPropOptions && Object.prototype.hasOwnProperty.call(selectedPropOptions, key) ? selectedPropOptions[key] : undefined}
                                                             describedBy={hint ? hintId : undefined}
                                                         />
-                                                        {hint && <p id={hintId} className="text-[10px] text-gray-500 leading-snug">{hint}</p>}
+                                                        {hint && <p id={hintId} className="text-2xs text-gray-500 leading-snug">{hint}</p>}
                                                     </div>
                                                 );
                                             })}

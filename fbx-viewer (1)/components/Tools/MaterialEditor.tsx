@@ -62,7 +62,7 @@ const FieldRow: React.FC<{
   children: React.ReactNode;
 }> = ({ label, htmlFor, overridden, onReset, children }) => (
   <div className="flex items-center gap-2 min-h-[26px]">
-    <label htmlFor={htmlFor} className={`w-24 shrink-0 text-[10px] uppercase font-bold flex items-center gap-1.5 ${overridden ? 'text-blue-300' : 'text-gray-500'}`}>
+    <label htmlFor={htmlFor} className={`w-24 shrink-0 text-2xs font-bold flex items-center gap-1.5 ${overridden ? 'text-blue-300' : 'text-gray-500'}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${overridden ? 'bg-blue-400' : 'bg-transparent'}`} aria-hidden />
       {label}
     </label>
@@ -97,7 +97,7 @@ const ColorField: React.FC<{
         onChange={(event) => onChange(event.target.value.toLowerCase())}
         className="w-8 h-6 rounded border border-gray-700 bg-gray-950 cursor-pointer p-0"
       />
-      <span className="text-[10px] font-mono text-gray-400">{value}</span>
+      <span className="text-2xs font-mono text-gray-400">{value}</span>
     </FieldRow>
   );
 };
@@ -125,7 +125,7 @@ const SliderField: React.FC<{
         onChange={(event) => onChange(Number(event.target.value))}
         className="flex-1 min-w-0 accent-blue-500"
       />
-      <span className="w-9 text-right text-[10px] font-mono text-gray-400">{formatNumber(value)}</span>
+      <span className="w-9 text-right text-2xs font-mono text-gray-400">{formatNumber(value)}</span>
     </FieldRow>
   );
 };
@@ -147,7 +147,7 @@ const TextureField: React.FC<{
       <div className="flex-1 min-w-0" aria-label={label}>
         <Select value={value ?? ''} options={options} onChange={(next: string) => onChange(next || undefined)} className="w-full" />
       </div>
-      {status && <span className="text-[9px] text-amber-400 shrink-0">{status}</span>}
+      {status && <span className="text-2xs text-amber-400 shrink-0">{status}</span>}
     </FieldRow>
   );
 };
@@ -165,7 +165,7 @@ const MaterialAssetField: React.FC<{ value: string | undefined; onChange: (value
   return (
     <FieldRow label="Material asset" htmlFor={id} overridden={Boolean(value)} onReset={() => onChange(undefined)}>
       <select id={id} value={value ?? ''} onChange={(event) => onChange(event.target.value || undefined)}
-        className="flex-1 min-w-0 bg-gray-950 border border-gray-700 rounded px-1.5 py-1 text-[11px] text-gray-200">
+        className="flex-1 min-w-0 bg-gray-950 border border-gray-700 rounded px-1.5 py-1 text-2xs text-gray-200">
         <option value="">(its own)</option>
         {assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
         {value && !assets.some((asset) => asset.id === value) && <option value={value}>(missing material)</option>}
@@ -186,7 +186,7 @@ const NumberInput: React.FC<{ label: string; value: number; step: number; onChan
     step={step}
     value={Number.isFinite(value) ? Number(value.toFixed(4)) : 0}
     onChange={(event) => { const next = Number(event.target.value); if (Number.isFinite(next)) onChange(next); }}
-    className="w-full min-w-0 bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-[11px] text-gray-200"
+    className="w-full min-w-0 bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-2xs text-gray-200"
   />
 );
 
@@ -241,7 +241,7 @@ const MaterialParameterFields: React.FC<{
   };
   return (
     <div className="space-y-1 pl-2 border-l border-gray-800">
-      <p className="text-[9px] uppercase font-bold text-gray-500">Material parameters</p>
+      <p className="text-2xs font-bold text-gray-500">Material parameters</p>
       {parameters.map((parameter) => (
         <ParameterField key={parameter.name} parameter={parameter} value={values?.find(setting => setting.name === parameter.name)?.value}
           onChange={(value) => set(parameter.name, value)} />
@@ -395,7 +395,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
           <MaterialParameterFields materialId={override.materialId} values={override.parameters}
             onChange={(value) => editField(material.name, 'parameters', value)} />
         )}
-        {override.materialId && <p className="text-[9px] text-gray-500">Shaded by the material asset; the fields below apply again without one.</p>}
+        {override.materialId && <p className="text-2xs text-gray-500">Shaded by the material asset; the fields below apply again without one.</p>}
         {base.color !== null && (
           <ColorField label="Color" value={override.color ?? base.color} overridden={override.color !== undefined}
             onChange={(value) => editField(material.name, 'color', value)} onReset={() => editField(material.name, 'color', undefined)} />
@@ -428,7 +428,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
             onChange={(value) => editField(material.name, 'normalTextureId', value)} />
         )}
         {material.instanceCount > 1 && (
-          <p className="text-[9px] text-gray-600 pt-1">Applies to {material.instanceCount} materials named “{material.name}”.</p>
+          <p className="text-2xs text-gray-600 pt-1">Applies to {material.instanceCount} materials named “{material.name}”.</p>
         )}
       </div>
     );
@@ -439,9 +439,9 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
       <div className="p-3 border-b border-gray-800 shrink-0 space-y-2">
         <div className="flex items-center gap-2">
           <Palette size={14} className="text-blue-400 shrink-0" />
-          <h2 className="text-xs font-bold tracking-wide uppercase">Materials</h2>
-          <span className="text-[10px] text-gray-500 truncate" title={model.name}>{model.name}</span>
-          <span className="ml-auto text-[10px] text-gray-600 shrink-0">{materials.length}</span>
+          <h2 className="text-xs font-bold ">Materials</h2>
+          <span className="text-2xs text-gray-500 truncate" title={model.name}>{model.name}</span>
+          <span className="ml-auto text-2xs text-gray-600 shrink-0">{materials.length}</span>
         </div>
         {materials.length > 6 && (
           <div className="relative">
@@ -483,10 +483,10 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
                 <span className={`flex-1 min-w-0 truncate text-xs ${editable ? 'text-gray-200' : reserved ? 'text-gray-500' : 'text-gray-600 italic'}`}>
                   {unnamed ? 'Unnamed material' : material.name}
                 </span>
-                {reserved && <span className="text-[9px] font-bold text-amber-500/80 uppercase shrink-0">Reserved</span>}
-                <span className="text-[9px] text-gray-600 uppercase shrink-0">{material.type.replace(/^Mesh|Material$/g, '')}</span>
+                {reserved && <span className="text-2xs font-bold text-amber-500/80 shrink-0">Reserved</span>}
+                <span className="text-2xs text-gray-600 shrink-0">{material.type.replace(/^Mesh|Material$/g, '')}</span>
                 {fieldCount > 0 && (
-                  <span className="text-[9px] font-bold text-blue-300 bg-blue-900/40 border border-blue-800/50 rounded px-1.5 shrink-0">{fieldCount}</span>
+                  <span className="text-2xs font-bold text-blue-300 bg-blue-900/40 border border-blue-800/50 rounded px-1.5 shrink-0">{fieldCount}</span>
                 )}
               </button>
               {isOpen && renderFields(material)}
@@ -495,11 +495,11 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
         })}
         {staleNames.length > 0 && (
           <div className="mt-3 rounded-md border border-amber-900/50 bg-amber-900/10 p-2 space-y-1">
-            <div className="text-[10px] font-bold text-amber-400 flex items-center gap-1.5">
+            <div className="text-2xs font-bold text-amber-400 flex items-center gap-1.5">
               <AlertTriangle size={11} /> Overrides for materials not in this model
             </div>
             {staleNames.map((name) => (
-              <div key={name} className="flex items-center gap-2 text-[10px] text-gray-400">
+              <div key={name} className="flex items-center gap-2 text-2xs text-gray-400">
                 <span className="flex-1 truncate">{name}</span>
                 <button
                   type="button"
@@ -517,7 +517,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
 
       <div className="p-3 border-t border-gray-800 shrink-0 space-y-2">
         {error && (
-          <div role="alert" className="text-[10px] text-red-400 bg-red-900/20 p-2 rounded border border-red-900/50 flex gap-2">
+          <div role="alert" className="text-2xs text-red-400 bg-red-900/20 p-2 rounded border border-red-900/50 flex gap-2">
             <AlertTriangle size={12} className="shrink-0 mt-0.5" /> <span className="flex-1">{error}</span>
           </div>
         )}
@@ -540,7 +540,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
               <Save size={12} /> {saving ? 'Saving…' : 'Save'}
             </button>
           ) : (
-            <span className="flex-1 text-[9px] text-gray-600 self-center text-center">Preview only — not saved</span>
+            <span className="flex-1 text-2xs text-gray-600 self-center text-center">Preview only — not saved</span>
           )}
         </div>
       </div>
