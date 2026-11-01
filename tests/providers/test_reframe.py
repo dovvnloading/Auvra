@@ -54,6 +54,12 @@ class BundleTests(unittest.TestCase):
             self.assertNotIn("hdri_path", config["environment"])
             self.assertTrue(config["objects"][0]["material"]["baseColorTexture"].startswith("data:image/png;base64,"))
 
+    def test_what_is_see_through_by_its_picture_stays_so(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            picture = {"offset": 0, "length": 4}
+            config = self.config({"meshes": [dict(MESH, material={"baseColorTexture": picture, "opacityTexture": picture})]}, bytes(96), Path(raw))
+            self.assertTrue(config["objects"][0]["material"]["opacityTexture"].startswith("data:image/png;base64,"))
+
     def test_settings_stay_within_what_a_renderer_can_do(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             config = self.config({"meshes": [MESH]}, bytes(96), Path(raw), {"width": 10 ** 9, "height": -5, "samples": "lots", "bounces": True})

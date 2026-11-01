@@ -45,7 +45,7 @@ A **Decal** component has **Describe** under its texture too. It paints the pict
 
 ## Finished frames
 
-**Render this view**, the aperture button in the Environment toolbar, path traces what the camera sees with [Reframe](https://github.com/dovvnloading/Reframe-Diffused), a renderer on this computer. It needs an NVIDIA graphics card and costs nothing. **Preview**, **Good** and **Final** trade time for a cleaner picture. A finished frame can be kept in the texture library.
+**Render this view**, the aperture button in the Environment toolbar, path traces what the camera sees with [Reframe](https://github.com/dovvnloading/Reframe-Diffused), a renderer on this computer. It needs an NVIDIA graphics card and costs nothing. **Preview**, **Good** and **Final** trade time for a cleaner picture. A finished frame can be kept in the texture library. It carries the sky the level has, whichever kind that is, and decals and cut-outs stay see-through; fog is not in it, and it does its own tone mapping, so colours differ a little from the viewport.
 
 Reframe is found where it is usually kept, or at the folder named by the `AUVRA_REFRAME_HOME` environment variable, and it runs under the Python in its own `.venv`, or the one named by `AUVRA_REFRAME_PYTHON`, or else the one on the path. Each render is a process of its own and leaves Reframe's folder as it was.
 

@@ -399,6 +399,20 @@ export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects, live = false
         () => (live && physics ? coverSampler(queries, () => camera.getWorldPosition(_cameraPosition).y + 150) : null),
         [live, physics, queries, camera],
     );
+    useEffect(() => {
+        if (!skyObject) return undefined;
+        renderView.drawSky = atmospheric
+            ? (renderer, onto) => skyRenderer.drawSkyOnto(renderer, onto)
+            : (renderer, onto) => {
+                if (!sky.current) return;
+                const faces = new THREE.CubeCamera(0.1, LIGHT_DISTANCE, onto);
+                camera.getWorldPosition(faces.position);
+                const skyOnly = new THREE.Scene();
+                skyOnly.add(sky.current.clone(), night.object.clone(), clouds.object.clone());
+                faces.update(renderer, skyOnly);
+            };
+        return () => { renderView.drawSky = null; };
+    }, [skyObject, atmospheric, camera, night, clouds]);
     const [isNight, setNight] = useState(false);
     const [reflections, setReflections] = useState(0.8);
     const frame = useRef(0);

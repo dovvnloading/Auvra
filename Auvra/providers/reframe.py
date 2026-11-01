@@ -44,7 +44,7 @@ _ENGINE_FILE = Path("gi_renderer") / "engine" / "render.py"
 _RENDER_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 # How long a render gets to stop by itself. It only looks between samples, and not at all while compiling kernels.
 _STOP_GRACE_SECONDS = 5.0
-_MATERIAL_TEXTURES = {"baseColorTexture": "baseColorTexture", "normalTexture": "normalMap", "roughnessTexture": "roughnessTexture", "metallicTexture": "metallicTexture"}
+_MATERIAL_TEXTURES = {"baseColorTexture": "baseColorTexture", "normalTexture": "normalMap", "roughnessTexture": "roughnessTexture", "metallicTexture": "metallicTexture", "opacityTexture": "opacityTexture"}
 
 
 def find_home() -> Path | None:

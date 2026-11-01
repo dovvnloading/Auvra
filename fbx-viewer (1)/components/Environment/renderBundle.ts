@@ -9,14 +9,21 @@ export const renderView: {
   camera: THREE.Camera | null;
   renderer: THREE.WebGLRenderer | null;
   panorama: { url: string; rotation: number; brightness: number } | null;
-} = { scene: null, camera: null, renderer: null, panorama: null };
+  /** Draws a level's own sky onto a cube, without what stands in front of it. Null without one. */
+  drawSky: ((renderer: THREE.WebGLRenderer, onto: THREE.WebGLCubeRenderTarget) => void) | null;
+} = { scene: null, camera: null, renderer: null, panorama: null, drawSky: null };
 
 const MAGIC = new TextEncoder().encode('AUVRARB1');
 /** Large enough for what a frame shows, and what a graphics card holds comfortably for a whole level's textures. */
 const MAX_TEXTURE_EDGE = 2048;
 /** A sky has no fine detail to speak of, and is sampled for light as much as seen. */
-const CAPTURED_SKY_FACE = 512;
 const CAPTURED_SKY_WIDTH = 1536;
+const CAPTURED_SKY_FACE = 512;
+/**
+ * How far a decal stands off the surface it lies on, as a share of the level's size. A ray that passes through a clear part of it
+ * steps on by 2e-5 of that size, and one that steps past the surface behind finds the inside of whatever it lies on.
+ */
+const DECAL_LIFT = 4e-5;
 const FLOATS_PER_CORNER = { positions: 3, normals: 3, uvs: 2 } as const;
 
 type StandardLike = THREE.MeshStandardMaterial;
@@ -42,7 +49,7 @@ const _instance = new THREE.Matrix4();
 const _world = new THREE.Matrix4();
 const _normalMatrix = new THREE.Matrix3();
 
-const chunkOf = (mesh: THREE.Mesh, start: number, end: number, indexOf: (corner: number) => number): MeshChunk[] => {
+const chunkOf = (mesh: THREE.Mesh, start: number, end: number, indexOf: (corner: number) => number, bounds: THREE.Box3): MeshChunk[] => {
   const instanced = mesh as THREE.InstancedMesh;
   const copies = instanced.isInstancedMesh ? instanced.count : 1;
   const corners = end - start;
@@ -65,6 +72,7 @@ const chunkOf = (mesh: THREE.Mesh, start: number, end: number, indexOf: (corner:
       // Skinned and morphed, as it stands now.
       mesh.getVertexPosition(vertex, _corner).applyMatrix4(_world);
       chunk.positions.set([_corner.x, _corner.y, _corner.z], at * 3);
+      bounds.expandByPoint(_corner);
       if (normal) {
         _normal.fromBufferAttribute(normal, vertex).applyMatrix3(_normalMatrix).normalize();
         chunk.normals.set([_normal.x, _normal.y, _normal.z], at * 3);
@@ -92,45 +100,33 @@ const pictureOfUrl = async (url: string): Promise<Uint8Array> => {
 };
 
 const EQUIRECT_VERTEX = 'varying vec2 vPlace; void main() { vPlace = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
+// The same way round as the sky's own panoramas and the renderer's: longitude from atan(z, x), the middle of the picture at zero.
 const EQUIRECT_FRAGMENT = `
   uniform samplerCube sky;
   varying vec2 vPlace;
   void main() {
-    float around = (vPlace.x - 0.5) * 6.28318530718;
-    float up = (vPlace.y - 0.5) * 3.14159265359;
-    vec3 direction = vec3(cos(up) * sin(around), sin(up), -cos(up) * cos(around));
-    vec3 color = textureCube(sky, vec3(-direction.x, direction.y, direction.z)).rgb;
+    float longitude = (vPlace.x - 0.5) * 6.28318530718;
+    float latitude = (vPlace.y - 0.5) * 3.14159265359;
+    vec3 direction = vec3(cos(latitude) * cos(longitude), sin(latitude), cos(latitude) * sin(longitude));
+    vec3 color = textureCube(sky, direction).rgb;
     gl_FragColor = vec4(pow(clamp(color, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
   }
 `;
 
-/** The sky as it is drawn now, as a panorama: a procedural sky exists nowhere else as a picture. Null where it cannot be had. */
-const captureSky = (scene: THREE.Scene, camera: THREE.Camera, renderer: THREE.WebGLRenderer): Uint8Array | null => {
-  const hidden: THREE.Object3D[] = [];
-  scene.traverse((object) => {
-    const mesh = object as THREE.Mesh;
-    const drawn = (mesh as THREE.Mesh).isMesh || (object as THREE.Points).isPoints || (object as THREE.Line).isLine || (object as THREE.Sprite).isSprite;
-    if (!drawn || !object.visible) return;
-    const materials = (Array.isArray(mesh.material) ? mesh.material : [mesh.material]) as THREE.Material[];
-    // The sky is drawn by shader materials on a mesh far around the camera; anything else is in front of it.
-    const isSky = materials.some((material) => (material as THREE.ShaderMaterial).isShaderMaterial) && !object.name.startsWith('Particles');
-    if (isSky) return;
-    object.visible = false;
-    hidden.push(object);
-  });
-  const target = new THREE.WebGLCubeRenderTarget(CAPTURED_SKY_FACE, { type: THREE.HalfFloatType });
-  const faces = new THREE.CubeCamera(0.1, 1_000_000, target);
-  camera.getWorldPosition(faces.position);
+/** The level's sky as a panorama: one worked out in a shader exists nowhere else as a picture. Null where it has none. */
+const capturedSkyPicture = (renderer: THREE.WebGLRenderer): Uint8Array | null => {
+  if (!renderView.drawSky) return null;
+  const cube = new THREE.WebGLCubeRenderTarget(CAPTURED_SKY_FACE, { type: THREE.HalfFloatType });
   const flat = new THREE.WebGLRenderTarget(CAPTURED_SKY_WIDTH, CAPTURED_SKY_WIDTH / 2, { depthBuffer: false });
-  const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({ vertexShader: EQUIRECT_VERTEX, fragmentShader: EQUIRECT_FRAGMENT, uniforms: { sky: { value: target.texture } }, depthTest: false, depthWrite: false }));
+  const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({ vertexShader: EQUIRECT_VERTEX, fragmentShader: EQUIRECT_FRAGMENT, uniforms: { sky: { value: cube.texture } }, depthTest: false, depthWrite: false }));
+  quad.frustumCulled = false;
   const quadScene = new THREE.Scene();
   quadScene.add(quad);
-  quad.frustumCulled = false;
   const toneMapping = renderer.toneMapping;
   const before = renderer.getRenderTarget();
   try {
     renderer.toneMapping = THREE.NoToneMapping;
-    faces.update(renderer, scene);
+    renderView.drawSky(renderer, cube);
     renderer.setRenderTarget(flat);
     renderer.render(quadScene, new THREE.Camera());
     const pixels = new Uint8Array(flat.width * flat.height * 4);
@@ -149,8 +145,7 @@ const captureSky = (scene: THREE.Scene, camera: THREE.Camera, renderer: THREE.We
   } finally {
     renderer.setRenderTarget(before);
     renderer.toneMapping = toneMapping;
-    hidden.forEach((object) => { object.visible = true; });
-    target.dispose();
+    cube.dispose();
     flat.dispose();
     quad.geometry.dispose();
     quad.material.dispose();
@@ -194,6 +189,8 @@ export const buildRenderBundle = async (textureUrls: ReadonlyMap<string, string>
 
   const byMaterial = new Map<StandardLike, MeshChunk[]>();
   const lights: Record<string, unknown>[] = [];
+  const bounds = new THREE.Box3();
+  const decals: MeshChunk[] = [];
   const add = (material: StandardLike, chunks: MeshChunk[]) => {
     const list = byMaterial.get(material) ?? [];
     list.push(...chunks);
@@ -218,13 +215,20 @@ export const buildRenderBundle = async (textureUrls: ReadonlyMap<string, string>
     if (Array.isArray(mesh.material)) {
       for (const group of mesh.geometry.groups) {
         const material = mesh.material[group.materialIndex ?? 0];
-        if (isSurface(material)) add(material, chunkOf(mesh, group.start, Math.min(group.start + group.count, total), indexOf));
+        if (isSurface(material)) add(material, chunkOf(mesh, group.start, Math.min(group.start + group.count, total), indexOf, bounds));
       }
     } else if (isSurface(mesh.material)) {
-      add(mesh.material, chunkOf(mesh, 0, total - (total % 3), indexOf));
+      const chunks = chunkOf(mesh, 0, total - (total % 3), indexOf, bounds);
+      add(mesh.material, chunks);
+      // Only a decal is pulled off its surface, for the viewport.
+      if (mesh.material.polygonOffset) decals.push(...chunks);
     }
   });
   if (byMaterial.size === 0) return null;
+  const lift = DECAL_LIFT * bounds.getSize(new THREE.Vector3()).length();
+  for (const { positions, normals } of decals) {
+    for (let at = 0; at < positions.length; at += 1) positions[at] += normals[at] * lift;
+  }
 
   // Laid out as it is made, so that nothing is held twice for long.
   const parts: BlobPart[] = [];
@@ -288,6 +292,8 @@ export const buildRenderBundle = async (textureUrls: ReadonlyMap<string, string>
         opacity: material.opacity,
         ...(emissive ? { emission: [emissive.r, emissive.g, emissive.b] } : {}),
         baseColorTexture: graph ? await projectPicture(graph.color) : pictureOf(material.map),
+        // Cards, cut-outs and decals draw through their colour map's alpha.
+        opacityTexture: !graph && material.transparent ? pictureOf(material.map) : undefined,
         normalTexture: graph ? await projectPicture(graph.normal) : pictureOf(material.normalMap),
         roughnessTexture: graph ? await projectPicture(graph.roughness) : pictureOf(material.roughnessMap),
         metallicTexture: graph ? await projectPicture(graph.metalness) : pictureOf(material.metalnessMap),
@@ -296,14 +302,14 @@ export const buildRenderBundle = async (textureUrls: ReadonlyMap<string, string>
   }));
 
   const background = scene.background instanceof THREE.Color ? [scene.background.r, scene.background.g, scene.background.b] : undefined;
-  const captured = !panorama && renderer ? captureSky(scene, camera, renderer) : null;
+  const captured = !panorama && renderer ? capturedSkyPicture(renderer) : null;
   const sky = panorama ? addPart(await pictureOfUrl(panorama.url)) : captured ? addPart(captured) : undefined;
   const look = camera.getWorldDirection(new THREE.Vector3());
   const position = camera.getWorldPosition(new THREE.Vector3());
   const perspective = camera as THREE.PerspectiveCamera;
   const header = new TextEncoder().encode(JSON.stringify({
     meshes, lights,
-    environment: { background, intensity: panorama?.brightness ?? 1, ...(sky ? { panorama: sky, rotation: panorama?.rotation ?? 0 } : {}) },
+    environment: { background, intensity: panorama?.brightness ?? 1, ...(sky ? { panorama: sky, rotation: -(panorama?.rotation ?? 0) } : {}) },
     camera: { position: position.toArray(), target: position.clone().add(look).toArray(), fov: perspective.fov ?? 45 },
   }));
   const length = new Uint8Array(4);
