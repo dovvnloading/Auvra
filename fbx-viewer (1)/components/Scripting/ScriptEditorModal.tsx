@@ -580,7 +580,7 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
                             type="button"
                             onClick={saveAndClose}
                             disabled={overLimit}
-                            className="rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-500 disabled:opacity-50"
+                            className="rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-accent-ink hover:bg-blue-500 disabled:opacity-50"
                         >
                             Save &amp; Close
                         </button>
@@ -604,7 +604,7 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
                             <div className="flex justify-end gap-2 pt-1">
                                 <button ref={keepEditingRef} type="button" onClick={keepEditing} className="rounded px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 hover:text-white">Keep Editing</button>
                                 <button type="button" onClick={onClose} className="rounded bg-red-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-red-500">Discard</button>
-                                <button type="button" onClick={saveAndClose} disabled={overLimit} className="rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-500 disabled:opacity-50">Save &amp; Close</button>
+                                <button type="button" onClick={saveAndClose} disabled={overLimit} className="rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-accent-ink hover:bg-blue-500 disabled:opacity-50">Save &amp; Close</button>
                             </div>
                         </div>
                     </div>

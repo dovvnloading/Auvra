@@ -34,6 +34,7 @@ interface AssetContextType {
   retextureModel: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<void>;
   /** Puts a picture on a model's map, or on every material without one. Gives the new map's id. */
   previewTexture: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<string>;
+  setModelTextureOverrides: (modelId: string, overrides: Record<string, string>) => Promise<void>;
   resetModelTexture: (modelId: string) => Promise<void>;
   updateModelMaterialOverrides: (modelId: string, overrides: MaterialOverrides) => Promise<void>;
   mirrorClip: (modelId: string, clipName: string) => Promise<void>;
@@ -184,6 +185,7 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     addAnimations: modelManager.addAnimations,
     retextureModel: modelManager.retextureModel,
     previewTexture: modelManager.previewTexture,
+    setModelTextureOverrides: modelManager.setModelTextureOverrides,
     resetModelTexture: modelManager.resetModelTexture,
     updateModelMaterialOverrides: modelManager.updateModelMaterialOverrides,
     mirrorClip: modelManager.mirrorClip,

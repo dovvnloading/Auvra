@@ -246,9 +246,6 @@ def validate_project_references(
         if generation is not None:
             if generation.get("artifactSha256") != value.get("assetId"):
                 raise ValueError("generated texture provenance does not match its asset")
-            for identity in generation.get("inputAssetIds", []):
-                if asset_exists is not None and not asset_exists(identity):
-                    raise ValueError("generated texture provenance references a missing input asset")
     for value in records["blueprints"].values():
         require("models", value.get("linkedModelId"), "blueprint model", optional=True)
         require("textures", value.get("textureId"), "blueprint texture", optional=True)
@@ -256,7 +253,7 @@ def validate_project_references(
 
     if asset_exists is not None:
         for document in domains.values():
-            for asset_id in _asset_handles(document):
+            for asset_id in _asset_handles(document, history=False):
                 if not asset_exists(asset_id):
                     raise ValueError("project references a missing asset")
 
@@ -490,17 +487,18 @@ def _assert_known_nested(value: Any, parent_key: str | None = None, freeform: bo
     elif isinstance(value, list):
         for child in value: _assert_known_nested(child, parent_key, freeform)
 
-def _asset_handles(value: Any, parent_key: str | None = None):
+def _asset_handles(value: Any, parent_key: str | None = None, *, history: bool = True):
+    """The asset hashes a document names. `history` includes the source pictures of generated textures, which nothing draws with."""
     if isinstance(value, dict):
         for key, child in value.items():
             if key == "assetId" and isinstance(child, str):
                 yield child
-            elif key in {"assetIds", "animationAssetIds", "inputAssetIds"} and isinstance(child, list):
+            elif (key in {"assetIds", "animationAssetIds"} or (history and key == "inputAssetIds")) and isinstance(child, list):
                 yield from (item for item in child if isinstance(item, str))
-            yield from _asset_handles(child, key)
+            yield from _asset_handles(child, key, history=history)
     elif isinstance(value, list):
         for child in value:
-            yield from _asset_handles(child, parent_key)
+            yield from _asset_handles(child, parent_key, history=history)
 
 def _assert_asset_handles(value: Any) -> None:
     for asset_id in _asset_handles(value):

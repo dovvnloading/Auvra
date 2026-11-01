@@ -543,7 +543,7 @@ export const HUDEditor: React.FC = () => {
                                     role="tab"
                                     aria-selected={option.id === descriptor.id}
                                     onClick={() => handleSwitchDocument(option.id)}
-                                    className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider transition-colors ${option.id === descriptor.id ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-gray-200 hover:bg-gray-800'}`}
+                                    className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider transition-colors ${option.id === descriptor.id ? 'bg-blue-600 text-accent-ink' : 'text-gray-500 hover:text-gray-200 hover:bg-gray-800'}`}
                                 >
                                     {option.label}
                                 </button>

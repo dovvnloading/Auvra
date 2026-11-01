@@ -137,7 +137,7 @@ export const HUDCanvas: React.FC<HUDCanvasProps> = ({ elements, selectedId, onSe
                 </div>
 
                 {/* Label on Hover */}
-                <div className="absolute -top-5 left-0 bg-blue-600 text-white text-[9px] px-1 rounded opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity">
+                <div className="absolute -top-5 left-0 bg-blue-600 text-accent-ink text-[9px] px-1 rounded opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity">
                     {el.name}
                 </div>
             </div>

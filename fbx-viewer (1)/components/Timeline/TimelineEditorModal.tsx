@@ -1240,7 +1240,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                     </div>
                     <div className="flex items-center gap-2">
                         <button type="button" onClick={requestClose} className="rounded px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-800 hover:text-white">Cancel</button>
-                        <button type="button" onClick={save} className="rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-500">Save</button>
+                        <button type="button" onClick={save} className="rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-accent-ink hover:bg-blue-500">Save</button>
                     </div>
                 </div>
 

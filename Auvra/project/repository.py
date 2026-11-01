@@ -250,7 +250,7 @@ class ProjectRepository:
                 for key, child in value.items():
                     if key == "assetId" and isinstance(child, str):
                         references.add(child)
-                    elif key == "assetIds" and isinstance(child, list):
+                    elif key in {"assetIds", "inputAssetIds"} and isinstance(child, list):
                         references.update(item for item in child if isinstance(item, str))
                     collect(child)
             elif isinstance(value, list):

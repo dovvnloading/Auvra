@@ -74,7 +74,7 @@ export const EnvironmentToolbar: React.FC<EnvironmentToolbarProps> = ({ state, a
 
                 {/* Modes */}
                 <div className="flex bg-gray-900 p-1 rounded-lg border border-gray-800">
-                    <button onClick={() => setInteractionMode('select')} title="Select and transform objects (Q)" className={`flex items-center gap-2 px-3 py-1.5 rounded-md transition-all text-xs font-bold ${interactionMode === 'select' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}><MousePointer2 size={14} /> Select</button>
+                    <button onClick={() => setInteractionMode('select')} title="Select and transform objects (Q)" className={`flex items-center gap-2 px-3 py-1.5 rounded-md transition-all text-xs font-bold ${interactionMode === 'select' ? 'bg-blue-600 text-accent-ink shadow-sm' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}><MousePointer2 size={14} /> Select</button>
                     <button onClick={() => setInteractionMode('place')} title="Place individual objects (Click to spawn)" disabled={!hasActiveBrush} className={`flex items-center gap-2 px-3 py-1.5 rounded-md transition-all text-xs font-bold ${interactionMode === 'place' ? 'bg-green-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800 disabled:opacity-30'}`}><Box size={14} /> Place</button>
                     <button onClick={() => setInteractionMode('paint')} title="Paint foliage or props with a brush (B)" disabled={!hasActiveBrush} className={`flex items-center gap-2 px-3 py-1.5 rounded-md transition-all text-xs font-bold ${interactionMode === 'paint' ? 'bg-emerald-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800 disabled:opacity-30'}`}><Brush size={14} /> Paint</button>
                     <div className="w-px h-4 bg-gray-700 mx-1"></div>
@@ -228,7 +228,7 @@ export const EnvironmentToolbar: React.FC<EnvironmentToolbarProps> = ({ state, a
                 <div className="flex items-center rounded shadow-lg shadow-blue-900/20">
                     <button
                         onClick={() => actions.handlePlayStart()}
-                        className="flex items-center gap-2 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-l font-bold text-xs transition-colors"
+                        className="flex items-center gap-2 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-accent-ink rounded-l font-bold text-xs transition-colors"
                         title="Play the level from its Player Start"
                     >
                         <Play size={14} fill="currentColor" /> PLAY LEVEL

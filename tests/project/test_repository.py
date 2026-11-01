@@ -46,6 +46,31 @@ class ProjectTests(unittest.TestCase):
         self.assertFalse(target.exists())
         manifest = json.loads((self.root / "Content" / "manifest.json").read_text(encoding="utf-8"))
         self.assertNotIn(reference.asset_id, manifest)
+
+    def _generated_texture(self, artifact: str, *sources: str) -> dict:
+        return {
+            "id": "texture", "name": "Generated", "assetId": artifact, "dimensions": {"width": 1, "height": 1},
+            "generation": {
+                "providerId": "fal", "modelId": "fal-ai/flux/dev", "jobId": "job-0123456789abcdef", "createdAt": 1,
+                "routeOrigin": "cloud", "routeConsent": "explicit", "promptSha256": "b" * 64, "settingsSha256": "c" * 64,
+                "artifactSha256": artifact, "inputAssetIds": list(sources),
+            },
+        }
+
+    def test_a_generated_textures_source_picture_stays_with_it(self):
+        artifact = self.repo.assets.put_stream(io.BytesIO(b"painted"), mime="application/octet-stream")
+        source = self.repo.assets.put_stream(io.BytesIO(b"source"), mime="application/octet-stream")
+        self.repo.apply_changes({"textures": [self._generated_texture(artifact.asset_id, source.asset_id)]}, expected_revision=0)
+        self.assertIn(source.asset_id, self.repo.referenced_asset_ids())
+        self.repo.prune_unreferenced_assets()
+        self.assertTrue(self.repo.assets.path_for(source.asset_id).exists())
+
+    def test_a_lost_source_picture_does_not_stop_a_project_being_edited(self):
+        artifact = self.repo.assets.put_stream(io.BytesIO(b"painted"), mime="application/octet-stream")
+        self.repo.apply_changes({"textures": [self._generated_texture(artifact.asset_id, "a" * 64)]}, expected_revision=0)
+        self.repo.apply_changes({"levels": [{"id": "level", "name": "Level"}]}, expected_revision=1)
+        self.assertEqual(self.repo.revision, 2)
+
     def test_revision_and_readonly_lock(self):
         second = ProjectRepository(self.root)
         try:

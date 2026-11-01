@@ -330,6 +330,34 @@ class ProviderHostTests(unittest.TestCase):
                 time.sleep(0.01)
             self.assertTrue(host._stores_closed)
 
+    def test_media_commit_records_only_the_sources_the_project_still_has(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            service = ProjectService(index=ProjectIndex(root / "projects.sqlite3"))
+            service.create(root / "project", "Media")
+            previews = PreviewStore(root / "previews")
+            host = NativeProviderHost(root / "provider", project_host=SimpleNamespace(service=service), preview_store=previews)
+            try:
+                project_id = service.active.project_id
+                job_id = "job-media-f039-00002"
+                payload = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x02\x00\x00\x00\x03\x08\x06\x00\x00\x00"
+                preview = previews.ingest(job_id, io.BytesIO(payload), project_id=project_id)
+                host.jobs.create(project_id=project_id, provider="fal", model="gpt-test", capability=Capability.MEDIA_EDIT.value, prompt_hash="a" * 64, job_id=job_id)
+                for state in (JobState.SUBMITTING, JobState.RUNNING, JobState.SUCCEEDED):
+                    host.jobs.transition(job_id, state, project_id=project_id)
+                source = service.active.assets.put_stream(io.BytesIO(b"source"), mime="application/octet-stream")
+                host._meta[job_id] = {"route": "cloud", "createdAt": 0, "assetIds": [source.asset_id, "b" * 64]}
+                host._commit_media({
+                    "projectId": project_id, "expectedRevision": 0, "jobId": job_id, "previewAssetId": preview.asset_id,
+                    "textureId": "texture-one", "name": "Generated",
+                })
+                generation = service.active.get_domain("textures")["documents"][0]["generation"]
+                self.assertEqual(generation["inputAssetIds"], [source.asset_id])
+            finally:
+                host.shutdown()
+                previews.close()
+                service.shutdown()
+
     def test_media_commit_validates_before_ingest_rolls_back_and_tolerates_discard_failure(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

@@ -162,7 +162,7 @@ const CodeField: React.FC<{ label: string; code: string; onChange: (code: string
             />
             <div className="flex items-center justify-between">
                 <span className="text-[10px] text-gray-500">{dirty ? 'Not applied yet (Ctrl+Enter)' : 'Applied'}</span>
-                <button disabled={!dirty} onClick={() => onChange(draft)} className="rounded bg-blue-600 px-2 py-0.5 text-[11px] font-bold text-white hover:bg-blue-500 disabled:opacity-40">Apply</button>
+                <button disabled={!dirty} onClick={() => onChange(draft)} className="rounded bg-blue-600 px-2 py-0.5 text-[11px] font-bold text-accent-ink hover:bg-blue-500 disabled:opacity-40">Apply</button>
             </div>
         </label>
     );

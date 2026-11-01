@@ -225,7 +225,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                                 w-full flex items-center justify-center gap-2 py-2.5 rounded font-bold text-xs uppercase tracking-wide transition-all
                                 ${(!playerModel || !enemyModel) 
                                     ? 'bg-gray-800 text-gray-500 cursor-not-allowed border border-gray-700' 
-                                    : 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg hover:shadow-blue-500/20 border border-blue-500'
+                                    : 'bg-blue-600 hover:bg-blue-500 text-accent-ink shadow-lg hover:shadow-blue-500/20 border border-blue-500'
                                 }
                             `}
                         >

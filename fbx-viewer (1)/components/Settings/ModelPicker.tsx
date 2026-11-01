@@ -1,12 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, RefreshCw, Search } from 'lucide-react';
+import { Check, Search } from 'lucide-react';
 import { hostProviderService, ProviderCapability, ProviderModel } from '../../services/HostProviderService';
 import { formatModelPrice, modelCostWeight } from '../../services/providerPricing';
+import { isUtilityModel, modelSample, picksFor, type PickTier } from '../../services/providerPicks';
+import { Segmented, Spinner, TextInput } from '../UI/kit';
 
 /** Rows drawn at a time: a catalog runs to hundreds, and typing narrows it far faster than scrolling. */
 const ROWS_SHOWN = 100;
 
+const TIERS: readonly PickTier[] = ['Fast', 'Balanced', 'Best quality'];
+
 type ModelSort = 'cheapest' | 'name';
+type PickerView = 'picks' | 'all';
 
 export const sortModels = (models: readonly ProviderModel[], sort: ModelSort): ProviderModel[] => [...models].sort((a, b) => {
   if (sort === 'cheapest') {
@@ -26,6 +31,29 @@ export const filterModels = (models: readonly ProviderModel[], search: string): 
   });
 };
 
+const ModelRow: React.FC<{ model: ProviderModel; note?: string; sample?: string; chosen: boolean; onChoose: (model: ProviderModel) => void }> = ({ model, note, sample, chosen, onChoose }) => {
+  const price = formatModelPrice(model);
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => onChoose(model)}
+        title={[model.id, model.description].filter(Boolean).join('\n')}
+        aria-pressed={chosen}
+        className={`flex min-h-[28px] w-full items-center gap-2 px-3 py-1 text-left transition-colors duration-75 ${chosen ? 'bg-accent/15' : 'hover:bg-white/5'}`}
+      >
+        {sample && <img src={sample} alt="" draggable={false} className="h-8 w-8 shrink-0 rounded-sm object-cover" />}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-xs text-ink">{model.name || model.id}</span>
+          {note && <span className="block truncate text-2xs text-ink-3">{note}</span>}
+        </span>
+        {price && <span className="shrink-0 text-right text-2xs tabular-nums text-ink-2">{price}</span>}
+        {chosen && <Check size={12} className="shrink-0 text-accent" />}
+      </button>
+    </li>
+  );
+};
+
 interface ModelPickerProps {
   providerId: string;
   capability: ProviderCapability;
@@ -33,12 +61,14 @@ interface ModelPickerProps {
   onChoose: (model: ProviderModel) => void;
 }
 
-/** Every model a provider offers for a capability, to search and sort by price. */
+/** A provider's models for a capability: a short list by purpose where there is one, and all of them to search and sort by price. */
 export const ModelPicker: React.FC<ModelPickerProps> = ({ providerId, capability, value, onChoose }) => {
   const [models, setModels] = useState<ProviderModel[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<ModelSort>('cheapest');
+  const [view, setView] = useState<PickerView>('picks');
+  const [showUtilities, setShowUtilities] = useState(false);
 
   const load = useCallback(async (isCurrent: () => boolean) => {
     try {
@@ -58,59 +88,68 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({ providerId, capability
     return () => { current = false; stop(); };
   }, [load]);
 
-  const matching = useMemo(() => sortModels(filterModels(models ?? [], search), sort), [models, search, sort]);
+  const picks = useMemo(() => picksFor(providerId, capability, models ?? []), [providerId, capability, models]);
+  const utilities = useMemo(() => (capability.startsWith('media.') ? (models ?? []).filter(isUtilityModel).length : 0), [capability, models]);
+  // Searching always looks through everything: what is typed is what is wanted.
+  const showingPicks = view === 'picks' && picks.length > 0 && !search.trim();
+  const matching = useMemo(() => {
+    const available = showUtilities || search.trim() || !capability.startsWith('media.') ? models ?? [] : (models ?? []).filter((model) => !isUtilityModel(model));
+    return sortModels(filterModels(available, search), sort);
+  }, [capability, models, search, showUtilities, sort]);
   const unpriced = useMemo(() => (models ?? []).filter((model) => formatModelPrice(model) === null).length, [models]);
 
   return (
-    <div className="space-y-2 rounded border border-gray-800 bg-gray-950 p-2">
-      <div className="flex gap-2">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 items-center gap-2 px-3 py-2">
         <div className="relative min-w-0 flex-1">
-          <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
-          <input
-            type="text"
+          <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-ink-3" />
+          <TextInput
+            autoFocus
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder={models ? `Search ${models.length} models...` : 'Search models...'}
+            placeholder={models ? `Search ${models.length} models` : 'Search models'}
             aria-label="Search models"
-            className="w-full rounded border border-gray-700 bg-gray-900 py-1 pl-6 pr-2 text-[11px] text-gray-200 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+            className="pl-6"
           />
         </div>
-        <select aria-label="Sort models" value={sort} onChange={(event) => setSort(event.target.value as ModelSort)} className="rounded border border-gray-700 bg-gray-900 px-1 text-[11px] text-gray-300">
-          <option value="cheapest">Cheapest</option>
-          <option value="name">Name</option>
-        </select>
+        {picks.length > 0 && !search.trim() && (
+          <Segmented label="Which models" value={view} onChange={setView} options={[{ value: 'picks', label: 'Suggested' }, { value: 'all', label: 'All' }]} />
+        )}
       </div>
-      {error && <div className="text-[10px] text-red-400">{error}</div>}
-      {!models && !error && <div className="flex items-center gap-2 py-3 text-[10px] text-gray-500"><RefreshCw size={11} className="animate-spin" /> Reading the catalog...</div>}
-      {models && (
-        <ul className="max-h-64 space-y-0.5 overflow-y-auto custom-scrollbar" aria-label="Models">
-          {matching.slice(0, ROWS_SHOWN).map((model) => {
-            const price = formatModelPrice(model);
-            const chosen = model.id === value;
+      {error && <div className="px-3 pb-2 text-2xs text-bad">{error}</div>}
+      {!models && !error && <div className="flex items-center gap-2 px-3 pb-3 text-2xs text-ink-3"><Spinner /> Reading the catalog</div>}
+      {models && (showingPicks ? (
+        <ul className="min-h-0 flex-1 overflow-y-auto pb-1" aria-label="Models">
+          {TIERS.map((tier) => {
+            const rows = picks.filter((pick) => pick.tier === tier);
+            if (!rows.length) return null;
             return (
-              <li key={model.id}>
-                <button
-                  type="button"
-                  onClick={() => onChoose(model)}
-                  title={model.description || model.id}
-                  aria-pressed={chosen}
-                  className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left transition-colors ${chosen ? 'bg-blue-900/30' : 'hover:bg-gray-800'}`}
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[11px] text-gray-200">{model.name || model.id}</span>
-                    <span className="block truncate font-mono text-[9px] text-gray-500">{model.id}</span>
-                  </span>
-                  {price && <span className="shrink-0 text-right text-[9px] text-emerald-400">{price}</span>}
-                  {chosen && <Check size={11} className="shrink-0 text-blue-400" />}
-                </button>
-              </li>
+              <React.Fragment key={tier}>
+                <li role="presentation" className="px-3 pb-0.5 pt-1.5 text-2xs text-ink-3">{tier}</li>
+                {rows.map((pick) => <ModelRow key={pick.id} model={pick.model} note={pick.note} sample={modelSample(pick.id)} chosen={pick.id === value} onChoose={onChoose} />)}
+              </React.Fragment>
             );
           })}
-          {matching.length === 0 && <li className="px-2 py-3 text-center text-[10px] text-gray-500">No model matches.</li>}
-          {matching.length > ROWS_SHOWN && <li className="px-2 py-1 text-center text-[9px] text-gray-500">{matching.length - ROWS_SHOWN} more: keep typing to narrow them down.</li>}
         </ul>
-      )}
-      {models && unpriced > 0 && <div className="text-[9px] text-gray-600">{unpriced} without a price yet: prices come in over the first couple of minutes.</div>}
+      ) : (
+        <>
+          <div className="flex shrink-0 items-center justify-between gap-2 px-3 pb-1.5">
+            <Segmented label="Sort models" value={sort} onChange={setSort} options={[{ value: 'cheapest', label: 'Cheapest' }, { value: 'name', label: 'Name' }]} />
+            {utilities > 0 && !search.trim() && (
+              <label className="flex items-center gap-1.5 text-2xs text-ink-3">
+                <input type="checkbox" checked={showUtilities} onChange={(event) => setShowUtilities(event.target.checked)} className="accent-accent" />
+                {utilities} utilities
+              </label>
+            )}
+          </div>
+          <ul className="min-h-0 flex-1 overflow-y-auto pb-1" aria-label="Models">
+            {matching.slice(0, ROWS_SHOWN).map((model) => <ModelRow key={model.id} model={model} chosen={model.id === value} onChoose={onChoose} />)}
+            {matching.length === 0 && <li className="px-3 py-3 text-center text-2xs text-ink-3">No model matches.</li>}
+            {matching.length > ROWS_SHOWN && <li className="px-3 py-1.5 text-center text-2xs text-ink-3">{matching.length - ROWS_SHOWN} more: keep typing to narrow them down.</li>}
+          </ul>
+        </>
+      ))}
+      {models && unpriced > 0 && <div className="shrink-0 border-t border-line px-3 py-1.5 text-2xs text-ink-3">{unpriced} without a price yet: they come in over the first couple of minutes.</div>}
     </div>
   );
 };

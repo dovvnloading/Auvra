@@ -173,7 +173,7 @@ export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
                             <button
                                 onClick={() => onAddBlueprint('Player Character')}
                                 disabled={isCreatingPlayerBlueprint}
-                                className="flex items-center gap-2 px-3 py-1.5 rounded text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white shadow transition-all"
+                                className="flex items-center gap-2 px-3 py-1.5 rounded text-xs font-bold bg-blue-600 hover:bg-blue-500 text-accent-ink shadow transition-all"
                             >
                                 <Shield size={14} /> New Character
                             </button>

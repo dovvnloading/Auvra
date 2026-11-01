@@ -29,6 +29,8 @@
   },
   "dependencies": {
     "@babel/standalone": "7.23.6",
+    "@fontsource-variable/inter": "5.2.5",
+    "@fontsource-variable/jetbrains-mono": "5.2.5",
     "@react-three/drei": "9.122.0",
     "@react-three/fiber": "8.16.6",
     "@react-three/postprocessing": "2.16.2",

@@ -637,7 +637,7 @@ export const MaterialGraphCanvas: React.FC<MaterialGraphCanvasProps> = (props) =
             })()}
 
             <div className="absolute left-3 top-3 z-20 flex flex-wrap gap-1" onMouseDown={(event) => event.stopPropagation()}>
-                <button className={`${toolbarButton} bg-blue-600 font-bold text-white hover:bg-blue-500`} aria-label="Add node" onClick={(event) => openPalette(event.clientX, event.clientY + 24, null)}>
+                <button className={`${toolbarButton} bg-blue-600 font-bold text-accent-ink hover:bg-blue-500`} aria-label="Add node" onClick={(event) => openPalette(event.clientX, event.clientY + 24, null)}>
                     <Plus size={12} /> Add node
                 </button>
                 <button className={toolbarButton} aria-label="Undo" title="Undo (Ctrl+Z)" disabled={!canUndo} onClick={onUndo}><Undo2 size={12} /></button>
