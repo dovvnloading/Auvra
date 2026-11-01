@@ -149,14 +149,10 @@ const grownByOne = (area: Uint8Array, width: number, height: number): Uint8Array
 };
 
 /**
- * Which pixels of a part's map the model draws, as a byte per pixel, or null where that cannot be told: without UVs,
- * or with a map that repeats across them, where any pixel may be in use. Filled here rather than on a canvas, as a
- * scanned or generated model can have millions of triangles.
+ * Hands `visit` each of a part's triangles where it lies on the map, as three corners from 0 to 1 across. False where it
+ * has no one place there: without UVs, or with a map that repeats across them.
  */
-export const usedAreaOfPart = (object: THREE.Object3D, part: ModelPart, width: number, height: number): Uint8Array | null => {
-  // The way round the picture of a map is, which the texture itself cannot say: a compressed one is flipped in advance.
-  const flipY = overrideTextureFlipY(object);
-  let used = new Uint8Array(width * height);
+const eachTriangleOnMap = (object: THREE.Object3D, part: ModelPart, visit: (corner: readonly number[]) => void): boolean => {
   let found = false;
   let repeats = false;
   object.traverse((child) => {
@@ -179,17 +175,51 @@ export const usedAreaOfPart = (object: THREE.Object3D, part: ModelPart, width: n
           const u = uv.getX(vertex);
           const v = uv.getY(vertex);
           if (u < -0.01 || u > 1.01 || v < -0.01 || v > 1.01) { repeats = true; return; }
-          corner[which * 2] = u * width;
-          corner[which * 2 + 1] = (flipY ? 1 - v : v) * height;
+          corner[which * 2] = u;
+          corner[which * 2 + 1] = v;
         }
-        fillTriangle(used, width, height, corner[0], corner[1], corner[2], corner[3], corner[4], corner[5]);
+        visit(corner);
         found = true;
       }
     }
   });
-  if (!found || repeats) return null;
+  return found && !repeats;
+};
+
+/**
+ * Which pixels of a part's map the model draws, as a byte per pixel, or null where that cannot be told: without UVs,
+ * or with a map that repeats across them, where any pixel may be in use. Filled here rather than on a canvas, as a
+ * scanned or generated model can have millions of triangles.
+ */
+export const usedAreaOfPart = (object: THREE.Object3D, part: ModelPart, width: number, height: number): Uint8Array | null => {
+  // The way round the picture of a map is, which the texture itself cannot say: a compressed one is flipped in advance.
+  const flipY = overrideTextureFlipY(object);
+  let used = new Uint8Array(width * height);
+  const onMap = eachTriangleOnMap(object, part, ([au, av, bu, bv, cu, cv]) => {
+    fillTriangle(used, width, height, au * width, (flipY ? 1 - av : av) * height, bu * width, (flipY ? 1 - bv : bv) * height, cu * width, (flipY ? 1 - cv : cv) * height);
+  });
+  if (!onMap) return null;
   for (let step = 0; step < USED_AREA_MARGIN_PX; step += 1) used = grownByOne(used, width, height);
   return used;
+};
+
+const LAYOUT_CHECK_EDGE = 256;
+/** At this many layers over, faces share a map rather than being laid out across it, as a box's do. A mirrored model comes to two. */
+const SHARED_MAP_LAYERS = 3;
+
+/**
+ * Whether a part's map is laid out across its object, each place on one having a place on the other. Such a map can only be
+ * painted through the object, where a picture spread over it comes out as scraps. Where faces share one map, or it repeats,
+ * the map is a picture of a surface.
+ */
+export const mapIsLaidOutOverObject = (object: THREE.Object3D, part: ModelPart): boolean => {
+  const used = usedAreaOfPart(object, part, LAYOUT_CHECK_EDGE, LAYOUT_CHECK_EDGE);
+  if (!used) return false;
+  let covered = 0;
+  for (let at = 0; at < used.length; at += 1) if (used[at]) covered += 1;
+  let area = 0;
+  eachTriangleOnMap(object, part, ([au, av, bu, bv, cu, cv]) => { area += Math.abs((bu - au) * (cv - av) - (bv - av) * (cu - au)) / 2; });
+  return area * used.length < SHARED_MAP_LAYERS * covered;
 };
 
 export interface PictureSize {

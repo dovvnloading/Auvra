@@ -25,6 +25,21 @@ const BROAD_BLUR_RADIUS = 3;
 /** How far behind what a camera sees a point may lie and still count as seen, as a share of the depth range. */
 const SEEN_DEPTH_BIAS = 0.004;
 
+/** How a sheet's picture goes back on an object. */
+export interface BakeStyle {
+  /** How sharply the views hand over to each other around it. */
+  handover: number;
+  /** A view that sees a surface more edge-on than this counts only where no other can see it, as down a barrel. */
+  leastFacing: number;
+  /** A pixel of a view this near its object's outline does not count, as a model's outline is never quite where it was. */
+  outlinePx: number;
+}
+
+/** Only broad colour moves in a change to a map, so a long blend hides any difference between the views. */
+const CHANGING: BakeStyle = { handover: 3, leastFacing: 0, outlinePx: 0 };
+/** Painted from nothing, a picture goes on as it is: a long blend would show two views' detail at once, and what is picked up from the backdrop would stay. What no view can answer for then takes its colour from what is next to it. */
+export const PAINTING: BakeStyle = { handover: 8, leastFacing: 0.2, outlinePx: 2 };
+
 const VIEW_DIRECTIONS: readonly [number, number, number][] = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0], [0, -1, 0]];
 
 export interface SheetCell {
@@ -100,15 +115,46 @@ const camerasFor = (object: THREE.Object3D, part: ModelPart, cell: number): Shee
   });
 };
 
-/** Draws the object as it looks without any light, its materials put back after. */
-const drawCells = (renderer: THREE.WebGLRenderer, object: THREE.Object3D, cells: readonly SheetCell[], cell: number, target: THREE.WebGLRenderTarget) => {
+const CLAY_LIGHT_EDGE = 64;
+/** Where the light comes from, seen from the camera, whichever side that is. */
+const CLAY_LIGHT = new THREE.Vector3(-0.25, 0.45, 0.85).normalize();
+/** No darker than this, so that nothing is lost in the backdrop. */
+const CLAY_SHADE = 0.3;
+const CLAY_LIT = 0.45;
+
+/** Soft light by the way a surface faces, with nothing cast: a shape reads from any side, and no shadow falls on it to paint over. */
+const clayLight = (): THREE.DataTexture => {
+  const pixels = new Uint8Array(CLAY_LIGHT_EDGE * CLAY_LIGHT_EDGE * 4);
+  for (let y = 0; y < CLAY_LIGHT_EDGE; y += 1) {
+    for (let x = 0; x < CLAY_LIGHT_EDGE; x += 1) {
+      const nx = ((x + 0.5) / CLAY_LIGHT_EDGE) * 2 - 1;
+      const ny = ((y + 0.5) / CLAY_LIGHT_EDGE) * 2 - 1;
+      const nz = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny));
+      const shade = CLAY_SHADE + CLAY_LIT * Math.max(0, nx * CLAY_LIGHT.x + ny * CLAY_LIGHT.y + nz * CLAY_LIGHT.z);
+      pixels.fill(Math.round(shade * 255), (y * CLAY_LIGHT_EDGE + x) * 4, (y * CLAY_LIGHT_EDGE + x) * 4 + 3);
+      pixels[(y * CLAY_LIGHT_EDGE + x) * 4 + 3] = 255;
+    }
+  }
+  const texture = new THREE.DataTexture(pixels, CLAY_LIGHT_EDGE, CLAY_LIGHT_EDGE, THREE.RGBAFormat);
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.needsUpdate = true;
+  return texture;
+};
+
+/**
+ * Draws the object as it looks without any light, its materials put back after. With `shapeOf`, that part and whatever else
+ * has no picture of its own are drawn as a plain shape instead, for painting from nothing.
+ */
+const drawCells = (renderer: THREE.WebGLRenderer, object: THREE.Object3D, cells: readonly SheetCell[], cell: number, target: THREE.WebGLRenderTarget, shapeOf?: ModelPart) => {
   const undo: (() => void)[] = [];
   const flatOf = new Map<THREE.Material, THREE.Material>();
+  const clay = shapeOf ? clayLight() : null;
   const flat = (from: THREE.Material): THREE.Material => {
     let copy = flatOf.get(from);
     if (!copy) {
       const source = from as PartMaterial & { alphaMap?: THREE.Texture | null };
-      copy = new THREE.MeshBasicMaterial({
+      copy = clay && (!source.map || shapeOf?.materials.includes(source)) ? new THREE.MeshMatcapMaterial({ matcap: clay, side: THREE.DoubleSide }) : new THREE.MeshBasicMaterial({
         map: source.map ?? null,
         alphaMap: source.alphaMap ?? null,
         color: source.color ?? 0xffffff,
@@ -147,6 +193,7 @@ const drawCells = (renderer: THREE.WebGLRenderer, object: THREE.Object3D, cells:
   } finally {
     undo.forEach((step) => step());
     flatOf.forEach((copy) => copy.dispose());
+    clay?.dispose();
     renderer.setRenderTarget(null);
   }
 };
@@ -161,8 +208,8 @@ const sheetTarget = (width: number, height: number, withDepth: boolean) => {
   return target;
 };
 
-/** The object from every side, as a model is to be shown it, or null where it cannot be drawn. */
-export const renderViewSheet = (object: THREE.Object3D, part: ModelPart): ViewSheet | null => withRenderer((renderer) => {
+/** The object from every side, as a model is to be shown it, or null where it cannot be drawn. With `asShape`, `part` is shown as a plain shape to paint. */
+export const renderViewSheet = (object: THREE.Object3D, part: ModelPart, asShape = false): ViewSheet | null => withRenderer((renderer) => {
   const cell = CELL_PX;
   const width = cell * SHEET_COLUMNS;
   const height = cell * SHEET_ROWS;
@@ -171,7 +218,7 @@ export const renderViewSheet = (object: THREE.Object3D, part: ModelPart): ViewSh
   object.updateMatrixWorld(true);
   const target = sheetTarget(width, height, true);
   try {
-    drawCells(renderer, object, cells, cell, target);
+    drawCells(renderer, object, cells, cell, target, asShape ? part : undefined);
     const drawn = new Uint8Array(width * height * 4);
     renderer.readRenderTargetPixels(target, 0, 0, width, height, drawn);
     const canvas = document.createElement('canvas');
@@ -275,12 +322,17 @@ const BAKE_FRAGMENT = /* glsl */ `
   uniform vec4 cellsInSheet[6];
   uniform vec3 directions[6];
   uniform float bias;
+  uniform float handover;
+  uniform float leastFacing;
+  uniform vec2 outlineReach;
   varying vec3 vWorld;
   varying vec3 vFacing;
   void main() {
     vec3 facing = normalize(vFacing);
     vec3 sum = vec3(0.0);
     float weights = 0.0;
+    vec3 edgeOnSum = vec3(0.0);
+    float edgeOnWeights = 0.0;
     for (int view = 0; view < 6; view++) {
       vec4 clip = cameras[view] * vec4(vWorld, 1.0);
       vec3 ndc = clip.xyz / clip.w;
@@ -288,11 +340,20 @@ const BAKE_FRAGMENT = /* glsl */ `
       vec2 at = cellsInSheet[view].xy + (ndc.xy * 0.5 + 0.5) * cellsInSheet[view].zw;
       if (ndc.z * 0.5 + 0.5 > texture2D(depths, at).r + bias) continue;
       float toward = abs(dot(facing, directions[view]));
-      float weight = toward * toward * toward + 0.001;
-      sum += texture2D(colors, at).rgb * weight;
-      weights += weight;
+      if (outlineReach.x > 0.0 && (
+        texture2D(depths, at + outlineReach).r >= 1.0 || texture2D(depths, at - outlineReach).r >= 1.0
+        || texture2D(depths, at + vec2(outlineReach.x, -outlineReach.y)).r >= 1.0 || texture2D(depths, at - vec2(outlineReach.x, -outlineReach.y)).r >= 1.0
+      )) continue;
+      float weight = pow(toward, handover) + 0.001;
+      if (toward < leastFacing) {
+        edgeOnSum += texture2D(colors, at).rgb * weight;
+        edgeOnWeights += weight;
+      } else {
+        sum += texture2D(colors, at).rgb * weight;
+        weights += weight;
+      }
     }
-    gl_FragColor = weights > 0.0 ? vec4(sum / weights, 1.0) : vec4(0.0);
+    gl_FragColor = weights > 0.0 ? vec4(sum / weights, 1.0) : edgeOnWeights > 0.0 ? vec4(edgeOnSum / edgeOnWeights, 1.0) : vec4(0.0);
   }
 `;
 
@@ -306,7 +367,7 @@ export interface BakedViews {
 }
 
 /** Puts an edited sheet back on a part's map through the cameras that made it, or null where that cannot be drawn. */
-export const bakeViews = (object: THREE.Object3D, part: ModelPart, sheet: ViewSheet, painted: Pixels, width: number, height: number): BakedViews | null => withRenderer((renderer) => {
+export const bakeViews = (object: THREE.Object3D, part: ModelPart, sheet: ViewSheet, painted: Pixels, width: number, height: number, style: BakeStyle = CHANGING): BakedViews | null => withRenderer((renderer) => {
   const fromBottom = new Uint8Array(sheet.width * sheet.height * 4);
   for (let y = 0; y < sheet.height; y += 1) {
     fromBottom.set(painted.data.subarray(y * sheet.width * 4, (y + 1) * sheet.width * 4), (sheet.height - 1 - y) * sheet.width * 4);
@@ -333,6 +394,9 @@ export const bakeViews = (object: THREE.Object3D, part: ModelPart, sheet: ViewSh
       cellsInSheet: { value: sheet.cells.map((view) => new THREE.Vector4(view.x / sheet.width, view.y / sheet.height, sheet.cell / sheet.width, sheet.cell / sheet.height)) },
       directions: { value: sheet.cells.map((view) => view.direction) },
       bias: { value: SEEN_DEPTH_BIAS },
+      handover: { value: style.handover },
+      leastFacing: { value: style.leastFacing },
+      outlineReach: { value: new THREE.Vector2(style.outlinePx / sheet.width, style.outlinePx / sheet.height) },
       // The way round the picture of the map is, which a compressed texture cannot say.
       flipV: { value: overrideTextureFlipY(object) ? 1 : 0 },
     },

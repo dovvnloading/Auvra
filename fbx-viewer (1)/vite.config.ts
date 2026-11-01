@@ -101,6 +101,9 @@ export default defineConfig(({ command, mode }) => {
     host: '127.0.0.1',
     strictPort: true,
     open: false,
+    // The launcher's state holds the window's own browser profile, whose files come and go while it runs.
+    // Windows refuses to read some of them, and a watcher that trips over one takes the server down with it.
+    watch: { ignored: ['**/.auvra-launcher/**'] },
     // Transform the editor's whole import graph as soon as the server starts, rather than module
     // by module as the window first asks for them: the window then boots from a warm server.
     // That only follows what is imported up front, so the tabs that load when opened are named too.
