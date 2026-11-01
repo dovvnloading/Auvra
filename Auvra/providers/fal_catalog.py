@@ -29,7 +29,13 @@ ROUTER_MODELS_URL = ROUTER_MODELS_ORIGIN + "/api/v1/models"
 MEDIA_CATEGORIES: Mapping[str, Capability] = {
     "image-to-image": Capability.MEDIA_EDIT,
     "text-to-image": Capability.MEDIA_GENERATE,
+    "3d-to-3d": Capability.MEDIA_MESH,
 }
+# Models that make surface maps from a picture. Nothing about them says so in the catalog: they are image-to-image there.
+MAP_MODELS = frozenset({"fal-ai/patina"})
+# Of the models that take a mesh, these paint it from a description and can keep its own texture layout, so what they
+# make fits the model as it is. The others need a reference picture, or give back a different mesh.
+MESH_MODELS = frozenset({"meshy/v7/retexture", "meshy/v6/retexture", "meshy/v6-lite/retexture"})
 # What is known without the network, so that a first start offline still has a model to choose.
 SEED_MODELS: Mapping[str, frozenset[Capability]] = {
     "fal-ai/flux/dev": frozenset({Capability.MEDIA_GENERATE}),
@@ -42,7 +48,7 @@ _PRICE_BATCH = 40
 _PRICE_PAUSE_SECONDS = 0.6
 _RATE_LIMIT_TRIES = 6
 _STALE_SECONDS = 24 * 60 * 60
-_CACHE_VERSION = 1
+_CACHE_VERSION = 2
 _DESCRIPTION_LENGTH = 200
 _TOKENS_PRICED = 1_000_000
 
@@ -84,6 +90,10 @@ def parse_media_model(row: Any) -> CatalogModel | None:
         return None
     if metadata.get("status") not in (None, "active"):
         return None
+    if capability == Capability.MEDIA_MESH and endpoint not in MESH_MODELS:
+        return None
+    if endpoint in MAP_MODELS:
+        capability = Capability.MEDIA_MAPS
     return CatalogModel(endpoint, _text(metadata.get("display_name"), 128) or endpoint, frozenset({capability}),
                         str(metadata["category"]), _text(metadata.get("description"), _DESCRIPTION_LENGTH))
 
@@ -334,7 +344,10 @@ def input_schema(openapi: Any, model_id: str) -> Mapping[str, Any] | None:
     return {"properties": properties, "required": [item for item in schema.get("required", ()) if isinstance(item, str)]}
 
 
-_PROMPT_FIELDS = ("prompt", "instruction", "text_input", "text_prompt")
+_PROMPT_FIELDS = ("prompt", "instruction", "text_input", "text_prompt", "text_style_prompt")
+_MESH_FIELDS = ("model_url", "mesh_url")
+# Surface maps are the ones a material draws with; a model that offers more would only cost more.
+_SURFACE_MAPS = ["normal", "roughness", "metalness"]
 _IMAGE_FIELDS = ("image_url", "image_urls", "input_image_url", "input_image_urls", "images", "source_image_url",
                  "reference_image_url", "reference_image_urls", "start_image_url", "image")
 _LARGEST_SIDE = 4096
@@ -367,7 +380,7 @@ def _allows_size_object(schema: Any) -> bool:
 
 
 def build_media_request(schema: Mapping[str, Any] | None, *, model: str, prompt: str, images: list[str],
-                        size: tuple[int, int] | None = None) -> dict[str, Any]:
+                        size: tuple[int, int] | None = None, mesh: str | None = None) -> dict[str, Any]:
     """What to send a model, shaped by what it says it takes. One that takes more than we have is refused here."""
     if schema is None:
         request: dict[str, Any] = {"prompt": prompt}
@@ -385,6 +398,17 @@ def build_media_request(schema: Mapping[str, Any] | None, *, model: str, prompt:
         if image_field is None:
             raise ProviderError(ErrorCode.UNSUPPORTED_CAPABILITY, f"{model} does not take an image", "fal")
         request[image_field] = images if _allows(properties[image_field], "array") else images[0]
+    if mesh:
+        mesh_field = next((name for name in _MESH_FIELDS if name in properties), None)
+        if mesh_field is None:
+            raise ProviderError(ErrorCode.UNSUPPORTED_CAPABILITY, f"{model} does not take a model", "fal")
+        request[mesh_field] = mesh
+        # What comes back has to fit the model as it stands, rig and all, and look lit.
+        for name in ("enable_original_uv", "enable_pbr"):
+            if name in properties:
+                request[name] = True
+    if "maps" in properties:
+        request["maps"] = list(_SURFACE_MAPS)
     missing = sorted(name for name in required if name not in request)
     if missing:
         raise ProviderError(ErrorCode.INVALID_REQUEST, f"{model} also needs {', '.join(missing)[:200]}, which this tool does not supply", "fal")
@@ -419,6 +443,33 @@ def media_output_url(output: Mapping[str, Any]) -> tuple[str, str | None, dict[s
             mime = item.get("content_type") or item.get("mime")
             return item["url"], mime if isinstance(mime, str) else None, dimensions
     return None
+
+
+_MAP_ROLES = {"basecolor": "color", "base_color": "color", "albedo": "color", "normal": "normal", "roughness": "roughness",
+              "metalness": "metalness", "metallic": "metalness"}
+
+
+def media_outputs(output: Mapping[str, Any]) -> list[tuple[str, str, str | None, dict[str, int] | None]]:
+    """Every map in a model's result, as (role, url, mime, dimensions), where a model makes several. Empty for one that makes one picture."""
+    found: list[tuple[str, str, str | None, dict[str, int] | None]] = []
+    textures = output.get("texture_urls")
+    if isinstance(textures, list) and textures and isinstance(textures[0], Mapping):
+        for name, role in _MAP_ROLES.items():
+            item = textures[0].get(name)
+            url = item.get("url") if isinstance(item, Mapping) else item
+            if isinstance(url, str) and url and not any(entry[0] == role for entry in found):
+                found.append((role, url, None, None))
+        return found
+    images = output.get("images")
+    if isinstance(images, list):
+        for item in images:
+            role = _MAP_ROLES.get(item.get("map_type")) if isinstance(item, Mapping) else None
+            if role and isinstance(item.get("url"), str) and not any(entry[0] == role for entry in found):
+                width, height = item.get("width"), item.get("height")
+                mime = item.get("content_type")
+                found.append((role, item["url"], mime if isinstance(mime, str) else None,
+                              {"width": width, "height": height} if isinstance(width, int) and isinstance(height, int) else None))
+    return found
 
 
 # Used to weigh one model against another, not to bill: what a square 1024 texture comes to in each of fal's units.

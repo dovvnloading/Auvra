@@ -13,9 +13,7 @@ from Auvra.providers.adapters import FalAdapter, MediaJob
 from Auvra.providers.commands import provider_command_schema
 from Auvra.providers.descriptors import Capability, ProviderRegistry
 from Auvra.providers.errors import ErrorCode, ProviderError
-from Auvra.providers.fal_catalog import (
-    FalCatalog, build_media_request, input_schema, media_output_url, parse_media_model, parse_router_model, rough_job_cost,
-)
+from Auvra.providers.fal_catalog import (FalCatalog, build_media_request, input_schema, media_output_url, media_outputs, parse_media_model, parse_router_model, rough_job_cost)
 from Auvra.providers.transport import HttpResponse
 
 
@@ -56,7 +54,7 @@ ROUTER_ROWS = [
 def catalog_routes():
     return [
         ("category=image-to-image", {"models": [media_row("acme/edit"), media_row("acme/retired", status="deprecated")], "has_more": False}),
-        ("category=text-to-image", {"models": [media_row("acme/paint", "text-to-image")], "has_more": False}),
+        ("category=3d-to-3d", {"models": [], "has_more": False}), ("category=text-to-image", {"models": [media_row("acme/paint", "text-to-image")], "has_more": False}),
         ("openrouter.ai", {"data": ROUTER_ROWS}),
     ]
 
@@ -107,7 +105,7 @@ class CatalogTests(unittest.TestCase):
         pages = {"": {"models": [media_row("acme/one")], "has_more": True, "next_cursor": "two"}, "two": {"models": [media_row("acme/two")], "has_more": False}}
         catalog, _fake = self.catalog([
             ("category=image-to-image", lambda request: pages["two" if "cursor=two" in request.url else ""]),
-            ("category=text-to-image", {"models": []}), ("openrouter.ai", {"data": []}),
+            ("category=3d-to-3d", {"models": [], "has_more": False}), ("category=text-to-image", {"models": []}), ("openrouter.ai", {"data": []}),
         ])
         self.assertEqual({model.model_id for model in catalog.models()}, {"acme/one", "acme/two"})
 
@@ -345,6 +343,50 @@ class StreamSizeTests(unittest.TestCase):
         self.assertEqual(_stream_image_size(jpeg, "image/jpeg"), (500, 300))
         self.assertIsNone(_stream_image_size(io.BytesIO(b"not an image"), "image/png"))
 
+
+
+class SurfaceMapAndWholeModelTests(unittest.TestCase):
+    def test_a_surface_map_model_is_its_own_job(self):
+        model = parse_media_model(media_row("fal-ai/patina"))
+        self.assertEqual(model.capabilities, {Capability.MEDIA_MAPS})
+
+    def test_only_models_that_paint_a_mesh_from_words_and_keep_its_layout_are_offered(self):
+        self.assertEqual(parse_media_model(media_row("meshy/v7/retexture", "3d-to-3d")).capabilities, {Capability.MEDIA_MESH})
+        self.assertIsNone(parse_media_model(media_row("fal-ai/trellis-2/retexture", "3d-to-3d")))
+        self.assertIsNone(parse_media_model(media_row("tripo3d/tripo/segment", "3d-to-3d")))
+
+    def test_a_whole_model_request_keeps_the_model_layout_and_asks_for_surface_maps(self):
+        schema = {"required": ["model_url"], "properties": {
+            "model_url": {"type": "string"}, "text_style_prompt": {"type": "string"},
+            "enable_original_uv": {"type": "boolean"}, "enable_pbr": {"type": "boolean"},
+        }}
+        request = build_media_request(schema, model="meshy/v7/retexture", prompt="green steel", images=[], mesh="https://v3.fal.media/m.fbx")
+        self.assertEqual(request, {"model_url": "https://v3.fal.media/m.fbx", "text_style_prompt": "green steel", "enable_original_uv": True, "enable_pbr": True})
+
+    def test_a_surface_map_request_asks_for_the_maps_a_material_draws_with(self):
+        schema = {"required": ["image_url"], "properties": {"image_url": {"type": "string"}, "maps": {"type": "array"}}}
+        request = build_media_request(schema, model="fal-ai/patina", prompt="maps", images=["https://v3.fal.media/i.png"])
+        self.assertEqual(request["maps"], ["normal", "roughness", "metalness"])
+        self.assertNotIn("prompt", request)
+
+    def test_a_model_that_takes_no_mesh_says_so(self):
+        schema = {"properties": {"prompt": {"type": "string"}}}
+        with self.assertRaises(ProviderError):
+            build_media_request(schema, model="acme/paint", prompt="x", images=[], mesh="https://v3.fal.media/m.fbx")
+
+    def test_every_map_in_an_answer_is_found_by_what_it_is(self):
+        labelled = {"images": [
+            {"url": "https://v3.fal.media/n.png", "map_type": "normal", "width": 64, "height": 64, "content_type": "image/png"},
+            {"url": "https://v3.fal.media/r.png", "map_type": "roughness"},
+            {"url": "https://v3.fal.media/h.png", "map_type": "height"},
+        ]}
+        self.assertEqual([(role, url) for role, url, _, _ in media_outputs(labelled)], [("normal", "https://v3.fal.media/n.png"), ("roughness", "https://v3.fal.media/r.png")])
+        sets = {"texture_urls": [{"base_color": {"url": "https://v3.fal.media/c.png"}, "metallic": {"url": "https://v3.fal.media/m.png"}, "normal": {"url": "https://v3.fal.media/n.png"}, "roughness": {"url": "https://v3.fal.media/r.png"}}]}
+        self.assertEqual([role for role, _, _, _ in media_outputs(sets)][0], "color")
+        self.assertEqual({role for role, _, _, _ in media_outputs(sets)}, {"color", "metalness", "normal", "roughness"})
+
+    def test_an_answer_with_one_picture_has_no_maps(self):
+        self.assertEqual(media_outputs({"images": [{"url": "https://v3.fal.media/a.png"}]}), [])
 
 if __name__ == "__main__":
     unittest.main()

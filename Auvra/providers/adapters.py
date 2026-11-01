@@ -302,16 +302,16 @@ class FalAdapter(TextAdapter):
     def model_details(self, model: str) -> CatalogModel | None:
         return self.catalog.get(model)
 
-    def media_request(self, *, model: str, prompt: str, images: list[str], size: tuple[int, int] | None = None) -> dict[str, Any]:
+    def media_request(self, *, model: str, prompt: str, images: list[str], size: tuple[int, int] | None = None, mesh: str | None = None) -> dict[str, Any]:
         """What to send `model` for this job, in the shape it says it takes."""
-        return build_media_request(self.catalog.request_schema(model), model=model, prompt=prompt, images=images, size=size)
+        return build_media_request(self.catalog.request_schema(model), model=model, prompt=prompt, images=images, size=size, mesh=mesh)
 
     def submit(self, *, model: str, payload: Mapping[str, Any], capability: Capability | str = Capability.MEDIA_GENERATE) -> MediaJob:
         try: capability = Capability(capability)
         except (TypeError, ValueError) as exc: raise ProviderError(ErrorCode.UNSUPPORTED_CAPABILITY, "fal capability is not supported", self.provider_id) from exc
         if not isinstance(payload, Mapping):
             raise ProviderError(ErrorCode.INVALID_REQUEST, "fal request payload is invalid", self.provider_id)
-        if capability not in {Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT} or not self.registry.supports(self.provider_id, capability, model):
+        if capability not in {Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT, Capability.MEDIA_MAPS, Capability.MEDIA_MESH} or not self.registry.supports(self.provider_id, capability, model):
             raise ProviderError(ErrorCode.UNSUPPORTED_CAPABILITY, "fal model is not registered", self.provider_id)
         if _FAL_MODEL_PATH.fullmatch(model) is None:
             raise ProviderError(ErrorCode.ENDPOINT_NOT_ALLOWED, "fal job endpoint is not allowed", self.provider_id)

@@ -23,6 +23,10 @@ Every result stays in the strip under the model. Click one to try it on, or step
 - **Use on model** saves it on the model, and it is there when the project opens again. **Use original** puts the part back.
 - **Save to library** keeps it among the project's textures without changing the model.
 
+**Surface maps.** Under a result, **Make matching maps** makes normal, roughness and metal maps from it, for about a cent, so that light falls on it as it would on the real thing. They are saved with the result.
+
+**Whole model** paints the model as a shape, seen from every side, rather than a flat sheet, so seams and shapes come out right, and it makes surface maps as it goes. It costs more ($0.30 a run on fal) and takes a few minutes. It works on a model with one texture, as most props have: a model with several comes back merged into one mesh, without its rig, so it is not offered for those.
+
 **Compare** (B) splits the model in two at a line you can drag, the part as it was on one side and with the result on the other. **Studio**, **Daylight** and **Flat** change the light, and Flat is the one for judging colour. T turns the model on a turntable and F frames it again.
 
 A part shaded by a material from the Materials tab will not show a texture. The tool says so and can take the material off.
@@ -39,7 +43,7 @@ Each model is sent what it says it takes: the picture in whichever form it wants
 
 Prices are fal's and are shown as it bills them: per image, per megapixel, per second of compute, or per million input and output tokens. **Cheapest** weighs them by what a square 1024 texture would come to, which is an estimate.
 
-Models that take a mesh and give back a mesh, such as fal's 3D retexturing models, are not offered: these tools work on texture maps.
+Of fal's models that take a whole mesh, the Meshy retexture models are offered for **Whole model**: they paint from a description and keep the model's own texture layout, so what they make fits the model as it is. The others need a reference picture, or give back a different mesh.
 
 ## Budgets
 

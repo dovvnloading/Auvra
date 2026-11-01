@@ -22,6 +22,7 @@ const EXEMPT = new Map(Object.entries({
   'components/AnimationGraph/hooks/useGraphViewport.ts': 'input-adapter',
   'components/AnimationGraph/hooks/useInputHandler.ts': 'input-adapter',
   'services/providerPicks.ts': 'pure-utility',
+  'utils/projectRecords.ts': 'pure-utility',
   'components/Scripting/scriptDiff.ts': 'pure-utility',
   'components/AnimationGraph/utils/blending.ts': 'pure-utility',
   'components/AnimationGraph/utils/transitions.ts': 'pure-utility',

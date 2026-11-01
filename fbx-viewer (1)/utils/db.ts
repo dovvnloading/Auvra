@@ -1,6 +1,7 @@
 
 import { AssetCategory, AssetInfoUpdate, Blueprint, SocketData, LevelObject, LevelData, TerrainData, PrefabData } from '../types';
 import { AssetTransferOptions, projectService } from './projectService';
+import { nativeDomainRecords } from './projectRecords';
 import { externalizeTerrainData } from './terrainHeightfieldEditor';
 import { externalizeTerrainSplat } from '../components/Environment/Terrain/terrainSplatEditor';
 import { terrainLayersReferenceTexture, withoutTerrainLayerTexture } from '../components/Environment/Terrain/terrainSplatCodec';
@@ -848,14 +849,6 @@ frontendDiagnostics.instrumentClass(DBOperations, 'project_documents', [
 ]);
 export const dbOperations = new DBOperations();
 
-function nativeDomainRecords(snapshot: Awaited<ReturnType<typeof projectService.getSnapshotAll>>, domain: string): Array<Record<string, any>> {
-  const raw = snapshot?.domains?.[domain];
-  const values = Array.isArray(raw)
-    ? raw
-    : raw && typeof raw === 'object' && Array.isArray((raw as { documents?: unknown[] }).documents)
-      ? (raw as { documents: unknown[] }).documents : [];
-  return values.filter((value): value is Record<string, any> => Boolean(value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string'));
-}
 
 /** Prepares a document for writing; `readStored` reads the document it replaces, if any. */
 type DocumentPreparation = (value: unknown, readStored?: () => Promise<Record<string, unknown> | undefined>) => Promise<{ value: unknown; afterCommit?: () => void }>;
@@ -922,6 +915,8 @@ export function withoutMaterialOverrideTexture(overrides: MaterialOverrides, tex
   for (const [materialName, override] of Object.entries(overrides)) {
     if (override?.mapTextureId === textureId) next = setMaterialOverrideField(next, materialName, 'mapTextureId', undefined);
     if (override?.normalTextureId === textureId) next = setMaterialOverrideField(next, materialName, 'normalTextureId', undefined);
+    if (override?.roughnessTextureId === textureId) next = setMaterialOverrideField(next, materialName, 'roughnessTextureId', undefined);
+    if (override?.metalnessTextureId === textureId) next = setMaterialOverrideField(next, materialName, 'metalnessTextureId', undefined);
   }
   return next;
 }

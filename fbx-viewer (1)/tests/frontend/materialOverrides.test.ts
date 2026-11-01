@@ -9,10 +9,12 @@ import {
   collectOverrideTextures,
   hydrateMaterialOverrides,
   listModelMaterials,
+  materialOverrideTextureIds,
   materialOverridesEqual,
   normalizeMaterialOverrides,
   setMaterialOverrideField,
   tagOverrideTexture,
+  type MaterialTextureSlot,
 } from '../../utils/materialOverrides';
 
 const standard = (name: string, params: THREE.MeshStandardMaterialParameters = {}) => {
@@ -113,7 +115,7 @@ describe('applyMaterialOverrides', () => {
     body.map = imported;
     const albedo = new THREE.Texture();
     const normal = new THREE.Texture();
-    const resolve = vi.fn((textureId: string, slot: 'map' | 'normal') => (
+    const resolve = vi.fn((textureId: string, slot: MaterialTextureSlot) => (
       textureId === 'tex-albedo' && slot === 'map' ? albedo : textureId === 'tex-normal' && slot === 'normal' ? normal : null
     ));
     const result = applyMaterialOverrides(root, {
@@ -236,5 +238,48 @@ describe('MaterialEditor', () => {
     view.unmount();
     expect(body.metalness).toBe(0.1);
     expect(body.roughness).toBe(0.8);
+  });
+});
+
+describe('surface maps on a material', () => {
+  const textured = () => {
+    const material = new THREE.MeshStandardMaterial({ roughness: 0.4, metalness: 0.2 });
+    material.name = 'Body';
+    const root = new THREE.Group();
+    root.add(new THREE.Mesh(new THREE.BufferGeometry(), material));
+    return { root, material };
+  };
+  const maps = { roughnessTextureId: 'tex-rough', metalnessTextureId: 'tex-metal' };
+
+  it('binds roughness and metal maps, the values stepping aside for them', () => {
+    const { root, material } = textured();
+    const rough = new THREE.Texture();
+    const metal = new THREE.Texture();
+    applyMaterialOverrides(root, { Body: maps }, (id) => (id === 'tex-rough' ? rough : metal));
+    expect(material.roughnessMap).toBe(rough);
+    expect(material.metalnessMap).toBe(metal);
+    expect(material.roughness).toBe(1);
+    expect(material.metalness).toBe(1);
+  });
+
+  it('puts everything back when the override goes', () => {
+    const { root, material } = textured();
+    applyMaterialOverrides(root, { Body: maps }, () => new THREE.Texture());
+    applyMaterialOverrides(root, {});
+    expect(material.roughnessMap).toBeNull();
+    expect(material.metalnessMap).toBeNull();
+    expect(material.roughness).toBe(0.4);
+    expect(material.metalness).toBe(0.2);
+  });
+
+  it('keeps the fields when reading stored overrides, and lists their textures', () => {
+    const overrides = normalizeMaterialOverrides({ Body: maps });
+    expect(overrides.Body).toEqual(maps);
+    expect(materialOverrideTextureIds(overrides)).toEqual([{ textureId: 'tex-rough', slot: 'roughness' }, { textureId: 'tex-metal', slot: 'metalness' }]);
+  });
+
+  it('stores the maps as data, not colour', () => {
+    const texture = tagOverrideTexture(new THREE.Texture(), 'tex-rough', 'roughness');
+    expect(texture.colorSpace).toBe(THREE.NoColorSpace);
   });
 });

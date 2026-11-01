@@ -2,7 +2,17 @@ import * as THREE from 'three';
 import { textureSourceImage } from '../../../utils/textureCompression/compressTextures';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
 
-export type PartMaterial = THREE.Material & { map?: THREE.Texture | null; color?: THREE.Color; emissive?: THREE.Color; emissiveIntensity?: number };
+export type PartMaterial = THREE.Material & {
+  map?: THREE.Texture | null;
+  normalMap?: THREE.Texture | null;
+  roughnessMap?: THREE.Texture | null;
+  metalnessMap?: THREE.Texture | null;
+  roughness?: number;
+  metalness?: number;
+  color?: THREE.Color;
+  emissive?: THREE.Color;
+  emissiveIntensity?: number;
+};
 
 /** What can be painted on its own: the materials that draw with one texture map, or one material with none. */
 export interface ModelPart {

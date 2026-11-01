@@ -1,5 +1,6 @@
-import { hostProviderService, HostProviderError, InferenceJob, MediaPreview } from './HostProviderService';
+import { hostProviderService, HostProviderError, InferenceJob, MediaPreview, type ProviderCapability } from './HostProviderService';
 import { projectService } from '../utils/projectService';
+import { nativeDomainRecords } from '../utils/projectRecords';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 
 /** A finished job's picture. Its URL is the caller's: the picture stays loaded until the caller revokes it. */
@@ -7,6 +8,8 @@ export interface TexturePreview extends MediaPreview {
   jobId: string;
   previewAssetId: string;
   previewUrl: string;
+  /** What a job that makes several maps made, the first of which is the preview above. */
+  maps?: { role: string; previewAssetId: string; previewUrl: string }[];
 }
 
 const MAX_LOCAL_MEDIA_BYTES = 8 * 1024 * 1024;
@@ -17,10 +20,10 @@ const MAX_LOCAL_MEDIA_BYTES = 8 * 1024 * 1024;
  */
 export class TextureGenerationService {
   /** Asks for the source asset restyled as the prompt says, or with none, a new image from the prompt alone. */
-  async submit(sourceAssetId: string | null, userPrompt: string): Promise<InferenceJob> {
+  async submit(sourceAssetId: string | null, userPrompt: string, capability?: ProviderCapability): Promise<InferenceJob> {
     if (!userPrompt.trim()) throw new Error('Describe the desired material before generating.');
     return hostProviderService.submitInference({
-      capability: sourceAssetId ? 'media.edit' : 'media.generate',
+      capability: capability ?? (sourceAssetId ? 'media.edit' : 'media.generate'),
       input: userPrompt.trim(), ...(sourceAssetId ? { assetIds: [sourceAssetId] } : {}), consent: 'explicit',
     });
   }
@@ -34,7 +37,13 @@ export class TextureGenerationService {
     if (!/^[0-9a-f]{64}$/.test(previewAssetId)) throw new HostProviderError('The host returned an invalid preview content hash.', 'invalid_preview');
     let previewUrl = '';
     try { previewUrl = await this.loadAsset(previewAssetId); } catch { throw new HostProviderError('The host preview asset could not be resolved.', 'invalid_preview'); }
-    return { ...result, assetId: previewAssetId, previewAssetId, previewUrl, jobId: job.jobId };
+    const listed = Array.isArray((job as { previewMaps?: unknown }).previewMaps) ? (job as unknown as { previewMaps: { role: string; previewAssetId: string }[] }).previewMaps : [];
+    const maps = await Promise.all(listed.map(async (item) => ({
+      role: item.role,
+      previewAssetId: item.previewAssetId,
+      previewUrl: item.previewAssetId === previewAssetId ? previewUrl : await this.loadAsset(item.previewAssetId),
+    })));
+    return { ...result, assetId: previewAssetId, previewAssetId, previewUrl, jobId: job.jobId, maps };
   }
 
   async cancel(jobId: string): Promise<void> { await hostProviderService.cancelInference(jobId); }
@@ -60,6 +69,14 @@ export class TextureGenerationService {
     const response = await fetch(await projectService.resolveAsset(assetId));
     if (!response.ok) throw new Error('The asset could not be read.');
     return URL.createObjectURL(await response.blob());
+  }
+
+  /** The asset holding a model's own file, which the project already has. */
+  async modelFileAsset(modelId: string): Promise<string> {
+    const snapshot = await projectService.getSnapshotAll('models');
+    const assetId = nativeDomainRecords(snapshot, 'models').find((record) => record.id === modelId)?.assetId;
+    if (typeof assetId !== 'string') throw new Error('The model file could not be found in the project.');
+    return assetId;
   }
 
   /** Gives the host a picture to work from, once however many jobs start from it. */

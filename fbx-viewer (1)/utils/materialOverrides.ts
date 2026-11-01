@@ -27,6 +27,10 @@ export interface MaterialOverride {
   mapTextureId?: string;
   /** Logical texture id (textures domain) replacing the normal map. */
   normalTextureId?: string;
+  /** Logical texture id replacing the roughness map (standard/physical materials only). */
+  roughnessTextureId?: string;
+  /** Logical texture id replacing the metalness map (standard/physical materials only). */
+  metalnessTextureId?: string;
   /** A material asset (materials domain) whose node graph shades the material instead. */
   materialId?: string;
   /**
@@ -43,7 +47,7 @@ export interface MaterialParameterSetting {
 
 export type MaterialOverrides = Record<string, MaterialOverride>;
 export type MaterialOverrideField = keyof MaterialOverride;
-export type MaterialTextureSlot = 'map' | 'normal';
+export type MaterialTextureSlot = 'map' | 'normal' | 'roughness' | 'metalness';
 /** Returns the texture to bind for a logical texture id, or nothing when it is not available (yet). */
 export type MaterialTextureResolver = (textureId: string, slot: MaterialTextureSlot) => THREE.Texture | null | undefined;
 
@@ -118,6 +122,8 @@ export const normalizeMaterialOverride = (value: unknown): MaterialOverride | nu
     opacity: normalizeNumber(source.opacity, 0, 1),
     mapTextureId: normalizeTextureId(source.mapTextureId),
     normalTextureId: normalizeTextureId(source.normalTextureId),
+    roughnessTextureId: normalizeTextureId(source.roughnessTextureId),
+    metalnessTextureId: normalizeTextureId(source.metalnessTextureId),
     materialId: normalizeTextureId(source.materialId),
     parameters: normalizeParameters(source.parameters),
   };
@@ -177,6 +183,8 @@ export const materialOverrideTextureIds = (overrides: MaterialOverrides): Array<
   for (const entry of Object.values(overrides)) {
     add(entry.mapTextureId, 'map');
     add(entry.normalTextureId, 'normal');
+    add(entry.roughnessTextureId, 'roughness');
+    add(entry.metalnessTextureId, 'metalness');
   }
   return result;
 };
@@ -205,7 +213,7 @@ export const tagOverrideTexture = (texture: THREE.Texture, textureId: string, sl
 const overrideTextureKey = (texture: THREE.Texture | null | undefined): string | null => {
   const textureId = texture?.userData?.[TEXTURE_ID_KEY];
   const slot = texture?.userData?.[TEXTURE_SLOT_KEY];
-  return typeof textureId === 'string' && (slot === 'map' || slot === 'normal') ? `${slot}:${textureId}` : null;
+  return typeof textureId === 'string' && (slot === 'map' || slot === 'normal' || slot === 'roughness' || slot === 'metalness') ? `${slot}:${textureId}` : null;
 };
 
 interface MaterialBaseline {
@@ -220,9 +228,15 @@ interface MaterialBaseline {
   map: THREE.Texture | null;
   hasNormalMap: boolean;
   normalMap: THREE.Texture | null;
+  hasRoughnessMap: boolean;
+  roughnessMap: THREE.Texture | null;
+  hasMetalnessMap: boolean;
+  metalnessMap: THREE.Texture | null;
   /** What the last apply left bound; a different value means code outside the override layer rebound it. */
   appliedMap: THREE.Texture | null;
   appliedNormalMap: THREE.Texture | null;
+  appliedRoughnessMap: THREE.Texture | null;
+  appliedMetalnessMap: THREE.Texture | null;
   appliedTransparent: boolean;
 }
 
@@ -237,6 +251,8 @@ type OverridableMaterial = THREE.Material & {
   emissiveIntensity?: number;
   map?: THREE.Texture | null;
   normalMap?: THREE.Texture | null;
+  roughnessMap?: THREE.Texture | null;
+  metalnessMap?: THREE.Texture | null;
 };
 
 const isColor = (value: unknown): value is THREE.Color => Boolean(value && (value as THREE.Color).isColor);
@@ -253,8 +269,14 @@ const captureBaseline = (material: OverridableMaterial): MaterialBaseline => ({
   map: material.map ?? null,
   hasNormalMap: 'normalMap' in material,
   normalMap: material.normalMap ?? null,
+  hasRoughnessMap: 'roughnessMap' in material,
+  roughnessMap: material.roughnessMap ?? null,
+  hasMetalnessMap: 'metalnessMap' in material,
+  metalnessMap: material.metalnessMap ?? null,
   appliedMap: material.map ?? null,
   appliedNormalMap: material.normalMap ?? null,
+  appliedRoughnessMap: material.roughnessMap ?? null,
+  appliedMetalnessMap: material.metalnessMap ?? null,
   appliedTransparent: material.transparent,
 });
 
@@ -281,7 +303,7 @@ const collectMaterials = (root: THREE.Object3D): THREE.Material[] => {
 };
 
 /** Shader-affecting state: a change needs `material.needsUpdate`. */
-const programKey = (material: OverridableMaterial) => `${Boolean(material.map)}|${Boolean(material.normalMap)}|${material.transparent}`;
+const programKey = (material: OverridableMaterial) => `${Boolean(material.map)}|${Boolean(material.normalMap)}|${Boolean(material.roughnessMap)}|${Boolean(material.metalnessMap)}|${material.transparent}`;
 
 const restoreBaseline = (material: OverridableMaterial, baseline: MaterialBaseline) => {
   if (baseline.color && material.color) material.color.copy(baseline.color);
@@ -293,6 +315,8 @@ const restoreBaseline = (material: OverridableMaterial, baseline: MaterialBaseli
   material.transparent = baseline.transparent;
   if (baseline.hasMap) material.map = baseline.map;
   if (baseline.hasNormalMap) material.normalMap = baseline.normalMap;
+  if (baseline.hasRoughnessMap) material.roughnessMap = baseline.roughnessMap;
+  if (baseline.hasMetalnessMap) material.metalnessMap = baseline.metalnessMap;
 };
 
 export interface ApplyMaterialOverridesResult {
@@ -343,6 +367,8 @@ export const applyMaterialOverrides = (
     const mapRebound = baseline.hasMap && (material.map ?? null) !== baseline.appliedMap;
     if (mapRebound) baseline.map = material.map ?? null;
     if (baseline.hasNormalMap && (material.normalMap ?? null) !== baseline.appliedNormalMap) baseline.normalMap = material.normalMap ?? null;
+    if (baseline.hasRoughnessMap && (material.roughnessMap ?? null) !== baseline.appliedRoughnessMap) baseline.roughnessMap = material.roughnessMap ?? null;
+    if (baseline.hasMetalnessMap && (material.metalnessMap ?? null) !== baseline.appliedMetalnessMap) baseline.metalnessMap = material.metalnessMap ?? null;
     if (mapRebound || material.transparent !== baseline.appliedTransparent) baseline.transparent = material.transparent;
     restoreBaseline(material, baseline);
     if (override) {
@@ -366,11 +392,28 @@ export const applyMaterialOverrides = (
         const normalMap = bindTexture(override.normalTextureId, 'normal');
         if (normalMap) material.normalMap = normalMap;
       }
+      // A map is multiplied by the value, so with a map the value steps aside unless the override sets it too.
+      if (baseline.hasRoughnessMap) {
+        const roughnessMap = bindTexture(override.roughnessTextureId, 'roughness');
+        if (roughnessMap) {
+          material.roughnessMap = roughnessMap;
+          if (override.roughness === undefined) material.roughness = 1;
+        }
+      }
+      if (baseline.hasMetalnessMap) {
+        const metalnessMap = bindTexture(override.metalnessTextureId, 'metalness');
+        if (metalnessMap) {
+          material.metalnessMap = metalnessMap;
+          if (override.metalness === undefined) material.metalness = 1;
+        }
+      }
     }
     // An assigned material asset shades it by its graph instead (or no longer, once unassigned).
     materialLibrary.assign(material, override?.materialId ?? null, overrideTextureFlipY(root), materialParameterValues(override?.parameters));
     baseline.appliedMap = material.map ?? null;
     baseline.appliedNormalMap = material.normalMap ?? null;
+    baseline.appliedRoughnessMap = material.roughnessMap ?? null;
+    baseline.appliedMetalnessMap = material.metalnessMap ?? null;
     baseline.appliedTransparent = material.transparent;
     if (programKey(material) !== before) material.needsUpdate = true;
   }
@@ -435,7 +478,7 @@ export const listModelMaterials = (root: THREE.Object3D): ModelMaterialInfo[] =>
 export const collectOverrideTextures = (root: THREE.Object3D): Map<string, THREE.Texture> => {
   const result = new Map<string, THREE.Texture>();
   for (const material of collectMaterials(root) as OverridableMaterial[]) {
-    for (const texture of [material.map, material.normalMap]) {
+    for (const texture of [material.map, material.normalMap, material.roughnessMap, material.metalnessMap]) {
       const key = overrideTextureKey(texture);
       if (key && texture && !result.has(key)) result.set(key, texture);
     }
