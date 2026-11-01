@@ -1,4 +1,5 @@
 
+import { RenderPanel } from '../RenderPanel';
 import React, { useState } from 'react';
 import { 
     MousePointer2, Box, Brush, Eraser, Move, RotateCw, 
@@ -119,6 +120,8 @@ export const EnvironmentToolbar: React.FC<EnvironmentToolbarProps> = ({ state, a
                 >
                     {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
                 </button>
+
+                <RenderPanel />
 
                 {/* Camera Speed Control */}
                 <div className="relative">

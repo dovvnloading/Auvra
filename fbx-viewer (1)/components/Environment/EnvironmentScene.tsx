@@ -2,6 +2,7 @@
 import React, { useRef, useState, useMemo, useEffect, useCallback, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import { useThree } from '@react-three/fiber';
+import { renderView } from './renderBundle';
 import type { ThreeEvent } from '@react-three/fiber';
 import { Grid, TransformControls } from '@react-three/drei';
 import { LoadedModelData, LevelObject } from '../../types';
@@ -478,6 +479,19 @@ interface DragState {
     followers: { node: THREE.Object3D; startWorld: THREE.Matrix4 }[];
 }
 
+/** Keeps what a render starts from up to date with the view. */
+const RenderViewTracker: React.FC = () => {
+    const scene = useThree(state => state.scene);
+    const camera = useThree(state => state.camera);
+    const renderer = useThree(state => state.gl);
+    useEffect(() => {
+        renderView.scene = scene;
+        renderView.camera = camera;
+        renderView.renderer = renderer as unknown as THREE.WebGLRenderer;
+    }, [scene, camera, renderer]);
+    return null;
+};
+
 export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
     activeModel,
     interactionMode,
@@ -777,6 +791,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
         <LodEditorPreviewContext.Provider value={lodPreview}>
             {/* Dynamic Sky System */}
             <SkySystem levelObjects={resolvedObjects} />
+            <RenderViewTracker />
             <LevelLightVolume bakedLighting={bakedLighting} />
             <LevelDynamicGi levelObjects={resolvedObjects} />
             <LightBakeRunner />

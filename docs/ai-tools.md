@@ -43,6 +43,14 @@ In the Environment tab, a sky drawn with **Image** has **Describe** under its pa
 
 A **Decal** component has **Describe** under its texture too. It paints the picture on a really transparent background, so only the picture lands on the surface. Few models do this: most accept the setting and paint on white. **Offset** moves the decal from the object's origin, which on most props is at their base.
 
+## Finished frames
+
+**Render this view**, the aperture button in the Environment toolbar, path traces what the camera sees with [Reframe](https://github.com/dovvnloading/Reframe-Diffused), a renderer on this computer. It needs an NVIDIA graphics card and costs nothing. **Preview**, **Good** and **Final** trade time for a cleaner picture. A finished frame can be kept in the texture library.
+
+Reframe is found where it is usually kept, or at the folder named by the `AUVRA_REFRAME_HOME` environment variable, and it runs under the Python in its own `.venv`, or the one named by `AUVRA_REFRAME_PYTHON`, or else the one on the path. Each render is a process of its own and leaves Reframe's folder as it was.
+
+It takes each surface's colour, roughness, metal and normal maps and values, the level's lights, the sky and the camera. A procedural sky is captured into a panorama as it stands. A material from the Materials tab is carried by the textures wired to its inputs; one worked out by other nodes gets its plain colour, and terrain gets the colour bounced light takes from it.
+
 ## Materials
 
 In the Materials tab, **Describe** paints a seamless texture from a description, with normal, roughness and metal maps, for about a cent. It keeps them in the project and makes a new material with each one wired to the input it is for, ready to change like any other node graph.

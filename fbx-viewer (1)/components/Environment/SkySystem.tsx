@@ -1,4 +1,5 @@
 
+import { renderView } from './renderBundle';
 import React, { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
@@ -330,6 +331,12 @@ export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects, live = false
     const { textures } = useGameContent();
     const panoramaTexture = textures.find(texture => texture.id === panoramaSettings.textureId) ?? textures.find(texture => texture.name === panoramaSettings.textureId);
     const panorama = usePanorama(panoramaTexture?.url);
+    useEffect(() => {
+        renderView.panorama = model === 'image' && panoramaTexture?.url
+            ? { url: panoramaTexture.url, rotation: panoramaSettings.rotation, brightness: panoramaSettings.brightness }
+            : null;
+        return () => { renderView.panorama = null; };
+    }, [model, panoramaTexture?.url, panoramaSettings.rotation, panoramaSettings.brightness]);
     const skyLightImage = skyLightSettings.source === 'image' ? panorama : null;
     const skyDome = useMemo(() => (atmospheric ? skyRenderer.createDome() : null), [atmospheric]);
     useEffect(() => (atmospheric ? skyRenderer.acquire() : undefined), [atmospheric]);
