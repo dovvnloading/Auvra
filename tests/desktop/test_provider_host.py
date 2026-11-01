@@ -4,11 +4,13 @@ import io
 from dataclasses import dataclass
 from pathlib import Path
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
 from types import SimpleNamespace
 
+from Auvra.desktop.credential_prompt import CredentialPromptUnavailableError
 from Auvra.desktop.previews import PreviewStore
 from Auvra.desktop.provider_host import NativeProviderHost
 from Auvra.host.dispatcher import HostOperationError
@@ -43,6 +45,16 @@ class _Prompt:
         return self.secret
 
 
+def _key_window_outcome(host: NativeProviderHost) -> dict:
+    """What a person's answer to the key window came to, once they have given it."""
+    for _ in range(500):
+        for name, payload in host.drain_events():
+            if name == "provider.status" and str(payload.get("operation", "")).startswith("key."):
+                return payload
+        time.sleep(0.01)
+    raise AssertionError("the key window never reported back")
+
+
 class _Adapter:
     def complete(self, *, model: str, prompt: str, capability="text", structured_command: bool = False):
         assert not structured_command
@@ -62,8 +74,11 @@ class ProviderHostTests(unittest.TestCase):
             host = NativeProviderHost(root, project_host=_Project(), credential_prompt=_Prompt("super-secret"))
             try:
                 result = host.handle("provider.configureCredential", {"providerId": "openai", "storageMode": "memoryOnly"})
-                self.assertEqual(result["configured"], True)
-                self.assertNotIn("secret", str(result).lower())
+                self.assertIs(result["waiting"], True)
+                outcome = _key_window_outcome(host)
+                self.assertEqual(outcome["operation"], "key.saved")
+                self.assertEqual(outcome["status"], "ready")
+                self.assertNotIn("secret", str(result).lower() + str(outcome).lower())
                 status = host.handle("provider.getStatus", {"providerId": "openai"})
                 self.assertEqual(status["credentialStatus"], "memoryOnly")
             finally:
@@ -72,12 +87,97 @@ class ProviderHostTests(unittest.TestCase):
                 if path.is_file():
                     self.assertNotIn(b"super-secret", path.read_bytes())
 
+    def test_an_open_key_window_holds_up_nothing_else(self) -> None:
+        answered = threading.Event()
+
+        class Waiting:
+            def prompt(self, _label: str) -> str:
+                answered.wait(5)
+                return "key"
+
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project(), credential_prompt=Waiting())
+            try:
+                opened = host.handle("provider.configureCredential", {"providerId": "openai", "storageMode": "memoryOnly"})
+                self.assertIs(opened["waiting"], True)
+                self.assertFalse(opened["configured"])
+                self.assertIn(host.handle("provider.getStatus", {"providerId": "openai"})["credentialStatus"], {"absent", "unavailable"})
+                with self.assertRaises(HostOperationError) as second:
+                    host.handle("provider.configureCredential", {"providerId": "fal", "storageMode": "memoryOnly"})
+                self.assertEqual(second.exception.code, "locking")
+                answered.set()
+                self.assertEqual(_key_window_outcome(host)["providerId"], "openai")
+                self.assertEqual(host.handle("provider.getStatus", {"providerId": "openai"})["credentialStatus"], "memoryOnly")
+                host.handle("provider.configureCredential", {"providerId": "fal", "storageMode": "memoryOnly"})
+                self.assertEqual(_key_window_outcome(host)["providerId"], "fal")
+            finally:
+                answered.set()
+                host.shutdown()
+
+    def test_the_key_window_opens_on_the_frames_ui_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project(), credential_prompt=_Prompt("key"))
+            ran = []
+            host.set_ui_invoker(lambda callback: ran.append("ui") or callback())
+            try:
+                host.handle("provider.configureCredential", {"providerId": "openai", "storageMode": "memoryOnly"})
+                _key_window_outcome(host)
+                self.assertEqual(ran, ["ui"])
+            finally:
+                host.shutdown()
+
+    def test_closing_the_key_window_saves_nothing_and_complains_of_nothing(self) -> None:
+        class Closed:
+            def prompt(self, _label: str) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project(), credential_prompt=Closed())
+            try:
+                host.handle("provider.configureCredential", {"providerId": "openai", "storageMode": "memoryOnly"})
+                outcome = _key_window_outcome(host)
+                self.assertEqual(outcome["operation"], "key.cancelled")
+                self.assertEqual(outcome["status"], "unconfigured")
+                self.assertNotIn("message", outcome)
+                self.assertIn(host.handle("provider.getStatus", {"providerId": "openai"})["credentialStatus"], {"absent", "unavailable"})
+            finally:
+                host.shutdown()
+
+    def test_a_key_that_cannot_be_kept_says_so_without_the_key(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project(), credential_prompt=_Prompt("super-secret"))
+            try:
+                with mock.patch("Auvra.desktop.provider_host.MemoryCredentialStore.write", side_effect=OSError("vault broke: super-secret")):
+                    host.handle("provider.configureCredential", {"providerId": "openai", "storageMode": "memoryOnly"})
+                    outcome = _key_window_outcome(host)
+                self.assertEqual(outcome["operation"], "key.failed")
+                self.assertEqual(outcome["message"], "The key could not be saved on this computer.")
+                self.assertNotIn("super-secret", str(outcome))
+            finally:
+                host.shutdown()
+
+    def test_when_the_key_window_cannot_open_it_says_so(self) -> None:
+        class Broken:
+            def prompt(self, _label: str) -> None:
+                raise CredentialPromptUnavailableError("no window")
+
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project(), credential_prompt=Broken())
+            try:
+                host.handle("provider.configureCredential", {"providerId": "openai", "storageMode": "memoryOnly"})
+                outcome = _key_window_outcome(host)
+                self.assertEqual(outcome["operation"], "key.failed")
+                self.assertEqual(outcome["message"], "The key window could not open on this computer.")
+            finally:
+                host.shutdown()
+
     def test_exact_route_submission_is_async_and_does_not_change_project_revision(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             project = _Project()
             host = NativeProviderHost(Path(raw), project_host=project, credential_prompt=_Prompt("key"), adapters={"openai": _Adapter()})
             try:
                 host.handle("provider.configureCredential", {"providerId": "openai", "storageMode": "memoryOnly"})
+                _key_window_outcome(host)
                 host.registry.discover_models("openai", ("gpt-4o-mini",))
                 host.handle("provider.configure", {"providerId": "openai", "expectedSettingsRevision": 0, "settings": {
                     "enabled": True, "routes": [{"capability": "text", "modelId": "gpt-4o-mini"}],

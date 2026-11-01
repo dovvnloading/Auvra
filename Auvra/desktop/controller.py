@@ -168,6 +168,11 @@ class FrameController:
             set_event_sink = getattr(self.project_host, "set_event_sink", None)
             if callable(set_event_sink):
                 set_event_sink(self._post_project_event)
+        if self.provider_host is not None:
+            set_ui_invoker = getattr(self.provider_host, "set_ui_invoker", None)
+            invoke_on_ui = getattr(self.frame, "invoke_on_ui", None)
+            if callable(set_ui_invoker) and callable(invoke_on_ui):
+                set_ui_invoker(invoke_on_ui)
 
     @classmethod
     def development(cls, process: Any, origin: str, *, profile_parent: Path,

@@ -191,9 +191,30 @@ export class HostProviderService {
     return normalizeProvider(route ? { ...(result as Record<string, unknown>), route } : result);
   }
 
-  /** Opens the OS-native credential prompt. Secret text is intentionally not accepted. */
-  async configureCredential(providerId: string, options: { remember?: boolean; memoryOnly?: boolean } = {}): Promise<unknown> {
+  /**
+   * Opens the OS-native credential prompt. Secret text is intentionally not accepted.
+   * `waiting` means the window is open: a `provider.status` event with a `key.` operation says how it ended.
+   */
+  async configureCredential(providerId: string, options: { remember?: boolean; memoryOnly?: boolean } = {}): Promise<{ waiting?: boolean }> {
     return this.call('provider.configureCredential', { providerId, storageMode: options.memoryOnly ? 'memoryOnly' : 'osVault' });
+  }
+
+  /** Asks for a key and settles once the window has closed, however long that takes. Closing it without a key is not a failure. */
+  async addKey(providerId: string, options: { remember?: boolean; memoryOnly?: boolean } = {}): Promise<void> {
+    let stop: () => void = () => undefined;
+    const closed = new Promise<void>((resolve, reject) => {
+      stop = this.subscribeProviderEvents(({ event, payload }) => {
+        const said = (payload ?? {}) as { providerId?: string; operation?: string; message?: string };
+        if (event !== 'provider.status' || said.providerId !== providerId || !said.operation?.startsWith('key.')) return;
+        if (said.operation === 'key.failed') reject(new Error(said.message ?? 'The key was not added.'));
+        else resolve();
+      });
+    });
+    closed.catch(() => undefined);
+    try {
+      const opened = await this.configureCredential(providerId, options);
+      if (opened?.waiting) await closed;
+    } finally { stop(); }
   }
 
   async deleteCredential(providerId: string): Promise<unknown> {

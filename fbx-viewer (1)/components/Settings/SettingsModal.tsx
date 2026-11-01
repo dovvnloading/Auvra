@@ -71,6 +71,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
   const [health, setHealth] = useState<Record<string, ProviderHealth>>({});
   const [rememberCredential, setRememberCredential] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [keyWindowFor, setKeyWindowFor] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [, setRoutesSeen] = useState(0);
 
@@ -121,10 +122,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
 
   const addKey = async (provider: ProviderDescriptor) => {
     setBusy(true); setMessage(null);
+    setKeyWindowFor(provider.id);
     try {
-      await hostProviderService.configureCredential(provider.id, { remember: rememberCredential, memoryOnly: !rememberCredential });
+      await hostProviderService.addKey(provider.id, { remember: rememberCredential, memoryOnly: !rememberCredential });
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : 'The key was not added.');
+    } finally {
+      setKeyWindowFor(null);
       await refresh();
-    } catch (cause) { setMessage(cause instanceof Error ? cause.message : 'The key was not added.'); setBusy(false); }
+    }
   };
 
   const removeKey = async (provider: ProviderDescriptor) => {
@@ -146,15 +152,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
     const words = local ? null : KEY_WORDS[provider.credentialStatus ?? 'absent'] ?? KEY_WORDS.absent;
     const hasKey = provider.credentialStatus === 'configured' || provider.credentialStatus === 'memoryOnly';
     const running = health[provider.id]?.status === 'healthy';
+    const waitingForKey = keyWindowFor === provider.id;
     return (
       <li key={provider.id} className="flex h-10 items-center gap-2.5 px-4">
         <span className="shrink-0 text-ink-3">{local ? <Cpu size={14} /> : <Cloud size={14} />}</span>
         <span className="w-28 shrink-0 truncate text-xs text-ink">{provider.name || provider.id}</span>
-        <span className={`min-w-0 flex-1 truncate text-2xs ${local ? (running ? 'text-ok' : 'text-ink-3') : words?.good ? 'text-ok' : 'text-ink-3'}`}>
-          {local ? (running ? 'Running on this computer' : 'Not running on this computer') : words?.text}
+        <span className={`min-w-0 flex-1 truncate text-2xs ${waitingForKey ? 'text-ink' : local ? (running ? 'text-ok' : 'text-ink-3') : words?.good ? 'text-ok' : 'text-ink-3'}`}>
+          {waitingForKey ? 'Paste the key in the window that opened' : local ? (running ? 'Running on this computer' : 'Not running on this computer') : words?.text}
         </span>
-        {!local && hasKey && <Button variant="ghost" size="sm" disabled={busy} onClick={() => void removeKey(provider)}>Remove</Button>}
-        {!local && <Button size="sm" disabled={busy || provider.credentialStatus === 'unavailable'} onClick={() => void addKey(provider)}>{hasKey ? 'Replace key' : 'Add key'}</Button>}
+        {!local && hasKey && <Button variant="ghost" size="sm" disabled={busy || keyWindowFor !== null} onClick={() => void removeKey(provider)}>Remove</Button>}
+        {!local && <Button size="sm" disabled={busy || keyWindowFor !== null || provider.credentialStatus === 'unavailable'} onClick={() => void addKey(provider)}>{hasKey ? 'Replace key' : 'Add key'}</Button>}
         <label className="flex shrink-0 items-center gap-1 text-2xs text-ink-3" title="Off, this provider does no work, whatever it has been chosen for">
           <input type="checkbox" className="accent-accent" checked={Boolean(provider.settings?.enabled)} onChange={(event) => void save(provider, { enabled: event.target.checked })} /> On
         </label>
