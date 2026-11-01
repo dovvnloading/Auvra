@@ -49,7 +49,7 @@ A **Decal** component has **Describe** under its texture too. It paints the pict
 
 Reframe is found where it is usually kept, or at the folder named by the `AUVRA_REFRAME_HOME` environment variable, and it runs under the Python in its own `.venv`, or the one named by `AUVRA_REFRAME_PYTHON`, or else the one on the path. Each render is a process of its own and leaves Reframe's folder as it was.
 
-It takes each surface's colour, roughness, metal and normal maps and values, the level's lights, the sky and the camera. A procedural sky is captured into a panorama as it stands. A material from the Materials tab is carried by the textures wired to its inputs; one worked out by other nodes gets its plain colour, and terrain gets the colour bounced light takes from it.
+It takes each surface's colour, roughness, metal and normal maps and values, the level's lights, the sky and the camera. A procedural sky is captured into a panorama as it stands. A material from the Materials tab is drawn out onto pictures first, whatever its nodes do, so it comes through as it looks in the view at that moment and from that camera. One that goes by where a surface stands or faces gets a picture with a place for each triangle, so each surface has its own look, and its normal is left out. A glow that is the same all over lights what is around it; one that varies is drawn into the surface's colour, so it shows where it is but lights nothing. Moving a surface with **World Position Offset** does not reach the frame. Terrain gets the colour bounced light takes from it.
 
 ## Materials
 

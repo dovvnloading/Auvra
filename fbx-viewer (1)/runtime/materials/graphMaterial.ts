@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {
     MAX_RAMP_STOPS,
+    OUTPUT_NODE_TYPE,
     STATIC_PARAM_KINDS,
     compileMaterialGraph,
     getMaterialNodeDefinition,
@@ -93,9 +94,22 @@ export interface MaterialPreviewOptions {
     columns: number;
 }
 
+/** The surface inputs of a graph that can be drawn out across a map, for a renderer that cannot run its shader. */
+export type BakedGraphInput = 'baseColor' | 'roughness' | 'metalness' | 'normal' | 'emissive' | 'opacity';
+
+/** An attribute that says where each corner lies on a map made for baking, where a mesh's own UVs would not do. */
+export const BAKE_PLACE_ATTRIBUTE = 'bakePlace';
+
+/** What to draw out, and which attribute says where: the mesh's own `uv`, or BAKE_PLACE_ATTRIBUTE. */
+interface GraphBake {
+    input: BakedGraphInput;
+    place: 'uv' | typeof BAKE_PLACE_ATTRIBUTE;
+}
+
 interface GraphBinding {
     graph: MaterialGraph;
     preview: MaterialPreviewOptions | null;
+    bake: GraphBake | null;
     settings: MaterialGraphSettings;
     fragment: CompiledMaterialGraph;
     /** The vertex offset, when the graph wires one. */
@@ -129,12 +143,18 @@ export const materialGraphAnimated = (material: THREE.Material): boolean => {
 const shapesShadow = (binding: Pick<GraphBinding, 'settings' | 'vertex'>): boolean => binding.settings.blendMode === 'masked' || binding.vertex !== null;
 
 const PREVIEW_SETTINGS: MaterialGraphSettings = { blendMode: 'opaque', alphaClip: 0.5, twoSided: false, unlit: true };
+const BAKE_SETTINGS: MaterialGraphSettings = { ...PREVIEW_SETTINGS, twoSided: true };
 
-const compileStages = (graph: MaterialGraph, preview: MaterialPreviewOptions | null): Omit<GraphBinding, 'uniforms' | 'textures' | 'own'> => {
+const compileStages = (graph: MaterialGraph, preview: MaterialPreviewOptions | null, bake: GraphBake | null): Omit<GraphBinding, 'uniforms' | 'textures' | 'own'> => {
     if (preview) {
         const fragment = compileMaterialGraph(graph, { stage: 'fragment', previews: preview.nodeIds });
         const specs = new Map(fragment.uniforms.map(spec => [spec.name, spec]));
-        return { graph, preview, settings: PREVIEW_SETTINGS, fragment, vertex: null, shadow: null, specs, key: `preview#${preview.columns}#${fragment.key}` };
+        return { graph, preview, bake: null, settings: PREVIEW_SETTINGS, fragment, vertex: null, shadow: null, specs, key: `preview#${preview.columns}#${fragment.key}` };
+    }
+    if (bake) {
+        const fragment = compileMaterialGraph(graph, { stage: 'fragment' });
+        const specs = new Map(fragment.uniforms.map(spec => [spec.name, spec]));
+        return { graph, preview: null, bake, settings: BAKE_SETTINGS, fragment, vertex: null, shadow: null, specs, key: `bake#${bake.input}#${bake.place}#${fragment.key}` };
     }
     const settings = materialGraphSettings(graph);
     const fragment = compileMaterialGraph(graph, { stage: 'fragment' });
@@ -143,7 +163,7 @@ const compileStages = (graph: MaterialGraph, preview: MaterialPreviewOptions | n
     const specs = new Map<string, MaterialUniformSpec>();
     for (const stage of [fragment, vertex, shadow]) for (const spec of stage?.uniforms ?? []) specs.set(spec.name, spec);
     const key = [fragment.key, vertex?.key ?? '-', shadow?.key ?? '-', settings.blendMode, settings.unlit, settings.twoSided].join('#');
-    return { graph, preview: null, settings, fragment, vertex, shadow, specs, key };
+    return { graph, preview: null, bake: null, settings, fragment, vertex, shadow, specs, key };
 };
 
 /** Sets each uniform the graph needs from its node's param (adding the ones it lacks). */
@@ -297,29 +317,39 @@ const previewSelection = (preview: MaterialPreviewOptions, previews: readonly st
     ...previews.map((expression, index) => `${index ? 'else ' : ''}if (mgTile == ${index}) mgPreview = ${expression};`),
 ].join('\n');
 
+/** GLSL for the colour an input is drawn out as: a normal encoded as a normal map is, and a single value in every channel. */
+const bakedValue = (bake: BakedGraphInput, outputs: Record<string, string>): string => {
+    if (bake === 'normal') return `${outputs.normal} * 0.5 + 0.5`;
+    return bake === 'baseColor' || bake === 'emissive' ? outputs[bake] : `vec3(${outputs[bake]})`;
+};
+
 const patchShader = (binding: GraphBinding, shader: THREE.WebGLProgramParametersWithUniforms): void => {
-    const { fragment, vertex, settings, preview } = binding;
+    const { fragment, vertex, settings, preview, bake } = binding;
     const { statements, outputs, connected } = fragment;
     bindUniforms(binding, shader, [fragment, vertex]);
     const fragmentBuiltins = fragment.builtins;
 
+    const placeAttribute = bake && bake.place !== 'uv' ? `attribute vec2 ${bake.place};\n` : '';
     shader.vertexShader = replaceOnce(shader.vertexShader, 'void main() {',
-        `${varyingsFor(fragmentBuiltins).join('\n')}\n#define MG_OBJECT_NORMAL objectNormal\n${VERTEX_COLOR_ATTRIBUTE}\n${preamble([vertex])}\nvoid main() {`);
-    shader.vertexShader = replaceOnce(shader.vertexShader, '#include <project_vertex>', vertexBlock(vertex, fragmentBuiltins));
+        `${placeAttribute}${varyingsFor(fragmentBuiltins).join('\n')}\n#define MG_OBJECT_NORMAL objectNormal\n${VERTEX_COLOR_ATTRIBUTE}\n${preamble([vertex])}\nvoid main() {`);
+    // Baking draws each triangle where it lies on the map, while everything it reads still comes from where it stands.
+    shader.vertexShader = replaceOnce(shader.vertexShader, '#include <project_vertex>', `${vertexBlock(vertex, fragmentBuiltins)}${bake ? `\ngl_Position = vec4(${bake.place} * 2.0 - 1.0, 0.0, 1.0);` : ''}`);
 
     let source = shader.fragmentShader;
     source = replaceOnce(source, 'void main() {', `${varyingsFor(fragmentBuiltins).join('\n')}\n${FRAGMENT_FUNCTIONS}\n${preamble([fragment])}\nvoid main() {`);
+    // Which way round a triangle lies on the map says nothing about which way it faces.
+    if (bake) source = `#undef DOUBLE_SIDED\n${source}`;
     // The whole graph runs where the standard material would read its colour map.
     source = replaceOnce(source, '#include <map_fragment>', preview
         ? `${statements.join('\n')}\n${previewSelection(preview, fragment.previews)}\ndiffuseColor.rgb = mgPreview;`
-        : `${statements.join('\n')}\ndiffuseColor.rgb = ${outputs.baseColor};`);
+        : `${statements.join('\n')}\ndiffuseColor.rgb = ${bake ? bakedValue(bake.input, outputs) : outputs.baseColor};`);
     source = replaceOnce(source, '#include <alphamap_fragment>', settings.blendMode === 'opaque' ? 'diffuseColor.a = 1.0;' : `diffuseColor.a = ${outputs.opacity};`);
     source = replaceOnce(source, '#include <roughnessmap_fragment>', `float roughnessFactor = ${outputs.roughness};`);
     source = replaceOnce(source, '#include <metalnessmap_fragment>', `float metalnessFactor = ${outputs.metalness};`);
     if (connected.has('normal')) {
         source = replaceOnce(source, '#include <normal_fragment_maps>', THREE.ShaderChunk.normal_fragment_maps.replace(NORMAL_READ, `vec3 mapN = ${outputs.normal};`));
     }
-    source = replaceOnce(source, '#include <emissivemap_fragment>', preview ? 'totalEmissiveRadiance = vec3(0.0);' : `totalEmissiveRadiance = ${outputs.emissive};`);
+    source = replaceOnce(source, '#include <emissivemap_fragment>', preview || bake ? 'totalEmissiveRadiance = vec3(0.0);' : `totalEmissiveRadiance = ${outputs.emissive};`);
     if (connected.has('occlusion')) {
         source = replaceOnce(source, '#include <aomap_fragment>', `{
     float ambientOcclusion = ${outputs.occlusion};
@@ -332,7 +362,8 @@ const patchShader = (binding: GraphBinding, shader: THREE.WebGLProgramParameters
     }
     if (settings.unlit) source = replaceOnce(source, LIT_OUTPUT, 'vec3 outgoingLight = diffuseColor.rgb + totalEmissiveRadiance;');
     // Previews draw into a linear render target, but are read back as the image they show.
-    if (preview) source = replaceOnce(source, '#include <colorspace_fragment>', 'gl_FragColor = sRGBTransferOETF( clamp( gl_FragColor, 0.0, 1.0 ) );');
+    if (preview || bake?.input === 'baseColor') source = replaceOnce(source, '#include <colorspace_fragment>', 'gl_FragColor = sRGBTransferOETF( clamp( gl_FragColor, 0.0, 1.0 ) );');
+    else if (bake) source = replaceOnce(source, '#include <colorspace_fragment>', 'gl_FragColor = clamp( gl_FragColor, 0.0, 1.0 );');
     shader.fragmentShader = source;
 };
 
@@ -398,8 +429,9 @@ export const bindMaterialGraph = (
     graph: unknown,
     textures: MaterialTextureLookup = () => null,
     preview: MaterialPreviewOptions | null = null,
+    bake: GraphBake | null = null,
 ): void => {
-    const stages = compileStages(normalizeMaterialGraph(graph), preview);
+    const stages = compileStages(normalizeMaterialGraph(graph), preview, bake);
     const existing = bindings.get(material);
     if (existing) {
         const rebuild = stages.key !== existing.key;
@@ -458,6 +490,58 @@ export const unbindMaterialGraph = (material: StandardMaterial): void => {
     material.map = own.map;
     material.normalMap = own.normalMap;
     material.needsUpdate = true;
+};
+
+/** What a graph may read that differs from one place on a surface to another of the same place on its map. */
+const PLACE_BUILTINS: readonly MaterialBuiltin[] = ['worldPosition', 'localPosition', 'objectPosition', 'worldNormal', 'localNormal', 'viewDirection', 'cameraDistance'];
+
+/** What a material's graph gives its surface where nothing is wired to an input, in linear light, and which are wired. */
+export interface GraphSurface {
+    wired: ReadonlySet<string>;
+    /** Whether it goes by where a surface stands or faces, so that two surfaces at one place on a map can look different. */
+    readsPlace: boolean;
+    baseColor: [number, number, number];
+    emissive: [number, number, number];
+    roughness: number;
+    metalness: number;
+    /** 1 for a material the graph does not draw through. */
+    opacity: number;
+}
+
+/** The surface of a material a graph shades, or null for one it does not. */
+export const graphSurface = (material: THREE.Material): GraphSurface | null => {
+    const binding = bindings.get(material);
+    if (!binding) return null;
+    const output = binding.graph.nodes.find(node => node.type === OUTPUT_NODE_TYPE);
+    const definition = getMaterialNodeDefinition(OUTPUT_NODE_TYPE)!;
+    const read = (key: string) => readParam(definition.params.find(param => param.key === key)!, output?.params[key]);
+    const colour = (key: string): [number, number, number] => {
+        const [r, g, b] = read(key) as number[];
+        // Colours are picked in sRGB.
+        const linear = new THREE.Color().setRGB(r, g, b, THREE.SRGBColorSpace);
+        return [linear.r, linear.g, linear.b];
+    };
+    return {
+        wired: binding.fragment.connected,
+        readsPlace: PLACE_BUILTINS.some(builtin => binding.fragment.builtins.has(builtin)),
+        baseColor: colour('baseColor'),
+        emissive: colour('emissive'),
+        roughness: read('roughness') as number,
+        metalness: read('metalness') as number,
+        opacity: binding.settings.blendMode === 'opaque' ? 1 : read('opacity') as number,
+    };
+};
+
+/**
+ * A material that draws what `material`'s graph gives one of its inputs, flat, each triangle where `place` says it lies on a map.
+ * The caller draws with it and disposes of it. Null for a material no graph shades.
+ */
+export const graphBakeMaterial = (material: THREE.Material, input: BakedGraphInput, place: GraphBake['place'] = 'uv'): THREE.MeshStandardMaterial | null => {
+    const binding = bindings.get(material);
+    if (!binding) return null;
+    const baker = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, depthTest: false, depthWrite: false, toneMapped: false });
+    bindMaterialGraph(baker, binding.graph, binding.textures, null, { input, place });
+    return baker;
 };
 
 /** A new standard material shaded by `graph` (material previews, and meshes that have none of their own). */
