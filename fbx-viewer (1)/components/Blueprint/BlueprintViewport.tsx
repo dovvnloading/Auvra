@@ -195,7 +195,7 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
                                 key={label}
                                 type="button"
                                 onClick={() => setWeaponsInUse(inUse)}
-                                className={`px-3 py-1 ${weaponsInUse === inUse ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+                                className={`px-3 py-1 ${weaponsInUse === inUse ? 'bg-blue-600 text-accent-ink' : 'text-gray-400 hover:text-gray-200'}`}
                             >
                                 {label}
                             </button>

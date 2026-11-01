@@ -266,7 +266,7 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
           <button type="button" disabled={disabled || !dirty} onClick={() => { setMessage(null); baselineRef.current = JSON.stringify(stored); setDraft(stored); }} className="flex items-center gap-2 rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-50"><RotateCcw size={13} /> Revert</button>
           <div className="flex items-center gap-2">
             <button type="button" onClick={onClose} className="rounded px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-800 hover:text-white">Close</button>
-            <button type="button" disabled={disabled || !dirty || !writable} onClick={() => void save()} className="flex items-center gap-2 rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-500 disabled:opacity-50" title={writable ? 'Save localization' : 'Open a writable project to save'}><Save size={13} /> {saving ? 'Saving…' : 'Save'}</button>
+            <button type="button" disabled={disabled || !dirty || !writable} onClick={() => void save()} className="flex items-center gap-2 rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-accent-ink hover:bg-blue-500 disabled:opacity-50" title={writable ? 'Save localization' : 'Open a writable project to save'}><Save size={13} /> {saving ? 'Saving…' : 'Save'}</button>
           </div>
         </div>
       </div>

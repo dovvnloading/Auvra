@@ -171,7 +171,7 @@ export const MaterialPreview: React.FC<{
             <div className="absolute left-1.5 top-1.5 flex gap-1">
                 {PREVIEW_SHAPES.map(([value, label]) => (
                     <button key={value} onClick={() => pick(value)} aria-pressed={shape === value}
-                        className={`rounded px-1.5 py-0.5 text-[10px] ${shape === value ? 'bg-blue-600 text-white' : 'bg-gray-900/80 text-gray-300 hover:bg-gray-800'}`}>
+                        className={`rounded px-1.5 py-0.5 text-[10px] ${shape === value ? 'bg-blue-600 text-accent-ink' : 'bg-gray-900/80 text-gray-300 hover:bg-gray-800'}`}>
                         {label}
                     </button>
                 ))}

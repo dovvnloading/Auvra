@@ -271,6 +271,8 @@ export async function loadGameContent(
                 if (candidate.name !== materialName) continue;
                 attached = true;
                 if (candidate.map) candidate.map.dispose();
+                // A plain colour tinted nothing until now; a painted texture shows its own colours.
+                else candidate.color?.set(0xffffff);
                 candidate.map = texture;
                 candidate.transparent = true;
                 candidate.alphaTest = 0.5;

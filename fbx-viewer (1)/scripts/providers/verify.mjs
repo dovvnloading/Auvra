@@ -6,7 +6,7 @@ const root = fileURLToPath(new URL('../..', import.meta.url));
 const files = async (...parts) => Promise.all(parts.map((part) => readFile(resolve(root, part), 'utf8')));
 const [service, texture, hook, settings, ai, model] = await files(
   'services/HostProviderService.ts', 'services/TextureGenerationService.ts',
-  'hooks/useTextureGeneration.ts', 'components/Settings/SettingsModal.tsx',
+  'components/Tools/Retexture/retextureSession.ts', 'components/Settings/SettingsModal.tsx',
   'components/HUDEditor/AIChatPanel.tsx', 'hooks/useModelManager.ts',
 );
 const failures = [];

@@ -177,7 +177,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
                 </button>
                 <button 
                     onClick={() => addState(canvasRef.current)} 
-                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg shadow-lg text-xs font-bold transition-all border border-blue-400"
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-accent-ink rounded-lg shadow-lg text-xs font-bold transition-all border border-blue-400"
                 >
                     <Plus size={14} /> Add State
                 </button>
@@ -256,7 +256,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
                                 type="button"
                                 onPointerDown={(e) => e.stopPropagation()}
                                 onClick={(e) => { e.stopPropagation(); onSelectNode(transition.id); }}
-                                className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider border transition-colors ${selectedNodeId === transition.id ? 'bg-blue-600 border-blue-400 text-white' : flash?.id === transition.id ? 'bg-green-700 border-green-400 text-white' : 'bg-gray-800 border-gray-600 text-gray-300 hover:border-blue-500'}`}
+                                className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider border transition-colors ${selectedNodeId === transition.id ? 'bg-blue-600 border-blue-400 text-accent-ink' : flash?.id === transition.id ? 'bg-green-700 border-green-400 text-accent-ink' : 'bg-gray-800 border-gray-600 text-gray-300 hover:border-blue-500'}`}
                                 title="Any State transition: fires from every other state"
                             >
                                 Any &rarr;

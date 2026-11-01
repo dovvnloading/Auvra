@@ -752,6 +752,12 @@ export const useModelManager = (
     return newTexture.uuid;
   }, [models]);
 
+  /** Records which texture each of a model's materials wears. The materials themselves are already drawing with them. */
+  const setModelTextureOverrides = useCallback(async (modelId: string, overrides: Record<string, string>) => {
+    await dbOperations.updateModelTextureOverrides(modelId, overrides);
+    setModels((previous) => previous.map((candidate) => (candidate.id === modelId ? { ...candidate, textureOverrides: overrides } : candidate)));
+  }, []);
+
   const resetModelTexture = useCallback(async (modelId: string) => {
     projectService.assertWritable();
     setIsLoading(true);
@@ -815,6 +821,7 @@ export const useModelManager = (
     addAnimations,
     retextureModel,
     previewTexture,
+    setModelTextureOverrides,
     resetModelTexture
   });
 };

@@ -217,7 +217,7 @@ export const WeaponsPanel: React.FC<WeaponsPanelProps> = ({ weapons, attachments
                                         <button
                                             type="button"
                                             onClick={() => setFitStatus(status => ({ ...status, [weapon.id]: onFit(weapon) }))}
-                                            className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white bg-blue-600 hover:bg-blue-500 rounded"
+                                            className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-accent-ink bg-blue-600 hover:bg-blue-500 rounded"
                                             title="Places the weapon in the hands as its Idle while held clip (else its Aim clip) poses them: its grip where the fingers close, its barrel through the other hand, or ahead"
                                         >
                                             Fit

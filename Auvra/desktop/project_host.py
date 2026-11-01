@@ -349,6 +349,10 @@ class NativeProjectHost:
     def _record_pending_asset(self, project_id: str, asset_id: str) -> None:
         self._pending_assets[project_id].add(asset_id)
 
+    def retain_pending_asset(self, project_id: str, asset_id: str) -> None:
+        """An upload something else now relies on: it stays until the project closes, when anything still unnamed goes."""
+        self._pending_assets[project_id].discard(asset_id)
+
     def _discard_pending_assets(self, project_id: str, active: Any | None = None) -> None:
         pending = self._pending_assets.get(project_id)
         if not pending:

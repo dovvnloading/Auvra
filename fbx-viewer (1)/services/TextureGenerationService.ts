@@ -2,67 +2,54 @@ import { hostProviderService, HostProviderError, InferenceJob, MediaPreview } fr
 import { projectService } from '../utils/projectService';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 
-export interface TextureGenerationResult extends MediaPreview { previewUrl: string; }
-export interface TextureGenerationOptions {
-  onProgress?: (progress: number, job: InferenceJob) => void;
+/** A finished job's picture. Its URL is the caller's: the picture stays loaded until the caller revokes it. */
+export interface TexturePreview extends MediaPreview {
+  jobId: string;
+  previewAssetId: string;
+  previewUrl: string;
 }
 
 const MAX_LOCAL_MEDIA_BYTES = 8 * 1024 * 1024;
 
-/** Host-mediated media workflow. Provider calls never run in the browser. */
+/**
+ * Host-mediated media workflow. Provider calls never run in the browser. Every job stands alone, so several can run at
+ * once and their pictures can be compared before any is kept.
+ */
 export class TextureGenerationService {
-  private activeJobId: string | null = null;
-  private completedJobId: string | null = null;
-  private previewObjectUrl: string | null = null;
-
-  /** Restyles `sourceImage` as the prompt says, or with none, makes a new image from the prompt alone. */
-  async generateTexture(sourceImage: string | null, userPrompt: string, maskReferenceBase64?: string, options: TextureGenerationOptions = {}): Promise<TextureGenerationResult> {
+  /** Asks for the source asset restyled as the prompt says, or with none, a new image from the prompt alone. */
+  async submit(sourceAssetId: string | null, userPrompt: string): Promise<InferenceJob> {
     if (!userPrompt.trim()) throw new Error('Describe the desired material before generating.');
-    if (maskReferenceBase64) throw new HostProviderError('Masked texture generation is not supported by the current host contract.', 'unsupported_capability');
-    const sourceAssetId = sourceImage ? await this.ingestLocalAsset(sourceImage, 'source-texture') : null;
-    const job = await hostProviderService.submitInference({
+    return hostProviderService.submitInference({
       capability: sourceAssetId ? 'media.edit' : 'media.generate',
       input: userPrompt.trim(), ...(sourceAssetId ? { assetIds: [sourceAssetId] } : {}), consent: 'explicit',
     });
-    this.activeJobId = job.jobId || null; this.completedJobId = null;
-    return this.waitForPreview(job, options.onProgress);
   }
 
-  async cancel(): Promise<void> { if (this.activeJobId) await hostProviderService.cancelInference(this.activeJobId); this.activeJobId = null; }
-  async retry(options: TextureGenerationOptions = {}): Promise<TextureGenerationResult> {
-    if (!this.activeJobId) throw new Error('There is no texture job to retry.');
-    return this.waitForPreview(await hostProviderService.retryInference(this.activeJobId), options.onProgress);
-  }
-  async discard(assetId: string): Promise<void> { const jobId = this.completedJobId || this.activeJobId; if (assetId && jobId) await hostProviderService.discardMedia(assetId, jobId); this.activeJobId = null; this.completedJobId = null; }
-  async commit(assetId: string, payload: Record<string, unknown> = {}): Promise<MediaPreview> {
-    if (!assetId) throw new Error('The generated media asset is unavailable.');
-    if (!this.completedJobId) throw new Error('The generated media job is no longer available. Generate a new preview before committing.');
-    const result = await hostProviderService.commitMedia({
-      ...payload,
-      jobId: this.completedJobId,
-      previewAssetId: assetId,
-      textureId: payload.textureId || assetId,
-      name: payload.name || 'Generated Texture',
-    });
-    if (result.assetId && /^[0-9a-f]{64}$/.test(result.assetId)) {
-      const previewUrl = await this.loadAsset(result.assetId);
-      this.activeJobId = null; this.completedJobId = null;
-      return { ...result, previewUrl };
-    }
-    this.activeJobId = null; this.completedJobId = null; return { ...result, previewUrl: '' };
-  }
-
-  private async waitForPreview(initial: InferenceJob, onProgress?: TextureGenerationOptions['onProgress']): Promise<TextureGenerationResult> {
-    const job = await hostProviderService.waitForJob(initial, (current) => {
-      onProgress?.(typeof current.progress === 'number' ? Math.max(0, Math.min(1, current.progress)) : 0, current);
-    });
+  /** Follows a job to its end, and loads the picture of one that succeeded. */
+  async follow(initial: InferenceJob, onUpdate?: (job: InferenceJob) => void): Promise<TexturePreview> {
+    const job = await hostProviderService.waitForJob(initial, onUpdate);
     if (job.status !== 'succeeded') throw new HostProviderError(job.error?.message || 'Texture generation failed.', job.error?.code, job.error?.retryable);
     const result = job.result && typeof job.result === 'object' ? job.result as MediaPreview : {};
     const previewAssetId = result.previewAssetId || (Array.isArray((result as { previewAssetIds?: unknown[] }).previewAssetIds) ? String((result as { previewAssetIds: unknown[] }).previewAssetIds[0] || '') : '');
     if (!/^[0-9a-f]{64}$/.test(previewAssetId)) throw new HostProviderError('The host returned an invalid preview content hash.', 'invalid_preview');
     let previewUrl = '';
     try { previewUrl = await this.loadAsset(previewAssetId); } catch { throw new HostProviderError('The host preview asset could not be resolved.', 'invalid_preview'); }
-    this.completedJobId = job.jobId; this.activeJobId = null; return { ...result, assetId: previewAssetId, previewAssetId, previewUrl, jobId: job.jobId };
+    return { ...result, assetId: previewAssetId, previewAssetId, previewUrl, jobId: job.jobId };
+  }
+
+  async cancel(jobId: string): Promise<void> { await hostProviderService.cancelInference(jobId); }
+
+  async discard(jobId: string, previewAssetId: string): Promise<void> { await hostProviderService.discardMedia(previewAssetId, jobId); }
+
+  /** Keeps a preview in the project's texture library. The host lets go of the preview once it has. */
+  async commit(jobId: string, previewAssetId: string, payload: Record<string, unknown> = {}): Promise<MediaPreview> {
+    return hostProviderService.commitMedia({
+      ...payload,
+      jobId,
+      previewAssetId,
+      textureId: payload.textureId || previewAssetId,
+      name: payload.name || 'Generated Texture',
+    });
   }
 
   /**
@@ -72,13 +59,11 @@ export class TextureGenerationService {
   private async loadAsset(assetId: string): Promise<string> {
     const response = await fetch(await projectService.resolveAsset(assetId));
     if (!response.ok) throw new Error('The asset could not be read.');
-    const url = URL.createObjectURL(await response.blob());
-    if (this.previewObjectUrl) URL.revokeObjectURL(this.previewObjectUrl);
-    this.previewObjectUrl = url;
-    return url;
+    return URL.createObjectURL(await response.blob());
   }
 
-  private async ingestLocalAsset(value: string, name: string): Promise<string> {
+  /** Gives the host a picture to work from, once however many jobs start from it. */
+  async ingestLocalAsset(value: string, name = 'source-texture'): Promise<string> {
     if (/^[0-9a-f]{64}$/.test(value)) return value;
     if (!/^data:/i.test(value)) throw new Error('Media input must be a host asset id.');
     const match = /^data:([^;,]+)?(;base64)?,(.*)$/is.exec(value);
@@ -95,6 +80,6 @@ export class TextureGenerationService {
 }
 
 frontendDiagnostics.instrumentClass(TextureGenerationService, 'texture_generation', [
-  'generateTexture', 'cancel', 'retry', 'discard', 'commit',
+  'submit', 'follow', 'cancel', 'discard', 'commit',
 ]);
 export const textureService = new TextureGenerationService();

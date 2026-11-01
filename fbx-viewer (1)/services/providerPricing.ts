@@ -30,6 +30,19 @@ export const formatModelPrice = (model: ProviderModel): string | null => {
 };
 
 /**
+ * About what one job of a media model comes to, in micro-USD, for a picture of so many megapixels. Null for a language
+ * model, or while the price is not known.
+ */
+export const estimateJobCost = (model: ProviderModel, megapixels = 1.05): number | null => {
+  if (typeof model.priceMicroUsd !== 'number' || typeof model.outputPriceMicroUsd === 'number') return null;
+  const unit = model.priceUnit ?? '';
+  return model.priceMicroUsd * (unit.includes('megapixel') ? megapixels : UNITS[unit]?.perJob ?? 1);
+};
+
+/** An amount as a person would read it, with enough digits to tell the very cheap apart. */
+export const formatCost = (microUsd: number): string => dollars(microUsd);
+
+/**
  * What to sort by for "cheapest": a rough cost of one job, so that a price per image and one per second can be weighed.
  * A language model weighs its input and output as a short exchange would. Unknown prices sort last.
  */

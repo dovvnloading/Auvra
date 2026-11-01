@@ -128,6 +128,7 @@ const FAILURE_MESSAGES: Record<string, string> = {
   provider_invalid_response: 'The provider gave an answer that could not be used.',
   provider_not_found: 'The provider does not have this model any more.',
   provider_failed: 'The provider could not finish this.',
+  'provider job failed': 'The provider could not finish this.',
   budget_exceeded: 'This would go over the budget set in Settings.',
 };
 

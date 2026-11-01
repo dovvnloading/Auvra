@@ -763,7 +763,7 @@ const MultiSelectionInspector: React.FC<{
         });
     };
 
-    const applyButton = 'shrink-0 px-2 h-7 rounded text-[10px] font-bold uppercase bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors';
+    const applyButton = 'shrink-0 px-2 h-7 rounded text-[10px] font-bold uppercase bg-blue-600 hover:bg-blue-500 text-accent-ink disabled:opacity-30 disabled:cursor-not-allowed transition-colors';
     const shown = selection.slice(0, MULTI_SELECTION_NAME_LIMIT);
 
     return (

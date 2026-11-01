@@ -265,7 +265,7 @@ export const EnvironmentMaskTool: React.FC<EnvironmentMaskToolProps> = ({ modelI
                                     />
 
                                     {isPicking && (
-                                        <div className="absolute top-2 left-2 bg-blue-600 text-white text-[10px] px-2 py-1 rounded shadow animate-pulse pointer-events-none">
+                                        <div className="absolute top-2 left-2 bg-blue-600 text-accent-ink text-[10px] px-2 py-1 rounded shadow animate-pulse pointer-events-none">
                                             Pick Key Color
                                         </div>
                                     )}
@@ -278,7 +278,7 @@ export const EnvironmentMaskTool: React.FC<EnvironmentMaskToolProps> = ({ modelI
                                         <div className="flex items-center gap-2">
                                             <button 
                                                 onClick={() => setIsPicking(!isPicking)}
-                                                className={`p-1.5 rounded border transition-colors ${isPicking ? 'bg-blue-600 border-blue-500 text-white' : 'bg-gray-700 border-gray-600 text-gray-300 hover:text-white'}`}
+                                                className={`p-1.5 rounded border transition-colors ${isPicking ? 'bg-blue-600 border-blue-500 text-accent-ink' : 'bg-gray-700 border-gray-600 text-gray-300 hover:text-accent-ink'}`}
                                                 title="Pick color from image"
                                             >
                                                 <Pipette size={12} />

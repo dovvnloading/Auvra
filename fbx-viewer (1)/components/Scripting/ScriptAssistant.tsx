@@ -55,7 +55,7 @@ export const ScriptAssistant: React.FC<ScriptAssistantProps> = ({ draft, referen
         type="button"
         onClick={() => void ask()}
         disabled={working || !request.trim()}
-        className="flex w-full items-center justify-center gap-1.5 rounded bg-blue-600 px-2 py-1.5 text-[11px] font-bold text-white hover:bg-blue-500 disabled:opacity-50"
+        className="flex w-full items-center justify-center gap-1.5 rounded bg-blue-600 px-2 py-1.5 text-[11px] font-bold text-accent-ink hover:bg-blue-500 disabled:opacity-50"
       >
         {working ? <RefreshCw size={12} className="animate-spin" /> : <Sparkles size={12} />} {working ? 'Writing...' : 'Write it'}
       </button>

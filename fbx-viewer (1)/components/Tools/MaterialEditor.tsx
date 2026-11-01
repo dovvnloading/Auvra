@@ -535,7 +535,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
               type="button"
               onClick={() => void handleSave()}
               disabled={!dirty || saving}
-              className="flex-1 py-2 rounded-md bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex-1 py-2 rounded-md bg-blue-600 hover:bg-blue-500 text-accent-ink text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Save size={12} /> {saving ? 'Saving…' : 'Save'}
             </button>

@@ -22,12 +22,11 @@ const files = {
   styles: resolve(root, "styles.css"),
   scope: resolve(root, "components/HUDEditor/assets/ScopeReticle.tsx"),
   texture: resolve(root, "components/UI/Browser/TextureCard.tsx"),
-  retexture: resolve(root, "components/Tools/RetextureTool.tsx"),
   localEnvironment: resolve(root, "components/Scene/LocalEnvironment.tsx"),
   localEnvironmentCapture: resolve(root, "components/Scene/localEnvironmentCapture.ts"),
   viewerScene: resolve(root, "components/Scene/ViewerScene.tsx"),
   graphPreview: resolve(root, "components/AnimationGraph/GraphPreview.tsx"),
-  retextureEditor: resolve(root, "components/Tools/RetextureEditor.tsx"),
+  retextureEditor: resolve(root, "components/Tools/Retexture/RetextureStage.tsx"),
   thumbnailTooltip: resolve(root, "components/UI/ThumbnailTooltip.tsx"),
   skySystem: resolve(root, "components/Environment/SkySystem.tsx"),
   packageJson: resolve(root, "package.json"),
@@ -113,10 +112,9 @@ check(!source.packageJson.includes("@tailwindcss/vite") && !source.packageLock.i
 check(!source.packageLock.includes('"node_modules/lightningcss":') && !source.packageLock.includes('"node_modules/@tailwindcss/oxide'), "rejected MPL/native Tailwind closure remains");
 check(source.postcss.includes("tailwindcss") && source.postcss.includes("autoprefixer"), "PostCSS config is incomplete");
 check(source.tailwind.includes("content") && source.tailwind.includes("tsx"), "Tailwind content globs are missing");
-check(source.tailwind.includes("750: '#333333'") && source.tailwind.includes("850: '#1f1f1f'"), "local Tailwind config lost the editor's custom gray palette");
+check(source.tailwind.includes("750: '#35363b'") && source.tailwind.includes("850: '#232428'"), "local Tailwind config lost the editor's custom gray palette");
 check(source.scope.includes("reticle-noise"), "scope reticle lacks local noise replacement");
 check(source.texture.includes("<button") && !source.texture.includes('target="_blank"'), "texture card retains popup behavior");
-check(source.retexture.includes("texture-preview-surface"), "retexture preview lacks local surface");
 const environmentSites = ["localEnvironment", "localEnvironmentCapture", "viewerScene", "graphPreview", "retextureEditor", "thumbnailTooltip", "skySystem"];
 for (const name of environmentSites) {
   check(!/<Environment\s+preset\b|\bpreset\s*=|Drei.*preset|environment-assets/i.test(source[name]), `${name} retains preset-based environment resolution`);

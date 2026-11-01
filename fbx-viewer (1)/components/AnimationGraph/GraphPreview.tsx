@@ -471,7 +471,7 @@ export const PreviewTransport: React.FC<PreviewTransportProps> = ({
             onMouseDown={keepFocus}
             onClick={onToggleFollow}
             aria-pressed={follow}
-            className={`${transportButton} ${follow ? 'bg-blue-600 text-white hover:bg-blue-500' : 'hover:bg-gray-700 hover:text-white'}`}
+            className={`${transportButton} ${follow ? 'bg-blue-600 text-accent-ink hover:bg-blue-500' : 'hover:bg-gray-700 hover:text-accent-ink'}`}
             aria-label="Follow model"
             title={follow ? 'Camera follows the model' : 'Camera stays put; orbit freely'}
         >

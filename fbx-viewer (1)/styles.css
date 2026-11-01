@@ -3,7 +3,27 @@
 @tailwind utilities;
 
 :root {
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* Surfaces, darkest behind: the ground shows as the gutter between panels, fields sit below the panel they are in. */
+  --ground: 17 18 20;
+  --well: 22 23 25;
+  --panel: 30 31 34;
+  --raised: 38 39 43;
+  --line: 46 47 52;
+
+  --ink: 226 227 229;
+  --ink-2: 173 176 182;
+  --ink-3: 133 136 144;
+
+  --accent: 240 138 60;
+  --accent-hover: 247 156 86;
+  --accent-ink: 28 17 8;
+
+  --ok: 110 196 140;
+  --warn: 222 184 92;
+  --bad: 236 104 96;
+
+  font-family: "Inter Variable", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-feature-settings: "cv11" 1, "ss03" 1;
   color-scheme: dark;
 }
 
@@ -17,17 +37,57 @@ body,
 body {
   margin: 0;
   overflow: hidden;
-  background: #0a0a0a;
-  color: #fff;
+  background: rgb(var(--ground));
+  color: rgb(var(--ink));
+}
+
+/* The editor's own pages: a desktop tool, where chrome is not selectable text and only text fields change the cursor. */
+.editor-shell {
+  font-size: 12px;
+  line-height: 16px;
+  cursor: default;
+  user-select: none;
+}
+
+.editor-shell input,
+.editor-shell textarea,
+.editor-shell pre,
+.editor-shell code,
+.editor-shell [contenteditable="true"],
+.editor-shell .selectable {
+  user-select: text;
+}
+
+.editor-shell button,
+.editor-shell select,
+.editor-shell summary,
+.editor-shell a,
+.editor-shell [role="button"],
+.editor-shell .cursor-pointer {
+  cursor: default;
+}
+
+.editor-shell button:disabled,
+.editor-shell .cursor-not-allowed {
+  cursor: not-allowed;
+}
+
+.editor-shell :focus-visible {
+  outline: 1px solid rgb(var(--accent));
+  outline-offset: 1px;
+}
+
+::selection {
+  background: rgb(var(--accent) / 0.35);
 }
 
 /* Local, deterministic replacement for the old remote texture background. */
 .texture-preview-surface {
-  background-color: #0a0a0a;
-  background-image: linear-gradient(45deg, #171717 25%, transparent 25%),
-    linear-gradient(-45deg, #171717 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, #171717 75%),
-    linear-gradient(-45deg, transparent 75%, #171717 75%);
+  background-color: #161719;
+  background-image: linear-gradient(45deg, #232428 25%, transparent 25%),
+    linear-gradient(-45deg, #232428 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #232428 75%),
+    linear-gradient(-45deg, transparent 75%, #232428 75%);
   background-position: 0 0, 0 6px, 6px -6px, -6px 0;
   background-size: 12px 12px;
 }
@@ -39,7 +99,15 @@ body {
   background-size: 6px 6px;
 }
 
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #171717; }
-::-webkit-scrollbar-thumb { background: #404040; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #525252; }
+.scrollbar-none::-webkit-scrollbar { display: none; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 0.14);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover { background-color: rgb(255 255 255 / 0.26); }

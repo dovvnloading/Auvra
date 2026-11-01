@@ -1,404 +1,415 @@
 
-import React, { useState, useMemo, useEffect, useRef } from 'react';
-import * as THREE from 'three';
-import { AuvraCanvas } from '../../renderer/AuvraCanvas';
-import { Bounds, Center, OrbitControls, Grid, ContactShadows } from '@react-three/drei';
-import { Brush, RefreshCw, Check, Undo2, ArrowRight, AlertTriangle, Search, Box, Layers, Image as ImageIcon, Edit3, Trash2, RotateCcw, Repeat, Wand2, Sparkles, Save, Link, Download } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type * as THREE from 'three';
+import { AlertTriangle, Box, Check, ChevronsLeftRight, Columns2, Grid3x3, Maximize, Palette, Plus, RotateCw, Save, Trash2, X } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
-import { useTextureGeneration } from '../../hooks/useTextureGeneration';
-import { listModelTextures, textureToDataUrl } from '../../utils/textureUtils';
-import { LoadedModelData } from '../../types';
-import { loadFBXFile } from '../../utils/modelLoader';
-import { disposeObject } from '../../utils/processing/ModelLifecycle';
 import { useNotification } from '../../context/NotificationContext';
-import { LocalEnvironment } from '../Scene/LocalEnvironment';
+import type { ProviderModel } from '../../services/HostProviderService';
+import { materialLibrary } from '../../runtime/materials/materialLibrary';
+import { formatCost } from '../../services/providerPricing';
 import { AiRouteBar } from '../Settings/AiRouteBar';
+import { Button, IconButton, PanelEdge, PanelTitle, Section, Segmented, TextArea, Tooltip, usePanelWidth } from '../UI/kit';
+import { AssetRail } from './Retexture/AssetRail';
+import { RetextureStage, type StageLighting } from './Retexture/RetextureStage';
+import { retextureSessions, useRetextureSessions, type RetextureMode, type SessionPart, type Take } from './Retexture/retextureSession';
+import { STATE_WORDS, TakesStrip } from './Retexture/TakesStrip';
 
-const isRenderablePreview = (value: string | null): value is string => Boolean(value?.startsWith('blob:'));
-// The map a model carries comes out as a data URL, and is only ever shown, not applied.
-const isShowable = (value: string | null): value is string => Boolean(value && (value.startsWith('data:image/') || isRenderablePreview(value)));
+const COUNTS = [{ value: '1', label: '1' }, { value: '2', label: '2' }, { value: '4', label: '4' }] as const;
 
-const ModelList: React.FC<{
-    models: LoadedModelData[];
-    selectedId: string | null;
-    onSelect: (id: string) => void;
-}> = ({ models, selectedId, onSelect }) => {
-    const [search, setSearch] = useState('');
-    
-    // Filter only valid meshes (exclude animations)
-    const filtered = models.filter(m => 
-        m.category !== 'Animation' && 
-        m.name.toLowerCase().includes(search.toLowerCase())
-    );
+const LIGHTING_OPTIONS: readonly { value: StageLighting; label: string; hint: string }[] = [
+  { value: 'studio', label: 'Studio', hint: 'Three lights, as a product shot' },
+  { value: 'daylight', label: 'Daylight', hint: 'One sun and a bright sky' },
+  { value: 'flat', label: 'Flat', hint: 'Even light, for judging colour' },
+];
 
-    return (
-        <div className="w-80 bg-gray-900 border-r border-gray-800 flex flex-col shrink-0 z-20 shadow-xl">
-            <div className="p-4 border-b border-gray-800 shrink-0">
-                <h1 className="text-sm font-bold text-gray-200 tracking-wide flex items-center gap-2">
-                    <Layers size={14} className="text-gray-400" /> ASSETS
-                </h1>
-            </div>
-            
-            <div className="p-2 border-b border-gray-800 bg-gray-900">
-                <div className="relative">
-                    <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" />
-                    <input 
-                        type="text" 
-                        placeholder="Filter models..." 
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        className="w-full bg-gray-900 border border-gray-700 rounded-md py-1.5 pl-8 pr-4 text-xs text-gray-300 focus:outline-none focus:border-blue-500 transition-colors placeholder-gray-600"
-                    />
-                </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
-                {filtered.length === 0 && (
-                    <div className="text-center py-8 text-gray-600 text-xs italic">No models found.</div>
-                )}
-                {filtered.map(m => (
-                    <div 
-                        key={m.id}
-                        onClick={() => onSelect(m.id)}
-                        className={`
-                            flex items-center gap-3 px-2 py-2 rounded-md cursor-pointer transition-all border
-                            ${selectedId === m.id 
-                                ? 'bg-blue-900/20 border-blue-500/30' 
-                                : 'hover:bg-gray-800 border-transparent'
-                            }
-                        `}
-                    >
-                        <div className="w-10 h-10 rounded bg-gray-800 overflow-hidden border border-gray-700 flex items-center justify-center shrink-0">
-                            {m.thumbnail ? (
-                                <img src={m.thumbnail} className="w-full h-full object-cover" />
-                            ) : (
-                                <Box size={16} className="text-gray-600" />
-                            )}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                            <div className={`text-xs font-bold truncate ${selectedId === m.id ? 'text-white' : 'text-gray-400'}`}>{m.name}</div>
-                            <div className="text-[9px] text-gray-600 uppercase">{m.category}</div>
-                        </div>
-                        {selectedId === m.id && <Edit3 size={12} className="text-blue-400" />}
-                    </div>
-                ))}
-            </div>
-        </div>
-    );
+const isTyping = (target: EventTarget | null): boolean => {
+  const element = target as HTMLElement | null;
+  return Boolean(element && (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA' || element.tagName === 'SELECT' || element.isContentEditable));
 };
 
+/** One remembered text between visits to the tab. */
+let draftPrompt = '';
+let lastModelId: string | null = null;
+let lastProjectId: string | null | undefined;
+
 export const RetextureEditor: React.FC = () => {
-    const { models, previewTexture } = useScene();
-    const { addNotification } = useNotification();
-    
-    const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
-    const [previewModelId, setPreviewModelId] = useState<string | null>(null);
-    const [prompt, setPrompt] = useState('');
-    // Restyle the texture map the model has, or paint a new one from the description alone.
-    const [fromPromptOnly, setFromPromptOnly] = useState(false);
-    const canvasRef = useRef<HTMLCanvasElement>(null); // For future mask painting
+  const { models, selectedModelId: sceneModelId, setModelTextureOverrides, updateModelMaterialOverrides, projectStatus, isLoading } = useScene();
+  const { addNotification } = useNotification();
+  const sessions = useRetextureSessions();
 
-    const selectedModel = useMemo(() => models.find(m => m.id === selectedModelId), [models, selectedModelId]);
+  const left = usePanelWidth('retexture.assets', 216, 170, 360);
+  const right = usePanelWidth('retexture.inspector', 272, 232, 420);
 
-    // A model can draw with several maps (a character's skin, clothes and shoes): which one is being worked on.
-    const [mapChoice, setMapChoice] = useState<string | null>(null);
-    const [mapsRevision, setMapsRevision] = useState(0);
-    const maps = useMemo(() => (selectedModel ? listModelTextures(selectedModel.object) : []), [selectedModel, mapsRevision]); // eslint-disable-line react-hooks/exhaustive-deps
-    const chosenMap = maps.find(map => map.uuid === mapChoice) ?? maps[0] ?? null;
-    // The map a preview goes on. Each preview makes it a new texture, so it is followed from one to the next.
-    const previewTarget = useRef<string | undefined>(undefined);
-    const previewQueue = useRef<Promise<unknown>>(Promise.resolve());
-    /** Puts a picture on the map, one at a time: a large preview still loading must not land on top of what replaces it. */
-    const putOnMap = (modelId: string, url: string) => {
-        const done = previewQueue.current.catch(() => undefined).then(() => previewTexture(modelId, url, previewTarget.current)).then((uuid) => {
-            previewTarget.current = uuid;
-            setMapChoice(uuid);
-            setMapsRevision(revision => revision + 1);
-        });
-        previewQueue.current = done;
-        return done;
+  // A project's previews go with it.
+  useEffect(() => {
+    if (lastProjectId !== undefined && lastProjectId !== projectStatus.projectId) sessions.reset();
+    lastProjectId = projectStatus.projectId;
+  }, [projectStatus.projectId, sessions]);
+
+  const paintable = useMemo(() => models.filter((model) => model.category !== 'Animation'), [models]);
+  const [modelId, setModelId] = useState<string | null>(() => lastModelId ?? sceneModelId ?? null);
+  const model = paintable.find((item) => item.id === modelId) ?? paintable[0] ?? null;
+  useEffect(() => { lastModelId = model?.id ?? null; }, [model?.id]);
+
+  const session = useMemo(() => (model ? sessions.open(model.id, model.name, model.object, model.textureOverrides) : null),
+    // Only a different model or a newly loaded one starts a session; saving changes the overrides and is not that.
+    [model?.id, model?.object, sessions]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!session) return undefined;
+    sessions.attach(session);
+    return () => sessions.detach(session);
+  }, [session, sessions]);
+
+  const part = session?.parts.find((item) => item.id === session.activePartId) ?? null;
+  const worn = part?.takes.find((take) => take.id === part.worn) ?? null;
+
+  // The result being looked at: what is on the model, or one that has not got that far.
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+  useEffect(() => { setFocusedId(part?.worn ?? null); }, [part?.id, part?.worn]);
+  const focused = part?.takes.find((take) => take.id === focusedId) ?? null;
+
+  const [prompt, setPromptState] = useState(draftPrompt);
+  const setPrompt = (value: string) => { draftPrompt = value; setPromptState(value); };
+  const [wantedMode, setMode] = useState<RetextureMode>('restyle');
+  // A part with nothing on it has nothing to restyle.
+  const mode: RetextureMode = part && !part.texture ? 'new' : wantedMode;
+  const [routeModel, setRouteModel] = useState<ProviderModel | null>(null);
+  const [count, setCount] = useState<'1' | '2' | '4'>('1');
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const [lighting, setLighting] = useState<StageLighting>('studio');
+  const [floor, setFloor] = useState(true);
+  const [turntable, setTurntable] = useState(false);
+  const [frameSignal, setFrameSignal] = useState(0);
+  const [glowPart, setGlowPart] = useState<SessionPart | null>(null);
+
+  // Before and after, either side of a line dragged across the model.
+  const [compareOn, setCompareOn] = useState(false);
+  const [split, setSplit] = useState(0.5);
+  const [wornTexture, setWornTexture] = useState<THREE.Texture | null>(null);
+  useEffect(() => {
+    let current = true;
+    if (session && worn) void sessions.textureOf(session, worn).then((texture) => { if (current) setWornTexture(texture); });
+    else setWornTexture(null);
+    return () => { current = false; };
+  }, [session, sessions, worn]);
+  const canCompare = Boolean(part?.texture && worn && wornTexture);
+  const compare = compareOn && canCompare && part?.texture ? { split, part, before: part.texture, after: wornTexture } : null;
+  const stage = useRef<HTMLDivElement>(null);
+
+  const startSplitDrag = (event: React.PointerEvent<HTMLElement>) => {
+    event.preventDefault();
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
+    const move = (next: PointerEvent) => {
+      const box = stage.current?.getBoundingClientRect();
+      if (box) setSplit(Math.max(0.02, Math.min(0.98, (next.clientX - box.left) / box.width)));
     };
-
-    useEffect(() => { setMapChoice(null); }, [selectedModelId]);
-
-    const {
-        currentTextureBase64,
-        generatedTextureUrl,
-        isGenerating,
-        progress,
-        error,
-        setCurrentTexture,
-        generate,
-        commit,
-        discard,
-        cancel,
-        retry
-    } = useTextureGeneration();
-
-    // 1. Sync Selection -> Current Texture
-    useEffect(() => {
-        // If we are previewing or generating, DO NOT update the current texture from the model,
-        // as the model currently displays the dirty/preview state.
-        if (generatedTextureUrl || isGenerating) return;
-
-        setCurrentTexture(chosenMap ? textureToDataUrl(chosenMap.texture) : null);
-        // Only when the map changes: this also clears any error, which a job that just failed has only now set.
-    }, [selectedModel, chosenMap?.uuid, setCurrentTexture]); // eslint-disable-line react-hooks/exhaustive-deps
-
-    // 2. Auto-Preview Logic
-    useEffect(() => {
-        if (!selectedModel) return;
-
-        if (generatedTextureUrl) {
-            // Preview is an in-memory material mutation; no project/DB write occurs.
-            if (selectedModel.id === previewModelId && isRenderablePreview(generatedTextureUrl)) void putOnMap(selectedModel.id, generatedTextureUrl);
-        }
-    }, [generatedTextureUrl, selectedModel?.id, previewModelId, previewTexture]);
-
-    // Generation restyles the model's own texture map; a model drawn with plain colours has none.
-    const noSourceTexture = Boolean(selectedModel) && !currentTextureBase64 && !generatedTextureUrl && !isGenerating;
-    const canGenerate = Boolean(selectedModel && prompt && (fromPromptOnly || currentTextureBase64)) && !isGenerating;
-
-    const handleGenerate = () => {
-        if (canGenerate) {
-            previewTarget.current = chosenMap?.uuid;
-            setPreviewModelId(selectedModelId);
-            generate(prompt, fromPromptOnly ? null : currentTextureBase64);
-        }
+    const end = () => {
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', end);
+      handle.removeEventListener('pointercancel', end);
     };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+  };
 
-    const handleSave = async () => {
-        if (selectedModel && generatedTextureUrl && selectedModel.id === previewModelId) {
-            const committed = await commit({ name: `AI_${selectedModel.name}_${Date.now().toString().slice(-4)}` });
-            if (committed) addNotification({ message: 'Texture committed to the library.', type: 'info' });
-        }
+  const cost = part ? sessions.estimate(part, { mode, model: routeModel }) : null;
+  const runs = Number(count);
+  const canGenerate = Boolean(session && part && routeModel && prompt.trim());
+
+  const generate = useCallback(async () => {
+    if (!session || !part || !routeModel || !prompt.trim()) return;
+    setMessage(null);
+    try {
+      await sessions.generate(session, part, { mode, prompt: prompt.trim(), model: routeModel, count: runs });
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'The texture could not be started.');
+    }
+  }, [mode, part, prompt, routeModel, runs, session, sessions]);
+
+  const pickTake = useCallback((take: Take | null) => {
+    if (!session || !part) return;
+    setMessage(null);
+    setFocusedId(take?.id ?? null);
+    if (!take || take.state === 'ready') sessions.wear(session, part, take?.id ?? null);
+  }, [part, session, sessions]);
+
+  const act = async (work: () => Promise<void>, failure: string) => {
+    setBusy(true); setMessage(null);
+    try { await work(); } catch (error) { setMessage(error instanceof Error ? error.message : failure); } finally { setBusy(false); }
+  };
+
+  const saveOnModel = (take: Take | null) => {
+    if (!session || !part || !model) return;
+    void act(async () => {
+      await sessions.saveOnModel(session, part, take, model.textureOverrides, (overrides) => setModelTextureOverrides(model.id, overrides));
+      addNotification({ message: take ? `${part.name} now wears result ${take.number}.` : `${part.name} is back to its original.`, type: 'info' });
+    }, 'This could not be saved on the model.');
+  };
+
+  const keepInLibrary = (take: Take) => {
+    if (!session || !part) return;
+    void act(async () => {
+      await sessions.keep(session, part, take);
+      addNotification({ message: `Result ${take.number} is in the texture library.`, type: 'info' });
+    }, 'This could not be saved to the library.');
+  };
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        void generate();
+        return;
+      }
+      if (isTyping(event.target) || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        if (!part) return;
+        const order = [null, ...part.takes.filter((take) => take.state === 'ready')];
+        const at = order.findIndex((take) => (take?.id ?? null) === (focused?.id ?? null));
+        const next = order[at + (event.key === 'ArrowRight' ? 1 : -1)];
+        if (next !== undefined) { event.preventDefault(); pickTake(next); }
+      } else if (event.key.toLowerCase() === 'b') {
+        setCompareOn((value) => !value);
+      } else if (event.key.toLowerCase() === 'f') {
+        setFrameSignal((value) => value + 1);
+      } else if (event.key.toLowerCase() === 't') {
+        setTurntable((value) => !value);
+      }
     };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [focused?.id, generate, part, pickTake]);
 
-    const handleApply = async () => {
-        if (!selectedModel || selectedModel.id !== previewModelId) return;
-        const committed = await commit({ targetModelId: selectedModel.id });
-        if (committed) {
-            await putOnMap(selectedModel.id, committed);
-            addNotification({ message: "Texture committed to the model.", type: 'info' });
-        }
-    };
+  // A material graph decides how a part looks, whatever texture is on it.
+  const shadingId = part?.materialNames.map((name) => model?.materialOverrides?.[name]?.materialId).find(Boolean);
+  const shadingName = shadingId ? materialLibrary.list().find((asset) => asset.id === shadingId)?.name ?? 'A material' : null;
 
-    const handleDiscard = async () => {
-        await discard();
-        if (selectedModel && selectedModel.id === previewModelId && currentTextureBase64) await putOnMap(selectedModel.id, currentTextureBase64);
-        setPreviewModelId(null);
-    };
+  const takeMaterialOff = () => {
+    if (!session || !part || !model) return;
+    void act(async () => {
+      const overrides = { ...(model.materialOverrides ?? {}) };
+      for (const name of part.materialNames) {
+        if (!overrides[name]) continue;
+        const { materialId: _material, parameters: _parameters, ...others } = overrides[name];
+        if (Object.keys(others).length) overrides[name] = others;
+        else delete overrides[name];
+      }
+      await updateModelMaterialOverrides(model.id, overrides);
+      // Taking the material off puts the part back as it was imported.
+      sessions.wear(session, part, part.worn, false);
+    }, 'The material could not be taken off.');
+  };
 
-    return (
-        <div className="flex h-full w-full bg-gray-950 text-white font-sans overflow-hidden">
-            
-            {/* Left: Models */}
-            <ModelList 
-                models={models} 
-                selectedId={selectedModelId}
-                onSelect={setSelectedModelId}
-            />
+  const failed = focused?.state === 'failed' ? focused : null;
+  const shownError = message ?? failed?.error ?? null;
+  const shownPicture = focused?.state === 'ready' && focused.url ? focused.url : part ? sessions.previewOf(part) : null;
+  const shownSize = focused?.state === 'ready' ? focused.size ?? part?.size : part?.size;
+  const placeholder = mode === 'restyle'
+    ? 'How should it change? For example: faded blue denim, worn at the knees'
+    : 'What should it be? For example: seamless polished walnut';
 
-            {/* Center: Viewport */}
-            <div className="flex-1 bg-[#0a0a0a] relative flex flex-col min-w-0">
-                {selectedModel ? (
-                    <>
-                        <AuvraCanvas surfaceId="preview-retexture-editor" role="preview" shadows camera={{ position: [2, 2, 4], fov: 45 }} className="flex-1">
-                            <color attach="background" args={['#0a0a0a']} />
-                            <LocalEnvironment />
-                            {/* The environment map lights only standard materials; imported models are often Phong. */}
-                            <ambientLight intensity={0.5} />
-                            <directionalLight position={[10, 10, 5]} intensity={1.5} castShadow shadow-bias={-0.0001} />
+  return (
+    <div className="flex h-full w-full overflow-hidden bg-ground text-ink">
+      <aside style={{ width: left.width }} className="flex shrink-0 flex-col bg-panel">
+        <PanelTitle>Models</PanelTitle>
+        <AssetRail models={paintable} selectedId={model?.id ?? null} onSelect={setModelId} loading={isLoading} />
+      </aside>
+      <PanelEdge side="left" width={left.width} onResize={left.setWidth} onDone={left.save} label="Resize the models panel" />
 
-                            {/* Framed to the model, however large it is, so the whole of what is being painted shows. */}
-                            <Bounds key={selectedModel.id} fit clip observe margin={1.15}>
-                                <Center>
-                                    <primitive object={selectedModel.object} />
-                                </Center>
-                            </Bounds>
-
-                            <OrbitControls makeDefault minPolarAngle={0} maxPolarAngle={Math.PI / 1.8} />
-                        </AuvraCanvas>
-                        
-                        {/* Overlay Controls */}
-                        <div className="absolute top-4 left-4 z-10 flex gap-2">
-                            <div className="bg-black/60 backdrop-blur rounded-full px-3 py-1 text-xs text-gray-300 border border-white/10 flex items-center gap-2">
-                                <Box size={12} />
-                                {selectedModel.name}
-                            </div>
-                            {generatedTextureUrl && (
-                                <div className="bg-blue-600/80 backdrop-blur rounded-full px-3 py-1 text-xs text-white border border-blue-400/50 animate-in fade-in slide-in-from-top-2">
-                                    Previewing...
-                                </div>
-                            )}
-                        </div>
-                    </>
-                ) : (
-                    <div className="flex-1 flex flex-col items-center justify-center text-gray-600 gap-2">
-                        <Brush size={48} className="opacity-20" />
-                        <p>Select a model to start retexturing.</p>
-                    </div>
-                )}
-            </div>
-
-            {/* Right: Controls */}
-            <div className="w-80 bg-gray-900 border-l border-gray-800 flex flex-col shrink-0 z-20 shadow-xl">
-                <div className="p-4 border-b border-gray-800 shrink-0">
-                    <h1 className="text-sm font-bold text-gray-200 tracking-wide flex items-center gap-2">
-                        <Sparkles size={14} className="text-blue-400" /> GENERATOR
-                    </h1>
+      <main className="flex min-w-0 flex-1 flex-col gap-px">
+        <div ref={stage} className="relative min-h-0 flex-1 overflow-hidden">
+          {model && session ? (
+            <>
+              <RetextureStage
+                modelId={model.id}
+                object={model.object}
+                parts={session.parts}
+                glowPart={glowPart}
+                onPickPart={(picked) => sessions.setActivePart(session, picked.id)}
+                lighting={lighting}
+                floor={floor}
+                turntable={turntable}
+                frameSignal={frameSignal}
+                compare={compare}
+              />
+              <div className="pointer-events-none absolute left-3 top-2.5 flex items-center gap-1.5 text-2xs text-ink-2 [text-shadow:0_1px_2px_rgb(0_0_0/0.8)]">
+                <span>{model.name}</span>
+                {part && <><span className="text-ink-3">/</span><span className="text-ink">{part.name}</span></>}
+              </div>
+              <div role="toolbar" aria-label="View" className="absolute right-2 top-2 flex items-center gap-0.5 rounded bg-ground/80 p-0.5">
+                <IconButton label={canCompare ? 'Compare before and after' : 'Compare appears once a result is on the model'} shortcut="B" active={Boolean(compare)} disabled={!canCompare} onClick={() => setCompareOn((value) => !value)}><Columns2 size={14} /></IconButton>
+                <span className="mx-0.5 h-4 w-px bg-line" />
+                <Segmented label="Lighting" value={lighting} onChange={setLighting} options={LIGHTING_OPTIONS} className="!bg-transparent" />
+                <span className="mx-0.5 h-4 w-px bg-line" />
+                <IconButton label="Floor" active={floor} onClick={() => setFloor((value) => !value)}><Grid3x3 size={14} /></IconButton>
+                <IconButton label="Turntable" shortcut="T" active={turntable} onClick={() => setTurntable((value) => !value)}><RotateCw size={14} /></IconButton>
+                <IconButton label="Frame the model" shortcut="F" onClick={() => setFrameSignal((value) => value + 1)}><Maximize size={14} /></IconButton>
+              </div>
+              {compare && (
+                <div style={{ left: `${split * 100}%` }} className="absolute inset-y-0 z-10 w-px bg-accent">
+                  <span className="absolute right-2 top-10 text-2xs text-ink [text-shadow:0_1px_2px_rgb(0_0_0/0.8)]">Before</span>
+                  <span className="absolute left-2 top-10 text-2xs text-ink [text-shadow:0_1px_2px_rgb(0_0_0/0.8)]">After</span>
+                  <button
+                    type="button"
+                    aria-label="Drag to compare"
+                    onPointerDown={startSplitDrag}
+                    className="absolute left-0 top-1/2 flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize items-center justify-center rounded-full bg-accent text-accent-ink"
+                  >
+                    <ChevronsLeftRight size={13} />
+                  </button>
                 </div>
-
-                <div className="flex-1 p-4 space-y-6 overflow-y-auto">
-                    {/* Texture Preview */}
-                    <div className="space-y-2">
-                        <label className="text-[10px] uppercase font-bold text-gray-500">Texture Map</label>
-                        {maps.length > 1 && (
-                            <select
-                                aria-label="Which texture map"
-                                value={chosenMap?.uuid ?? ''}
-                                disabled={isGenerating || Boolean(generatedTextureUrl)}
-                                onChange={(event) => setMapChoice(event.target.value)}
-                                className="w-full rounded border border-gray-700 bg-gray-950 px-2 py-1 text-[11px] text-gray-200 disabled:opacity-50"
-                            >
-                                {maps.map(map => <option key={map.uuid} value={map.uuid}>{map.name}</option>)}
-                            </select>
-                        )}
-                        <div className="aspect-square w-full bg-gray-950 rounded-lg border border-gray-700 relative overflow-hidden group">
-                            {isShowable(generatedTextureUrl || currentTextureBase64) ? (
-                                <img 
-                                    src={generatedTextureUrl || currentTextureBase64 || ''} 
-                                    className="w-full h-full object-contain" 
-                                />
-                            ) : generatedTextureUrl ? (
-                                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center text-[10px] text-blue-300"><ImageIcon size={24} /><span>Preview asset ready in host memory</span><span className="text-gray-600">Commit or discard to finish.</span></div>
-                            ) : noSourceTexture ? (
-                                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center text-[10px] text-gray-500">
-                                    <ImageIcon size={24} />
-                                    <span>This model has no texture map to restyle.</span>
-                                    <span className="text-gray-600">Choose New from description to paint one.</span>
-                                </div>
-                            ) : (
-                                <div className="absolute inset-0 flex items-center justify-center text-gray-600">
-                                    <ImageIcon size={24} />
-                                </div>
-                            )}
-                            
-                            {isGenerating && (
-                                <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center gap-2 z-10 backdrop-blur-sm">
-                                    <RefreshCw size={24} className="animate-spin text-blue-400" />
-                                    <span className="text-xs text-blue-200 animate-pulse">Generating… {Math.round(progress * 100)}%</span>
-                                    <button type="button" onClick={() => void cancel()} className="rounded border border-gray-600 px-2 py-1 text-[10px] text-gray-300 hover:bg-gray-800">Cancel job</button>
-                                </div>
-                            )}
-
-                            {generatedTextureUrl && (
-                                <div className="absolute top-2 left-2 bg-blue-600 text-white text-[9px] font-bold px-2 py-0.5 rounded shadow">
-                                    PREVIEW
-                                </div>
-                            )}
-                        </div>
-                        {error && (
-                            <div className="text-[10px] text-red-400 bg-red-900/20 p-2 rounded border border-red-900/50 flex gap-2">
-                                <AlertTriangle size={12} className="shrink-0 mt-0.5" />
-                                <span className="flex-1">{error}</span><button type="button" onClick={() => void retry()} className="text-red-200 underline">Retry</button>
-                            </div>
-                        )}
-                    </div>
-
-                    {/* What to start from, and the model that does it */}
-                    <div className="space-y-2">
-                        <div className="grid grid-cols-2 gap-1 rounded border border-gray-700 bg-gray-950 p-0.5" role="radiogroup" aria-label="What to start from">
-                            {([[false, 'Restyle texture'], [true, 'New from description']] as const).map(([value, label]) => (
-                                <button
-                                    key={label}
-                                    type="button"
-                                    role="radio"
-                                    aria-checked={fromPromptOnly === value}
-                                    onClick={() => setFromPromptOnly(value)}
-                                    className={`rounded px-2 py-1 text-[10px] font-bold transition-colors ${fromPromptOnly === value ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300'}`}
-                                >
-                                    {label}
-                                </button>
-                            ))}
-                        </div>
-                        <AiRouteBar capability={fromPromptOnly ? 'media.generate' : 'media.edit'} label={fromPromptOnly ? 'Image model' : 'Retexture model'} />
-                    </div>
-
-                    {/* Prompt Input */}
-                    <div className="space-y-2">
-                        <label className="text-[10px] uppercase font-bold text-gray-500 flex items-center gap-2">
-                            <Wand2 size={10} /> Description
-                        </label>
-                        <textarea 
-                            value={prompt}
-                            onChange={(e) => setPrompt(e.target.value)}
-                            disabled={!selectedModel || isGenerating}
-                            placeholder="Describe the material (e.g. 'Rusty metal with scratches', 'Alien organic skin')..."
-                            className="w-full h-32 bg-gray-950 border border-gray-700 rounded-lg p-3 text-xs text-gray-200 focus:outline-none focus:border-blue-500 resize-none transition-colors"
-                        />
-                    </div>
-
-                    {/* Action Buttons */}
-                    <div className="space-y-2 pt-2">
-                        {generatedTextureUrl ? (
-                            <div className="space-y-2 animate-in fade-in slide-in-from-bottom-2">
-                                {/* Primary Actions */}
-                                 <button
-                                     onClick={handleSave}
-                                     disabled={selectedModel?.id !== previewModelId}
-                                     className="w-full py-2.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors border border-gray-700"
-                                >
-                                    <Save size={14} /> Save to Library
-                                </button>
-                                
-                                <div className="grid grid-cols-2 gap-2">
-                                    <button
-                                        onClick={() => void handleDiscard()}
-                                        className="py-2.5 rounded-lg bg-red-900/20 hover:bg-red-900/40 text-red-400 border border-red-900/50 font-bold text-xs flex items-center justify-center gap-2 transition-colors"
-                                    >
-                                        <Undo2 size={14} /> Discard
-                                    </button>
-                                     <button
-                                         onClick={handleApply}
-                                         disabled={selectedModel?.id !== previewModelId}
-                                         className="py-2.5 rounded-lg bg-green-600 hover:bg-green-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow-lg shadow-green-900/20"
-                                    >
-                                        <Check size={14} /> Apply Only
-                                    </button>
-                                </div>
-                            </div>
-                        ) : (
-                            <button
-                                onClick={handleGenerate}
-                                disabled={!canGenerate}
-                                title={noSourceTexture && !fromPromptOnly ? 'This model has no texture map to restyle.' : undefined}
-                                className={`
-                                    w-full py-3 rounded-lg font-bold text-xs flex items-center justify-center gap-2 transition-all
-                                    ${!canGenerate 
-                                        ? 'bg-gray-800 text-gray-500 cursor-not-allowed border border-gray-700' 
-                                        : 'bg-white text-black hover:bg-gray-200 shadow-xl'
-                                    }
-                                `}
-                            >
-                                <Sparkles size={14} /> Generate Texture
-                            </button>
-                        )}
-                    </div>
-                    
-                    <div className="pt-4 border-t border-gray-800">
-                        <div className="bg-blue-900/10 rounded p-3 border border-blue-900/30">
-                            <h4 className="text-[10px] font-bold text-blue-400 mb-1 flex items-center gap-1.5">
-                                <Link size={10} /> Workflow Tip
-                            </h4>
-                            <p className="text-[9px] text-gray-500 leading-relaxed">
-                                <strong>Apply Only</strong> keeps the texture on the model for this session.<br/>
-                                <strong>Save to Library</strong> stores it permanently for use in Blueprints.
-                            </p>
-                        </div>
-                    </div>
-                </div>
+              )}
+            </>
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center gap-2 bg-panel text-ink-3">
+              <Box size={28} strokeWidth={1.25} />
+              <p className="text-xs">{isLoading ? 'Loading the project' : 'Import a model to paint it.'}</p>
             </div>
+          )}
         </div>
-    );
+
+        {part && (
+          <TakesStrip
+            part={part}
+            focusedId={focusedId}
+            onFocus={pickTake}
+            actions={
+              focused === null ? (
+                part.saved === null
+                  ? <span className="flex items-center gap-1 pr-1 text-2xs text-ink-3"><Check size={12} /> On the model</span>
+                  : <Button variant="primary" disabled={busy} onClick={() => saveOnModel(null)}>Use original</Button>
+              ) : focused.state === 'ready' ? (
+                <>
+                  <IconButton label={part.saved === focused.id ? 'On the model: replace it first to remove it' : `Remove result ${focused.number}`} size="md" disabled={busy || part.saved === focused.id} onClick={() => session && void sessions.remove(session, part, focused)}><Trash2 size={14} /></IconButton>
+                  <Button icon={<Save size={13} />} disabled={busy || Boolean(focused.textureId)} onClick={() => keepInLibrary(focused)}>{focused.textureId ? 'In library' : 'Save to library'}</Button>
+                  {part.saved === focused.id
+                    ? <span className="flex h-7 items-center gap-1 px-2 text-xs text-ink-2"><Check size={13} className="text-accent" /> On the model</span>
+                    : <Button variant="primary" disabled={busy || part.materialNames.length === 0} title={part.materialNames.length === 0 ? 'This part has no material name to save under' : undefined} onClick={() => saveOnModel(focused)}>Use on model</Button>}
+                </>
+              ) : focused.state === 'failed' ? (
+                <>
+                  <IconButton label={`Remove result ${focused.number}`} size="md" onClick={() => session && void sessions.remove(session, part, focused)}><Trash2 size={14} /></IconButton>
+                  <Button disabled={!canGenerate} onClick={() => { setPrompt(focused.prompt); void generate(); }}>Try again</Button>
+                </>
+              ) : (
+                <Button icon={<X size={13} />} disabled={!focused.jobId || focused.stopping} onClick={() => void sessions.cancel(focused)}>{focused.stopping ? 'Stopping' : 'Stop'}</Button>
+              )
+            }
+          />
+        )}
+
+        <div className="shrink-0 bg-panel">
+          {shadingName && (
+            <div className="flex items-center gap-2 border-b border-line bg-warn/10 px-3 py-1 text-2xs text-ink">
+              <Palette size={13} className="shrink-0 text-warn" />
+              <span className="min-w-0 flex-1">{shadingName} shades this part, so a texture will not show on it.</span>
+              <Button size="sm" disabled={busy} onClick={takeMaterialOff}>Take the material off</Button>
+            </div>
+          )}
+          {shownError && (
+            <div role="alert" className="flex items-start gap-2 border-b border-line bg-bad/10 px-3 py-1.5 text-2xs text-ink">
+              <AlertTriangle size={13} className="mt-px shrink-0 text-bad" />
+              <span className="selectable min-w-0 flex-1">{shownError}</span>
+              {message && <button type="button" aria-label="Dismiss" onClick={() => setMessage(null)} className="text-ink-3 hover:text-ink"><X size={13} /></button>}
+            </div>
+          )}
+          <div className="flex gap-2 p-2">
+            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+              <Segmented
+                label="What to start from"
+                value={mode}
+                onChange={setMode}
+                disabled={!part}
+                className="self-start"
+                options={[
+                  { value: 'restyle', label: 'Restyle', disabled: !part?.texture, hint: part?.texture ? 'Change what is on this part now, keeping its layout' : 'This part has no texture to restyle' },
+                  { value: 'new', label: 'New', hint: 'Paint a texture from the description alone' },
+                ]}
+              />
+              <TextArea
+                aria-label="Description"
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+                disabled={!part}
+                placeholder={placeholder}
+                className="h-[52px]"
+              />
+            </div>
+            <div className="flex w-56 shrink-0 flex-col justify-end gap-1.5">
+              <AiRouteBar capability={mode === 'new' ? 'media.generate' : 'media.edit'} label={mode === 'new' ? 'Image model' : 'Retexture model'} onModelChange={setRouteModel} placement="top-end" />
+              <div className="flex h-5 items-center justify-between gap-2 text-2xs text-ink-3">
+                <span className="truncate tabular-nums">{cost === null ? (routeModel ? 'Price not known yet' : '') : `About ${formatCost(cost * runs)}${runs > 1 ? ` for ${runs}` : ''}`}</span>
+                <Tooltip text="How many results to paint"><span><Segmented label="How many results" value={count} onChange={setCount} options={COUNTS} /></span></Tooltip>
+              </div>
+              <Button variant="primary" size="lg" className="w-full" disabled={!canGenerate} onClick={() => void generate()} title={routeModel ? undefined : 'Choose a model first'}>
+                Generate <span className="text-2xs font-normal opacity-60">Ctrl Enter</span>
+              </Button>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <PanelEdge side="right" width={right.width} onResize={right.setWidth} onDone={right.save} label="Resize the parts panel" />
+      <aside style={{ width: right.width }} className="flex shrink-0 flex-col bg-panel">
+        <PanelTitle>Parts</PanelTitle>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <ul aria-label="Parts" className="border-b border-line py-1">
+            {session?.parts.map((item) => (
+              <li key={item.id}>
+                <button
+                  type="button"
+                  aria-current={item.id === part?.id || undefined}
+                  title={item.rawName || undefined}
+                  onClick={() => sessions.setActivePart(session, item.id)}
+                  onMouseEnter={() => setGlowPart(item)}
+                  onMouseLeave={() => setGlowPart(null)}
+                  className={`flex h-8 w-full items-center gap-2 px-3 text-left transition-colors duration-75 ${item.id === part?.id ? 'bg-accent/15 text-ink' : 'text-ink-2 hover:bg-white/5 hover:text-ink'}`}
+                >
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-sm bg-well">
+                    {item.thumbnail ? <img src={item.thumbnail} alt="" draggable={false} className="h-full w-full object-cover" /> : <Plus size={11} className="text-ink-3" />}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-xs">{item.name}</span>
+                  {item.worn !== item.saved && <span title="Being tried on, not saved" className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />}
+                  {item.takes.length > 0 && <span className="shrink-0 text-2xs tabular-nums text-ink-3">{item.takes.length}</span>}
+                </button>
+              </li>
+            ))}
+          </ul>
+
+          {part && (
+            <Section title="Texture" actions={shownSize ? <span className="text-2xs tabular-nums text-ink-3">{shownSize.width} × {shownSize.height}</span> : undefined}>
+              {shownPicture
+                ? <img src={shownPicture} alt={`${part.name} texture`} draggable={false} className="aspect-square w-full rounded-sm bg-well object-contain" />
+                : <p className="text-2xs text-ink-3">No texture yet. Describe one below and press Generate.</p>}
+            </Section>
+          )}
+
+          {focused && (
+            <Section
+              title={`Result ${focused.number}`}
+              actions={focused.state !== 'ready' ? <span className="text-2xs text-ink-3">{STATE_WORDS[focused.state]}</span> : undefined}
+            >
+              <p className="selectable text-xs leading-[18px] text-ink">{focused.prompt}</p>
+              <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-2xs">
+                <dt className="text-ink-3">Model</dt><dd className="truncate text-ink-2" title={focused.modelName}>{focused.modelName}</dd>
+                <dt className="text-ink-3">From</dt><dd className="text-ink-2">{focused.mode === 'new' ? 'The description alone' : focused.fromTake ? `Result ${focused.fromTake}` : 'The original'}</dd>
+                {focused.costMicroUsd !== null && <><dt className="text-ink-3">Cost</dt><dd className="tabular-nums text-ink-2">About {formatCost(focused.costMicroUsd)}</dd></>}
+                {focused.finishedAt && <><dt className="text-ink-3">Took</dt><dd className="tabular-nums text-ink-2">{Math.round((focused.finishedAt - focused.startedAt) / 1000)} s</dd></>}
+              </dl>
+              <Button variant="ghost" size="sm" className="-ml-2 mt-1.5" onClick={() => setPrompt(focused.prompt)}>Use this description</Button>
+            </Section>
+          )}
+        </div>
+        {sessions.runs > 0 && (
+          <div title="Worked out from catalog prices: provider accounts cannot be read from here" className="shrink-0 border-t border-line px-3 py-1.5 text-2xs tabular-nums text-ink-3">
+            {sessions.runs} {sessions.runs === 1 ? 'result' : 'results'} this session, about {formatCost(sessions.spentMicroUsd)}
+          </div>
+        )}
+      </aside>
+    </div>
+  );
 };

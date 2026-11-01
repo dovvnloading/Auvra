@@ -589,6 +589,9 @@ class NativeProviderHost:
             resolver = getattr(self.project_host.service, "resolve_reference", None)
             if callable(resolver):
                 resolver(asset_id, project_id=active.project_id)
+            retain = getattr(self.project_host, "retain_pending_asset", None)
+            if callable(retain):
+                retain(active.project_id, asset_id)
         with self._lock:
             estimated_cost = self._check_budget(descriptor.provider_id, configured, self._cost_estimate(descriptor.provider_id, configured, payload))
             job = self.jobs.create(provider=descriptor.provider_id, model=payload["modelId"], capability=capability.value, prompt_hash=prompt_hash,
@@ -685,7 +688,9 @@ class NativeProviderHost:
             "createdAt": meta.get("createdAt", self._now()),
             "routeOrigin": meta.get("route", "cloud"), "routeConsent": "explicit",
             "promptSha256": job.prompt_hash, "settingsSha256": meta.get("settingsHash", self._settings_hash(self.settings.get(job.provider))),
-            "artifactSha256": artifact_id, "inputAssetIds": meta.get("assetIds", []),
+            "artifactSha256": artifact_id,
+            # What it was made from, while the project still has it.
+            "inputAssetIds": [asset_id for asset_id in meta.get("assetIds", []) if active.assets.verify(asset_id)],
         }
         if isinstance(meta.get("modelVersion"), str):
             generation["modelVersion"] = meta["modelVersion"]

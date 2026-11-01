@@ -54,7 +54,7 @@ export const AudioCard: React.FC<AudioCardProps> = ({ audio, onDelete, nameEdito
                 <div className="absolute inset-0 bg-black/60 backdrop-blur-[1px] opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-2">
                     <button 
                         onClick={togglePlay}
-                        className="p-2 bg-blue-600 hover:bg-blue-500 text-white rounded-full transition-colors"
+                        className="p-2 bg-blue-600 hover:bg-blue-500 text-accent-ink rounded-full transition-colors"
                         title={isPlaying ? "Pause" : "Play Preview"}
                     >
                         {isPlaying ? <Pause size={14} /> : <Play size={14} />}

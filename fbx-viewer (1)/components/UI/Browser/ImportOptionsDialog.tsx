@@ -77,7 +77,7 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-gray-800 bg-gray-950 px-5 py-3">
           <button type="button" onClick={onCancel} className="rounded px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-800 hover:text-white">Cancel</button>
-          <button type="submit" disabled={!canConfirm} className="rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-500 disabled:opacity-50">{confirmLabel}</button>
+          <button type="submit" disabled={!canConfirm} className="rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-accent-ink hover:bg-blue-500 disabled:opacity-50">{confirmLabel}</button>
         </div>
       </form>
     </div>
