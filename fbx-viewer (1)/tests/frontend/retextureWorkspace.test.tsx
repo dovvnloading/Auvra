@@ -8,6 +8,7 @@ import { ModelPicker } from '../../components/Settings/ModelPicker';
 import { listModelParts, mapIsLaidOutOverObject, partDisplayName, partOfHit, usedAreaOfPart } from '../../components/Tools/Retexture/parts';
 import { libraryName, paintInstruction, restyleInstruction, retextureSessions, surfaceInstruction, viewsInstruction } from '../../components/Tools/Retexture/retextureSession';
 import { OriginalDetail, PaintedMap, ViewedDetail, type Pixels } from '../../components/Tools/Retexture/keepOriginal';
+import { limitMetal, limitSmoothness } from '../../components/Tools/Retexture/surfaceLimits';
 import { bindMaterialGraph } from '../../runtime/materials/graphMaterial';
 import { NativeHostTransport } from '../../host/nativeTransport';
 import { textureSourceFlipY } from '../../utils/textureCompression/compressTextures';
@@ -173,6 +174,50 @@ describe('working from the map on a part', () => {
 
   it('refuses a result of another size', async () => {
     await expect(OriginalDetail.prepare(weave, { width: 2, height: 2, data: new Uint8ClampedArray(16) })).rejects.toThrow(/size/);
+  });
+});
+
+describe('holding surface maps to what their colours can bear', () => {
+  const grey = (value: number) => [value, value, value, 255];
+
+  it('takes metal off what is too dark to be metal, and leaves it on what is bright', () => {
+    const metal = new Uint8ClampedArray([...grey(255), ...grey(255), ...grey(255)]);
+    // Black rubber, a dull grey and polished steel, as a picture holds them.
+    const colour = new Uint8ClampedArray([...grey(20), ...grey(120), ...grey(220)]);
+    limitMetal(metal, colour);
+    expect(metal[0]).toBe(0);
+    expect(metal[4]).toBeGreaterThan(0);
+    expect(metal[4]).toBeLessThan(255);
+    expect(metal[8]).toBeGreaterThan(metal[4]);
+    // Short of all metal even so: a picture holds light and grime, which a true metal's colour does not.
+    expect(metal[8]).toBeLessThan(255);
+    // In every channel, and clear of nothing.
+    expect([metal[5], metal[6], metal[7]]).toEqual([metal[4], metal[4], 255]);
+  });
+
+  it('never calls anything metal that the model did not', () => {
+    const metal = new Uint8ClampedArray(grey(0));
+    limitMetal(metal, new Uint8ClampedArray(grey(255)));
+    expect(metal[0]).toBe(0);
+  });
+
+  it('lifts what is too smooth, letting only metal shine, and leaves the rest', () => {
+    const metal = new Uint8ClampedArray([...grey(255), ...grey(255), ...grey(255)]);
+    limitMetal(metal, new Uint8ClampedArray([...grey(255), ...grey(255), ...grey(255)]));
+    metal.fill(0, 4, 7);
+    const roughness = new Uint8ClampedArray([...grey(10), ...grey(10), ...grey(240)]);
+    limitSmoothness(roughness, metal);
+    // On metal it stays quite smooth, off metal it does not, and what was already rough stays as it was.
+    expect(roughness[0]).toBeGreaterThan(50);
+    expect(roughness[4]).toBeGreaterThan(roughness[0] + 40);
+    expect(roughness[5]).toBe(roughness[4]);
+    expect(roughness[8]).toBe(240);
+  });
+
+  it('counts everything as not metal without a metal map', () => {
+    const roughness = new Uint8ClampedArray(grey(10));
+    limitSmoothness(roughness, null);
+    expect(roughness[0]).toBeGreaterThan(100);
   });
 });
 

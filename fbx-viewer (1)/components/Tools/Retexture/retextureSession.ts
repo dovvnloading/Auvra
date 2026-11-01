@@ -8,7 +8,8 @@ import { picksFor } from '../../../services/providerPicks';
 import { textureService } from '../../../services/TextureGenerationService';
 import { overrideTextureFlipY, tagOverrideTexture, type MaterialOverrides, type MaterialTextureSlot } from '../../../utils/materialOverrides';
 import { DEFAULT_KEEP, OriginalDetail, PaintedMap, ViewedDetail, type DetailMix, type Pixels } from './keepOriginal';
-import { bakeViews, PAINTING, renderViewSheet, SHEET_MEGAPIXELS, type ViewSheet } from './viewSheet';
+import { bakeNormals, bakePainted, bakeViews, renderViewSheet, SHEET_MEGAPIXELS, type ViewSheet } from './viewSheet';
+import { limitMetal, limitSmoothness } from './surfaceLimits';
 import { listModelParts, mapIsLaidOutOverObject, texturePicture, usedAreaOfPart, type ModelPart, type PartMaterial, type PictureSize } from './parts';
 
 export type RetextureMode = 'restyle' | 'new' | 'whole';
@@ -24,6 +25,8 @@ export interface SurfaceMap {
   previewAssetId: string;
   url: string;
   textureId?: string;
+  /** What `url` holds where that is not the picture the model answered with, to keep. */
+  finished?: Blob;
 }
 
 /** One result: everything asked for, whatever became of it. They stay until removed, to try on and compare. */
@@ -473,13 +476,13 @@ class RetextureSessions {
       if (!found.picture) throw new Error('This part has no texture to restyle. Paint a new one from a description.');
       fromTake = found.fromTake;
       picture = found.picture;
-      // A map that repeats is a picture of a surface, which a model can edit as it is; one laid out on a model is not.
-      sheet = usedAreaOfPart(session.object, part, THUMBNAIL_EDGE, THUMBNAIL_EDGE) ? renderViewSheet(session.object, part) ?? undefined : undefined;
+      // A map that repeats or that faces share is a picture of a surface, which a model can edit as it is; one laid out on a model is not.
+      sheet = this.paintsOnObject(session, part) ? renderViewSheet(session.object, part) ?? undefined : undefined;
       source = textureService.ingestLocalAsset(sheet?.picture ?? found.picture.url);
     } else if (request.mode === 'whole') {
       source = textureService.modelFileAsset(session.modelId);
     } else if (this.paintsOnObject(session, part)) {
-      sheet = renderViewSheet(session.object, part, true) ?? undefined;
+      sheet = renderViewSheet(session.object, part, { asShape: true }) ?? undefined;
       if (!sheet) throw new Error('This part could not be drawn to paint it.');
       source = textureService.ingestLocalAsset(sheet.picture);
     }
@@ -555,9 +558,16 @@ class RetextureSessions {
       const used = original ? usedAreaOfPart(session.object, part, width, height) : null;
       let detail: DetailMix;
       if (take.sheet) {
-        const baked = bakeViews(session.object, part, take.sheet, await pixelsOf(take.rawUrl, take.sheet.width, take.sheet.height), width, height, original ? undefined : PAINTING);
-        if (!baked) throw new Error('The result could not be put back on the map.');
-        detail = original ? new ViewedDetail(original.data, baked.broad, baked.before, baked.painted, used, width) : new PaintedMap(baked.painted, width, height);
+        const answer = await pixelsOf(take.rawUrl, take.sheet.width, take.sheet.height);
+        if (original) {
+          const baked = bakeViews(session.object, part, take.sheet, answer, width, height);
+          if (!baked) throw new Error('The result could not be put back on the map.');
+          detail = new ViewedDetail(original.data, baked.broad, baked.before, baked.painted, used, width);
+        } else {
+          const baked = bakePainted(session.object, part, take.sheet, answer, width, height);
+          if (!baked) throw new Error('The result could not be put back on the map.');
+          detail = new PaintedMap(baked, width, height);
+        }
       } else {
         detail = await OriginalDetail.prepare(original!, await pixelsOf(take.rawUrl, width, height), used);
       }
@@ -669,6 +679,49 @@ class RetextureSessions {
     return models[0] ?? null;
   }
 
+  /** The size of what a model is shown to make surface maps for a result of this size, for what that comes to. */
+  mapsMegapixels(session: ModelSession, part: SessionPart, size: PictureSize | undefined): number | undefined {
+    if (this.paintsOnObject(session, part)) return SHEET_MEGAPIXELS;
+    return size ? (Math.min(size.width, MAX_SOURCE_EDGE) * Math.min(size.height, MAX_SOURCE_EDGE)) / 1_000_000 : undefined;
+  }
+
+  /** Makes the surface maps a model answered with fit the result they are for: put back on the map through the cameras that made a sheet, and held to what its colours can bear. */
+  private async finishSurfaces(session: ModelSession, part: SessionPart, take: Take, sheet: ViewSheet | null, maps: readonly SurfaceMap[]) {
+    const { width, height } = take.size ?? take.source ?? { width: PAINTED_MAP_EDGE, height: PAINTED_MAP_EDGE };
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) throw new Error('The picture could not be made.');
+    const frames = new Map<SurfaceMap, ImageData>();
+    for (const surface of maps) {
+      const frame = context.createImageData(width, height);
+      if (sheet) {
+        const answer = await pixelsOf(surface.url, sheet.width, sheet.height);
+        const bake = surface.role === 'normal' ? bakeNormals : bakePainted;
+        const baked = bake(session.object, part, sheet, answer, width, height);
+        if (!baked) throw new Error('The surface maps could not be put back on the map.');
+        new PaintedMap(baked, width, height).mix(0, frame.data);
+      } else {
+        frame.data.set((await pixelsOf(surface.url, width, height)).data);
+      }
+      frames.set(surface, frame);
+    }
+    const metal = maps.find((surface) => surface.role === 'metalness');
+    const metalFrame = metal ? frames.get(metal)!.data : null;
+    if (metalFrame && take.url) limitMetal(metalFrame, (await pixelsOf(take.url, width, height)).data);
+    const roughness = maps.find((surface) => surface.role === 'roughness');
+    if (roughness) limitSmoothness(frames.get(roughness)!.data, metalFrame);
+    for (const surface of maps) {
+      context.putImageData(frames.get(surface)!, 0, 0);
+      const blob = await new Promise<Blob | null>((resolve) => { canvas.toBlob(resolve, 'image/png'); });
+      if (!blob) throw new Error('The picture could not be made.');
+      URL.revokeObjectURL(surface.url);
+      surface.finished = blob;
+      surface.url = URL.createObjectURL(blob);
+    }
+  }
+
   /** Makes normal, roughness and metal maps from a result's colours, for the same parts of the picture to catch the light. */
   async makeMaps(session: ModelSession, part: SessionPart, take: Take, model: ProviderModel) {
     take.mapsState = 'making';
@@ -676,16 +729,21 @@ class RetextureSessions {
     this.changed();
     try {
       const texture = await this.textureOf(session, take);
-      const picture = texture ? texturePicture(texture, MAX_SOURCE_EDGE) : null;
-      if (!picture) throw new Error('This result can no longer be read.');
-      const asset = await textureService.ingestLocalAsset(picture.url);
+      if (!texture) throw new Error('This result can no longer be read.');
+      // As with colour, a map cut into pieces means little as a picture: each piece comes back judged on its own.
+      const sheet = this.paintsOnObject(session, part) ? renderViewSheet(session.object, part, { map: texture }) : null;
+      const picture = sheet ? null : texturePicture(texture, MAX_SOURCE_EDGE);
+      if (!sheet && !picture) throw new Error('This result can no longer be read.');
+      const asset = await textureService.ingestLocalAsset(sheet?.picture ?? picture!.url);
       const route = await hostProviderService.loadConfiguredRoute('media.maps');
       if (route?.modelId !== model.id) await hostProviderService.routeCapability(MAPS_PROVIDER, 'media.maps', model.id);
       const job = await textureService.submit(asset, 'Surface maps for this texture', 'media.maps');
       const preview = await textureService.follow(job);
-      take.maps = surfaceMapsOf(job.jobId, preview.maps);
+      const maps = surfaceMapsOf(job.jobId, preview.maps);
+      await this.finishSurfaces(session, part, take, sheet, maps);
+      take.maps = maps;
       take.mapsState = 'ready';
-      this.count(estimateJobCost(model, (picture.width * picture.height) / 1_000_000));
+      this.count(estimateJobCost(model, this.mapsMegapixels(session, part, take.size)));
       if (part.worn === take.id && session.attached) void this.show(session, part, take.id);
     } catch (error) {
       frontendDiagnostics.failure('retexture_maps_failed', error);
@@ -748,8 +806,9 @@ class RetextureSessions {
     for (const surface of take.maps) {
       if (surface.textureId) continue;
       const surfaceName = libraryName(session.modelName, part.name, take.prompt, ` ${surface.role}`);
-      await textureService.commit(surface.jobId, surface.previewAssetId, { name: surfaceName });
-      surface.textureId = surface.previewAssetId;
+      const finishedAssetId = surface.finished ? await textureService.ingestPicture(surface.finished) : null;
+      await textureService.commit(surface.jobId, surface.previewAssetId, { name: surfaceName, ...(finishedAssetId ? { finishedAssetId, textureId: finishedAssetId } : {}) });
+      surface.textureId = finishedAssetId ?? surface.previewAssetId;
       await this.onTextureKept(surface.textureId, surfaceName, dimensions);
     }
     this.changed();

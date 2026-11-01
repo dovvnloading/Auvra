@@ -31,6 +31,8 @@ Every result stays in the strip under the model. Click one to try it on, or step
 
 **Surface maps.** Under a result, **Make matching maps** makes normal, roughness and metal maps from it, for about a cent, so that light falls on it as it would on the real thing. They are saved with the result.
 
+**Make matching maps** adds normal, roughness and metal maps, so that light falls on a result as it would on the real thing. Like colour, a laid-out map would only show a model scraps, so it is shown the object from every side, and what comes back goes on through the same views. The normal map holds the fine detail, as the mesh has the large shapes already.
+
 **Whole model** is for a model with no textures: it paints the model as a shape, seen from every side, and makes surface maps as it goes. It costs $0.30 a run on fal and takes a few minutes. A model that has textures keeps them and changes from them instead.
 
 **Compare** (B) splits the model in two at a line you can drag, the part as it was on one side and with the result on the other. **Studio**, **Daylight** and **Flat** change the light, and Flat is the one for judging colour. T turns the model on a turntable and F frames it again.
