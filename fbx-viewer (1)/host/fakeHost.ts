@@ -3,7 +3,7 @@ import type { ErrorCode, Event, ProjectResult, Request, Response, SuccessResult 
 import type { HostTransport } from "./transport";
 
 const PROJECT_METHODS = ["project.getStatus", "project.create", "project.open", "project.openRecent", "project.close", "project.getSnapshot", "project.applyChanges", "project.save", "project.saveAs", "project.exportPack", "project.buildGame", "project.importPack", "project.importLegacy", "asset.beginUpload", "asset.resolve"] as const;
-const PROVIDER_METHODS = ["provider.list", "provider.getStatus", "provider.configureCredential", "provider.deleteCredential", "provider.configure", "provider.listModels", "provider.health", "inference.submit", "inference.get", "inference.list", "inference.cancel", "inference.retry", "media.discard", "media.commit", "command.preview", "command.approve", "command.undo"] as const;
+const PROVIDER_METHODS = ["provider.list", "provider.getStatus", "provider.configureCredential", "provider.deleteCredential", "provider.chooseFolder", "provider.configure", "provider.listModels", "provider.health", "inference.submit", "inference.get", "inference.list", "inference.cancel", "inference.retry", "media.discard", "media.commit", "command.preview", "command.approve", "command.undo"] as const;
 const ENGINE_METHODS = ["engine.getStatus", "engine.getSnapshot", "engine.applyChanges", "engine.openViewport", "engine.closeViewport", "engine.renderReference", "engine.getMetrics", "engine.recover"] as const;
 const MEDIA_CAPABILITIES = ["media.generate", "media.edit", "media.maps", "media.mesh", "media.material", "media.sky", "media.decal", "media.render"] as const;
 const ENGINE_FEATURES = ["pbr_metallic_roughness", "skeletal_animation", "frustum_culling", "deterministic_lod", "instance_batching", "directional_lights", "point_lights", "spot_lights", "shadow_maps", "image_based_lighting", "entity_picking", "editor_gizmos", "hdr_intermediate", "aces_tone_mapping", "msaa_or_fxaa", "post_processing_chain"] as const;
@@ -116,6 +116,7 @@ export class FakeHost implements HostTransport {
       case "provider.getStatus": { const providerId = String(payload.providerId); this.assertProvider(providerId); const configured = this.providerConfigured.has(providerId); return this.providerStatus(providerId, configured); }
       case "provider.configureCredential": { const providerId = String(payload.providerId); this.assertProvider(providerId); this.providerConfigured.add(providerId); return { kind: "provider.credential", providerId, storageMode: payload.storageMode, configured: true, credentialStatus: payload.storageMode === "memoryOnly" ? "memoryOnly" : "configured" }; }
       case "provider.deleteCredential": { const providerId = String(payload.providerId); this.assertProvider(providerId); this.providerConfigured.delete(providerId); return this.providerStatus(providerId, false); }
+      case "provider.chooseFolder": { const providerId = String(payload.providerId); this.assertProvider(providerId); return { kind: "provider.folder", providerId, waiting: false }; }
       case "provider.configure": {
         const providerId = String(payload.providerId); this.assertProvider(providerId);
         const expected = Number(payload.expectedSettingsRevision); const current = this.providerSettingsRevision.get(providerId) ?? 0;

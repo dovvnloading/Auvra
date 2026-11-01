@@ -26,7 +26,7 @@ METHODS = (
     "project.buildGame", "project.importPack", "project.importLegacy", "asset.beginUpload",
     "asset.resolve",
     "provider.list", "provider.getStatus", "provider.configureCredential",
-    "provider.deleteCredential", "provider.configure", "provider.listModels",
+    "provider.deleteCredential", "provider.chooseFolder", "provider.configure", "provider.listModels",
     "provider.health", "inference.submit", "inference.get", "inference.list",
     "inference.cancel", "inference.retry", "media.discard", "media.commit",
     "command.preview", "command.approve", "command.undo",
@@ -35,14 +35,14 @@ METHODS = (
     "engine.getMetrics", "engine.recover",
 )
 PROJECT_METHODS = METHODS[2:17]
-PROVIDER_METHODS = METHODS[17:34]
-ENGINE_METHODS = METHODS[34:]
+PROVIDER_METHODS = METHODS[17:35]
+ENGINE_METHODS = METHODS[35:]
 MUTATING_METHODS = frozenset({
     "project.create", "project.open", "project.openRecent", "project.close",
     "project.applyChanges", "project.save", "project.saveAs", "project.exportPack",
     "project.buildGame", "project.importPack", "project.importLegacy", "asset.beginUpload",
     "media.commit", "command.approve", "command.undo",
-    "provider.configureCredential", "provider.deleteCredential", "provider.configure",
+    "provider.configureCredential", "provider.deleteCredential", "provider.chooseFolder", "provider.configure",
     "media.discard",
     "engine.applyChanges", "engine.openViewport", "engine.closeViewport",
     "engine.recover",
@@ -126,6 +126,7 @@ class HostDispatcher:
                 "provider.getStatus": self._provider_status,
                 "provider.configureCredential": self._configure_credential,
                 "provider.deleteCredential": self._delete_credential,
+                "provider.chooseFolder": self._choose_folder,
                 "provider.configure": self._configure_provider,
                 "provider.listModels": self._list_models,
                 "provider.health": self._provider_health,
@@ -592,6 +593,11 @@ class HostDispatcher:
         return {"kind": "provider.credential", "providerId": pid,
                 "storageMode": payload["storageMode"], "configured": True,
                 "credentialStatus": "memoryOnly" if payload["storageMode"] == "memoryOnly" else "configured"}
+
+    def _choose_folder(self, payload: dict[str, Any]) -> dict[str, Any]:
+        pid, _name, _route, _capabilities = self._provider_info(payload["providerId"])
+        self.session.advance()
+        return {"kind": "provider.folder", "providerId": pid, "waiting": False}
 
     def _delete_credential(self, payload: dict[str, Any]) -> dict[str, Any]:
         pid, _name, _route, _capabilities = self._provider_info(payload["providerId"])

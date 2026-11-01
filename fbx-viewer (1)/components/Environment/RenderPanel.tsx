@@ -46,13 +46,28 @@ export const RenderPanel: React.FC = () => {
   const [large, setLarge] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const running = useRef<{ jobId: string; stopped: boolean } | null>(null);
+  const [choosing, setChoosing] = useState(false);
+
+  const lookForReframe = useCallback(() => hostProviderService.listProviders()
+    .then(() => hostProviderService.health(PROVIDER))
+    .then((health) => setAvailable(health?.status === 'healthy'), () => setAvailable(false)), []);
 
   useEffect(() => {
-    if (!open) return;
-    void hostProviderService.listProviders()
-      .then(() => hostProviderService.health(PROVIDER))
-      .then((health) => setAvailable(health?.status === 'healthy'), () => setAvailable(false));
-  }, [open]);
+    if (open) void lookForReframe();
+  }, [lookForReframe, open]);
+
+  const chooseFolder = async () => {
+    setError(null);
+    setChoosing(true);
+    try {
+      await hostProviderService.chooseFolder(PROVIDER);
+      await lookForReframe();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'That folder could not be used.');
+    } finally {
+      setChoosing(false);
+    }
+  };
 
   useEffect(() => hostProviderService.subscribe((job) => {
     if (job.jobId === running.current?.jobId && typeof job.progress === 'number') setProgress(job.progress);
@@ -123,7 +138,10 @@ export const RenderPanel: React.FC = () => {
         <div className="space-y-2 p-3">
           <h3 className="text-xs font-medium text-ink">Render this view</h3>
           {available === false ? (
-            <p className="text-2xs leading-4 text-ink-2">Reframe was not found on this computer. Rendering needs Reframe and an NVIDIA graphics card. Set <code className="selectable">AUVRA_REFRAME_HOME</code> to its folder if it is kept somewhere else.</p>
+            <>
+              <p className="text-2xs leading-4 text-ink-2">Reframe was not found on this computer. Rendering needs Reframe and an NVIDIA graphics card.</p>
+              <Button size="sm" disabled={choosing} onClick={() => void chooseFolder()}>{choosing ? 'Waiting for the folder window' : 'Show where Reframe is kept'}</Button>
+            </>
           ) : (
             <>
               <p className="text-2xs leading-4 text-ink-3">A path traced frame of what the camera sees, on this computer's graphics card. It costs nothing.</p>
