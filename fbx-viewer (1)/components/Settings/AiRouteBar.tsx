@@ -34,17 +34,23 @@ export const AiRouteBar: React.FC<AiRouteBarProps> = ({ capability, label, onMod
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
+  const latestLoad = useRef(0);
 
   const loadRoute = useCallback(async () => {
+    // The job can change while a longer list is still on its way, and only the last one asked for counts.
+    latestLoad.current += 1;
+    const load = latestLoad.current;
     try {
       const active = await hostProviderService.loadConfiguredRoute(capability);
+      if (load !== latestLoad.current) return;
       if (!active) { setRoute(null); return; }
       setProviderId(active.providerId);
       setRoute((current) => ({ providerId: active.providerId, modelId: active.modelId, model: current?.modelId === active.modelId ? current.model : undefined }));
       const models = await hostProviderService.listModels(active.providerId, capability).catch(() => [] as ProviderModel[]);
+      if (load !== latestLoad.current) return;
       setRoute({ providerId: active.providerId, modelId: active.modelId, model: models.find((model) => model.id === active.modelId) });
     } catch {
-      setRoute(null);
+      if (load === latestLoad.current) setRoute(null);
     }
   }, [capability]);
 

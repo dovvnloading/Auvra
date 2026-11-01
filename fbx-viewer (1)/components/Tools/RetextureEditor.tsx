@@ -10,7 +10,7 @@ import { AiRouteBar } from '../Settings/AiRouteBar';
 import { Button, IconButton, PanelEdge, PanelTitle, Section, Segmented, Spinner, TextArea, Tooltip, usePanelWidth } from '../UI/kit';
 import { AssetRail } from './Retexture/AssetRail';
 import { RetextureStage, type StageLighting } from './Retexture/RetextureStage';
-import { capabilityOfMode, retextureSessions, useRetextureSessions, type RetextureMode, type SessionPart, type SurfaceRole, type Take } from './Retexture/retextureSession';
+import { capabilityOfMode, retextureSessions, startingLookName, useRetextureSessions, type RetextureMode, type SessionPart, type SurfaceRole, type Take } from './Retexture/retextureSession';
 import { STATE_WORDS, TakesStrip } from './Retexture/TakesStrip';
 
 const SURFACE_WORDS: Record<SurfaceRole, string> = { normal: 'Normal', roughness: 'Roughness', metalness: 'Metal' };
@@ -75,12 +75,13 @@ export const RetextureEditor: React.FC = () => {
 
   const [prompt, setPromptState] = useState(draftPrompt);
   const setPrompt = (value: string) => { draftPrompt = value; setPromptState(value); };
-  const [wantedMode, setMode] = useState<RetextureMode>('restyle');
-  // A model drawn with several textures comes back from whole-model painting merged and without its rig.
-  const textured = session?.parts.filter((item) => item.texture).length ?? 0;
-  const wholeAllowed = textured === 1;
-  // A part with nothing on it has nothing to restyle.
-  const mode: RetextureMode = wantedMode === 'whole' ? (wholeAllowed ? 'whole' : 'restyle') : part && !part.texture ? 'new' : wantedMode;
+  // A texture is always worked from. Painting from words alone is for what has none to work from.
+  const [scope, setScope] = useState<'part' | 'all'>('part');
+  const [blankWay, setBlankWay] = useState<'new' | 'whole'>('new');
+  const texturedParts = useMemo(() => session?.parts.filter((item) => item.texture) ?? [], [session]);
+  const wholeAllowed = texturedParts.length === 0;
+  const mode: RetextureMode = part && !part.texture ? (blankWay === 'whole' && wholeAllowed ? 'whole' : 'new') : 'restyle';
+  const everyPart = mode === 'restyle' && scope === 'all' && texturedParts.length > 1;
   const [routeModel, setRouteModel] = useState<ProviderModel | null>(null);
   const [count, setCount] = useState<'1' | '2' | '4'>('1');
   const [message, setMessage] = useState<string | null>(null);
@@ -103,11 +104,9 @@ export const RetextureEditor: React.FC = () => {
     return () => { current = false; };
   }, [session, sessions, worn]);
   const canCompare = Boolean(part && worn && wornReady);
-  const compare = useMemo(() => (compareOn && canCompare && part && worn ? {
-    split,
-    drawBefore: () => sessions.showNow(part, null),
-    drawAfter: () => sessions.showNow(part, worn),
-  } : null), [canCompare, compareOn, part, sessions, split, worn]);
+  const comparison = useMemo(() => (compareOn && canCompare && part && session ? sessions.comparison(session, part) : null), [canCompare, compareOn, part, session, sessions]);
+  useEffect(() => () => comparison?.end(), [comparison]);
+  const compare = useMemo(() => (comparison ? { split, drawBefore: comparison.drawBefore, drawAfter: comparison.drawAfter } : null), [comparison, split]);
   const stage = useRef<HTMLDivElement>(null);
 
   const startSplitDrag = (event: React.PointerEvent<HTMLElement>) => {
@@ -128,19 +127,21 @@ export const RetextureEditor: React.FC = () => {
     handle.addEventListener('pointercancel', end);
   };
 
-  const cost = part ? sessions.estimate(part, { mode, model: routeModel }) : null;
-  const runs = Number(count);
+  const cost = part ? sessions.estimate({ mode, model: routeModel }) : null;
+  const runs = everyPart ? texturedParts.length : Number(count);
   const canGenerate = Boolean(session && part && routeModel && prompt.trim());
 
   const generate = useCallback(async () => {
     if (!session || !part || !routeModel || !prompt.trim()) return;
     setMessage(null);
     try {
-      await sessions.generate(session, part, { mode, prompt: prompt.trim(), model: routeModel, count: runs });
+      for (const target of everyPart ? texturedParts : [part]) {
+        await sessions.generate(session, target, { mode, prompt: prompt.trim(), model: routeModel, count: everyPart ? 1 : runs });
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'The texture could not be started.');
     }
-  }, [mode, part, prompt, routeModel, runs, session, sessions]);
+  }, [everyPart, mode, part, prompt, routeModel, runs, session, sessions, texturedParts]);
 
   const pickTake = useCallback((take: Take | null) => {
     if (!session || !part) return;
@@ -158,7 +159,7 @@ export const RetextureEditor: React.FC = () => {
     if (!session || !part || !model) return;
     void act(async () => {
       await sessions.saveOnModel(session, part, take, { overrides: model.textureOverrides, materials: model.materialOverrides }, (overrides) => setModelTextureOverrides(model.id, overrides), (overrides) => updateModelMaterialOverrides(model.id, overrides));
-      addNotification({ message: take ? `${part.name} now wears result ${take.number}.` : `${part.name} is back to its original.`, type: 'info' });
+      addNotification({ message: take ? `${part.name} now wears result ${take.number}.` : `${part.name} is back to what it wore.`, type: 'info' });
     }, 'This could not be saved on the model.');
   };
 
@@ -216,13 +217,15 @@ export const RetextureEditor: React.FC = () => {
     }, 'The material could not be taken off.');
   };
 
+  useEffect(() => { void sessions.chooseCapableModel(); }, [sessions]);
+
   const [mapsModel, setMapsModel] = useState<ProviderModel | null>(null);
   useEffect(() => { void sessions.mapsModel().then(setMapsModel); }, [sessions]);
   const mapsCost = mapsModel && focused?.size ? estimateJobCost(mapsModel, (focused.size.width * focused.size.height) / 1_000_000) : mapsModel ? estimateJobCost(mapsModel) : null;
 
   const failed = focused?.state === 'failed' ? focused : null;
   const shownError = message ?? failed?.error ?? null;
-  const shownPicture = focused?.state === 'ready' && focused.url ? focused.url : part ? sessions.previewOf(part) : null;
+  const shownPicture = focused?.state === 'ready' && focused.url ? focused.url : part && session ? sessions.previewOf(session, part) : null;
   const shownSize = focused?.state === 'ready' ? focused.size ?? part?.size : part?.size;
   const placeholder = mode === 'restyle'
     ? 'How should it change? For example: faded blue denim, worn at the knees'
@@ -299,7 +302,7 @@ export const RetextureEditor: React.FC = () => {
               focused === null ? (
                 part.saved === null
                   ? <span className="flex items-center gap-1 pr-1 text-2xs text-ink-3"><Check size={12} /> On the model</span>
-                  : <Button variant="primary" disabled={busy} onClick={() => saveOnModel(null)}>Use original</Button>
+                  : <Button variant="primary" disabled={busy} onClick={() => saveOnModel(null)}>{startingLookName(part) === 'Original' ? 'Use original' : 'Use this'}</Button>
               ) : focused.state === 'ready' ? (
                 <>
                   <IconButton label={part.saved === focused.id ? 'On the model: replace it first to remove it' : `Remove result ${focused.number}`} size="md" disabled={busy || part.saved === focused.id} onClick={() => session && void sessions.remove(session, part, focused)}><Trash2 size={14} /></IconButton>
@@ -337,18 +340,31 @@ export const RetextureEditor: React.FC = () => {
           )}
           <div className="flex gap-2 p-2">
             <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-              <Segmented
-                label="What to start from"
-                value={mode}
-                onChange={setMode}
-                disabled={!part}
-                className="self-start"
-                options={[
-                  { value: 'restyle', label: 'Restyle', disabled: !part?.texture, hint: part?.texture ? 'Change what is on this part now, keeping its layout' : 'This part has no texture to restyle' },
-                  { value: 'new', label: 'New', hint: 'Paint a texture from the description alone' },
-                  { value: 'whole', label: 'Whole model', disabled: !wholeAllowed, hint: wholeAllowed ? 'Paint the model as a shape, seen from every side, with surface maps to match' : `Works on a model with one texture. This one has ${textured}.` },
-                ]}
-              />
+              {mode === 'restyle' ? (
+                <Segmented
+                  label="What to change"
+                  value={everyPart ? 'all' : 'part'}
+                  onChange={setScope}
+                  disabled={!part}
+                  className="self-start"
+                  options={[
+                    { value: 'part', label: 'This part', hint: 'Change the texture on this part, keeping its layout' },
+                    { value: 'all', label: 'All parts', disabled: texturedParts.length < 2, hint: texturedParts.length < 2 ? 'This model has one texture' : `Change all ${texturedParts.length} textures, each from its own map` },
+                  ]}
+                />
+              ) : (
+                <Segmented
+                  label="How to paint it"
+                  value={mode}
+                  onChange={setBlankWay}
+                  disabled={!part}
+                  className="self-start"
+                  options={[
+                    { value: 'new', label: 'New', hint: 'This part has no texture to work from, so it is painted from the description' },
+                    { value: 'whole', label: 'Whole model', disabled: !wholeAllowed, hint: wholeAllowed ? 'Paint the model as a shape, seen from every side, with surface maps to match' : 'Only for a model with no textures: the others keep what they have and change from it' },
+                  ]}
+                />
+              )}
               <TextArea
                 aria-label="Description"
                 value={prompt}
@@ -362,7 +378,7 @@ export const RetextureEditor: React.FC = () => {
               <AiRouteBar capability={capabilityOfMode(mode)} label={mode === 'new' ? 'Image model' : mode === 'whole' ? 'Whole-model model' : 'Retexture model'} onModelChange={setRouteModel} placement="top-end" />
               <div className="flex h-5 items-center justify-between gap-2 text-2xs text-ink-3">
                 <span className="truncate tabular-nums">{cost === null ? (routeModel ? 'Price not known yet' : '') : `About ${formatCost(cost * runs)}${runs > 1 ? ` for ${runs}` : ''}`}</span>
-                <Tooltip text="How many results to paint"><span><Segmented label="How many results" value={count} onChange={setCount} options={COUNTS} /></span></Tooltip>
+                {!everyPart && <Tooltip text="How many results to paint"><span><Segmented label="How many results" value={count} onChange={setCount} options={COUNTS} /></span></Tooltip>}
               </div>
               <Button variant="primary" size="lg" className="w-full" disabled={!canGenerate} onClick={() => void generate()} title={routeModel ? undefined : 'Choose a model first'}>
                 Generate <span className="text-2xs font-normal opacity-60">Ctrl Enter</span>
@@ -404,6 +420,24 @@ export const RetextureEditor: React.FC = () => {
               {shownPicture
                 ? <img src={shownPicture} alt={`${part.name} texture`} draggable={false} className="aspect-square w-full rounded-sm bg-well object-contain" />
                 : <p className="text-2xs text-ink-3">No texture yet. Describe one below and press Generate.</p>}
+            </Section>
+          )}
+
+          {focused?.state === 'ready' && focused.source && (
+            <Section title="Keep original detail" actions={<span className="text-2xs tabular-nums text-ink-3">{Math.round(focused.keepOriginal * 100)}%</span>}>
+              <input
+                type="range"
+                aria-label="Keep original detail"
+                min={0}
+                max={100}
+                step={5}
+                value={Math.round(focused.keepOriginal * 100)}
+                disabled={part?.saved === focused.id}
+                title={part?.saved === focused.id ? 'This result is on the model. Use the original to change it again.' : undefined}
+                onChange={(event) => { if (session && part) void sessions.setKeepOriginal(session, part, focused, Number(event.target.value) / 100); }}
+                className="w-full"
+              />
+              <p className="mt-1 text-2xs leading-4 text-ink-3">Fine detail from {focused.fromTake ? `result ${focused.fromTake}` : 'the map it came from'}: folds, seams and print stay where they were. Changing this costs nothing.</p>
             </Section>
           )}
 

@@ -26,6 +26,7 @@ export const MaterialFromDescription: React.FC<{ onCreated: (name: string, graph
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const running = useRef<{ jobId: string; stopped: boolean } | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -42,7 +43,9 @@ export const MaterialFromDescription: React.FC<{ onCreated: (name: string, graph
       const route = await hostProviderService.loadConfiguredRoute('media.material');
       if (route?.modelId !== model.id) await hostProviderService.routeCapability(MATERIAL_PROVIDER, 'media.material', model.id);
       const job = await textureService.submit(null, wanted, 'media.material');
+      running.current = { jobId: job.jobId, stopped: false };
       const preview = await textureService.follow(job);
+      running.current = null;
       const dimensions = preview.dimensions ?? { width: 1024, height: 1024 };
       // Kept straight away: a material's graph draws with the project's textures, and has nowhere to wait for them.
       const keep = async (previewAssetId: string, suffix: string) => {
@@ -59,8 +62,18 @@ export const MaterialFromDescription: React.FC<{ onCreated: (name: string, graph
       setOpen(false);
       setDescription('');
     } catch (cause) {
-      setError(describeProviderFailure(cause instanceof Error ? cause.message : undefined) || 'The material could not be painted.');
-    } finally { setWorking(false); }
+      if (!running.current?.stopped) setError(describeProviderFailure(cause instanceof Error ? cause.message : undefined) || 'The material could not be painted.');
+    } finally {
+      running.current = null;
+      setWorking(false);
+    }
+  };
+
+  /** A busy queue can hold a job for minutes. It ends as stopped, which needs no remark. */
+  const stop = () => {
+    if (!running.current) return;
+    running.current.stopped = true;
+    void textureService.cancel(running.current.jobId).catch(() => undefined);
   };
 
   return (
@@ -88,9 +101,12 @@ export const MaterialFromDescription: React.FC<{ onCreated: (name: string, graph
           )}
           <div className="flex items-center justify-between gap-2">
             <span className="text-2xs tabular-nums text-ink-3">{cost !== null ? `About ${formatCost(cost)}` : model ? 'Price not known yet' : ''}</span>
-            <Button variant="primary" disabled={!description.trim() || !model || working} icon={working ? <Spinner /> : undefined} onClick={() => void paint()}>
-              {working ? 'Painting' : 'Paint'}
-            </Button>
+            <div className="flex items-center gap-1.5">
+              {working && <Button size="sm" onClick={stop}>Stop</Button>}
+              <Button variant="primary" disabled={!description.trim() || !model || working} icon={working ? <Spinner /> : undefined} onClick={() => void paint()}>
+                {working ? 'Painting' : 'Paint'}
+              </Button>
+            </div>
           </div>
         </div>
       </Popover>

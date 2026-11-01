@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import { textureSourceImage } from '../../../utils/textureCompression/compressTextures';
+import { textureSourceFlipY, textureSourceImage } from '../../../utils/textureCompression/compressTextures';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
+import { overrideTextureFlipY } from '../../../utils/materialOverrides';
 
 export type PartMaterial = THREE.Material & {
   map?: THREE.Texture | null;
@@ -107,13 +108,101 @@ export const setPartGlow = (part: ModelPart, on: boolean): void => {
   }
 };
 
+/** A little beyond each triangle, as a texture is read from between its pixels and from smaller copies of itself. */
+const USED_AREA_MARGIN_PX = 3;
+
+const fillTriangle = (used: Uint8Array, width: number, height: number, ax: number, ay: number, bx: number, by: number, cx: number, cy: number) => {
+  const left = Math.max(0, Math.floor(Math.min(ax, bx, cx)));
+  const right = Math.min(width - 1, Math.ceil(Math.max(ax, bx, cx)));
+  const top = Math.max(0, Math.floor(Math.min(ay, by, cy)));
+  const bottom = Math.min(height - 1, Math.ceil(Math.max(ay, by, cy)));
+  const sign = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax) < 0 ? -1 : 1;
+  for (let y = top; y <= bottom; y += 1) {
+    const py = y + 0.5;
+    const row = y * width;
+    for (let x = left; x <= right; x += 1) {
+      const px = x + 0.5;
+      if (sign * ((bx - ax) * (py - ay) - (by - ay) * (px - ax)) >= 0
+        && sign * ((cx - bx) * (py - by) - (cy - by) * (px - bx)) >= 0
+        && sign * ((ax - cx) * (py - cy) - (ay - cy) * (px - cx)) >= 0) used[row + x] = 255;
+    }
+  }
+  // A sliver can fall between pixel centres.
+  const ix = Math.floor(ax);
+  const iy = Math.floor(ay);
+  if (ix >= 0 && ix < width && iy >= 0 && iy < height) used[iy * width + ix] = 255;
+};
+
+const grownByOne = (area: Uint8Array, width: number, height: number): Uint8Array => {
+  const grown = area.slice();
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const at = y * width + x;
+      if (!area[at]) continue;
+      if (x > 0) grown[at - 1] = 255;
+      if (x < width - 1) grown[at + 1] = 255;
+      if (y > 0) grown[at - width] = 255;
+      if (y < height - 1) grown[at + width] = 255;
+    }
+  }
+  return grown;
+};
+
+/**
+ * Which pixels of a part's map the model draws, as a byte per pixel, or null where that cannot be told: without UVs,
+ * or with a map that repeats across them, where any pixel may be in use. Filled here rather than on a canvas, as a
+ * scanned or generated model can have millions of triangles.
+ */
+export const usedAreaOfPart = (object: THREE.Object3D, part: ModelPart, width: number, height: number): Uint8Array | null => {
+  // The way round the picture of a map is, which the texture itself cannot say: a compressed one is flipped in advance.
+  const flipY = overrideTextureFlipY(object);
+  let used = new Uint8Array(width * height);
+  let found = false;
+  let repeats = false;
+  object.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+    if (!mesh.isMesh || repeats) return;
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    if (!materials.some((material) => part.materials.includes(material as PartMaterial))) return;
+    const uv = mesh.geometry?.getAttribute('uv');
+    if (!uv) { repeats = true; return; }
+    const index = mesh.geometry.index;
+    const count = index ? index.count : uv.count;
+    const groups = Array.isArray(mesh.material) && mesh.geometry.groups.length ? mesh.geometry.groups : [{ start: 0, count, materialIndex: 0 }];
+    const corner = [0, 0, 0, 0, 0, 0];
+    for (const group of groups) {
+      if (!part.materials.includes(materials[group.materialIndex ?? 0] as PartMaterial)) continue;
+      const end = Math.min(group.start + group.count, count);
+      for (let at = group.start; at + 2 < end; at += 3) {
+        for (let which = 0; which < 3; which += 1) {
+          const vertex = index ? index.getX(at + which) : at + which;
+          const u = uv.getX(vertex);
+          const v = uv.getY(vertex);
+          if (u < -0.01 || u > 1.01 || v < -0.01 || v > 1.01) { repeats = true; return; }
+          corner[which * 2] = u * width;
+          corner[which * 2 + 1] = (flipY ? 1 - v : v) * height;
+        }
+        fillTriangle(used, width, height, corner[0], corner[1], corner[2], corner[3], corner[4], corner[5]);
+        found = true;
+      }
+    }
+  });
+  if (!found || repeats) return null;
+  for (let step = 0; step < USED_AREA_MARGIN_PX; step += 1) used = grownByOne(used, width, height);
+  return used;
+};
+
 export interface PictureSize {
   width: number;
   height: number;
 }
 
-/** A texture's picture as a data URL, no wider or taller than `maxEdge`, with the size it came out at. */
-export const texturePicture = (texture: THREE.Texture, maxEdge: number, mime = 'image/png'): (PictureSize & { url: string }) | null => {
+/**
+ * A texture's picture as a data URL, no wider or taller than `maxEdge`, with the size it came out at. With `flipY`, it comes
+ * out the way up a texture with that `flipY` is read, whichever way up it was made: an imported map and one saved on the
+ * same model can differ, and what is worked out from one has to line up with the other.
+ */
+export const texturePicture = (texture: THREE.Texture, maxEdge: number, mime = 'image/png', flipY?: boolean): (PictureSize & { url: string }) | null => {
   const image = textureSourceImage(texture) as HTMLImageElement | HTMLCanvasElement | ImageBitmap | null;
   if (!image?.width || !image.height) return null;
   const scale = Math.min(1, maxEdge / Math.max(image.width, image.height));
@@ -123,6 +212,10 @@ export const texturePicture = (texture: THREE.Texture, maxEdge: number, mime = '
   const context = canvas.getContext('2d');
   if (!context) return null;
   try {
+    if (flipY !== undefined && flipY !== textureSourceFlipY(texture)) {
+      context.translate(0, canvas.height);
+      context.scale(1, -1);
+    }
     context.drawImage(image, 0, 0, canvas.width, canvas.height);
     return { url: canvas.toDataURL(mime, 0.92), width: canvas.width, height: canvas.height };
   } catch (error) {

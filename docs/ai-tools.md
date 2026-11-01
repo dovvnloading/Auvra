@@ -6,7 +6,7 @@ The editor can use AI models for texturing and for code. Nothing here is needed 
 
 | Tool | Where | What it does |
 |---|---|---|
-| **Retexture** | Retexture tab | Restyles a part of a model from a description, or paints it a new texture, and compares the results on the model |
+| **Retexture** | Retexture tab | Changes a part's texture from a description, starting from the texture it has, and compares the results on the model |
 | **AI Coder** | HUD/UI tab, right-hand panel | Proposes HUD elements and changes, shown dashed on the canvas until you apply them. Applied changes can be undone |
 | **AI** | Script editor, top right | Writes or changes a script. Its changes appear in the code for you to keep or leave out one by one, and the editor's undo takes them back |
 
@@ -16,7 +16,13 @@ Each tool shows the model it will use and what that model costs. Click it to cha
 
 Pick a model, then the part to paint: click it on the model, or choose it under **Parts**. Pointing at a part names it and lights it up. Describe the change and press **Generate**, or Ctrl+Enter. The cost of the run is shown beside the button, and you can ask for up to four results at once.
 
-**Restyle** changes what the part has now, keeping its layout, and starts from whichever result is on the model. **New** paints from the description alone, for a part with no texture or to start over.
+A texture is always changed, never replaced. The tool draws the model as it looks now from six sides, a model edits that picture, and the change is put back on the map through the same views, so that the layout, seams, folds, print and cut-outs stay exactly where the model's UVs expect them. What the model does not use of the map is left untouched. It starts from whichever result is on the model, so changes can be built up. **All parts** changes every texture on the model at once, each from its own map.
+
+Top models are suggested for this, as the job is to change a surface without disturbing anything else. A run on Flux 3, the first suggestion, comes to about $0.13 and takes a minute or two.
+
+**Keep original detail** under a result says how much of the fine detail stays the original's. It works at once and costs nothing, as nothing goes back to the provider.
+
+A map that repeats across a surface is a picture of that surface already, so a model is shown it directly. A part with no texture has nothing to start from and is painted from the description (**New**), and a model with no textures at all can be painted as a shape (**Whole model**).
 
 Every result stays in the strip under the model. Click one to try it on, or step through them with the left and right arrow keys. Nothing is saved until you say so:
 
@@ -25,7 +31,7 @@ Every result stays in the strip under the model. Click one to try it on, or step
 
 **Surface maps.** Under a result, **Make matching maps** makes normal, roughness and metal maps from it, for about a cent, so that light falls on it as it would on the real thing. They are saved with the result.
 
-**Whole model** paints the model as a shape, seen from every side, rather than a flat sheet, so seams and shapes come out right, and it makes surface maps as it goes. It costs more ($0.30 a run on fal) and takes a few minutes. It works on a model with one texture, as most props have: a model with several comes back merged into one mesh, without its rig, so it is not offered for those.
+**Whole model** is for a model with no textures: it paints the model as a shape, seen from every side, and makes surface maps as it goes. It costs $0.30 a run on fal and takes a few minutes. A model that has textures keeps them and changes from them instead.
 
 **Compare** (B) splits the model in two at a line you can drag, the part as it was on one side and with the result on the other. **Studio**, **Daylight** and **Flat** change the light, and Flat is the one for judging colour. T turns the model on a turntable and F frames it again.
 

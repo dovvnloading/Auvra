@@ -20,10 +20,10 @@ const LANGUAGE_PICKS: readonly ModelPick[] = [
 const MODEL_PICKS: Readonly<Record<string, Partial<Record<ProviderCapability, readonly ModelPick[]>>>> = {
   fal: {
     'media.edit': [
-      { id: 'fal-ai/flux-2/flash/edit', tier: 'Fast', note: 'Quick drafts, keeps the layout' },
-      { id: 'alibaba/qwen-image-3/edit', tier: 'Balanced', note: 'Flat price at any size' },
-      { id: 'fal-ai/flux-2/edit', tier: 'Balanced', note: 'Cleaner detail' },
-      { id: 'fal-ai/flux-2-pro/edit', tier: 'Best quality', note: 'Fine detail, follows the description closely' },
+      // Chosen by running a real model's views through them. Of the top models, these keep its shape and markings where others invent new ones.
+      { id: 'blackforestlabs/flux-3/edit-image', tier: 'Best quality', note: 'Keeps shape and markings, adds real surface detail' },
+      { id: 'bytedance/seedream/v5/pro/edit', tier: 'Best quality', note: 'The richest surfaces. Takes longer' },
+      { id: 'google/nano-banana-2.1/edit', tier: 'Balanced', note: 'Quick, and stays nearest the original' },
     ],
     'media.generate': [
       { id: 'fal-ai/flux/schnell', tier: 'Fast', note: 'Quick drafts' },

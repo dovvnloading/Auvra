@@ -382,6 +382,22 @@ def _allows_size_object(schema: Any) -> bool:
     return any(_allows_size_object(item) for item in schema.get("anyOf", ()) if isinstance(item, Mapping))
 
 
+def _resolution_for(schema: Mapping[str, Any], longest_side: int) -> str | None:
+    """The smallest of a model's named resolutions ("1K", "2k", "1.5k") that holds a picture of this size, or else its largest."""
+    named: list[tuple[float, str]] = []
+    options = [schema, *schema.get("anyOf", [])]
+    for option in options:
+        for value in option.get("enum", ()) if isinstance(option, Mapping) else ():
+            match = re.fullmatch(r"(\d+(?:\.\d+)?)[kK]", str(value))
+            if match:
+                named.append((float(match.group(1)) * 1000, str(value)))
+    if not named:
+        return None
+    named.sort()
+    # "2K" is short of 2048 only by how it is named.
+    return next((value for pixels, value in named if pixels >= longest_side * 0.9), named[-1][1])
+
+
 def build_media_request(schema: Mapping[str, Any] | None, *, model: str, prompt: str, images: list[str],
                         size: tuple[int, int] | None = None, mesh: str | None = None) -> dict[str, Any]:
     """What to send a model, shaped by what it says it takes. One that takes more than we have is refused here."""
@@ -428,6 +444,14 @@ def build_media_request(schema: Mapping[str, Any] | None, *, model: str, prompt:
         request["aspect_ratio"] = "1:1"
     if "output_format" in properties and _allows_value(properties["output_format"], "png"):
         request["output_format"] = "png"
+    # A model's own defaults are mostly its least: a texture is worth its best.
+    if size is not None and "resolution" in properties:
+        resolution = _resolution_for(properties["resolution"], max(size))
+        if resolution is not None:
+            request["resolution"] = resolution
+    for name in ("thinking_level", "quality"):
+        if name in properties and _allows_value(properties[name], "high"):
+            request[name] = "high"
     return request
 
 

@@ -32,6 +32,7 @@ from Auvra.providers.credentials import MemoryCredentialStore, WindowsCredential
 from Auvra.providers.fal_catalog import media_output_url, media_outputs, rough_job_cost
 from Auvra.providers.transport import StdlibTransport
 
+from .previews import PreviewError
 from .credential_prompt import CredentialPromptUnavailableError, WinFormsCredentialPrompt
 
 
@@ -700,11 +701,20 @@ class NativeProviderHost:
         if job.state.value != "succeeded" or job.capability not in {Capability.MEDIA_GENERATE.value, Capability.MEDIA_EDIT.value, Capability.MEDIA_MAPS.value, Capability.MEDIA_MESH.value, Capability.MEDIA_MATERIAL.value}:
             raise HostOperationError("invalid_job", "Media job is not complete")
         meta = self._meta.get(job.job_id, {})
-        preview = (self.preview_store.get(job.job_id, payload["previewAssetId"], project_id=active.project_id)
-                   if self.preview_store is not None else None)
-        if preview is None:
+        # The picture as it was finished in the editor, already uploaded, which can be kept again after the preview has gone.
+        finished = payload.get("finishedAssetId")
+        if finished is not None and not active.assets.verify(finished):
+            raise HostOperationError("invalid_job", "The finished picture is unavailable")
+        try:
+            preview = (self.preview_store.get(job.job_id, payload["previewAssetId"], project_id=active.project_id)
+                       if self.preview_store is not None else None)
+        except PreviewError:
+            if finished is None:
+                raise
+            preview = None
+        if preview is None and finished is None:
             raise HostOperationError("invalid_job", "Generated preview is unavailable")
-        artifact_id = preview.asset_id
+        artifact_id = finished or preview.asset_id
         generation = {
             "providerId": job.provider, "modelId": job.model, "jobId": job.job_id,
             "createdAt": meta.get("createdAt", self._now()),
@@ -720,7 +730,15 @@ class NativeProviderHost:
             generation["seed"] = meta["seed"]
         if isinstance(meta.get("costMicroUsd"), int) and not isinstance(meta.get("costMicroUsd"), bool):
             generation["costMicroUsd"] = meta["costMicroUsd"]
-        texture = {"id": payload["textureId"], "name": payload["name"], "assetId": artifact_id, "dimensions": {"width": preview.width, "height": preview.height}, "generation": generation}
+        if finished is None:
+            width, height = preview.width, preview.height
+        else:
+            reference = self.project_host.service.resolve_reference(finished, project_id=active.project_id)
+            with self.project_host.service.resolve(finished, project_id=active.project_id) as stream:
+                width, height = _stream_image_size(stream, reference.mime) or (None, None)
+            if width is None:
+                raise HostOperationError("invalid_job", "The finished picture cannot be read")
+        texture = {"id": payload["textureId"], "name": payload["name"], "assetId": artifact_id, "dimensions": {"width": width, "height": height}, "generation": generation}
         # apply_changes expects document records, not a replacement domain
         # singleton.  Merge the generated record into the complete canonical
         # textures document, replacing only a matching texture identity.
@@ -749,25 +767,26 @@ class NativeProviderHost:
             model_documents[model_index] = model
             # Keep every model record and only update the selected model.
             changes["models"] = model_documents
-        existing = active.assets.verify(artifact_id, expected_size=preview.size)
-        try:
-            with self.preview_store.open(preview.asset_id, project_id=active.project_id) as stream:
-                reference = self.project_host.service.begin_upload(
-                    stream,
-                    project_id=active.project_id,
-                    size=preview.size,
-                    mime=preview.mime,
-                    name=payload["name"],
-                )
-            if reference.asset_id != artifact_id:
-                raise InvalidProjectError("generated asset hash changed during ingestion")
-        except Exception:
-            if not existing:
-                try:
-                    active.discard_asset_if_unreferenced(artifact_id)
-                except (OSError, ValueError):
-                    pass
-            raise
+        existing = finished is not None or active.assets.verify(artifact_id, expected_size=preview.size)
+        if finished is None:
+            try:
+                with self.preview_store.open(preview.asset_id, project_id=active.project_id) as stream:
+                    reference = self.project_host.service.begin_upload(
+                        stream,
+                        project_id=active.project_id,
+                        size=preview.size,
+                        mime=preview.mime,
+                        name=payload["name"],
+                    )
+                if reference.asset_id != artifact_id:
+                    raise InvalidProjectError("generated asset hash changed during ingestion")
+            except Exception:
+                if not existing:
+                    try:
+                        active.discard_asset_if_unreferenced(artifact_id)
+                    except (OSError, ValueError):
+                        pass
+                raise
         try:
             status = self.project_host.service.apply_changes(
                 changes,
@@ -782,12 +801,13 @@ class NativeProviderHost:
                     pass
             raise
         try:
-            self.preview_store.discard(job.job_id, preview.asset_id, project_id=active.project_id)
+            if preview is not None:
+                self.preview_store.discard(job.job_id, preview.asset_id, project_id=active.project_id)
         except Exception:
             # The project mutation is already durable.  A cleanup failure must
             # not report a false commit failure; session shutdown will retry it.
             pass
-        return {"kind": "media.commit", "projectId": active.project_id, "jobId": job.job_id, "previewAssetId": preview.asset_id, "projectRevision": status.revision, "assetId": reference.asset_id, "provenance": generation}
+        return {"kind": "media.commit", "projectId": active.project_id, "jobId": job.job_id, "previewAssetId": payload["previewAssetId"], "projectRevision": status.revision, "assetId": reference.asset_id, "provenance": generation}
 
     def _preview_command(self, payload: dict[str, Any]) -> dict[str, Any]:
         if "changes" in payload or "document" in payload:
