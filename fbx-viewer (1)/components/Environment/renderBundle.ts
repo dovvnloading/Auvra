@@ -11,7 +11,9 @@ export const renderView: {
   panorama: { url: string; rotation: number; brightness: number } | null;
   /** Draws a level's own sky onto a cube, without what stands in front of it. Null without one. */
   drawSky: ((renderer: THREE.WebGLRenderer, onto: THREE.WebGLCubeRenderTarget) => void) | null;
-} = { scene: null, camera: null, renderer: null, panorama: null, drawSky: null };
+  /** Whether the sky itself lights the level, where otherwise a plain fill stands in for it. */
+  skyLights: boolean;
+} = { scene: null, camera: null, renderer: null, panorama: null, drawSky: null, skyLights: false };
 
 const MAGIC = new TextEncoder().encode('AUVRARB1');
 /** Large enough for what a frame shows, and what a graphics card holds comfortably for a whole level's textures. */
@@ -34,6 +36,8 @@ const CAPTURED_SKY_FACE = 512;
  */
 const DECAL_LIFT = 4e-5;
 const FLOATS_PER_CORNER = { positions: 3, normals: 3, uvs: 2 } as const;
+/** three's filmic curve is the renderer's own, after dividing the light by this. */
+const FILMIC_WHITE = 0.6;
 
 type StandardLike = THREE.MeshStandardMaterial;
 type PartReference = { offset: number; length: number };
@@ -299,6 +303,8 @@ const addGlowToColour = (colour: Uint8Array, glow: Uint8Array, least: readonly n
   }
 };
 
+const luminanceOf = (color: THREE.Color): number => 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
+
 /** Lets the editor draw between one long piece of work and the next. */
 const breathe = () => new Promise<void>((resolve) => { setTimeout(resolve, 0); });
 
@@ -322,6 +328,7 @@ export const buildRenderBundle = async (): Promise<RenderBundle | null> => {
   const lights: Record<string, unknown>[] = [];
   const bounds = new THREE.Box3();
   const decals: MeshChunk[] = [];
+  let fill = 0;
   const add = (material: StandardLike, mesh: THREE.Mesh, chunks: MeshChunk[]) => {
     const list = byMaterial.get(material) ?? [];
     list.push(...chunks);
@@ -336,7 +343,10 @@ export const buildRenderBundle = async (): Promise<RenderBundle | null> => {
       const position = light.getWorldPosition(new THREE.Vector3());
       const color = [light.color.r, light.color.g, light.color.b];
       const direction = light.target ? light.target.getWorldPosition(new THREE.Vector3()).sub(position).normalize().toArray() : [0, -1, 0];
-      if ((light as THREE.DirectionalLight).isDirectionalLight) lights.push({ type: 'directional', color, intensity: light.intensity, direction });
+      const dome = light as THREE.Light & { isAmbientLight?: boolean; isHemisphereLight?: boolean; groundColor?: THREE.Color };
+      if (dome.isAmbientLight) fill += light.intensity * luminanceOf(light.color);
+      else if (dome.isHemisphereLight) fill += light.intensity * (luminanceOf(light.color) + luminanceOf(dome.groundColor ?? light.color)) / 2;
+      else if ((light as THREE.DirectionalLight).isDirectionalLight) lights.push({ type: 'directional', color, intensity: light.intensity, direction });
       else if ((light as THREE.PointLight).isPointLight) lights.push({ type: 'point', color, intensity: light.intensity, position: position.toArray() });
       else if ((light as THREE.SpotLight).isSpotLight) lights.push({ type: 'spot', color, intensity: light.intensity, position: position.toArray(), direction, angle: THREE.MathUtils.radToDeg(light.angle ?? 0.5) });
       return;
@@ -471,8 +481,19 @@ export const buildRenderBundle = async (): Promise<RenderBundle | null> => {
   const look = camera.getWorldDirection(new THREE.Vector3());
   const position = camera.getWorldPosition(new THREE.Vector3());
   const perspective = camera as THREE.PerspectiveCamera;
+  const fog = scene.fog as (THREE.Fog | THREE.FogExp2 | null);
   const header = new TextEncoder().encode(JSON.stringify({
     meshes, lights,
+    // The same curve at the same brightness as the view, and the same fog.
+    exposure: Math.log2((renderer?.toneMappingExposure ?? 1) / FILMIC_WHITE),
+    // A plain fill lights a white surface with this much, which the sky is to stand in for.
+    ...(renderView.skyLights ? {} : { skyFill: fill / Math.PI }),
+    ...(fog ? {
+      fog: {
+        color: [fog.color.r, fog.color.g, fog.color.b],
+        ...((fog as THREE.FogExp2).isFogExp2 ? { density: (fog as THREE.FogExp2).density } : { near: (fog as THREE.Fog).near, far: (fog as THREE.Fog).far }),
+      },
+    } : {}),
     environment: { background, intensity: panorama?.brightness ?? 1, ...(sky ? { panorama: sky, rotation: -(panorama?.rotation ?? 0) } : {}) },
     camera: { position: position.toArray(), target: position.clone().add(look).toArray(), fov: perspective.fov ?? 45 },
   }));
