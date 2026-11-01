@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, Aperture, Check, Save, X } from 'lucide-react';
 import { useAssets } from '../../context/AssetContext';
-import { useGameContent } from '../../runtime/GameContentContext';
 import { describeProviderFailure, hostProviderService } from '../../services/HostProviderService';
 import { textureService } from '../../services/TextureGenerationService';
 import { Button, IconButton, Popover, Segmented, Spinner } from '../UI/kit';
@@ -35,7 +34,6 @@ interface Finished {
 /** Renders the view being looked at with Reframe, a path tracer on this computer, for a finished frame. */
 export const RenderPanel: React.FC = () => {
   const { adoptHostTexture } = useAssets();
-  const { textures } = useGameContent();
   const [open, setOpen] = useState(false);
   const [available, setAvailable] = useState<boolean | null>(null);
   const [quality, setQuality] = useState<Quality>('good');
@@ -66,7 +64,7 @@ export const RenderPanel: React.FC = () => {
     setPhase('Gathering the scene');
     const started = performance.now();
     try {
-      const built = await buildRenderBundle(new Map(textures.map((texture) => [texture.id, texture.url])));
+      const built = await buildRenderBundle();
       if (!built) throw new Error('There is nothing in view to render.');
       const width = chosen.width;
       const height = Math.max(16, Math.round(width / built.aspect / 2) * 2);
@@ -89,7 +87,7 @@ export const RenderPanel: React.FC = () => {
       setCanStop(false);
       setPhase(null);
     }
-  }, [quality, textures]);
+  }, [quality]);
 
   const stop = () => {
     if (!running.current) return;
