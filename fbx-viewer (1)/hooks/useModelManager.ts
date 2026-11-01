@@ -15,6 +15,7 @@ import { useNotification } from '../context/NotificationContext';
 import { assetDiagnosticAttributes, frontendDiagnostics, type DiagnosticAttributes } from '../diagnostics/runtime';
 import {
   applyMaterialOverrides,
+  drawAsPaintedTexture,
   collectOverrideTextures,
   normalizeMaterialOverrides,
   overrideTextureCacheKey,
@@ -82,10 +83,7 @@ const adoptOverrideTextures = (from: THREE.Object3D, to: THREE.Object3D, materia
     if (material.map && material.map !== texture) material.map.dispose();
     alignOverrideTextureFlipY(texture, to);
     material.map = texture;
-    material.transparent = true;
-    material.alphaTest = 0.5;
-    material.side = THREE.DoubleSide;
-    material.needsUpdate = true;
+    drawAsPaintedTexture(material);
     adopted.add(texture);
   });
   // Adopted textures now belong to the replacement and must survive disposal of the old model.
@@ -708,10 +706,7 @@ export const useModelManager = (
           if (!materialNames.has(candidate.name)) continue;
           if (candidate.map) candidate.map.dispose();
           candidate.map = newTexture;
-          candidate.transparent = true;
-          candidate.alphaTest = 0.5;
-          candidate.side = THREE.DoubleSide;
-          candidate.needsUpdate = true;
+          drawAsPaintedTexture(candidate);
         }
       });
       setModels((previous) => previous.map((candidate) => candidate.id === modelId
@@ -745,8 +740,8 @@ export const useModelManager = (
         if (targetMapUUID && candidate.map?.uuid !== targetMapUUID) continue;
         if (!targetMapUUID && candidate.map) continue;
         if (candidate.map) candidate.map.dispose();
-        candidate.map = newTexture; candidate.transparent = true; candidate.alphaTest = 0.5;
-        candidate.side = THREE.DoubleSide; candidate.needsUpdate = true;
+        candidate.map = newTexture;
+        drawAsPaintedTexture(candidate);
       }
     });
     return newTexture.uuid;

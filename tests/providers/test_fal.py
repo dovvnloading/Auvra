@@ -396,6 +396,21 @@ class SurfaceMapAndWholeModelTests(unittest.TestCase):
         model = parse_media_model(media_row("fal-ai/patina/material", "text-to-image"))
         self.assertEqual(model.capabilities, {Capability.MEDIA_GENERATE, Capability.MEDIA_MATERIAL})
 
+    def test_a_request_asks_for_what_a_map_needs_rather_than_the_models_smallest(self):
+        schema = {"properties": {"prompt": {"type": "string"}, "image_urls": {"type": "array"},
+                                 "resolution": {"enum": ["768sq", "1k", "1.5k", "2k", "4k"], "default": "1k"}}}
+        ask = lambda size: build_media_request(schema, model="m", prompt="p", images=["i"], size=size)["resolution"]
+        self.assertEqual(ask((1024, 1024)), "1k")
+        self.assertEqual(ask((2046, 1364)), "2k")
+        self.assertEqual(ask((3000, 3000)), "4k")
+        self.assertEqual(ask((9000, 9000)), "4k")
+
+    def test_a_request_asks_for_a_models_best_where_it_can(self):
+        schema = {"properties": {"prompt": {"type": "string"}, "thinking_level": {"anyOf": [{"enum": ["minimal", "medium", "high"]}, {"type": "null"}]},
+                                 "quality": {"enum": ["low", "medium", "high"]}, "resolution": {"anyOf": [{"enum": ["1K", "2K"]}, {"type": "null"}]}}}
+        request = build_media_request(schema, model="m", prompt="p", images=[], size=(2048, 2048))
+        self.assertEqual((request["thinking_level"], request["quality"], request["resolution"]), ("high", "high", "2K"))
+
     def test_an_answer_with_one_picture_has_no_maps(self):
         self.assertEqual(media_outputs({"images": [{"url": "https://v3.fal.media/a.png"}]}), [])
 

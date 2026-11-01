@@ -204,6 +204,8 @@ export const splitAlphaCards = (root: THREE.Object3D): void => {
         return nothing;
       }
       material.depthWrite = false;
+      // Cards draw in no particular order anyway, so back faces first gains nothing and costs a second draw.
+      material.forceSinglePass = true;
       return material;
     });
     mesh.material = Array.isArray(original) ? list.map(material => (isAlphaCard(material) ? bodyOf(material) : material)) : bodyOf(original);

@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { LoadedModelData } from '../../types';
 import { MaterialEditor } from '../../components/Tools/MaterialEditor';
-import {
+import { drawAsPaintedTexture,
   applyMaterialOverrides,
   collectOverrideTextures,
   hydrateMaterialOverrides,
@@ -35,6 +35,18 @@ const model = () => {
   root.add(new THREE.Mesh(geometry, [visor, unnamed]));
   return { root, body, bodyCopy, visor, unnamed };
 };
+
+describe('a painted texture', () => {
+  it('is cut out and two-sided, and is not drawn twice', () => {
+    const material = new THREE.MeshStandardMaterial();
+    drawAsPaintedTexture(material);
+    expect(material.transparent).toBe(true);
+    expect(material.alphaTest).toBe(0.5);
+    expect(material.side).toBe(THREE.DoubleSide);
+    expect(material.forceSinglePass).toBe(true);
+    expect(material.version).toBeGreaterThan(0);
+  });
+});
 
 describe('material override normalization', () => {
   it('keeps valid fields, clamps numbers and drops malformed entries', () => {

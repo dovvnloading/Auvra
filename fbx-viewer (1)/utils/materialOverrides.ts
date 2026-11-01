@@ -329,6 +329,18 @@ export interface ApplyMaterialOverridesResult {
 }
 
 /**
+ * How a painted texture is drawn: cut out where it is see-through, and from both sides. three draws anything see-through and
+ * two-sided twice, rebuilding the material each time for every mesh in every frame; only blended glass gains from that.
+ */
+export const drawAsPaintedTexture = (material: THREE.Material): void => {
+  material.transparent = true;
+  material.alphaTest = 0.5;
+  material.side = THREE.DoubleSide;
+  material.forceSinglePass = true;
+  material.needsUpdate = true;
+};
+
+/**
  * Apply `overrides` to every material under `root` (matched by material
  * name). Materials touched by an earlier apply but absent from `overrides`
  * revert to their imported values. Textures come from `resolveTexture`; they

@@ -79,6 +79,11 @@ export class TextureGenerationService {
     return assetId;
   }
 
+  /** Gives the host a finished picture. It joins the project once a texture names it. */
+  async ingestPicture(picture: Blob): Promise<string> {
+    return projectService.uploadAsset(new File([picture], 'retextured-map.png', { type: picture.type || 'image/png' }));
+  }
+
   /** Gives the host a picture to work from, once however many jobs start from it. */
   async ingestLocalAsset(value: string, name = 'source-texture'): Promise<string> {
     if (/^[0-9a-f]{64}$/.test(value)) return value;

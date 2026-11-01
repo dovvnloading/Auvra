@@ -1,11 +1,15 @@
 import { useSyncExternalStore } from 'react';
 import * as THREE from 'three';
+import { boundMaterialGraph } from '../../../runtime/materials/graphMaterial';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { describeProviderFailure, hostProviderService, type InferenceJob, type ProviderCapability, type ProviderModel } from '../../../services/HostProviderService';
 import { estimateJobCost } from '../../../services/providerPricing';
+import { picksFor } from '../../../services/providerPicks';
 import { textureService } from '../../../services/TextureGenerationService';
 import { overrideTextureFlipY, tagOverrideTexture, type MaterialOverrides, type MaterialTextureSlot } from '../../../utils/materialOverrides';
-import { listModelParts, texturePicture, type ModelPart, type PartMaterial, type PictureSize } from './parts';
+import { DEFAULT_KEEP, OriginalDetail, ViewedDetail, type DetailMix, type Pixels } from './keepOriginal';
+import { bakeViews, renderViewSheet, SHEET_MEGAPIXELS, type ViewSheet } from './viewSheet';
+import { listModelParts, texturePicture, usedAreaOfPart, type ModelPart, type PartMaterial, type PictureSize } from './parts';
 
 export type RetextureMode = 'restyle' | 'new' | 'whole';
 export type TakeState = 'starting' | 'queued' | 'painting' | 'ready' | 'failed';
@@ -35,7 +39,18 @@ export interface Take {
   state: TakeState;
   jobId?: string;
   previewAssetId?: string;
+  /** The picture as it stands, the original's detail put back. */
   url?: string;
+  /** The picture as the model answered. */
+  rawUrl?: string;
+  /** What `url` holds, to keep. */
+  finished?: Blob;
+  /** The map a restyle was worked from. */
+  source?: PictureSize & { url: string };
+  /** The views of the object a model was shown, where it was not shown the map itself. */
+  sheet?: ViewSheet;
+  /** How much of that map's fine detail stays, from 0 to 1. */
+  keepOriginal: number;
   size?: PictureSize;
   error?: string;
   startedAt: number;
@@ -57,6 +72,7 @@ interface MaterialBaseline {
   transparent: boolean;
   alphaTest: number;
   side: THREE.Side;
+  forceSinglePass: boolean;
   color: THREE.Color | null;
   normalMap: THREE.Texture | null;
   roughnessMap: THREE.Texture | null;
@@ -94,6 +110,13 @@ export interface ModelSession {
   attached: boolean;
 }
 
+export interface PartComparison {
+  drawBefore: () => void;
+  drawAfter: () => void;
+  /** Lets go of what only the comparison used. */
+  end: () => void;
+}
+
 export interface GenerateRequest {
   mode: RetextureMode;
   prompt: string;
@@ -108,6 +131,46 @@ interface PartLook {
   roughness: THREE.Texture | null;
   metalness: THREE.Texture | null;
 }
+
+/** A result being mixed with its map: what the slider works on. Only one is held at a time, as they are large. */
+interface TakeMix {
+  detail: DetailMix;
+  canvas: HTMLCanvasElement;
+  context: CanvasRenderingContext2D;
+  frame: ImageData;
+  bakeTimer?: ReturnType<typeof setTimeout>;
+}
+
+/** What a part wore when this session began: its original, unless it had already been retextured when the project opened. */
+export const startingLookName = (part: SessionPart): string => (Object.keys(part.baselineOverrides).length ? 'Current' : 'Original');
+
+/** What a model is told along with the words, so that it edits the map it is given rather than paints a new one. */
+export const restyleInstruction = (words: string): string =>
+  `This is a flat texture map. Change all of its surface to: ${words.trim()}. Keep the exact same layout, shapes, seams, folds and positions, and keep areas that are darker or lighter than others darker or lighter. No new elements.`;
+
+const pixelsOf = async (url: string, width: number, height: number): Promise<Pixels> => {
+  const image = new Image();
+  image.src = url;
+  await image.decode();
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) throw new Error('The picture could not be read.');
+  context.drawImage(image, 0, 0, width, height);
+  return { width, height, data: context.getImageData(0, 0, width, height).data };
+};
+
+/** What a model is told along with the words when shown views of the object. */
+export const viewsInstruction = (words: string): string =>
+  `This image shows one object from six sides on a plain grey background. Change its surface to: ${words.trim()}, the same on every side. Keep its exact shape, outline, size and position in each view, and all of its markings and details. Keep the grey background. No new elements.`;
+
+/** Models that earlier suggested themselves for this tool, which are put aside once for the ones suggested now. */
+const SUPERSEDED_EDIT_MODELS: ReadonlySet<string> = new Set(['fal-ai/flux-2/flash/edit', 'fal-ai/flux-2/edit', 'fal-ai/flux-2-pro/edit', 'alibaba/qwen-image-3/edit', 'fal-ai/flux-2/klein/9b/edit']);
+const CAPABLE_MODEL_NOTED = 'retexture.capableModel';
+
+/** Long enough to let a slider come to rest before writing out the picture. */
+const BAKE_DELAY_MS = 250;
 
 /** The largest picture sent as a source. Providers bill by the megapixel and answer at the size they are sent. */
 const MAX_SOURCE_EDGE = 2048;
@@ -159,6 +222,7 @@ const applyLook = (part: SessionPart, look: PartLook | null) => {
     material.transparent = transparent;
     material.alphaTest = alphaTest;
     material.side = side;
+    material.forceSinglePass = look ? true : base.forceSinglePass;
     // A plain colour tinted nothing until now; a painted texture shows its own colours.
     if (look && !base.map) material.color?.set(0xffffff);
     else if (base.color) material.color?.copy(base.color);
@@ -177,6 +241,9 @@ class RetextureSessions {
   private sequence = 0;
   /** Estimated from catalog prices, as provider accounts cannot be read: only what finished. */
   spentMicroUsd = 0;
+  /** What a new result keeps of its map: wherever the slider was last left. */
+  keepForNext = DEFAULT_KEEP;
+  private mixing: { take: Take; ready: Promise<TakeMix> } | null = null;
   runs = 0;
   /** Finished runs whose price was not known at the time, so the total leaves them out. */
   unpricedRuns = 0;
@@ -199,7 +266,7 @@ class RetextureSessions {
     if (existing?.object === object) return existing;
     if (existing) this.drop(existing);
     const parts = listModelParts(object).map((part): SessionPart => {
-      const picture = part.texture ? texturePicture(part.texture, THUMBNAIL_EDGE, 'image/jpeg') : null;
+      const picture = part.texture ? texturePicture(part.texture, THUMBNAIL_EDGE, 'image/jpeg', overrideTextureFlipY(object)) : null;
       return {
         ...part,
         baseline: part.materials.map((material) => ({
@@ -208,6 +275,7 @@ class RetextureSessions {
           transparent: material.transparent,
           alphaTest: material.alphaTest,
           side: material.side,
+          forceSinglePass: material.forceSinglePass,
           color: material.color?.clone() ?? null,
           normalMap: material.normalMap ?? null,
           roughnessMap: material.roughnessMap ?? null,
@@ -251,8 +319,8 @@ class RetextureSessions {
   }
 
   /** The large picture of a part's original, made when first asked for. */
-  previewOf(part: SessionPart): string | null {
-    if (!part.preview && part.texture) part.preview = texturePicture(part.texture, PREVIEW_EDGE, 'image/jpeg')?.url ?? null;
+  previewOf(session: ModelSession, part: SessionPart): string | null {
+    if (!part.preview && part.texture) part.preview = texturePicture(part.texture, PREVIEW_EDGE, 'image/jpeg', overrideTextureFlipY(session.object))?.url ?? null;
     return part.preview;
   }
 
@@ -306,46 +374,83 @@ class RetextureSessions {
     if (look && request === part.showRequest) applyLook(part, look);
   }
 
-  /** Draws a part as it was, or with what it wears, within a frame, for before and after. Only with everything already loaded. */
-  showNow(part: SessionPart, take: Take | null) {
-    if (!take) { applyLook(part, null); return; }
-    const map = this.textures.get(take.id);
-    if (!map) return;
-    const of = (role: SurfaceRole) => this.textures.get(`${take.id}:${role}`) ?? null;
-    applyLook(part, { map, normal: of('normal'), roughness: of('roughness'), metalness: of('metalness') });
+  /**
+   * Both sides of a before and after on a part, drawn within every frame. The before side has materials of its own:
+   * changing a material's look makes it recompile, where swapping one for another costs nothing.
+   * One shaded by a material asset draws the same either way, so it stays as it is.
+   */
+  comparison(session: ModelSession, part: SessionPart): PartComparison {
+    const before = new Map<THREE.Material, PartMaterial>();
+    for (const base of part.baseline) {
+      if (boundMaterialGraph(base.material)) continue;
+      const copy = base.material.clone() as PartMaterial;
+      copy.map = base.map;
+      copy.normalMap = base.normalMap;
+      copy.roughnessMap = base.roughnessMap;
+      copy.metalnessMap = base.metalnessMap;
+      copy.transparent = base.transparent;
+      copy.alphaTest = base.alphaTest;
+      copy.side = base.side;
+      copy.forceSinglePass = base.forceSinglePass;
+      if (base.color) copy.color?.copy(base.color);
+      if (base.roughness !== undefined) copy.roughness = base.roughness;
+      if (base.metalness !== undefined) copy.metalness = base.metalness;
+      before.set(base.material, copy);
+    }
+    const meshes: THREE.Mesh[] = [];
+    session.object.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (mesh.isMesh && (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).some((material) => before.has(material))) meshes.push(mesh);
+    });
+    const originals = meshes.map((mesh) => mesh.material);
+    return {
+      drawBefore: () => {
+        // Which part is being pointed at shows on both sides.
+        for (const [material, copy] of before) {
+          const glow = material as PartMaterial;
+          if (glow.emissive) copy.emissive?.copy(glow.emissive);
+          if (glow.emissiveIntensity !== undefined) copy.emissiveIntensity = glow.emissiveIntensity;
+        }
+        meshes.forEach((mesh, index) => {
+          const own = originals[index];
+          mesh.material = Array.isArray(own) ? own.map((material) => before.get(material) ?? material) : before.get(own) ?? own;
+        });
+      },
+      drawAfter: () => { meshes.forEach((mesh, index) => { mesh.material = originals[index]; }); },
+      end: () => { before.forEach((copy) => copy.dispose()); },
+    };
   }
 
   /** What a restyle starts from: what is on the part now, at a size that is sensible to send. */
   private async sourceOf(session: ModelSession, part: SessionPart): Promise<{ picture: { url: string; width: number; height: number } | null; fromTake?: number }> {
     const take = part.worn ? part.takes.find((item) => item.id === part.worn && item.state === 'ready') : null;
     const texture = take ? await this.textureOf(session, take) : part.texture;
-    return { picture: texture ? texturePicture(texture, MAX_SOURCE_EDGE) : null, fromTake: take?.number };
+    return { picture: texture ? texturePicture(texture, MAX_SOURCE_EDGE, 'image/png', overrideTextureFlipY(session.object)) : null, fromTake: take?.number };
   }
 
-  private megapixelsOf(part: SessionPart | null): number {
-    if (!part?.size) return NEW_TEXTURE_MEGAPIXELS;
-    const scale = Math.min(1, MAX_SOURCE_EDGE / Math.max(part.size.width, part.size.height));
-    return (part.size.width * scale * part.size.height * scale) / 1_000_000;
-  }
-
-  /** What one run of a model would come to on this part, or null while the price is not known. */
-  estimate(part: SessionPart | null, request: Pick<GenerateRequest, 'mode' | 'model'>): number | null {
+  /** What one run of a model would come to, or null while the price is not known. */
+  estimate(request: Pick<GenerateRequest, 'mode' | 'model'>): number | null {
     if (!request.model) return null;
-    return estimateJobCost(request.model, request.mode === 'restyle' ? this.megapixelsOf(part) : NEW_TEXTURE_MEGAPIXELS);
+    return estimateJobCost(request.model, request.mode === 'restyle' ? SHEET_MEGAPIXELS : NEW_TEXTURE_MEGAPIXELS);
   }
 
   async generate(session: ModelSession, part: SessionPart, request: GenerateRequest): Promise<void> {
     let source: Promise<string | null> = Promise.resolve(null);
     let fromTake: number | undefined;
+    let picture: Take['source'];
+    let sheet: ViewSheet | undefined;
     if (request.mode === 'restyle') {
       const found = await this.sourceOf(session, part);
       if (!found.picture) throw new Error('This part has no texture to restyle. Paint a new one from a description.');
       fromTake = found.fromTake;
-      source = textureService.ingestLocalAsset(found.picture.url);
+      picture = found.picture;
+      // A map that repeats is a picture of a surface, which a model can edit as it is; one laid out on a model is not.
+      sheet = usedAreaOfPart(session.object, part, THUMBNAIL_EDGE, THUMBNAIL_EDGE) ? renderViewSheet(session.object, part) ?? undefined : undefined;
+      source = textureService.ingestLocalAsset(sheet?.picture ?? found.picture.url);
     } else if (request.mode === 'whole') {
       source = textureService.modelFileAsset(session.modelId);
     }
-    const cost = this.estimate(part, request);
+    const cost = this.estimate(request);
     part.followNext = true;
     for (let index = 0; index < request.count; index += 1) {
       this.sequence += 1;
@@ -360,6 +465,9 @@ class RetextureSessions {
         state: 'starting',
         startedAt: Date.now(),
         fromTake,
+        source: picture,
+        sheet,
+        keepOriginal: this.keepForNext,
         maps: [],
         mapsState: 'none',
       };
@@ -372,15 +480,18 @@ class RetextureSessions {
 
   private async run(session: ModelSession, part: SessionPart, take: Take, source: Promise<string | null>) {
     try {
-      const job = await textureService.submit(await source, take.prompt, capabilityOfMode(take.mode));
+      const told = take.mode !== 'restyle' ? take.prompt : take.sheet ? viewsInstruction(take.prompt) : restyleInstruction(take.prompt);
+      const job = await textureService.submit(await source, told, capabilityOfMode(take.mode));
       take.jobId = job.jobId;
       const preview = await textureService.follow(job, (current) => {
         const state = stateOfJob(current.status);
         if (take.state !== state) { take.state = state; this.changed(); }
       });
       take.previewAssetId = preview.previewAssetId;
+      take.rawUrl = preview.previewUrl;
       take.url = preview.previewUrl;
       take.size = preview.dimensions;
+      if (take.source) await this.finish(session, part, take);
       // A whole-model job makes the surface maps along with the colour.
       take.maps = surfaceMapsOf(job.jobId, preview.maps);
       take.mapsState = take.maps.length ? 'ready' : 'none';
@@ -402,11 +513,119 @@ class RetextureSessions {
     this.changed();
   }
 
+  /** The result and its map, ready to mix: worked out when first asked for, and let go of when another is. */
+  private mixOf(session: ModelSession, part: SessionPart, take: Take): Promise<TakeMix> {
+    if (this.mixing?.take === take) return this.mixing.ready;
+    const ready = (async (): Promise<TakeMix> => {
+      if (!take.source || !take.rawUrl) throw new Error('This result can no longer be read.');
+      const { width, height } = take.source;
+      const original = await pixelsOf(take.source.url, width, height);
+      const used = usedAreaOfPart(session.object, part, width, height);
+      let detail: DetailMix;
+      if (take.sheet) {
+        const baked = bakeViews(session.object, part, take.sheet, await pixelsOf(take.rawUrl, take.sheet.width, take.sheet.height), width, height);
+        if (!baked) throw new Error('The result could not be put back on the map.');
+        detail = new ViewedDetail(original.data, baked.broad, baked.before, baked.painted, used);
+      } else {
+        detail = await OriginalDetail.prepare(original, await pixelsOf(take.rawUrl, width, height), used);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (!context) throw new Error('The picture could not be made.');
+      return { detail, canvas, context, frame: context.createImageData(width, height) };
+    })();
+    this.mixing = { take, ready };
+    return ready;
+  }
+
+  private paint(mix: TakeMix, take: Take) {
+    mix.detail.mix(take.keepOriginal, mix.frame.data);
+    mix.context.putImageData(mix.frame, 0, 0);
+  }
+
+  /** Writes out the picture as it stands, for the panels and for keeping. */
+  private async bake(mix: TakeMix, take: Take) {
+    const blob = await new Promise<Blob | null>((resolve) => { mix.canvas.toBlob(resolve, 'image/png'); });
+    if (!blob) throw new Error('The picture could not be made.');
+    const before = take.url;
+    take.finished = blob;
+    take.url = URL.createObjectURL(blob);
+    take.size = { width: mix.canvas.width, height: mix.canvas.height };
+    if (before && before !== take.rawUrl) URL.revokeObjectURL(before);
+  }
+
+  /** Puts the model's answer back over the map it was given. */
+  private async finish(session: ModelSession, part: SessionPart, take: Take) {
+    const mix = await this.mixOf(session, part, take);
+    this.paint(mix, take);
+    await this.bake(mix, take);
+  }
+
+  /** Changes how much of its map's fine detail a result keeps. Nothing goes to a provider, so this costs nothing. */
+  async setKeepOriginal(session: ModelSession, part: SessionPart, take: Take, keep: number) {
+    take.keepOriginal = keep;
+    this.keepForNext = keep;
+    // What was kept before is another picture now.
+    take.textureId = undefined;
+    this.changed();
+    const mix = await this.mixOf(session, part, take);
+    this.paint(mix, take);
+    const shown = this.textures.get(take.id);
+    if (shown?.image === mix.canvas) {
+      shown.needsUpdate = true;
+    } else {
+      const live = new THREE.CanvasTexture(mix.canvas);
+      live.colorSpace = THREE.SRGBColorSpace;
+      live.flipY = overrideTextureFlipY(session.object);
+      live.wrapS = THREE.RepeatWrapping;
+      live.wrapT = THREE.RepeatWrapping;
+      this.textures.set(take.id, live);
+      if (part.worn === take.id && session.attached) await this.show(session, part, take.id);
+      shown?.dispose();
+    }
+    if (mix.bakeTimer) clearTimeout(mix.bakeTimer);
+    mix.bakeTimer = setTimeout(() => {
+      mix.bakeTimer = undefined;
+      void this.bake(mix, take).then(() => this.changed(), (error) => frontendDiagnostics.failure('retexture_bake_failed', error));
+    }, BAKE_DELAY_MS);
+  }
+
+  /** The picture to keep, with anything still waiting to be written out written. */
+  private async finishedPicture(take: Take): Promise<Blob | undefined> {
+    if (this.mixing?.take === take) {
+      const mix = await this.mixing.ready;
+      if (mix.bakeTimer) {
+        clearTimeout(mix.bakeTimer);
+        mix.bakeTimer = undefined;
+        await this.bake(mix, take);
+      }
+    }
+    return take.finished;
+  }
+
   async cancel(take: Take) {
     if (!take.jobId) return;
     take.stopping = true;
     this.changed();
     await textureService.cancel(take.jobId);
+  }
+
+  /** Puts this tool on a capable model where it has none, or once where it is on one chosen for it before those were known. */
+  async chooseCapableModel() {
+    try {
+      const pick = picksFor(MAPS_PROVIDER, 'media.edit', await hostProviderService.listModels(MAPS_PROVIDER, 'media.edit'))[0];
+      if (!pick) return;
+      const route = await hostProviderService.loadConfiguredRoute('media.edit');
+      let noted = false;
+      try { noted = localStorage.getItem(CAPABLE_MODEL_NOTED) === pick.id; } catch { /* Then it is put forward again next time, and that is all. */ }
+      if (route && (noted || !SUPERSEDED_EDIT_MODELS.has(route.modelId))) return;
+      await hostProviderService.routeCapability(MAPS_PROVIDER, 'media.edit', pick.id);
+      try { localStorage.setItem(CAPABLE_MODEL_NOTED, pick.id); } catch { /* As above. */ }
+    } catch (error) {
+      frontendDiagnostics.failure('retexture_model_choice_failed', error);
+    }
   }
 
   /** The model that makes surface maps where there is one, which the workspace shows the price of. */
@@ -449,7 +668,9 @@ class RetextureSessions {
 
   private forget(part: SessionPart, take: Take) {
     part.takes = part.takes.filter((item) => item !== take);
+    if (this.mixing?.take === take) this.mixing = null;
     if (take.url) URL.revokeObjectURL(take.url);
+    if (take.rawUrl && take.rawUrl !== take.url) URL.revokeObjectURL(take.rawUrl);
     this.disposeTextures(take);
     for (const surface of take.maps) URL.revokeObjectURL(surface.url);
     this.changed();
@@ -483,8 +704,10 @@ class RetextureSessions {
     const dimensions = take.size ?? part.size ?? { width: 1024, height: 1024 };
     const name = libraryName(session.modelName, part.name, take.prompt);
     if (!take.textureId) {
-      await textureService.commit(take.jobId, take.previewAssetId, { name });
-      take.textureId = take.previewAssetId;
+      const finished = await this.finishedPicture(take);
+      const finishedAssetId = finished ? await textureService.ingestPicture(finished) : null;
+      await textureService.commit(take.jobId, take.previewAssetId, { name, ...(finishedAssetId ? { finishedAssetId, textureId: finishedAssetId } : {}) });
+      take.textureId = finishedAssetId ?? take.previewAssetId;
       await this.onTextureKept(take.textureId, name, dimensions);
     }
     for (const surface of take.maps) {

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Check, Image as ImageIcon } from 'lucide-react';
 import { Spinner, Tooltip } from '../../UI/kit';
-import type { SessionPart, Take } from './retextureSession';
+import { startingLookName, type SessionPart, type Take } from './retextureSession';
 
 const seconds = (take: Take, now: number) => `${Math.max(0, Math.round(((take.finishedAt ?? now) - take.startedAt) / 1000))} s`;
 
@@ -61,11 +61,11 @@ export const TakesStrip: React.FC<{
   return (
     <div className="flex h-[72px] shrink-0 items-center gap-3 bg-panel px-2">
       <div ref={scroller} role="group" aria-label="Results" className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto py-1 pl-0.5">
-        <Tile selected={focusedId === null} saved={part.saved === null} label="Original" tip="The original" onClick={() => onFocus(null)}>
+        <Tile selected={focusedId === null} saved={part.saved === null} label={startingLookName(part)} tip={startingLookName(part) === 'Original' ? 'The original' : 'What this part wore when the project opened'} onClick={() => onFocus(null)}>
           {part.thumbnail
             ? <img src={part.thumbnail} alt="" draggable={false} className="h-full w-full object-cover" />
             : <span className="flex h-full w-full items-center justify-center text-ink-3"><ImageIcon size={14} /></span>}
-          <span className="absolute inset-x-0 bottom-0 bg-ground/75 py-px text-center text-2xs leading-3 text-ink-2">Original</span>
+          <span className="absolute inset-x-0 bottom-0 bg-ground/75 py-px text-center text-2xs leading-3 text-ink-2">{startingLookName(part)}</span>
         </Tile>
         {count > 0 && <span className="mx-0.5 h-8 w-px shrink-0 bg-line" />}
         {part.takes.map((take) => (

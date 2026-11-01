@@ -458,6 +458,45 @@ class ProviderHostTests(unittest.TestCase):
                 previews.close()
                 service.shutdown()
 
+    def test_media_commit_keeps_the_picture_as_finished_and_can_again_after_the_preview_has_gone(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            service = ProjectService(index=ProjectIndex(root / "projects.sqlite3"))
+            service.create(root / "project", "Media")
+            previews = PreviewStore(root / "previews")
+            host = NativeProviderHost(root / "provider", project_host=SimpleNamespace(service=service), preview_store=previews)
+            try:
+                project_id = service.active.project_id
+                job_id = "job-media-f039-00003"
+                picture = lambda width, height: b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big") + b"\x08\x06\x00\x00\x00"
+                preview = previews.ingest(job_id, io.BytesIO(picture(2, 3)), project_id=project_id)
+                host.jobs.create(project_id=project_id, provider="fal", model="gpt-test", capability=Capability.MEDIA_EDIT.value, prompt_hash="a" * 64, job_id=job_id)
+                for state in (JobState.SUBMITTING, JobState.RUNNING, JobState.SUCCEEDED):
+                    host.jobs.transition(job_id, state, project_id=project_id)
+                host._meta[job_id] = {"route": "cloud", "createdAt": 0, "assetIds": []}
+                revision = lambda: service.active.revision
+                for width in (40, 50):
+                    finished = service.active.assets.put_stream(io.BytesIO(picture(width, 60)), mime="image/png").asset_id
+                    host._commit_media({
+                        "projectId": project_id, "expectedRevision": revision(), "jobId": job_id, "previewAssetId": preview.asset_id,
+                        "finishedAssetId": finished, "textureId": finished, "name": f"Finished {width}",
+                    })
+                    kept = next(item for item in service.active.get_domain("textures")["documents"] if item["id"] == finished)
+                    self.assertEqual(kept["assetId"], finished)
+                    self.assertEqual(kept["generation"]["artifactSha256"], finished)
+                    self.assertEqual(kept["dimensions"], {"width": width, "height": 60})
+                self.assertFalse(service.active.assets.verify(preview.asset_id))
+                with self.assertRaises(HostOperationError) as gone:
+                    host._commit_media({
+                        "projectId": project_id, "expectedRevision": revision(), "jobId": job_id, "previewAssetId": preview.asset_id,
+                        "finishedAssetId": "c" * 64, "textureId": "texture-gone", "name": "Gone",
+                    })
+                self.assertEqual(gone.exception.code, "invalid_job")
+            finally:
+                host.shutdown()
+                previews.close()
+                service.shutdown()
+
     def test_media_commit_validates_before_ingest_rolls_back_and_tolerates_discard_failure(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

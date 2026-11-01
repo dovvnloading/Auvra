@@ -23,6 +23,8 @@ const EXEMPT = new Map(Object.entries({
   'components/AnimationGraph/hooks/useInputHandler.ts': 'input-adapter',
   'services/providerPicks.ts': 'pure-utility',
   'components/Materials/graphFromTextures.ts': 'pure-utility',
+  'components/Tools/Retexture/keepOriginal.ts': 'pure-utility',
+  'components/Tools/Retexture/viewSheet.ts': 'pure-utility',
   'utils/projectRecords.ts': 'pure-utility',
   'components/Scripting/scriptDiff.ts': 'pure-utility',
   'components/AnimationGraph/utils/blending.ts': 'pure-utility',

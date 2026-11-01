@@ -20,6 +20,7 @@ import {
 } from '../diagnostics/runtime';
 import { createDefaultCameraState, readEditorState } from '../utils/editorState';
 import { loadGameContent } from '../utils/projectHydration';
+import { drawAsPaintedTexture } from '../utils/materialOverrides';
 
 export interface ScenePersistenceProps {
   setModels: (models: LoadedModelData[]) => void;
@@ -488,10 +489,7 @@ export const useScenePersistence = ({
                                     attached = true;
                                     if (m.map) m.map.dispose();
                                     m.map = tex;
-                                    m.transparent = true;
-                                    m.alphaTest = 0.5;
-                                    m.side = THREE.DoubleSide;
-                                    m.needsUpdate = true;
+                                    drawAsPaintedTexture(m);
                                 }
                             });
                         }

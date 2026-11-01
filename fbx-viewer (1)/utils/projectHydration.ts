@@ -9,7 +9,7 @@ import { applyModelImportSettings, stripGeometry } from './processing/ModelTrans
 import { generateThumbnail } from './thumbnailGenerator';
 import { disposeModel, disposeObject } from './processing/ModelLifecycle';
 import { applyStoredClipNames, mirrorModelClips, prepareAnimationClips } from './animationBinding';
-import { hydrateMaterialOverrides, overrideTextureFlipY } from './materialOverrides';
+import { drawAsPaintedTexture, hydrateMaterialOverrides, overrideTextureFlipY } from './materialOverrides';
 import {
   assetDiagnosticAttributes,
   diagnosticErrorType,
@@ -274,10 +274,7 @@ export async function loadGameContent(
                 // A plain colour tinted nothing until now; a painted texture shows its own colours.
                 else candidate.color?.set(0xffffff);
                 candidate.map = texture;
-                candidate.transparent = true;
-                candidate.alphaTest = 0.5;
-                candidate.side = THREE.DoubleSide;
-                candidate.needsUpdate = true;
+                drawAsPaintedTexture(candidate);
               }
             });
           } finally {
