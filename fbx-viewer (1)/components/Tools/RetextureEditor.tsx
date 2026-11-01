@@ -223,7 +223,7 @@ export const RetextureEditor: React.FC = () => {
 
   const [mapsModel, setMapsModel] = useState<ProviderModel | null>(null);
   useEffect(() => { void sessions.mapsModel().then(setMapsModel); }, [sessions]);
-  const mapsCost = mapsModel && focused?.size ? estimateJobCost(mapsModel, (focused.size.width * focused.size.height) / 1_000_000) : mapsModel ? estimateJobCost(mapsModel) : null;
+  const mapsCost = mapsModel ? estimateJobCost(mapsModel, session && part ? sessions.mapsMegapixels(session, part, focused?.size) : undefined) : null;
 
   const failed = focused?.state === 'failed' ? focused : null;
   const shownError = message ?? failed?.error ?? null;
