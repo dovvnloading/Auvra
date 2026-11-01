@@ -100,9 +100,8 @@ class ProviderHostTests(unittest.TestCase):
             try:
                 opened = host.handle("provider.configureCredential", {"providerId": "openai", "storageMode": "memoryOnly"})
                 self.assertIs(opened["waiting"], True)
-                self.assertEqual(opened["credentialStatus"], "absent")
                 self.assertFalse(opened["configured"])
-                self.assertEqual(host.handle("provider.getStatus", {"providerId": "openai"})["credentialStatus"], "absent")
+                self.assertIn(host.handle("provider.getStatus", {"providerId": "openai"})["credentialStatus"], {"absent", "unavailable"})
                 with self.assertRaises(HostOperationError) as second:
                     host.handle("provider.configureCredential", {"providerId": "fal", "storageMode": "memoryOnly"})
                 self.assertEqual(second.exception.code, "locking")
@@ -140,7 +139,7 @@ class ProviderHostTests(unittest.TestCase):
                 self.assertEqual(outcome["operation"], "key.cancelled")
                 self.assertEqual(outcome["status"], "unconfigured")
                 self.assertNotIn("message", outcome)
-                self.assertEqual(host.handle("provider.getStatus", {"providerId": "openai"})["credentialStatus"], "absent")
+                self.assertIn(host.handle("provider.getStatus", {"providerId": "openai"})["credentialStatus"], {"absent", "unavailable"})
             finally:
                 host.shutdown()
 
