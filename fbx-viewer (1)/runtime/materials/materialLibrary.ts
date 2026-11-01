@@ -92,12 +92,19 @@ class MaterialLibrary {
     private readonly bound = new Map<THREE.MeshStandardMaterial, Binding>();
     private readonly textures = new Map<string, THREE.Texture | null>();
     private resolveUrl: TextureUrlResolver = () => undefined;
+    private readonly addedUrls = new Map<string, string>();
     private loadTexture: (url: string) => Promise<THREE.Texture> = (url) => new THREE.TextureLoader().loadAsync(url);
 
     /** Where texture images come from (the open project), and how they load (tests). */
     setTextureSource(resolveUrl: TextureUrlResolver, load?: (url: string) => Promise<THREE.Texture>): void {
         this.resolveUrl = resolveUrl;
+        this.addedUrls.clear();
         if (load) this.loadTexture = load;
+    }
+
+    /** Where a texture added since the project opened comes from. */
+    addTextureUrl(textureId: string, url: string): void {
+        this.addedUrls.set(textureId, url);
     }
 
     list(): MaterialAsset[] {
@@ -190,7 +197,7 @@ class MaterialLibrary {
         const key = `${slot}:${flipY ? 1 : 0}:${textureId}`;
         if (this.textures.has(key)) return this.textures.get(key) ?? null;
         this.textures.set(key, null);
-        const url = this.resolveUrl(textureId);
+        const url = this.addedUrls.get(textureId) ?? this.resolveUrl(textureId);
         if (!url) return null;
         this.loadTexture(url).then((texture) => {
             // Only colour is decoded from sRGB; normals and data are read as stored.

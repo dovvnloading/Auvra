@@ -720,6 +720,7 @@ export interface SceneContextType {
   retextureModel: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<void>;
   previewTexture: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<string>;
   setModelTextureOverrides: (modelId: string, overrides: Record<string, string>) => Promise<void>;
+  adoptHostTexture: (id: string, name: string, assetId: string, dimensions: { width: number; height: number }) => Promise<void>;
   resetModelTexture: (modelId: string) => Promise<void>;
   /** Persist a model's material overrides and apply them to its loaded object; rejects when they cannot be saved. */
   updateModelMaterialOverrides: (modelId: string, overrides: MaterialOverrides) => Promise<void>;

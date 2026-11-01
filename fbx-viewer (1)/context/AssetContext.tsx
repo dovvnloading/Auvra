@@ -60,6 +60,7 @@ interface AssetContextType {
   // Textures
   textures: TextureData[];
   addTexture: (file: File) => Promise<string | null>;
+  adoptHostTexture: (id: string, name: string, assetId: string, dimensions: { width: number; height: number }) => Promise<void>;
   saveTextureToLibrary: (base64: string, name: string) => Promise<string | null>;
   removeTexture: (id: string) => void;
   updateTexture: (id: string, updates: AssetInfoUpdate) => Promise<void>;
@@ -211,6 +212,7 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     // Textures
     textures: textureManager.textures,
     addTexture: textureManager.addTexture,
+    adoptHostTexture: textureManager.adoptHostTexture,
     saveTextureToLibrary: textureManager.saveTextureToLibrary,
     removeTexture,
     updateTexture: textureManager.updateTexture,

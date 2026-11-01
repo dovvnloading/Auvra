@@ -27,6 +27,7 @@ const MODEL_PICKS: Readonly<Record<string, Partial<Record<ProviderCapability, re
     ],
     'media.generate': [
       { id: 'fal-ai/flux/schnell', tier: 'Fast', note: 'Quick drafts' },
+      { id: 'fal-ai/patina/material', tier: 'Balanced', note: 'Seamless, with surface maps' },
       { id: 'fal-ai/flux-2', tier: 'Balanced', note: 'Cleaner detail' },
       { id: 'fal-ai/flux-2-pro', tier: 'Best quality', note: 'Fine detail, follows the description closely' },
     ],

@@ -385,6 +385,17 @@ class SurfaceMapAndWholeModelTests(unittest.TestCase):
         self.assertEqual([role for role, _, _, _ in media_outputs(sets)][0], "color")
         self.assertEqual({role for role, _, _, _ in media_outputs(sets)}, {"color", "metalness", "normal", "roughness"})
 
+    def test_among_labelled_maps_the_unlabelled_picture_is_the_texture_and_comes_first(self):
+        painted = {"images": [
+            {"url": "https://v3.fal.media/t.png"},
+            {"url": "https://v3.fal.media/n.png", "map_type": "normal"},
+        ]}
+        self.assertEqual([role for role, _, _, _ in media_outputs(painted)], ["color", "normal"])
+
+    def test_a_material_model_also_paints_new_textures(self):
+        model = parse_media_model(media_row("fal-ai/patina/material", "text-to-image"))
+        self.assertEqual(model.capabilities, {Capability.MEDIA_GENERATE, Capability.MEDIA_MATERIAL})
+
     def test_an_answer_with_one_picture_has_no_maps(self):
         self.assertEqual(media_outputs({"images": [{"url": "https://v3.fal.media/a.png"}]}), [])
 

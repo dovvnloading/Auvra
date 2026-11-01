@@ -675,7 +675,7 @@ class NativeProviderHost:
     def _commit_media(self, payload: dict[str, Any]) -> dict[str, Any]:
         active = self._require_project(payload, expected=True)
         job = self._require_job_project(payload)
-        if job.state.value != "succeeded" or job.capability not in {Capability.MEDIA_GENERATE.value, Capability.MEDIA_EDIT.value, Capability.MEDIA_MAPS.value, Capability.MEDIA_MESH.value}:
+        if job.state.value != "succeeded" or job.capability not in {Capability.MEDIA_GENERATE.value, Capability.MEDIA_EDIT.value, Capability.MEDIA_MAPS.value, Capability.MEDIA_MESH.value, Capability.MEDIA_MATERIAL.value}:
             raise HostOperationError("invalid_job", "Media job is not complete")
         meta = self._meta.get(job.job_id, {})
         preview = (self.preview_store.get(job.job_id, payload["previewAssetId"], project_id=active.project_id)
@@ -953,7 +953,7 @@ class NativeProviderHost:
                     meta["proposalId"] = meta["proposal"].proposal_id
                 else:
                     meta["outputText"] = result.text[:65536]
-            elif capability in {Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT, Capability.MEDIA_MAPS, Capability.MEDIA_MESH}:
+            elif capability in {Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT, Capability.MEDIA_MAPS, Capability.MEDIA_MESH, Capability.MEDIA_MATERIAL}:
                 references: list[str] = []
                 source_size: tuple[int, int] | None = None
                 mesh_reference: str | None = None

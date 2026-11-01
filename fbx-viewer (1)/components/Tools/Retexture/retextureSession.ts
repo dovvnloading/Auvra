@@ -474,17 +474,25 @@ class RetextureSessions {
     await Promise.all(unkept.map((surface) => textureService.discard(surface.jobId, surface.previewAssetId).catch(() => undefined)));
   }
 
+  /** Tells the library of a texture kept here. The workspace sets it. */
+  onTextureKept: (id: string, name: string, dimensions: PictureSize) => Promise<void> = async () => undefined;
+
   /** Keeps a take in the project's texture library, once, with any surface maps it has. */
   async keep(session: ModelSession, part: SessionPart, take: Take): Promise<string> {
     if (!take.jobId || !take.previewAssetId) throw new Error('This result is no longer available.');
+    const dimensions = take.size ?? part.size ?? { width: 1024, height: 1024 };
+    const name = libraryName(session.modelName, part.name, take.prompt);
     if (!take.textureId) {
-      await textureService.commit(take.jobId, take.previewAssetId, { name: libraryName(session.modelName, part.name, take.prompt) });
+      await textureService.commit(take.jobId, take.previewAssetId, { name });
       take.textureId = take.previewAssetId;
+      await this.onTextureKept(take.textureId, name, dimensions);
     }
     for (const surface of take.maps) {
       if (surface.textureId) continue;
-      await textureService.commit(surface.jobId, surface.previewAssetId, { name: libraryName(session.modelName, part.name, take.prompt, ` ${surface.role}`) });
+      const surfaceName = libraryName(session.modelName, part.name, take.prompt, ` ${surface.role}`);
+      await textureService.commit(surface.jobId, surface.previewAssetId, { name: surfaceName });
       surface.textureId = surface.previewAssetId;
+      await this.onTextureKept(surface.textureId, surfaceName, dimensions);
     }
     this.changed();
     return take.textureId;

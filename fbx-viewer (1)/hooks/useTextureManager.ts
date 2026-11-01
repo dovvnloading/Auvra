@@ -3,6 +3,7 @@ import { useState, useCallback } from 'react';
 import { AssetInfoUpdate, TextureData } from '../types';
 import { dbOperations, normalizeAssetInfoUpdate } from '../utils/db';
 import { projectService } from '../utils/projectService';
+import { materialLibrary } from '../runtime/materials/materialLibrary';
 import { useNotification } from '../context/NotificationContext';
 import { isAbortError, useOperationActions } from '../context/OperationContext';
 import { assetDiagnosticAttributes, frontendDiagnostics } from '../diagnostics/runtime';
@@ -148,10 +149,20 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
       setTextures(prev => prev.map(t => (t.id === id ? { ...t, ...info } : t)));
   }, []);
 
+  /** A texture the host has just kept in the project: into the library and material graphs without reopening it. */
+  const adoptHostTexture = useCallback(async (id: string, name: string, assetId: string, dimensions: { width: number; height: number }) => {
+    const response = await fetch(await projectService.resolveAsset(assetId));
+    if (!response.ok) throw new Error('The kept texture could not be read.');
+    const url = URL.createObjectURL(await response.blob());
+    materialLibrary.addTextureUrl(id, url);
+    setTextures((previous) => (previous.some((texture) => texture.id === id) ? previous : [...previous, { id, name, url, dimensions }]));
+  }, []);
+
   return frontendDiagnostics.traceActions('texture_manager', {
       textures,
       setTextures, // Exposed for persistence loading
       addTexture,
+      adoptHostTexture,
       saveTextureToLibrary,
       removeTexture,
       updateTexture

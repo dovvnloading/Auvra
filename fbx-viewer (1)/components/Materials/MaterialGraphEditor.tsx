@@ -16,6 +16,7 @@ import {
     type MaterialGraphNode,
 } from '../../runtime/materials/materialGraph';
 import { MATERIALS_DOMAIN, materialAssetDocument, materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
+import { MaterialFromDescription } from './MaterialFromDescription';
 import { MaterialGraphCanvas } from './MaterialGraphCanvas';
 import { MaterialPreview, clearMaterialShaderError, useMaterialShaderError } from './MaterialPreview';
 import { ParamField } from './MaterialParamField';
@@ -188,6 +189,14 @@ export const MaterialGraphEditor: React.FC = () => {
         select([]);
     };
 
+    const createFromDescription = (name: string, painted: MaterialGraph) => {
+        const next: MaterialAsset = { id: crypto.randomUUID(), name: name.slice(0, 128) || 'Material', graph: painted };
+        materialLibrary.upsert(next);
+        save(next, true);
+        setSelectedId(next.id);
+        select([]);
+    };
+
     const rename = (name: string) => {
         if (!asset) return;
         const next = { ...asset, name: name.slice(0, 128) || 'Material' };
@@ -263,8 +272,10 @@ export const MaterialGraphEditor: React.FC = () => {
     return (
         <div className="flex h-full min-h-0 w-full bg-gray-950 text-white">
             <aside className="flex w-56 shrink-0 flex-col border-r border-gray-800">
-                <div className="flex items-center justify-between border-b border-gray-800 px-3 py-2">
+                <div className="flex items-center gap-1.5 border-b border-gray-800 px-3 py-2">
                     <span className="text-xs font-bold text-gray-400">Materials</span>
+                    <span className="flex-1" />
+                    <MaterialFromDescription onCreated={createFromDescription} />
                     <button onClick={create} aria-label="New material" className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-700"><Plus size={12} /> New</button>
                 </div>
                 <div className="flex-1 overflow-y-auto p-2">

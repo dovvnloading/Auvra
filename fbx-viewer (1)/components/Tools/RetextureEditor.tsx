@@ -34,7 +34,7 @@ let lastModelId: string | null = null;
 let lastProjectId: string | null | undefined;
 
 export const RetextureEditor: React.FC = () => {
-  const { models, selectedModelId: sceneModelId, setModelTextureOverrides, updateModelMaterialOverrides, projectStatus, isLoading } = useScene();
+  const { models, selectedModelId: sceneModelId, setModelTextureOverrides, updateModelMaterialOverrides, adoptHostTexture, projectStatus, isLoading } = useScene();
   const { addNotification } = useNotification();
   const sessions = useRetextureSessions();
 
@@ -46,6 +46,10 @@ export const RetextureEditor: React.FC = () => {
     if (lastProjectId !== undefined && lastProjectId !== projectStatus.projectId) sessions.reset();
     lastProjectId = projectStatus.projectId;
   }, [projectStatus.projectId, sessions]);
+
+  useEffect(() => {
+    sessions.onTextureKept = (id, name, dimensions) => adoptHostTexture(id, name, id, dimensions);
+  }, [adoptHostTexture, sessions]);
 
   const paintable = useMemo(() => models.filter((model) => model.category !== 'Animation'), [models]);
   const [modelId, setModelId] = useState<string | null>(() => lastModelId ?? sceneModelId ?? null);

@@ -33,6 +33,8 @@ MEDIA_CATEGORIES: Mapping[str, Capability] = {
 }
 # Models that make surface maps from a picture. Nothing about them says so in the catalog: they are image-to-image there.
 MAP_MODELS = frozenset({"fal-ai/patina"})
+# Models that paint a seamless material from a description, with its surface maps.
+MATERIAL_MODELS = frozenset({"fal-ai/patina/material"})
 # Of the models that take a mesh, these paint it from a description and can keep its own texture layout, so what they
 # make fits the model as it is. The others need a reference picture, or give back a different mesh.
 MESH_MODELS = frozenset({"meshy/v7/retexture", "meshy/v6/retexture", "meshy/v6-lite/retexture"})
@@ -48,7 +50,7 @@ _PRICE_BATCH = 40
 _PRICE_PAUSE_SECONDS = 0.6
 _RATE_LIMIT_TRIES = 6
 _STALE_SECONDS = 24 * 60 * 60
-_CACHE_VERSION = 2
+_CACHE_VERSION = 3
 _DESCRIPTION_LENGTH = 200
 _TOKENS_PRICED = 1_000_000
 
@@ -94,7 +96,8 @@ def parse_media_model(row: Any) -> CatalogModel | None:
         return None
     if endpoint in MAP_MODELS:
         capability = Capability.MEDIA_MAPS
-    return CatalogModel(endpoint, _text(metadata.get("display_name"), 128) or endpoint, frozenset({capability}),
+    capabilities = {capability, Capability.MEDIA_MATERIAL} if endpoint in MATERIAL_MODELS else {capability}
+    return CatalogModel(endpoint, _text(metadata.get("display_name"), 128) or endpoint, frozenset(capabilities),
                         str(metadata["category"]), _text(metadata.get("description"), _DESCRIPTION_LENGTH))
 
 
@@ -461,14 +464,17 @@ def media_outputs(output: Mapping[str, Any]) -> list[tuple[str, str, str | None,
                 found.append((role, url, None, None))
         return found
     images = output.get("images")
-    if isinstance(images, list):
+    if isinstance(images, list) and any(isinstance(item, Mapping) and item.get("map_type") for item in images):
         for item in images:
-            role = _MAP_ROLES.get(item.get("map_type")) if isinstance(item, Mapping) else None
+            # Among labelled maps, a picture with no label is the texture they go with.
+            role = (_MAP_ROLES.get(item["map_type"]) if item.get("map_type") else "color") if isinstance(item, Mapping) else None
             if role and isinstance(item.get("url"), str) and not any(entry[0] == role for entry in found):
                 width, height = item.get("width"), item.get("height")
                 mime = item.get("content_type")
                 found.append((role, item["url"], mime if isinstance(mime, str) else None,
                               {"width": width, "height": height} if isinstance(width, int) and isinstance(height, int) else None))
+    # The picture itself stands for the job.
+    found.sort(key=lambda entry: entry[0] != "color")
     return found
 
 
