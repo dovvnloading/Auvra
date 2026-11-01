@@ -41,12 +41,12 @@ export const SkyWeatherSection: React.FC<SkyWeatherSectionProps> = ({ config, on
     return (
         <>
             <div className="space-y-2">
-                <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
+                <div className="text-2xs font-bold text-gray-500 flex items-center gap-1.5">
                     <Clock size={12} /> Day-Night Cycle
                 </div>
                 <div className="space-y-2 bg-gray-800 p-2 rounded border border-gray-700">
                     <div className="flex items-center justify-between">
-                        <span className="text-[10px] text-gray-400">Day Length (min)</span>
+                        <span className="text-2xs text-gray-400">Day Length (min)</span>
                         <div className="w-16">
                             <ScrubbableInput
                                 label=""
@@ -57,12 +57,12 @@ export const SkyWeatherSection: React.FC<SkyWeatherSectionProps> = ({ config, on
                             />
                         </div>
                     </div>
-                    <div className="text-[9px] text-gray-500">
+                    <div className="text-2xs text-gray-500">
                         {dayLength > 0
                             ? `In play a full day takes ${dayLength} min, starting at the Time of Day.`
                             : 'Time stands still at the Time of Day.'}
                     </div>
-                    <label className="flex items-center justify-between text-[10px] text-gray-400">
+                    <label className="flex items-center justify-between text-2xs text-gray-400">
                         <span>Fog Follows Sky</span>
                         <input
                             type="checkbox"
@@ -75,15 +75,15 @@ export const SkyWeatherSection: React.FC<SkyWeatherSectionProps> = ({ config, on
             </div>
 
             <div className="space-y-2">
-                <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
+                <div className="text-2xs font-bold text-gray-500 flex items-center gap-1.5">
                     <CloudRain size={12} /> Weather
                 </div>
                 <div className="space-y-2 bg-gray-800 p-2 rounded border border-gray-700">
                     <div className="flex items-center justify-between gap-2">
-                        <span className="text-[10px] text-gray-400">Preset</span>
+                        <span className="text-2xs text-gray-400">Preset</span>
                         <select
                             aria-label="Weather preset"
-                            className="bg-gray-900 border border-gray-700 rounded text-[10px] text-white px-1 py-0.5"
+                            className="bg-gray-900 border border-gray-700 rounded text-2xs text-white px-1 py-0.5"
                             value={weather?.preset ?? 'none'}
                             onChange={(e) => setWeather(isWeatherKind(e.target.value) ? weatherFromPreset(e.target.value) : null, true)}
                         >
@@ -92,7 +92,7 @@ export const SkyWeatherSection: React.FC<SkyWeatherSectionProps> = ({ config, on
                         </select>
                     </div>
                     {weather && !matchesPreset(weather) && (
-                        <div className="text-[9px] text-gray-500">Customized from {WEATHER_LABELS[weather.preset]}.</div>
+                        <div className="text-2xs text-gray-500">Customized from {WEATHER_LABELS[weather.preset]}.</div>
                     )}
                     {weather && (
                         <div className="grid grid-cols-2 gap-2">
@@ -108,7 +108,7 @@ export const SkyWeatherSection: React.FC<SkyWeatherSectionProps> = ({ config, on
                             ))}
                         </div>
                     )}
-                    <div className="text-[9px] text-gray-500">
+                    <div className="text-2xs text-gray-500">
                         Level scripts change the weather and the hour in play: Set Weather, Set Time of Day, Set Sky Preset.
                     </div>
                 </div>

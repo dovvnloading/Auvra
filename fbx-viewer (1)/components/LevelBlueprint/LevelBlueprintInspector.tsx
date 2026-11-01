@@ -89,7 +89,7 @@ const groupDataInputs = (pins: LogicPin[]): PinFieldGroup[] => {
 };
 
 const Warning: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-    <div role="alert" className="flex items-start gap-2 rounded border border-amber-700/60 bg-amber-950/40 p-2 text-[10px] text-amber-300">
+    <div role="alert" className="flex items-start gap-2 rounded border border-amber-700/60 bg-amber-950/40 p-2 text-2xs text-amber-300">
         <AlertTriangle size={12} className="shrink-0 mt-px" />
         <span>{children}</span>
     </div>
@@ -142,7 +142,7 @@ const LevelVariableNameField: React.FC<{
             )}
             {name === ''
                 ? <Warning>No variable name; this node does nothing.</Warning>
-                : !declared && <div className="text-[10px] text-gray-500">Not declared in the Variables panel: the variable is created by its first Set, typed by that value.</div>}
+                : !declared && <div className="text-2xs text-gray-500">Not declared in the Variables panel: the variable is created by its first Set, typed by that value.</div>}
         </>
     );
 };
@@ -212,7 +212,7 @@ const RegistryNodeFields: React.FC<RegistryNodeFieldsProps> = ({
                         {!missing && text !== '' && prefabs.length === 0 && <option value={text}>{text}</option>}
                         {prefabs.map(prefab => <option key={prefab.id} value={prefab.id}>{prefab.name}</option>)}
                     </select>
-                    {prefabs.length === 0 && <div className="text-[10px] text-gray-500">No prefabs yet: create one from the World Editor's Prefabs panel.</div>}
+                    {prefabs.length === 0 && <div className="text-2xs text-gray-500">No prefabs yet: create one from the World Editor's Prefabs panel.</div>}
                     {missing ? <Warning>Missing prefab: it was deleted.</Warning> : text === '' && <Warning>No prefab selected; this node spawns nothing.</Warning>}
                 </>
             );
@@ -305,7 +305,7 @@ const RegistryNodeFields: React.FC<RegistryNodeFieldsProps> = ({
                         className={FIELD_CLASS}
                     />
                     {kind === null && (
-                        <div className="text-[10px] text-gray-500">
+                        <div className="text-2xs text-gray-500">
                             {typeof value === 'boolean' ? 'Creates a Boolean variable.' : typeof value === 'number' ? 'Creates a Float variable.' : 'Creates a String variable: type true, false or a number for a Boolean or Float.'}
                         </div>
                     )}
@@ -322,7 +322,7 @@ const RegistryNodeFields: React.FC<RegistryNodeFieldsProps> = ({
                         onChange={(e) => setDefault(pin, e.target.value)}
                         className="w-full h-20 bg-gray-950 border border-gray-700 rounded p-2 text-xs text-pink-300 focus:outline-none focus:border-pink-500 resize-none font-mono"
                     />
-                    <div className="text-[10px] text-gray-500">{'{0}'}, {'{1}'} and {'{2}'} are replaced by Arg 0-2; {'{{'} and {'}}'} print braces.</div>
+                    <div className="text-2xs text-gray-500">{'{0}'}, {'{1}'} and {'{2}'} are replaced by Arg 0-2; {'{{'} and {'}}'} print braces.</div>
                 </>
             );
         }
@@ -344,7 +344,7 @@ const RegistryNodeFields: React.FC<RegistryNodeFieldsProps> = ({
             return (
                 <>
                     <SuggestField id={fieldId(pin)} value={text} options={playerBones} placeholder="full body" onChange={(name) => setDefault(pin, name)} />
-                    <div className="text-[10px] text-gray-500">Empty plays the clip on the full body; a bone limits it to that bone and its children (e.g. Spine for an upper-body attack).</div>
+                    <div className="text-2xs text-gray-500">Empty plays the clip on the full body; a bone limits it to that bone and its children (e.g. Spine for an upper-body attack).</div>
                     {bone !== '' && playerBones.length > 0 && !playerBones.includes(bone) && <Warning>The player character has no bone named "{bone}".</Warning>}
                 </>
             );
@@ -371,7 +371,7 @@ const RegistryNodeFields: React.FC<RegistryNodeFieldsProps> = ({
                     {morph === ''
                         ? <Warning>No morph target; this node changes nothing.</Warning>
                         : morphs && morphs.length > 0 && !morphs.includes(morph) && <Warning>This actor's model has no morph target named "{morph}".</Warning>}
-                    {morphs && morphs.length === 0 && <div className="text-[10px] text-gray-500">This actor's model has no morph targets.</div>}
+                    {morphs && morphs.length === 0 && <div className="text-2xs text-gray-500">This actor's model has no morph targets.</div>}
                 </>
             );
         }
@@ -380,7 +380,7 @@ const RegistryNodeFields: React.FC<RegistryNodeFieldsProps> = ({
             return (
                 <>
                     <input id={fieldId(pin)} type="number" min="0" max="1" step="0.05" value={text} onChange={(e) => setDefault(pin, parseNumberField(e.target.value, false))} placeholder="unset" className={FIELD_CLASS} />
-                    <div className="text-[10px] text-gray-500">0 is off, 1 is the full shape; other values are clamped.</div>
+                    <div className="text-2xs text-gray-500">0 is off, 1 is the full shape; other values are clamped.</div>
                 </>
             );
         }
@@ -440,7 +440,7 @@ const RegistryNodeFields: React.FC<RegistryNodeFieldsProps> = ({
     };
 
     const connectedBadge = (
-        <span className="inline-flex items-center gap-1 text-[10px] text-gray-500"><Link size={10} /> Connected</span>
+        <span className="inline-flex items-center gap-1 text-2xs text-gray-500"><Link size={10} /> Connected</span>
     );
 
     return (
@@ -448,15 +448,15 @@ const RegistryNodeFields: React.FC<RegistryNodeFieldsProps> = ({
             <div className="flex items-center gap-2 text-sky-400 text-xs font-bold">
                 <SlidersHorizontal size={14} /> {definition.title}
             </div>
-            {definition.description && <div className="text-[10px] text-gray-400 leading-snug">{definition.description}</div>}
+            {definition.description && <div className="text-2xs text-gray-400 leading-snug">{definition.description}</div>}
 
             {node.type === 'Sequence' && (
                 <div className="space-y-1">
-                    <label className="text-[10px] text-gray-400">Outputs ({execOutputs.length})</label>
+                    <label className="text-2xs text-gray-400">Outputs ({execOutputs.length})</label>
                     <div className="flex gap-2">
                         <button
                             onClick={() => onUpdate({ outputs: [...node.outputs, { id: crypto.randomUUID(), ...sequenceThenPin(execOutputs.length) }] })}
-                            className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-gray-800 border border-gray-700 hover:bg-gray-700 text-[10px] text-gray-300"
+                            className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-gray-800 border border-gray-700 hover:bg-gray-700 text-2xs text-gray-300"
                         >
                             <Plus size={10} /> Add pin
                         </button>
@@ -466,7 +466,7 @@ const RegistryNodeFields: React.FC<RegistryNodeFieldsProps> = ({
                                 if (last) onUpdate({ outputs: node.outputs.filter(pin => pin.id !== last.id) });
                             }}
                             disabled={execOutputs.length <= 1}
-                            className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-gray-800 border border-gray-700 hover:bg-gray-700 text-[10px] text-gray-300 disabled:opacity-40 disabled:hover:bg-gray-800"
+                            className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-gray-800 border border-gray-700 hover:bg-gray-700 text-2xs text-gray-300 disabled:opacity-40 disabled:hover:bg-gray-800"
                         >
                             <Minus size={10} /> Remove pin
                         </button>
@@ -479,7 +479,7 @@ const RegistryNodeFields: React.FC<RegistryNodeFieldsProps> = ({
                     const { pin } = group;
                     return (
                         <div key={pin.id} className="space-y-1">
-                            <label htmlFor={fieldId(pin)} className="text-[10px] text-gray-400 flex items-center justify-between">
+                            <label htmlFor={fieldId(pin)} className="text-2xs text-gray-400 flex items-center justify-between">
                                 <span>{pin.name}</span>
                                 {connectedPinIds.has(pin.id) && connectedBadge}
                             </label>
@@ -489,17 +489,17 @@ const RegistryNodeFields: React.FC<RegistryNodeFieldsProps> = ({
                 }
                 return (
                     <div key={group.pins[0].id} className="space-y-1">
-                        <div className="text-[10px] text-gray-400">{group.label}</div>
+                        <div className="text-2xs text-gray-400">{group.label}</div>
                         <div className="grid grid-cols-3 gap-1">
                             {group.pins.map(pin => {
                                 const axis = pin.name.slice(-1);
                                 return (
                                     <div key={pin.id} className="space-y-0.5">
-                                        <label htmlFor={fieldId(pin)} className="text-[9px] text-gray-500 flex items-center gap-1">
+                                        <label htmlFor={fieldId(pin)} className="text-2xs text-gray-500 flex items-center gap-1">
                                             {axis} {connectedPinIds.has(pin.id) && <Link size={8} aria-label="Connected" />}
                                         </label>
                                         {connectedPinIds.has(pin.id) ? (
-                                            <div className="p-2 text-[10px] text-gray-500 bg-gray-900 border border-gray-800 rounded">wired</div>
+                                            <div className="p-2 text-2xs text-gray-500 bg-gray-900 border border-gray-800 rounded">wired</div>
                                         ) : (
                                             <input
                                                 id={fieldId(pin)}
@@ -565,8 +565,8 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                     <Settings2 size={16} />
                 </div>
                 <div>
-                    <h2 className="text-xs font-bold text-gray-200 uppercase tracking-wider">Node Details</h2>
-                    <div className="text-[10px] text-gray-500">{node.type}</div>
+                    <h2 className="text-xs font-bold text-gray-200 ">Node Details</h2>
+                    <div className="text-2xs text-gray-500">{node.type}</div>
                 </div>
             </div>
 
@@ -575,7 +575,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                 
                 {/* Common: Node Name */}
                 <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Node Name</label>
+                    <label className="text-2xs font-bold text-gray-500 ">Node Name</label>
                     <input 
                         value={node.name}
                         onChange={(e) => onUpdate({ name: e.target.value })}
@@ -595,7 +595,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                              <span>Constant Value</span>
                         </div>
                         <div className="space-y-1">
-                            <label className="text-[10px] text-gray-400">
+                            <label className="text-2xs text-gray-400">
                                 {node.type.replace('Literal', '')} Value
                             </label>
                             {node.type === 'LiteralBoolean' ? (
@@ -635,7 +635,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                             <MessageSquare size={14} /> Message Configuration
                         </div>
                         <div className="space-y-1">
-                            <label className="text-[10px] text-gray-400">Text to Print</label>
+                            <label className="text-2xs text-gray-400">Text to Print</label>
                             <textarea 
                                 value={node.data?.printMessage || ''}
                                 onChange={(e) => {
@@ -658,7 +658,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                 {/* Specific: Event (Animation Notify) */}
                 {node.type === 'SetActiveCamera' && (
                     <div className="space-y-1">
-                        <label className="text-[10px] text-gray-400">Camera</label>
+                        <label className="text-2xs text-gray-400">Camera</label>
                         <select
                             value={typeof node.data?.cameraId === 'string' ? node.data.cameraId : ''}
                             onChange={(e) => onUpdate({ data: { ...(node.data || {}), cameraId: e.target.value } })}
@@ -669,13 +669,13 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                                 <option key={object.id} value={object.id}>{object.name || object.id}</option>
                             ))}
                         </select>
-                        <p className="text-[10px] text-gray-500">Switches the view to an object with a Camera component, or back to the gameplay camera, blending over Blend seconds.</p>
+                        <p className="text-2xs text-gray-500">Switches the view to an object with a Camera component, or back to the gameplay camera, blending over Blend seconds.</p>
                     </div>
                 )}
 
                 {node.type === 'StartDialogue' && (
                     <div className="space-y-1">
-                        <label className="text-[10px] text-gray-400">Speaker</label>
+                        <label className="text-2xs text-gray-400">Speaker</label>
                         <select
                             value={typeof node.data?.targetObjectId === 'string' ? node.data.targetObjectId : ''}
                             onChange={(e) => onUpdate({ data: { ...(node.data || {}), targetObjectId: e.target.value } })}
@@ -686,26 +686,26 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                                 <option key={object.id} value={object.id}>{object.name || object.id}</option>
                             ))}
                         </select>
-                        <p className="text-[10px] text-gray-500">Opens the conversation on an object with a Dialogue component, wherever the player is. Does nothing while another conversation is open.</p>
+                        <p className="text-2xs text-gray-500">Opens the conversation on an object with a Dialogue component, wherever the player is. Does nothing while another conversation is open.</p>
                     </div>
                 )}
 
                 {node.type === 'Event' && node.name === 'Event DialogueEvent' && (
                     <div className="space-y-1">
-                        <label className="text-[10px] text-gray-400">Event name (empty: any dialogue event)</label>
+                        <label className="text-2xs text-gray-400">Event name (empty: any dialogue event)</label>
                         <input
                             value={typeof node.data?.eventName === 'string' ? node.data.eventName : ''}
                             onChange={(e) => onUpdate({ data: { ...(node.data || {}), eventName: e.target.value } })}
                             className="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-red-500"
                             placeholder="e.g. AcceptedQuest"
                         />
-                        <p className="text-[10px] text-gray-500">Runs when a dialogue line or choice that raises this event is shown or chosen.</p>
+                        <p className="text-2xs text-gray-500">Runs when a dialogue line or choice that raises this event is shown or chosen.</p>
                     </div>
                 )}
 
                 {node.type === 'Event' && (node.name === 'Event VehicleEntered' || node.name === 'Event VehicleExited') && (
                     <div className="space-y-1">
-                        <label className="text-[10px] text-gray-400">Vehicle</label>
+                        <label className="text-2xs text-gray-400">Vehicle</label>
                         <select
                             aria-label="Event vehicle"
                             value={typeof node.data?.vehicleId === 'string' ? node.data.vehicleId : ''}
@@ -717,13 +717,13 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                                 <option key={obj.id} value={obj.id}>{obj.name}</option>
                             ))}
                         </select>
-                        <p className="text-[10px] text-gray-500">Runs when the player gets {node.name === 'Event VehicleEntered' ? 'into' : 'out of'} this vehicle (or any). Vehicle is the one they {node.name === 'Event VehicleEntered' ? 'got into' : 'left'}.</p>
+                        <p className="text-2xs text-gray-500">Runs when the player gets {node.name === 'Event VehicleEntered' ? 'into' : 'out of'} this vehicle (or any). Vehicle is the one they {node.name === 'Event VehicleEntered' ? 'got into' : 'left'}.</p>
                     </div>
                 )}
 
                 {node.type === 'Event' && node.name === 'Event ObjectBroken' && (
                     <div className="space-y-1">
-                        <label className="text-[10px] text-gray-400">Object</label>
+                        <label className="text-2xs text-gray-400">Object</label>
                         <select
                             aria-label="Event object"
                             value={typeof node.data?.actorId === 'string' ? node.data.actorId : ''}
@@ -735,13 +735,13 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                                 <option key={obj.id} value={obj.id}>{obj.name}</option>
                             ))}
                         </select>
-                        <p className="text-[10px] text-gray-500">Runs when this object (or any with a Destructible component) breaks. Actor is the one that broke.</p>
+                        <p className="text-2xs text-gray-500">Runs when this object (or any with a Destructible component) breaks. Actor is the one that broke.</p>
                     </div>
                 )}
 
                 {node.type === 'Event' && (node.name === 'Event AbilityUsed' || node.name === 'Event ActorDied') && (
                     <div className="space-y-1">
-                        <label className="text-[10px] text-gray-400">Actor</label>
+                        <label className="text-2xs text-gray-400">Actor</label>
                         <select
                             aria-label="Event actor"
                             value={typeof node.data?.actorId === 'string' ? node.data.actorId : ''}
@@ -756,7 +756,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                         </select>
                         {node.name === 'Event AbilityUsed' && (
                             <>
-                                <label className="text-[10px] text-gray-400">Ability id (empty: any ability)</label>
+                                <label className="text-2xs text-gray-400">Ability id (empty: any ability)</label>
                                 <input
                                     aria-label="Event ability"
                                     value={typeof node.data?.abilityId === 'string' ? node.data.abilityId : ''}
@@ -765,7 +765,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                                 />
                             </>
                         )}
-                        <p className="text-[10px] text-gray-500">{node.name === 'Event AbilityUsed'
+                        <p className="text-2xs text-gray-500">{node.name === 'Event AbilityUsed'
                             ? 'Runs when this actor (or any) uses this ability (or any). Actor is the user, Ability its id, Target what it was used on (none for an ability without one).'
                             : 'Runs when this actor (or any with an Abilities component) loses all its health. Actor is the one that died.'}</p>
                     </div>
@@ -773,20 +773,20 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
 
                 {node.type === 'Event' && node.name === 'Event NetworkEvent' && (
                     <div className="space-y-1">
-                        <label className="text-[10px] text-gray-400">Event name (empty: any network event)</label>
+                        <label className="text-2xs text-gray-400">Event name (empty: any network event)</label>
                         <input
                             value={typeof node.data?.eventName === 'string' ? node.data.eventName : ''}
                             onChange={(e) => onUpdate({ data: { ...(node.data || {}), eventName: e.target.value } })}
                             className="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-red-500"
                             placeholder="e.g. DoorOpened"
                         />
-                        <p className="text-[10px] text-gray-500">Runs when another player sends this event. Value is what they sent, as text; From is their player id.</p>
+                        <p className="text-2xs text-gray-500">Runs when another player sends this event. Value is what they sent, as text; From is their player id.</p>
                     </div>
                 )}
 
                 {node.type === 'Event' && node.name === 'Event TimelineEvent' && (
                     <div className="space-y-1">
-                        <label className="text-[10px] text-gray-400">Event name (empty: any timeline event)</label>
+                        <label className="text-2xs text-gray-400">Event name (empty: any timeline event)</label>
                         <input
                             value={typeof node.data?.eventName === 'string' ? node.data.eventName : ''}
                             onChange={(e) => onUpdate({ data: { ...(node.data || {}), eventName: e.target.value } })}
@@ -798,14 +798,14 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
 
                 {node.type === 'Event' && node.name === 'Event AnimNotify' && (
                     <div className="space-y-1">
-                        <label className="text-[10px] text-gray-400">Notify name (empty: any notify)</label>
+                        <label className="text-2xs text-gray-400">Notify name (empty: any notify)</label>
                         <input
                             value={typeof node.data?.notifyName === 'string' ? node.data.notifyName : ''}
                             onChange={(e) => onUpdate({ data: { ...(node.data || {}), notifyName: e.target.value } })}
                             className="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-red-500"
                             placeholder="e.g. Footstep"
                         />
-                        <label className="text-[10px] text-gray-400">Raised by</label>
+                        <label className="text-2xs text-gray-400">Raised by</label>
                         <select
                             value={node.data?.notifySource === 'enemies' ? 'enemies' : node.data?.notifySource === 'any' ? 'any' : 'player'}
                             onChange={(e) => onUpdate({ data: { ...(node.data || {}), notifySource: e.target.value } })}
@@ -825,7 +825,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                             <Box size={14} /> Trigger Settings
                         </div>
                         <div className="space-y-1">
-                            <label className="text-[10px] text-gray-400">Target Actor</label>
+                            <label className="text-2xs text-gray-400">Target Actor</label>
                             <select
                                 value={selectedOverlapActorId(overlapTarget)}
                                 onChange={(e) => {
@@ -844,11 +844,11 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                                 ))}
                             </select>
                             {(overlapTarget.kind === 'linked' || overlapTarget.kind === 'legacy-unique') && (
-                                <div className="text-[10px] text-gray-500">Current name: {overlapTarget.actor.name}</div>
+                                <div className="text-2xs text-gray-500">Current name: {overlapTarget.actor.name}</div>
                             )}
                         </div>
                         {overlapWarning && (
-                            <div role="alert" className="flex items-start gap-2 rounded border border-amber-700/60 bg-amber-950/40 p-2 text-[10px] text-amber-300">
+                            <div role="alert" className="flex items-start gap-2 rounded border border-amber-700/60 bg-amber-950/40 p-2 text-2xs text-amber-300">
                                 <AlertTriangle size={12} className="shrink-0 mt-px" />
                                 <span>{overlapWarning}</span>
                             </div>
@@ -863,7 +863,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                             <DoorOpen size={14} /> Level Travel
                         </div>
                         <div className="space-y-1">
-                            <label className="text-[10px] text-gray-400">Target Level</label>
+                            <label className="text-2xs text-gray-400">Target Level</label>
                             <select
                                 value={openLevelId}
                                 onChange={(e) => {
@@ -883,7 +883,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                             </select>
                         </div>
                         {(openLevelMissing || !openLevelId) && (
-                            <div role="alert" className="flex items-start gap-2 rounded border border-amber-700/60 bg-amber-950/40 p-2 text-[10px] text-amber-300">
+                            <div role="alert" className="flex items-start gap-2 rounded border border-amber-700/60 bg-amber-950/40 p-2 text-2xs text-amber-300">
                                 <AlertTriangle size={12} className="shrink-0 mt-px" />
                                 <span>{openLevelMissing ? 'Missing level: it was deleted.' : 'No level selected; this node does nothing.'}</span>
                             </div>
@@ -898,7 +898,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                             <Save size={14} /> Save Slot
                         </div>
                         <div className="space-y-1">
-                            <label htmlFor={`save-slot-${node.id}`} className="text-[10px] text-gray-400">Slot (blank for default)</label>
+                            <label htmlFor={`save-slot-${node.id}`} className="text-2xs text-gray-400">Slot (blank for default)</label>
                             <input
                                 id={`save-slot-${node.id}`}
                                 type="text"
@@ -920,17 +920,17 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                         
                         {/* Target Scope Switcher */}
                         <div className="space-y-1">
-                            <label className="text-[10px] text-gray-400">Target Entity</label>
+                            <label className="text-2xs text-gray-400">Target Entity</label>
                             <div className="flex bg-gray-800 p-1 rounded border border-gray-700">
                                 <button
                                     onClick={() => updateData('targetBlueprintType', 'Player')}
-                                    className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded text-[10px] transition-all ${node.data?.targetBlueprintType !== 'Enemy' ? 'bg-blue-900 text-blue-200 font-bold' : 'text-gray-500 hover:text-white'}`}
+                                    className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded text-2xs transition-all ${node.data?.targetBlueprintType !== 'Enemy' ? 'bg-blue-900 text-blue-200 font-bold' : 'text-gray-500 hover:text-white'}`}
                                 >
                                     <Shield size={10} /> Player
                                 </button>
                                 <button
                                     onClick={() => updateData('targetBlueprintType', 'Enemy')}
-                                    className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded text-[10px] transition-all ${node.data?.targetBlueprintType === 'Enemy' ? 'bg-red-900 text-red-200 font-bold' : 'text-gray-500 hover:text-white'}`}
+                                    className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded text-2xs transition-all ${node.data?.targetBlueprintType === 'Enemy' ? 'bg-red-900 text-red-200 font-bold' : 'text-gray-500 hover:text-white'}`}
                                 >
                                     <Skull size={10} /> Enemy
                                 </button>
@@ -939,7 +939,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
 
                         {/* Variable Select */}
                         <div className="space-y-1">
-                            <label className="text-[10px] text-gray-400">Variable</label>
+                            <label className="text-2xs text-gray-400">Variable</label>
                             <select
                                 value={node.data?.variableName || ''}
                                 onChange={(e) => {

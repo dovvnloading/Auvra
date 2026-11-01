@@ -13,7 +13,7 @@ export const BreadcrumbBar: React.FC<BreadcrumbBarProps> = ({ currentFolder, isS
     const [dropTarget, setDropTarget] = useState<string | null>(null);
     const crumbs = [ROOT_FOLDER, ...folderAncestors(currentFolder)];
     return (
-        <div className="h-7 shrink-0 flex items-center gap-0.5 px-3 border-b border-white/5 text-[11px] text-gray-400 overflow-x-auto custom-scrollbar">
+        <div className="h-7 shrink-0 flex items-center gap-0.5 px-3 border-b border-white/5 text-2xs text-gray-400 overflow-x-auto custom-scrollbar">
             {crumbs.map((path, index) => {
                 const isLast = index === crumbs.length - 1;
                 return (
@@ -46,7 +46,7 @@ export const BreadcrumbBar: React.FC<BreadcrumbBarProps> = ({ currentFolder, isS
                     </React.Fragment>
                 );
             })}
-            {isSearching && <span className="ml-2 text-[10px] text-gray-500 whitespace-nowrap">Searching this folder and its subfolders</span>}
+            {isSearching && <span className="ml-2 text-2xs text-gray-500 whitespace-nowrap">Searching this folder and its subfolders</span>}
         </div>
     );
 };

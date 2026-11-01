@@ -117,8 +117,8 @@ const InlineValue: React.FC<{ node: MaterialGraphNode; input: MaterialInputDef }
     if (!param) return null;
     const value = readParam(param, node.params[param.key]);
     if (param.kind === 'color') return <span className="ml-auto mr-2 h-2.5 w-4 rounded-sm border border-gray-700" style={{ background: toHex(value as number[]) }} />;
-    if (param.kind === 'float') return <span className="ml-auto mr-2 font-mono text-[9px] text-gray-500">{(value as number).toFixed(2)}</span>;
-    if (Array.isArray(value)) return <span className="ml-auto mr-2 font-mono text-[9px] text-gray-500">{(value as number[]).map(v => v.toFixed(1)).join(', ')}</span>;
+    if (param.kind === 'float') return <span className="ml-auto mr-2 font-mono text-2xs text-gray-500">{(value as number).toFixed(2)}</span>;
+    if (Array.isArray(value)) return <span className="ml-auto mr-2 font-mono text-2xs text-gray-500">{(value as number[]).map(v => v.toFixed(1)).join(', ')}</span>;
     return null;
 };
 
@@ -541,7 +541,7 @@ export const MaterialGraphCanvas: React.FC<MaterialGraphCanvasProps> = (props) =
                 onMouseDown={(event) => onNodeDown(event, node)}
                 title={faded ? 'Not used: it feeds nothing the material reads' : undefined}
             >
-                <div className={`flex items-center justify-between rounded-t-md px-2 text-[11px] font-bold ${isOutput ? 'bg-emerald-900/60 text-emerald-200' : 'bg-gray-800 text-gray-200'}`} style={{ height: HEADER }} title={definition.description}>
+                <div className={`flex items-center justify-between rounded-t-md px-2 text-2xs font-bold ${isOutput ? 'bg-emerald-900/60 text-emerald-200' : 'bg-gray-800 text-gray-200'}`} style={{ height: HEADER }} title={definition.description}>
                     <span className="truncate">
                         {definition.label}
                         {node.parameter && <span className="ml-1 font-normal text-amber-300" title="Material parameter">· {node.parameter}</span>}
@@ -551,13 +551,13 @@ export const MaterialGraphCanvas: React.FC<MaterialGraphCanvasProps> = (props) =
                     )}
                 </div>
                 {definition.outputs.map(output => (
-                    <div key={output.key} className="relative flex items-center justify-end pr-3 text-[10px] text-gray-300" style={{ height: ROW }}>
+                    <div key={output.key} className="relative flex items-center justify-end pr-3 text-2xs text-gray-300" style={{ height: ROW }}>
                         {output.label}
                         {renderPin(node, 'out', output.key, output.label, '-right-[7px]')}
                     </div>
                 ))}
                 {definition.inputs.map(input => (
-                    <div key={input.key} className="relative flex items-center pl-3 text-[10px] text-gray-300" style={{ height: ROW }}>
+                    <div key={input.key} className="relative flex items-center pl-3 text-2xs text-gray-300" style={{ height: ROW }}>
                         {renderPin(node, 'in', input.key, input.label, '-left-[7px]')}
                         <span className="truncate">{input.label}</span>
                         {!wired.has(`${node.id}:${input.key}`) && <InlineValue node={node} input={input} />}
@@ -572,14 +572,14 @@ export const MaterialGraphCanvas: React.FC<MaterialGraphCanvasProps> = (props) =
         );
     };
 
-    const toolbarButton = 'flex items-center gap-1 rounded bg-gray-800/90 px-2 py-1 text-[11px] text-gray-200 hover:bg-gray-700 disabled:opacity-40';
+    const toolbarButton = 'flex items-center gap-1 rounded bg-gray-800/90 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-700 disabled:opacity-40';
 
     return (
         <div
             ref={container}
             tabIndex={0}
             aria-label="Material graph"
-            className="relative flex-1 select-none overflow-hidden bg-[#0d0f12] outline-none"
+            className="relative flex-1 select-none overflow-hidden bg-well outline-none"
             style={{ backgroundImage: 'radial-gradient(#1f2937 1px, transparent 1px)', backgroundSize: `${20 * viewport.scale}px ${20 * viewport.scale}px`, backgroundPosition: `${viewport.x}px ${viewport.y}px` }}
             onWheel={onWheel}
             onMouseDown={onBackgroundDown}
@@ -648,7 +648,7 @@ export const MaterialGraphCanvas: React.FC<MaterialGraphCanvasProps> = (props) =
                     {previews ? <Eye size={12} /> : <EyeOff size={12} />}
                 </button>
             </div>
-            <div className="pointer-events-none absolute bottom-2 left-3 text-[10px] text-gray-600">
+            <div className="pointer-events-none absolute bottom-2 left-3 text-2xs text-gray-600">
                 Right-click or Space: add · drag pins to wire · Alt+click a wire to cut · Ctrl+C/V/D · Ctrl+Z/Y · C comment · F frame
             </div>
 

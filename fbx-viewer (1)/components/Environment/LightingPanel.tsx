@@ -142,7 +142,7 @@ const SkyLightRow: React.FC<{
 }> = ({ levelId, objects, onSelect, onChange }) => {
     const sky = objects.find(object => object.levelId === levelId && object.type === 'sky_sphere' && object.skyConfig);
     if (!sky?.skyConfig) {
-        return <div className="px-3 py-2 text-[10px] text-gray-500 border-b border-gray-800">Add a Sky Sphere to light this level from its sky.</div>;
+        return <div className="px-3 py-2 text-2xs text-gray-500 border-b border-gray-800">Add a Sky Sphere to light this level from its sky.</div>;
     }
     const settings = resolveSkyLight(sky.skyConfig.skyLight);
     const usable = skyModel(sky.skyConfig) !== 'classic';
@@ -152,11 +152,11 @@ const SkyLightRow: React.FC<{
             <button
                 type="button"
                 onClick={() => onSelect(sky.id)}
-                className="flex-1 text-left text-[11px] text-gray-300 hover:text-white"
+                className="flex-1 text-left text-2xs text-gray-300 hover:text-white"
                 title="Lights the level from the sky itself. Select the Sky Sphere to set it."
             >
                 Sky Light
-                <span className="ml-1 text-[9px] text-gray-500">{usable ? (settings.enabled ? settings.capture === 'live' ? 'Live' : 'Captured once' : 'Off') : 'Needs the Atmosphere sky'}</span>
+                <span className="ml-1 text-2xs text-gray-500">{usable ? (settings.enabled ? settings.capture === 'live' ? 'Live' : 'Captured once' : 'Off') : 'Needs the Atmosphere sky'}</span>
             </button>
             {usable && (
                 <input
@@ -232,7 +232,7 @@ export const LightingPanel: React.FC<LightingPanelProps> = ({ levelId, onSelect,
             <div className="flex items-center justify-between p-3 border-b border-gray-800 bg-gray-950 shrink-0">
                 <span className="text-xs font-bold text-gray-300 flex items-center gap-2">
                     <Lightbulb size={14} className="text-amber-400" /> Lights
-                    <span className="text-[10px] font-normal text-gray-500">{lights.length}</span>
+                    <span className="text-2xs font-normal text-gray-500">{lights.length}</span>
                 </span>
                 <div className="flex items-center gap-1">
                     {LIGHT_KINDS.map(kind => (
@@ -240,7 +240,7 @@ export const LightingPanel: React.FC<LightingPanelProps> = ({ levelId, onSelect,
                             key={kind}
                             onClick={() => void handleAdd(kind)}
                             disabled={!canAdd}
-                            className="flex items-center gap-1 px-1.5 py-1 rounded text-[10px] font-bold uppercase text-amber-300 hover:text-white hover:bg-amber-700 disabled:text-gray-600 disabled:hover:bg-transparent disabled:cursor-not-allowed"
+                            className="flex items-center gap-1 px-1.5 py-1 rounded text-2xs font-bold text-amber-300 hover:text-white hover:bg-amber-700 disabled:text-gray-600 disabled:hover:bg-transparent disabled:cursor-not-allowed"
                             title={isOpenLevel
                                 ? `Add a ${LIGHT_LABELS[kind].toLowerCase()} ${placementTarget ? 'above the camera target' : 'above the origin'}`
                                 : 'Open this level to add lights'}
@@ -256,7 +256,7 @@ export const LightingPanel: React.FC<LightingPanelProps> = ({ levelId, onSelect,
 
             <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
                 {lights.length === 0 && (
-                    <div className="text-[11px] text-gray-500 text-center py-6 px-2">
+                    <div className="text-2xs text-gray-500 text-center py-6 px-2">
                         No lights in this level. Add a point or spot light above.
                     </div>
                 )}
@@ -282,7 +282,7 @@ export const LightingPanel: React.FC<LightingPanelProps> = ({ levelId, onSelect,
                                     title={`Select ${name}`}
                                 >
                                     {name}
-                                    {shared && <span className="text-[10px] text-gray-500"> ({LIGHT_LABELS[kind]})</span>}
+                                    {shared && <span className="text-2xs text-gray-500"> ({LIGHT_LABELS[kind]})</span>}
                                 </button>
                                 <button
                                     onClick={() => applyChanges(light, { enabled: !component.enabled }, false)}

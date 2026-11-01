@@ -56,7 +56,7 @@ const removeLocale = (settings: LocalizationSettings, locale: string): Localizat
 };
 
 const sectionClass = 'rounded-lg border border-gray-800 bg-gray-950/60 p-3 space-y-3';
-const sectionTitleClass = 'text-[10px] font-bold uppercase tracking-wider text-gray-500';
+const sectionTitleClass = 'text-2xs font-bold text-gray-500';
 const inputClass = 'w-full rounded border border-gray-700 bg-gray-950 px-2 py-1.5 text-xs text-white disabled:opacity-50';
 const smallButtonClass = 'flex shrink-0 items-center gap-1 rounded border border-gray-700 px-2 py-1.5 text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-50';
 
@@ -157,26 +157,26 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-label="Localization">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 p-4" role="dialog" aria-modal="true" aria-label="Localization">
       <div className="flex w-full max-w-5xl max-h-[90vh] flex-col overflow-hidden rounded-xl border border-gray-700 bg-gray-900 shadow-2xl">
         <div className="flex items-center justify-between border-b border-gray-800 bg-gray-950 px-5 py-4">
-          <div className="flex items-center gap-3"><Languages size={18} className="text-blue-400" /><div><h2 className="text-sm font-bold text-white">Localization</h2><p className="text-[10px] text-gray-500">String tables stored in the project · used by HUD text keys and t()</p></div></div>
+          <div className="flex items-center gap-3"><Languages size={18} className="text-blue-400" /><div><h2 className="text-sm font-bold text-white">Localization</h2><p className="text-2xs text-gray-500">String tables stored in the project · used by HUD text keys and t()</p></div></div>
           <button type="button" onClick={onClose} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white" aria-label="Close localization"><X size={16} /></button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-5 space-y-4">
           {!hydrated && <div className="text-xs text-gray-500">Loading localization…</div>}
-          {!projectStatus.projectId && <div className="rounded border border-amber-900 bg-amber-950/40 px-3 py-2 text-[11px] text-amber-300">Open or create a project to save localization.</div>}
-          {projectStatus.readOnly && <div className="rounded border border-amber-900 bg-amber-950/40 px-3 py-2 text-[11px] text-amber-300">This project is read-only.</div>}
+          {!projectStatus.projectId && <div className="rounded border border-amber-900 bg-amber-950/40 px-3 py-2 text-2xs text-amber-300">Open or create a project to save localization.</div>}
+          {projectStatus.readOnly && <div className="rounded border border-amber-900 bg-amber-950/40 px-3 py-2 text-2xs text-amber-300">This project is read-only.</div>}
 
           <div className={sectionClass}>
             <div className={sectionTitleClass}>Locales</div>
             <div className="grid gap-3 md:grid-cols-2">
-              <label className="block text-[9px] uppercase text-gray-500">Default locale
+              <label className="block text-2xs text-gray-500">Default locale
                 <select aria-label="Default locale" value={draft.defaultLocale} disabled={disabled} onChange={(event) => { const defaultLocale = event.target.value; update((current) => ({ ...current, defaultLocale })); }} className={`mt-1 ${inputClass}`}>
                   {locales.map((locale) => <option key={locale} value={locale}>{locale}</option>)}
                 </select>
               </label>
-              <form className="block text-[9px] uppercase text-gray-500" onSubmit={(event) => { event.preventDefault(); submitLocale(); }}>
+              <form className="block text-2xs text-gray-500" onSubmit={(event) => { event.preventDefault(); submitLocale(); }}>
                 <label htmlFor="localization-new-locale">Add locale</label>
                 <div className="mt-1 flex gap-2">
                   <input id="localization-new-locale" type="text" value={newLocale} placeholder="fr, de, pt-BR…" disabled={disabled} onChange={(event) => setNewLocale(event.target.value)} className={inputClass} />
@@ -184,8 +184,8 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
                 </div>
               </form>
             </div>
-            {localeProblem && <p className="text-[10px] text-amber-400">{localeProblem}</p>}
-            <p className="text-[10px] text-gray-500">Missing text falls back to the base language (fr for fr-CA), then the default locale, then the key itself.</p>
+            {localeProblem && <p className="text-2xs text-amber-400">{localeProblem}</p>}
+            <p className="text-2xs text-gray-500">Missing text falls back to the base language (fr for fr-CA), then the default locale, then the key itself.</p>
           </div>
 
           <div className={sectionClass}>
@@ -200,15 +200,15 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
               <input type="text" aria-label="New string key" value={newKey} placeholder="New key, e.g. hud.score" disabled={disabled} onChange={(event) => setNewKey(event.target.value)} className={`${inputClass} font-mono`} />
               <button type="submit" disabled={disabled || !trimmedKey || Boolean(keyProblem)} className={smallButtonClass}><Plus size={13} /> Add key</button>
             </form>
-            {keyProblem && <p className="text-[10px] text-amber-400">{keyProblem}</p>}
-            <p className="text-[10px] text-gray-500">Use {'{name}'} in text for values passed to t(key, {'{ name }'}).</p>
+            {keyProblem && <p className="text-2xs text-amber-400">{keyProblem}</p>}
+            <p className="text-2xs text-gray-500">Use {'{name}'} in text for values passed to t(key, {'{ name }'}).</p>
 
             {keys.length === 0 ? (
               <div className="rounded border border-dashed border-gray-800 px-3 py-6 text-center text-xs text-gray-500">No strings yet. Add a key to start a string table.</div>
             ) : (
               <div className="overflow-x-auto rounded border border-gray-800">
                 <table className="w-full border-collapse text-xs">
-                  <thead className="bg-gray-950 text-[10px] uppercase text-gray-500">
+                  <thead className="bg-gray-950 text-2xs text-gray-500">
                     <tr>
                       <th scope="col" className="sticky left-0 z-10 min-w-[10rem] bg-gray-950 px-2 py-2 text-left font-bold">Key</th>
                       {locales.map((locale) => (
@@ -228,7 +228,7 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
                   <tbody>
                     {visibleKeys.map((key) => (
                       <tr key={key} className="border-t border-gray-800">
-                        <th scope="row" className="sticky left-0 z-10 bg-gray-900 px-2 py-1.5 text-left align-top font-mono text-[11px] font-normal text-gray-300 break-all">{key}</th>
+                        <th scope="row" className="sticky left-0 z-10 bg-gray-900 px-2 py-1.5 text-left align-top font-mono text-2xs font-normal text-gray-300 break-all">{key}</th>
                         {locales.map((locale) => {
                           const text = cellText(draft, locale, key);
                           const fallback = text ? '' : translate(draft, locale, key);

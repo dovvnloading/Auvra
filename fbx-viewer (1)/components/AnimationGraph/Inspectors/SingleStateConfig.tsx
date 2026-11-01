@@ -61,7 +61,7 @@ export const SingleStateConfig: React.FC<SingleStateConfigProps> = ({
 
                  <div className="p-3 space-y-4">
                     <div className="space-y-1.5">
-                        <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider">Clip</label>
+                        <label className="text-2xs text-gray-500 font-bold ">Clip</label>
                         <Select
                             value={node.clipName || ''}
                             onChange={(val) => updateState({ clipName: val })}
@@ -73,7 +73,7 @@ export const SingleStateConfig: React.FC<SingleStateConfigProps> = ({
                     <ToggleRow label="Loop Animation" checked={node.loop} onChange={(loop) => updateState({ loop })} />
 
                     <div className="space-y-1.5">
-                        <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider">Play Rate</label>
+                        <label className="text-2xs text-gray-500 font-bold ">Play Rate</label>
                         <ScrubbableInput
                             label="Rate"
                             labelWidth="w-10"
@@ -86,14 +86,14 @@ export const SingleStateConfig: React.FC<SingleStateConfigProps> = ({
                     </div>
 
                     <div className="space-y-1.5">
-                        <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider">Play Rate Variable</label>
+                        <label className="text-2xs text-gray-500 font-bold ">Play Rate Variable</label>
                         <Select
                             value={node.playRateParam ?? ''}
                             onChange={(val) => updateState({ playRateParam: val === '' ? undefined : val })}
                             options={playRateParamOptions}
                             placeholder="Play Rate Variable"
                         />
-                        <p className="text-[10px] text-gray-600">Multiplies the play rate each frame. A negative rate plays the clip backwards.</p>
+                        <p className="text-2xs text-gray-600">Multiplies the play rate each frame. A negative rate plays the clip backwards.</p>
                     </div>
 
                     <ToggleRow label="Root Motion" checked={!!node.rootMotion} onChange={(rootMotion) => updateState({ rootMotion })} />
@@ -103,7 +103,7 @@ export const SingleStateConfig: React.FC<SingleStateConfigProps> = ({
             {/* Notifies List */}
             <div className="space-y-3">
                 <div className="flex items-center justify-between px-1">
-                    <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider flex items-center gap-1.5">
+                    <label className="text-2xs text-gray-500 font-bold flex items-center gap-1.5">
                         <Bell size={10} /> Notifies
                     </label>
                     <button
@@ -112,7 +112,7 @@ export const SingleStateConfig: React.FC<SingleStateConfigProps> = ({
                             updateState({ notifies: [...notifies, newNotify] });
                         }}
                         aria-label="Add notify"
-                        className="text-[10px] px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-gray-300 hover:text-white transition-colors flex items-center gap-1"
+                        className="text-2xs px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-gray-300 hover:text-white transition-colors flex items-center gap-1"
                     >
                         <Plus size={10} /> Add
                     </button>
@@ -126,7 +126,7 @@ export const SingleStateConfig: React.FC<SingleStateConfigProps> = ({
                                     value={notify.name}
                                     onChange={(e) => updateNotify(notify.id, { name: e.target.value })}
                                     aria-label="Notify name"
-                                    className="flex-1 min-w-0 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-[10px] text-white focus:border-gray-500 focus:outline-none"
+                                    className="flex-1 min-w-0 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-2xs text-white focus:border-gray-500 focus:outline-none"
                                 />
                                 <button
                                     onClick={() => updateState({ notifies: notifies.filter(n => n.id !== notify.id) })}
@@ -149,7 +149,7 @@ export const SingleStateConfig: React.FC<SingleStateConfigProps> = ({
                     ))}
                     {notifies.length === 0 && (
                         <div className="text-center py-4 border border-dashed border-gray-800 rounded bg-gray-900/50">
-                            <p className="text-[10px] text-gray-600">No notifies. Each one raises a named event when playback reaches its time (seconds).</p>
+                            <p className="text-2xs text-gray-600">No notifies. Each one raises a named event when playback reaches its time (seconds).</p>
                         </div>
                     )}
                 </div>

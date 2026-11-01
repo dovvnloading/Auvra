@@ -109,7 +109,7 @@ const sanitizeGameSettings = (value: GameSettings): GameSettings => {
 };
 
 const sectionClass = 'rounded-lg border border-gray-800 bg-gray-950/60 p-3 space-y-3';
-const sectionTitleClass = 'text-[10px] font-bold uppercase tracking-wider text-gray-500';
+const sectionTitleClass = 'text-2xs font-bold text-gray-500';
 const inputClass = 'w-full rounded border border-gray-700 bg-gray-950 px-2 py-1.5 text-xs text-white disabled:opacity-50';
 
 const Toggle: React.FC<{ label: string; checked: boolean; disabled: boolean; onChange: (checked: boolean) => void }> = ({ label, checked, disabled, onChange }) => (
@@ -120,7 +120,7 @@ const Toggle: React.FC<{ label: string; checked: boolean; disabled: boolean; onC
 );
 
 const NumberField: React.FC<{ label: string; value: number; limits: { min: number; max: number; step: number }; disabled: boolean; onChange: (value: number) => void }> = ({ label, value, limits, disabled, onChange }) => (
-  <label className="block text-[9px] uppercase text-gray-500">
+  <label className="block text-2xs text-gray-500">
     {label}
     <input
       type="number"
@@ -237,37 +237,37 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-label="Game settings">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 p-4" role="dialog" aria-modal="true" aria-label="Game settings">
       <div className="flex w-full max-w-xl max-h-[90vh] flex-col overflow-hidden rounded-xl border border-gray-700 bg-gray-900 shadow-2xl">
         <div className="flex items-center justify-between border-b border-gray-800 bg-gray-950 px-5 py-4">
-          <div className="flex items-center gap-3"><SlidersHorizontal size={18} className="text-blue-400" /><div><h2 className="text-sm font-bold text-white">Game Settings</h2><p className="text-[10px] text-gray-500">Stored in the project · used by Play and Build Game</p></div></div>
+          <div className="flex items-center gap-3"><SlidersHorizontal size={18} className="text-blue-400" /><div><h2 className="text-sm font-bold text-white">Game Settings</h2><p className="text-2xs text-gray-500">Stored in the project · used by Play and Build Game</p></div></div>
           <button type="button" onClick={onClose} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white" aria-label="Close game settings"><X size={16} /></button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-5 space-y-4">
           {!hydrated && <div className="text-xs text-gray-500">Loading game settings…</div>}
-          {!projectStatus.projectId && <div className="rounded border border-amber-900 bg-amber-950/40 px-3 py-2 text-[11px] text-amber-300">Open or create a project to save game settings.</div>}
-          {projectStatus.readOnly && <div className="rounded border border-amber-900 bg-amber-950/40 px-3 py-2 text-[11px] text-amber-300">This project is read-only.</div>}
+          {!projectStatus.projectId && <div className="rounded border border-amber-900 bg-amber-950/40 px-3 py-2 text-2xs text-amber-300">Open or create a project to save game settings.</div>}
+          {projectStatus.readOnly && <div className="rounded border border-amber-900 bg-amber-950/40 px-3 py-2 text-2xs text-amber-300">This project is read-only.</div>}
 
           <div className={sectionClass}>
             <div className={sectionTitleClass}>Game</div>
-            <label className="block text-[9px] uppercase text-gray-500">Name
+            <label className="block text-2xs text-gray-500">Name
               <input type="text" value={draft.name} disabled={disabled} onChange={(event) => { const name = event.target.value; update((current) => ({ ...current, name })); }} className={`mt-1 ${inputClass}`} />
             </label>
-            <label className="block text-[9px] uppercase text-gray-500">Startup level
+            <label className="block text-2xs text-gray-500">Startup level
               <select aria-label="Startup level" value={draft.startupLevelId ?? ''} disabled={disabled} onChange={(event) => { const startupLevelId = event.target.value || null; update((current) => ({ ...current, startupLevelId })); }} className={`mt-1 ${inputClass}`}>
                 <option value="">First level</option>
                 {levels.map((level) => <option key={level.id} value={level.id}>{level.name}</option>)}
                 {missingLevel && <option value={draft.startupLevelId ?? ''}>Missing level ({draft.startupLevelId})</option>}
               </select>
             </label>
-            <label className="block text-[9px] uppercase text-gray-500">Player blueprint
+            <label className="block text-2xs text-gray-500">Player blueprint
               <select aria-label="Player blueprint" value={draft.playerBlueprintId ?? ''} disabled={disabled} onChange={(event) => { const playerBlueprintId = event.target.value || null; update((current) => ({ ...current, playerBlueprintId })); }} className={`mt-1 ${inputClass}`}>
                 <option value="">First Player Character</option>
                 {playerBlueprints.map((blueprint) => <option key={blueprint.id} value={blueprint.id}>{blueprint.name}</option>)}
                 {missingBlueprint && <option value={draft.playerBlueprintId ?? ''}>Missing blueprint ({draft.playerBlueprintId})</option>}
               </select>
             </label>
-            {playerBlueprints.length === 0 && <p className="text-[10px] text-amber-400">No Player Character blueprint exists yet.</p>}
+            {playerBlueprints.length === 0 && <p className="text-2xs text-amber-400">No Player Character blueprint exists yet.</p>}
           </div>
 
           <div className={sectionClass}>
@@ -277,7 +277,7 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
             <Toggle label="Post-processing" checked={draft.quality.postProcessing} disabled={disabled} onChange={(postProcessing) => update((current) => ({ ...current, quality: { ...current.quality, postProcessing } }))} />
             <Toggle label="Mesh detail levels" checked={draft.quality.meshLod} disabled={disabled} onChange={(meshLod) => update((current) => ({ ...current, quality: { ...current.quality, meshLod } }))} />
             <Toggle label="Texture compression" checked={draft.quality.textureCompression} disabled={disabled} onChange={(textureCompression) => update((current) => ({ ...current, quality: { ...current.quality, textureCompression } }))} />
-            <label className="block text-[9px] uppercase text-gray-500">Anti-aliasing
+            <label className="block text-2xs text-gray-500">Anti-aliasing
               <select aria-label="Anti-aliasing" value={draft.quality.antiAliasing} disabled={disabled} onChange={(event) => { const antiAliasing = event.target.value as GameSettings['quality']['antiAliasing']; update((current) => ({ ...current, quality: { ...current.quality, antiAliasing } })); }} className={`mt-1 ${inputClass}`}>
                 <option value="temporal">Temporal</option>
                 <option value="smaa">SMAA</option>
@@ -293,7 +293,7 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
 
           <div className={sectionClass}>
             <div className={sectionTitleClass}>Navigation</div>
-            <p className="text-[10px] text-gray-500">The agent each level's navmesh is baked for: enemies keep to it.</p>
+            <p className="text-2xs text-gray-500">The agent each level's navmesh is baked for: enemies keep to it.</p>
             <div className="grid grid-cols-2 gap-2">
               <NumberField label="Agent radius (m)" value={draft.navigation.agentRadius} limits={NAV_SETTING_LIMITS.agentRadius} disabled={disabled} onChange={(agentRadius) => update((current) => ({ ...current, navigation: { ...current.navigation, agentRadius } }))} />
               <NumberField label="Agent height (m)" value={draft.navigation.agentHeight} limits={NAV_SETTING_LIMITS.agentHeight} disabled={disabled} onChange={(agentHeight) => update((current) => ({ ...current, navigation: { ...current.navigation, agentHeight } }))} />
@@ -306,7 +306,7 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
             <div className={sectionTitleClass}>Input & audio</div>
             <NumberField label="Mouse sensitivity" value={draft.input.mouseSensitivity} limits={LIMITS.mouseSensitivity} disabled={disabled} onChange={(mouseSensitivity) => update((current) => ({ ...current, input: { ...current.input, mouseSensitivity } }))} />
             <Toggle label="Invert Y" checked={draft.input.invertY} disabled={disabled} onChange={(invertY) => update((current) => ({ ...current, input: { ...current.input, invertY } }))} />
-            <label className="block text-[9px] uppercase text-gray-500">Master volume · {Math.round(draft.audio.masterVolume * 100)}%
+            <label className="block text-2xs text-gray-500">Master volume · {Math.round(draft.audio.masterVolume * 100)}%
               <input type="range" aria-label="Master volume" min={LIMITS.masterVolume.min} max={LIMITS.masterVolume.max} step={LIMITS.masterVolume.step} value={draft.audio.masterVolume} disabled={disabled} onChange={(event) => { const masterVolume = Number(event.target.value); update((current) => ({ ...current, audio: { ...current.audio, masterVolume } })); }} className="mt-1 w-full" />
             </label>
           </div>
@@ -316,17 +316,17 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
             <Toggle label="Online multiplayer" checked={draft.network.enabled} disabled={disabled} onChange={(enabled) => update((current) => ({ ...current, network: { ...current.network, enabled } }))} />
             {draft.network.enabled && (
               <>
-                <label className="block text-[9px] uppercase text-gray-500">Server address
+                <label className="block text-2xs text-gray-500">Server address
                   <input type="text" aria-label="Server address" value={draft.network.serverUrl} disabled={disabled} placeholder="ws://127.0.0.1:7777" onChange={(event) => { const serverUrl = event.target.value; update((current) => ({ ...current, network: { ...current.network, serverUrl } })); }} className={`mt-1 ${inputClass}`} />
                 </label>
-                {!/^wss?:\/\//i.test(draft.network.serverUrl.trim()) && <p className="text-[10px] text-amber-400">The address must start with ws:// or wss://.</p>}
+                {!/^wss?:\/\//i.test(draft.network.serverUrl.trim()) && <p className="text-2xs text-amber-400">The address must start with ws:// or wss://.</p>}
                 <div className="grid grid-cols-2 gap-2">
-                  <label className="block text-[9px] uppercase text-gray-500">Room
+                  <label className="block text-2xs text-gray-500">Room
                     <input type="text" aria-label="Room" value={draft.network.room} disabled={disabled} onChange={(event) => { const room = event.target.value; update((current) => ({ ...current, network: { ...current.network, room } })); }} className={`mt-1 ${inputClass}`} />
                   </label>
                   <NumberField label="Max players" value={draft.network.maxPlayers} limits={{ min: 1, max: 16, step: 1 }} disabled={disabled} onChange={(maxPlayers) => update((current) => ({ ...current, network: { ...current.network, maxPlayers } }))} />
                 </div>
-                <p className="text-[10px] text-gray-500">Players meet through a relay server: run <code>python -m Auvra.net.relay</code>, or the <code>server/relay.py</code> shipped with the build. Play in the editor reaches a relay on this machine at port 7777.</p>
+                <p className="text-2xs text-gray-500">Players meet through a relay server: run <code>python -m Auvra.net.relay</code>, or the <code>server/relay.py</code> shipped with the build. Play in the editor reaches a relay on this machine at port 7777.</p>
               </>
             )}
           </div>
@@ -342,14 +342,14 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
                     <input type="radio" name={`${buildIdPrefix}-target`} value={target} aria-label={copy.label} aria-describedby={hintId} checked={buildTarget === target} disabled={!available || building} onChange={() => setBuildTarget(target)} className="mt-0.5" />
                     <span className="min-w-0">
                       <span className="block font-bold">{copy.label}</span>
-                      <span id={hintId} className={`block text-[10px] ${available ? 'text-gray-500' : 'text-amber-400'}`}>{available ? copy.detail : reason ?? 'Not available in this editor.'}</span>
+                      <span id={hintId} className={`block text-2xs ${available ? 'text-gray-500' : 'text-amber-400'}`}>{available ? copy.detail : reason ?? 'Not available in this editor.'}</span>
                     </span>
                   </label>
                 );
               })}
             </fieldset>
             <div className="flex items-center justify-between gap-3">
-              <p className="text-[10px] text-gray-500">{buildBlocked ?? 'Pick a parent folder; an earlier build of this target there is replaced.'}</p>
+              <p className="text-2xs text-gray-500">{buildBlocked ?? 'Pick a parent folder; an earlier build of this target there is replaced.'}</p>
               <button type="button" disabled={!canBuild} onClick={() => void build()} className="flex shrink-0 items-center gap-2 rounded bg-emerald-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-600 disabled:opacity-50"><Hammer size={13} /> {building ? 'Building…' : `Build ${BUILD_TARGET_COPY[selectedBuild.target].label}`}</button>
             </div>
           </div>

@@ -31,7 +31,7 @@ export const BlueprintListPanel: React.FC<BlueprintListPanelProps> = ({
         <div className="w-64 bg-gray-900 border-r border-gray-800 flex flex-col shrink-0 z-20">
             <div className="p-3 border-b border-gray-800 shrink-0 flex items-center justify-between bg-gray-950">
                 <span className="text-xs font-bold text-gray-400 tracking-wider flex items-center gap-2">
-                    <FileCode size={12} /> FILE MANAGER
+                    <FileCode size={12} /> File manager
                 </span>
                 <div className="flex gap-1">
                     {!hasPlayerCharacter && (
@@ -76,7 +76,7 @@ export const BlueprintListPanel: React.FC<BlueprintListPanelProps> = ({
                         }
                         <div className="flex-1 min-w-0">
                             <div className="text-xs font-bold truncate">{bp.name}</div>
-                            <div className="text-[9px] text-gray-500 truncate">{bp.type.replace(' Controller', '').replace(' Character', '')}</div>
+                            <div className="text-2xs text-gray-500 truncate">{bp.type.replace(' Controller', '').replace(' Character', '')}</div>
                         </div>
 
                         <button

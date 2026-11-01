@@ -188,7 +188,7 @@ export const EnvironmentMaskTool: React.FC<EnvironmentMaskToolProps> = ({ modelI
         <div className="flex flex-col h-full bg-gray-900 border-l border-gray-800 w-80 shadow-xl shrink-0 z-30">
             {/* Header / Model Select */}
             <div className="p-4 border-b border-gray-800 bg-gray-950">
-                <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-2" title="Select the object to mask">
+                <div className="text-2xs font-bold text-gray-500 mb-2 flex items-center gap-2" title="Select the object to mask">
                     <Box size={12} /> Target Mesh
                 </div>
                 <Select 
@@ -208,14 +208,14 @@ export const EnvironmentMaskTool: React.FC<EnvironmentMaskToolProps> = ({ modelI
                     <>
                         {/* Texture Selector */}
                         <div className="space-y-2">
-                            <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
+                            <label className="text-2xs font-bold text-gray-500 flex items-center gap-2">
                                 <Layers size={12} /> Select Texture Map
                             </label>
                             
                             {availableTextures.length === 0 ? (
                                 <div className="bg-red-900/20 border border-red-900/50 rounded p-3 text-center">
                                     <AlertTriangle size={16} className="mx-auto text-red-400 mb-1" />
-                                    <p className="text-[10px] text-red-300">No diffuse maps found on this model.</p>
+                                    <p className="text-2xs text-red-300">No diffuse maps found on this model.</p>
                                 </div>
                             ) : (
                                 <div className="grid grid-cols-3 gap-2">
@@ -230,7 +230,7 @@ export const EnvironmentMaskTool: React.FC<EnvironmentMaskToolProps> = ({ modelI
                                             title={`Select ${tex.name || 'Texture'}`}
                                         >
                                             <img src={tex.base64} className="w-full h-full object-cover" />
-                                            <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-1 truncate text-[8px] text-center text-gray-300">
+                                            <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-1 truncate text-2xs text-center text-gray-300">
                                                 {tex.name}
                                             </div>
                                         </div>
@@ -244,7 +244,7 @@ export const EnvironmentMaskTool: React.FC<EnvironmentMaskToolProps> = ({ modelI
                                 <div className="h-px bg-gray-800 w-full" />
 
                                 {/* Preview Area */}
-                                <div className="relative aspect-square bg-[#1a1a1a] rounded-lg border border-gray-700 overflow-hidden group">
+                                <div className="relative aspect-square bg-panel rounded-lg border border-gray-700 overflow-hidden group">
                                     <div className="absolute inset-0 opacity-20" 
                                          style={{ 
                                              backgroundImage: 'linear-gradient(45deg, #333 25%, transparent 25%), linear-gradient(-45deg, #333 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #333 75%), linear-gradient(-45deg, transparent 75%, #333 75%)',
@@ -265,7 +265,7 @@ export const EnvironmentMaskTool: React.FC<EnvironmentMaskToolProps> = ({ modelI
                                     />
 
                                     {isPicking && (
-                                        <div className="absolute top-2 left-2 bg-blue-600 text-accent-ink text-[10px] px-2 py-1 rounded shadow animate-pulse pointer-events-none">
+                                        <div className="absolute top-2 left-2 bg-blue-600 text-accent-ink text-2xs px-2 py-1 rounded shadow animate-pulse pointer-events-none">
                                             Pick Key Color
                                         </div>
                                     )}
@@ -274,7 +274,7 @@ export const EnvironmentMaskTool: React.FC<EnvironmentMaskToolProps> = ({ modelI
                                 {/* Controls */}
                                 <div className="bg-gray-800/50 p-3 rounded border border-gray-800 space-y-3">
                                     <div className="flex items-center justify-between">
-                                        <label className="text-[10px] font-bold text-gray-400 uppercase">Key Color</label>
+                                        <label className="text-2xs font-bold text-gray-400 ">Key Color</label>
                                         <div className="flex items-center gap-2">
                                             <button 
                                                 onClick={() => setIsPicking(!isPicking)}
@@ -294,7 +294,7 @@ export const EnvironmentMaskTool: React.FC<EnvironmentMaskToolProps> = ({ modelI
                                     </div>
 
                                     <div className="space-y-1">
-                                        <div className="flex justify-between text-[10px] text-gray-400">
+                                        <div className="flex justify-between text-2xs text-gray-400">
                                             <span>Threshold</span> <span>{threshold.toFixed(2)}</span>
                                         </div>
                                         <input 
@@ -307,7 +307,7 @@ export const EnvironmentMaskTool: React.FC<EnvironmentMaskToolProps> = ({ modelI
                                     </div>
 
                                     <div className="space-y-1">
-                                        <div className="flex justify-between text-[10px] text-gray-400">
+                                        <div className="flex justify-between text-2xs text-gray-400">
                                             <span>Smoothness</span> <span>{smoothness.toFixed(2)}</span>
                                         </div>
                                         <input 
@@ -319,7 +319,7 @@ export const EnvironmentMaskTool: React.FC<EnvironmentMaskToolProps> = ({ modelI
                                         />
                                     </div>
 
-                                    <label className="flex items-center gap-2 text-[10px] text-gray-300 cursor-pointer select-none pt-1">
+                                    <label className="flex items-center gap-2 text-2xs text-gray-300 cursor-pointer select-none pt-1">
                                         <input 
                                             type="checkbox" 
                                             checked={inverted} 

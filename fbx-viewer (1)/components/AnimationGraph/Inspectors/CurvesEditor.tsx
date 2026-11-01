@@ -51,7 +51,7 @@ export const CurvesEditor: React.FC<CurvesEditorProps> = ({ curves, onChange, va
     return (
         <div className="space-y-3">
             <div className="flex items-center justify-between px-1">
-                <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider flex items-center gap-1.5">
+                <label className="text-2xs text-gray-500 font-bold flex items-center gap-1.5">
                     <Spline size={10} /> Curves
                 </label>
                 <button
@@ -61,7 +61,7 @@ export const CurvesEditor: React.FC<CurvesEditorProps> = ({ curves, onChange, va
                         keys: [{ time: 0, value: 0 }, { time: clipDuration && clipDuration > 0 ? clipDuration : 1, value: 1 }],
                     }])}
                     aria-label="Add curve"
-                    className="text-[10px] px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-gray-300 hover:text-white transition-colors flex items-center gap-1"
+                    className="text-2xs px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-gray-300 hover:text-white transition-colors flex items-center gap-1"
                 >
                     <Plus size={10} /> Add
                 </button>
@@ -123,7 +123,7 @@ export const CurvesEditor: React.FC<CurvesEditorProps> = ({ curves, onChange, va
                                     const time = Math.min(duration, (last?.time ?? 0) + duration / 4);
                                     updateCurve(curve.id, { keys: [...curve.keys, { time, value: last?.value ?? 0 }] });
                                 }}
-                                className="w-full text-[10px] py-1 rounded border border-dashed border-gray-700 text-gray-400 hover:text-white hover:border-gray-500 transition-colors"
+                                className="w-full text-2xs py-1 rounded border border-dashed border-gray-700 text-gray-400 hover:text-white hover:border-gray-500 transition-colors"
                             >
                                 Add key
                             </button>
@@ -132,7 +132,7 @@ export const CurvesEditor: React.FC<CurvesEditorProps> = ({ curves, onChange, va
                 })}
                 {curves.length === 0 && (
                     <div className="text-center py-4 border border-dashed border-gray-800 rounded bg-gray-900/50">
-                        <p className="text-[10px] text-gray-600">No curves. A curve sets a variable from the clip&apos;s time while this state plays (a Boolean is on above 0.5), so transitions and other systems can follow it.</p>
+                        <p className="text-2xs text-gray-600">No curves. A curve sets a variable from the clip&apos;s time while this state plays (a Boolean is on above 0.5), so transitions and other systems can follow it.</p>
                     </div>
                 )}
             </div>

@@ -580,7 +580,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
     return (
         <div
             ref={containerRef}
-            className="relative w-full h-full bg-[#111]"
+            className="relative w-full h-full bg-well"
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
@@ -589,40 +589,40 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
             {/* HTML Layout Grid for View Tracking */}
             <div className="absolute inset-0 w-full h-full flex flex-col pointer-events-none">
                 {layout === 'single' ? (
-                    <div className="relative w-full h-full bg-[#111] pointer-events-auto border-b border-gray-800">
+                    <div className="relative w-full h-full bg-well pointer-events-auto border-b border-gray-800">
                         <div ref={viewMain} className="w-full h-full" onMouseDown={() => setActiveView('main')} />
-                        <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'main' ? 'bg-blue-600 text-accent-ink' : 'bg-black/70 text-gray-200'}`}>
-                            PERSPECTIVE
+                        <div className={`absolute top-2 left-2 text-2xs font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'main' ? 'bg-blue-600 text-accent-ink' : 'bg-black/55 text-gray-200'}`}>
+                            Perspective
                         </div>
                     </div>
                 ) : (
                     <div className="w-full h-full grid grid-cols-2 grid-rows-2 gap-0.5 bg-gray-800 pointer-events-auto">
                         {/* 1. TOP LEFT -> LEFT View */}
-                        <div className="relative bg-[#111]">
+                        <div className="relative bg-well">
                             <div ref={viewLeft} className="w-full h-full" onMouseDown={() => setActiveView('left')} />
-                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'left' ? 'bg-blue-600 text-accent-ink' : 'bg-black/70 text-gray-200'}`}>
-                                LEFT
+                            <div className={`absolute top-2 left-2 text-2xs font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'left' ? 'bg-blue-600 text-accent-ink' : 'bg-black/55 text-gray-200'}`}>
+                                Left
                             </div>
                         </div>
                         {/* 2. TOP RIGHT -> RIGHT View */}
-                        <div className="relative bg-[#111]">
+                        <div className="relative bg-well">
                             <div ref={viewRight} className="w-full h-full" onMouseDown={() => setActiveView('right')} />
-                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'right' ? 'bg-blue-600 text-accent-ink' : 'bg-black/70 text-gray-200'}`}>
-                                RIGHT
+                            <div className={`absolute top-2 left-2 text-2xs font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'right' ? 'bg-blue-600 text-accent-ink' : 'bg-black/55 text-gray-200'}`}>
+                                Right
                             </div>
                         </div>
                         {/* 3. BOTTOM LEFT -> TOP View */}
-                        <div className="relative bg-[#111]">
+                        <div className="relative bg-well">
                             <div ref={viewTop} className="w-full h-full" onMouseDown={() => setActiveView('top')} />
-                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'top' ? 'bg-blue-600 text-accent-ink' : 'bg-black/70 text-gray-200'}`}>
+                            <div className={`absolute top-2 left-2 text-2xs font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'top' ? 'bg-blue-600 text-accent-ink' : 'bg-black/55 text-gray-200'}`}>
                                 TOP
                             </div>
                         </div>
                         {/* 4. BOTTOM RIGHT -> BOTTOM View */}
-                        <div className="relative bg-[#111]">
+                        <div className="relative bg-well">
                             <div ref={viewBottom} className="w-full h-full" onMouseDown={() => setActiveView('bottom')} />
-                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'bottom' ? 'bg-blue-600 text-accent-ink' : 'bg-black/70 text-gray-200'}`}>
-                                BOTTOM
+                            <div className={`absolute top-2 left-2 text-2xs font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'bottom' ? 'bg-blue-600 text-accent-ink' : 'bg-black/55 text-gray-200'}`}>
+                                Bottom
                             </div>
                         </div>
                     </div>

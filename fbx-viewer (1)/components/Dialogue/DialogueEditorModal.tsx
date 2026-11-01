@@ -19,7 +19,7 @@ const INPUT = 'w-full bg-gray-950 border border-gray-700 rounded px-2 py-1 text-
 
 const Field: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
     <label className="block space-y-1">
-        <span className="text-[10px] text-gray-400">{label}</span>
+        <span className="text-2xs text-gray-400">{label}</span>
         {children}
     </label>
 );
@@ -109,7 +109,7 @@ export const DialogueEditorModal: React.FC<DialogueEditorModalProps> = ({ dialog
             role="dialog"
             aria-modal="true"
             aria-label="Dialogue editor"
-            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 outline-none"
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 p-4 outline-none"
             onKeyDown={(event) => {
                 event.stopPropagation();
                 handleKey(event);
@@ -125,7 +125,7 @@ export const DialogueEditorModal: React.FC<DialogueEditorModalProps> = ({ dialog
                         <MessageSquare size={18} className="text-sky-400 shrink-0" />
                         <div className="min-w-0">
                             <h2 className="text-sm font-bold text-white">Dialogue</h2>
-                            <p className="text-[10px] text-gray-500 truncate">
+                            <p className="text-2xs text-gray-500 truncate">
                                 {subtitle ? `${subtitle} · ` : ''}A line continues to the next one, or offers choices that each lead somewhere
                             </p>
                         </div>
@@ -146,11 +146,11 @@ export const DialogueEditorModal: React.FC<DialogueEditorModalProps> = ({ dialog
                                     >
                                         {item.id === draft.startId && <Flag size={10} className="text-emerald-400 shrink-0" aria-label="Start line" />}
                                         <span className="truncate">{lineLabel(draft, item.id)}</span>
-                                        {item.choices?.length ? <span className="ml-auto shrink-0 text-[10px] text-gray-500">{item.choices.length} choices</span> : null}
+                                        {item.choices?.length ? <span className="ml-auto shrink-0 text-2xs text-gray-500">{item.choices.length} choices</span> : null}
                                     </button>
                                 </li>
                             ))}
-                            {!draft.lines.length && <li className="px-2 py-4 text-center text-[11px] text-gray-500">No lines yet.</li>}
+                            {!draft.lines.length && <li className="px-2 py-4 text-center text-2xs text-gray-500">No lines yet.</li>}
                         </ul>
                         <div className="border-t border-gray-800 p-2">
                             <button
@@ -170,8 +170,8 @@ export const DialogueEditorModal: React.FC<DialogueEditorModalProps> = ({ dialog
                                 <div className="flex items-center gap-2">
                                     <h3 className="text-xs font-bold text-white">Line {draft.lines.indexOf(line) + 1}</h3>
                                     {line.id === draft.startId
-                                        ? <span className="flex items-center gap-1 text-[10px] text-emerald-400"><Flag size={10} /> Start line</span>
-                                        : <button type="button" onClick={() => setDraft({ ...draft, startId: line.id })} className="text-[10px] text-gray-400 hover:text-emerald-300">Start here</button>}
+                                        ? <span className="flex items-center gap-1 text-2xs text-emerald-400"><Flag size={10} /> Start line</span>
+                                        : <button type="button" onClick={() => setDraft({ ...draft, startId: line.id })} className="text-2xs text-gray-400 hover:text-emerald-300">Start here</button>}
                                     <div className="ml-auto flex items-center gap-1">
                                         <button type="button" aria-label="Move line up" onClick={() => setDraft(moveLine(draft, line.id, -1))} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white"><ArrowUp size={12} /></button>
                                         <button type="button" aria-label="Move line down" onClick={() => setDraft(moveLine(draft, line.id, 1))} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white"><ArrowDown size={12} /></button>
@@ -198,21 +198,21 @@ export const DialogueEditorModal: React.FC<DialogueEditorModalProps> = ({ dialog
 
                                 <div className="space-y-2">
                                     <div className="flex items-center justify-between">
-                                        <h4 className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Choices</h4>
+                                        <h4 className="text-2xs font-bold text-gray-500">Choices</h4>
                                         <button
                                             type="button"
                                             onClick={() => setDraft(addChoice(draft, line.id))}
                                             disabled={(line.choices?.length ?? 0) >= DIALOGUE_LIMITS.maxChoices}
-                                            className="flex items-center gap-1 rounded px-2 py-1 text-[10px] text-sky-300 hover:bg-sky-900/30 disabled:opacity-40"
+                                            className="flex items-center gap-1 rounded px-2 py-1 text-2xs text-sky-300 hover:bg-sky-900/30 disabled:opacity-40"
                                         >
                                             <Plus size={10} /> Add Choice
                                         </button>
                                     </div>
-                                    {!line.choices?.length && <p className="text-[10px] text-gray-500">No choices: the player continues to the next line.</p>}
+                                    {!line.choices?.length && <p className="text-2xs text-gray-500">No choices: the player continues to the next line.</p>}
                                     {line.choices?.map((choice, index) => (
                                         <div key={choice.id} className="space-y-2 rounded border border-gray-700/60 bg-gray-950/40 p-2">
                                             <div className="flex items-center gap-2">
-                                                <span className="text-[10px] font-mono text-gray-500">{index + 1}</span>
+                                                <span className="text-2xs font-mono text-gray-500">{index + 1}</span>
                                                 <input aria-label={`Choice ${index + 1} text`} value={choice.text} maxLength={DIALOGUE_LIMITS.maxChoiceText} onChange={(event) => setDraft(updateChoice(draft, line.id, choice.id, { text: event.target.value }))} className={INPUT} placeholder="What the player says" />
                                                 <button type="button" aria-label={`Delete choice ${index + 1}`} onClick={() => setDraft(removeChoice(draft, line.id, choice.id))} className="rounded p-1 text-gray-500 hover:bg-red-900/40 hover:text-red-300"><Trash2 size={12} /></button>
                                             </div>
@@ -241,7 +241,7 @@ export const DialogueEditorModal: React.FC<DialogueEditorModalProps> = ({ dialog
                 </div>
 
                 <div className="flex items-center justify-between gap-3 border-t border-gray-800 bg-gray-950 px-5 py-3">
-                    <div className="flex min-w-0 items-center gap-3 text-[11px]">
+                    <div className="flex min-w-0 items-center gap-3 text-2xs">
                         <span className={dirty ? 'text-amber-400' : 'text-gray-500'}>{dirty ? 'Unsaved changes' : 'No changes'}</span>
                         {problems.length > 0 && (
                             <span className="flex items-center gap-1 text-amber-300 truncate" title={problems.join('\n')}>
@@ -259,7 +259,7 @@ export const DialogueEditorModal: React.FC<DialogueEditorModalProps> = ({ dialog
                     <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60">
                         <div role="alertdialog" aria-modal="true" aria-label="Discard changes" className="w-80 space-y-3 rounded-lg border border-gray-700 bg-gray-900 p-4 shadow-2xl">
                             <div className="flex items-center gap-2 text-sm font-bold text-white"><AlertTriangle size={14} className="text-amber-400" /> Discard changes?</div>
-                            <p className="text-[11px] text-gray-400">The edits made to this dialogue have not been saved.</p>
+                            <p className="text-2xs text-gray-400">The edits made to this dialogue have not been saved.</p>
                             <div className="flex justify-end gap-2">
                                 <button type="button" autoFocus onClick={keepEditing} className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800">Keep Editing</button>
                                 <button type="button" onClick={onClose} className="rounded bg-red-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-red-500">Discard</button>

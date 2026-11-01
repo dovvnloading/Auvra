@@ -92,7 +92,7 @@ export const EnvironmentToolbar: React.FC<EnvironmentToolbarProps> = ({ state, a
                                 <button onClick={() => updateTransformSettings({ tool: 'rotate' })} title="Rotate Tool (E)" className={`p-1.5 rounded ${transformSettings.tool === 'rotate' ? 'bg-gray-700 text-white' : 'text-gray-500'}`}><RotateCw size={14}/></button>
                                 <button onClick={() => updateTransformSettings({ tool: 'scale' })} title="Scale Tool (R)" className={`p-1.5 rounded ${transformSettings.tool === 'scale' ? 'bg-gray-700 text-white' : 'text-gray-500'}`}><Scaling size={14}/></button>
                             </div>
-                            <button onClick={() => updateTransformSettings({ space: transformSettings.space === 'world' ? 'local' : 'world' })} title="Toggle Global/Local Space (Z)" className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-gray-400 hover:text-white bg-gray-900 px-2 py-1.5 rounded border border-gray-800">{transformSettings.space === 'world' ? <Globe size={12} /> : <Box size={12} />} {transformSettings.space}</button>
+                            <button onClick={() => updateTransformSettings({ space: transformSettings.space === 'world' ? 'local' : 'world' })} title="Toggle Global/Local Space (Z)" className="flex items-center gap-2 text-2xs font-bold text-gray-400 hover:text-white bg-gray-900 px-2 py-1.5 rounded border border-gray-800">{transformSettings.space === 'world' ? <Globe size={12} /> : <Box size={12} />} {transformSettings.space}</button>
                         </div>
                     </>
                 )}
@@ -209,7 +209,7 @@ export const EnvironmentToolbar: React.FC<EnvironmentToolbarProps> = ({ state, a
                                                             updateTransformSettings({ snapGrid: opt.value });
                                                             setShowGridMenu(false);
                                                         }}
-                                                        className={`text-[10px] py-1.5 px-3 text-left hover:bg-gray-800 transition-colors ${transformSettings.snapGrid === opt.value ? 'text-blue-400 font-bold bg-blue-900/10' : 'text-gray-300'}`}
+                                                        className={`text-2xs py-1.5 px-3 text-left hover:bg-gray-800 transition-colors ${transformSettings.snapGrid === opt.value ? 'text-blue-400 font-bold bg-blue-900/10' : 'text-gray-300'}`}
                                                     >
                                                         {opt.label}
                                                     </button>
@@ -231,7 +231,7 @@ export const EnvironmentToolbar: React.FC<EnvironmentToolbarProps> = ({ state, a
                         className="flex items-center gap-2 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-accent-ink rounded-l font-bold text-xs transition-colors"
                         title="Play the level from its Player Start"
                     >
-                        <Play size={14} fill="currentColor" /> PLAY LEVEL
+                        <Play size={14} fill="currentColor" /> Play level
                     </button>
                     <button
                         onClick={() => actions.handlePlayStart(true)}

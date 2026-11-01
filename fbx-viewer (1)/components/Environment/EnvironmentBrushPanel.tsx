@@ -40,14 +40,14 @@ export const EnvironmentBrushPanel: React.FC<EnvironmentBrushPanelProps> = ({
                 <div className="bg-gray-800 p-1 rounded-lg flex border border-gray-700">
                     <button
                         onClick={() => setMode('add')}
-                        className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all ${mode === 'add' ? 'bg-emerald-600 text-white shadow-sm' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
+                        className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded-md text-2xs font-bold transition-all ${mode === 'add' ? 'bg-emerald-600 text-white shadow-sm' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
                         title="Add objects"
                     >
                         <Brush size={12} /> Paint
                     </button>
                     <button
                         onClick={() => setMode('erase')}
-                        className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all ${mode === 'erase' ? 'bg-red-600 text-white shadow-sm' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
+                        className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded-md text-2xs font-bold transition-all ${mode === 'erase' ? 'bg-red-600 text-white shadow-sm' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
                         title="Remove objects"
                     >
                         <Eraser size={12} /> Erase
@@ -56,7 +56,7 @@ export const EnvironmentBrushPanel: React.FC<EnvironmentBrushPanelProps> = ({
 
                 {/* Brush Settings */}
                 <div className="space-y-3">
-                    <div className="flex items-center gap-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider border-b border-gray-800 pb-1">
+                    <div className="flex items-center gap-2 text-2xs font-bold text-gray-500 border-b border-gray-800 pb-1">
                         <CircleDashed size={12} /> Brush Properties
                     </div>
                     
@@ -91,7 +91,7 @@ export const EnvironmentBrushPanel: React.FC<EnvironmentBrushPanelProps> = ({
                 {/* Variation Settings (Add Mode Only) */}
                 {mode === 'add' && (
                     <div className="space-y-3 pt-2">
-                        <div className="flex items-center gap-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider border-b border-gray-800 pb-1">
+                        <div className="flex items-center gap-2 text-2xs font-bold text-gray-500 border-b border-gray-800 pb-1">
                             <Grip size={12} /> Instance Variation
                         </div>
 

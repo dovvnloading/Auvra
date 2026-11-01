@@ -144,7 +144,7 @@ export const BakedLightingSection: React.FC<{ levelId: string | null }> = ({ lev
                     <Sun size={14} className="text-amber-400" /> Baked Lighting
                 </span>
                 {probes && !bakingThis && (
-                    <span className={`text-[10px] ${outOfDate ? 'text-amber-400' : 'text-gray-500'}`} title={probes.bakedAt}>
+                    <span className={`text-2xs ${outOfDate ? 'text-amber-400' : 'text-gray-500'}`} title={probes.bakedAt}>
                         {outOfDate ? 'Out of date' : `Baked ${describeAge(probes.bakedAt)}`}
                     </span>
                 )}
@@ -164,7 +164,7 @@ export const BakedLightingSection: React.FC<{ levelId: string | null }> = ({ lev
             </div>
             {bakingThis ? (
                 <div className="space-y-1">
-                    <div className="flex items-center justify-between text-[10px] text-gray-400">
+                    <div className="flex items-center justify-between text-2xs text-gray-400">
                         <span className="flex items-center gap-1"><Loader2 size={10} className="animate-spin" /> {stage}</span>
                         <span>{fraction}%</span>
                     </div>
@@ -173,7 +173,7 @@ export const BakedLightingSection: React.FC<{ levelId: string | null }> = ({ lev
                     </div>
                     <button
                         onClick={() => lightBakeJobs.cancel()}
-                        className="w-full flex items-center justify-center gap-1 py-1 rounded text-[11px] text-gray-300 bg-gray-800 hover:bg-gray-700"
+                        className="w-full flex items-center justify-center gap-1 py-1 rounded text-2xs text-gray-300 bg-gray-800 hover:bg-gray-700"
                         aria-label="Cancel light bake"
                     >
                         <X size={11} /> Cancel
@@ -184,7 +184,7 @@ export const BakedLightingSection: React.FC<{ levelId: string | null }> = ({ lev
                     <button
                         onClick={() => void runBake()}
                         disabled={!writable || baking}
-                        className="flex-1 py-1 rounded text-[11px] font-bold text-white bg-amber-600 hover:bg-amber-500 disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed"
+                        className="flex-1 py-1 rounded text-2xs font-bold text-white bg-amber-600 hover:bg-amber-500 disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed"
                         title={writable ? 'Bake the light of the level\'s static geometry, lights and sky into light probes' : 'Open this level to bake its lighting'}
                         aria-label="Bake lighting"
                     >
@@ -194,7 +194,7 @@ export const BakedLightingSection: React.FC<{ levelId: string | null }> = ({ lev
                         <button
                             onClick={clear}
                             disabled={!writable || baking}
-                            className="px-2 py-1 rounded text-[11px] text-gray-300 bg-gray-800 hover:bg-gray-700 disabled:text-gray-600 disabled:cursor-not-allowed"
+                            className="px-2 py-1 rounded text-2xs text-gray-300 bg-gray-800 hover:bg-gray-700 disabled:text-gray-600 disabled:cursor-not-allowed"
                             title="Remove the baked light; the level is lit by its sky fill alone"
                             aria-label="Clear baked lighting"
                         >
@@ -204,12 +204,12 @@ export const BakedLightingSection: React.FC<{ levelId: string | null }> = ({ lev
                 </div>
             )}
             {probes && !bakingThis && (
-                <p className="text-[10px] text-gray-500">
+                <p className="text-2xs text-gray-500">
                     {(probes.counts[0] * probes.counts[1] * probes.counts[2]).toLocaleString()} probes, {probes.spacing.toFixed(2)} apart
                     {probes.spacing > settings.spacing + 1e-6 && ' (widened to stay within the probe limit)'}
                 </p>
             )}
-            {error && <p className="text-[10px] text-red-400">{error}</p>}
+            {error && <p className="text-2xs text-red-400">{error}</p>}
         </div>
     );
 };

@@ -64,9 +64,9 @@ const NodeInspector: React.FC<{
     const blendMode = node.type === OUTPUT_NODE_TYPE ? materialGraphSettings({ nodes: [node], links: [] }).blendMode : null;
     return (
         <div className="space-y-2 rounded border border-gray-800 bg-gray-900/60 p-2">
-            <div className="text-[11px] font-bold text-gray-200">{title ?? definition.label}</div>
-            <p className="text-[10px] leading-snug text-gray-500">{definition.description}</p>
-            {params.length === 0 && <p className="text-[10px] text-gray-500">No settings.</p>}
+            <div className="text-2xs font-bold text-gray-200">{title ?? definition.label}</div>
+            <p className="text-2xs leading-snug text-gray-500">{definition.description}</p>
+            {params.length === 0 && <p className="text-2xs text-gray-500">No settings.</p>}
             {params.map(param => {
                 // The clip only matters to a masked material.
                 if (param.key === 'alphaClip' && blendMode !== 'masked') return null;
@@ -82,7 +82,7 @@ const NodeInspector: React.FC<{
             })}
             {PARAMETER_NODE_PARAMS[node.type] && (
                 <label className="block space-y-1" title="Name this value to let each model material using the asset set its own">
-                    <span className="text-[10px] uppercase text-gray-500">Parameter name</span>
+                    <span className="text-2xs text-gray-500">Parameter name</span>
                     <input
                         aria-label="Parameter name"
                         value={node.parameter ?? ''}
@@ -264,11 +264,11 @@ export const MaterialGraphEditor: React.FC = () => {
         <div className="flex h-full min-h-0 w-full bg-gray-950 text-white">
             <aside className="flex w-56 shrink-0 flex-col border-r border-gray-800">
                 <div className="flex items-center justify-between border-b border-gray-800 px-3 py-2">
-                    <span className="text-xs font-bold uppercase tracking-wider text-gray-400">Materials</span>
-                    <button onClick={create} aria-label="New material" className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-[11px] text-gray-200 hover:bg-gray-700"><Plus size={12} /> New</button>
+                    <span className="text-xs font-bold text-gray-400">Materials</span>
+                    <button onClick={create} aria-label="New material" className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-700"><Plus size={12} /> New</button>
                 </div>
                 <div className="flex-1 overflow-y-auto p-2">
-                    {assets.length === 0 && <p className="px-1 text-[11px] text-gray-500">No materials yet. A material is a node graph; give one to a model's material in the Retexture tab.</p>}
+                    {assets.length === 0 && <p className="px-1 text-2xs text-gray-500">No materials yet. A material is a node graph; give one to a model's material in the Retexture tab.</p>}
                     {assets.map(candidate => (
                         <button
                             key={candidate.id}
@@ -306,13 +306,13 @@ export const MaterialGraphEditor: React.FC = () => {
                         <MaterialPreview assetId={asset.id} graph={shadingGraph ?? graph} previewNodeIds={previewNodeIds} />
                         {shaderError && (
                             <div role="alert" className="rounded border border-red-900 bg-red-950/60 p-2">
-                                <div className="mb-1 flex items-center gap-1 text-[11px] font-bold text-red-300"><AlertTriangle size={12} /> The shader does not compile</div>
-                                <pre className="max-h-40 overflow-auto whitespace-pre-wrap font-mono text-[10px] leading-4 text-red-200">{shaderError}</pre>
+                                <div className="mb-1 flex items-center gap-1 text-2xs font-bold text-red-300"><AlertTriangle size={12} /> The shader does not compile</div>
+                                <pre className="max-h-40 overflow-auto whitespace-pre-wrap font-mono text-2xs leading-4 text-red-200">{shaderError}</pre>
                             </div>
                         )}
-                        {error && <p className="text-[11px] text-amber-400">{error}</p>}
+                        {error && <p className="text-2xs text-amber-400">{error}</p>}
                         {analysis && (
-                            <p className="text-[10px] text-gray-500">
+                            <p className="text-2xs text-gray-500">
                                 {graph.nodes.length} nodes · {analysis.statements} shader statements{analysis.unused.size ? ` · ${analysis.unused.size} unused` : ''}
                             </p>
                         )}
@@ -321,16 +321,16 @@ export const MaterialGraphEditor: React.FC = () => {
                             <NodeInspector key={single.id} node={single} textures={textures} onChangeNode={changeNode} />
                         ) : selected.size > 1 ? (
                             <div className="space-y-2 rounded border border-gray-800 bg-gray-900/60 p-2">
-                                <div className="text-[11px] font-bold text-gray-200">{selected.size} nodes selected</div>
+                                <div className="text-2xs font-bold text-gray-200">{selected.size} nodes selected</div>
                                 <div className="flex gap-2">
-                                    <button onClick={() => { update(removeNodes(graph, selected), true); select([]); }} className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-[11px] text-gray-200 hover:bg-red-900"><Trash2 size={12} /> Delete</button>
+                                    <button onClick={() => { update(removeNodes(graph, selected), true); select([]); }} className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-red-900"><Trash2 size={12} /> Delete</button>
                                     <button
                                         onClick={() => {
                                             const created = createComment(graph.nodes.filter(node => selected.has(node.id)).map(node => nodeRect(node, previews)), { x: 0, y: 0 });
                                             update(withComments(graph, [...(graph.comments ?? []), created]), true);
                                             select([], created.id);
                                         }}
-                                        className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-[11px] text-gray-200 hover:bg-gray-700"
+                                        className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-700"
                                     >
                                         <MessageSquarePlus size={12} /> Comment
                                     </button>
@@ -338,7 +338,7 @@ export const MaterialGraphEditor: React.FC = () => {
                             </div>
                         ) : comment ? (
                             <div className="space-y-2 rounded border border-gray-800 bg-gray-900/60 p-2">
-                                <div className="text-[11px] font-bold text-gray-200">Comment</div>
+                                <div className="text-2xs font-bold text-gray-200">Comment</div>
                                 <textarea aria-label="Comment text" value={comment.text} maxLength={MAX_COMMENT_LENGTH} rows={2} onChange={(event) => changeComment({ text: event.target.value })} className="w-full rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white" />
                                 <div className="flex flex-wrap gap-1">
                                     {COMMENT_COLORS.map(color => (
@@ -350,7 +350,7 @@ export const MaterialGraphEditor: React.FC = () => {
                         ) : outputNode ? (
                             <NodeInspector key={outputNode.id} node={outputNode} textures={textures} title="Material" onChangeNode={changeNode} />
                         ) : null}
-                        <p className="text-[10px] leading-snug text-gray-600">
+                        <p className="text-2xs leading-snug text-gray-600">
                             Right-click the canvas (or press Space) to add a node where the pointer is. Drag from a pin to wire it, or drop a wire on empty space to pick a node for it. Select nothing to set the material itself.
                         </p>
                     </aside>

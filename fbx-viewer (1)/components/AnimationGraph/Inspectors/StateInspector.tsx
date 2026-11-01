@@ -56,11 +56,11 @@ const curveVariableOptions = [
                     <div className="min-w-0 flex-1">
                         <h3 className="text-sm font-bold text-white truncate">{node.name}</h3>
                         <div className="flex items-center gap-2 mt-1">
-                            <span className="text-[10px] text-gray-400 bg-gray-800 px-1.5 py-0.5 rounded border border-gray-700 uppercase tracking-wider">
+                            <span className="text-2xs text-gray-400 bg-gray-800 px-1.5 py-0.5 rounded border border-gray-700 ">
                                 State
                             </span>
                             {node.isRoot && (
-                                <span className="text-[10px] text-gray-200 bg-gray-700 px-1.5 py-0.5 rounded border border-gray-600 uppercase tracking-wider">
+                                <span className="text-2xs text-gray-200 bg-gray-700 px-1.5 py-0.5 rounded border border-gray-600 ">
                                     Entry
                                 </span>
                             )}
@@ -73,7 +73,7 @@ const curveVariableOptions = [
                 {/* Basic Info */}
                 <div className="space-y-3">
                     <div className="space-y-1.5">
-                        <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider flex items-center gap-1.5">
+                        <label className="text-2xs text-gray-500 font-bold flex items-center gap-1.5">
                             <Settings size={10} /> Name
                         </label>
                         <input 
@@ -86,7 +86,7 @@ const curveVariableOptions = [
 
                 {/* State Type Selector */}
                 <div className="space-y-1.5">
-                    <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider flex items-center gap-1.5">
+                    <label className="text-2xs text-gray-500 font-bold flex items-center gap-1.5">
                         <Activity size={10} /> Type
                     </label>
                     <div className="flex bg-gray-900 p-0.5 rounded border border-gray-700">
@@ -97,7 +97,7 @@ const curveVariableOptions = [
                                     ? { stateType: type, subGraph: newSubStateMachine(node.clipName) }
                                     : { stateType: type })}
                                 aria-pressed={node.stateType === type}
-                                className={`flex-1 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded transition-all ${node.stateType === type ? 'bg-gray-700 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
+                                className={`flex-1 py-1.5 text-2xs font-bold rounded transition-all ${node.stateType === type ? 'bg-gray-700 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
                             >
                                 {label}
                             </button>
@@ -107,7 +107,7 @@ const curveVariableOptions = [
 
                 {/* Sync Group */}
                 {!machine && !conduit && <div className="space-y-1.5">
-                    <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider flex items-center gap-1.5">
+                    <label className="text-2xs text-gray-500 font-bold flex items-center gap-1.5">
                         <Link2 size={10} /> Sync Group
                     </label>
                     <input
@@ -117,13 +117,13 @@ const curveVariableOptions = [
                         aria-label="Sync group"
                         className="w-full bg-gray-900 border border-gray-700 rounded text-xs text-gray-300 p-2 focus:outline-none focus:border-gray-500 transition-colors"
                     />
-                    <p className="text-[10px] text-gray-600">States in one group carry their phase across transitions, so a run picks up the walk's stride.</p>
+                    <p className="text-2xs text-gray-600">States in one group carry their phase across transitions, so a run picks up the walk's stride.</p>
                 </div>}
 
                 {/* Match ground speed */}
                 {!machine && !conduit && <div className="space-y-1.5">
                     <label className="flex items-center justify-between gap-2 cursor-pointer">
-                        <span className="text-[10px] uppercase text-gray-500 font-bold tracking-wider">Match Ground Speed</span>
+                        <span className="text-2xs text-gray-500 font-bold ">Match Ground Speed</span>
                         <input
                             type="checkbox"
                             checked={!!node.matchSpeed}
@@ -132,7 +132,7 @@ const curveVariableOptions = [
                             className="accent-blue-500"
                         />
                     </label>
-                    <p className="text-[10px] text-gray-600">Plays the clips as fast as the character really moves, read from their feet, so planted feet do not slide. Not with root motion.</p>
+                    <p className="text-2xs text-gray-600">Plays the clips as fast as the character really moves, read from their feet, so planted feet do not slide. Not with root motion.</p>
                 </div>}
 
                 {/* Configuration based on Type */}
@@ -141,7 +141,7 @@ const curveVariableOptions = [
                         <span className="text-xs font-medium text-gray-200 flex items-center gap-2">
                             <GitFork size={12} className="text-gray-400" /> Conduit
                         </span>
-                        <p className="text-[10px] text-gray-500 leading-relaxed">
+                        <p className="text-2xs text-gray-500 leading-relaxed">
                             A junction with no animation. A transition into it is taken only when one of its own transitions
                             is ready too, and the character goes straight through to that one&apos;s state with its crossfade.
                             Use it to share exit rules between several states.
@@ -152,7 +152,7 @@ const curveVariableOptions = [
                         <span className="text-xs font-medium text-gray-200 flex items-center gap-2">
                             <Network size={12} className="text-gray-400" /> {innerStateCount(node)} {innerStateCount(node) === 1 ? 'state' : 'states'} inside
                         </span>
-                        <p className="text-[10px] text-gray-500 leading-relaxed">
+                        <p className="text-2xs text-gray-500 leading-relaxed">
                             Entering this state starts its entry state; its own transitions run while any state inside plays,
                             and transitions from this state leave from wherever it is.
                         </p>

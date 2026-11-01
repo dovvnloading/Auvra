@@ -63,7 +63,7 @@ export const PlayToolbar: React.FC<PlayToolbarProps> = ({ paused, onResume, onSt
 
     if (!paused) {
         return (
-            <div className="pointer-events-none absolute top-2 left-1/2 -translate-x-1/2 z-40 px-2 py-1 rounded bg-black/40 text-[10px] text-gray-400">
+            <div className="pointer-events-none absolute top-2 left-1/2 -translate-x-1/2 z-40 px-2 py-1 rounded bg-black/40 text-2xs text-gray-400">
                 Esc: pause
             </div>
         );
@@ -72,7 +72,7 @@ export const PlayToolbar: React.FC<PlayToolbarProps> = ({ paused, onResume, onSt
     return (
         <>
             <div className="absolute top-2 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1 p-1 rounded-lg bg-gray-900/95 border border-gray-700 shadow-xl cursor-default" role="toolbar" aria-label="Play controls">
-                <span className="flex items-center gap-1.5 px-2 text-[10px] font-bold uppercase tracking-wider text-amber-400">
+                <span className="flex items-center gap-1.5 px-2 text-2xs font-bold text-amber-400">
                     <span className="w-2 h-2 rounded-full bg-amber-400" /> Paused
                 </span>
                 <button type="button" onClick={onResume} className={`${BUTTON} bg-green-700 hover:bg-green-600 text-white`} title="Resume (F8)">
@@ -112,9 +112,9 @@ export const PlayToolbar: React.FC<PlayToolbarProps> = ({ paused, onResume, onSt
                         </button>
                     </div>
                     <div className="flex-1 overflow-y-auto p-1 space-y-1">
-                        {rows.length === 0 && <div className="p-2 text-[10px] text-gray-500 italic">No drawn level objects match.</div>}
+                        {rows.length === 0 && <div className="p-2 text-2xs text-gray-500 italic">No drawn level objects match.</div>}
                         {rows.map(row => (
-                            <div key={row.id} className="px-2 py-1.5 rounded bg-gray-800/60 text-[10px] font-mono">
+                            <div key={row.id} className="px-2 py-1.5 rounded bg-gray-800/60 text-2xs font-mono">
                                 <div className="flex items-center gap-1.5 font-sans text-xs font-bold text-gray-200">
                                     {row.visible ? <Eye size={10} className="text-gray-500" /> : <EyeOff size={10} className="text-amber-500" />}
                                     <span className="truncate">{row.name}</span>
@@ -124,7 +124,7 @@ export const PlayToolbar: React.FC<PlayToolbarProps> = ({ paused, onResume, onSt
                             </div>
                         ))}
                     </div>
-                    <div className="p-2 border-t border-gray-700 text-[10px] text-gray-500">
+                    <div className="p-2 border-t border-gray-700 text-2xs text-gray-500">
                         World transforms of objects drawn as their own group (with components, children or a timeline). Step to watch them change.
                     </div>
                 </div>

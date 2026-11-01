@@ -180,7 +180,7 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
 
             {/* 3D Viewport with Overlays */}
             <div className="flex-1 bg-black relative border-r border-gray-800 overflow-hidden">
-                <div className="absolute top-4 left-4 z-10 bg-black/50 backdrop-blur px-3 py-1 rounded-full text-[10px] text-gray-400 border border-white/10 flex items-center gap-2">
+                <div className="absolute top-4 left-4 z-10 bg-black/50 px-3 py-1 rounded-full text-2xs text-gray-400 border border-white/10 flex items-center gap-2">
                     <Eye size={10} /> Mesh Preview
                 </div>
                 {pickLabel && (
@@ -189,7 +189,7 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
                     </div>
                 )}
                 {attachmentPlacements && (
-                    <div className="absolute top-4 right-4 z-10 flexrounded-full border border-white/10 bg-black/50 backdrop-blur text-[10px] overflow-hidden">
+                    <div className="absolute top-4 right-4 z-10 flexrounded-full border border-white/10 bg-black/50 text-2xs overflow-hidden">
                         {([[false, 'Weapons at rest'], [true, 'Weapon in use']] as const).map(([inUse, label]) => (
                             <button
                                 key={label}
@@ -218,17 +218,17 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
                 )}
                 
                 {/* Mesh Selector Overlay */}
-                <div className="absolute bottom-4 left-4 right-4 bg-gray-900/95 backdrop-blur p-0 rounded-xl border border-gray-700 shadow-2xl max-w-lg mx-auto overflow-visible">
+                <div className="absolute bottom-4 left-4 right-4 bg-gray-900/95 p-0 rounded-xl border border-gray-700 shadow-2xl max-w-lg mx-auto overflow-visible">
                     <div className="p-4 border-b border-gray-800 flex items-center justify-between">
                         <div className="flex items-center gap-3">
                             <Box size={16} className="text-gray-400" />
-                            <span className="text-xs font-bold text-gray-200">LINKED MESH</span>
+                            <span className="text-xs font-bold text-gray-200">Linked mesh</span>
                         </div>
                         {linkedModel && (
                             <button
                                 type="button"
                                 onClick={() => matchClips(linkedModel, false)}
-                                className="flex items-center gap-1.5 text-[10px] font-bold text-gray-300 hover:text-white bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1 transition-colors"
+                                className="flex items-center gap-1.5 text-2xs font-bold text-gray-300 hover:text-white bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1 transition-colors"
                                 title="Give each animation state the clip of this mesh whose name fits it (Idle, Walk, Run, Jump, Falling, Land, Attack, Death...), where the state has none or one this mesh lacks"
                             >
                                 <Wand2 size={12} /> Match Clips
@@ -249,7 +249,7 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
                                         </div>
                                         <div className="text-left">
                                             <div className="font-bold text-xs">{linkedModel.name}</div>
-                                            <div className="text-[9px] text-gray-400 uppercase">{linkedModel.category}</div>
+                                            <div className="text-2xs text-gray-400 ">{linkedModel.category}</div>
                                         </div>
                                     </div>
                                 ) : (
@@ -293,7 +293,7 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
                                                 </div>
                                                 <div className="flex-1 min-w-0">
                                                     <div className={`text-xs font-bold truncate ${linkedModel?.id === m.id ? 'text-blue-400' : 'text-gray-300'}`}>{m.name}</div>
-                                                    <div className="text-[9px] text-gray-500 uppercase">{m.category}</div>
+                                                    <div className="text-2xs text-gray-500 ">{m.category}</div>
                                                 </div>
                                                 {linkedModel?.id === m.id && <Check size={14} className="text-blue-500" />}
                                             </div>
@@ -303,7 +303,7 @@ export const BlueprintViewport: React.FC<BlueprintViewportProps> = ({
                             )}
                         </div>
 
-                        <p className="text-[10px] text-gray-500 mt-3 leading-relaxed">
+                        <p className="text-2xs text-gray-500 mt-3 leading-relaxed">
                             Select the skeletal mesh (FBX) that this blueprint controls. 
                             <br/>Animations will be previewed on this mesh. Linking it gives each state the mesh's clip whose name fits.
                         </p>

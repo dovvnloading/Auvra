@@ -21,7 +21,7 @@ const UEToast: React.FC<{ notification: Notification; onDismiss: (id: string) =>
     return (
         <div className="relative group w-80 animate-in slide-in-from-right-10 fade-in duration-300">
             {/* Main Card */}
-            <div className="flex bg-[#1b1b1b] border border-[#050505] shadow-xl overflow-hidden min-h-[50px]">
+            <div className="flex bg-panel border border-[#050505] shadow-xl overflow-hidden min-h-[50px]">
                 
                 {/* Status Strip (Left) */}
                 <div className={`w-1 shrink-0 ${NOTIFICATION_COLORS[notification.type]}`} />
@@ -34,7 +34,7 @@ const UEToast: React.FC<{ notification: Notification; onDismiss: (id: string) =>
                         </div>
                         <div className="flex-1 min-w-0">
                             {/* Title / Type Label (UE Style) */}
-                            <div className="text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-0.5">
+                            <div className="text-2xs font-bold text-gray-500 mb-0.5">
                                 {notification.type}
                             </div>
                             {/* Message */}

@@ -72,13 +72,13 @@ export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
                 <div className="flex bg-gray-900 rounded p-0.5 border border-gray-700 mr-2 shrink-0">
                     <button
                         onClick={() => onTabChange('models')}
-                        className={`flex items-center gap-1 px-3 py-1 text-[10px] rounded font-bold transition-colors ${activeTab === 'models' ? 'bg-gray-700 text-white shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}
+                        className={`flex items-center gap-1 px-3 py-1 text-2xs rounded font-bold transition-colors ${activeTab === 'models' ? 'bg-gray-700 text-white shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}
                     >
                         <Component size={12} /> Library
                     </button>
                     <button
                         onClick={() => onTabChange('blueprints')}
-                        className={`flex items-center gap-1 px-3 py-1 text-[10px] rounded font-bold transition-colors ${activeTab === 'blueprints' ? 'bg-gray-700 text-white shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}
+                        className={`flex items-center gap-1 px-3 py-1 text-2xs rounded font-bold transition-colors ${activeTab === 'blueprints' ? 'bg-gray-700 text-white shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}
                     >
                         <FileCode size={12} /> Blueprints
                     </button>
@@ -106,7 +106,7 @@ export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
                                 <>
                                     <div className="fixed inset-0 z-40" onClick={() => setIsImportOpen(false)} />
                                     <div className="absolute bottom-full left-0 mb-2 w-48 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-50 overflow-hidden py-1">
-                                        <div className="px-3 py-2 text-[10px] uppercase text-gray-500 font-bold tracking-wider border-b border-gray-700/50 mb-1">Asset Type</div>
+                                        <div className="px-3 py-2 text-2xs text-gray-500 font-bold border-b border-gray-700/50 mb-1">Asset Type</div>
                                         {(['Character', 'Prop', 'Environment', 'Weapon', 'Animation', 'Texture', 'Audio'] as AssetCategory[]).map(cat => {
                                             const animationUnavailable = cat === 'Animation' && !animationTargetName;
                                             return (
@@ -124,7 +124,7 @@ export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
                                                 {cat === 'Audio' && <Music size={14} className="text-gray-500 group-hover:text-white" />}
                                                 <span className="text-sm text-gray-300 group-hover:text-white flex-1">{cat}</span>
                                                 {cat === 'Animation' && (
-                                                    <span className="max-w-20 truncate text-[9px] text-gray-500">
+                                                    <span className="max-w-20 truncate text-2xs text-gray-500">
                                                         {animationTargetName ? `→ ${animationTargetName}` : 'select target'}
                                                     </span>
                                                 )}
@@ -158,7 +158,7 @@ export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
                                 <button
                                     key={f}
                                     onClick={() => onFilterChange(f)}
-                                    className={`px-3 py-1 text-[10px] rounded font-medium transition-colors whitespace-nowrap ${filter === f ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+                                    className={`px-3 py-1 text-2xs rounded font-medium transition-colors whitespace-nowrap ${filter === f ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}
                                 >
                                     {f}
                                 </button>

@@ -47,7 +47,7 @@ export const GraphNode: React.FC<GraphNodeProps> = ({
                     <span className={`text-xs font-bold truncate ${state.isRoot ? 'text-amber-100' : 'text-gray-200'}`}>{state.name}</span>
                 </div>
                 {isActive && (
-                    <span className="flex items-center gap-1 shrink-0 text-[8px] font-bold uppercase tracking-wider text-green-400" title="The preview is in this state">
+                    <span className="flex items-center gap-1 shrink-0 text-2xs font-bold text-green-400" title="The preview is in this state">
                         <span className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)] animate-pulse"></span>
                         Active
                     </span>
@@ -55,7 +55,7 @@ export const GraphNode: React.FC<GraphNodeProps> = ({
             </div>
             
             {/* Body */}
-            <div className="p-3 text-[10px] text-gray-400 space-y-2">
+            <div className="p-3 text-2xs text-gray-400 space-y-2">
                 {conduit ? (
                     <div className="flex items-center gap-1.5 text-amber-200/80 bg-amber-950/20 px-2 py-1 rounded border border-dashed border-amber-800/40">
                         <GitFork size={8} />
@@ -82,7 +82,7 @@ export const GraphNode: React.FC<GraphNodeProps> = ({
                 
                 <div className="flex items-center justify-between pt-1 border-t border-gray-800/50">
                     <span className="text-gray-600">ID: {state.id.substring(0,4)}</span>
-                    {state.loop && <span className="px-1.5 py-0.5 bg-gray-800 rounded text-gray-400 font-mono text-[8px]">LOOP</span>}
+                    {state.loop && <span className="px-1.5 py-0.5 bg-gray-800 rounded text-gray-400 font-mono text-2xs">Loop</span>}
                 </div>
             </div>
         </div>

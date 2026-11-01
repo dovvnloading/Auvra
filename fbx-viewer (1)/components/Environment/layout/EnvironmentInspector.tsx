@@ -43,7 +43,7 @@ type ObjectUpdate = Partial<LevelObject>;
 
 const AXES = ['X', 'Y', 'Z'] as const;
 const AXIS_COLORS = ['text-red-400', 'text-green-400', 'text-blue-400'];
-const SECTION_TITLE = 'text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5';
+const SECTION_TITLE = 'text-2xs font-bold text-gray-500 flex items-center gap-1.5';
 const MIN_ABS_SCALE = 0.001;
 const MULTI_SELECTION_NAME_LIMIT = 8;
 /** What a new Enemy Spawner starts with: no enemy chosen yet, one every 5 s, no limit. */
@@ -142,14 +142,14 @@ const TerrainInspector: React.FC<{
                 <div className="flex border-b border-gray-800 bg-gray-950">
                     <button 
                         onClick={() => setActiveTab('create')}
-                        className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 border-b-2 transition-colors ${activeTab === 'create' ? 'border-amber-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+                        className={`flex-1 py-3 text-2xs font-bold flex items-center justify-center gap-2 border-b-2 transition-colors ${activeTab === 'create' ? 'border-amber-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
                     >
                         <Layers size={12} /> Manage
                     </button>
                     <button 
                         onClick={() => setActiveTab('sculpt')}
                         disabled={!existingTerrain}
-                        className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 border-b-2 transition-colors ${activeTab === 'sculpt' ? 'border-amber-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed'}`}
+                        className={`flex-1 py-3 text-2xs font-bold flex items-center justify-center gap-2 border-b-2 transition-colors ${activeTab === 'sculpt' ? 'border-amber-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed'}`}
                     >
                         <Hammer size={12} /> Sculpt
                     </button>
@@ -159,7 +159,7 @@ const TerrainInspector: React.FC<{
                     
                     {activeTab === 'create' && (
                         <div className="space-y-4">
-                            <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
+                            <div className="text-2xs font-bold text-gray-500 flex items-center gap-2">
                                 <Mountain size={12} /> Terrain Generation
                             </div>
 
@@ -170,7 +170,7 @@ const TerrainInspector: React.FC<{
                                     </div>
                                     <div className="space-y-1">
                                         <h4 className="text-xs font-bold text-white">Terrain Active</h4>
-                                        <p className="text-[10px] text-gray-400 leading-relaxed">
+                                        <p className="text-2xs text-gray-400 leading-relaxed">
                                             Only one terrain object is allowed per scene. Select the existing terrain to sculpt it, or delete it to create a new one.
                                         </p>
                                     </div>
@@ -220,12 +220,12 @@ const TerrainInspector: React.FC<{
                                                     />
                                                     <span className="text-xs font-mono text-white w-10 text-right">{createRes}</span>
                                                 </div>
-                                                <div className="text-[9px] text-gray-500 flex justify-between">
+                                                <div className="text-2xs text-gray-500 flex justify-between">
                                                     <span>Low Poly</span>
                                                     <span>High Detail (Heavy)</span>
                                                 </div>
                                             </div>
-                                            <p className="text-[9px] text-gray-500 leading-tight pl-1">
+                                            <p className="text-2xs text-gray-500 leading-tight pl-1">
                                                 Higher resolution allows for smoother sculpting but may impact performance.
                                             </p>
                                         </div>
@@ -248,7 +248,7 @@ const TerrainInspector: React.FC<{
                                 <>
                                     {/* Brush Settings */}
                                     <div className="space-y-3">
-                                        <div className="flex items-center gap-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider border-b border-gray-800 pb-1">
+                                        <div className="flex items-center gap-2 text-2xs font-bold text-gray-500 border-b border-gray-800 pb-1">
                                             <CircleDashed size={12} /> Brush Settings
                                         </div>
                                         <div className="space-y-2">
@@ -269,7 +269,7 @@ const TerrainInspector: React.FC<{
 
                                     {/* Tools */}
                                     <div className="space-y-3">
-                                        <div className="flex items-center gap-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider border-b border-gray-800 pb-1">
+                                        <div className="flex items-center gap-2 text-2xs font-bold text-gray-500 border-b border-gray-800 pb-1">
                                             <Hammer size={12} /> Tools
                                         </div>
                                         <div className="grid grid-cols-2 gap-2">
@@ -277,31 +277,31 @@ const TerrainInspector: React.FC<{
                                                 onClick={() => actions.setSculptSettings({ ...sculptSettings, tool: 'raise' })}
                                                 className={`p-2 rounded border flex flex-col items-center gap-1 transition-all ${sculptSettings.tool === 'raise' ? 'bg-amber-600/20 border-amber-500 text-amber-400' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}
                                             >
-                                                <ArrowUp size={16} /> <span className="text-[10px] font-bold uppercase">Raise</span>
+                                                <ArrowUp size={16} /> <span className="text-2xs font-bold ">Raise</span>
                                             </button>
                                             <button 
                                                 onClick={() => actions.setSculptSettings({ ...sculptSettings, tool: 'lower' })}
                                                 className={`p-2 rounded border flex flex-col items-center gap-1 transition-all ${sculptSettings.tool === 'lower' ? 'bg-red-600/20 border-red-500 text-red-400' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}
                                             >
-                                                <ArrowDown size={16} /> <span className="text-[10px] font-bold uppercase">Lower</span>
+                                                <ArrowDown size={16} /> <span className="text-2xs font-bold ">Lower</span>
                                             </button>
                                             <button 
                                                 onClick={() => actions.setSculptSettings({ ...sculptSettings, tool: 'flatten' })}
                                                 className={`p-2 rounded border flex flex-col items-center gap-1 transition-all ${sculptSettings.tool === 'flatten' ? 'bg-blue-600/20 border-blue-500 text-blue-400' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}
                                             >
-                                                <Minus size={16} /> <span className="text-[10px] font-bold uppercase">Flatten</span>
+                                                <Minus size={16} /> <span className="text-2xs font-bold ">Flatten</span>
                                             </button>
                                             <button 
                                                 onClick={() => actions.setSculptSettings({ ...sculptSettings, tool: 'smooth' })}
                                                 className={`p-2 rounded border flex flex-col items-center gap-1 transition-all ${sculptSettings.tool === 'smooth' ? 'bg-green-600/20 border-green-500 text-green-400' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}
                                             >
-                                                <Wind size={16} /> <span className="text-[10px] font-bold uppercase">Smooth</span>
+                                                <Wind size={16} /> <span className="text-2xs font-bold ">Smooth</span>
                                             </button>
                                             <button
                                                 onClick={() => actions.setSculptSettings({ ...sculptSettings, tool: 'paint' })}
                                                 className={`col-span-2 p-2 rounded border flex flex-col items-center gap-1 transition-all ${sculptSettings.tool === 'paint' ? 'bg-purple-600/20 border-purple-500 text-purple-400' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}
                                             >
-                                                <Brush size={16} /> <span className="text-[10px] font-bold uppercase">Paint</span>
+                                                <Brush size={16} /> <span className="text-2xs font-bold ">Paint</span>
                                             </button>
                                         </div>
 
@@ -352,10 +352,10 @@ const TransformFields: React.FC<{
         <div className="space-y-3 pt-2 border-t border-gray-800/50">
             <div className="flex items-center justify-between">
                 <div className={SECTION_TITLE}><Move size={12} /> Transform</div>
-                {object.parentId && <span className="text-[9px] text-gray-500">Local to parent</span>}
+                {object.parentId && <span className="text-2xs text-gray-500">Local to parent</span>}
             </div>
             <div className="space-y-1">
-                <div className="text-[10px] text-gray-400">Position</div>
+                <div className="text-2xs text-gray-400">Position</div>
                 <div className="grid grid-cols-3 gap-1">
                     {AXES.map((axis, i) => (
                         <ScrubbableInput
@@ -370,7 +370,7 @@ const TransformFields: React.FC<{
                 </div>
             </div>
             <div className="space-y-1">
-                <div className="text-[10px] text-gray-400 flex items-center gap-1"><RotateCw size={10} /> Rotation (Degrees)</div>
+                <div className="text-2xs text-gray-400 flex items-center gap-1"><RotateCw size={10} /> Rotation (Degrees)</div>
                 {/* LevelObject.rotation is stored in radians; degrees are presentation only. */}
                 <div className="grid grid-cols-3 gap-1">
                     {AXES.map((axis, i) => (
@@ -390,7 +390,7 @@ const TransformFields: React.FC<{
             </div>
             {showScale && (
                 <div className="space-y-1">
-                    <div className="text-[10px] text-gray-400 flex items-center gap-1"><Scaling size={10} /> Scale</div>
+                    <div className="text-2xs text-gray-400 flex items-center gap-1"><Scaling size={10} /> Scale</div>
                     <div className="grid grid-cols-3 gap-1">
                         {AXES.map((axis, i) => (
                             <ScrubbableInput
@@ -471,7 +471,7 @@ const clampToSchema = (value: number, schema: ComponentPropSchema) =>
 
 const PropRow: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
     <div className="flex items-center justify-between gap-2">
-        <span className="text-[10px] text-gray-400 truncate" title={label}>{label}</span>
+        <span className="text-2xs text-gray-400 truncate" title={label}>{label}</span>
         {children}
     </div>
 );
@@ -521,7 +521,7 @@ const ComponentPropField: React.FC<{
                     <input
                         value={readString(value, schema.default)}
                         onChange={(e) => onChange(e.target.value, true)}
-                        className="w-32 bg-gray-950 border border-gray-800 rounded px-2 h-7 text-[11px] text-white focus:border-blue-500 focus:outline-none"
+                        className="w-32 bg-gray-950 border border-gray-800 rounded px-2 h-7 text-2xs text-white focus:border-blue-500 focus:outline-none"
                         aria-label={schema.label}
                     />
                 </PropRow>
@@ -542,7 +542,7 @@ const ComponentPropField: React.FC<{
             const current = readVector(value, schema.default);
             return (
                 <div className="space-y-1">
-                    <span className="text-[10px] text-gray-400">{schema.label}</span>
+                    <span className="text-2xs text-gray-400">{schema.label}</span>
                     <div className="grid grid-cols-3 gap-1">
                         {AXES.map((axis, i) => (
                             <ScrubbableInput
@@ -571,7 +571,7 @@ const ComponentPropField: React.FC<{
                     <select
                         value={readString(value, schema.default)}
                         onChange={(e) => onChange(e.target.value, false)}
-                        className="w-32 bg-gray-950 border border-gray-800 rounded px-1 h-7 text-[11px] text-white focus:outline-none focus:border-blue-500"
+                        className="w-32 bg-gray-950 border border-gray-800 rounded px-1 h-7 text-2xs text-white focus:outline-none focus:border-blue-500"
                         aria-label={schema.label}
                     >
                         {(schema.options ?? []).map(option => (
@@ -601,7 +601,7 @@ const ComponentsSection: React.FC<{
             <div className={SECTION_TITLE}><Puzzle size={12} /> Components</div>
 
             {components.length === 0 && (
-                <div className="text-[10px] text-gray-500 italic">No components. Add one to give this object lights or behaviour.</div>
+                <div className="text-2xs text-gray-500 italic">No components. Add one to give this object lights or behaviour.</div>
             )}
 
             {components.map(component => {
@@ -642,10 +642,10 @@ const ComponentsSection: React.FC<{
                                         }}
                                     />
                                 )) : (
-                                    <div className="text-[10px] text-gray-500">{definition.description}</div>
+                                    <div className="text-2xs text-gray-500">{definition.description}</div>
                                 )
                             ) : (
-                                <div className="text-[10px] text-amber-400">Unknown component type "{component.type}". Its settings are kept but it has no effect.</div>
+                                <div className="text-2xs text-amber-400">Unknown component type "{component.type}". Its settings are kept but it has no effect.</div>
                             )}
                             {definition?.Inspector && (
                                 <definition.Inspector
@@ -683,7 +683,7 @@ const ComponentsSection: React.FC<{
                                 className="w-full text-left px-3 py-2 hover:bg-gray-800 transition-colors"
                             >
                                 <div className="text-xs font-bold text-gray-200">{definition.label}</div>
-                                <div className="text-[10px] text-gray-500 leading-snug">{definition.description}</div>
+                                <div className="text-2xs text-gray-500 leading-snug">{definition.description}</div>
                             </button>
                         ))}
                     </div>
@@ -763,7 +763,7 @@ const MultiSelectionInspector: React.FC<{
         });
     };
 
-    const applyButton = 'shrink-0 px-2 h-7 rounded text-[10px] font-bold uppercase bg-blue-600 hover:bg-blue-500 text-accent-ink disabled:opacity-30 disabled:cursor-not-allowed transition-colors';
+    const applyButton = 'shrink-0 px-2 h-7 rounded text-2xs font-bold bg-blue-600 hover:bg-blue-500 text-accent-ink disabled:opacity-30 disabled:cursor-not-allowed transition-colors';
     const shown = selection.slice(0, MULTI_SELECTION_NAME_LIMIT);
 
     return (
@@ -783,17 +783,17 @@ const MultiSelectionInspector: React.FC<{
                         <div className={SECTION_TITLE}><Layers size={12} /> Selection</div>
                         <ul className="space-y-0.5">
                             {shown.map(object => (
-                                <li key={object.id} className="flex items-center justify-between text-[11px] text-gray-300 bg-gray-800/40 rounded px-2 py-1">
+                                <li key={object.id} className="flex items-center justify-between text-2xs text-gray-300 bg-gray-800/40 rounded px-2 py-1">
                                     <span className="truncate">{object.name || object.type}</span>
-                                    {object.id === primaryId && <span className="text-[9px] text-blue-400 uppercase font-bold">Primary</span>}
+                                    {object.id === primaryId && <span className="text-2xs text-blue-400 font-bold">Primary</span>}
                                 </li>
                             ))}
                         </ul>
                         {selection.length > shown.length && (
-                            <div className="text-[10px] text-gray-500">+{selection.length - shown.length} more</div>
+                            <div className="text-2xs text-gray-500">+{selection.length - shown.length} more</div>
                         )}
                         {roots.length < selection.length && (
-                            <div className="text-[10px] text-gray-500 leading-relaxed">
+                            <div className="text-2xs text-gray-500 leading-relaxed">
                                 {selection.length - roots.length} selected object(s) follow a selected parent and are not offset separately.
                             </div>
                         )}
@@ -802,7 +802,7 @@ const MultiSelectionInspector: React.FC<{
                     <div className="space-y-3 pt-2 border-t border-gray-800/50">
                         <div className={SECTION_TITLE}><Move size={12} /> Shared Transform</div>
                         <div className="space-y-1">
-                            <div className="text-[10px] text-gray-400">Move By (World)</div>
+                            <div className="text-2xs text-gray-400">Move By (World)</div>
                             <div className="flex gap-1">
                                 <div className="grid grid-cols-3 gap-1 flex-1">
                                     {AXES.map((axis, i) => (
@@ -813,7 +813,7 @@ const MultiSelectionInspector: React.FC<{
                             </div>
                         </div>
                         <div className="space-y-1">
-                            <div className="text-[10px] text-gray-400">Rotate By (Degrees, Local)</div>
+                            <div className="text-2xs text-gray-400">Rotate By (Degrees, Local)</div>
                             <div className="flex gap-1">
                                 <div className="grid grid-cols-3 gap-1 flex-1">
                                     {AXES.map((axis, i) => (
@@ -824,7 +824,7 @@ const MultiSelectionInspector: React.FC<{
                             </div>
                         </div>
                         <div className="space-y-1">
-                            <div className="text-[10px] text-gray-400">Scale By (Factor)</div>
+                            <div className="text-2xs text-gray-400">Scale By (Factor)</div>
                             <div className="flex gap-1">
                                 <div className="flex-1">
                                     <ScrubbableInput label="x" value={scaleBy} onChange={(v) => { if (Number.isFinite(v)) setScaleBy(v); }} step={0.1} />
@@ -941,7 +941,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                     {/* Properties */}
                     <div className="p-4 space-y-6 overflow-y-auto custom-scrollbar flex-1">
                         <div className="space-y-2">
-                            <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Object Name</label>
+                            <label className="text-2xs font-bold text-gray-500 ">Object Name</label>
                             <input
                                 value={selectedObject.name}
                                 onChange={(e) => scrubUpdate({ name: e.target.value })}
@@ -958,7 +958,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                         )}
 
                         {isPlayerStart && (
-                            <p className="text-[10px] text-gray-500 leading-relaxed">
+                            <p className="text-2xs text-gray-500 leading-relaxed">
                                 The player spawns here when the level starts, facing the green arrow. Only one Player Start is used per level.
                             </p>
                         )}
@@ -968,9 +968,9 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                 <div>Resolution: {selectedObject.terrainData?.resolution}</div>
                                 <div>Size: {selectedObject.terrainData?.width}m x {selectedObject.terrainData?.depth}m</div>
                                 {isTerrainHeightfieldPending(selectedObject.terrainData) ? (
-                                    <div className="pt-2 text-[10px] italic text-amber-400">Loading terrain heights; sculpting is unavailable until they load.</div>
+                                    <div className="pt-2 text-2xs italic text-amber-400">Loading terrain heights; sculpting is unavailable until they load.</div>
                                 ) : (
-                                    <div className="pt-2 text-[10px] italic">Switch to Terrain Mode to sculpt geometry.</div>
+                                    <div className="pt-2 text-2xs italic">Switch to Terrain Mode to sculpt geometry.</div>
                                 )}
                             </div>
                         )}
@@ -981,10 +981,10 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                 {/* Time of Day */}
                                 <div className="space-y-2">
                                     <div className="flex justify-between items-center">
-                                        <span className="text-[10px] font-bold text-cyan-400 uppercase flex items-center gap-1.5">
+                                        <span className="text-2xs font-bold text-cyan-400 flex items-center gap-1.5">
                                             <Timer size={12} /> Time of Day
                                         </span>
-                                        <span className="text-[10px] font-mono text-white">
+                                        <span className="text-2xs font-mono text-white">
                                             {Math.floor(selectedObject.skyConfig.timeOfDay)}:{Math.floor((selectedObject.skyConfig.timeOfDay % 1) * 60).toString().padStart(2, '0')}
                                         </span>
                                     </div>
@@ -995,7 +995,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                             onChange={(e) => scrubUpdate({ skyConfig: { ...selectedObject.skyConfig!, timeOfDay: parseFloat(e.target.value) } })}
                                             className="w-full h-1.5 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-cyan-400"
                                         />
-                                        <div className="flex justify-between text-[8px] text-gray-500 mt-1">
+                                        <div className="flex justify-between text-2xs text-gray-500 mt-1">
                                             <span>0:00</span><span>6:00</span><span>12:00</span><span>18:00</span><span>24:00</span>
                                         </div>
                                         <DayPreviewControls hour={selectedObject.skyConfig.timeOfDay} onHour={(hours) => commitUpdate({ skyConfig: { ...selectedObject.skyConfig!, timeOfDay: hours } })} />
@@ -1018,7 +1018,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
 
                                 {/* Atmosphere: the analytic sky's own controls */}
                                 {skyModel(selectedObject.skyConfig) === 'classic' && <div className="space-y-2">
-                                    <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
+                                    <div className="text-2xs font-bold text-gray-500 flex items-center gap-1.5">
                                         <Wind size={12} /> Atmosphere
                                     </div>
                                     <div className="grid grid-cols-2 gap-2">
@@ -1051,25 +1051,25 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
 
                                 {/* Lighting & Fog */}
                                 <div className="space-y-2">
-                                    <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
+                                    <div className="text-2xs font-bold text-gray-500 flex items-center gap-1.5">
                                         <Sun size={12} /> Light & Fog
                                     </div>
                                     <div className="space-y-2 bg-gray-800 p-2 rounded border border-gray-700">
                                         <div className="flex items-center justify-between">
-                                            <span className="text-[10px] text-gray-400">Sun Intensity</span>
+                                            <span className="text-2xs text-gray-400">Sun Intensity</span>
                                             <div className="w-16">
                                                 <ScrubbableInput label="" value={selectedObject.skyConfig.sunIntensity} onChange={(v) => scrubUpdate({ skyConfig: { ...selectedObject.skyConfig!, sunIntensity: Math.max(0, v) } })} step={0.1} labelWidth="w-0" />
                                             </div>
                                         </div>
                                         <div className="flex items-center justify-between">
-                                            <span className="text-[10px] text-gray-400">Ambience</span>
+                                            <span className="text-2xs text-gray-400">Ambience</span>
                                             <div className="w-16">
                                                 <ScrubbableInput label="" value={selectedObject.skyConfig.ambienceIntensity} onChange={(v) => scrubUpdate({ skyConfig: { ...selectedObject.skyConfig!, ambienceIntensity: Math.max(0, v) } })} step={0.1} labelWidth="w-0" />
                                             </div>
                                         </div>
 
                                         <div className="flex items-center justify-between" title="How far from the camera the sun casts shadows. 0 keeps them near what the camera looks at.">
-                                            <span className="text-[10px] text-gray-400">Shadow Distance</span>
+                                            <span className="text-2xs text-gray-400">Shadow Distance</span>
                                             <div className="w-16">
                                                 <ScrubbableInput label="" value={selectedObject.skyConfig.shadowDistance ?? DEFAULT_SHADOW_DISTANCE} onChange={(v) => scrubUpdate({ skyConfig: { ...selectedObject.skyConfig!, shadowDistance: Math.min(2000, Math.max(0, Math.round(v))) } })} step={10} labelWidth="w-0" />
                                             </div>
@@ -1078,13 +1078,13 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                         <div className="h-px bg-gray-700 my-1" />
 
                                         <div className="flex items-center justify-between">
-                                            <span className="text-[10px] text-gray-400 flex items-center gap-1"><CloudFog size={10}/> Fog Density</span>
+                                            <span className="text-2xs text-gray-400 flex items-center gap-1"><CloudFog size={10}/> Fog Density</span>
                                             <div className="w-16">
                                                 <ScrubbableInput label="" value={selectedObject.skyConfig.fogDensity} onChange={(v) => scrubUpdate({ skyConfig: { ...selectedObject.skyConfig!, fogDensity: Math.max(0, v) } })} step={0.001} labelWidth="w-0" />
                                             </div>
                                         </div>
                                         <div className="flex items-center justify-between">
-                                            <span className="text-[10px] text-gray-400">Fog Color</span>
+                                            <span className="text-2xs text-gray-400">Fog Color</span>
                                             <input
                                                 type="color"
                                                 value={selectedObject.skyConfig.fogColor}
@@ -1114,11 +1114,11 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                             return (
                                 <div className="space-y-4 pt-2 border-t border-gray-800/50">
                                     <div className="space-y-3 bg-red-950/20 p-3 rounded border border-red-900/30">
-                                        <div className="flex items-center gap-2 text-xs font-bold text-red-400 uppercase tracking-wide">
+                                        <div className="flex items-center gap-2 text-xs font-bold text-red-400 ">
                                             <Users size={12} /> Spawning
                                         </div>
                                         <div className="space-y-1">
-                                            <label className="text-[10px] font-medium text-gray-400 flex items-center gap-1.5">
+                                            <label className="text-2xs font-medium text-gray-400 flex items-center gap-1.5">
                                                 <UserPlus size={10} /> Enemy
                                             </label>
                                             <select
@@ -1133,7 +1133,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                                 ))}
                                             </select>
                                             {!spawn.blueprintId || missing ? (
-                                                <p className="text-[10px] text-amber-400 flex items-start gap-1.5 pt-1">
+                                                <p className="text-2xs text-amber-400 flex items-start gap-1.5 pt-1">
                                                     <AlertTriangle size={10} className="shrink-0 mt-0.5" />
                                                     {enemies.length
                                                         ? 'Choose an enemy. The spawner creates nothing until one is set.'
@@ -1156,7 +1156,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                             />
                                         </div>
                                         <div className="space-y-1">
-                                            <label className="text-[10px] font-medium text-gray-400 flex items-center gap-1.5">
+                                            <label className="text-2xs font-medium text-gray-400 flex items-center gap-1.5">
                                                 <Route size={10} /> Patrol Path
                                             </label>
                                             <select
@@ -1171,7 +1171,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                                 {splinePaths.map(path => <option key={path.id} value={path.id}>{path.name}</option>)}
                                             </select>
                                         </div>
-                                        <p className="text-[10px] text-gray-500 leading-relaxed flex items-start gap-1.5">
+                                        <p className="text-2xs text-gray-500 leading-relaxed flex items-start gap-1.5">
                                             <Hash size={10} className="shrink-0 mt-0.5" />
                                             {spawn.maxSpawns > 0
                                                 ? `Spawns one enemy every ${spawn.interval} s around this point, ${spawn.maxSpawns} in all.`
@@ -1186,13 +1186,13 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                         {isAudio && (
                             <div className="space-y-4 pt-2 border-t border-gray-800/50">
                                 <div className="space-y-3 bg-amber-950/20 p-3 rounded border border-amber-900/30">
-                                    <div className="flex items-center gap-2 text-xs font-bold text-amber-400 uppercase tracking-wide">
+                                    <div className="flex items-center gap-2 text-xs font-bold text-amber-400 ">
                                         <Volume2 size={12} /> Sound Properties
                                     </div>
 
                                     {/* Audio File Selector */}
                                     <div className="space-y-1">
-                                        <label className="text-[10px] font-medium text-gray-400 flex items-center gap-1.5">
+                                        <label className="text-2xs font-medium text-gray-400 flex items-center gap-1.5">
                                             <Music size={10} /> Source File
                                         </label>
                                         <select
@@ -1238,7 +1238,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
 
                                     {/* Mute Toggle */}
                                     <div className="flex items-center justify-between bg-gray-900 p-2 rounded border border-gray-800">
-                                        <span className="text-[10px] text-gray-400 font-bold uppercase flex items-center gap-1.5">
+                                        <span className="text-2xs text-gray-400 font-bold flex items-center gap-1.5">
                                             <VolumeX size={10} /> Mute
                                         </span>
                                         <input
@@ -1253,7 +1253,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
 
                                     {/* Spatial Toggle */}
                                     <div className="flex items-center justify-between bg-gray-900 p-2 rounded border border-gray-800">
-                                        <span className="text-[10px] text-gray-400 font-bold uppercase flex items-center gap-1.5">
+                                        <span className="text-2xs text-gray-400 font-bold flex items-center gap-1.5">
                                             <Radio size={10} /> 3D Spatial
                                         </span>
                                         <input
@@ -1268,7 +1268,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
 
                                     {/* Loop Toggle */}
                                     <div className="flex items-center justify-between bg-gray-900 p-2 rounded border border-gray-800">
-                                        <span className="text-[10px] text-gray-400 font-bold uppercase flex items-center gap-1.5">
+                                        <span className="text-2xs text-gray-400 font-bold flex items-center gap-1.5">
                                             <Repeat size={10} /> Loop
                                         </span>
                                         <input

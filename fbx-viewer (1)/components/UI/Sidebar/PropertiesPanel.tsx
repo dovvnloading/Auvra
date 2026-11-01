@@ -59,7 +59,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                             </div>
                             <div>
                                 <h3 className="text-sm font-bold text-white truncate max-w-[150px]">{selectedModel.name}</h3>
-                                <span className="text-[10px] text-gray-400 bg-gray-800 px-1.5 py-0.5 rounded border border-gray-700">
+                                <span className="text-2xs text-gray-400 bg-gray-800 px-1.5 py-0.5 rounded border border-gray-700">
                                     {selectedModel.category}
                                 </span>
                             </div>
@@ -70,7 +70,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                             <div className="mt-3 p-2 bg-blue-900/20 border border-blue-800 rounded flex items-center gap-2">
                                 {controllingBlueprint.type === 'Player Character' ? <Shield size={14} className="text-blue-400" /> : <Skull size={14} className="text-red-400" />}
                                 <div className="flex-1 min-w-0">
-                                    <div className="text-[10px] text-gray-400 font-bold uppercase tracking-wide">Controlled By</div>
+                                    <div className="text-2xs text-gray-400 font-bold ">Controlled By</div>
                                     <div className="text-xs text-white truncate font-medium">{controllingBlueprint.name}</div>
                                 </div>
                             </div>
@@ -78,14 +78,14 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                         
                         {/* Material / Texture Quick Actions */}
                         <div className="mt-3 pt-3 border-t border-gray-700/50 flex items-center justify-between">
-                             <div className="text-[10px] text-gray-500 font-semibold uppercase tracking-wider flex items-center gap-1.5">
+                             <div className="text-2xs text-gray-500 font-semibold flex items-center gap-1.5">
                                  <Palette size={12} />
                                  Materials
                              </div>
                              <button
                                 onClick={() => resetModelTexture(selectedModel.id)}
                                 disabled={isLoading}
-                                className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 px-2 py-1 rounded transition-colors border border-gray-700"
+                                className="flex items-center gap-1 text-2xs text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 px-2 py-1 rounded transition-colors border border-gray-700"
                                 title="Reset to original FBX textures"
                              >
                                  <RotateCcw size={10} className={isLoading ? 'animate-spin' : ''} />
@@ -99,7 +99,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                          <div className="p-4 border-b border-gray-800 text-center">
                              <FileCode size={24} className="mx-auto text-gray-600 mb-2" />
                              <p className="text-xs text-gray-400">Animation driven by Blueprint Graph.</p>
-                             <p className="text-[10px] text-gray-600 mt-1">Manual clip control is disabled.</p>
+                             <p className="text-2xs text-gray-600 mt-1">Manual clip control is disabled.</p>
                          </div>
                     ) : (
                         <AnimationControls 

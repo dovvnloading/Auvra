@@ -12,7 +12,7 @@ export const ViewControls: React.FC<ViewControlsProps> = ({ mode, setMode, onRes
     <div className="absolute top-6 right-6 flex flex-col items-end gap-3 z-30 pointer-events-auto">
         
         {/* Mode Switcher */}
-        <div className="bg-gray-900/90 backdrop-blur-sm border border-gray-700 rounded-lg p-1 flex gap-1 shadow-xl">
+        <div className="bg-gray-900/90 border border-gray-700 rounded-lg p-1 flex gap-1 shadow-xl">
             <button
                 onClick={() => setMode('orbit')}
                 className={`
@@ -37,7 +37,7 @@ export const ViewControls: React.FC<ViewControlsProps> = ({ mode, setMode, onRes
 
         {/* Controls / Info */}
         {mode === 'free' && (
-            <div className="bg-gray-900/80 backdrop-blur-sm border border-gray-700 rounded-lg p-3 text-[10px] text-gray-400 space-y-1 shadow-xl max-w-[200px]">
+            <div className="bg-gray-900/80 border border-gray-700 rounded-lg p-3 text-2xs text-gray-400 space-y-1 shadow-xl max-w-[200px]">
                 <div className="flex items-center gap-2 text-white font-semibold mb-1">
                     <MousePointer2 size={12} />
                     <span>Controls</span>

@@ -221,7 +221,7 @@ export const LevelObjectRenderer = forwardRef<THREE.Group, LevelObjectRendererPr
                     <Billboard position={[0, 2.2, 0]} follow={true} lockX={false} lockY={false} lockZ={false}>
                         <Html transform center style={{ pointerEvents: 'none' }}>
                             <div className="select-none whitespace-nowrap text-sm font-semibold text-white [text-shadow:0_1px_3px_#000,0_0_2px_#000]">
-                                PLAYER START
+                                Player start
                             </div>
                         </Html>
                     </Billboard>

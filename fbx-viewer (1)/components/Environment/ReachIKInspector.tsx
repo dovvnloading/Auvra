@@ -11,7 +11,7 @@ export const ReachIKInspector: React.FC<ComponentInspectorProps> = ({ object, co
     const known = target === 'player' || choices.some(candidate => candidate.id === target);
     return (
         <div className="space-y-1">
-            <label className="flex items-center gap-1 text-[10px] text-gray-400"><Crosshair size={10} /> Reach for</label>
+            <label className="flex items-center gap-1 text-2xs text-gray-400"><Crosshair size={10} /> Reach for</label>
             <select
                 aria-label="Reach for"
                 value={target}
@@ -23,7 +23,7 @@ export const ReachIKInspector: React.FC<ComponentInspectorProps> = ({ object, co
                 {target && !known && <option value={target}>Missing object</option>}
                 {choices.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
             </select>
-            {!target && <p className="text-[10px] text-amber-400">Pick the object the bone reaches for.</p>}
+            {!target && <p className="text-2xs text-amber-400">Pick the object the bone reaches for.</p>}
         </div>
     );
 };

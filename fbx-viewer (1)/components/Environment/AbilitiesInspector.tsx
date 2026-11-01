@@ -18,9 +18,9 @@ import {
 } from '../../runtime/abilities';
 import { ABILITY_INPUTS } from '../../runtime/components/abilitiesComponent';
 
-const FIELD = 'w-full bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-[11px] text-gray-200 focus:outline-none focus:border-amber-500';
-const BUTTON = 'flex items-center justify-center gap-1 px-2 py-0.5 rounded border border-gray-700 bg-gray-800 hover:bg-gray-700 text-[10px] text-gray-200';
-const LABEL = 'text-[10px] text-gray-400';
+const FIELD = 'w-full bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-2xs text-gray-200 focus:outline-none focus:border-amber-500';
+const BUTTON = 'flex items-center justify-center gap-1 px-2 py-0.5 rounded border border-gray-700 bg-gray-800 hover:bg-gray-700 text-2xs text-gray-200';
+const LABEL = 'text-2xs text-gray-400';
 
 /** Text taken on Enter or when the field is left. */
 const TextInput: React.FC<{ label: string; value: string; onCommit: (value: string) => void; placeholder?: string }> = ({ label, value, onCommit, placeholder }) => {
@@ -89,10 +89,10 @@ const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, ch
 const EffectPicker: React.FC<{ label: string; effects: EffectDefinition[]; value: string[]; onCommit: (value: string[]) => void }> = ({ label, effects, value, onCommit }) => (
     <div className="space-y-0.5">
         <div className={LABEL}>{label}</div>
-        {effects.length === 0 && <div className="text-[10px] text-gray-600">No effects yet.</div>}
+        {effects.length === 0 && <div className="text-2xs text-gray-600">No effects yet.</div>}
         <div className="flex flex-wrap gap-x-2 gap-y-0.5">
             {effects.map(effect => (
-                <label key={effect.id} className="flex items-center gap-1 text-[10px] text-gray-300">
+                <label key={effect.id} className="flex items-center gap-1 text-2xs text-gray-300">
                     <input
                         type="checkbox"
                         aria-label={`${label}: ${effect.name}`}
@@ -114,7 +114,7 @@ const Card: React.FC<{ title: string; onRemove: () => void; children: React.Reac
                 <button type="button" aria-label={`${open ? 'Collapse' : 'Expand'} ${title}`} onClick={() => setOpen(!open)} className="text-gray-400 hover:text-gray-200">
                     {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
                 </button>
-                <span className="flex-1 truncate text-[11px] text-gray-200">{title}</span>
+                <span className="flex-1 truncate text-2xs text-gray-200">{title}</span>
                 <button type="button" aria-label={`Remove ${title}`} onClick={onRemove} className="text-gray-500 hover:text-red-400"><Trash2 size={11} /></button>
             </div>
             {open && <div className="space-y-1 border-t border-gray-800 p-1.5">{children}</div>}
@@ -124,7 +124,7 @@ const Card: React.FC<{ title: string; onRemove: () => void; children: React.Reac
 
 const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
     <div className="space-y-1">
-        <div className="text-[10px] font-bold uppercase tracking-wider text-gray-500">{title}</div>
+        <div className="text-2xs font-bold text-gray-500">{title}</div>
         {children}
     </div>
 );
@@ -174,7 +174,7 @@ export const AbilitiesInspector: React.FC<ComponentInspectorProps> = ({ componen
                             <TextInput label={`Attribute ${index + 1} name`} value={attribute.name} onCommit={(name) => updateAttribute(index, { name })} />
                             <button type="button" aria-label={`Remove ${attribute.name}`} onClick={() => commit({ attributes: set.attributes.filter((_, i) => i !== index) })} className="text-gray-500 hover:text-red-400"><Trash2 size={11} /></button>
                         </div>
-                        <div className="grid grid-cols-3 gap-1 text-[9px] text-gray-500">
+                        <div className="grid grid-cols-3 gap-1 text-2xs text-gray-500">
                             <label className="space-y-0.5"><span>Base</span><NumberInput label={`${attribute.name} base`} value={attribute.base} onCommit={(base) => updateAttribute(index, { base })} /></label>
                             <label className="space-y-0.5"><span>Min</span><BoundInput label={`${attribute.name} minimum`} value={attribute.min} onCommit={(min) => updateAttribute(index, { min })} /></label>
                             <label className="space-y-0.5"><span>Max</span><BoundInput label={`${attribute.name} maximum`} value={attribute.max} onCommit={(max) => updateAttribute(index, { max })} /></label>
@@ -184,7 +184,7 @@ export const AbilitiesInspector: React.FC<ComponentInspectorProps> = ({ componen
                     </div>
                 ))}
                 <button type="button" className={BUTTON} onClick={() => commit({ attributes: [...set.attributes, { name: uniqueId(attributeNames, 'attribute'), base: 100, min: 0, max: 100, regen: 0, regenDelay: 0 }] })}><Plus size={10} /> Attribute</button>
-                <p className="text-[10px] text-gray-500">A bound can be another attribute's name (health's maximum is maxHealth). An actor with health takes damage from weapons and blasts, less its armor.</p>
+                <p className="text-2xs text-gray-500">A bound can be another attribute's name (health's maximum is maxHealth). An actor with health takes damage from weapons and blasts, less its armor.</p>
             </Section>
 
             <Section title="Effects">
