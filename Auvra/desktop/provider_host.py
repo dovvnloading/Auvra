@@ -19,6 +19,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from Auvra.diagnostics import trace_public_class
 from typing import Any, Callable, Mapping
 
+from Auvra.desktop.dialogs import DialogUnavailableError, WinFormsProjectDialogs
 from Auvra.host.dispatcher import HostOperationError
 from Auvra.project import InvalidProjectError
 from Auvra.providers import (
@@ -101,6 +102,7 @@ class NativeProviderHost:
         preview_store: Any = None,
         registry: ProviderRegistry | None = None,
         credential_prompt: Any = None,
+        folder_dialogs: Any = None,
         transports: Mapping[str, Any] | None = None,
         adapters: Mapping[str, Any] | None = None,
         executor: ThreadPoolExecutor | None = None,
@@ -126,8 +128,10 @@ class NativeProviderHost:
         # provider's durable settings row, never in a process-global budget.
         self.route_policy = RoutePolicy(self.registry)
         self.prompt = credential_prompt or WinFormsCredentialPrompt()
+        self.folder_dialogs = folder_dialogs or WinFormsProjectDialogs()
         self._ui_invoker: Callable[[Callable[[], Any]], Any] = lambda callback: callback()
         self._key_window: threading.Thread | None = None
+        self._folder_window: threading.Thread | None = None
         self.transports = dict(transports or {})
         self._adapters = dict(adapters or {})
         self._executor = executor or ThreadPoolExecutor(max_workers=2, thread_name_prefix="auvra-provider")
@@ -185,6 +189,7 @@ class NativeProviderHost:
             "provider.getStatus": self._provider_status,
             "provider.configureCredential": self._configure_credential,
             "provider.deleteCredential": self._delete_credential,
+            "provider.chooseFolder": self._choose_folder,
             "provider.configure": self._configure,
             "provider.listModels": self._list_models,
             "provider.health": self._health,
@@ -437,6 +442,37 @@ class NativeProviderHost:
         if descriptor.provider_id not in self._provided_adapters:
             self._adapters.pop(descriptor.provider_id, None)
         return self._provider_status(payload)
+
+    def _choose_folder(self, payload: dict[str, Any]) -> dict[str, Any]:
+        descriptor = self.registry.get(payload["providerId"])
+        adapter = self._adapter(descriptor.provider_id)
+        if not callable(getattr(adapter, "choose_home", None)):
+            raise HostOperationError("invalid_request", "This provider is not kept in a folder")
+        with self._lock:
+            if self._folder_window is not None:
+                raise HostOperationError("locking", "A folder window is already open")
+            self._folder_window = threading.Thread(target=self._ask_for_folder, args=(descriptor, adapter), daemon=True, name="auvra-folder-window")
+            self._folder_window.start()
+        return {"kind": "provider.folder", "providerId": descriptor.provider_id, "waiting": True}
+
+    def _ask_for_folder(self, descriptor: Any, adapter: Any) -> None:
+        """Wait for the folder window apart from the host's one worker, as with the key window. The folder itself never crosses to the page."""
+        label = descriptor.display_name
+        operation, message = "folder.saved", None
+        try:
+            selection = self._ui_invoker(lambda: self.folder_dialogs.choose_folder(f"Choose the folder {label} is kept in"))
+            if selection is None:
+                operation = "folder.cancelled"
+            elif not adapter.choose_home(selection.path):
+                operation, message = "folder.refused", f"{label} is not in that folder. Choose the one with a gi_renderer folder inside it."
+        except DialogUnavailableError:
+            operation, message = "folder.failed", "The folder window could not open on this computer."
+        except Exception:
+            operation, message = "folder.failed", "That folder could not be saved on this computer."
+        with self._lock:
+            self._folder_window = None
+        self._queue("provider.status", {"providerId": descriptor.provider_id, "status": "ready" if adapter.health() else "unconfigured",
+                                        "operation": operation, **({"message": message} if message else {})})
 
     def _configure(self, payload: dict[str, Any]) -> dict[str, Any]:
         descriptor = self.registry.get(payload["providerId"])

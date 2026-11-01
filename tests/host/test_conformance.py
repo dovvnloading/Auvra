@@ -27,7 +27,7 @@ class ConformanceTests(unittest.TestCase):
                 "protocol": "auvra.host/1",
                 "methods": ["host.ping", "host.getCapabilities"],
                 "projectMethods": ["project.getStatus", "project.create", "project.open", "project.openRecent", "project.close", "project.getSnapshot", "project.applyChanges", "project.save", "project.saveAs", "project.exportPack", "project.buildGame", "project.importPack", "project.importLegacy", "asset.beginUpload", "asset.resolve"],
-                "providerMethods": ["provider.list", "provider.getStatus", "provider.configureCredential", "provider.deleteCredential", "provider.configure", "provider.listModels", "provider.health", "inference.submit", "inference.get", "inference.list", "inference.cancel", "inference.retry", "media.discard", "media.commit", "command.preview", "command.approve", "command.undo"],
+                "providerMethods": ["provider.list", "provider.getStatus", "provider.configureCredential", "provider.deleteCredential", "provider.chooseFolder", "provider.configure", "provider.listModels", "provider.health", "inference.submit", "inference.get", "inference.list", "inference.cancel", "inference.retry", "media.discard", "media.commit", "command.preview", "command.approve", "command.undo"],
                 "engineMethods": ["engine.getStatus", "engine.getSnapshot", "engine.applyChanges", "engine.openViewport", "engine.closeViewport", "engine.renderReference", "engine.getMetrics", "engine.recover"],
             },
         }

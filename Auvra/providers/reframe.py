@@ -47,12 +47,19 @@ _STOP_GRACE_SECONDS = 5.0
 _MATERIAL_TEXTURES = {"baseColorTexture": "baseColorTexture", "normalTexture": "normalMap", "roughnessTexture": "roughnessTexture", "metallicTexture": "metallicTexture", "opacityTexture": "opacityTexture"}
 
 
-def find_home() -> Path | None:
-    """Where Reframe is: where the variable says, or where it is usually kept."""
+def holds_reframe(folder: Path) -> bool:
+    """Whether Reframe's renderer is in a folder."""
+    return (folder / _ENGINE_FILE).is_file()
+
+
+def find_home(chosen: Path | None = None) -> Path | None:
+    """Where Reframe is: where the variable says, where someone chose, or where it is usually kept."""
     named = os.environ.get(HOME_VARIABLE, "").strip()
     candidates = [Path(named)] if named else []
+    if chosen is not None:
+        candidates.append(chosen)
     candidates.append(Path.home() / "source" / "repos" / "Reframe-Diffused" / "Reframe-Diffused")
-    return next((folder for folder in candidates if (folder / _ENGINE_FILE).is_file()), None)
+    return next((folder for folder in candidates if holds_reframe(folder)), None)
 
 
 def find_python(home: Path) -> str | None:
@@ -212,13 +219,29 @@ class ReframeAdapter(Adapter):
         super().__init__(transport, credential_store=credential_store, registry=registry, endpoint=endpoint)
         self._jobs_root = Path(jobs_root) if jobs_root is not None else Path.home() / ".auvra-render-jobs"
         self._cache = self._jobs_root.parent / "render-cache"
+        self._chosen_note = self._jobs_root.parent / "reframe-folder.txt"
         self._processes: dict[str, subprocess.Popen[bytes]] = {}
         self._stops: dict[str, float] = {}
         # What an earlier run left: nothing can come back for it.
         shutil.rmtree(self._jobs_root, ignore_errors=True)
 
+    def _chosen_home(self) -> Path | None:
+        try:
+            note = self._chosen_note.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        return Path(note) if note else None
+
+    def choose_home(self, folder: Path) -> bool:
+        """Remembers where Reframe is kept, on this computer and for no project in particular. False if it is not there."""
+        if not holds_reframe(folder):
+            return False
+        self._chosen_note.parent.mkdir(parents=True, exist_ok=True)
+        self._chosen_note.write_text(str(folder), encoding="utf-8")
+        return True
+
     def health(self) -> bool:
-        home = find_home()
+        home = find_home(self._chosen_home())
         return home is not None and find_python(home) is not None
 
     def list_models(self) -> tuple[str, ...]:
@@ -247,7 +270,7 @@ class ReframeAdapter(Adapter):
         return {"job": images[0], "settings": settings if isinstance(settings, dict) else {}}
 
     def submit(self, *, model: str, payload: Mapping[str, Any], capability: Capability | str = Capability.MEDIA_RENDER) -> MediaJob:
-        home = find_home()
+        home = find_home(self._chosen_home())
         python = find_python(home) if home is not None else None
         if home is None or python is None:
             raise ProviderError(ErrorCode.UNSUPPORTED_CAPABILITY, "Reframe was not found on this computer", self.provider_id)

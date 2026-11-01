@@ -13,7 +13,7 @@ const failures = [];
 const require = (text, pattern, label) => { if (!pattern.test(text)) failures.push(`${label}: missing ${pattern}`); };
 const forbid = (text, pattern, label) => { if (pattern.test(text)) failures.push(`${label}: forbidden ${pattern}`); };
 
-for (const method of ['provider.list', 'provider.getStatus', 'provider.configureCredential', 'provider.deleteCredential', 'provider.configure', 'provider.listModels', 'provider.health', 'inference.submit', 'inference.get', 'inference.list', 'inference.cancel', 'inference.retry', 'media.discard', 'media.commit', 'command.preview', 'command.approve', 'command.undo']) require(service, new RegExp(method.replace('.', '\\.')), 'host provider method');
+for (const method of ['provider.list', 'provider.getStatus', 'provider.configureCredential', 'provider.deleteCredential', 'provider.chooseFolder', 'provider.configure', 'provider.listModels', 'provider.health', 'inference.submit', 'inference.get', 'inference.list', 'inference.cancel', 'inference.retry', 'media.discard', 'media.commit', 'command.preview', 'command.approve', 'command.undo']) require(service, new RegExp(method.replace('.', '\\.')), 'host provider method');
 for (const event of ['provider.job', 'provider.status', 'provider.progress', 'provider.recovery']) require(service, new RegExp(event.replace('.', '\\.')), 'provider event');
 require(service, /host\.currentRevision/, 'transport-current revision envelope');
 for (const token of ['osVault', 'memoryOnly', 'expectedSettingsRevision', 'routes', 'perJobMicroUsd', 'dailyMicroUsd', 'monthlyMicroUsd']) require(settings + service, new RegExp(token), 'settings schema');

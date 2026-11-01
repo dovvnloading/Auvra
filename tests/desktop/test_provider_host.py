@@ -11,6 +11,7 @@ from unittest import mock
 from types import SimpleNamespace
 
 from Auvra.desktop.credential_prompt import CredentialPromptUnavailableError
+from Auvra.desktop.dialogs import DialogSelection, DialogUnavailableError
 from Auvra.desktop.previews import PreviewStore
 from Auvra.desktop.provider_host import NativeProviderHost
 from Auvra.host.dispatcher import HostOperationError
@@ -55,6 +56,28 @@ def _key_window_outcome(host: NativeProviderHost) -> dict:
     raise AssertionError("the key window never reported back")
 
 
+def _folder_window_outcome(host: NativeProviderHost) -> dict:
+    """What a person's answer to the folder window came to, once they have given it."""
+    for _ in range(500):
+        for name, payload in host.drain_events():
+            if name == "provider.status" and str(payload.get("operation", "")).startswith("folder."):
+                return payload
+        time.sleep(0.01)
+    raise AssertionError("the folder window never reported back")
+
+
+class _Folders:
+    """Answers the folder window with one folder, or nothing."""
+
+    def __init__(self, folder: Path | None) -> None:
+        self.folder = folder
+        self.asked: list[str] = []
+
+    def choose_folder(self, description: str) -> DialogSelection | None:
+        self.asked.append(description)
+        return DialogSelection(self.folder) if self.folder else None
+
+
 class _Adapter:
     def complete(self, *, model: str, prompt: str, capability="text", structured_command: bool = False):
         assert not structured_command
@@ -68,6 +91,103 @@ class _Adapter:
 
 
 class ProviderHostTests(unittest.TestCase):
+    def _reframe_folder(self, root: Path) -> Path:
+        folder = root / "kept here"
+        (folder / "gi_renderer" / "engine").mkdir(parents=True)
+        (folder / "gi_renderer" / "engine" / "render.py").write_text("")
+        return folder
+
+    def test_choosing_reframes_folder_opens_on_the_ui_thread_and_finds_it(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            folders = _Folders(self._reframe_folder(root))
+            host = NativeProviderHost(root / "state", project_host=_Project(), folder_dialogs=folders)
+            ran = []
+            host.set_ui_invoker(lambda callback: ran.append("ui") or callback())
+            try:
+                with mock.patch.dict("os.environ", {"AUVRA_REFRAME_HOME": ""}), mock.patch("Auvra.providers.reframe.Path.home", return_value=root / "nobody"), mock.patch("Auvra.providers.reframe.find_python", return_value="python"):
+                    self.assertFalse(host.handle("provider.health", {"providerId": "reframe"})["healthy"])
+                    opened = host.handle("provider.chooseFolder", {"providerId": "reframe"})
+                    self.assertEqual(opened, {"kind": "provider.folder", "providerId": "reframe", "waiting": True})
+                    outcome = _folder_window_outcome(host)
+                    self.assertEqual(outcome["operation"], "folder.saved")
+                    self.assertEqual(outcome["status"], "ready")
+                    self.assertEqual(ran, ["ui"])
+                    self.assertIn("Reframe", folders.asked[0])
+                    self.assertTrue(host.handle("provider.health", {"providerId": "reframe"})["healthy"])
+                    # The page is told how it went, and never where.
+                    self.assertNotIn("kept here", str(opened) + str(outcome))
+            finally:
+                host.shutdown()
+
+    def test_a_folder_reframe_is_not_in_is_refused_with_what_to_look_for(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "empty").mkdir()
+            host = NativeProviderHost(root / "state", project_host=_Project(), folder_dialogs=_Folders(root / "empty"))
+            try:
+                host.handle("provider.chooseFolder", {"providerId": "reframe"})
+                outcome = _folder_window_outcome(host)
+                self.assertEqual(outcome["operation"], "folder.refused")
+                self.assertIn("gi_renderer", outcome["message"])
+            finally:
+                host.shutdown()
+
+    def test_closing_the_folder_window_complains_of_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project(), folder_dialogs=_Folders(None))
+            try:
+                host.handle("provider.chooseFolder", {"providerId": "reframe"})
+                outcome = _folder_window_outcome(host)
+                self.assertEqual(outcome["operation"], "folder.cancelled")
+                self.assertNotIn("message", outcome)
+            finally:
+                host.shutdown()
+
+    def test_a_folder_window_that_cannot_open_says_so(self) -> None:
+        class Unavailable:
+            def choose_folder(self, _description: str) -> None:
+                raise DialogUnavailableError("no")
+
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project(), folder_dialogs=Unavailable())
+            try:
+                host.handle("provider.chooseFolder", {"providerId": "reframe"})
+                self.assertEqual(_folder_window_outcome(host)["operation"], "folder.failed")
+            finally:
+                host.shutdown()
+
+    def test_an_open_folder_window_holds_up_nothing_else_and_opens_once(self) -> None:
+        answered = threading.Event()
+
+        class Waiting:
+            def choose_folder(self, _description: str) -> None:
+                answered.wait(5)
+
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project(), folder_dialogs=Waiting())
+            try:
+                host.handle("provider.chooseFolder", {"providerId": "reframe"})
+                self.assertEqual(host.handle("provider.list", {})["kind"], "provider.list")
+                with self.assertRaises(HostOperationError) as second:
+                    host.handle("provider.chooseFolder", {"providerId": "reframe"})
+                self.assertEqual(second.exception.code, "locking")
+                answered.set()
+                _folder_window_outcome(host)
+            finally:
+                answered.set()
+                host.shutdown()
+
+    def test_a_provider_not_kept_in_a_folder_has_no_window(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project(), folder_dialogs=_Folders(None), adapters={"openai": _Adapter()})
+            try:
+                with self.assertRaises(HostOperationError) as refused:
+                    host.handle("provider.chooseFolder", {"providerId": "openai"})
+                self.assertEqual(refused.exception.code, "invalid_request")
+            finally:
+                host.shutdown()
+
     def test_credential_prompt_and_status_never_persist_secret(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

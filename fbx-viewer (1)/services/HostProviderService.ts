@@ -199,22 +199,32 @@ export class HostProviderService {
     return this.call('provider.configureCredential', { providerId, storageMode: options.memoryOnly ? 'memoryOnly' : 'osVault' });
   }
 
-  /** Asks for a key and settles once the window has closed, however long that takes. Closing it without a key is not a failure. */
-  async addKey(providerId: string, options: { remember?: boolean; memoryOnly?: boolean } = {}): Promise<void> {
+  /** Opens a native window through `open`, and settles once it has closed: the host says how by a `provider.status` event with an operation under `prefix`. */
+  private async untilWindowCloses(providerId: string, prefix: string, failed: readonly string[], fallback: string, open: () => Promise<{ waiting?: boolean }>): Promise<void> {
     let stop: () => void = () => undefined;
     const closed = new Promise<void>((resolve, reject) => {
       stop = this.subscribeProviderEvents(({ event, payload }) => {
         const said = (payload ?? {}) as { providerId?: string; operation?: string; message?: string };
-        if (event !== 'provider.status' || said.providerId !== providerId || !said.operation?.startsWith('key.')) return;
-        if (said.operation === 'key.failed') reject(new Error(said.message ?? 'The key was not added.'));
+        if (event !== 'provider.status' || said.providerId !== providerId || !said.operation?.startsWith(prefix)) return;
+        if (failed.includes(said.operation)) reject(new Error(said.message ?? fallback));
         else resolve();
       });
     });
     closed.catch(() => undefined);
     try {
-      const opened = await this.configureCredential(providerId, options);
+      const opened = await open();
       if (opened?.waiting) await closed;
     } finally { stop(); }
+  }
+
+  /** Asks for a key and settles once the window has closed, however long that takes. Closing it without a key is not a failure. */
+  async addKey(providerId: string, options: { remember?: boolean; memoryOnly?: boolean } = {}): Promise<void> {
+    await this.untilWindowCloses(providerId, 'key.', ['key.failed'], 'The key was not added.', () => this.configureCredential(providerId, options));
+  }
+
+  /** Asks where a local provider is kept and settles once the window has closed. A folder it is not in is a failure; closing the window is not. */
+  async chooseFolder(providerId: string): Promise<void> {
+    await this.untilWindowCloses(providerId, 'folder.', ['folder.refused', 'folder.failed'], 'That folder could not be used.', () => this.call('provider.chooseFolder', { providerId }));
   }
 
   async deleteCredential(providerId: string): Promise<unknown> {
