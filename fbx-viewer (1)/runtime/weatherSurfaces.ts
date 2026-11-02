@@ -153,6 +153,8 @@ if ( uWeatherWetness + uWeatherSnow > 0.001 ) {
 
 const PROGRAM_KEY = 'auvra-weather-1';
 const patched = new WeakSet<THREE.Material>();
+/** Materials this patch is all the shader they have of their own, from which their look can be read off as usual without it. */
+const onlyWeather = new WeakSet<THREE.Material>();
 
 const takesWeather = (material: THREE.Material): material is THREE.MeshStandardMaterial => {
     if (!(material as THREE.MeshStandardMaterial).isMeshStandardMaterial) return false;
@@ -160,12 +162,25 @@ const takesWeather = (material: THREE.Material): material is THREE.MeshStandardM
     return material.onBeforeCompile === THREE.Material.prototype.onBeforeCompile || material.userData.weatherSurface === true;
 };
 
+/** Whether it is raining or snowing on surfaces now. */
+export const weatherIsOn = (): boolean => WEATHER_UNIFORMS.uWeatherWetness.value > 0 || WEATHER_UNIFORMS.uWeatherSnow.value > 0;
+
+/** Whether a material works out its look in a shader of its own, as opposed to what three does with its maps and values. */
+export const hasOwnShader = (material: THREE.Material): boolean => {
+    if (material.onBeforeCompile === THREE.Material.prototype.onBeforeCompile) return false;
+    return !onlyWeather.has(material) || weatherIsOn();
+};
+
+/** Whether a material bends in the wind, in its shader. */
+export const swaysInWind = (material: THREE.Material): boolean => Boolean(windOf(material));
+
 /** Patches one material to take the weather (once; false when it does not take it). */
 export const patchWeatherMaterial = (material: THREE.Material): boolean => {
     if (patched.has(material)) return true;
     if (!takesWeather(material)) return false;
     patched.add(material);
     const before = material.onBeforeCompile;
+    if (before === THREE.Material.prototype.onBeforeCompile) onlyWeather.add(material);
     const ownKey = Object.prototype.hasOwnProperty.call(material, 'customProgramCacheKey')
         ? material.customProgramCacheKey.bind(material)
         : null;

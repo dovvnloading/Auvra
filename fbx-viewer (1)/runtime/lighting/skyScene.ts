@@ -190,6 +190,18 @@ export interface SceneSky {
 
 const skies = new Map<THREE.Object3D, SceneSky>();
 const paused = new Set<THREE.Object3D>();
+const unclouded = new Set<THREE.Object3D>();
+
+/** Whether the shadows of clouds fall on `scene`. */
+export const cloudShadowsFallOn = (scene: THREE.Object3D): boolean => (skies.get(scene)?.cloudStrength ?? 0) > 0;
+
+/** Draws `scene` without the shadows of its clouds until the returned function is called. */
+export const leaveOutCloudShadows = (scene: THREE.Object3D): (() => void) => {
+    unclouded.add(scene);
+    return () => {
+        unclouded.delete(scene);
+    };
+};
 
 /**
  * Draws `scene` without its sky's effects until the returned function is called. A bake sees the real
@@ -224,7 +236,7 @@ export const applySceneSky = (scene: THREE.Object3D): void => {
     light.set(sky.occlusion, sky.occlusionFloor, sky.reflections, sky.lightOn ? 1 : 0);
     area.set(sky.areaX, sky.areaZ, 1 / Math.max(sky.areaSize, 1e-3), sky.areaY);
     cloudMap.set(sky.cloudTiling, sky.cloudDriftU, sky.cloudDriftV, sky.cloudThreshold);
-    cloudSun.set(sky.cloudLeanX, sky.cloudLeanZ, sky.cloudHeight, sky.cloudStrength);
+    cloudSun.set(sky.cloudLeanX, sky.cloudLeanZ, sky.cloudHeight, unclouded.has(scene) ? 0 : sky.cloudStrength);
 };
 
 /**

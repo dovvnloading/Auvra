@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { buildRenderBundle, renderView } from '../../components/Environment/renderBundle';
+import { radianceFile } from '../../components/Environment/renderCapture';
+import { POST_PROCESS_DEFAULTS } from '../../runtime/components/postProcess';
+import { frameLook } from '../../runtime/frameLook';
 import { GraphMaterial } from '../../runtime/materials/graphMaterial';
 import { OUTPUT_NODE_TYPE, defaultParams, normalizeMaterialGraph } from '../../runtime/materials/materialGraph';
 
@@ -14,8 +17,8 @@ const bytesOf = (blob: Blob): Promise<ArrayBuffer> => new Promise((resolve, reje
 type Part = { offset: number; length: number };
 
 /** The bundle as a renderer reads it: each mesh's corners, as they were sent. */
-const readBundle = async () => {
-  const built = await buildRenderBundle();
+const readBundle = async (frame?: { width: number; height: number }) => {
+  const built = await buildRenderBundle(frame);
   if (!built) throw new Error('nothing was gathered');
   const bytes = await bytesOf(built.bundle);
   const headerLength = new DataView(bytes).getUint32(8, true);
@@ -36,10 +39,46 @@ const view = (...objects: THREE.Object3D[]) => {
   renderView.camera = new THREE.PerspectiveCamera();
 };
 
+/** Just enough of a renderer to see what is drawn with what, whose every pixel comes back covered. */
+const fakeRenderer = () => {
+  const drawn: { object: THREE.Object3D; material: THREE.Mesh['material']; children: boolean[] }[] = [];
+  const scenes: THREE.Scene[] = [];
+  const renderer = {
+    autoClear: true,
+    coordinateSystem: THREE.WebGLCoordinateSystem,
+    toneMappingExposure: 1,
+    toneMapping: THREE.NoToneMapping,
+    xr: { enabled: false },
+    shadowMap: { autoUpdate: true },
+    getRenderTarget: () => null,
+    getActiveCubeFace: () => 0,
+    getActiveMipmapLevel: () => 0,
+    setRenderTarget: () => undefined,
+    getClearAlpha: () => 1,
+    getClearColor: (into: THREE.Color) => into,
+    setClearColor: () => undefined,
+    clear: () => undefined,
+    render: (object: THREE.Object3D & THREE.Mesh) => {
+      if ((object as unknown as THREE.Scene).isScene) scenes.push(object as unknown as THREE.Scene);
+      else drawn.push({ object, material: object.material, children: object.children.map((child) => child.visible) });
+    },
+    readRenderTargetPixels: (_target: unknown, _x: number, _y: number, _width: number, _height: number, pixels: Uint8Array | Float32Array) => { pixels.fill(200); },
+  };
+  renderView.renderer = renderer as unknown as THREE.WebGLRenderer;
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+    createImageData: (width: number, height: number) => ({ data: new Uint8ClampedArray(width * height * 4) }),
+    putImageData: () => undefined,
+  } as unknown as CanvasRenderingContext2D);
+  vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,AAAA');
+  return { renderer, drawn, scenes };
+};
+
 afterEach(() => {
   renderView.scene = null;
   renderView.camera = null;
   renderView.renderer = null;
+  frameLook.settings = null;
+  frameLook.adaptedExposure = null;
   vi.restoreAllMocks();
 });
 
@@ -87,18 +126,79 @@ describe('gathering the view for a render', () => {
   it('sends the brightness that brings the renderer\'s curve to the view\'s', async () => {
     view(new THREE.Mesh(triangle(), new THREE.MeshStandardMaterial()));
     expect((await readBundle()).header.exposure).toBeCloseTo(Math.log2(1 / 0.6), 5);
-    renderView.renderer = { toneMappingExposure: 2, getClearAlpha: () => 1 } as unknown as THREE.WebGLRenderer;
+    fakeRenderer().renderer.toneMappingExposure = 2;
     expect((await readBundle()).header.exposure).toBeCloseTo(Math.log2(2 / 0.6), 5);
   });
 
-  it('sends how much a plain fill lights a level, unless the sky itself does', async () => {
+  it('lights a frame with what lights the view: its reflection map and its plain fill', async () => {
     const hemisphere = new THREE.HemisphereLight(0xffffff, 0x000000, 2);
     view(new THREE.Mesh(triangle(), new THREE.MeshStandardMaterial()), hemisphere, new THREE.AmbientLight(0xffffff, 1));
-    // Half of the hemisphere's 2, as its ground is black, and the ambient's 1, over pi as a white surface sends it back.
-    expect((await readBundle()).header.skyFill).toBeCloseTo(2 / Math.PI, 5);
-    renderView.skyLights = true;
-    expect((await readBundle()).header.skyFill).toBeUndefined();
-    renderView.skyLights = false;
+    const reflections = new THREE.Texture();
+    renderView.scene!.environment = reflections;
+    renderView.scene!.environmentIntensity = 0.7;
+    const { scenes } = fakeRenderer();
+    const { header } = await readBundle();
+    expect(header.environment.lightAround).toBeDefined();
+    const around = scenes.find((scene) => scene.background === reflections)!;
+    expect(around.backgroundIntensity).toBeCloseTo(0.7);
+    const quad = scenes[scenes.length - 1].children[0] as THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
+    // The hemisphere's 2 and the ambient's 1 from above, and only the ambient from below, over pi as a white surface sends it back.
+    expect(quad.material.uniforms.fromAbove.value.r).toBeCloseTo(3 / Math.PI, 5);
+    expect(quad.material.uniforms.fromBelow.value.g).toBeCloseTo(1 / Math.PI, 5);
+    expect(header.lights).toEqual([]);
+  });
+
+  it('says how the view blends what goes over a surface, with a post-process stack or without', async () => {
+    view(new THREE.Mesh(triangle(), new THREE.MeshStandardMaterial()));
+    expect((await readBundle()).header.blendsOnScreen).toBe(true);
+    frameLook.settings = POST_PROCESS_DEFAULTS;
+    expect((await readBundle()).header.blendsOnScreen).toBe(false);
+  });
+
+  it('sends what a post-process stack does, and the exposure it has adapted to', async () => {
+    view(new THREE.Mesh(triangle(), new THREE.MeshStandardMaterial()));
+    fakeRenderer();
+    frameLook.settings = { ...POST_PROCESS_DEFAULTS, autoExposure: true, toneMapping: 'reinhard', saturation: 0.2, contrast: -0.1, vignette: true, vignetteDarkness: 0.3, temperature: 0.5, tint: 0, bloom: true, bloomIntensity: 0.4, bloomThreshold: 2 };
+    frameLook.adaptedExposure = () => 2;
+    const { header } = await readBundle();
+    expect(header.toneMapping).toBe('reinhard');
+    // A curve with no scale of its own to take out.
+    expect(header.exposure).toBeCloseTo(1, 5);
+    expect(header.post.saturation).toBeCloseTo(0.2);
+    expect(header.post.contrast).toBeCloseTo(-0.1);
+    expect(header.post.vignette).toBeCloseTo(0.3);
+    expect(header.post.whiteBalance[0]).toBeGreaterThan(header.post.whiteBalance[2]);
+    expect(header.post.bloom).toEqual({ intensity: 0.4, threshold: 2 });
+    expect(header.post.depthOfField).toBeUndefined();
+    expect(header.post.look).toBeUndefined();
+  });
+
+  it('draws fog and particles at the size of the frame, and sends no particle as a surface', async () => {
+    const particles = new THREE.Mesh(triangle(), new THREE.MeshBasicMaterial());
+    particles.userData.drawnOverPicture = true;
+    view(new THREE.Mesh(triangle(), new THREE.MeshStandardMaterial()), particles);
+    renderView.scene!.fog = new THREE.FogExp2(0x336699, 0.01);
+    fakeRenderer();
+    const { header, floats } = await readBundle({ width: 16, height: 8 });
+    expect(header.meshes).toHaveLength(1);
+    expect([header.over.width, header.over.height]).toEqual([16, 8]);
+    expect(floats(header.over.picture)).toHaveLength(16 * 8 * 4);
+    expect(floats(header.fog.picture.picture)).toHaveLength(16 * 8 * 4);
+    expect(renderView.scene!.fog.density).toBeCloseTo(0.01);
+    expect(renderView.scene!.children).toHaveLength(2);
+  });
+
+  it('writes light of any strength as a picture a renderer reads', () => {
+    const file = radianceFile(new Float32Array([0, 0, 0, 1, 1, 0.5, 0.25, 1, 8, 4, 2, 1, 0.5, 0.25, 0, 1]), 2, 2);
+    const head = '#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 2 +X 2\n';
+    expect(new TextDecoder().decode(file.slice(0, head.length))).toBe(head);
+    const pixels = file.slice(head.length);
+    const read = (at: number) => [0, 1, 2].map((channel) => pixels[at + channel] * 2 ** (pixels[at + 3] - 136));
+    // The top row comes first.
+    expect(read(0)).toEqual([8, 4, 2]);
+    expect(read(4)).toEqual([0.5, 0.25, 0]);
+    expect(read(8)).toEqual([0, 0, 0]);
+    expect(read(12)).toEqual([1, 0.5, 0.25]);
   });
 
   it('leaves a surface that has no bones as it is', async () => {
@@ -133,29 +233,6 @@ describe('gathering the view for a render', () => {
       nodes: [node('out', OUTPUT_NODE_TYPE, { roughness: 0.3, metalness: 0.7 }), node('noise', 'noise')],
       links: [{ fromNode: 'noise', fromOutput: 'out', toNode: 'out', toInput: 'baseColor' }],
     }));
-    /** Just enough of a renderer to see what is drawn with what, whose every pixel comes back covered. */
-    const fakeRenderer = () => {
-      const drawn: { object: THREE.Object3D; material: THREE.Mesh['material']; children: boolean[] }[] = [];
-      const renderer = {
-        autoClear: true,
-        getRenderTarget: () => null,
-        setRenderTarget: () => undefined,
-        getClearAlpha: () => 1,
-        getClearColor: (into: THREE.Color) => into,
-        setClearColor: () => undefined,
-        clear: () => undefined,
-        render: (object: THREE.Mesh) => { drawn.push({ object, material: object.material, children: object.children.map((child) => child.visible) }); },
-        readRenderTargetPixels: (_target: unknown, _x: number, _y: number, _width: number, _height: number, pixels: Uint8Array) => { pixels.fill(200); },
-      };
-      renderView.renderer = renderer as unknown as THREE.WebGLRenderer;
-      vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
-        createImageData: (width: number, height: number) => ({ data: new Uint8ClampedArray(width * height * 4) }),
-        putImageData: () => undefined,
-      } as unknown as CanvasRenderingContext2D);
-      vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,AAAA');
-      return { renderer, drawn };
-    };
-
     it('sends what it gives its wired inputs as pictures, and the values of the rest', async () => {
       const material = noisy();
       view(new THREE.Mesh(triangle(), material));
@@ -180,11 +257,11 @@ describe('gathering the view for a render', () => {
         const render = renderer.render;
         renderer.render = (object) => { current = object.material as THREE.MeshStandardMaterial; render(object); };
         renderer.readRenderTargetPixels = (_target, _x, _y, _width, _height, pixels) => {
-          const isGlow = String(current?.customProgramCacheKey()).includes('bake#emissive');
+          const isGlow = String(current?.customProgramCacheKey()).includes('capture:emissive');
           for (let at = 0; at < pixels.length; at += 4) {
             const value = isGlow ? glow[(at / 4) % 2] : 128;
             pixels.fill(value, at, at + 3);
-            pixels[at + 3] = 255;
+            pixels[at + 3] = isGlow ? 1 : 255;
           }
         };
       };
@@ -192,18 +269,19 @@ describe('gathering the view for a render', () => {
       it('keeps one that is the same all over as a glow, and leaves the colour to the graph', async () => {
         view(new THREE.Mesh(triangle(), glowing()));
         const { renderer } = fakeRenderer();
-        drawGlow(renderer, [51, 51]);
+        drawGlow(renderer, [0.2, 0.2]);
         const { header } = await readBundle();
         const sent = header.meshes[0].material;
         expect(sent.emission[0]).toBeCloseTo(0.2);
+        expect(sent.emissionTexture).toBeUndefined();
         expect(sent.baseColorTexture).toBeUndefined();
         expect(sent.baseColor[0]).toBeGreaterThan(0);
       });
 
-      it('keeps what is everywhere as a glow, and draws what varies into the colour', async () => {
+      it('sends one that varies as a map of its own, at its full strength, and leaves the colour alone', async () => {
         view(new THREE.Mesh(triangle(), glowing()));
         const { renderer } = fakeRenderer();
-        drawGlow(renderer, [0, 255]);
+        drawGlow(renderer, [0, 3]);
         const putImage = vi.fn();
         (HTMLCanvasElement.prototype.getContext as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
           createImageData: (width: number, height: number) => ({ data: new Uint8ClampedArray(width * height * 4) }),
@@ -211,12 +289,11 @@ describe('gathering the view for a render', () => {
         });
         const { header } = await readBundle();
         const sent = header.meshes[0].material;
-        expect(sent.emission).toEqual([0, 0, 0]);
-        expect(sent.baseColorTexture).toBeDefined();
-        expect(sent.baseColor).toEqual([1, 1, 1]);
+        expect(sent.emission).toEqual([3, 3, 3]);
+        expect(sent.emissionTexture).toBeDefined();
+        expect(sent.baseColorTexture).toBeUndefined();
         const { data } = putImage.mock.calls[0][0] as { data: Uint8ClampedArray };
-        // Where it did not glow the colour is as drawn, and where it did it goes to white.
-        expect([data[0], data[4]]).toEqual([128, 255]);
+        expect([data[0], data[4]]).toEqual([0, 255]);
       });
     });
 
@@ -303,7 +380,10 @@ describe('gathering the view for a render', () => {
       const counts: number[] = [];
       const { renderer } = fakeRenderer();
       const render = renderer.render;
-      renderer.render = (object) => { counts.push((object as unknown as THREE.InstancedMesh).count); render(object); };
+      renderer.render = (object) => {
+        if ((object as unknown as THREE.InstancedMesh).isInstancedMesh) counts.push((object as unknown as THREE.InstancedMesh).count);
+        render(object);
+      };
       await readBundle();
       expect(counts).toEqual([1]);
       expect(instanced.count).toBe(5);

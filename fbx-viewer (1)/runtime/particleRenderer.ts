@@ -149,6 +149,8 @@ export class WorldMesh extends THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMate
         this.matrixAutoUpdate = false;
         this.matrixWorldAutoUpdate = false;
         this.frustumCulled = false;
+        // Light drawn onto the picture, with nothing there for a ray to meet.
+        this.userData.drawnOverPicture = true;
     }
 
     override updateMatrixWorld(): void {}

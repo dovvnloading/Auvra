@@ -15,7 +15,7 @@ import {
   wouldCreateCycle,
   type MaterialGraph,
 } from '../../runtime/materials/materialGraph';
-import { BAKE_PLACE_ATTRIBUTE, GraphMaterial, MATERIAL_TIME, bindMaterialGraph, boundMaterialGraph, graphBakeMaterial, graphSurface, unbindMaterialGraph } from '../../runtime/materials/graphMaterial';
+import { GraphMaterial, MATERIAL_TIME, bindMaterialGraph, boundMaterialGraph, graphSurface, unbindMaterialGraph } from '../../runtime/materials/graphMaterial';
 import { graphTextures, materialAssetDocument, materialLibrary, readMaterialAsset } from '../../runtime/materials/materialLibrary';
 import { applyMaterialOverrides, materialParameterValues, normalizeMaterialOverride } from '../../utils/materialOverrides';
 
@@ -208,67 +208,14 @@ describe('material parameters', () => {
   });
 });
 
-describe('drawing a graph out across a map', () => {
-  const bakedShader = (input: Parameters<typeof graphBakeMaterial>[1]) => {
-    const baker = graphBakeMaterial(new GraphMaterial(tintedGraph()), input)!;
-    const shader = standardShader();
-    baker.onBeforeCompile(shader, {} as THREE.WebGLRenderer);
-    return { baker, shader };
-  };
-
-  it('draws each triangle where it lies on the map, reading what it reads from where it stands', () => {
-    const { baker, shader } = bakedShader('baseColor');
-    expect(baker.side).toBe(THREE.DoubleSide);
-    expect(shader.vertexShader).toContain('gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);');
-    // After the place is worked out, and not instead of it.
-    expect(shader.vertexShader.indexOf('gl_Position = vec4(uv')).toBeGreaterThan(shader.vertexShader.indexOf('vMgWorldPosition = (mgModel'));
-    expect(shader.fragmentShader.startsWith('#undef DOUBLE_SIDED')).toBe(true);
-  });
-
-  it('gives a colour as a picture holds one, and values as they are', () => {
-    const colour = bakedShader('baseColor').shader;
-    expect(colour.fragmentShader).toContain('diffuseColor.rgb = mg_mul_out_out_');
-    expect(colour.fragmentShader).toContain('sRGBTransferOETF');
-    const value = bakedShader('roughness').shader;
-    expect(value.fragmentShader).toContain('diffuseColor.rgb = vec3(mg_out_roughness);');
-    expect(value.fragmentShader).toContain('gl_FragColor = clamp( gl_FragColor, 0.0, 1.0 );');
-    expect(value.fragmentShader).not.toContain('sRGBTransferOETF( clamp');
-  });
-
-  it('encodes a normal as a normal map is', () => {
-    const baker = graphBakeMaterial(new GraphMaterial(normalizeMaterialGraph({
-      nodes: [node('out', OUTPUT_NODE_TYPE), node('nm', 'normalMap')],
-      links: [link('nm', 'out', 'out', 'normal')],
-    })), 'normal')!;
-    const shader = standardShader();
-    baker.onBeforeCompile(shader, {} as THREE.WebGLRenderer);
-    expect(shader.fragmentShader).toMatch(/diffuseColor\.rgb = mg_nm_out_out_\d+ \* 0\.5 \+ 0\.5;/);
-  });
-
-  it('can be told where each corner lies by an attribute of its own', () => {
-    const baker = graphBakeMaterial(new GraphMaterial(tintedGraph()), 'baseColor', BAKE_PLACE_ATTRIBUTE)!;
-    const shader = standardShader();
-    baker.onBeforeCompile(shader, {} as THREE.WebGLRenderer);
-    expect(shader.vertexShader).toContain(`attribute vec2 ${BAKE_PLACE_ATTRIBUTE};`);
-    expect(shader.vertexShader).toContain(`gl_Position = vec4(${BAKE_PLACE_ATTRIBUTE} * 2.0 - 1.0, 0.0, 1.0);`);
-    expect(baker.customProgramCacheKey()).not.toBe(bakedShader('baseColor').baker.customProgramCacheKey());
-  });
-
+describe('what a graph gives a surface', () => {
   it('says whether a graph goes by where a surface stands or faces', () => {
     expect(graphSurface(new GraphMaterial(tintedGraph()))!.readsPlace).toBe(false);
     const rim = normalizeMaterialGraph({ nodes: [node('out', OUTPUT_NODE_TYPE), node('rim', 'fresnel')], links: [link('rim', 'out', 'out', 'emissive')] });
     expect(graphSurface(new GraphMaterial(rim))!.readsPlace).toBe(true);
   });
 
-  it('adds nothing to what it draws, and each input is a shader of its own', () => {
-    const { baker, shader } = bakedShader('baseColor');
-    expect(shader.fragmentShader).toContain('totalEmissiveRadiance = vec3(0.0);');
-    expect(shader.fragmentShader).toContain('vec3 outgoingLight = diffuseColor.rgb + totalEmissiveRadiance;');
-    expect(baker.customProgramCacheKey()).not.toBe(bakedShader('roughness').baker.customProgramCacheKey());
-  });
-
-  it('has nothing to draw for a material no graph shades', () => {
-    expect(graphBakeMaterial(new THREE.MeshStandardMaterial(), 'baseColor')).toBeNull();
+  it('has nothing to say for a material no graph shades', () => {
     expect(graphSurface(new THREE.MeshStandardMaterial())).toBeNull();
   });
 

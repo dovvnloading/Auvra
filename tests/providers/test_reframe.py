@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import io
 import math
 import json
@@ -12,7 +13,7 @@ from unittest import mock
 from Auvra.providers.adapters import MediaJob
 from Auvra.providers.errors import ProviderError
 from Auvra.providers.reframe import MODEL, ReframeAdapter, _Blobs, build_render_config, find_home, read_bundle_header
-from Auvra.providers.reframe_worker import fog_transmittance, sky_light_share
+from Auvra.providers.reframe_worker import fog_transmittance, panorama_along_view
 from Auvra.providers.transport import StdlibTransport
 
 
@@ -78,7 +79,7 @@ class BundleTests(unittest.TestCase):
         self.assertLessEqual(self._config(exposure=1e9)["exposure"], 20)
 
     def test_a_views_fog_goes_to_the_worker_in_its_own_kind(self) -> None:
-        self.assertNotIn("volumetric_fog", self._config())
+        self.assertEqual(self._config()["volumetric_fog"]["kind"], "none")
         squared = self._config(fog={"color": [0.1, 0.2, 0.3], "density": 0.01})["volumetric_fog"]
         self.assertEqual((squared["kind"], squared["density"], squared["enabled"]), ("squared", 0.01, True))
         self.assertEqual(squared["color"], [0.1, 0.2, 0.3])
@@ -86,23 +87,70 @@ class BundleTests(unittest.TestCase):
         self.assertEqual((linear["kind"], linear["near"], linear["far"]), ("linear", 10.0, 90.0))
 
     def test_fog_that_would_do_nothing_is_left_out(self) -> None:
-        self.assertNotIn("volumetric_fog", self._config(fog={"color": [0, 0, 0], "density": 0}))
-        self.assertNotIn("volumetric_fog", self._config(fog={"color": [0, 0, 0], "near": 50, "far": 50}))
-        self.assertNotIn("volumetric_fog", self._config(fog="thick"))
+        for fog in ({"color": [0, 0, 0], "density": 0}, {"color": [0, 0, 0], "near": 50, "far": 50}, "thick"):
+            self.assertEqual(self._config(fog=fog)["volumetric_fog"]["kind"], "none")
 
-    def test_what_the_sky_stands_in_for_reaches_the_worker_with_or_without_fog(self) -> None:
-        alone = self._config(skyFill=0.2)["volumetric_fog"]
-        self.assertEqual((alone["enabled"], alone["kind"], alone["sky_fill"]), (True, "none", 0.2))
-        both = self._config(skyFill=0.2, fog={"color": [0, 0, 0], "density": 0.01})["volumetric_fog"]
-        self.assertEqual((both["kind"], both["sky_fill"]), ("squared", 0.2))
-        self.assertNotIn("volumetric_fog", self._config(skyFill="bright"))
+    def test_a_frame_is_lit_by_what_lights_the_view_and_shows_the_sky_the_view_shows(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            part = {"offset": 0, "length": 4}
+            config = self.config(
+                {"meshes": [dict(MESH)], "environment": {"lightAround": part, "panorama": part, "panoramaIsLight": True, "intensity": 2.0, "rotation": 30},
+                 "camera": {"position": [1, 2, 3], "target": [0, 0, 0], "fov": 40}},
+                bytes(96), Path(root),
+            )
+        environment, finish = config["environment"], config["volumetric_fog"]
+        self.assertTrue(environment["hdri_path"].endswith(".hdr"))
+        self.assertEqual(environment["intensity"], 1.0)
+        self.assertNotIn("rotation_deg", environment)
+        shown = finish["sky"]
+        self.assertEqual(shown["light_around"], environment["hdri_path"])
+        self.assertTrue(shown["panorama"].endswith(".hdr"))
+        self.assertEqual((shown["intensity"], shown["rotation_deg"]), (2.0, 30.0))
+        self.assertEqual(finish["camera"], {"lookfrom": [1.0, 2.0, 3.0], "lookat": [0.0, 0.0, 0.0], "vfov": 40.0})
 
-    def test_a_sky_gives_what_the_viewports_fill_gives(self) -> None:
-        self.assertAlmostEqual(sky_light_share(0.2, 0.8), 0.25)
-        # Never more than it has, never quite nothing, and a black sky has nothing to share out.
-        self.assertEqual(sky_light_share(5.0, 0.8), 1.0)
-        self.assertEqual(sky_light_share(0.0, 0.8), 0.05)
-        self.assertEqual(sky_light_share(0.2, 0.0), 1.0)
+    def test_what_a_views_stack_does_reaches_the_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            part = {"offset": 0, "length": 4}
+            config = self.config(
+                {"meshes": [dict(MESH)], "toneMapping": "reinhard", "blendsOnScreen": False, "cloudShade": {"picture": part, "width": 16, "height": 16}, "over": {"picture": part, "width": 16, "height": 16},
+                 "post": {"saturation": 0.5, "brightness": 9, "vignette": 0.4, "whiteBalance": [1.1, 1, 0.9], "look": {"table": part, "size": 32, "strength": 0.5}, "bloom": {"intensity": 1, "threshold": 2}, "fringe": 0.5}},
+                bytes(96), Path(root),
+            )
+        finish = config["volumetric_fog"]
+        self.assertEqual(config["tone_map"], "reinhard")
+        self.assertFalse(finish["on_screen"])
+        self.assertEqual((finish["over"]["width"], finish["cloud_shade"]["height"]), (16, 16))
+        self.assertTrue(finish["over"]["picture"].endswith(".bin"))
+        grade = finish["grade"]
+        self.assertEqual((grade["saturation"], grade["brightness"], grade["vignette"]), (0.5, 1.0, 0.4))
+        self.assertEqual(grade["white_balance"], [1.1, 1.0, 0.9])
+        self.assertEqual((grade["look"]["size"], grade["look"]["strength"]), (32, 0.5))
+        self.assertEqual(config["post"]["bloom"]["threshold"], 2.0)
+        self.assertTrue(config["post"]["chromatic_aberration"]["enabled"])
+
+    def test_a_views_depth_of_field_becomes_a_lens_of_the_same_blur(self) -> None:
+        self.assertNotIn("fstop", self._config()["camera"])
+        camera = self._config(post={"depthOfField": {"focus": 10, "bokeh": 5}}, camera={"fov": 90})["camera"]
+        self.assertEqual(camera["focus_distance"], 10.0)
+        # A lens this wide takes a point at any great distance to 3% of the height of the frame.
+        radius = camera["focal_length"] / camera["fstop"] / 2.0
+        self.assertAlmostEqual(radius / 10.0, 0.03)
+        self.assertNotIn("fstop", self._config(post={"depthOfField": {"focus": 10, "bokeh": 0}})["camera"])
+
+    @unittest.skipUnless(importlib.util.find_spec("numpy"), "reads a picture with numpy, which runs under Reframe's own Python")
+    def test_a_panorama_is_read_the_way_round_the_renderer_reads_one(self) -> None:
+        import numpy as np
+
+        # Longitude from atan(z, x), the middle of the picture at zero: straight along +x is its middle.
+        panorama = np.zeros((4, 8, 3), dtype=np.float32)
+        panorama[:, 4:] = 1.0
+        camera = {"lookfrom": [0.0, 0.0, 0.0], "lookat": [1.0, 0.0, 0.0], "vfov": 20.0}
+        along = panorama_along_view(np, panorama, 0.0, camera, 8, 8)
+        self.assertEqual(along.shape, (8, 8, 3))
+        # Looking along +x, +z is to the right.
+        self.assertLess(float(along[4, 0, 0]), float(along[4, 7, 0]))
+        turned = panorama_along_view(np, panorama, 180.0, camera, 8, 8)
+        self.assertGreater(float(turned[4, 0, 0]), float(turned[4, 7, 0]))
 
     def test_the_worker_thins_fog_by_the_viewports_law(self) -> None:
         clip = lambda value, low, high: max(low, min(high, value))  # noqa: E731

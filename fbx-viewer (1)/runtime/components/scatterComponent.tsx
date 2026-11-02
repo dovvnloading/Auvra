@@ -93,7 +93,8 @@ class CellView {
             matrices.forEach((matrix, i) => mesh.setMatrixAt(i, matrix));
             mesh.instanceMatrix.needsUpdate = true;
             mesh.computeBoundingSphere();
-            mesh.userData = SCATTER_USER_DATA;
+            // A card is a picture for the camera that made it. Anything that traces light wants what it stands in for.
+            mesh.userData = { ...SCATTER_USER_DATA, standsInFor: model.parts };
             this.far.add(mesh);
         });
     }
