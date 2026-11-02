@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import {
   decodeFoliageInstances, DEFAULT_FOLIAGE_TYPE, editFoliageInstances, encodeFoliageInstances, externalizeFoliageData, FOLIAGE_INSTANCE_FLOATS,
-  foliageInstanceCount, foliageInstanceMatrix, followTerrainEdit, isFoliageTypePending, resolveFoliageInstances, sanitizeFoliageType, writeFoliageMatrix,
-  type FoliageType,
+  foliageAfterTerrainEdit, foliageInstanceCount, foliageInstanceMatrix, followTerrainEdit, groundHeightUnder, isFoliageTypePending, resolveFoliageInstances,
+  sanitizeFoliageType, writeFoliageMatrix, type FoliageType,
 } from '../../runtime/foliage';
 import {
   FoliageHash, foliageDefaultsFor, foliageFits, foliageHashOf, foliageRotation, foliageScale, instancesWanted, placeFoliageInstance, type FoliageGround,
@@ -133,6 +133,31 @@ describe('foliage instances', () => {
     expect(moved[FOLIAGE_INSTANCE_FLOATS * 3 + 1]).toBe(10);
     expect(instances[1]).toBe(10);
     expect(followTerrainEdit(instances, before, before)).toBeNull();
+  });
+});
+
+describe('foliage on a changed terrain', () => {
+  const ground = (height: number, position = [0, 0, 0], typed = false) => ({
+    position, scale: [1, 1, 1], width: 10, depth: 10, resolution: 2,
+    heights: typed ? new Float32Array(9).fill(height) : new Array<number>(9).fill(height),
+  });
+
+  it('reads heights in any kind of array, off the ground plane too', () => {
+    expect(groundHeightUnder(ground(6, [0, 20, 0]), 0, 0)).toBe(26);
+    expect(groundHeightUnder(ground(6, [0, 20, 0], true), 0, 0)).toBe(26);
+    expect(groundHeightUnder(ground(6), 100, 0)).toBeNull();
+  });
+
+  it('moves what stood on the old surface, well above height zero', () => {
+    const instances = new Float32Array([1, 26, 1, 0, 0, 0, 1, 1, 1, 1]);
+    const types = foliageAfterTerrainEdit([type({ instances })], ground(6, [0, 20, 0]), ground(9, [0, 20, 0]));
+    expect(types?.[0].instances?.[1]).toBe(29);
+  });
+
+  it('says so when nothing moved', () => {
+    const instances = new Float32Array([1, 500, 1, 0, 0, 0, 1, 1, 1, 1]);
+    expect(foliageAfterTerrainEdit([type({ instances })], ground(6), ground(9))).toBeNull();
+    expect(foliageAfterTerrainEdit([type()], ground(6), ground(9))).toBeNull();
   });
 });
 

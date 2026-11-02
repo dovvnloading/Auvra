@@ -674,7 +674,7 @@ Click a model in the browser, drag one onto the palette or pick one under it to 
 
 **Size** (keys **[** and **]**) is across the brush. **Paint density** multiplies every type's density while painting, and **Erase density** is the share of it erasing leaves behind: 0 removes everything. **On terrain**, **On meshes**, **On foliage** and **Translucent** say what the brush can paint on.
 
-Sculpting the terrain moves the foliage standing on it, as part of the same undo step. Only its height changes, so what you turned by hand stays turned.
+Anything that changes the ground's height (a brush, Mirror, an imported heightmap, an edit layer turned off) moves the foliage standing on it, as part of the same undo step. Only its height changes, so what you turned by hand stays turned.
 
 ### A type's rules
 

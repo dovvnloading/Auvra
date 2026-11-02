@@ -10,7 +10,7 @@ import { subscribeDomainCascade, type DomainCascadeEvent } from '../utils/domain
 import { resolveTerrainHeightfield } from '../utils/terrainHeightfieldEditor';
 import { isTerrainHeightfieldPending, TerrainHeightfieldEncodingError } from '../utils/terrainHeightfieldCodec';
 import { resolveTerrainHolemap, resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplatEditor';
-import { isFoliageTypePending, resolveFoliageInstances, type FoliageInstanceReference, type FoliageType } from '../runtime/foliage';
+import { foliageAfterTerrainEdit, isFoliageTypePending, resolveFoliageInstances, type FoliageGroundTerrain, type FoliageInstanceReference, type FoliageType } from '../runtime/foliage';
 import { isEditLayerPending, resolveEditLayer } from '../components/Environment/Terrain/terrainEditLayers';
 import { isTerrainHolesPending, isTerrainSplat2Pending, isTerrainSplatPending, terrainLayersReferenceTexture, withoutTerrainLayerModel, withoutTerrainLayerTexture } from '../components/Environment/Terrain/terrainSplatCodec';
 import { collectSubtree, sortByHierarchy } from '../utils/sceneGraph';
@@ -346,7 +346,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
 
   // History State
   const history = useRef<{ past: LevelObject[][], future: LevelObject[][] }>({ past: [], future: [] });
-  const historyMutationRef = useRef(false);
+  const historyFailuresRef = useRef(0);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
 
@@ -364,62 +364,63 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       updateHistoryState();
   }, [levelObjects, session]);
 
-  const undo = useCallback(async () => {
-      if (historyMutationRef.current) return;
+  /**
+   * Steps through the history. The screen answers at once and the host catches
+   * up behind it, in order with every other write, so holding Ctrl+Z walks back
+   * without waiting for the disk. A step the host refuses puts back what it took.
+   */
+  const stepHistory = useCallback(async (direction: 'Undo' | 'Redo') => {
       const lease = session.requireCurrent(session.captureReady());
-      const previousState = history.current.past[history.current.past.length - 1];
-      if (!previousState) return;
-      const currentSnapshot = snapshotLevelObjects(levelObjects);
-      historyMutationRef.current = true;
+      const { past, future } = history.current;
+      const [from, to] = direction === 'Undo' ? [past, future] : [future, past];
+      const wanted = from[from.length - 1];
+      if (!wanted) return;
+      const shown = levelObjectsRef.current;
+      const stacks = { past: [...past], future: [...future] };
+      const failures = historyFailuresRef.current;
       // Rewritten documents supersede pending partial edits of the same objects.
-      const superseded = supersedePendingEdits(changedLevelObjectIds(levelObjects, previousState));
-      let applied = false;
-      try {
-          // Keep both stacks untouched until every host change succeeds.
-          if (!await syncStateToDB(levelObjects, previousState, lease) || !session.isSameSession(lease)) return;
-          applied = true;
-          if (history.current.past[history.current.past.length - 1] !== previousState) return;
-          history.current.past.pop();
-          history.current.future.push(currentSnapshot);
-          setWorkingState(prev => ({ ...prev, levelObjects: previousState }));
-          addNotification({ message: "Undo", type: 'info', duration: 800 });
-      } catch (error) {
-          frontendDiagnostics.failure('level_undo_failed', error);
-          addNotification({ message: "Undo failed; no history was consumed.", type: 'error' });
-      } finally {
-          if (!applied) restorePendingEdits(superseded);
-          historyMutationRef.current = false;
-          updateHistoryState();
-      }
-  }, [levelObjects, addNotification, restorePendingEdits, session, supersedePendingEdits]);
+      const superseded = supersedePendingEdits(changedLevelObjectIds(shown, wanted));
+      from.pop();
+      to.push(snapshotLevelObjects(shown));
+      levelObjectsRef.current = wanted;
+      setWorkingState(prev => ({ ...prev, levelObjects: wanted }));
+      updateHistoryState();
+      addNotification({ message: direction, type: 'info', duration: 800 });
 
-  const redo = useCallback(async () => {
-      if (historyMutationRef.current) return;
-      const lease = session.requireCurrent(session.captureReady());
-      const nextState = history.current.future[history.current.future.length - 1];
-      if (!nextState) return;
-      const currentSnapshot = snapshotLevelObjects(levelObjects);
-      historyMutationRef.current = true;
-      const superseded = supersedePendingEdits(changedLevelObjectIds(levelObjects, nextState));
-      let applied = false;
-      try {
-          // Keep both stacks untouched until every host change succeeds.
-          if (!await syncStateToDB(levelObjects, nextState, lease) || !session.isSameSession(lease)) return;
-          applied = true;
-          if (history.current.future[history.current.future.length - 1] !== nextState) return;
-          history.current.future.pop();
-          history.current.past.push(currentSnapshot);
-          setWorkingState(prev => ({ ...prev, levelObjects: nextState }));
-          addNotification({ message: "Redo", type: 'info', duration: 800 });
-      } catch (error) {
-          frontendDiagnostics.failure('level_redo_failed', error);
-          addNotification({ message: "Redo failed; no history was consumed.", type: 'error' });
-      } finally {
-          if (!applied) restorePendingEdits(superseded);
-          historyMutationRef.current = false;
+      const write = flushChainRef.current.then(async () => {
+          // An earlier step failed, and this one started from what it wrote.
+          if (historyFailuresRef.current !== failures) {
+              restorePendingEdits(superseded);
+              return;
+          }
+          // The write itself uses the newest revision of that same session.
+          const current = session.isSameSession(lease) ? session.captureReady() : null;
+          if (!current) return;
+          try {
+              if (await syncStateToDB(shown, wanted, current)) return;
+          } catch (error) {
+              frontendDiagnostics.failure(direction === 'Undo' ? 'level_undo_failed' : 'level_redo_failed', error);
+              addNotification({ message: `${direction} failed; no history was consumed.`, type: 'error' });
+          }
+          if (!session.isSameSession(lease)) return;
+          historyFailuresRef.current += 1;
+          history.current = stacks;
+          restorePendingEdits(superseded);
+          // What the host still has goes back on screen, under edits made since.
+          const restored = shown.map((object) => {
+              const edit = pendingUpdatesRef.current.get(object.id);
+              return edit ? { ...object, ...edit.updates } : object;
+          });
+          levelObjectsRef.current = restored;
+          setWorkingState(prev => ({ ...prev, levelObjects: restored }));
           updateHistoryState();
-      }
-  }, [levelObjects, addNotification, restorePendingEdits, session, supersedePendingEdits]);
+      });
+      flushChainRef.current = write.catch(() => undefined);
+      await write;
+  }, [addNotification, restorePendingEdits, session, supersedePendingEdits]);
+
+  const undo = useCallback(() => stepHistory('Undo'), [stepHistory]);
+  const redo = useCallback(() => stepHistory('Redo'), [stepHistory]);
 
   useEffect(() => {
       history.current = { past: [], future: [] };
@@ -1177,15 +1178,33 @@ export const useLevelManager = (models: LoadedModelData[]) => {
           addNotification({ message: 'Terrain paint is still loading; the stroke was not applied.', type: 'error' });
           return;
       }
+      // Whatever changed the heights, what stands on the ground moves with it, in the same undo step.
+      const nextTerrain = updates.terrainData;
+      const foliageSet = nextTerrain?.heights && previous.terrainData && nextTerrain.heights !== previous.terrainData.heights
+          ? levelObjects.find((object) => object.type === 'foliage_set')
+          : undefined;
+      const ground = (data: TerrainData): FoliageGroundTerrain => ({
+          position: previous.position, scale: previous.scale, width: data.width, depth: data.depth, resolution: Math.floor(data.resolution), heights: data.heights,
+      });
+      // Two terrains in one stroke arrive one after the other: the second builds on the first.
+      const foliageNow = foliageSet && (pendingUpdatesRef.current.get(foliageSet.id)?.updates.foliageData ?? foliageSet.foliageData);
+      const followed = foliageSet && foliageNow && nextTerrain ? foliageAfterTerrainEdit(foliageNow.types, ground(previous.terrainData!), ground(nextTerrain)) : null;
       setWorkingState(prev => ({
           ...prev,
-          levelObjects: prev.levelObjects.map(o => o.id === id ? { ...o, ...updates } : o),
+          levelObjects: prev.levelObjects.map(o => {
+              if (o.id === id) return { ...o, ...updates };
+              return followed && o.id === foliageSet?.id ? { ...o, foliageData: { types: followed } } : o;
+          }),
       }));
       const existing = pendingUpdatesRef.current.get(id);
       pendingUpdatesRef.current.set(id, {
           updates: { ...(existing?.updates || {}), ...updates },
           lease,
       });
+      if (followed && foliageSet) {
+          const existingSet = pendingUpdatesRef.current.get(foliageSet.id);
+          pendingUpdatesRef.current.set(foliageSet.id, { updates: { ...(existingSet?.updates || {}), foliageData: { types: followed } }, lease });
+      }
       scheduleFlush();
   }, [addNotification, levelObjects, scheduleFlush, session]);
 
