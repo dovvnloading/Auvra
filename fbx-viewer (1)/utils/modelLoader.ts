@@ -1,13 +1,15 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { LoadedModelData } from '../types';
-import { optimizeModelMaterials, splitAlphaCards } from './processing/ModelMaterials';
+import { splitAlphaCards } from './processing/ModelMaterials';
 import { compressModelTextures } from './textureCompression/compressTextures';
 import { withGltfDecoders } from './gltfDecoders';
 import { normalizeModel, SOURCE_METRES_PER_UNIT } from './processing/ModelTransforms';
 import { disposeObject } from './processing/ModelLifecycle';
 import { UV_ORIGIN_TOP_LEFT_KEY } from './materialOverrides';
 import { frontendDiagnostics } from '../diagnostics/runtime';
+import type { ModelFileReport } from './fbxImport/nativeImporter';
+import type { ModelConvertOptions } from '../workers/fbxImport.worker';
 
 // Re-export specific utilities for consumers (hooks) to maintain API compatibility
 export { disposeModel, disposeObject } from './processing/ModelLifecycle';
@@ -108,13 +110,16 @@ export interface ModelLoadOptions {
   diagnostics?: { operationId: string; traceId: string; spanId?: string; assetAlias: string };
   /** Swap colour and material maps for GPU-compressed textures (the game's Texture compression setting); on by default. */
   compressTextures?: boolean;
+  /** How an FBX or OBJ is read: what to bring in, and how. */
+  convert?: ModelConvertOptions;
 }
 
 type WorkerFormat = 'fbx' | 'obj';
 
 type WorkerResponse =
   | { type: 'progress'; progress: number; phase: ImportPhase; workerState: string }
-  | { type: 'complete'; glb: ArrayBuffer; itemCount: number; clipCount: number; missingTextures: number; metresPerUnit: number | null }
+  | { type: 'complete'; glb: ArrayBuffer; itemCount: number; clipCount: number; missingTextures: string[]; metresPerUnit: number | null; report: ModelFileReport }
+  | { type: 'inspected'; report: ModelFileReport }
   | { type: 'error'; message: string };
 
 type ParsedGltf = Awaited<ReturnType<GLTFLoader['parseAsync']>>;
@@ -126,6 +131,8 @@ interface ParsedModel {
   missingTextures?: number;
   /** Metres per unit the source says it is authored in (FBX), when it says. */
   metresPerUnit?: number | null;
+  /** What the source file held and what was made of it (FBX, OBJ). */
+  report?: ModelFileReport;
 }
 
 const abortError = (): DOMException => new DOMException('Asset import was cancelled.', 'AbortError');
@@ -169,6 +176,8 @@ const parseOffThread = async (
   signal?: AbortSignal,
   onProgress?: (progress: number, phase: ImportPhase) => void,
   diagnostics?: { operationId: string; traceId: string; spanId?: string; assetAlias: string },
+  fileName?: string,
+  convert?: ModelConvertOptions,
 ): Promise<ParsedModel> => {
   const label = format.toUpperCase();
   const parsePhase: ImportPhase = format === 'fbx' ? 'fbx_structure_parse' : 'model_structure_parse';
@@ -180,7 +189,7 @@ const parseOffThread = async (
     phase: 'worker_creation', workerState: 'created', queueState: 'worker_active', assetAlias: diagnostics.assetAlias, progressBucket: 0,
   }, diagnostics);
   try {
-    const converted = await new Promise<{ glb: ArrayBuffer; itemCount: number; clipCount: number; missingTextures: number; metresPerUnit: number | null }>((resolve, reject) => {
+    const converted = await new Promise<Extract<WorkerResponse, { type: 'complete' }>>((resolve, reject) => {
       const onAbort = () => {
         worker.terminate();
         reject(abortError());
@@ -219,7 +228,7 @@ const parseOffThread = async (
           resolve(message);
         }
       };
-      worker.postMessage({ type: 'parse', buffer: source, format }, [source]);
+      worker.postMessage({ type: 'parse', buffer: source, format, name: fileName, options: convert }, [source]);
     });
     throwIfAborted(signal);
     onProgress?.(0.86, 'viewport_materialization');
@@ -227,8 +236,8 @@ const parseOffThread = async (
     throwIfAborted(signal);
     const object = loaded.scene;
     object.animations = loaded.animations;
-    if (converted.missingTextures > 0) frontendDiagnostics.warning('model_textures_missing', converted.missingTextures);
-    return { object, animations: loaded.animations, missingTextures: converted.missingTextures, metresPerUnit: converted.metresPerUnit };
+    if (converted.missingTextures.length > 0) frontendDiagnostics.warning('model_textures_missing', converted.missingTextures.length);
+    return { object, animations: loaded.animations, missingTextures: converted.missingTextures.length, metresPerUnit: converted.metresPerUnit, report: converted.report };
   } finally {
     worker.terminate();
   }
@@ -368,12 +377,10 @@ const parseGltfNative = async (
 };
 
 /**
- * Authored glTF materials are already metal/rough PBR with correct colour
- * spaces, alpha modes and sidedness; the FBX repair heuristics would force
- * blended materials opaque and strip legitimate white emissive. Only enable
- * shadows, as every other import does.
+ * Every model arrives as glTF, with metal/rough PBR materials, correct colour spaces, alpha modes
+ * and sidedness, so only shadows are left to enable.
  */
-const prepareNativeGltfMaterials = (object: THREE.Object3D): void => {
+const prepareImportedModel = (object: THREE.Object3D): void => {
   // glTF UVs start top-left, so override textures for this model load with flipY off.
   object.userData[UV_ORIGIN_TOP_LEFT_KEY] = true;
   object.traverse((child) => {
@@ -418,8 +425,7 @@ const nameAnimations = (animations: THREE.AnimationClip[], fileName: string, for
  *    (FBX when nothing else matches). FBX and OBJ parse in a worker and
  *    arrive as a GLB handoff; glTF/GLB materialize directly on this thread.
  * 2. Cleanses and names animations (glTF clips keep their authored names).
- * 3. Optimizes FBX/OBJ materials (Phong -> Standard, PBR fixes).
- * 4. Normalizes scale and position (optional).
+ * 3. Normalizes scale and position (optional).
  */
 export const loadModelFile = async (file: File, options: ModelLoadOptions = { normalize: true }): Promise<LoadedModelData> => {
   // Create object URL for the file
@@ -432,13 +438,11 @@ export const loadModelFile = async (file: File, options: ModelLoadOptions = { no
     throwIfAborted(options.signal);
     const format = detectModelFormat(file) ?? sniffModelFormat(source) ?? 'fbx';
 
-    // FBXLoader.load() fetches asynchronously but invokes its CPU-heavy
-    // parse() synchronously on the calling renderer thread. FBX (and OBJ)
-    // parse and compact conversion therefore happen in an isolated worker;
-    // only the optimized GLB handoff is materialized into Three objects here.
+    // FBX and OBJ parse and convert in an isolated worker; only the GLB handoff
+    // is materialized into Three objects here.
     const parsed = format === 'glb' || format === 'gltf'
       ? await parseGltfNative(source, format, options.signal, options.onProgress)
-      : await parseOffThread(source, format, options.signal, options.onProgress, options.diagnostics);
+      : await parseOffThread(source, format, options.signal, options.onProgress, options.diagnostics, file.name, options.convert);
     object = parsed.object;
 
     // --- FILTER ANIMATIONS ---
@@ -451,8 +455,7 @@ export const loadModelFile = async (file: File, options: ModelLoadOptions = { no
 
     // --- OPTIMIZE MATERIALS ---
     options.onProgress?.(0.91, 'material_optimization_normalization');
-    if (format === 'glb' || format === 'gltf') prepareNativeGltfMaterials(object);
-    else optimizeModelMaterials(object);
+    prepareImportedModel(object);
     if (options.compressTextures !== false) await compressModelTextures(object);
     // Hair, lashes and leaf cards draw a solid body, then their soft fringe.
     splitAlphaCards(object);
@@ -507,6 +510,7 @@ export const loadModelFile = async (file: File, options: ModelLoadOptions = { no
       isPlacedInScene: false,
       initialScale,
       ...(parsed.missingTextures ? { missingTextures: parsed.missingTextures } : {}),
+      ...(parsed.report ? { importReport: parsed.report } : {}),
     };
 
   } catch (err) {

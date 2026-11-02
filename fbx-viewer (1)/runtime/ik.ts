@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { isPartCopy } from '../utils/partCopies';
 
 /**
  * Inverse kinematics for THREE.Object3D chains, usually skeleton Bones. Solves read the chain's current
@@ -40,8 +39,7 @@ const looseBoneName = (name: string): string => (name.split(/[|:]/).pop() ?? nam
 /**
  * The first object under `root` (depth first, `root` included) named `name`. A Bone with the exact name
  * wins, then a Bone whose name matches loosely ('Head' finds 'mixamorig:Head', 'mixamorig1_Head' or
- * 'HEAD'), then any other object the same two ways. A part's copy of a bone ('mixamorigSpine_1' under
- * 'mixamorigSpine', see isPartCopy) is found only by its exact name, never for 'Spine1'.
+ * 'HEAD'), then any other object the same two ways.
  * `skip` leaves out a node and everything below it.
  */
 export const findBone = (
@@ -55,7 +53,7 @@ export const findBone = (
     const stack: THREE.Object3D[] = [root];
     while (stack.length) {
         const node = stack.pop()!;
-        const match = node.name === name ? 0 : looseBoneName(node.name) === wanted && !isPartCopy(node) ? 1 : -1;
+        const match = node.name === name ? 0 : looseBoneName(node.name) === wanted ? 1 : -1;
         if (match >= 0) {
             const rank = match + ((node as THREE.Bone).isBone ? 0 : 2);
             if (rank === 0) return node;

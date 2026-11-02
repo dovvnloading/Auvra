@@ -120,10 +120,10 @@ describe('seating a carried weapon on the body', () => {
     const knee = new THREE.Bone();
     knee.name = 'mixamorigRightLeg';
     knee.position.set(0, -0.8, 0);
-    // A part's copy of the thigh bone, first among its children, as Mixamo characters have.
-    const copy = new THREE.Bone();
-    copy.name = 'mixamorigRightUpLeg_1';
-    thigh.add(copy);
+    // A helper bone sitting exactly on the thigh, first among its children, as twist bones do.
+    const twist = new THREE.Bone();
+    twist.name = 'mixamorigRightUpLegTwist';
+    thigh.add(twist);
     thigh.add(knee);
     root.add(thigh);
     const geometry = new THREE.CylinderGeometry(0.1, 0.1, 0.8, 24, 4, true);

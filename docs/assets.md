@@ -13,6 +13,14 @@ The world is in metres: gravity, vehicles, speeds and distances all are. A chara
 
 An FBX that names texture images it does not contain (they were left beside the file it came from) still imports, without those textures, and says how many it left out. Import the images as textures and assign them in the model's **Material Overrides**.
 
+FBX and OBJ files are read by a native importer in the background, so a large file does not stall the editor. It reads every FBX version from Maya, 3ds Max, Blender, MotionBuilder, Cinema 4D and others, in binary or text:
+
+- **Orientation and units.** A file authored Z-up is stood up on import. A file's unit is read from the file.
+- **Materials.** Base colour, roughness, metalness, normal, emissive, opacity and ambient occlusion maps come through as physically based materials, including those Blender writes into its FBX exports. Roughness and metalness maps are packed into one image, and a glossiness map is inverted into roughness. TGA and TIFF images are read too.
+- **Geometry.** Polygons are triangulated, corners are shared between triangles, and a mesh has one piece per material. A mesh with no normals gets them worked out, keeping edges sharper than 60 degrees hard. Parts with a normal map get MikkTSpace tangents, the standard the maps are baked against, unless the file has its own.
+- **Skeletons.** A character split into several meshes shares one skeleton. Each vertex keeps its four strongest bones.
+- **Animation.** Each take in a file becomes a clip, with all its animation layers merged and its curves followed exactly, then cut to the take's range and stripped of keys that change nothing. Blend shapes and their animation come through.
+
 Animations in FBX and glTF files are kept and can be bound to characters in the animation graph.
 
 Compressed glTF and GLB files load as they are: **Draco** and **meshopt** geometry is decoded as the model loads, and **KTX2 (Basis Universal)** textures are transcoded to a format the graphics card reads directly (BC7 or BC1/BC3 on desktops, ASTC or ETC on phones), so they stay small in graphics memory as well as on disk. The decoders are bundled into the editor and into built games.
