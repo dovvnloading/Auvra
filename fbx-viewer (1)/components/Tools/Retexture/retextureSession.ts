@@ -153,10 +153,13 @@ export const startingLookName = (part: SessionPart): string => (Object.keys(part
 export const restyleInstruction = (words: string): string =>
   `This is a flat texture map. Change all of its surface to: ${words.trim()}. Keep the exact same layout, shapes, seams, folds and positions, and keep areas that are darker or lighter than others darker or lighter. No new elements.`;
 
-const pixelsOf = async (url: string, width: number, height: number): Promise<Pixels> => {
+/** A picture's pixels, at the given size or else at its own. */
+const pixelsOf = async (url: string, wantedWidth?: number, wantedHeight?: number): Promise<Pixels> => {
   const image = new Image();
   image.src = url;
   await image.decode();
+  const width = wantedWidth ?? image.naturalWidth;
+  const height = wantedHeight ?? image.naturalHeight;
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -203,6 +206,14 @@ const PREVIEW_EDGE = 512;
 const NEW_TEXTURE_MEGAPIXELS = 4;
 /** The size of a map painted through views of an object. A model's answer is no sharper than its views, whatever this is. */
 const PAINTED_MAP_EDGE = 2048;
+
+/** The size a result's map is made at. Painted through views it holds more than a small map could, so that map grows to hold it, laid out as it was. */
+export const resultMapSize = (source: PictureSize | undefined, throughViews: boolean): PictureSize => {
+  if (!source) return { width: PAINTED_MAP_EDGE, height: PAINTED_MAP_EDGE };
+  if (!throughViews) return { width: source.width, height: source.height };
+  const grow = Math.max(1, PAINTED_MAP_EDGE / Math.max(source.width, source.height));
+  return { width: Math.round(source.width * grow), height: Math.round(source.height * grow) };
+};
 const MAX_LIBRARY_NAME = 128;
 /** Which model makes surface maps, where a provider has one. */
 const MAPS_PROVIDER = 'fal';
@@ -553,12 +564,12 @@ class RetextureSessions {
     if (this.mixing?.take === take) return this.mixing.ready;
     const ready = (async (): Promise<TakeMix> => {
       if ((!take.source && !take.sheet) || !take.rawUrl) throw new Error('This result can no longer be read.');
-      const { width, height } = take.source ?? { width: PAINTED_MAP_EDGE, height: PAINTED_MAP_EDGE };
+      const { width, height } = resultMapSize(take.source, Boolean(take.sheet));
       const original = take.source ? await pixelsOf(take.source.url, width, height) : null;
       const used = original ? usedAreaOfPart(session.object, part, width, height) : null;
       let detail: DetailMix;
       if (take.sheet) {
-        const answer = await pixelsOf(take.rawUrl, take.sheet.width, take.sheet.height);
+        const answer = await pixelsOf(take.rawUrl);
         if (original) {
           const baked = bakeViews(session.object, part, take.sheet, answer, width, height);
           if (!baked) throw new Error('The result could not be put back on the map.');
@@ -687,7 +698,7 @@ class RetextureSessions {
 
   /** Makes the surface maps a model answered with fit the result they are for: put back on the map through the cameras that made a sheet, and held to what its colours can bear. */
   private async finishSurfaces(session: ModelSession, part: SessionPart, take: Take, sheet: ViewSheet | null, maps: readonly SurfaceMap[]) {
-    const { width, height } = take.size ?? take.source ?? { width: PAINTED_MAP_EDGE, height: PAINTED_MAP_EDGE };
+    const { width, height } = take.size ?? resultMapSize(take.source, Boolean(sheet));
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
@@ -697,7 +708,7 @@ class RetextureSessions {
     for (const surface of maps) {
       const frame = context.createImageData(width, height);
       if (sheet) {
-        const answer = await pixelsOf(surface.url, sheet.width, sheet.height);
+        const answer = await pixelsOf(surface.url);
         const bake = surface.role === 'normal' ? bakeNormals : bakePainted;
         const baked = bake(session.object, part, sheet, answer, width, height);
         if (!baked) throw new Error('The surface maps could not be put back on the map.');

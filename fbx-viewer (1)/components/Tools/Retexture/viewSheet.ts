@@ -9,18 +9,19 @@ import type { ModelPart, PartMaterial } from './parts';
  * from every side, which a model edits as one picture, whose changes are then put back on the map through the same cameras.
  */
 
-const SHEET_COLUMNS = 3;
-const SHEET_ROWS = 2;
-const CELL_PX = 682;
-/** Room around the object in its cell, as a model can move an outline a little. */
-const CELL_MARGIN = 1.08;
+const SHEET_WIDTH = 2046;
+const SHEET_HEIGHT = 1364;
+/** Room around the object in each view, as a share of its longest side, as a model can move an outline a little. */
+const VIEW_MARGIN = 0.02;
+/** What is left between one view and the next. */
+const VIEW_GAP_PX = 6;
 /** A plain mid grey, which nothing is mistaken for and a model leaves alone. */
 const BACKDROP = 128;
 
 /** What a sheet comes to, for working out what a run costs. */
-export const SHEET_MEGAPIXELS = (CELL_PX * SHEET_COLUMNS * CELL_PX * SHEET_ROWS) / 1_000_000;
-/** The broad colour of a cell is worked out at this size: only its overall look is wanted from it. */
-const BROAD_CELL_PX = 128;
+export const SHEET_MEGAPIXELS = (SHEET_WIDTH * SHEET_HEIGHT) / 1_000_000;
+/** The broad colour of a view is worked out with this many pixels along the longest side of any: only its overall look is wanted from it. */
+const BROAD_LONGEST_PX = 128;
 const BROAD_BLUR_RADIUS = 3;
 /** How far behind what a camera sees a point may lie and still count as seen, as a share of the depth range. */
 const SEEN_DEPTH_BIAS = 0.004;
@@ -49,12 +50,13 @@ export interface SheetCell {
   /** Left and bottom of the cell in the sheet, in pixels from its bottom left. */
   x: number;
   y: number;
+  width: number;
+  height: number;
 }
 
 export interface ViewSheet {
   width: number;
   height: number;
-  cell: number;
   cells: SheetCell[];
   /** The object as drawn: RGBA, from the bottom row up. Alpha tells it from what is around it. */
   drawn: Uint8Array;
@@ -90,28 +92,77 @@ const withRenderer = <T>(work: (renderer: THREE.WebGLRenderer) => T): T | null =
   }
 };
 
-const camerasFor = (object: THREE.Object3D, part: ModelPart, cell: number): SheetCell[] | null => {
+export interface PackedView {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** How far each try at fitting views on a sheet is smaller than the last. */
+const PACK_STEP = 0.985;
+
+/**
+ * Lays out views of the given sizes on a sheet at the one scale that makes them largest, each in the highest place it fits, the
+ * biggest first. All of an object is then drawn at the same detail, and a long one lies along the sheet rather than as a strip
+ * across a square.
+ */
+export const packedViews = (sizes: readonly { across: number; high: number }[], sheetWidth: number, sheetHeight: number): { scale: number; placed: PackedView[] } => {
+  const biggestFirst = sizes.map((_, index) => index).sort((a, b) => sizes[b].across * sizes[b].high - sizes[a].across * sizes[a].high);
+  /** With y from the top of the sheet. */
+  const placedAt = (scale: number): PackedView[] | null => {
+    const placed: PackedView[] = [];
+    const taken: PackedView[] = [];
+    for (const index of biggestFirst) {
+      const width = Math.ceil(sizes[index].across * scale);
+      const height = Math.ceil(sizes[index].high * scale);
+      const places = [{ x: 0, y: 0 }, ...taken.flatMap((other) => [{ x: other.x + other.width + VIEW_GAP_PX, y: other.y }, { x: other.x, y: other.y + other.height + VIEW_GAP_PX }])]
+        .filter(({ x, y }) => x + width <= sheetWidth && y + height <= sheetHeight
+          && !taken.some((other) => x < other.x + other.width + VIEW_GAP_PX && other.x < x + width + VIEW_GAP_PX && y < other.y + other.height + VIEW_GAP_PX && other.y < y + height + VIEW_GAP_PX))
+        .sort((a, b) => a.y - b.y || a.x - b.x);
+      if (!places.length) return null;
+      const view = { ...places[0], width, height };
+      taken.push(view);
+      placed[index] = { ...view, y: sheetHeight - view.y - height };
+    }
+    return placed;
+  };
+  let scale = Math.min(...sizes.map(({ across, high }) => Math.min(sheetWidth / across, sheetHeight / high)));
+  let placed = placedAt(scale);
+  while (!placed) {
+    scale *= PACK_STEP;
+    placed = placedAt(scale);
+  }
+  return { scale, placed };
+};
+
+const camerasFor = (object: THREE.Object3D, part: ModelPart): SheetCell[] | null => {
   const box = new THREE.Box3();
   for (const mesh of meshesOf(object, part)) box.expandByObject(mesh);
   if (box.isEmpty()) return null;
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
   const reach = size.length() || 1;
-  return VIEW_DIRECTIONS.map(([x, y, z], index) => {
+  const margin = Math.max(size.x, size.y, size.z, reach * 0.01) * VIEW_MARGIN * 2;
+  const views = VIEW_DIRECTIONS.map(([x, y, z]) => {
     const direction = new THREE.Vector3(x, y, z);
     const up = y !== 0 ? new THREE.Vector3(0, 0, -y) : new THREE.Vector3(0, 1, 0);
     const right = new THREE.Vector3().crossVectors(up, direction);
     const across = Math.abs(right.x) * size.x + Math.abs(right.y) * size.y + Math.abs(right.z) * size.z;
     const high = Math.abs(up.x) * size.x + Math.abs(up.y) * size.y + Math.abs(up.z) * size.z;
-    const half = (Math.max(across, high, reach * 0.01) * CELL_MARGIN) / 2;
-    const camera = new THREE.OrthographicCamera(-half, half, half, -half, reach * 0.1, reach * 3);
+    return { direction, up, across: across + margin, high: high + margin };
+  });
+  const { scale, placed } = packedViews(views, SHEET_WIDTH, SHEET_HEIGHT);
+  return views.map(({ direction, up }, index) => {
+    const view = placed[index];
+    const halfAcross = view.width / scale / 2;
+    const halfHigh = view.height / scale / 2;
+    const camera = new THREE.OrthographicCamera(-halfAcross, halfAcross, halfHigh, -halfHigh, reach * 0.1, reach * 3);
     camera.position.copy(center).addScaledVector(direction, reach * 1.5);
     camera.up.copy(up);
     camera.lookAt(center);
     camera.updateMatrixWorld(true);
-    const column = index % SHEET_COLUMNS;
-    const rowFromTop = Math.floor(index / SHEET_COLUMNS);
-    return { camera, direction, x: column * cell, y: (SHEET_ROWS - 1 - rowFromTop) * cell };
+    return { camera, direction, ...view };
   });
 };
 
@@ -150,7 +201,7 @@ export type SheetLook = { asShape: true } | { map: THREE.Texture };
  * has no picture of its own are drawn as a plain shape instead, for painting from nothing. With a `look` wearing a map, the
  * part draws with that.
  */
-const drawCells = (renderer: THREE.WebGLRenderer, object: THREE.Object3D, cells: readonly SheetCell[], cell: number, target: THREE.WebGLRenderTarget, part?: ModelPart, look?: SheetLook) => {
+const drawCells = (renderer: THREE.WebGLRenderer, object: THREE.Object3D, cells: readonly SheetCell[], target: THREE.WebGLRenderTarget, part?: ModelPart, look?: SheetLook) => {
   const undo: (() => void)[] = [];
   const flatOf = new Map<THREE.Material, THREE.Material>();
   const clay = look && 'asShape' in look ? clayLight() : null;
@@ -190,8 +241,8 @@ const drawCells = (renderer: THREE.WebGLRenderer, object: THREE.Object3D, cells:
     renderer.clear();
     target.scissorTest = true;
     for (const view of cells) {
-      target.viewport.set(view.x, view.y, cell, cell);
-      target.scissor.set(view.x, view.y, cell, cell);
+      target.viewport.set(view.x, view.y, view.width, view.height);
+      target.scissor.set(view.x, view.y, view.width, view.height);
       renderer.setRenderTarget(target);
       renderer.render(object, view.camera);
     }
@@ -215,15 +266,14 @@ const sheetTarget = (width: number, height: number, withDepth: boolean) => {
 
 /** The object from every side, as a model is to be shown it, or null where it cannot be drawn. */
 export const renderViewSheet = (object: THREE.Object3D, part: ModelPart, look?: SheetLook): ViewSheet | null => withRenderer((renderer) => {
-  const cell = CELL_PX;
-  const width = cell * SHEET_COLUMNS;
-  const height = cell * SHEET_ROWS;
-  const cells = camerasFor(object, part, cell);
+  const width = SHEET_WIDTH;
+  const height = SHEET_HEIGHT;
+  const cells = camerasFor(object, part);
   if (!cells) return null;
   object.updateMatrixWorld(true);
   const target = sheetTarget(width, height, true);
   try {
-    drawCells(renderer, object, cells, cell, target, part, look);
+    drawCells(renderer, object, cells, target, part, look);
     const drawn = new Uint8Array(width * height * 4);
     renderer.readRenderTargetPixels(target, 0, 0, width, height, drawn);
     const canvas = document.createElement('canvas');
@@ -244,32 +294,39 @@ export const renderViewSheet = (object: THREE.Object3D, part: ModelPart, look?: 
       }
     }
     context.putImageData(image, 0, 0);
-    return { width, height, cell, cells, drawn, picture: canvas.toDataURL('image/png') };
+    return { width, height, cells, drawn, picture: canvas.toDataURL('image/png') };
   } finally {
     target.depthTexture?.dispose();
     target.dispose();
   }
 });
 
-/** A sheet's picture at a low size, each cell's colour spread over and past its object so that nothing is read from the backdrop. */
-const broadSheet = (sheet: ViewSheet, picture: Uint8Array): THREE.DataTexture => {
-  const { width, cell } = sheet;
-  const columns = SHEET_COLUMNS * BROAD_CELL_PX;
-  const rows = SHEET_ROWS * BROAD_CELL_PX;
+/** A sheet's picture at a low size, each cell's colour spread over and past its object so that nothing is read from the backdrop. The picture may be larger than the sheet. */
+const broadSheet = (sheet: ViewSheet, picture: Uint8Array, pictureWidth: number, pictureHeight: number): THREE.DataTexture => {
+  const { width, height } = sheet;
+  const roughStep = Math.max(...sheet.cells.flatMap((view) => [view.width, view.height])) / BROAD_LONGEST_PX;
+  const columns = Math.max(1, Math.round(width / roughStep));
+  const rows = Math.max(1, Math.round(height / roughStep));
+  const stepAcross = width / columns;
+  const stepUp = height / rows;
   const out = new Uint8Array(columns * rows * 4);
-  const count = BROAD_CELL_PX * BROAD_CELL_PX;
-  const step = cell / BROAD_CELL_PX;
   for (const view of sheet.cells) {
+    const originColumn = Math.min(columns - 1, Math.round(view.x / stepAcross));
+    const originRow = Math.min(rows - 1, Math.round(view.y / stepUp));
+    const lowWidth = Math.max(1, Math.min(columns - originColumn, Math.round(view.width / stepAcross)));
+    const lowHeight = Math.max(1, Math.min(rows - originRow, Math.round(view.height / stepUp)));
+    const count = lowWidth * lowHeight;
     const mask = new Float32Array(count);
     const channels = [new Float32Array(count), new Float32Array(count), new Float32Array(count)];
     const totals = [0, 0, 0];
     let solidPixels = 0;
-    for (let y = 0; y < cell; y += 1) {
-      const row = Math.min(BROAD_CELL_PX - 1, Math.floor(y / step));
-      for (let x = 0; x < cell; x += 1) {
-        const at = ((view.y + y) * width + view.x + x) * 4;
-        if (sheet.drawn[at + 3] < 128) continue;
-        const low = row * BROAD_CELL_PX + Math.min(BROAD_CELL_PX - 1, Math.floor(x / step));
+    for (let y = 0; y < view.height; y += 1) {
+      const row = Math.min(lowHeight - 1, Math.floor(y / stepUp));
+      const pictureRow = Math.floor(((view.y + y) * pictureHeight) / height);
+      for (let x = 0; x < view.width; x += 1) {
+        if (sheet.drawn[((view.y + y) * width + view.x + x) * 4 + 3] < 128) continue;
+        const low = row * lowWidth + Math.min(lowWidth - 1, Math.floor(x / stepAcross));
+        const at = (pictureRow * pictureWidth + Math.floor(((view.x + x) * pictureWidth) / width)) * 4;
         mask[low] += 1;
         solidPixels += 1;
         for (let channel = 0; channel < 3; channel += 1) {
@@ -278,14 +335,12 @@ const broadSheet = (sheet: ViewSheet, picture: Uint8Array): THREE.DataTexture =>
         }
       }
     }
-    const spread = blurred(mask, BROAD_CELL_PX, BROAD_CELL_PX, BROAD_BLUR_RADIUS);
-    const originColumn = Math.round(view.x / step);
-    const originRow = Math.round(view.y / step);
+    const spread = blurred(mask, lowWidth, lowHeight, BROAD_BLUR_RADIUS);
     for (let channel = 0; channel < 3; channel += 1) {
-      const blurredChannel = blurred(channels[channel], BROAD_CELL_PX, BROAD_CELL_PX, BROAD_BLUR_RADIUS);
+      const blurredChannel = blurred(channels[channel], lowWidth, lowHeight, BROAD_BLUR_RADIUS);
       const mean = solidPixels ? totals[channel] / solidPixels : 0;
       for (let low = 0; low < count; low += 1) {
-        const at = ((originRow + Math.floor(low / BROAD_CELL_PX)) * columns + originColumn + (low % BROAD_CELL_PX)) * 4;
+        const at = ((originRow + Math.floor(low / lowWidth)) * columns + originColumn + (low % lowWidth)) * 4;
         out[at + channel] = Math.round(spread[low] > 0.001 ? blurredChannel[low] / spread[low] : mean);
         out[at + 3] = 255;
       }
@@ -408,14 +463,14 @@ const withBake = <T>(
   object: THREE.Object3D, part: ModelPart, sheet: ViewSheet, painted: Pixels, width: number, height: number, style: BakeStyle, asNormals: boolean,
   work: (read: (colors: THREE.Texture) => Uint8Array, sources: BakeSources) => T,
 ): T | null => withRenderer((renderer) => {
-  const fromBottom = new Uint8Array(sheet.width * sheet.height * 4);
-  for (let y = 0; y < sheet.height; y += 1) {
-    fromBottom.set(painted.data.subarray(y * sheet.width * 4, (y + 1) * sheet.width * 4), (sheet.height - 1 - y) * sheet.width * 4);
+  const fromBottom = new Uint8Array(painted.width * painted.height * 4);
+  for (let y = 0; y < painted.height; y += 1) {
+    fromBottom.set(painted.data.subarray(y * painted.width * 4, (y + 1) * painted.width * 4), (painted.height - 1 - y) * painted.width * 4);
   }
   object.updateMatrixWorld(true);
   const depth = sheetTarget(sheet.width, sheet.height, true);
-  drawCells(renderer, object, sheet.cells, sheet.cell, depth);
-  const paintedTexture = new THREE.DataTexture(fromBottom, sheet.width, sheet.height, THREE.RGBAFormat);
+  drawCells(renderer, object, sheet.cells, depth);
+  const paintedTexture = new THREE.DataTexture(fromBottom, painted.width, painted.height, THREE.RGBAFormat);
   paintedTexture.minFilter = THREE.LinearFilter;
   paintedTexture.magFilter = THREE.LinearFilter;
   paintedTexture.needsUpdate = true;
@@ -430,8 +485,8 @@ const withBake = <T>(
       return texture;
     };
   };
-  const broadAfter = once(() => broadSheet(sheet, fromBottom));
-  const broadBefore = once(() => broadSheet(sheet, sheet.drawn));
+  const broadAfter = once(() => broadSheet(sheet, fromBottom, painted.width, painted.height));
+  const broadBefore = once(() => broadSheet(sheet, sheet.drawn, sheet.width, sheet.height));
   const material = new THREE.ShaderMaterial({
     vertexShader: BAKE_VERTEX,
     fragmentShader: BAKE_FRAGMENT,
@@ -443,7 +498,7 @@ const withBake = <T>(
       colors: { value: paintedTexture },
       depths: { value: depth.depthTexture },
       cameras: { value: sheet.cells.map((view) => new THREE.Matrix4().multiplyMatrices(view.camera.projectionMatrix, view.camera.matrixWorldInverse)) },
-      cellsInSheet: { value: sheet.cells.map((view) => new THREE.Vector4(view.x / sheet.width, view.y / sheet.height, sheet.cell / sheet.width, sheet.cell / sheet.height)) },
+      cellsInSheet: { value: sheet.cells.map((view) => new THREE.Vector4(view.x / sheet.width, view.y / sheet.height, view.width / sheet.width, view.height / sheet.height)) },
       directions: { value: sheet.cells.map((view) => view.direction) },
       bias: { value: SEEN_DEPTH_BIAS },
       handover: { value: style.handover },
