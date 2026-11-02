@@ -12,6 +12,30 @@ export interface TerrainTextureLayerSettings {
   tiling: number;
 }
 
+/** Holes are stored as a splat map asset: red is non-zero at a cell cut out, one sample per cell plus the grid's far edge. */
+export const encodeTerrainHoles = (holes: ArrayLike<number>, resolution: number): Uint8Array<ArrayBuffer> => {
+  const samples = terrainSamplesPerSide(resolution);
+  const weights = new Uint8Array(samples * samples * TERRAIN_SPLAT_CHANNELS);
+  for (let row = 0; row < resolution; row++) {
+    for (let column = 0; column < resolution; column++) {
+      if (holes[row * resolution + column]) weights[(row * samples + column) * TERRAIN_SPLAT_CHANNELS] = FULL_WEIGHT;
+    }
+  }
+  return encodeTerrainSplat(weights, samples, samples);
+};
+
+export const decodeTerrainHoles = (source: ArrayBuffer | Uint8Array, expected: TerrainSplatGrid): number[] => {
+  const weights = decodeTerrainSplat(source, expected);
+  const resolution = expected.columns - 1;
+  const holes = new Array<number>(resolution * resolution);
+  for (let row = 0; row < resolution; row++) {
+    for (let column = 0; column < resolution; column++) {
+      holes[row * resolution + column] = weights[(row * expected.columns + column) * TERRAIN_SPLAT_CHANNELS] ? 1 : 0;
+    }
+  }
+  return holes;
+};
+
 export interface TerrainSplatGrid {
   columns: number;
   rows: number;
@@ -22,6 +46,8 @@ export interface TerrainPaintState {
   textureLayers?: readonly TerrainTextureLayerSettings[];
   splat?: readonly number[];
   splatmap?: TerrainSplatGrid & { assetId: string; encoding: string };
+  holes?: readonly number[];
+  holemap?: TerrainSplatGrid & { assetId: string; encoding: string };
 }
 
 /**
@@ -71,6 +97,11 @@ export function terrainSplatLength(resolution: number): number {
 /** True while a terrain's weights are stored in an asset that is not loaded yet. */
 export function isTerrainSplatPending(terrain: Pick<TerrainPaintState, 'splat' | 'splatmap'> | null | undefined): boolean {
   return Boolean(terrain?.splatmap && !(terrain.splat && terrain.splat.length > 0));
+}
+
+/** True while a terrain's holes are stored in an asset that is not loaded yet. */
+export function isTerrainHolesPending(terrain: Pick<TerrainPaintState, 'holes' | 'holemap'> | null | undefined): boolean {
+  return Boolean(terrain?.holemap && !terrain.holes);
 }
 
 /** True when the terrain carries in-memory weights that describe its grid. */

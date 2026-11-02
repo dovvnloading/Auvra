@@ -9,8 +9,8 @@ import { editorSession, selectObjectsForLevel, type EditorSessionLease } from '.
 import { subscribeDomainCascade, type DomainCascadeEvent } from '../utils/domainCascade';
 import { resolveTerrainHeightfield } from '../utils/terrainHeightfieldEditor';
 import { isTerrainHeightfieldPending, TerrainHeightfieldEncodingError } from '../utils/terrainHeightfieldCodec';
-import { resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplatEditor';
-import { isTerrainSplatPending, terrainLayersReferenceTexture, withoutTerrainLayerTexture } from '../components/Environment/Terrain/terrainSplatCodec';
+import { resolveTerrainHolemap, resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplatEditor';
+import { isTerrainHolesPending, isTerrainSplatPending, terrainLayersReferenceTexture, withoutTerrainLayerTexture } from '../components/Environment/Terrain/terrainSplatCodec';
 import { collectSubtree, sortByHierarchy } from '../utils/sceneGraph';
 import type { LevelBakedLighting } from '../runtime/lighting/bakedLighting';
 
@@ -46,6 +46,51 @@ const withDescendants = (objects: readonly LevelObject[], isRoot: (object: Level
         if (isRoot(object) || (object.parentId && ids.has(object.parentId))) ids.add(object.id);
     }
     return ids;
+};
+
+/** Terrain fields that can hold millions of numbers. They are replaced whole, never changed in place, so history can share them. */
+const SHARED_TERRAIN_FIELDS = ['heights', 'splat', 'holes'] as const;
+
+/** A copy of the level's objects for the undo history, sharing the terrains' largest arrays. */
+const snapshotLevelObjects = (objects: readonly LevelObject[]): LevelObject[] => objects.map((object) => {
+    const terrain = object.terrainData;
+    if (!terrain) return JSON.parse(JSON.stringify(object)) as LevelObject;
+    const light: Record<string, unknown> = { ...terrain };
+    for (const field of SHARED_TERRAIN_FIELDS) delete light[field];
+    const copy = JSON.parse(JSON.stringify({ ...object, terrainData: light })) as LevelObject;
+    for (const field of SHARED_TERRAIN_FIELDS) {
+        const value = terrain[field];
+        if (value) (copy.terrainData as unknown as Record<string, unknown>)[field] = value;
+    }
+    return copy;
+});
+
+const sameNumbers = (a: readonly number[] | undefined, b: readonly number[] | undefined): boolean => {
+    if (a === b) return true;
+    if (!a || !b || a.length !== b.length) return false;
+    for (let index = 0; index < a.length; index++) {
+        if (a[index] !== b[index]) return false;
+    }
+    return true;
+};
+
+/** Whether two versions of a terrain say the same, without writing its millions of numbers out as text. */
+const sameTerrainObject = (a: LevelObject, b: LevelObject): boolean => {
+    for (const field of SHARED_TERRAIN_FIELDS) {
+        if (!a.terrainData || !b.terrainData) return false;
+        if (!sameNumbers(a.terrainData[field], b.terrainData[field])) return false;
+    }
+    const replacer = (key: string, value: unknown) => ((SHARED_TERRAIN_FIELDS as readonly string[]).includes(key) ? undefined : value);
+    return JSON.stringify(a, replacer) === JSON.stringify(b, replacer);
+};
+
+/** The first of Terrain, Terrain 2, Terrain 3... no terrain in the level is called. */
+const nextTerrainName = (objects: readonly LevelObject[]): string => {
+    const taken = new Set(objects.filter((object) => object.type === 'terrain').map((object) => object.name));
+    if (!taken.has('Terrain')) return 'Terrain';
+    let number = 2;
+    while (taken.has(`Terrain ${number}`)) number++;
+    return `Terrain ${number}`;
 };
 
 /** A deleted model removes its objects together with their descendants, as the host does. */
@@ -111,7 +156,10 @@ const diffLevelObjects = (currentState: LevelObject[], nextState: LevelObject[])
             // A level object is an authored document. Compare the complete
             // document so name/type/audio/spawn/terrain/sky and every
             // transform component survive undo/redo round trips.
-            if (JSON.stringify(oldItem) !== JSON.stringify(item)) {
+            const changed = oldItem.terrainData && item.terrainData
+                ? !sameTerrainObject(oldItem, item)
+                : JSON.stringify(oldItem) !== JSON.stringify(item);
+            if (changed) {
                 toUpdate.push(item);
             }
         }
@@ -261,7 +309,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
 
   const snapshotHistory = useCallback(() => {
       session.requireCurrent(session.captureReady());
-      const snapshot = JSON.parse(JSON.stringify(levelObjects));
+      const snapshot = snapshotLevelObjects(levelObjects);
       history.current.past.push(snapshot);
       if (history.current.past.length > 50) history.current.past.shift();
       history.current.future = []; 
@@ -273,7 +321,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       const lease = session.requireCurrent(session.captureReady());
       const previousState = history.current.past[history.current.past.length - 1];
       if (!previousState) return;
-      const currentSnapshot = JSON.parse(JSON.stringify(levelObjects));
+      const currentSnapshot = snapshotLevelObjects(levelObjects);
       historyMutationRef.current = true;
       // Rewritten documents supersede pending partial edits of the same objects.
       const superseded = supersedePendingEdits(changedLevelObjectIds(levelObjects, previousState));
@@ -302,7 +350,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       const lease = session.requireCurrent(session.captureReady());
       const nextState = history.current.future[history.current.future.length - 1];
       if (!nextState) return;
-      const currentSnapshot = JSON.parse(JSON.stringify(levelObjects));
+      const currentSnapshot = snapshotLevelObjects(levelObjects);
       historyMutationRef.current = true;
       const superseded = supersedePendingEdits(changedLevelObjectIds(levelObjects, nextState));
       let applied = false;
@@ -592,6 +640,48 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       return () => { active = false; };
   }, [addNotification, levelObjects]);
 
+  // Terrain holes are resolved the same way into terrainData.holes.
+  const failedHolemapsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+      const references = new Map<string, TerrainSplatmapReference>();
+      for (const object of levelObjects) {
+          const reference = object.terrainData?.holemap;
+          if (reference && isTerrainHolesPending(object.terrainData) && !failedHolemapsRef.current.has(reference.assetId)) {
+              references.set(reference.assetId, reference);
+          }
+      }
+      if (references.size === 0) return;
+      let active = true;
+      for (const reference of references.values()) {
+          resolveTerrainHolemap(reference).then((holes) => {
+              if (!active) return;
+              const resolves = (object: LevelObject): boolean => Boolean(
+                  object.terrainData?.holemap?.assetId === reference.assetId && isTerrainHolesPending(object.terrainData),
+              );
+              for (const snapshot of [...history.current.past, ...history.current.future]) {
+                  snapshot.forEach((object, index) => {
+                      if (resolves(object)) snapshot[index] = { ...object, terrainData: { ...object.terrainData!, holes } };
+                  });
+              }
+              setWorkingState((current) => {
+                  let changed = false;
+                  const nextObjects = current.levelObjects.map((object) => {
+                      if (!resolves(object)) return object;
+                      changed = true;
+                      return { ...object, terrainData: { ...object.terrainData!, holes } };
+                  });
+                  return changed ? { ...current, levelObjects: nextObjects } : current;
+              });
+          }, (error) => {
+              if (!active) return;
+              failedHolemapsRef.current.add(reference.assetId);
+              frontendDiagnostics.failure('terrain_holes_resolve_failed', error);
+              addNotification({ message: `Terrain holes could not be loaded (${describeError(error)}); the ground shows solid there.`, type: 'error' });
+          });
+      }
+      return () => { active = false; };
+  }, [addNotification, levelObjects]);
+
   const initLevels = useCallback(async (signal?: AbortSignal) => {
       const initialSession = session.getSnapshot();
       if (projectService.getStatus().projectId || initialSession.phase !== 'closed') return;
@@ -783,7 +873,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
               type === 'audio_emitter' ? 'Audio Emitter' :
               type === 'sky_sphere' ? 'Sky Atmosphere' :
               type === 'player_start' ? 'Player Start' :
-              type === 'terrain' ? `Terrain_${Math.floor(Math.random()*100)}` :
+              type === 'terrain' ? nextTerrainName(levelObjects) :
               (type === 'foliage' ? `${model?.name}_Foliage` : `${model?.name}_Prop`),
         position,
         rotation,

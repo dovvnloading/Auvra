@@ -8,7 +8,8 @@ import { View, PerspectiveCamera, OrthographicCamera, OrbitControls } from '@rea
 import { PostProcessAllowedContext } from '../../runtime/components/postProcess';
 import { useAssets, useLevel } from '../../context/SceneContext';
 import { LevelObject } from '../../types';
-import { InteractionMode, PaintMode, PaintSettings, TransformSettings, ViewportLayout, SculptSettings } from './types';
+import { InteractionMode, PaintMode, PaintSettings, TransformSettings, ViewportLayout } from './types';
+import type { TerrainToolSettings } from './Terrain/terrainTool';
 import { EnvironmentScene } from './EnvironmentScene';
 import type { FoliagePlacement } from './FoliageBrushTool';
 import { editorSession } from '../../utils/editorSession';
@@ -34,7 +35,8 @@ interface EnvironmentViewportProps {
     paintMode?: PaintMode;
     transformSettings: TransformSettings;
     paintSettings?: PaintSettings;
-    sculptSettings?: SculptSettings;
+    sculptSettings?: TerrainToolSettings;
+    onSculptSettingsChange?: (settings: TerrainToolSettings) => void;
     layout?: ViewportLayout;
     cameraSpeed?: number;
     /** Frame this object in every view; a new request (nonce) re-frames the same object. */
@@ -420,6 +422,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
     transformSettings,
     paintSettings,
     sculptSettings,
+    onSculptSettingsChange,
     layout = 'single',
     cameraSpeed = 1.0,
     focusRequest = null,
@@ -559,6 +562,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
         transformSettings,
         paintSettings,
         sculptSettings,
+    onSculptSettingsChange,
         onSnapshot: () => { if (canEdit()) snapshotHistory(); },
         selectedId: showsSelection ? selectedObjectId : null,
         selectedIds: showsSelection ? selectedObjectIds : undefined,

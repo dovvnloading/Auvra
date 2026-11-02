@@ -1,7 +1,9 @@
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { terrainSamplesPerSide } from '../../../utils/terrainHeightfieldCodec';
 import {
+  decodeTerrainHoles,
   decodeTerrainSplat,
+  encodeTerrainHoles,
   encodeTerrainSplat,
   normalizeTerrainLayers,
   TERRAIN_SPLATMAP_ENCODING,
@@ -79,6 +81,33 @@ export async function externalizeTerrainSplat<T extends TerrainPaintState>(
       terrainData: { ...base, splatmap: reference } as unknown as Result,
       remember: () => { knownSplats.set(splat, reference); },
     };
+  });
+}
+
+/** Persisted terrain data: inline holes replaced by their asset's reference. Writing no holes drops any stored. */
+export async function externalizeTerrainHoles<T extends TerrainPaintState>(
+  terrain: T,
+  upload: TerrainSplatUploader,
+): Promise<{ terrainData: Omit<T, 'holes'> }> {
+  const { holes, holemap, ...rest } = terrain;
+  if (!holes || !holes.some(value => value > 0)) {
+    // An unresolved reference stays; holes filled in again go with the array.
+    return { terrainData: (holes === undefined && holemap ? { ...rest, holemap } : rest) as unknown as Omit<T, 'holes'> };
+  }
+  return frontendDiagnostics.runAsync('terrain_splatmap', 'upload', async () => {
+    const samples = terrainSamplesPerSide(terrain.resolution);
+    const bytes = encodeTerrainHoles(holes, terrain.resolution);
+    const assetId = await upload(new File([bytes], 'terrain-holes.bin', { type: TERRAIN_SPLATMAP_MIME }));
+    const reference: TerrainSplatmapReference = { assetId, encoding: TERRAIN_SPLATMAP_ENCODING, columns: samples, rows: samples };
+    return { terrainData: { ...rest, holemap: reference } as unknown as Omit<T, 'holes'> };
+  });
+}
+
+/** Load and decode a terrain's holes. */
+export function resolveTerrainHolemap(reference: TerrainSplatmapReference, load: TerrainSplatLoader): Promise<number[]> {
+  return frontendDiagnostics.runAsync('terrain_splatmap', 'resolve', async () => {
+    if (reference.encoding !== TERRAIN_SPLATMAP_ENCODING) throw new Error('Terrain hole map encoding is not supported');
+    return decodeTerrainHoles(await load(reference.assetId), reference);
   });
 }
 

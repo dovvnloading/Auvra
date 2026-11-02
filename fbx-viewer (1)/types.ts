@@ -146,6 +146,10 @@ export interface TerrainData {
     // resolved from `splatmap`; persisted documents carry only the reference.
     splat?: number[];
     splatmap?: TerrainSplatmapReference;
+    // resolution * resolution cells cut out of the terrain, row by row: non-zero is a hole. In memory
+    // these are resolved from `holemap` (red channel); persisted documents carry only the reference.
+    holes?: number[];
+    holemap?: TerrainSplatmapReference;
 }
 
 export interface SkyConfig {

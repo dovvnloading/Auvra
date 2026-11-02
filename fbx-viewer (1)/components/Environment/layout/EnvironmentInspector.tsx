@@ -12,7 +12,7 @@ import { PrefabInstanceSection } from '../PrefabInstanceSection';
 import { LevelComponent, LevelObject, SpawnConfig } from '../../../types';
 import { EnvironmentBrushPanel } from '../EnvironmentBrushPanel';
 import { EnvironmentMaskTool } from '../EnvironmentMaskTool';
-import { TerrainLayerPanel } from '../Terrain/TerrainLayerPanel';
+import { TerrainPanel } from '../Terrain/TerrainPanel';
 import { ScrubbableInput } from '../../UI/Properties/ScrubbableInput';
 import { useScene } from '../../../context/SceneContext';
 import { WaveformEditor } from '../assets/WaveformEditor';
@@ -108,236 +108,6 @@ const useInspectorEdits = () => {
 
 type InspectorEdits = ReturnType<typeof useInspectorEdits>;
 
-// Internal Terrain Config Component
-const TerrainInspector: React.FC<{ 
-    actions: EnvironmentInspectorProps['actions'], 
-    sculptSettings: any 
-}> = ({ actions, sculptSettings }) => {
-    const { addLevelObject, levelObjects } = useScene();
-    const [activeTab, setActiveTab] = useState<'create' | 'sculpt'>('create');
-    
-    // Creation Settings
-    const [createSize, setCreateSize] = useState(100);
-    const [createRes, setCreateRes] = useState(128);
-
-    // Check if terrain exists
-    const existingTerrain = levelObjects.find(obj => obj.type === 'terrain');
-
-    const handleCreateTerrain = async () => {
-        if (existingTerrain) return;
-
-        const id = await addLevelObject(
-            '', 
-            [0, 0, 0], 
-            [0, 0, 0], 
-            [1, 1, 1], 
-            'terrain',
-            { resolution: createRes, width: createSize, depth: createSize, heights: [] }
-        );
-        
-        if (id) {
-            actions.setSelectedObjectId(id);
-            setActiveTab('sculpt');
-        }
-    };
-
-    return (
-        <div className="absolute right-0 top-12 bottom-0 z-20 pointer-events-auto flex">
-            <div className="w-72 bg-gray-900 border-l border-gray-800 flex flex-col shrink-0 z-20 shadow-xl animate-in slide-in-from-right-10 duration-200 h-full">
-                <div className="flex border-b border-gray-800 bg-gray-950">
-                    <button 
-                        onClick={() => setActiveTab('create')}
-                        className={`flex-1 py-3 text-2xs font-bold flex items-center justify-center gap-2 border-b-2 transition-colors ${activeTab === 'create' ? 'border-amber-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
-                    >
-                        <Layers size={12} /> Manage
-                    </button>
-                    <button 
-                        onClick={() => setActiveTab('sculpt')}
-                        disabled={!existingTerrain}
-                        className={`flex-1 py-3 text-2xs font-bold flex items-center justify-center gap-2 border-b-2 transition-colors ${activeTab === 'sculpt' ? 'border-amber-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed'}`}
-                    >
-                        <Hammer size={12} /> Sculpt
-                    </button>
-                </div>
-
-                <div className="p-4 space-y-6 overflow-y-auto custom-scrollbar flex-1">
-                    
-                    {activeTab === 'create' && (
-                        <div className="space-y-4">
-                            <div className="text-2xs font-bold text-gray-500 flex items-center gap-2">
-                                <Mountain size={12} /> Terrain Generation
-                            </div>
-
-                            {existingTerrain ? (
-                                <div className="bg-gray-800/50 border border-gray-700 rounded p-4 flex flex-col items-center text-center gap-3">
-                                    <div className="w-12 h-12 rounded-full bg-gray-800 flex items-center justify-center text-amber-500">
-                                        <AlertTriangle size={24} />
-                                    </div>
-                                    <div className="space-y-1">
-                                        <h4 className="text-xs font-bold text-white">Terrain Active</h4>
-                                        <p className="text-2xs text-gray-400 leading-relaxed">
-                                            Only one terrain object is allowed per scene. Select the existing terrain to sculpt it, or delete it to create a new one.
-                                        </p>
-                                    </div>
-                                    <button 
-                                        onClick={() => actions.setSelectedObjectId(existingTerrain.id)}
-                                        className="w-full py-2 bg-gray-800 hover:bg-gray-700 text-white text-xs font-bold rounded border border-gray-600 transition-colors"
-                                    >
-                                        Select Current Terrain
-                                    </button>
-                                </div>
-                            ) : (
-                                <div className="space-y-6 animate-in fade-in duration-300">
-                                    {/* Settings */}
-                                    <div className="space-y-4">
-                                        <div className="space-y-2">
-                                            <div className="flex justify-between items-center">
-                                                <span className="text-xs text-gray-300 font-bold flex items-center gap-2">
-                                                    <Scaling size={12} className="text-gray-500" /> Size (Meters)
-                                                </span>
-                                            </div>
-                                            <div className="bg-gray-800 rounded p-2 border border-gray-700">
-                                                <div className="flex items-center gap-2">
-                                                    <input 
-                                                        type="range" min="50" max="1000" step="50"
-                                                        value={createSize}
-                                                        onChange={(e) => setCreateSize(parseInt(e.target.value))}
-                                                        className="flex-1 h-1.5 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-amber-500"
-                                                    />
-                                                    <span className="text-xs font-mono text-white w-10 text-right">{createSize}m</span>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <div className="space-y-2">
-                                            <div className="flex justify-between items-center">
-                                                <span className="text-xs text-gray-300 font-bold flex items-center gap-2">
-                                                    <Grid size={12} className="text-gray-500" /> Resolution (Polygons)
-                                                </span>
-                                            </div>
-                                            <div className="bg-gray-800 rounded p-2 border border-gray-700 space-y-2">
-                                                <div className="flex items-center gap-2">
-                                                    <input 
-                                                        type="range" min="32" max="512" step="32"
-                                                        value={createRes}
-                                                        onChange={(e) => setCreateRes(parseInt(e.target.value))}
-                                                        className="flex-1 h-1.5 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-amber-500"
-                                                    />
-                                                    <span className="text-xs font-mono text-white w-10 text-right">{createRes}</span>
-                                                </div>
-                                                <div className="text-2xs text-gray-500 flex justify-between">
-                                                    <span>Low Poly</span>
-                                                    <span>High Detail (Heavy)</span>
-                                                </div>
-                                            </div>
-                                            <p className="text-2xs text-gray-500 leading-tight pl-1">
-                                                Higher resolution allows for smoother sculpting but may impact performance.
-                                            </p>
-                                        </div>
-                                    </div>
-
-                                    <button 
-                                        onClick={handleCreateTerrain}
-                                        className="w-full py-3 bg-amber-600 hover:bg-amber-500 text-white rounded font-bold text-xs shadow-lg shadow-amber-900/20 transition-all flex items-center justify-center gap-2"
-                                    >
-                                        <Plus size={14} /> Create Terrain Surface
-                                    </button>
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    {activeTab === 'sculpt' && (
-                        <div className="space-y-6">
-                            {existingTerrain ? (
-                                <>
-                                    {/* Brush Settings */}
-                                    <div className="space-y-3">
-                                        <div className="flex items-center gap-2 text-2xs font-bold text-gray-500 border-b border-gray-800 pb-1">
-                                            <CircleDashed size={12} /> Brush Settings
-                                        </div>
-                                        <div className="space-y-2">
-                                            <div className="flex items-center justify-between">
-                                                <span className="text-xs text-gray-400">Radius</span>
-                                                <div className="w-24">
-                                                    <ScrubbableInput label="m" value={sculptSettings.radius} onChange={(v) => actions.setSculptSettings({ ...sculptSettings, radius: Math.max(0.5, v) })} step={0.5} labelWidth="w-6" />
-                                                </div>
-                                            </div>
-                                            <div className="flex items-center justify-between">
-                                                <span className="text-xs text-gray-400">Strength</span>
-                                                <div className="w-24">
-                                                    <ScrubbableInput label="%" value={sculptSettings.strength} onChange={(v) => actions.setSculptSettings({ ...sculptSettings, strength: Math.max(0.01, Math.min(1, v)) })} step={0.05} labelWidth="w-6" />
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {/* Tools */}
-                                    <div className="space-y-3">
-                                        <div className="flex items-center gap-2 text-2xs font-bold text-gray-500 border-b border-gray-800 pb-1">
-                                            <Hammer size={12} /> Tools
-                                        </div>
-                                        <div className="grid grid-cols-2 gap-2">
-                                            <button 
-                                                onClick={() => actions.setSculptSettings({ ...sculptSettings, tool: 'raise' })}
-                                                className={`p-2 rounded border flex flex-col items-center gap-1 transition-all ${sculptSettings.tool === 'raise' ? 'bg-amber-600/20 border-amber-500 text-amber-400' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}
-                                            >
-                                                <ArrowUp size={16} /> <span className="text-2xs font-bold ">Raise</span>
-                                            </button>
-                                            <button 
-                                                onClick={() => actions.setSculptSettings({ ...sculptSettings, tool: 'lower' })}
-                                                className={`p-2 rounded border flex flex-col items-center gap-1 transition-all ${sculptSettings.tool === 'lower' ? 'bg-red-600/20 border-red-500 text-red-400' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}
-                                            >
-                                                <ArrowDown size={16} /> <span className="text-2xs font-bold ">Lower</span>
-                                            </button>
-                                            <button 
-                                                onClick={() => actions.setSculptSettings({ ...sculptSettings, tool: 'flatten' })}
-                                                className={`p-2 rounded border flex flex-col items-center gap-1 transition-all ${sculptSettings.tool === 'flatten' ? 'bg-blue-600/20 border-blue-500 text-blue-400' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}
-                                            >
-                                                <Minus size={16} /> <span className="text-2xs font-bold ">Flatten</span>
-                                            </button>
-                                            <button 
-                                                onClick={() => actions.setSculptSettings({ ...sculptSettings, tool: 'smooth' })}
-                                                className={`p-2 rounded border flex flex-col items-center gap-1 transition-all ${sculptSettings.tool === 'smooth' ? 'bg-green-600/20 border-green-500 text-green-400' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}
-                                            >
-                                                <Wind size={16} /> <span className="text-2xs font-bold ">Smooth</span>
-                                            </button>
-                                            <button
-                                                onClick={() => actions.setSculptSettings({ ...sculptSettings, tool: 'paint' })}
-                                                className={`col-span-2 p-2 rounded border flex flex-col items-center gap-1 transition-all ${sculptSettings.tool === 'paint' ? 'bg-purple-600/20 border-purple-500 text-purple-400' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}
-                                            >
-                                                <Brush size={16} /> <span className="text-2xs font-bold ">Paint</span>
-                                            </button>
-                                        </div>
-
-                                        {sculptSettings.tool === 'flatten' && (
-                                            <div className="flex items-center justify-between pt-2">
-                                                <span className="text-xs text-gray-400">Target Height</span>
-                                                <div className="w-24">
-                                                    <ScrubbableInput label="Y" value={sculptSettings.flattenHeight} onChange={(v) => actions.setSculptSettings({ ...sculptSettings, flattenHeight: v })} step={0.5} labelWidth="w-6" />
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    <TerrainLayerPanel
-                                        terrain={existingTerrain}
-                                        sculptSettings={sculptSettings}
-                                        onSculptSettingsChange={actions.setSculptSettings}
-                                    />
-                                </>
-                            ) : (
-                                <div className="text-center py-10 text-gray-500 text-xs">
-                                    No terrain found.<br/>Go to the Manage tab to create one.
-                                </div>
-                            )}
-                        </div>
-                    )}
-                </div>
-            </div>
-        </div>
-    );
-};
 
 // --- Object transform ---
 
@@ -900,7 +670,14 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
     const { interactionMode, paintMode, paintSettings, selectedBrushId, sculptSettings } = state;
 
     if (interactionMode === 'sculpt') {
-        return <TerrainInspector actions={actions} sculptSettings={sculptSettings} />;
+        return (
+            <TerrainPanel
+                settings={sculptSettings}
+                onSettingsChange={actions.setSculptSettings}
+                selectedObjectId={state.selectedObjectId}
+                onSelectTerrain={actions.setSelectedObjectId}
+            />
+        );
     }
 
     if (interactionMode === 'mask') {

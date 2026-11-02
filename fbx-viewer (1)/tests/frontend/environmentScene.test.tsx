@@ -26,7 +26,7 @@ vi.mock('../../components/Environment/Terrain/TerrainObject', () => ({
     return null;
   },
 }));
-vi.mock('../../components/Environment/Terrain/TerrainSculptor', () => ({ TerrainSculptor: () => null }));
+vi.mock('../../components/Environment/Terrain/TerrainBrushTool', () => ({ TerrainBrushTool: () => null }));
 vi.mock('../../components/Environment/InstancedLevelLayer', () => ({ InstancedLevelLayer: () => null }));
 vi.mock('../../components/Environment/AudioSystem', () => ({ AudioSystem: () => null }));
 vi.mock('../../components/Environment/SkySystem', () => ({ SkySystem: () => null }));
@@ -73,9 +73,9 @@ beforeEach(() => {
 });
 
 describe('environment terrain selection', () => {
-  it('selects terrain from the active view in select and sculpt modes', () => {
+  it('selects terrain from the active view in select mode; in the Terrain tool a press belongs to the brush', () => {
     expect(clickTerrain('select', 'main').onSelectObject).toHaveBeenCalledWith('terrain-1');
-    expect(clickTerrain('sculpt', 'main').onSelectObject).toHaveBeenCalledWith('terrain-1');
+    expect(clickTerrain('sculpt', 'main').onSelectObject).not.toHaveBeenCalled();
   });
 
   it('leaves terrain clicks in inactive views alone, including in sculpt mode', () => {

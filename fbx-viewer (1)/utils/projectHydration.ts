@@ -3,8 +3,8 @@ import type { AttachmentData, AudioData, Blueprint, LevelData, LevelObject, Load
 import { importPhaseLabel, loadFBXFile } from './modelLoader';
 import { resolveTerrainHeightfield } from './terrainHeightfield';
 import { isTerrainHeightfieldPending } from './terrainHeightfieldCodec';
-import { resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplat';
-import { isTerrainSplatPending } from '../components/Environment/Terrain/terrainSplatCodec';
+import { resolveTerrainHolemap, resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplat';
+import { isTerrainHolesPending, isTerrainSplatPending } from '../components/Environment/Terrain/terrainSplatCodec';
 import { applyModelImportSettings, stripGeometry } from './processing/ModelTransforms';
 import { generateThumbnail } from './thumbnailGenerator';
 import { disposeModel, disposeObject } from './processing/ModelLifecycle';
@@ -142,6 +142,7 @@ export async function loadGameContent(
     for (const object of objectDocuments) {
       if (isTerrainHeightfieldPending(object?.terrainData)) terrainWork += 1;
       if (isTerrainSplatPending(object?.terrainData)) terrainWork += 1;
+      if (isTerrainHolesPending(object?.terrainData)) terrainWork += 1;
     }
   }
   const assetWork = Math.max(1,
@@ -436,6 +437,21 @@ export async function loadGameContent(
             recordAssetDiagnostic('terrain_splatmap_hydration_failed', error, 'source_read', { ...diagnostic, fallback: 'base_layer' });
           }
           complete(`Loaded terrain paint — ${label}`, diagnostic);
+        }
+        const holemap = terrain.holemap;
+        if (holemap && isTerrainHolesPending(terrain)) {
+          const assetAlias = frontendDiagnostics.nextAssetAlias();
+          const diagnostic: DiagnosticAttributes = { assetAlias, assetKind: 'terrain_splatmap' };
+          try {
+            report(`Loading terrain holes — ${label}`, 0.1, 'source_read', diagnostic);
+            const holes = await resolveTerrainHolemap(holemap, (assetId) => loadProjectAssetBytes(assetId, traceAsset(assetAlias)));
+            assertCurrent();
+            resolved = { ...resolved, holes };
+          } catch (error) {
+            assertCurrent();
+            recordAssetDiagnostic('terrain_holes_hydration_failed', error, 'source_read', { ...diagnostic, fallback: 'solid_ground' });
+          }
+          complete(`Loaded terrain holes — ${label}`, diagnostic);
         }
         resolvedObjects.push(resolved === terrain ? object : { ...object, terrainData: resolved });
       }

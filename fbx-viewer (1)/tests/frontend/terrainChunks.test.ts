@@ -49,7 +49,8 @@ describe('terrain chunks', () => {
     expect(skirt.positions.length).toBe(edge.length * 2 * 3);
     // The lowered copy of the first edge vertex sits 2 below it (Z is the height before the plane is rotated).
     expect(skirt.positions[edge.length * 3 + 2]).toBeCloseTo(skirt.positions[2] - 2);
-    expect(skirt.indices.length).toBe(edge.length * 6);
+    // Each stretch of edge is wound both ways.
+    expect(skirt.indices.length).toBe(edge.length * 12);
     expect(Math.max(...skirt.indices)).toBe(edge.length * 2 - 1);
   });
 

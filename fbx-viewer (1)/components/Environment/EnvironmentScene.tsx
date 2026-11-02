@@ -6,11 +6,12 @@ import { renderView } from './renderBundle';
 import type { ThreeEvent } from '@react-three/fiber';
 import { Grid, TransformControls } from '@react-three/drei';
 import { LoadedModelData, LevelObject } from '../../types';
-import { InteractionMode, PaintMode, PaintSettings, TransformSettings, TransformTool, SculptSettings } from './types';
+import { InteractionMode, PaintMode, PaintSettings, TransformSettings, TransformTool } from './types';
+import type { TerrainToolSettings } from './Terrain/terrainTool';
 import { LevelObjectRenderer, LevelComponentPreviews } from './LevelObjectRenderer';
 import { FoliageBrushTool, type FoliagePlacement } from './FoliageBrushTool';
 import { TerrainObject } from './Terrain/TerrainObject';
-import { TerrainSculptor } from './Terrain/TerrainSculptor';
+import { TerrainBrushTool } from './Terrain/TerrainBrushTool';
 import { InstancedLevelLayer } from './InstancedLevelLayer';
 import { LodEditorPreviewContext, useLodEditorPreview } from '../../runtime/components/lodComponents';
 import { AudioSystem } from './AudioSystem';
@@ -453,7 +454,8 @@ interface EnvironmentSceneProps {
     updateLevelObject: (id: string, updates: Partial<LevelObject>) => void;
     transformSettings: TransformSettings;
     paintSettings?: PaintSettings;
-    sculptSettings?: SculptSettings;
+    sculptSettings?: TerrainToolSettings;
+    onSculptSettingsChange?: (settings: TerrainToolSettings) => void;
     onSnapshot: () => void;
     /** The primary selection: it carries the gizmo. */
     selectedId: string | null;
@@ -507,6 +509,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
     transformSettings,
     paintSettings,
     sculptSettings,
+    onSculptSettingsChange,
     onSnapshot,
     selectedId,
     selectedIds,
@@ -774,7 +777,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
 
     // Check if current view is active for interaction
     const isActiveView = viewId === activeViewId;
-    const objectsInteractive = isActiveView && interactionMode !== 'place' && interactionMode !== 'paint';
+    const objectsInteractive = isActiveView && interactionMode !== 'place' && interactionMode !== 'paint' && interactionMode !== 'sculpt';
     const highlightedIds = isActiveView ? selection : EMPTY_IDS;
     // Objects a foliage erase stroke has taken, hidden until the stroke is saved.
     const [erasingIds, setErasingIds] = useState<ReadonlySet<string>>(EMPTY_IDS);
@@ -827,35 +830,41 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                     visible={!lodHiddenIds.has(terrain.id)}
                     receiveShadow
                     castShadow
+                    lod
                     onClick={(e) => {
                         // Like every other selection in this scene, only the active view selects.
-                        if (isActiveView && !gizmoPointer.owns() && (interactionMode === 'select' || interactionMode === 'sculpt')) {
+                        if (isActiveView && !gizmoPointer.owns() && interactionMode === 'select') {
                             e.stopPropagation();
-                            // Sculpt mode picks the sculpt target; it never builds a multi-selection.
-                            if (interactionMode === 'select') handleSelect(terrain.id, e);
-                            else onSelectObject(terrain.id);
+                            handleSelect(terrain.id, e);
                         }
                     }}
-                    sculptingEnabled={interactionMode === 'sculpt' && selectedId === terrain.id && isActiveView}
-                    sculptSettings={sculptSettings}
-                    onHeightUpdate={(id, heights) => {
-                        const source = objectById.get(id);
-                        if (source) updateLevelObject(id, { terrainData: { ...source.terrainData!, heights } });
-                    }}
-                    onStrokeStart={onSnapshot}
                 />
             ))}
 
-            {/* Terrain Sculptor (Global Overlay Logic) */}
-            {interactionMode === 'sculpt' && sculptSettings && (
-                <TerrainSculptor
+            {/* The Terrain tool's brush */}
+            {interactionMode === 'sculpt' && sculptSettings && onSculptSettingsChange && (
+                <TerrainBrushTool
                     settings={sculptSettings}
-                    onPaintStrokeEnd={(id, splat) => {
-                        const terr = objectById.get(id);
-                        if (terr) updateLevelObject(id, { terrainData: { ...terr.terrainData!, splat } });
+                    onSettingsChange={onSculptSettingsChange}
+                    enabled={isActiveView && sculptSettings.tab !== 'manage'}
+                    onHeightsCommit={(id, heights) => {
+                        const source = objectById.get(id);
+                        if (source) updateLevelObject(id, { terrainData: { ...source.terrainData!, heights } });
+                    }}
+                    onPaintCommit={(id, splat) => {
+                        const source = objectById.get(id);
+                        if (source) updateLevelObject(id, { terrainData: { ...source.terrainData!, splat } });
+                    }}
+                    onHolesCommit={(id, holes) => {
+                        const source = objectById.get(id);
+                        if (!source?.terrainData) return;
+                        const { holes: _previous, holemap: _stored, ...rest } = source.terrainData;
+                        updateLevelObject(id, { terrainData: holes ? { ...rest, holes } : rest });
                     }}
                     onStrokeStart={onSnapshot}
-                    enabled={isActiveView}
+                    onTerrainTouched={(id) => {
+                        if (selectedId !== id) onSelectObject(id);
+                    }}
                 />
             )}
 
