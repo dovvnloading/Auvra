@@ -128,6 +128,15 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(config["post"]["bloom"]["threshold"], 2.0)
         self.assertTrue(config["post"]["chromatic_aberration"]["enabled"])
 
+    def test_a_views_depth_of_field_becomes_a_lens_of_the_same_blur(self) -> None:
+        self.assertNotIn("fstop", self._config()["camera"])
+        camera = self._config(post={"depthOfField": {"focus": 10, "bokeh": 5}}, camera={"fov": 90})["camera"]
+        self.assertEqual(camera["focus_distance"], 10.0)
+        # A lens this wide takes a point at any great distance to 3% of the height of the frame.
+        radius = camera["focal_length"] / camera["fstop"] / 2.0
+        self.assertAlmostEqual(radius / 10.0, 0.03)
+        self.assertNotIn("fstop", self._config(post={"depthOfField": {"focus": 10, "bokeh": 0}})["camera"])
+
     @unittest.skipUnless(importlib.util.find_spec("numpy"), "reads a picture with numpy, which runs under Reframe's own Python")
     def test_a_panorama_is_read_the_way_round_the_renderer_reads_one(self) -> None:
         import numpy as np

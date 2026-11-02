@@ -52,8 +52,10 @@ _VIEWPORT_EXPOSURE = 0.737
 # How the viewport's bloom strength reads as a share of light scattered, and how far that spreads, as a share of the frame.
 _BLOOM_SCATTER = 0.3
 _BLOOM_RADIUS = 0.05
-# The viewport's depth of field is given in pixels of blur, the renderer's as the size of a lens in the world.
-_APERTURE_OF_BOKEH = 0.01
+# How blurred something far off comes out as a share of the frame's height, for each step of the viewport's bokeh scale.
+_BLUR_OF_BOKEH = 0.006
+# The renderer's lens is given as a focal length and f-stop in the world's units, and this length changes nothing else with a field of view given.
+_FOCAL_LENGTH = 50.0
 _MATERIAL_TEXTURES = {"baseColorTexture": "baseColorTexture", "normalTexture": "normalMap", "roughnessTexture": "roughnessTexture", "metallicTexture": "metallicTexture", "opacityTexture": "opacityTexture", "emissionTexture": "emissionTexture"}
 
 
@@ -221,6 +223,15 @@ def _finish(header: Mapping[str, Any], blobs: _Blobs) -> dict[str, Any]:
     return {**finish, "enabled": True}
 
 
+def _lens(focus: Any, vfov: float) -> dict[str, Any]:
+    """A view's depth of field as the renderer's lens: as far out of focus at a distance as the view is, for where it focuses and how wide it sees."""
+    if not isinstance(focus, Mapping):
+        return {}
+    distance = _number(focus.get("focus"), 10.0, 0.01, 1e6)
+    radius = _number(focus.get("bokeh"), 2.0, 0.0, 100.0) * _BLUR_OF_BOKEH * distance * math.tan(math.radians(vfov) / 2.0)
+    return {"focus_distance": distance, "focal_length": _FOCAL_LENGTH, "fstop": _FOCAL_LENGTH / (2.0 * radius)} if radius > 0.0 else {}
+
+
 def _optics(post: Any) -> dict[str, Any] | None:
     """A view's bloom and lens fringe, as the renderer has its own."""
     if not isinstance(post, Mapping):
@@ -298,8 +309,8 @@ def build_render_config(header: Mapping[str, Any], settings: Mapping[str, Any], 
         "max_bounces": int(_number(settings.get("bounces"), 6, 1, _MAX_BOUNCES)),
         "objects": objects, "lights": lights, "environment": environment,
         "camera": {
-            "projection": "perspective", "dof_enabled": isinstance(focus, Mapping),
-            **({"focus_distance": _number(focus.get("focus"), 10.0, 0.01, 1e6), "aperture": _number(focus.get("bokeh"), 2.0, 0.0, 100.0) * _APERTURE_OF_BOKEH} if isinstance(focus, Mapping) else {}),
+            "projection": "perspective",
+            **_lens(focus, _number(camera.get("fov"), 45.0, 1.0, 170.0)),
             "lookfrom": _triple(camera.get("position"), (0.0, 2.0, 5.0)),
             "lookat": _triple(camera.get("target"), (0.0, 1.0, 0.0)),
             "vfov": _number(camera.get("fov"), 45.0, 1.0, 170.0),

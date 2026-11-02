@@ -63,38 +63,42 @@ def panorama_along_view(np: Any, panorama: Any, rotation_deg: float, camera: dic
     return (panorama[upper, left] * (1.0 - part_x) + panorama[upper, beside] * part_x) * (1.0 - part_y) + (panorama[lower, left] * (1.0 - part_x) + panorama[lower, beside] * part_x) * part_y
 
 
+def _light_of_screen(np: Any, shown: Any) -> Any:
+    """Colours on screen back as light, as the tone curve hands it on."""
+    return np.where(shown <= 0.04045, shown / 12.92, np.power((shown + 0.055) / 1.055, 2.4))
+
+
 def _graded(np: Any, film: Any, mapped: Any, grade: dict[str, Any]) -> Any:
-    """What a view's stack does to the picture once it is tone mapped, each in the order and by the sum the stack has it."""
+    """What a view's stack does to the picture once it is tone mapped, each in the order, the colours and by the sum the stack has it."""
     out = mapped
     saturation = float(grade.get("saturation", 0.0))
     if saturation != 0.0:
         grey = out.mean(axis=2, keepdims=True)
         out = out + (grey - out) * ((1.0 - 1.0 / (1.001 - saturation)) if saturation > 0.0 else -saturation)
     brightness, contrast = float(grade.get("brightness", 0.0)), float(grade.get("contrast", 0.0))
-    if brightness != 0.0 or contrast != 0.0:
-        centred = out + brightness - 0.5
-        out = (centred / (1.0 - contrast) if contrast > 0.0 else centred * (1.0 + contrast)) + 0.5
     look = grade.get("look")
-    if isinstance(look, dict):
-        size = int(look["size"])
-        table = np.fromfile(look["table"], dtype=np.float32).reshape(size, size, size, 4)[:, :, :, :3]
-        place = np.clip(film.linear_to_srgb(np.clip(out, 0.0, 1.0)), 0.0, 1.0) * (size - 1)
-        low = np.floor(place).astype(np.int32)
-        high = np.minimum(low + 1, size - 1)
-        part = (place - low)[..., None]
-        def corner(red: Any, green: Any, blue: Any) -> Any:
-            return table[blue[..., 2], green[..., 1], red[..., 0]]
-        reds = [low, high]
-        blended = 0.0
-        for r in (0, 1):
-            for g in (0, 1):
-                for b in (0, 1):
-                    weight = (part[:, :, 0] if r else 1.0 - part[:, :, 0]) * (part[:, :, 1] if g else 1.0 - part[:, :, 1]) * (part[:, :, 2] if b else 1.0 - part[:, :, 2])
-                    blended = blended + corner(reds[r], reds[g], reds[b]) * weight
-        strength = float(look["strength"])
-        on_screen = np.clip(film.linear_to_srgb(np.clip(out, 0.0, 1.0)), 0.0, 1.0)
-        mixed = on_screen * (1.0 - strength) + np.clip(blended, 0.0, 1.0) * strength
-        out = np.where(mixed <= 0.04045, mixed / 12.92, np.power((mixed + 0.055) / 1.055, 2.4))
+    if brightness != 0.0 or contrast != 0.0 or isinstance(look, dict):
+        # These two work in the colours on screen.
+        shown = film.linear_to_srgb(np.clip(out, 0.0, 1.0))
+        if brightness != 0.0 or contrast != 0.0:
+            centred = shown + brightness - 0.5
+            shown = (centred / (1.0 - contrast) if contrast > 0.0 else centred * (1.0 + contrast)) + 0.5
+        if isinstance(look, dict):
+            size = int(look["size"])
+            table = np.fromfile(look["table"], dtype=np.float32).reshape(size, size, size, 4)[:, :, :, :3]
+            place = np.clip(shown, 0.0, 1.0) * (size - 1)
+            low = np.floor(place).astype(np.int32)
+            ends = [low, np.minimum(low + 1, size - 1)]
+            part = place - low
+            blended = 0.0
+            for r in (0, 1):
+                for g in (0, 1):
+                    for b in (0, 1):
+                        weight = (part[:, :, 0] if r else 1.0 - part[:, :, 0]) * (part[:, :, 1] if g else 1.0 - part[:, :, 1]) * (part[:, :, 2] if b else 1.0 - part[:, :, 2])
+                        blended = blended + table[ends[b][:, :, 2], ends[g][:, :, 1], ends[r][:, :, 0]] * weight[:, :, None]
+            strength = float(look["strength"])
+            shown = shown * (1.0 - strength) + blended * strength
+        out = _light_of_screen(np, np.clip(shown, 0.0, 1.0))
     darkness = float(grade.get("vignette", 0.0))
     if darkness > 0.0:
         rows, columns = out.shape[0], out.shape[1]
@@ -174,7 +178,7 @@ def _use_viewport_finish(film: Any, load_image: Callable[[str], Any]) -> None:
             if over is not None:
                 on_screen = on_screen * (1.0 - np.clip(over[:, :, 3:], 0.0, 1.0)) + over[:, :, :3]
             on_screen = np.clip(on_screen, 0.0, 1.0)
-            mapped = np.where(on_screen <= 0.04045, on_screen / 12.92, np.power((on_screen + 0.055) / 1.055, 2.4))
+            mapped = _light_of_screen(np, on_screen)
         grade = held.get("grade")
         return (_graded(np, film, mapped, grade) if grade else mapped).astype(np.float32)
 
