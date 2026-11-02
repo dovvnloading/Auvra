@@ -16,6 +16,30 @@ export const TERRAIN_BRUSH_UNIFORMS = {
   terrainBrushColour: { value: new THREE.Color('#ffffff') },
   /** A world-space rectangle outlined on the ground, for picking a region: minX, minZ, maxX, maxZ; empty when max < min. */
   terrainBrushRect: { value: new THREE.Vector4(0, 0, -1, -1) },
+  /** 1 to tint the ground chosen for the brushes. */
+  terrainRegionShow: { value: 0 },
+  /** 1 to colour the ground by which layer is painted there. */
+  terrainShowLayerUsage: { value: 0 },
+};
+
+let noRegion: THREE.DataTexture | null = null;
+
+/** Nothing chosen, for a terrain with no region. Shared; never disposed. */
+export const getNoRegion = (): THREE.DataTexture => {
+  if (!noRegion) {
+    noRegion = new THREE.DataTexture(new Uint8Array(1), 1, 1, THREE.RedFormat, THREE.UnsignedByteType);
+    noRegion.needsUpdate = true;
+  }
+  return noRegion;
+};
+
+/** A terrain material's own region texture: the ground chosen differs from terrain to terrain. */
+export const createTerrainRegionUniform = (): THREE.IUniform<THREE.Texture> => ({ value: getNoRegion() });
+
+/** Stops drawing the region and the layer colours: the state in play. */
+export const hideTerrainWorkingViews = (): void => {
+  TERRAIN_BRUSH_UNIFORMS.terrainRegionShow.value = 0;
+  TERRAIN_BRUSH_UNIFORMS.terrainShowLayerUsage.value = 0;
 };
 
 export const showTerrainBrush = (x: number, z: number, radius: number, inner: number, colour: string | THREE.Color): void => {
@@ -38,7 +62,8 @@ export const hideTerrainRect = (): void => {
 };
 
 const VERTEX = /* glsl */`
-vTerrainBrushWorld = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;`;
+vTerrainBrushWorld = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
+vTerrainRegionUv = uv;`;
 
 const FRAGMENT_DECLARATIONS = /* glsl */`
 uniform vec2 terrainBrushCentre;
@@ -46,10 +71,20 @@ uniform float terrainBrushRadius;
 uniform float terrainBrushInner;
 uniform vec3 terrainBrushColour;
 uniform vec4 terrainBrushRect;
-varying vec3 vTerrainBrushWorld;`;
+uniform float terrainRegionShow;
+uniform float terrainShowLayerUsage;
+uniform sampler2D terrainRegionMap;
+varying vec3 vTerrainBrushWorld;
+varying vec2 vTerrainRegionUv;`;
 
-// A soft fill that follows the falloff, a bright outer ring and a thin ring where the fade begins.
+// The region's texels sit on the height samples, with row 0 at uv.y = 1. Then a soft fill that follows
+// the falloff, a bright outer ring and a thin ring where the fade begins.
 const FRAGMENT = /* glsl */`
+if ( terrainRegionShow > 0.5 ) {
+    vec2 regionSize = vec2( textureSize( terrainRegionMap, 0 ) );
+    vec2 regionAt = ( vec2( vTerrainRegionUv.x, 1.0 - vTerrainRegionUv.y ) * ( regionSize - 1.0 ) + 0.5 ) / regionSize;
+    gl_FragColor.rgb = mix( gl_FragColor.rgb, vec3( 0.04, 0.26, 0.9 ), texture2D( terrainRegionMap, regionAt ).r * 0.4 );
+}
 if ( terrainBrushRadius > 0.0 ) {
     float brushDistance = distance( vTerrainBrushWorld.xz, terrainBrushCentre );
     if ( brushDistance < terrainBrushRadius + 1.0 ) {
@@ -78,9 +113,9 @@ const inject = (source: string, marker: string, code: string): string => {
 };
 
 /** Adds the overlay to a MeshStandardMaterial program (the shader handed to onBeforeCompile). */
-export const patchTerrainBrushOverlay = (shader: { vertexShader: string; fragmentShader: string; uniforms: Record<string, THREE.IUniform> }): void => {
-  Object.assign(shader.uniforms, TERRAIN_BRUSH_UNIFORMS);
-  shader.vertexShader = inject(shader.vertexShader, '#include <common>', 'varying vec3 vTerrainBrushWorld;');
+export const patchTerrainBrushOverlay = (shader: { vertexShader: string; fragmentShader: string; uniforms: Record<string, THREE.IUniform> }, region: THREE.IUniform<THREE.Texture>): void => {
+  Object.assign(shader.uniforms, TERRAIN_BRUSH_UNIFORMS, { terrainRegionMap: region });
+  shader.vertexShader = inject(shader.vertexShader, '#include <common>', 'varying vec3 vTerrainBrushWorld;\nvarying vec2 vTerrainRegionUv;');
   shader.vertexShader = inject(shader.vertexShader, '#include <project_vertex>', VERTEX);
   shader.fragmentShader = inject(shader.fragmentShader, '#include <common>', FRAGMENT_DECLARATIONS);
   shader.fragmentShader = inject(shader.fragmentShader, '#include <opaque_fragment>', FRAGMENT);

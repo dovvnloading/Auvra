@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { MAX_TERRAIN_LAYERS } from './terrainSplatCodec';
-import { patchTerrainBrushOverlay } from './terrainBrushOverlay';
+import { createTerrainRegionUniform, patchTerrainBrushOverlay } from './terrainBrushOverlay';
 
 /**
  * Terrain material that blends up to eight texture layers by two splat maps. Each layer has its colour,
@@ -66,6 +66,14 @@ interface ShaderSource {
   uniforms: Record<string, THREE.IUniform>;
 }
 
+/** Colours of the view that shows where each layer is painted, by layer. */
+export const TERRAIN_LAYER_USAGE_COLOURS: readonly string[] = ['#e5484d', '#46a758', '#3b82f6', '#f5d90a', '#ab4aba', '#12a594', '#f76b15', '#e8e8e8'];
+
+const usageVectors = TERRAIN_LAYER_USAGE_COLOURS.map((hex) => {
+  const { r, g, b } = new THREE.Color(hex);
+  return `vec3( ${r.toFixed(4)}, ${g.toFixed(4)}, ${b.toFixed(4)} )`;
+}).join(', ');
+
 const VERTEX_DECLARATIONS = /* glsl */`
 uniform vec2 terrainSplatSize;
 uniform vec2 terrainPlaneSize;
@@ -108,6 +116,7 @@ varying vec3 vTerrainLocalNormal;
 varying vec3 vTerrainAxisX;
 varying vec3 vTerrainAxisY;
 varying vec3 vTerrainAxisZ;
+const vec3 TERRAIN_LAYER_USAGE[ ${MAX_TERRAIN_LAYERS} ] = vec3[ ${MAX_TERRAIN_LAYERS} ]( ${usageVectors} );
 vec3 terrainBlendedNormal;
 float terrainBlendedRoughness;
 
@@ -225,6 +234,11 @@ const FRAGMENT_BLEND = /* glsl */`
         counted += share;
     }
     diffuseColor.rgb *= terrainColor / max( counted, 1e-4 );
+    if ( terrainShowLayerUsage > 0.5 ) {
+        vec3 usage = vec3( 0.0 );
+        for ( int layer = 0; layer < terrainLayerCount; layer ++ ) usage += TERRAIN_LAYER_USAGE[ layer ] * weights[ layer ];
+        diffuseColor.rgb = usage / max( counted, 1e-4 );
+    }
     terrainBlendedNormal = normalize( normalSum );
     terrainBlendedRoughness = roughnessSum / max( counted, 1e-4 );
 }`;
@@ -341,9 +355,11 @@ export function createTerrainLayerMaterial(splat: THREE.DataTexture): TerrainLay
   material.userData.weatherSurface = true;
   material.userData.raySolid = true;
   material.userData.terrainUniforms = uniforms;
+  const region = createTerrainRegionUniform();
+  material.userData.terrainRegion = region;
   material.onBeforeCompile = (shader) => {
     patchTerrainLayerShader(shader, uniforms);
-    patchTerrainBrushOverlay(shader);
+    patchTerrainBrushOverlay(shader, region);
   };
   material.customProgramCacheKey = () => PROGRAM_KEY;
   return material;
@@ -370,6 +386,8 @@ export function createTerrainGroundMaterial(): THREE.MeshStandardMaterial {
   // What bounced light takes from it: its colours are worked out in the shader, mostly grass.
   material.userData.rayAlbedo = new THREE.Color(0.068, 0.112, 0.03);
   material.userData.raySolid = true;
+  const region = createTerrainRegionUniform();
+  material.userData.terrainRegion = region;
   material.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vGroundWorld;\nvarying vec3 vGroundNormal;')
@@ -400,7 +418,7 @@ float groundNoise(vec2 p) {
   ground = mix(ground, rock, smoothstep(0.42, 0.62, slope));
   diffuseColor.rgb *= ground;
 }`);
-    patchTerrainBrushOverlay(shader);
+    patchTerrainBrushOverlay(shader, region);
   };
   material.customProgramCacheKey = () => GROUND_PROGRAM_KEY;
   return material;

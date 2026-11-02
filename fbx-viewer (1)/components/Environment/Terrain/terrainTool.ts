@@ -11,7 +11,7 @@ import type { TerrainClip, FlattenMode, MirrorOperation, NoiseMode, PasteMode } 
 
 export type TerrainTab = 'manage' | 'sculpt' | 'paint';
 
-export type SculptToolName = 'sculpt' | 'smooth' | 'flatten' | 'ramp' | 'erosion' | 'hydro' | 'noise' | 'terrace' | 'holes' | 'mirror' | 'copy';
+export type SculptToolName = 'sculpt' | 'smooth' | 'flatten' | 'ramp' | 'erosion' | 'hydro' | 'noise' | 'terrace' | 'holes' | 'mirror' | 'copy' | 'region';
 export type PaintToolName = 'paint' | 'smooth' | 'flatten' | 'noise';
 
 export interface TerrainToolSettings {
@@ -76,6 +76,13 @@ export interface TerrainToolSettings {
   /** The weight (0-1) painting moves a layer towards. */
   paintTarget: number;
   paintNoiseScale: number;
+  /** Colour the ground by which layer is painted there, while on the Paint tab. */
+  showLayerUsage: boolean;
+
+  /** Every brush only changes the chosen ground. */
+  regionLimit: boolean;
+  /** Every brush changes the ground outside it instead. */
+  regionInvert: boolean;
 }
 
 export const DEFAULT_TERRAIN_TOOL_SETTINGS: TerrainToolSettings = {
@@ -127,6 +134,10 @@ export const DEFAULT_TERRAIN_TOOL_SETTINGS: TerrainToolSettings = {
   paintLayer: 0,
   paintTarget: 1,
   paintNoiseScale: 8,
+  showLayerUsage: false,
+
+  regionLimit: true,
+  regionInvert: false,
 };
 
 /** A world point a tool has marked. */
@@ -152,15 +163,18 @@ export interface TerrainToolState {
   clip: TerrainClip | null;
   /** What Paste does on a click: off until a clip is picked up. */
   pasting: boolean;
+  /** Some terrain has ground chosen for the brushes. */
+  hasRegion: boolean;
 }
 
 /** One-off actions the panel asks of the tool in the viewport, which holds the live terrains. */
 export type TerrainToolCommand =
   | { kind: 'ramp' }
   | { kind: 'mirror'; terrainId: string }
-  | { kind: 'copy' };
+  | { kind: 'copy' }
+  | { kind: 'clear-region' };
 
-let state: TerrainToolState = { rampStart: null, rampEnd: null, region: null, clip: null, pasting: false };
+let state: TerrainToolState = { rampStart: null, rampEnd: null, region: null, clip: null, pasting: false, hasRegion: false };
 const listeners = new Set<() => void>();
 let commandHandler: ((command: TerrainToolCommand) => void) | null = null;
 
@@ -199,4 +213,5 @@ export const SCULPT_TOOL_LABELS: Record<SculptToolName, string> = {
   holes: 'Holes',
   mirror: 'Mirror',
   copy: 'Copy / Paste',
+  region: 'Region',
 };

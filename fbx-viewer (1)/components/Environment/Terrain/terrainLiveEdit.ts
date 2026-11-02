@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { TerrainGridRect } from './terrainBrush';
+import type { TerrainBrushMask, TerrainGridRect } from './terrainBrush';
 import { terrainIndices } from './terrainChunks';
 
 /**
@@ -29,6 +29,9 @@ export class TerrainLiveEdit {
   committedHoles: readonly number[] | null = null;
   /** Told about every run of cells cut or filled, so level-of-detail chunks can follow. */
   onHoles: ((rect: TerrainGridRect) => void) | null = null;
+  /** The ground chosen for the brushes to work on (0-255 per sample). A working aid: lasts until cleared, never saved. */
+  regionData: Uint8Array | null = null;
+  regionTexture: THREE.DataTexture | null = null;
 
   constructor(
     private readonly geometry: THREE.BufferGeometry,
@@ -128,6 +131,41 @@ export class TerrainLiveEdit {
     }
     if (changed) this.onHoles?.({ c0: rect.c0, r0: rect.r0, c1: rect.c1, r1: rect.r1 });
     return changed;
+  }
+
+  /** Adds to the region under a brush's weights, or takes from it. */
+  markRegion({ rect, weights, stride }: TerrainBrushMask, amount: number, remove: boolean): void {
+    if (!this.regionData) {
+      if (remove) return;
+      this.regionData = new Uint8Array(this.columns * this.rows);
+      const texture = new THREE.DataTexture(this.regionData, this.columns, this.rows, THREE.RedFormat, THREE.UnsignedByteType);
+      texture.magFilter = THREE.LinearFilter;
+      texture.minFilter = THREE.LinearFilter;
+      texture.unpackAlignment = 1;
+      this.regionTexture = texture;
+    }
+    const { regionData, columns } = this;
+    const step = amount * (remove ? -255 : 255);
+    let slot = 0;
+    for (let row = rect.r0; row <= rect.r1; row++) {
+      for (let column = rect.c0; column < rect.c0 + stride; column++, slot++) {
+        if (weights[slot] <= 0) continue;
+        const index = row * columns + column;
+        regionData[index] = Math.max(0, Math.min(255, Math.round(regionData[index] + step * weights[slot])));
+      }
+    }
+    this.regionTexture!.needsUpdate = true;
+  }
+
+  /** A region with nothing left in it is no region. */
+  settleRegion(): void {
+    if (this.regionData && !this.regionData.some(value => value > 0)) this.clearRegion();
+  }
+
+  clearRegion(): void {
+    this.regionTexture?.dispose();
+    this.regionTexture = null;
+    this.regionData = null;
   }
 
   /** The holes as the level stores them; undefined when none are cut. */

@@ -231,10 +231,10 @@ export const EnvironmentToolbar: React.FC<EnvironmentToolbarProps> = ({ state, a
                 <div className="flex items-center rounded shadow-lg shadow-blue-900/20">
                     <button
                         onClick={() => actions.handlePlayStart()}
-                        className="flex items-center gap-2 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-accent-ink rounded-l font-bold text-xs transition-colors"
+                        className="flex items-center gap-2 whitespace-nowrap px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-accent-ink rounded-l font-bold text-xs transition-colors"
                         title="Play the level from its Player Start"
                     >
-                        <Play size={14} fill="currentColor" /> Play level
+                        <Play size={14} fill="currentColor" /> <span>Play<span className="hidden xl:inline"> level</span></span>
                     </button>
                     <button
                         onClick={() => actions.handlePlayStart(true)}
