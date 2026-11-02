@@ -273,7 +273,7 @@ export const useModelManager = (
    * blueprints that reference it keep working; clips from its animation documents are
    * rebound to the new skeleton. Nothing is committed unless the source loads and binds.
    */
-  const reimportModel = useCallback(async (modelId: string, file?: File | null, settings?: ModelImportSettings, images: readonly File[] = []) => {
+  const reimportModel = useCallback(async (modelId: string, file?: File | null, settings?: ModelImportSettings, images: readonly File[] = [], newCategory?: AssetCategory) => {
     projectService.assertWritable();
     const existing = models.find((model) => model.id === modelId);
     if (!existing) {
@@ -285,7 +285,7 @@ export const useModelManager = (
       void appAlert(`A model named "${name}" is already loaded in the library.`);
       return;
     }
-    const category = existing.category;
+    const category = newCategory ?? existing.category;
     const kind = category === 'Animation' ? 'animation' : 'model';
     const assetAlias = frontendDiagnostics.nextAssetAlias();
     let source = file ? modelSourceFile(file, name) : null;
@@ -390,7 +390,8 @@ export const useModelManager = (
       operation.update({ phase: 'project_record_commit', progress: 0.94, detail: 'Finalizing project record', diagnostic });
       const stored = nativeDocuments(await projectService.getSnapshotAll('models', trace), 'models').find((model) => model.id === modelId);
       const document: Record<string, unknown> = {
-        ...(stored ?? { category, isPlacedInScene: existing.isPlacedInScene }),
+        ...(stored ?? { isPlacedInScene: existing.isPlacedInScene }),
+        category,
         id: modelId,
         name,
         assetId,
@@ -451,6 +452,12 @@ export const useModelManager = (
     const response = await projectService.fetchAsset(stored.assetId);
     if (!response.ok) throw new Error(`Source download failed (${response.status}).`);
     return modelSourceFile(new File([await response.blob()], name), name);
+  }, []);
+
+  /** The images kept with a model, as files named as its source names them. */
+  const readModelSourceImages = useCallback(async (modelId: string): Promise<File[]> => {
+    const stored = nativeDocuments(await projectService.getSnapshotAll('models'), 'models').find((model) => model.id === modelId);
+    return loadSourceImages(Array.isArray(stored?.sourceImages) ? stored.sourceImages as ModelSourceImage[] : []);
   }, []);
 
   /** Shows a model in the Scene viewer in place of the one shown there: the viewer shows one model. */
@@ -858,6 +865,7 @@ export const useModelManager = (
     importModelWithOptions,
     reimportModel,
     readModelSource,
+    readModelSourceImages,
     updateModel,
     removeModel,
     removeTextureReference,

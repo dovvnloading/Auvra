@@ -4,6 +4,7 @@ import { LoadedModelData } from '../types';
 import { splitAlphaCards } from './processing/ModelMaterials';
 import { compressModelTextures } from './textureCompression/compressTextures';
 import { withGltfDecoders } from './gltfDecoders';
+import type { RigSource } from './autoRig/riggedGlb';
 import { normalizeModel, SOURCE_METRES_PER_UNIT } from './processing/ModelTransforms';
 import { disposeObject } from './processing/ModelLifecycle';
 import { UV_ORIGIN_TOP_LEFT_KEY } from './materialOverrides';
@@ -173,7 +174,8 @@ const materializeGltf = async (data: ArrayBuffer | string, signal?: AbortSignal,
   return Promise.race([parsedPromise, cancelled]);
 };
 
-const parseOffThread = async (
+/** A file the importer reads, as the GLB and report its worker makes of it. */
+const convertOffThread = async (
   source: ArrayBuffer,
   format: WorkerFormat,
   signal?: AbortSignal,
@@ -182,7 +184,7 @@ const parseOffThread = async (
   fileName?: string,
   convert?: ModelConvertOptions,
   images?: readonly File[],
-): Promise<ParsedModel> => {
+): Promise<Extract<WorkerResponse, { type: 'complete' }>> => {
   const label = format.toUpperCase();
   const parsePhase: ImportPhase = format === 'fbx' ? 'fbx_structure_parse' : 'model_structure_parse';
   if (typeof Worker === 'undefined') throw new Error(`Background ${label} processing is unavailable in this environment.`);
@@ -237,16 +239,30 @@ const parseOffThread = async (
       worker.postMessage({ type: 'parse', buffer: source, format, name: fileName, options: convert, images: imageMessages }, [source, ...imageMessages.map((image) => image.buffer)]);
     });
     throwIfAborted(signal);
-    onProgress?.(0.86, 'viewport_materialization');
-    const loaded = await materializeGltf(converted.glb, signal);
-    throwIfAborted(signal);
-    const object = loaded.scene;
-    object.animations = loaded.animations;
-    if (converted.missingTextures.length > 0) frontendDiagnostics.warning('model_textures_missing', converted.missingTextures.length);
-    return { object, animations: loaded.animations, missingTextures: converted.missingTextures.length, metresPerUnit: converted.metresPerUnit, report: converted.report };
+    return converted;
   } finally {
     worker.terminate();
   }
+};
+
+const parseOffThread = async (
+  source: ArrayBuffer,
+  format: WorkerFormat,
+  signal?: AbortSignal,
+  onProgress?: (progress: number, phase: ImportPhase) => void,
+  diagnostics?: { operationId: string; traceId: string; spanId?: string; assetAlias: string },
+  fileName?: string,
+  convert?: ModelConvertOptions,
+  images?: readonly File[],
+): Promise<ParsedModel> => {
+  const converted = await convertOffThread(source, format, signal, onProgress, diagnostics, fileName, convert, images);
+  onProgress?.(0.86, 'viewport_materialization');
+  const loaded = await materializeGltf(converted.glb, signal);
+  throwIfAborted(signal);
+  const object = loaded.scene;
+  object.animations = loaded.animations;
+  if (converted.missingTextures.length > 0) frontendDiagnostics.warning('model_textures_missing', converted.missingTextures.length);
+  return { object, animations: loaded.animations, missingTextures: converted.missingTextures.length, metresPerUnit: converted.metresPerUnit, report: converted.report };
 };
 
 // --- NATIVE glTF / GLB ---
@@ -407,6 +423,71 @@ export const inspectModelFile = async (file: File): Promise<ModelFileReport | nu
   } finally {
     worker.terminate();
   }
+};
+
+/** A model file as the glTF document it reads as, for a tool that writes it out changed. */
+export interface GltfSource {
+  json: RigSource['json'];
+  viewBytes: RigSource['viewBytes'];
+  /** Metres per unit of the document's space. */
+  metresPerUnit: number;
+  /** The document's nodes, geometry only: materials and images are left out, as they would only cost time. */
+  scene: THREE.Group;
+  /** Which node, mesh and primitive of the document each object of `scene` is. */
+  associations: Map<unknown, { nodes?: number; meshes?: number; primitives?: number }>;
+}
+
+export const readGltfSource = async (file: File, options: { convert?: ModelConvertOptions; images?: readonly File[]; signal?: AbortSignal } = {}): Promise<GltfSource> => {
+  const original = await file.arrayBuffer();
+  const format = detectModelFormat(file) ?? sniffModelFormat(original) ?? 'fbx';
+  let bytes = original;
+  let metresPerUnit = 1;
+  if (format !== 'glb' && format !== 'gltf') {
+    const converted = await convertOffThread(original, format, options.signal, undefined, undefined, file.name, options.convert, options.images);
+    bytes = converted.glb;
+    metresPerUnit = converted.metresPerUnit ?? 1;
+  }
+  const isText = format === 'gltf';
+  const { json, jsonEnd } = isText ? { json: parseGltfJson(new TextDecoder().decode(bytes)), jsonEnd: 0 } : readGlb(bytes);
+  const document = json as GltfSource['json'];
+
+  // A buffer is the file's binary chunk, or written out in its uri.
+  const binary = (() => {
+    if (isText) return null;
+    const view = new DataView(bytes);
+    if (jsonEnd + 8 > bytes.byteLength) return null;
+    return new Uint8Array(bytes, jsonEnd + 8, view.getUint32(jsonEnd, true));
+  })();
+  const buffers = new Map<number, Uint8Array>();
+  const bufferBytes = (index: number): Uint8Array => {
+    let found = buffers.get(index);
+    if (!found) {
+      const uri = document.buffers?.[index]?.uri;
+      found = uri ? decodeDataUri(uri).bytes : binary ?? new Uint8Array(0);
+      buffers.set(index, found);
+    }
+    return found;
+  };
+  const viewBytes = (index: number): Uint8Array => {
+    const view = document.bufferViews![index];
+    const buffer = bufferBytes(view.buffer);
+    return buffer.subarray(view.byteOffset ?? 0, (view.byteOffset ?? 0) + view.byteLength);
+  };
+
+  // Geometry only, from a copy of the document without what the geometry does not need.
+  const shapes = structuredClone(document);
+  delete shapes.images;
+  delete shapes.textures;
+  delete shapes.samplers;
+  delete shapes.materials;
+  for (const mesh of shapes.meshes ?? []) for (const primitive of mesh.primitives) delete primitive.material;
+  const urls: string[] = [];
+  const release = () => { for (const url of urls.splice(0)) URL.revokeObjectURL(url); };
+  embedGltfResources(shapes as GltfDocument, urls);
+  const loaded = await materializeGltf(isText ? JSON.stringify(shapes) : rebuildGlb(bytes, jsonEnd, shapes as GltfDocument), options.signal, release);
+  throwIfAborted(options.signal);
+  loaded.scene.updateMatrixWorld(true);
+  return { json: document, viewBytes, metresPerUnit, scene: loaded.scene, associations: loaded.parser.associations as unknown as GltfSource['associations'] };
 };
 
 /**

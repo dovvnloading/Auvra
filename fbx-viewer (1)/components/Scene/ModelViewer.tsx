@@ -8,6 +8,7 @@ import { GraphRuntime, GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
 import { AttachmentController } from './AttachmentController';
 import { SocketController, resolveSocketFlashTextureUrl } from './SocketController';
 import { SkeletonOverlay } from './SkeletonOverlay';
+import { RigMarkers } from './RigMarkers';
 import { previewHeldWeapon, weaponMoveClips, weaponPlacements } from '../../runtime/weapons';
 import { weaponLocomotionGraph } from '../AnimationGraph/utils/clipMatching';
 import { CharacterIK, heldWeaponGrip } from '../Sandbox/CharacterIK';
@@ -111,6 +112,12 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
         return;
     }
 
+    // A reimported model is a new object, and a mixer plays only the object it was made for.
+    if (mixerRef.current && mixerRef.current.getRoot() !== data.object) {
+      mixerRef.current.stopAllAction();
+      mixerRef.current = null;
+    }
+
     // Initialize mixer if needed
     if (!mixerRef.current && data.object) {
       mixerRef.current = new THREE.AnimationMixer(data.object);
@@ -180,6 +187,7 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
          {supportGrip && <CharacterIK model={data.object} supportGrip={supportGrip} />}
 
          {isSelected && <SkeletonOverlay root={data.object} />}
+         {isSelected && <RigMarkers modelId={data.id} root={data.object} />}
 
          {/* Blueprint Runtime Engine */}
          {isBlueprintActive && blueprint && previewGraph && (

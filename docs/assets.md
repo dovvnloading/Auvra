@@ -40,7 +40,19 @@ Select a model and open the **Skeleton** tab in the sidebar to see its bones as 
 
 A clip made for one skeleton plays on another when both read as people. Bones are recognised by the names rigs commonly use (`mixamorig:LeftArm`, `upperarm_l`, `UpperArm.L`, `LUpperLeg`, `FootL`). A skeleton whose names say nothing, such as `Bone.012`, is read from its shape at rest: the feet are the lowest leaves, the head the highest, the hands those furthest out, and hips and chest are where their paths meet. The tab warns when a part is still missing. To put a bone right, pick it and choose under **This bone is**; the choice stays with the project, and **Make them again** remakes the clips from other rigs with it.
 
+A clip plays as it is only when it fits the skeleton: the same bone names, and bones it places resting where it expects them. A clip made for other proportions or in another unit is carried over like one from any other skeleton, so feet stay on the floor even between rigs that name their bones alike.
+
 A clip from another skeleton is rebuilt for this one rather than copied: each bone takes the pose its counterpart has, then the legs bend so that the feet land where the clip's feet land, in proportion to this character's legs. Feet that hang from the skeleton's root instead of the legs, as on rigs built for inverse kinematics, are moved to the same places. Clips keep the rate they were made at, and bones a clip never moves get no keys.
+
+### Making a skeleton
+
+A model with no skeleton can be given one: select it, open the **Skeleton** tab and choose **Make a skeleton**. It is for a person standing with their arms out to the sides or lowered, facing any way.
+
+The body is read from its mesh, and markers appear on its chin, shoulders, elbows, wrists, groin, knees and ankles. Drag any that are off. Only their place in the view counts: each is kept in the middle of the limb it is on, and both sides move together unless you turn that off. A mesh that does not read as a person gets markers from a person's usual proportions to start from.
+
+**Make the skeleton** gives the model the bones most character rigs have, turned the way those rigs turn them, with each vertex following the bones nearest it through the body, in lengths of the limb's own thickness. A hand resting on a thigh does not pull the thigh along, and loose pieces such as a belt follow the bones nearest them. Materials and images stay as they were.
+
+The model keeps its place in levels and blueprints and goes among the characters, its source now a GLB in metres. Clips from any humanoid rig can then be imported onto it.
 
 ## Reimport and import settings
 
