@@ -75,8 +75,14 @@ export const useAttachmentManager = (
   }), []);
 
   const addAttachment = useCallback(async (file: File, parentModelId: string) => {
-    projectService.assertWritable();
-    const lease = editorSession.requireWritable(editorSession.captureReady(), projectService.getStatus());
+    let lease: ReturnType<typeof editorSession.requireWritable>;
+    try {
+      projectService.assertWritable();
+      lease = editorSession.requireWritable(editorSession.captureReady(), projectService.getStatus());
+    } catch (error) {
+      addNotification({ message: importFailureMessage(`Failed to import attachment "${file.name}"`, error), type: 'error' });
+      return;
+    }
     const assetAlias = frontendDiagnostics.nextAssetAlias();
     const diagnostic = assetDiagnosticAttributes(file, 'attachment', assetAlias);
     const operation = startOperation({
@@ -93,6 +99,7 @@ export const useAttachmentManager = (
     let failure: unknown;
     setIsLoading(true);
     try {
+        await projectService.assertStorable(file);
         loaded = await loadFBXFile(file, {
           normalize: false,
           signal: operation.signal,

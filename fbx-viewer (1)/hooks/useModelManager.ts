@@ -152,6 +152,7 @@ export const useModelManager = (
     let failure: unknown;
     setIsLoading(true);
     try {
+      await projectService.assertStorable(file);
       newModel = await loadFBXFile(file, {
         normalize: category !== 'Animation',
         signal: operation.signal,
@@ -292,12 +293,13 @@ export const useModelManager = (
     let failure: unknown;
     setIsLoading(true);
     try {
+      if (source) await projectService.assertStorable(source);
       // Without a new file, the source the project already holds.
       let storedAssetId: string | null = null;
       if (!source) {
         const stored = nativeDocuments(await projectService.getSnapshotAll('models', trace), 'models').find((model) => model.id === modelId);
         if (typeof stored?.assetId !== 'string') throw new Error('its source file is not in the project');
-        const response = await fetch(await projectService.resolveAsset(stored.assetId, trace), { method: 'GET', signal: operation.signal });
+        const response = await projectService.fetchAsset(stored.assetId, { signal: operation.signal, diagnostics: trace });
         if (!response.ok) throw new Error(`source download failed (${response.status})`);
         source = modelSourceFile(new File([await response.blob()], name), name);
         storedAssetId = stored.assetId;
@@ -337,7 +339,7 @@ export const useModelManager = (
           detail: `Binding animation — ${animationName}`,
           diagnostic,
         });
-        const response = await fetch(await projectService.resolveAsset(animation.assetId, trace), { method: 'GET', signal: operation.signal });
+        const response = await projectService.fetchAsset(animation.assetId, { signal: operation.signal, diagnostics: trace });
         if (!response.ok) throw new Error(`Animation download failed (${response.status})`);
         const animationFile = new File([await response.blob()], animationName, { type: response.headers.get('Content-Type') || 'application/octet-stream' });
         const animationModel = await loadFBXFile(animationFile, { normalize: false, signal: operation.signal, diagnostics: trace });

@@ -40,7 +40,7 @@ from Auvra.project.game_build import (
 )
 from Auvra.project.schemas import DOMAIN_NAMES
 
-from .assets import AssetResourceRequest, AssetTransferRegistry, AssetUpload
+from .assets import AssetResourceRequest, AssetTransferRegistry, AssetTransportError, AssetUpload
 from .dialogs import DialogSelection, WinFormsProjectDialogs, _validated_name
 from .native_engine import NativeEngineState, NativeEngineUnavailableHost
 
@@ -1145,7 +1145,9 @@ class NativeProjectHost:
 
         def ingest(upload: AssetUpload) -> None:
             current = self.service.active
-            if current is None or current.project_id != project_id or current.read_only:
+            if current is None or current.project_id != project_id:
+                raise AssetTransportError("asset_project_closed", 409)
+            if current.read_only:
                 raise ReadOnlyError("project upload is no longer writable")
             already_present = current.assets.verify(upload.sha256, expected_size=upload.size)
             try:

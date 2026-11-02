@@ -222,6 +222,7 @@ async function hydrateSnapshot(
   targets.setCameraState(editorState.cameraState);
   const loaded = await loadGameContent(domains, {
     resolveAssetUrl: (assetId, assetDiagnostics) => projectService.resolveAsset(assetId, assetDiagnostics),
+    fetchAsset: (assetId, init) => projectService.fetchAsset(assetId, init),
     generateThumbnails: true,
     onProgress: (progress, detail, phase, diagnostic) => onProgress(progress, detail || '', phase, diagnostic),
     signal,

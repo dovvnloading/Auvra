@@ -25,13 +25,20 @@ export type ImportPhase =
   | 'material_optimization_normalization';
 
 /** What a parser says when it runs off the end of a broken file, in the words of the language it is written in. */
-const PARSER_TRIPPED = /unexpected eof|outside the bounds|out of (bounds|range)|cannot read propert|is not (a function|iterable|defined)/i;
+const PARSER_TRIPPED = /unexpected eof|outside the bounds|out of (bounds|range)|cannot read propert|is not (a function|iterable|defined)|cannot find the version/i;
+/** What the browser says when the file on disk cannot be reached, by the name of its error. */
+const FILE_UNREACHABLE: Record<string, string> = {
+  NotFoundError: 'The file could not be found. It may have been moved or deleted.',
+  NotReadableError: 'The file could not be read from the disk.',
+};
 
 /** Says an import failed, and why where that is known. The name of a library's own loader means nothing to someone importing a file. */
 export const importFailureMessage = (what: string, error: unknown): string => {
   const said = error instanceof Error ? error.message.replace(/^THREE\.\w+:\s*/, '').trim() : '';
-  const reason = PARSER_TRIPPED.test(said) ? 'The file could not be read. It may be damaged or cut short.' : said;
-  return reason ? `${what}: ${reason}` : `${what}.`;
+  const reason = FILE_UNREACHABLE[(error as { name?: string } | null)?.name ?? '']
+    ?? (PARSER_TRIPPED.test(said) ? 'The file could not be read. It may be damaged or cut short.' : said);
+  if (!reason) return `${what}.`;
+  return `${what}: ${reason}${/[.!?]$/.test(reason) ? '' : '.'}`;
 };
 
 export const importPhaseLabel = (phase: ImportPhase): string => ({

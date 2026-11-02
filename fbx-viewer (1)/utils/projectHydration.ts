@@ -39,6 +39,8 @@ export type GameContentProgress = (
 export interface LoadGameContentOptions {
   /** Resolves a project asset id to a fetchable URL (a host ticket or a game pack file). */
   resolveAssetUrl(assetId: string, diagnostics?: DiagnosticContext): Promise<string>;
+  /** Reads a project asset where there is more to it than fetching its URL. */
+  fetchAsset?(assetId: string, init: { signal?: AbortSignal; diagnostics?: DiagnosticContext }): Promise<Response>;
   /** Library thumbnails are only needed by the editor. */
   generateThumbnails: boolean;
   onProgress?: GameContentProgress;
@@ -91,6 +93,11 @@ export async function loadGameContent(
   options: LoadGameContentOptions,
 ): Promise<LoadedGameContent> {
   const { resolveAssetUrl, generateThumbnails, onProgress, signal, diagnostics, isCurrent, resolveTerrains = false } = options;
+  const fetchProjectAsset = options.fetchAsset ?? (async (assetId: string, init: { signal?: AbortSignal; diagnostics?: DiagnosticContext }) => {
+    const url = await resolveAssetUrl(assetId, init.diagnostics);
+    assertCurrent();
+    return fetch(url, { method: 'GET', signal: init.signal });
+  });
   const assertCurrent = () => {
     throwIfAborted(signal);
     if (isCurrent && !isCurrent()) throw new DOMException('Project loading was superseded.', 'AbortError');
@@ -105,9 +112,8 @@ export async function loadGameContent(
 
   const loadProjectAssetFile = async (assetId: string, name: string, trace?: DiagnosticContext): Promise<File> => {
     throwIfAborted(signal);
-    const url = await resolveAssetUrl(assetId, trace);
+    const response = await fetchProjectAsset(assetId, { signal, diagnostics: trace });
     assertCurrent();
-    const response = await fetch(url, { method: 'GET', signal });
     if (!response.ok) throw new Error(`Asset download failed (${response.status})`);
     const blob = await response.blob();
     assertCurrent();
@@ -122,9 +128,8 @@ export async function loadGameContent(
   };
   const loadProjectAssetBytes = async (assetId: string, trace?: DiagnosticContext): Promise<ArrayBuffer> => {
     throwIfAborted(signal);
-    const url = await resolveAssetUrl(assetId, trace);
+    const response = await fetchProjectAsset(assetId, { signal, diagnostics: trace });
     assertCurrent();
-    const response = await fetch(url, { method: 'GET', signal });
     if (!response.ok) throw new Error(`Asset download failed (${response.status})`);
     const bytes = await response.arrayBuffer();
     assertCurrent();
