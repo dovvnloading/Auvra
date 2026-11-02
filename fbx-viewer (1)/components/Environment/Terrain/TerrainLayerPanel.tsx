@@ -1,214 +1,377 @@
-import React, { useCallback, useMemo, useRef } from 'react';
-import { Brush, ImageOff, Layers, Plus, X } from 'lucide-react';
-import { LevelObject, TerrainData } from '../../../types';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { ArrowDown, ArrowUp, Download, Eraser, ImageOff, PaintBucket, Plus, Trash2, Upload, Wand2 } from 'lucide-react';
+import { LevelObject, TerrainData, TerrainTextureLayer } from '../../../types';
 import { useScene } from '../../../context/SceneContext';
+import { useNotification } from '../../../context/NotificationContext';
 import { editorSession } from '../../../utils/editorSession';
+import { terrainSamplesPerSide } from '../../../utils/terrainHeightfieldCodec';
+import { Button, Section, Segmented } from '../../UI/kit';
+import { Select } from '../../UI/Select';
 import { ScrubbableInput } from '../../UI/Properties/ScrubbableInput';
-import type { TerrainToolSettings } from './terrainTool';
+import { decodeHeightmapFile, downloadBytes, encodeWeightmapPng, resampleGrid } from './terrainHeightmapFile';
 import {
-    DEFAULT_TERRAIN_LAYER_TILING,
-    hasTerrainSplat,
+    createDefaultTerrainSplat,
+    DEFAULT_TERRAIN_LAYER_TILE_SIZE,
     isTerrainSplatPending,
-    MAX_TERRAIN_LAYER_TILING,
     MAX_TERRAIN_LAYERS,
     normalizeTerrainLayers,
-    withoutTerrainSplatChannel,
+    terrainLayerTileSize,
     type TerrainPaintState,
-    type TerrainTextureLayerSettings,
 } from './terrainSplatCodec';
+import {
+    clearLayer, fillLayer, layerCoverage, layerValues, paintLayerByRule, removeLayerWeights, setLayerFromValues, swapLayerWeights,
+    type TerrainWeightGrid,
+} from './terrainWeightTools';
+import type { PaintToolName, TerrainToolSettings } from './terrainTool';
 
 interface TerrainLayerPanelProps {
     terrain: LevelObject;
-    sculptSettings: TerrainToolSettings;
-    onSculptSettingsChange: (settings: TerrainToolSettings) => void;
+    settings: TerrainToolSettings;
+    onSettingsChange: (settings: TerrainToolSettings) => void;
+    /** The brush settings, between the tool's and the layers' in the panel. */
+    brush: React.ReactNode;
 }
 
-const SECTION_TITLE = 'flex items-center gap-2 text-2xs font-bold text-gray-500 border-b border-gray-800 pb-1';
-// Splat channel N weights layer N.
-const CHANNEL_COLORS = ['bg-red-500', 'bg-green-500', 'bg-blue-500', 'bg-gray-300'];
+const PAINT_TOOLS: readonly { value: PaintToolName; label: string; hint: string }[] = [
+    { value: 'paint', label: 'Paint', hint: 'Paint the layer on. Shift takes it away.' },
+    { value: 'smooth', label: 'Smooth', hint: 'Soften where the layer meets the others.' },
+    { value: 'flatten', label: 'Flatten', hint: 'Bring the layer to the amount under the first click.' },
+    { value: 'noise', label: 'Noise', hint: 'Break the edges of the layer up in patches. Shift works the other way.' },
+];
+
+const Row: React.FC<{ label: string; hint?: string; children: React.ReactNode }> = ({ label, hint, children }) => (
+    <div className="flex min-h-[26px] items-center justify-between gap-2" title={hint}>
+        <span className="truncate text-xs text-ink-2">{label}</span>
+        <div className="w-[120px] shrink-0">{children}</div>
+    </div>
+);
+
+const NumberRow: React.FC<{ label: string; unit: string; value: number; onChange: (value: number) => void; step?: number; min?: number; max?: number; hint?: string }> = ({
+    label, unit, value, onChange, step = 1, min = -Infinity, max = Infinity, hint,
+}) => (
+    <Row label={label} hint={hint}>
+        <ScrubbableInput label={unit} value={value} step={step} labelWidth="w-7" onChange={(next) => { if (Number.isFinite(next)) onChange(Math.min(max, Math.max(min, next))); }} />
+    </Row>
+);
+
+const NOT_CHOSEN = '';
 
 /**
- * Texture layers of a terrain: up to four textures with their tiling, blended
- * by the splat map the sculpt panel's Paint tool edits. Layer 1 covers the
- * terrain until other layers are painted over it.
+ * The Terrain tool's Paint tab: the paint tools, the terrain's texture layers, and the settings of the
+ * layer being painted. Up to eight layers, each with its own maps.
  */
-export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, sculptSettings, onSculptSettingsChange }) => {
+export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, settings, onSettingsChange, brush }) => {
     const { textures, updateLevelObject, snapshotHistory } = useScene();
+    const { addNotification } = useNotification();
     const terrainData = terrain.terrainData;
     const paintState: TerrainPaintState | undefined = terrainData;
     const layers = useMemo(() => normalizeTerrainLayers(paintState?.textureLayers), [paintState?.textureLayers]);
     const splatPending = isTerrainSplatPending(paintState);
-    const paintLayer = Math.max(0, Math.floor(sculptSettings.paintLayer ?? 0));
-    const painting = sculptSettings.tab === 'paint';
+    const selected = Math.min(Math.max(0, settings.paintLayer), Math.max(0, layers.length - 1));
+    const layer = layers[selected];
+    const samples = terrainData ? terrainSamplesPerSide(terrainData.resolution) : 0;
+    const change = (changes: Partial<TerrainToolSettings>) => onSettingsChange({ ...settings, ...changes });
 
     const textureOptions = useMemo(
-        () => [...textures].sort((a, b) => a.name.localeCompare(b.name)),
+        () => [{ label: 'None', value: NOT_CHOSEN }, ...[...textures].sort((a, b) => a.name.localeCompare(b.name)).map(texture => ({ label: texture.name, value: texture.id }))],
         [textures],
     );
     const textureById = useMemo(() => new Map(textures.map(texture => [texture.id, texture])), [textures]);
+    const coverage = useMemo(
+        () => layerCoverage(terrainData?.splat, terrainData?.splat2, samples * samples, layers.length),
+        [terrainData?.splat, terrainData?.splat2, samples, layers.length],
+    );
 
-    // One undo snapshot per discrete edit, and one per tiling scrub or typing gesture.
+    // One undo snapshot per discrete edit, and one per scrub or typing gesture.
     const armedRef = useRef(true);
     const arm = useCallback(() => { armedRef.current = true; }, []);
     const canEdit = () => Boolean(terrainData) && editorSession.captureReady() !== null;
 
-    const writeTerrain = (changes: Partial<TerrainPaintState>) => {
+    const writeTerrain = (changes: Partial<TerrainData>) => {
         if (!terrainData) return;
         updateLevelObject(terrain.id, { terrainData: { ...terrainData, ...changes } as TerrainData });
     };
 
-    const commitLayers = (next: TerrainTextureLayerSettings[], extra: Partial<TerrainPaintState> = {}) => {
+    const commitLayers = (next: TerrainTextureLayer[], extra: Partial<TerrainData> = {}) => {
         if (!canEdit()) return;
         snapshotHistory();
         armedRef.current = false;
         writeTerrain({ textureLayers: next, ...extra });
     };
 
-    const scrubLayers = (next: TerrainTextureLayerSettings[]) => {
-        if (!canEdit()) return;
+    const scrubLayer = (changes: Partial<TerrainTextureLayer>) => {
+        if (!canEdit() || !layer) return;
         if (armedRef.current) {
             snapshotHistory();
             armedRef.current = false;
         }
-        writeTerrain({ textureLayers: next });
+        writeTerrain({ textureLayers: layers.map((current, index) => (index === selected ? { ...current, ...changes } : current)) });
     };
 
-    const replaceLayer = (index: number, layer: TerrainTextureLayerSettings) => layers.map((current, i) => (i === index ? layer : current));
+    /** Works on a copy of the weights, then stores the result as one undo step. */
+    const editWeights = (edit: (grid: TerrainWeightGrid) => void, count = layers.length, nextLayers?: TerrainTextureLayer[]) => {
+        if (!terrainData || !canEdit() || splatPending) return;
+        const length = samples * samples * 4;
+        const weights = terrainData.splat?.length === length ? Uint8Array.from(terrainData.splat) : createDefaultTerrainSplat(samples, samples);
+        const needsSecond = Math.max(count, layers.length) > 4 || terrainData.splat2?.length === length;
+        const weights2 = needsSecond ? (terrainData.splat2?.length === length ? Uint8Array.from(terrainData.splat2) : new Uint8Array(length)) : null;
+        edit({ columns: samples, rows: samples, width: terrainData.width, depth: terrainData.depth, weights, weights2, layerCount: count });
+        snapshotHistory();
+        const secondHasWeight = weights2?.some(value => value > 0);
+        const next: TerrainData = { ...terrainData, splat: Array.from(weights) };
+        if (secondHasWeight && weights2) next.splat2 = Array.from(weights2);
+        else {
+            delete next.splat2;
+            delete next.splatmap2;
+        }
+        if (nextLayers) next.textureLayers = nextLayers;
+        updateLevelObject(terrain.id, { terrainData: next });
+    };
 
     const addLayer = () => {
         if (layers.length >= MAX_TERRAIN_LAYERS) return;
-        commitLayers([...layers, { tiling: DEFAULT_TERRAIN_LAYER_TILING }]);
+        commitLayers([...layers, {
+            name: `Layer ${layers.length + 1}`,
+            tiling: terrainData && terrainData.width > 0 ? terrainData.width / DEFAULT_TERRAIN_LAYER_TILE_SIZE : 16,
+            tileSize: DEFAULT_TERRAIN_LAYER_TILE_SIZE,
+            variation: 0.3,
+        }]);
+        change({ paintLayer: layers.length });
     };
 
-    // Only the last layer can be removed, so channel N keeps weighting layer N.
-    // Its painted weight returns to layer 1.
-    const removeLastLayer = () => {
-        const index = layers.length - 1;
-        if (index < 0 || splatPending) return;
-        const next = layers.slice(0, index);
-        const extra = paintState && hasTerrainSplat(paintState) && paintState.splat
-            ? { splat: withoutTerrainSplatChannel(paintState.splat, index) }
-            : {};
-        commitLayers(next, extra);
-        if (paintLayer >= next.length) {
-            onSculptSettingsChange({ ...sculptSettings, paintLayer: Math.max(0, next.length - 1) });
+    const removeLayer = () => {
+        if (!layer || splatPending) return;
+        const next = layers.filter((_, index) => index !== selected);
+        if (layers.length <= 1 || !terrainData?.splat) {
+            commitLayers(next);
+        } else {
+            editWeights(grid => removeLayerWeights(grid, selected), layers.length, next);
+        }
+        change({ paintLayer: Math.max(0, Math.min(selected, next.length - 1)) });
+    };
+
+    const moveLayer = (direction: -1 | 1) => {
+        const other = selected + direction;
+        if (!layer || other < 0 || other >= layers.length || splatPending) return;
+        const next = layers.slice();
+        next[selected] = layers[other];
+        next[other] = layers[selected];
+        editWeights(grid => swapLayerWeights(grid, selected, other), layers.length, next);
+        change({ paintLayer: other });
+    };
+
+    const importFile = useRef<HTMLInputElement>(null);
+
+    const importWeights = async (file: File) => {
+        try {
+            const image = await decodeHeightmapFile(file);
+            const values = resampleGrid(image.values, image.width, image.height, samples, samples);
+            editWeights(grid => setLayerFromValues(grid, selected, values));
+        } catch (error) {
+            addNotification({ message: `The weight map could not be read (${error instanceof Error ? error.message : 'unknown error'}).`, type: 'error' });
         }
     };
 
-    const selectPaintLayer = (index: number) => {
-        onSculptSettingsChange({ ...sculptSettings, tab: 'paint', paintLayer: index });
+    const exportWeights = async () => {
+        if (!terrainData || !layer) return;
+        const length = samples * samples * 4;
+        const weights = terrainData.splat?.length === length ? Uint8Array.from(terrainData.splat) : createDefaultTerrainSplat(samples, samples);
+        const weights2 = terrainData.splat2?.length === length ? Uint8Array.from(terrainData.splat2) : null;
+        const values = layerValues({ columns: samples, rows: samples, width: terrainData.width, depth: terrainData.depth, weights, weights2, layerCount: layers.length }, selected);
+        const bytes = await encodeWeightmapPng({ width: samples, height: samples, values });
+        downloadBytes(bytes, `${terrain.name.replace(/[^\w-]+/g, '_')}_${(layer.name ?? `layer_${selected + 1}`).replace(/[^\w-]+/g, '_')}.png`, 'image/png');
     };
 
+    const [rule, setRule] = useState({ slopeMin: 30, slopeMax: 90, heightMin: -10000, heightMax: 10000, softness: 6 });
+    const paintByRule = () => {
+        const heights = terrainData?.heights;
+        if (!heights || heights.length !== samples * samples) {
+            addNotification({ message: 'Sculpt the terrain first: it has no slopes to paint by yet.', type: 'info' });
+            return;
+        }
+        editWeights(grid => paintLayerByRule(grid, heights, selected, {
+            ...rule,
+            scaleX: terrain.scale[0], scaleY: terrain.scale[2], scaleZ: terrain.scale[1], originY: terrain.position[1],
+        }));
+    };
+
+    const toolHint = PAINT_TOOLS.find(tool => tool.value === settings.paintTool)?.hint;
+
     return (
-        <div className="space-y-3" onPointerDownCapture={arm} onFocusCapture={arm}>
-            <div className={SECTION_TITLE}>
-                <Layers size={12} /> Texture Layers
-                <span className="ml-auto font-mono normal-case text-gray-600">{layers.length}/{MAX_TERRAIN_LAYERS}</span>
-            </div>
+        <div onPointerDownCapture={arm} onFocusCapture={arm}>
+            <Section title="Tool">
+                <Segmented value={settings.paintTool} options={PAINT_TOOLS} label="Paint tool" onChange={(paintTool) => change({ paintTool })} className="w-full" />
+                <p className="mt-2 text-2xs leading-relaxed text-ink-3">{toolHint}</p>
+                <div className="mt-1 space-y-1">
+                    <NumberRow label="Strength" unit="%" value={Math.round(settings.strength * 100)} min={1} max={100} hint="How fast the tool works. Keys: , and ." onChange={(value) => change({ strength: value / 100 })} />
+                    {settings.paintTool === 'paint' && (
+                        <NumberRow label="Up to" unit="%" value={Math.round(settings.paintTarget * 100)} min={1} max={100} hint="How much of this layer painting builds up to" onChange={(value) => change({ paintTarget: value / 100 })} />
+                    )}
+                    {settings.paintTool === 'smooth' && (
+                        <NumberRow label="Reach" unit="cells" value={settings.smoothKernel} min={1} max={16} onChange={(value) => change({ smoothKernel: Math.round(value) })} />
+                    )}
+                    {settings.paintTool === 'noise' && (
+                        <NumberRow label="Patch size" unit="m" value={settings.paintNoiseScale} step={0.5} min={0.1} onChange={(paintNoiseScale) => change({ paintNoiseScale })} />
+                    )}
+                </div>
+            </Section>
 
-            {layers.length === 0 && (
-                <p className="text-2xs text-gray-500 leading-relaxed">
-                    No layers: the terrain uses its flat material. Add a layer to texture it, then add more and paint them on.
-                </p>
-            )}
+            {brush}
 
-            {splatPending && layers.length > 0 && (
-                <p className="text-2xs text-amber-400/90 leading-relaxed">
-                    Painted layer weights are loading; painting is unavailable until they arrive.
-                </p>
-            )}
-
-            <div className="space-y-2">
-                {layers.map((layer, index) => {
-                    const texture = layer.textureId ? textureById.get(layer.textureId) : undefined;
-                    const active = painting && paintLayer === index;
-                    const isLast = index === layers.length - 1;
-                    return (
-                        <div
-                            key={index}
-                            className={`rounded border p-2 space-y-2 transition-colors ${active ? 'border-purple-500 bg-purple-600/10' : 'border-gray-700 bg-gray-800/60'}`}
-                        >
-                            <div className="flex items-center gap-2">
-                                <div className="relative w-8 h-8 rounded overflow-hidden bg-gray-700 shrink-0 flex items-center justify-center">
-                                    {texture
-                                        ? <img src={texture.url} alt="" className="w-full h-full object-cover" draggable={false} />
-                                        : <ImageOff size={14} className="text-gray-500" />}
-                                    <span className={`absolute bottom-0 right-0 w-2 h-2 rounded-tl ${CHANNEL_COLORS[index]}`} />
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                    <div className="text-xs font-bold text-gray-200">
-                                        Layer {index + 1}{index === 0 && <span className="ml-1 font-normal text-gray-500">(base)</span>}
-                                    </div>
-                                    <div className="text-2xs text-gray-500 truncate">{texture ? texture.name : 'No texture'}</div>
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={() => selectPaintLayer(index)}
-                                    disabled={splatPending}
-                                    title={splatPending ? 'Layer weights are still loading' : `Paint layer ${index + 1}`}
-                                    aria-pressed={active}
-                                    className={`p-1.5 rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${active ? 'border-purple-500 text-purple-300 bg-purple-600/20' : 'border-gray-700 text-gray-400 hover:bg-gray-700'}`}
-                                >
-                                    <Brush size={12} />
-                                </button>
-                                {isLast && (
-                                    <button
-                                        type="button"
-                                        onClick={removeLastLayer}
-                                        disabled={splatPending}
-                                        title={index === 0 ? 'Remove layer (back to the flat material)' : 'Remove layer (its paint returns to layer 1)'}
-                                        className="p-1.5 rounded border border-gray-700 text-gray-400 hover:text-red-400 hover:border-red-500/60 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                                    >
-                                        <X size={12} />
-                                    </button>
-                                )}
-                            </div>
-
-                            <label className="flex items-center justify-between gap-2">
-                                <span className="text-2xs text-gray-400">Texture</span>
-                                <select
-                                    value={layer.textureId ?? ''}
-                                    onChange={(event) => {
-                                        const textureId = event.target.value;
-                                        commitLayers(replaceLayer(index, textureId ? { textureId, tiling: layer.tiling } : { tiling: layer.tiling }));
-                                    }}
-                                    className="w-36 bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-2xs text-gray-200 focus:outline-none focus:border-amber-500"
-                                >
-                                    <option value="">None</option>
-                                    {textureOptions.map(option => (
-                                        <option key={option.id} value={option.id}>{option.name}</option>
-                                    ))}
-                                </select>
-                            </label>
-
-                            <div className="flex items-center justify-between gap-2">
-                                <span className="text-2xs text-gray-400">Tiling</span>
-                                <div className="w-24">
-                                    <ScrubbableInput
-                                        label="x"
-                                        value={layer.tiling}
-                                        onChange={(value) => scrubLayers(replaceLayer(index, {
-                                            ...layer,
-                                            tiling: Math.min(MAX_TERRAIN_LAYER_TILING, Math.max(0.1, value)),
-                                        }))}
-                                        step={0.5}
-                                        labelWidth="w-6"
-                                    />
-                                </div>
-                            </div>
-                        </div>
-                    );
-                })}
-            </div>
-
-            <button
-                type="button"
-                onClick={addLayer}
-                disabled={layers.length >= MAX_TERRAIN_LAYERS || !terrainData}
-                className="w-full py-1.5 rounded border border-dashed border-gray-700 text-2xs font-bold text-gray-400 hover:text-white hover:border-gray-500 transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            <Section
+                title={`Layers (${layers.length} of ${MAX_TERRAIN_LAYERS})`}
+                actions={(
+                    <Button size="sm" disabled={layers.length >= MAX_TERRAIN_LAYERS || !terrainData} onClick={addLayer} title="Add a layer"><Plus size={11} /> Add</Button>
+                )}
             >
-                <Plus size={12} /> Add Layer
-            </button>
+                {layers.length === 0 && (
+                    <p className="text-2xs leading-relaxed text-ink-3">
+                        No layers: the terrain shades itself as grass, earth and rock by slope. Add a layer to texture it, then more to paint over it.
+                    </p>
+                )}
+                {splatPending && layers.length > 0 && (
+                    <p className="pb-1.5 text-2xs leading-relaxed text-amber-400/90">Painted weights are loading; painting is unavailable until they arrive.</p>
+                )}
+                <div className="space-y-1">
+                    {layers.map((entry, index) => {
+                        const texture = entry.textureId ? textureById.get(entry.textureId) : undefined;
+                        const active = selected === index;
+                        return (
+                            <button
+                                key={index}
+                                type="button"
+                                aria-pressed={active}
+                                onClick={() => change({ paintLayer: index })}
+                                className={`flex w-full items-center gap-2 rounded border p-1 text-left transition-colors duration-75 ${active ? 'border-accent/70 bg-accent/15' : 'border-line hover:bg-gray-750'}`}
+                            >
+                                <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded bg-gray-700">
+                                    {texture
+                                        ? <img src={texture.url} alt="" className="h-full w-full object-cover" draggable={false} />
+                                        : <ImageOff size={13} className="text-ink-3" />}
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                    <span className="block truncate text-xs text-ink">{entry.name || texture?.name || `Layer ${index + 1}`}</span>
+                                    <span className="block truncate text-[10px] text-ink-3">{index === 0 ? 'Base, ' : ''}{Math.round((coverage[index] ?? 0) * 100)}% of the ground</span>
+                                </span>
+                            </button>
+                        );
+                    })}
+                </div>
+            </Section>
+
+            {layer && (
+                <Section
+                    title={layer.name || `Layer ${selected + 1}`}
+                    actions={(
+                        <div className="flex gap-0.5">
+                            <Button size="sm" variant="ghost" disabled={selected === 0 || splatPending} title="Move up" onClick={() => moveLayer(-1)}><ArrowUp size={11} /></Button>
+                            <Button size="sm" variant="ghost" disabled={selected === layers.length - 1 || splatPending} title="Move down" onClick={() => moveLayer(1)}><ArrowDown size={11} /></Button>
+                            <Button size="sm" variant="danger" disabled={splatPending} title="Remove this layer: its paint goes to the base layer" onClick={removeLayer}><Trash2 size={11} /></Button>
+                        </div>
+                    )}
+                >
+                    <div className="space-y-1">
+                        <Row label="Name">
+                            <input
+                                value={layer.name ?? ''}
+                                placeholder={`Layer ${selected + 1}`}
+                                onChange={(event) => scrubLayer({ name: event.target.value.slice(0, 64) })}
+                                className="h-6 w-full rounded border border-line bg-well px-2 text-xs text-ink focus:border-accent/70 focus:outline-none"
+                            />
+                        </Row>
+                        <Row label="Colour" hint="Its colour texture">
+                            <Select value={layer.textureId ?? NOT_CHOSEN} options={textureOptions} onChange={(value: string) => commitLayers(layers.map((current, index) => {
+                                if (index !== selected) return current;
+                                const { textureId: _gone, ...rest } = current;
+                                return value ? { ...rest, textureId: value } : rest;
+                            }))} />
+                        </Row>
+                        <Row label="Normal" hint="Its normal map: the bumps light catches">
+                            <Select value={layer.normalTextureId ?? NOT_CHOSEN} options={textureOptions} onChange={(value: string) => commitLayers(layers.map((current, index) => {
+                                if (index !== selected) return current;
+                                const { normalTextureId: _gone, ...rest } = current;
+                                return value ? { ...rest, normalTextureId: value } : rest;
+                            }))} />
+                        </Row>
+                        <Row label="Roughness" hint="Its roughness map">
+                            <Select value={layer.roughnessTextureId ?? NOT_CHOSEN} options={textureOptions} onChange={(value: string) => commitLayers(layers.map((current, index) => {
+                                if (index !== selected) return current;
+                                const { roughnessTextureId: _gone, ...rest } = current;
+                                return value ? { ...rest, roughnessTextureId: value } : rest;
+                            }))} />
+                        </Row>
+                        <Row label="Height" hint="Its height map: with Height blend, the taller of two layers shows first where they meet">
+                            <Select value={layer.heightTextureId ?? NOT_CHOSEN} options={textureOptions} onChange={(value: string) => commitLayers(layers.map((current, index) => {
+                                if (index !== selected) return current;
+                                const { heightTextureId: _gone, ...rest } = current;
+                                return value ? { ...rest, heightTextureId: value } : rest;
+                            }))} />
+                        </Row>
+                        <NumberRow
+                            label="Tile size" unit="m" step={0.5} min={0.1} max={10000}
+                            value={terrainLayerTileSize(layer, (terrainData?.width ?? 0) * terrain.scale[0])}
+                            hint="How many metres one repeat of its textures covers"
+                            onChange={(tileSize) => scrubLayer({ tileSize })}
+                        />
+                        <NumberRow label="Turn" unit="°" step={5} value={layer.rotation ?? 0} onChange={(rotation) => scrubLayer({ rotation })} />
+                        <Row label="Tint">
+                            <input
+                                type="color"
+                                value={layer.tint ?? '#ffffff'}
+                                onChange={(event) => scrubLayer({ tint: event.target.value })}
+                                className="h-6 w-full cursor-pointer rounded border border-line bg-well"
+                            />
+                        </Row>
+                        <NumberRow label="Roughness" unit="%" min={0} max={100} value={Math.round((layer.roughness ?? 0.9) * 100)} hint="How dull it is; with a roughness map, how far that map goes" onChange={(value) => scrubLayer({ roughness: value / 100 })} />
+                        <NumberRow label="Normal strength" unit="%" min={0} max={300} step={5} value={Math.round((layer.normalStrength ?? 1) * 100)} onChange={(value) => scrubLayer({ normalStrength: value / 100 })} />
+                        <NumberRow label="Height blend" unit="%" min={0} max={300} step={5} value={Math.round((layer.heightContrast ?? 0) * 100)} hint="0 blends layers evenly. Higher lets its height map decide where it shows, so stones show through sand before the sand covers them" onChange={(value) => scrubLayer({ heightContrast: value / 100 })} />
+                        <NumberRow label="Variation" unit="%" min={0} max={100} value={Math.round((layer.variation ?? 0) * 100)} hint="Broad, soft changes of colour that hide the repeat of the texture" onChange={(value) => scrubLayer({ variation: value / 100 })} />
+                        <label className="flex min-h-[26px] cursor-pointer items-center justify-between gap-2" title="Also project its textures from the sides on steep ground, so they do not stretch down cliffs. Costs more where the ground is steep">
+                            <span className="truncate text-xs text-ink-2">Project onto cliffs</span>
+                            <input type="checkbox" checked={Boolean(layer.cliffProjection)} onChange={(event) => commitLayers(layers.map((current, index) => (index === selected ? { ...current, cliffProjection: event.target.checked } : current)))} className="h-3.5 w-3.5" />
+                        </label>
+                    </div>
+                    <div className="mt-2 grid grid-cols-2 gap-1">
+                        <Button size="md" disabled={splatPending} onClick={() => editWeights(grid => fillLayer(grid, selected))} title="Paint this layer over the whole terrain"><PaintBucket size={12} /> Fill</Button>
+                        <Button size="md" disabled={splatPending} onClick={() => editWeights(grid => clearLayer(grid, selected))} title="Take this layer off the whole terrain"><Eraser size={12} /> Clear</Button>
+                        <Button size="md" disabled={splatPending} onClick={() => importFile.current?.click()} title="Set this layer from an 8 or 16 bit grey PNG"><Upload size={12} /> Import</Button>
+                        <Button size="md" onClick={() => void exportWeights()} title="Save this layer's weights as a grey PNG"><Download size={12} /> Export</Button>
+                    </div>
+                    <input
+                        ref={importFile}
+                        type="file"
+                        accept=".png,.r16,.raw"
+                        data-terrain-weights="true"
+                        className="hidden"
+                        onChange={(event) => {
+                            const file = event.target.files?.[0];
+                            event.target.value = '';
+                            if (file) void importWeights(file);
+                        }}
+                    />
+                </Section>
+            )}
+
+            {layer && (
+                <Section title="Paint by Slope and Height">
+                    <div className="space-y-1">
+                        <Row label="Slope" hint="Degrees of slope the layer goes on">
+                            <div className="grid grid-cols-2 gap-1">
+                                <ScrubbableInput label="" labelWidth="w-0" value={rule.slopeMin} step={1} onChange={(slopeMin) => setRule(current => ({ ...current, slopeMin }))} />
+                                <ScrubbableInput label="" labelWidth="w-0" value={rule.slopeMax} step={1} onChange={(slopeMax) => setRule(current => ({ ...current, slopeMax }))} />
+                            </div>
+                        </Row>
+                        <Row label="Height" hint="World heights the layer goes between">
+                            <div className="grid grid-cols-2 gap-1">
+                                <ScrubbableInput label="" labelWidth="w-0" value={rule.heightMin} step={1} onChange={(heightMin) => setRule(current => ({ ...current, heightMin }))} />
+                                <ScrubbableInput label="" labelWidth="w-0" value={rule.heightMax} step={1} onChange={(heightMax) => setRule(current => ({ ...current, heightMax }))} />
+                            </div>
+                        </Row>
+                        <NumberRow label="Soft edge" unit="" min={0} max={45} value={rule.softness} hint="How gradually it starts and stops" onChange={(softness) => setRule(current => ({ ...current, softness }))} />
+                        <Button size="md" className="mt-1 w-full" disabled={splatPending} onClick={paintByRule}><Wand2 size={12} /> Paint This Layer</Button>
+                    </div>
+                </Section>
+            )}
         </div>
     );
 };

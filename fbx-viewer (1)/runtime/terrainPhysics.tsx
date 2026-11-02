@@ -196,9 +196,12 @@ export const terrainSurfaceAt = (
     const v = (worldZ - terrain.position[2]) / grid.scale.z + 0.5;
     if (!(u >= 0 && u <= 1 && v >= 0 && v <= 1)) return base;
     const at = (Math.round(v * grid.resolution) * grid.samples + Math.round(u * grid.resolution)) * 4;
+    const splat2 = terrain.terrainData?.splat2;
+    const second = splat2 && splat2.length === splat.length ? splat2 : null;
+    const weightOf = (channel: number) => (channel < 4 ? splat[at + channel] : (second ? second[at + channel - 4] : 0));
     let layer = 0;
-    for (let channel = 1; channel < Math.min(4, layers.length); channel++) {
-        if (splat[at + channel] > splat[at + layer]) layer = channel;
+    for (let channel = 1; channel < Math.min(8, layers.length); channel++) {
+        if (weightOf(channel) > weightOf(layer)) layer = channel;
     }
     return layers[layer] ?? base;
 };

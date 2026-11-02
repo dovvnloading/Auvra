@@ -4,7 +4,7 @@ import { importPhaseLabel, loadFBXFile } from './modelLoader';
 import { resolveTerrainHeightfield } from './terrainHeightfield';
 import { isTerrainHeightfieldPending } from './terrainHeightfieldCodec';
 import { resolveTerrainHolemap, resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplat';
-import { isTerrainHolesPending, isTerrainSplatPending } from '../components/Environment/Terrain/terrainSplatCodec';
+import { isTerrainHolesPending, isTerrainSplat2Pending, isTerrainSplatPending } from '../components/Environment/Terrain/terrainSplatCodec';
 import { applyModelImportSettings, stripGeometry } from './processing/ModelTransforms';
 import { generateThumbnail } from './thumbnailGenerator';
 import { disposeModel, disposeObject } from './processing/ModelLifecycle';
@@ -142,6 +142,7 @@ export async function loadGameContent(
     for (const object of objectDocuments) {
       if (isTerrainHeightfieldPending(object?.terrainData)) terrainWork += 1;
       if (isTerrainSplatPending(object?.terrainData)) terrainWork += 1;
+      if (isTerrainSplat2Pending(object?.terrainData)) terrainWork += 1;
       if (isTerrainHolesPending(object?.terrainData)) terrainWork += 1;
     }
   }
@@ -434,6 +435,24 @@ export async function loadGameContent(
           } catch (error) {
             assertCurrent();
             // Paint is not essential to play: the terrain keeps its base layer.
+            recordAssetDiagnostic('terrain_splatmap_hydration_failed', error, 'source_read', { ...diagnostic, fallback: 'base_layer' });
+          }
+          complete(`Loaded terrain paint — ${label}`, diagnostic);
+        }
+        const splatmap2 = terrain.splatmap2;
+        if (splatmap2 && isTerrainSplat2Pending(terrain)) {
+          const assetAlias = frontendDiagnostics.nextAssetAlias();
+          const diagnostic: DiagnosticAttributes = { assetAlias, assetKind: 'terrain_splatmap' };
+          try {
+            report(`Loading terrain paint — ${label}`, 0.1, 'source_read', diagnostic);
+            const splat2 = await resolveSharedTerrainAsset(splatmaps, splatmap2, () => resolveTerrainSplatmap(
+              splatmap2,
+              (assetId) => loadProjectAssetBytes(assetId, traceAsset(assetAlias)),
+            ));
+            assertCurrent();
+            resolved = { ...resolved, splat2 };
+          } catch (error) {
+            assertCurrent();
             recordAssetDiagnostic('terrain_splatmap_hydration_failed', error, 'source_read', { ...diagnostic, fallback: 'base_layer' });
           }
           complete(`Loaded terrain paint — ${label}`, diagnostic);

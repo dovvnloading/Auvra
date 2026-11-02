@@ -10,7 +10,7 @@ import { subscribeDomainCascade, type DomainCascadeEvent } from '../utils/domain
 import { resolveTerrainHeightfield } from '../utils/terrainHeightfieldEditor';
 import { isTerrainHeightfieldPending, TerrainHeightfieldEncodingError } from '../utils/terrainHeightfieldCodec';
 import { resolveTerrainHolemap, resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplatEditor';
-import { isTerrainHolesPending, isTerrainSplatPending, terrainLayersReferenceTexture, withoutTerrainLayerTexture } from '../components/Environment/Terrain/terrainSplatCodec';
+import { isTerrainHolesPending, isTerrainSplat2Pending, isTerrainSplatPending, terrainLayersReferenceTexture, withoutTerrainLayerTexture } from '../components/Environment/Terrain/terrainSplatCodec';
 import { collectSubtree, sortByHierarchy } from '../utils/sceneGraph';
 import type { LevelBakedLighting } from '../runtime/lighting/bakedLighting';
 
@@ -49,7 +49,7 @@ const withDescendants = (objects: readonly LevelObject[], isRoot: (object: Level
 };
 
 /** Terrain fields that can hold millions of numbers. They are replaced whole, never changed in place, so history can share them. */
-const SHARED_TERRAIN_FIELDS = ['heights', 'splat', 'holes'] as const;
+const SHARED_TERRAIN_FIELDS = ['heights', 'splat', 'splat2', 'holes'] as const;
 
 /** A copy of the level's objects for the undo history, sharing the terrains' largest arrays. */
 const snapshotLevelObjects = (objects: readonly LevelObject[]): LevelObject[] => objects.map((object) => {
@@ -633,6 +633,48 @@ export const useLevelManager = (models: LoadedModelData[]) => {
           }, (error) => {
               if (!active) return;
               failedSplatmapsRef.current.add(reference.assetId);
+              frontendDiagnostics.failure('terrain_splatmap_resolve_failed', error);
+              addNotification({ message: `Terrain paint could not be loaded (${describeError(error)}); painting is disabled for that terrain.`, type: 'error' });
+          });
+      }
+      return () => { active = false; };
+  }, [addNotification, levelObjects]);
+
+  // The weights of layers 5 to 8 are resolved the same way into terrainData.splat2.
+  const failedSplatmaps2Ref = useRef<Set<string>>(new Set());
+  useEffect(() => {
+      const references = new Map<string, TerrainSplatmapReference>();
+      for (const object of levelObjects) {
+          const reference = object.terrainData?.splatmap2;
+          if (reference && isTerrainSplat2Pending(object.terrainData) && !failedSplatmaps2Ref.current.has(reference.assetId)) {
+              references.set(reference.assetId, reference);
+          }
+      }
+      if (references.size === 0) return;
+      let active = true;
+      for (const reference of references.values()) {
+          resolveTerrainSplatmap(reference).then((splat2) => {
+              if (!active) return;
+              const resolves = (object: LevelObject): boolean => Boolean(
+                  object.terrainData?.splatmap2?.assetId === reference.assetId && isTerrainSplat2Pending(object.terrainData),
+              );
+              for (const snapshot of [...history.current.past, ...history.current.future]) {
+                  snapshot.forEach((object, index) => {
+                      if (resolves(object)) snapshot[index] = { ...object, terrainData: { ...object.terrainData!, splat2 } };
+                  });
+              }
+              setWorkingState((current) => {
+                  let changed = false;
+                  const nextObjects = current.levelObjects.map((object) => {
+                      if (!resolves(object)) return object;
+                      changed = true;
+                      return { ...object, terrainData: { ...object.terrainData!, splat2 } };
+                  });
+                  return changed ? { ...current, levelObjects: nextObjects } : current;
+              });
+          }, (error) => {
+              if (!active) return;
+              failedSplatmaps2Ref.current.add(reference.assetId);
               frontendDiagnostics.failure('terrain_splatmap_resolve_failed', error);
               addNotification({ message: `Terrain paint could not be loaded (${describeError(error)}); painting is disabled for that terrain.`, type: 'error' });
           });

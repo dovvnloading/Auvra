@@ -7,7 +7,7 @@ import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { pictureFromImage, unionRect, type TerrainBrushPicture, type TerrainBrushStamp, type TerrainGridRect } from './terrainBrush';
 import { hideTerrainBrush, hideTerrainRect, showTerrainBrush, showTerrainRect } from './terrainBrushOverlay';
 import type { TerrainLiveEdit } from './terrainLiveEdit';
-import { paintTerrainSplat, TERRAIN_SPLAT_CHANNELS } from './terrainSplatCodec';
+import { applyFlattenLayer, applyNoiseLayer, applyPaintLayer, applySmoothLayer, layerWeightNear, type TerrainWeightGrid, type WeightToolContext } from './terrainWeightTools';
 import {
     applyErosion, applyFlatten, applyHoles, applyHydroErosion, applyMirror, applyNoise, applyRamp, applySculpt, applySmooth, applyTerrace,
     copyRegion, heightAt, pasteClip, slopeAt,
@@ -24,8 +24,10 @@ export interface TerrainPaintTarget {
     rows: number;
     width: number;
     depth: number;
-    /** RGBA weights, (columns * rows * 4), row-major in PlaneGeometry order. */
+    /** RGBA weights of layers 1 to 4, (columns * rows * 4), row-major in PlaneGeometry order. */
     weights: Uint8Array;
+    /** The same for layers 5 to 8, once there are more than four. */
+    weights2: Uint8Array | null;
     layerCount: number;
     /** The stored weights are still loading; painting would overwrite them. */
     pending: boolean;
@@ -39,7 +41,7 @@ export const getTerrainPaintTarget = (mesh: THREE.Object3D | null | undefined): 
 };
 
 const canPaint = (target: TerrainPaintTarget | null, layer: number): target is TerrainPaintTarget => (
-    Boolean(target && !target.pending && layer >= 0 && layer < Math.min(target.layerCount, TERRAIN_SPLAT_CHANNELS))
+    Boolean(target && !target.pending && layer >= 0 && layer < target.layerCount)
 );
 
 const liveEditOf = (mesh: THREE.Object3D | null | undefined): TerrainLiveEdit | null => (mesh?.userData.terrainEdit as TerrainLiveEdit | undefined) ?? null;
@@ -82,8 +84,8 @@ interface TerrainBrushToolProps {
     enabled: boolean;
     /** A stroke ended: the terrain's new heights. */
     onHeightsCommit: (objectId: string, heights: number[]) => void;
-    /** A paint stroke ended: the terrain's full splat weights (0-255 RGBA per sample). */
-    onPaintCommit: (objectId: string, splat: number[]) => void;
+    /** A paint stroke ended: the terrain's splat weights (0-255 RGBA per sample) and, past four layers, its second map's. */
+    onPaintCommit: (objectId: string, splat: number[], splat2: number[] | undefined) => void;
     /** A holes stroke ended: the cells cut out, or undefined when none are. */
     onHolesCommit: (objectId: string, holes: number[] | undefined) => void;
     /** The first edit of a stroke, before it is committed (take an undo snapshot). */
@@ -104,6 +106,8 @@ interface Stroke {
     origin: THREE.Vector3;
     /** A press with the region tool: where the drag began. */
     regionStart: THREE.Vector3 | null;
+    /** The layer's weight under the first click, for the paint Flatten tool. */
+    weightTarget: number;
 }
 
 const _local = new THREE.Vector3();
@@ -220,7 +224,9 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
         const objectId = active.mesh.userData.levelObjectId as string;
         if (latest.current.settings.tab === 'paint') {
             const target = getTerrainPaintTarget(active.mesh);
-            if (target && !target.pending) latest.current.onPaintCommit(objectId, Array.from(target.weights));
+            if (target && !target.pending) {
+                latest.current.onPaintCommit(objectId, Array.from(target.weights), target.weights2 ? Array.from(target.weights2) : undefined);
+            }
             return;
         }
         if (latest.current.settings.tool === 'holes') {
@@ -368,13 +374,21 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
             if (painting) {
                 const target = getTerrainPaintTarget(active.mesh);
                 if (!canPaint(target, current.paintLayer)) break;
-                const modified = paintTerrainSplat(target.weights, target, {
-                    x: _step.x,
-                    y: _step.y,
-                    radius: radiusLocal,
-                    strength: Math.min(1, current.strength * 6 * (dt / steps)),
+                const context: WeightToolContext = {
+                    grid: target,
+                    stamp: stampAt(active.mesh, _step.x, _step.y),
                     layer: current.paintLayer,
-                });
+                    strength: current.strength * pressedAt.current.pressure,
+                    dt: dt / steps,
+                    invert,
+                };
+                let modified: TerrainGridRect | null = null;
+                switch (current.paintTool) {
+                    case 'paint': modified = applyPaintLayer(context, current.paintTarget); break;
+                    case 'smooth': modified = applySmoothLayer(context, current.smoothKernel); break;
+                    case 'flatten': modified = applyFlattenLayer(context, active.weightTarget); break;
+                    case 'noise': modified = applyNoiseLayer(context, current.paintNoiseScale / Math.max(1e-6, _scale.x)); break;
+                }
                 if (modified) {
                     noteChange(active);
                     target.markDirty();
@@ -479,11 +493,13 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
                     mesh: hit.mesh, live, last: local.clone(), changed: false, dirty: null,
                     flattenTarget: 0, flattenSlope: { x: 0, y: 0 }, origin: local.clone(),
                     regionStart: hit.point.clone(),
+                    weightTarget: 0,
                 };
                 return;
             }
 
             const grid = live;
+            const paintTarget = getTerrainPaintTarget(hit.mesh);
             hit.mesh.getWorldScale(_scale);
             const flattenTarget = current.flattenUseHeight
                 ? hit.mesh.worldToLocal(new THREE.Vector3(hit.point.x, current.flattenHeight, hit.point.z)).z
@@ -499,6 +515,9 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
                 flattenSlope: slopeAt(grid, local.x, local.y),
                 origin: local.clone(),
                 regionStart: null,
+                weightTarget: paintTarget && canPaint(paintTarget, current.paintLayer)
+                    ? layerWeightNear(paintTarget as TerrainWeightGrid, local.x, local.y, current.paintLayer)
+                    : 0,
             };
         };
 

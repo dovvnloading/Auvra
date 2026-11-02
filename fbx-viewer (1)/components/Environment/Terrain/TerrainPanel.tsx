@@ -380,6 +380,7 @@ const ManageTab: React.FC<{
         const next: TerrainData = { ...data, resolution: resize };
         delete next.heightfield;
         delete next.splatmap;
+        delete next.splatmap2;
         delete next.holemap;
         next.heights = data.heights?.length === from * from ? Array.from(resampleGrid(data.heights, from, from, to, to)) : [];
         if (data.splat?.length === from * from * 4) {
@@ -398,6 +399,11 @@ const ManageTab: React.FC<{
             next.splat = splat;
         } else {
             delete next.splat;
+        }
+        if (data.splat2?.length === from * from * 4) {
+            next.splat2 = Array.from(resampleGrid(data.splat2, from, from, to, to, 4), value => Math.round(value));
+        } else {
+            delete next.splat2;
         }
         delete next.holes;
         updateLevelObject(terrain.id, { terrainData: next });
@@ -544,13 +550,7 @@ export const TerrainPanel: React.FC<TerrainPanelProps> = ({ settings, onSettings
                     )}
                     {settings.tab === 'sculpt' && <SculptTab settings={settings} change={change} terrain={terrain} />}
                     {settings.tab === 'paint' && terrain && (
-                        <>
-                            <Section title="Paint">
-                                <NumberRow label="Strength" unit="%" value={Math.round(settings.strength * 100)} min={1} max={100} onChange={(value) => change({ strength: value / 100 })} />
-                            </Section>
-                            <div className="px-3 py-2.5"><TerrainLayerPanel terrain={terrain} sculptSettings={settings} onSculptSettingsChange={onSettingsChange} /></div>
-                            <BrushSection settings={settings} change={change} />
-                        </>
+                        <TerrainLayerPanel terrain={terrain} settings={settings} onSettingsChange={onSettingsChange} brush={<BrushSection settings={settings} change={change} />} />
                     )}
                 </div>
             </div>

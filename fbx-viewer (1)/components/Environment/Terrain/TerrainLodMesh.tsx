@@ -85,6 +85,7 @@ export const TerrainLodMesh: React.FC<TerrainLodMeshProps> = ({ source, segments
             render.skirt.dispose();
             render.skirt.setAttribute('position', new THREE.BufferAttribute(skirt.positions, 3));
             render.skirt.setAttribute('normal', new THREE.BufferAttribute(skirt.normals, 3));
+            render.skirt.setAttribute('uv', new THREE.BufferAttribute(skirt.uvs, 2));
             render.skirt.setIndex(new THREE.BufferAttribute(skirt.indices, 1));
         }
         render.skirt.computeBoundingSphere();

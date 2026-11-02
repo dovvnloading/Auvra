@@ -1,8 +1,7 @@
-import React, { useRef, useLayoutEffect, useMemo, forwardRef, useImperativeHandle, useState, useEffect } from 'react';
+import React, { useRef, useLayoutEffect, useMemo, forwardRef, useImperativeHandle, useEffect } from 'react';
 import * as THREE from 'three';
 import { LevelObject } from '../../../types';
 import { isTerrainHeightfieldPending, terrainSamplesPerSide } from '../../../utils/terrainHeightfieldCodec';
-import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { useGameContent } from '../../../runtime/GameContentContext';
 import { raycastTerrainMesh } from '../../../utils/surfacePlacement';
 import type { TerrainPaintTarget } from './TerrainBrushTool';
@@ -11,18 +10,24 @@ import { TerrainLodMesh } from './TerrainLodMesh';
 import {
     createDefaultTerrainSplat,
     fillDefaultTerrainSplat,
+    isTerrainSplat2Pending,
     isTerrainSplatPending,
     normalizeTerrainLayers,
+    terrainLayerTileSize,
+    TERRAIN_SPLAT_CHANNELS,
     type TerrainPaintState,
 } from './terrainSplatCodec';
 import {
     bindTerrainLayers,
     createTerrainLayerMaterial,
     createTerrainSplatTexture,
-    prepareTerrainLayerTexture,
-    setTerrainSplatTexture,
+    getNeutralAlbedoArray,
+    getNeutralDetailArray,
+    setTerrainSplatTextures,
     createTerrainGroundMaterial,
+    type TerrainLayerLook,
 } from './terrainLayerMaterial';
+import { useTerrainLayerArrays, type TerrainLayerSources } from './terrainLayerTextures';
 
 interface TerrainObjectProps {
     data: LevelObject;
@@ -40,50 +45,6 @@ interface TerrainObjectProps {
 
 /** Below this many cells per side one mesh is cheap enough; chunking would only add draw calls. */
 const MIN_LOD_SEGMENTS = 64;
-
-/**
- * Layer textures by URL. Each URL is loaded once and disposed when no layer
- * uses it any more (or the terrain unmounts); a layer still loading is null.
- */
-const useTerrainLayerTextures = (urls: readonly (string | undefined)[]): (THREE.Texture | null)[] => {
-    const cacheRef = useRef(new Map<string, THREE.Texture | null>());
-    const [version, setVersion] = useState(0);
-    const key = urls.map(url => url ?? '').join('\n');
-
-    useEffect(() => {
-        const cache = cacheRef.current;
-        const wanted = new Set(urls.filter((url): url is string => Boolean(url)));
-        for (const [url, texture] of cache) {
-            if (!wanted.has(url)) {
-                texture?.dispose();
-                cache.delete(url);
-            }
-        }
-        for (const url of wanted) {
-            if (cache.has(url)) continue;
-            cache.set(url, null);
-            new THREE.TextureLoader().load(url, (texture) => {
-                // The layer changed (or the terrain unmounted) while this loaded.
-                if (!cache.has(url) || cache.get(url) !== null) {
-                    texture.dispose();
-                    return;
-                }
-                cache.set(url, prepareTerrainLayerTexture(texture));
-                setVersion(value => value + 1);
-            }, undefined, (error) => {
-                frontendDiagnostics.failure('terrain_layer_texture_load_failed', error);
-            });
-        }
-    }, [key]);
-
-    useEffect(() => () => {
-        for (const texture of cacheRef.current.values()) texture?.dispose();
-        cacheRef.current.clear();
-    }, []);
-
-    // `key` stands for `urls`; `version` changes when a texture finishes loading.
-    return useMemo(() => urls.map(url => (url ? cacheRef.current.get(url) ?? null : null)), [key, version]);
-};
 
 /** The terrain's edge, following the ground: how a selected terrain shows, whatever its size. */
 const TerrainOutline: React.FC<{ live: TerrainLiveEdit; version: unknown }> = ({ live, version }) => {
@@ -141,28 +102,43 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
     const chunked = lod && resolution >= MIN_LOD_SEGMENTS;
 
     // --- Texture Layers ---
-    // Up to four layers blended by the splat map. Without layers the terrain
-    // keeps the flat material.
+    // Up to eight layers blended by the splat maps. Without layers the terrain
+    // shades itself by slope.
     const storedLayers = paintState?.textureLayers;
     const layers = useMemo(() => normalizeTerrainLayers(storedLayers), [storedLayers]);
     const splat = paintState?.splat;
+    const splat2 = paintState?.splat2;
     // Weights stored in a splat map asset are loaded after the level opens.
     // Until then layer 0 is shown and the terrain must not be painted.
-    const splatPending = isTerrainSplatPending(paintState);
+    const splatPending = isTerrainSplatPending(paintState) || isTerrainSplat2Pending(paintState);
 
     const { textures } = useGameContent();
-    const layerUrls = useMemo(
-        () => layers.map(layer => (layer.textureId ? textures.find(texture => texture.id === layer.textureId)?.url : undefined)),
-        [layers, textures],
-    );
-    const layerTextures = useTerrainLayerTextures(layerUrls);
+    const layerSources = useMemo<TerrainLayerSources[]>(() => {
+        const urlOf = (id: string | undefined) => (id ? textures.find(texture => texture.id === id)?.url : undefined);
+        return layers.map(layer => ({
+            albedo: urlOf(layer.textureId),
+            normal: urlOf(layer.normalTextureId),
+            roughness: urlOf(layer.roughnessTextureId),
+            height: urlOf(layer.heightTextureId),
+        }));
+    }, [layers, textures]);
+    const layerArrays = useTerrainLayerArrays(layerSources);
 
-    // The live splat weights (painted in place by the sculptor) and their texture.
+    // The live splat weights (painted in place by the brush) and their textures.
     const splatResources = useMemo(() => {
         const weights = createDefaultTerrainSplat(samplesPerSide, samplesPerSide);
         return { weights, texture: createTerrainSplatTexture(weights, samplesPerSide, samplesPerSide) };
     }, [samplesPerSide]);
     useEffect(() => () => splatResources.texture.dispose(), [splatResources]);
+
+    // The second map only exists once a terrain has more than four layers.
+    const needsSecondMap = layers.length > TERRAIN_SPLAT_CHANNELS;
+    const secondSplat = useMemo(() => {
+        if (!needsSecondMap) return null;
+        const weights = new Uint8Array(samplesPerSide * samplesPerSide * TERRAIN_SPLAT_CHANNELS);
+        return { weights, texture: createTerrainSplatTexture(weights, samplesPerSide, samplesPerSide) };
+    }, [samplesPerSide, needsSecondMap]);
+    useEffect(() => () => secondSplat?.texture.dispose(), [secondSplat]);
 
     useLayoutEffect(() => {
         const { weights, texture } = splatResources;
@@ -170,6 +146,13 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
         else fillDefaultTerrainSplat(weights);
         texture.needsUpdate = true;
     }, [splat, splatResources]);
+
+    useLayoutEffect(() => {
+        if (!secondSplat) return;
+        if (splat2 && splat2.length === secondSplat.weights.length) secondSplat.weights.set(splat2);
+        else secondSplat.weights.fill(0);
+        secondSplat.texture.needsUpdate = true;
+    }, [splat2, secondSplat]);
 
     // --- Material ---
     // Unpainted terrain: grass, earth and rock by slope (see createTerrainGroundMaterial).
@@ -181,27 +164,45 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
     const layerMaterial = useMemo(() => (layered ? createTerrainLayerMaterial(splatResources.texture) : null), [layered]);
     useEffect(() => () => layerMaterial?.dispose(), [layerMaterial]);
 
+    const scaleX = data.scale[0];
     useLayoutEffect(() => {
         if (!layerMaterial) return;
-        setTerrainSplatTexture(layerMaterial, splatResources.texture);
+        setTerrainSplatTextures(layerMaterial, splatResources.texture, secondSplat?.texture ?? null);
+        const looks = layers.map((layer): TerrainLayerLook => ({
+            tileSize: terrainLayerTileSize(layer, width * scaleX),
+            rotation: layer.rotation,
+            tint: layer.tint,
+            roughness: layer.roughness ?? (layer.roughnessTextureId ? 1 : undefined),
+            normalStrength: layer.normalStrength,
+            heightContrast: layer.heightContrast,
+            cliffProjection: layer.cliffProjection,
+            variation: layer.variation,
+        }));
         bindTerrainLayers(layerMaterial, {
-            textures: layerTextures,
-            tilings: layers.map(layer => layer.tiling),
-            aspect: width > 0 ? depth / width : 1,
+            albedo: layerArrays?.albedo ?? getNeutralAlbedoArray(),
+            detail: layerArrays?.detail ?? getNeutralDetailArray(),
+            layers: looks,
+            width,
+            depth,
+            rayMaps: layerArrays?.rayMaps,
         });
-    }, [layerMaterial, splatResources, layerTextures, layers, width, depth]);
+    }, [layerMaterial, splatResources, secondSplat, layerArrays, layers, width, depth, scaleX]);
 
-    // Exposed on the mesh for the sculptor's paint brush.
+    // Exposed on the mesh for the brush.
     const paintTarget = useMemo<TerrainPaintTarget>(() => ({
         columns: samplesPerSide,
         rows: samplesPerSide,
         width,
         depth,
         weights: splatResources.weights,
+        weights2: secondSplat?.weights ?? null,
         layerCount: layers.length,
         pending: splatPending,
-        markDirty: () => { splatResources.texture.needsUpdate = true; },
-    }), [samplesPerSide, width, depth, splatResources, layers.length, splatPending]);
+        markDirty: () => {
+            splatResources.texture.needsUpdate = true;
+            if (secondSplat) secondSplat.texture.needsUpdate = true;
+        },
+    }), [samplesPerSide, width, depth, splatResources, secondSplat, layers.length, splatPending]);
 
     // --- Geometry Init ---
     useLayoutEffect(() => {

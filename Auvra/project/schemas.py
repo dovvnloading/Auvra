@@ -30,14 +30,15 @@ _NESTED_KEYS = {
     # binary heightfield asset instead (see ``_validate_terrain_heightfields``).
     # Paint weights likewise live in a binary splat map asset (``splatmap``);
     # the editor's in-memory ``splat`` array is never persisted.
-    "terrainData": {"resolution", "width", "depth", "heights", "heightfield", "textureId", "textureLayers", "splatmap", "holemap"},
+    "terrainData": {"resolution", "width", "depth", "heights", "heightfield", "textureId", "textureLayers", "splatmap", "splatmap2", "holemap"},
     "heightfield": {"assetId", "encoding", "columns", "rows"},
     "splatmap": {"assetId", "encoding", "columns", "rows"},
+    "splatmap2": {"assetId", "encoding", "columns", "rows"},
     "holemap": {"assetId", "encoding", "columns", "rows"},
     # A level's baked lighting: bake settings and the light probe volume asset.
     "bakedLighting": {"spacing", "bounces", "intensity", "probes"},
     "probes": {"assetId", "encoding", "origin", "spacing", "counts", "bakedAt", "signature"},
-    "textureLayers": {"textureId", "tiling"},
+    "textureLayers": {"name", "textureId", "normalTextureId", "roughnessTextureId", "heightTextureId", "tiling", "tileSize", "rotation", "tint", "roughness", "normalStrength", "heightContrast", "cliffProjection", "variation"},
     "skyConfig": {"timeOfDay", "sunIntensity", "ambienceIntensity", "sunColor", "fogColor", "fogDensity", "turbidity", "rayleigh", "mieCoefficient", "mieDirectionalG", "inclination", "azimuth", "dayLength", "weather", "fogMode", "shadowDistance", "model", "preset", "sunTilt", "sunSize", "atmosphere", "cloudLayer", "night", "skyLight", "panorama"},
     # The physically based sky: its air, its clouds, its night, the Sky Light it lights the level with and a panorama image.
     "atmosphere": {"rayleigh", "rayleighTint", "haze", "hazeGlow", "ozone", "ground", "brightness"},
@@ -195,7 +196,8 @@ def validate_project_references(
         require("audio", (value.get("audioConfig") or {}).get("audioId"), "object audio", optional=True)
         require("textures", (value.get("terrainData") or {}).get("textureId"), "terrain texture", optional=True)
         for layer in ((value.get("terrainData") or {}).get("textureLayers") or []):
-            require("textures", layer.get("textureId") if isinstance(layer, dict) else None, "terrain layer texture", optional=True)
+            for field in ("textureId", "normalTextureId", "roughnessTextureId", "heightTextureId"):
+                require("textures", layer.get(field) if isinstance(layer, dict) else None, "terrain layer texture", optional=True)
         require("prefabs", value.get("prefabId"), "object prefab", optional=True)
     # Transform parents live in the same level, so a hierarchy never spans
     # levels and a level can be loaded (or deleted) as one tree.
@@ -328,7 +330,7 @@ def _validate_terrain_heightfields(value: Any) -> None:
         terrain = object_value.get("terrainData") if isinstance(object_value, dict) else None
         if not isinstance(terrain, dict):
             continue
-        for key, label in (("heightfield", "heightfield"), ("splatmap", "splat map"), ("holemap", "hole map")):
+        for key, label in (("heightfield", "heightfield"), ("splatmap", "splat map"), ("splatmap2", "second splat map"), ("holemap", "hole map")):
             reference = terrain.get(key)
             if not isinstance(reference, dict):
                 continue

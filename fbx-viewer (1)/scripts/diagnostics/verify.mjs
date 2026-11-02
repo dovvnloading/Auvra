@@ -112,6 +112,8 @@ const EXEMPT = new Map(Object.entries({
   'components/Environment/Terrain/terrainSplatCodec.ts': 'pure-utility',
   'components/Environment/Terrain/terrainChunks.ts': 'pure-utility',
   'components/Environment/Terrain/terrainBrush.ts': 'pure-utility',
+  'components/Environment/Terrain/terrainLayerTextures.ts': 'pure-utility',
+  'components/Environment/Terrain/terrainWeightTools.ts': 'pure-utility',
   'components/Environment/Terrain/terrainBrushOverlay.ts': 'pure-utility',
   'components/Environment/Terrain/terrainHeightmapFile.ts': 'pure-utility',
   'components/Environment/Terrain/terrainLiveEdit.ts': 'pure-utility',

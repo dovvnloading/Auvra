@@ -84,6 +84,24 @@ export async function externalizeTerrainSplat<T extends TerrainPaintState>(
   });
 }
 
+/** Persisted terrain data: inline weights of layers 5 to 8 replaced by their splat map's reference. */
+export async function externalizeTerrainSplat2<T extends TerrainPaintState>(
+  terrain: T,
+  upload: TerrainSplatUploader,
+): Promise<{ terrainData: Omit<T, 'splat2'> }> {
+  const { splat2, splatmap2, ...rest } = terrain;
+  if (!splat2 || splat2.length === 0) {
+    return { terrainData: (splatmap2 ? { ...rest, splatmap2 } : rest) as unknown as Omit<T, 'splat2'> };
+  }
+  return frontendDiagnostics.runAsync('terrain_splatmap', 'upload', async () => {
+    const columns = terrainSamplesPerSide(terrain.resolution);
+    const bytes = encodeTerrainSplat(splat2, columns, columns);
+    const assetId = await upload(new File([bytes], TERRAIN_SPLATMAP_FILE_NAME, { type: TERRAIN_SPLATMAP_MIME }));
+    const reference: TerrainSplatmapReference = { assetId, encoding: TERRAIN_SPLATMAP_ENCODING, columns, rows: columns };
+    return { terrainData: { ...rest, splatmap2: reference } as unknown as Omit<T, 'splat2'> };
+  });
+}
+
 /** Persisted terrain data: inline holes replaced by their asset's reference. Writing no holes drops any stored. */
 export async function externalizeTerrainHoles<T extends TerrainPaintState>(
   terrain: T,
