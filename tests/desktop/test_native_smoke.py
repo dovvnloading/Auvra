@@ -689,7 +689,7 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         }
         _wait_until(
             lambda: any(item.get("id") == f"{prefix}-asset-error" for item in seen) or (
-                expected.issubset({item.get("id") for item in seen}) and any(
+                expected.issubset({item.get("id") for item in seen if item.get("type") == "response"}) and any(
                     item.get("id", "").startswith(f"{prefix}-get-provider-") and
                     item.get("type") == "response" and item.get("ok") and
                     item.get("result", {}).get("job", {}).get("status") == "succeeded"
@@ -701,7 +701,7 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         )
         if any(item.get("id") == f"{prefix}-asset-error" for item in seen):
             self.fail(self._document_title(controller.frame))
-        responses = {item["id"]: item for item in seen if item.get("id") in expected}
+        responses = {item["id"]: item for item in seen if item.get("id") in expected and item.get("type") == "response"}
         successful = expected - {f"{prefix}-wrong-owner"}
         self.assertTrue(all(responses[item].get("ok") is True for item in successful), responses)
         self.assertEqual(responses[f"{prefix}-wrong-owner"].get("error", {}).get("code"), "invalid_project")
