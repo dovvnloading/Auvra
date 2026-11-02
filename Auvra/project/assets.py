@@ -52,6 +52,7 @@ GLTF_JSON_MIME = "model/gltf+json"
 OBJ_MIME = "model/obj"
 FBX_MIME = "model/fbx"
 MODEL_MIMES = frozenset({GLB_MIME, GLTF_JSON_MIME, OBJ_MIME, FBX_MIME})
+GENERIC_MIME = "application/octet-stream"
 _TEXT_MODEL_MIMES = frozenset({GLTF_JSON_MIME, OBJ_MIME})
 
 # Verifying a blob is a full SHA-256 pass, and every project edit checks each
@@ -119,7 +120,7 @@ class AssetStore:
             declared = mime.lower() if isinstance(mime, str) else None
             if declared in _TEXT_MODEL_MIMES and not text_model_matches(declared, bytes(prefix)):
                 raise ValueError("asset MIME does not match its content")
-            mime = mime or detected or "application/octet-stream"
+            mime = mime or detected or GENERIC_MIME
             if mime == HEIGHTFIELD_MIME:
                 validate_heightfield_file(tmp)
             elif mime == SPLATMAP_MIME:
@@ -275,8 +276,13 @@ class AssetStore:
                 except (OSError, ValueError) as exc: raise ValueError("asset manifest is corrupt") from exc
                 if not isinstance(values, dict): raise ValueError("asset manifest is corrupt")
             candidate = {"size": size, "mime": mime, "name": name}
-            if asset_id in values and values[asset_id] != candidate:
-                raise ValueError("asset metadata conflicts with existing content")
+            existing = values.get(asset_id)
+            if existing is not None:
+                # The same bytes may come again under another name, or saying what they are where they first did not.
+                known = existing.get("mime")
+                if known != mime and GENERIC_MIME not in (known, mime):
+                    raise ValueError("asset metadata conflicts with existing content")
+                candidate = {"size": size, "mime": mime if known == GENERIC_MIME else known, "name": existing.get("name") or name}
             values[asset_id] = candidate
             temp = manifest.with_name(f"manifest.json.tmp-{os.getpid()}-{uuid.uuid4().hex}")
             try:
