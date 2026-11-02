@@ -9,6 +9,7 @@ import json
 import struct
 import sys
 import threading
+from .errors import AssetContentError
 from array import array
 from dataclasses import dataclass
 from pathlib import Path
@@ -116,10 +117,10 @@ class AssetStore:
             detected = sniff_mime(bytes(prefix))
             known_media = {"image/png", "image/jpeg", "image/webp", "audio/wav", "audio/ogg", GLB_MIME, HEIGHTFIELD_MIME, SPLATMAP_MIME, LIGHT_VOLUME_MIME}
             if mime in known_media and detected != mime:
-                raise ValueError("asset MIME does not match its content")
+                raise AssetContentError("asset MIME does not match its content")
             declared = mime.lower() if isinstance(mime, str) else None
             if declared in _TEXT_MODEL_MIMES and not text_model_matches(declared, bytes(prefix)):
-                raise ValueError("asset MIME does not match its content")
+                raise AssetContentError("asset MIME does not match its content")
             mime = mime or detected or GENERIC_MIME
             if mime == HEIGHTFIELD_MIME:
                 validate_heightfield_file(tmp)

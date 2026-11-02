@@ -3,6 +3,9 @@
 class AuvraProjectError(Exception):
     code = "project_error"
 
+class AssetContentError(AuvraProjectError, ValueError):
+    code = "asset_content"
+
 class InvalidProjectError(AuvraProjectError):
     code = "invalid_project"
 

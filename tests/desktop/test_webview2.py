@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import gc
+import io
 import os
 import sys
 import threading
 import time
 import types
 import unittest
+import weakref
 from unittest import mock
 
 from Auvra.desktop.contracts import FrameConfig, FrameMode, FrameStartupError, FrameState
@@ -36,6 +39,39 @@ class NativeBodyReaderTests(unittest.TestCase):
             received.append(chunk)
         self.assertEqual(b"".join(received), sent)
 
+    def test_it_counts_what_came_through_net_so_it_can_be_collected(self) -> None:
+        reader = WebView2Frame._NativeBodyReader(self.stream_of(bytes(5000)))
+        while reader.read(4096):
+            pass
+        self.assertEqual(reader.native_bytes, 5000)
+        self.assertEqual(WebView2Frame._NativeBodyReader(io.BytesIO(b"fake")).native_bytes, 0)
+
+    def test_a_request_that_was_answered_is_let_go(self) -> None:
+        # A request holds its whole body. The callback and .NET delegate that answer it hold
+        # each other, which neither runtime can collect, so the callback must not keep it.
+        class Form:
+            def BeginInvoke(self, action):
+                action()
+
+        class Args:
+            Response = None
+
+        class Deferral:
+            def Complete(self):
+                pass
+
+        frame = WebView2Frame(FrameConfig(FrameMode.DEVELOPMENT, development_origin="http://127.0.0.1:3000"))
+        frame._form = Form()
+        args = Args()
+        watched = weakref.ref(args)
+        frame._complete_deferred_resource(args, Deferral(), AssetResourceResponse(204, "No Content", {}))
+        self.assertIsNotNone(args.Response)
+        del args
+        gc.collect()
+        self.assertIsNone(watched())
+        frame._form = None
+        frame.close()
+
     def test_a_large_file_is_not_read_a_byte_at_a_time(self) -> None:
         sent = bytes(16 * 1024 * 1024)
         reader = WebView2Frame._NativeBodyReader(self.stream_of(sent))
@@ -55,6 +91,21 @@ class WebView2HandlerTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.frame.close()
+
+    def test_net_is_kept_collecting_only_while_large_files_pass_through(self):
+        with mock.patch("Auvra.desktop.webview2.threading.Thread") as thread:
+            self.frame._keep_collecting_for(1024)
+            thread.assert_not_called()
+            self.frame._keep_collecting_for(64 * 1024 * 1024)
+            thread.assert_called_once()
+            thread.return_value.start.assert_called_once()
+            first = self.frame._collect_until
+            self.frame._keep_collecting_for(64 * 1024 * 1024)
+            thread.assert_called_once()
+            self.assertGreater(self.frame._collect_until, first)
+        self.frame._collect_until = time.monotonic() - 1
+        self.frame._collect_assets()
+        self.assertFalse(self.frame._collecting)
 
     def test_navigation_and_resource_handlers_cancel_external_content(self):
         allowed = navigation("http://127.0.0.1:3000/")

@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   loadFBXFile: vi.fn(),
   projectService: {
     assertWritable: vi.fn(),
+    assertStorable: vi.fn(),
+    fetchAsset: vi.fn(async () => fetch('stored-asset')),
     getSnapshotAll: vi.fn(),
     uploadAsset: vi.fn(),
     applyChanges: vi.fn(),
@@ -20,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   addNotification: vi.fn(),
 }));
 
-vi.mock('../../utils/modelLoader', () => ({ loadFBXFile: mocks.loadFBXFile, importPhaseLabel: () => 'Loading' }));
+vi.mock('../../utils/modelLoader', () => ({ loadFBXFile: mocks.loadFBXFile, importPhaseLabel: () => 'Loading', importFailureMessage: (what: string) => what }));
 vi.mock('../../utils/projectService', () => ({ projectService: mocks.projectService }));
 vi.mock('../../utils/db', () => ({
   dbOperations: mocks.dbOperations,

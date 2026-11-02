@@ -2,7 +2,9 @@
 
 The protocol carries only opaque HTTPS URLs. Filesystem paths and binary data
 remain on the Python side of the host boundary, and every transfer is streamed
-through bounded chunks.
+through bounded chunks. A ticket covers one file, which may go in one request
+or in several: an upload's pieces come in order, each saying where it belongs
+with ``Content-Range``, and a download's are asked for with ``Range``.
 """
 
 from __future__ import annotations
@@ -17,7 +19,8 @@ import secrets
 import shutil
 import threading
 from Auvra.diagnostics import trace_public_class
-from Auvra.project.errors import ReadOnlyError
+from Auvra.project.errors import AssetContentError, ReadOnlyError
+from Auvra.project.locking import ProjectLock
 import time
 from typing import Any, BinaryIO, Callable, Mapping
 from urllib.parse import urlsplit
@@ -26,6 +29,10 @@ from urllib.parse import urlsplit
 ASSET_ORIGIN = "https://assets.auvra.local"
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+_RANGE_RE = re.compile(r"bytes (\d{1,12})-(\d{1,12})/(\d{1,12})")
+_ASKED_RANGE_RE = re.compile(r"bytes=(\d{1,12})-(\d{1,12})")
+_MARKER_NAME = ".auvra-asset-transfer"
+_SESSION_LOCK_NAME = ".auvra-session"
 _CHUNK_SIZE = 1024 * 1024
 _MAX_TTL_SECONDS = 300.0
 
@@ -97,6 +104,50 @@ class _TicketState:
     consumed: bool = False
     upload: AssetUpload | None = None
     on_upload: Callable[[AssetUpload], None] | None = None
+    ttl: float = 0.0
+    received: int = 0
+    digest: Any = None
+    receiving: bool = False
+    verified: bool = False
+
+
+class _FilePiece:
+    """Part of a file as one response's body. ``span`` lets the frame read it without a copy through Python."""
+
+    def __init__(self, path: Path, start: int, length: int, release: Callable[[], None] | None) -> None:
+        self.name = str(path)
+        self.span = (start, length)
+        self._release = release
+        self._stream: BinaryIO | None = None
+        self._left = length
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def read(self, size: int = -1) -> bytes:
+        if self._stream is None:
+            self._stream = open(self.name, "rb")
+            self._stream.seek(self.span[0])
+        data = self._stream.read(self._left if size < 0 else min(size, self._left))
+        self._left -= len(data)
+        return data
+
+    def __enter__(self) -> _FilePiece:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._stream is not None:
+            self._stream.close()
+        if self._release is not None:
+            self._release()
 
 
 class _EphemeralDownloadStream:
@@ -267,12 +318,41 @@ class AssetTransferRegistry:
         directory = self._parent / f"asset-transfer-{secrets.token_urlsafe(16)}"
         directory.mkdir(mode=0o700)
         self._root = directory.resolve(strict=True)
+        # Taken before the marker, so no other session can find this folder and take it for abandoned.
+        self._session_lock = ProjectLock(self._root / _SESSION_LOCK_NAME)
+        self._session_lock.acquire()
         self._marker = secrets.token_urlsafe(32)
-        marker = self._root / ".auvra-asset-transfer"
+        marker = self._root / _MARKER_NAME
         with marker.open("x", encoding="ascii", newline="\n") as stream:
             stream.write(self._marker + "\n")
             stream.flush()
             os.fsync(stream.fileno())
+        self._remove_abandoned()
+
+    def _remove_abandoned(self) -> None:
+        """Remove what sessions that never closed left behind: a crash would otherwise keep its staged copies for good."""
+        for other in self._parent.glob("asset-transfer-*"):
+            if other == self._root or other.is_symlink() or not (other / _MARKER_NAME).is_file():
+                continue
+            lock = ProjectLock(other / _SESSION_LOCK_NAME)
+            try:
+                if not lock.acquire():
+                    continue
+                lock.release()
+            except OSError:
+                continue
+            shutil.rmtree(other, ignore_errors=True)
+
+    def _drop_expired(self) -> None:
+        """Forget tickets nobody came back for, and what they left on disk: an upload cancelled part way, a download never fetched."""
+        now = self._now()
+        with self._lock:
+            for state in list(self._tickets.values()):
+                if now < state.expires_at or state.receiving or state.upload is not None:
+                    continue
+                self._tickets.pop(state.token, None)
+                if not state.consumed:
+                    self._cleanup_staged_path(state.cleanup_path)
 
     @property
     def root(self) -> Path:
@@ -300,6 +380,7 @@ class AssetTransferRegistry:
             raise ValueError("asset ticket expiry is invalid")
         if expected_hash is not None and not _HASH_RE.fullmatch(expected_hash):
             raise ValueError("asset hash is invalid")
+        self._drop_expired()
         token = secrets.token_urlsafe(32)
         expires = self._now() + ttl
         state = _TicketState(
@@ -313,6 +394,7 @@ class AssetTransferRegistry:
             source_path=source_path,
             cleanup_path=cleanup_path,
             on_upload=on_upload,
+            ttl=ttl,
         )
         with self._lock:
             self._tickets[token] = state
@@ -485,7 +567,7 @@ class AssetTransferRegistry:
             response_headers.update(
                 {
                     "Access-Control-Allow-Methods": state.method,
-                    "Access-Control-Allow-Headers": "Content-Type",
+                    "Access-Control-Allow-Headers": "Content-Type, Content-Range, Range",
                     "Access-Control-Max-Age": "0",
                 }
             )
@@ -494,7 +576,8 @@ class AssetTransferRegistry:
             raise AssetTransportError("asset_method_denied", 405)
         if method == "PUT":
             return self._upload(state, headers, body)
-        return self._download(state)
+        asked = self._header(headers, "Range")
+        return self._download_piece(state, asked) if asked else self._download(state)
 
     def failure_response(self, headers: Mapping[str, str], error: Exception) -> AssetResourceResponse:
         """A failed transfer as an answer the page that asked can read, to say what went wrong. Anything else that asks gets a bare refusal."""
@@ -502,6 +585,8 @@ class AssetTransferRegistry:
             status = error.status
         elif isinstance(error, ReadOnlyError):
             status = 423
+        elif isinstance(error, AssetContentError):
+            status = 415
         elif isinstance(error, OSError) and error.errno == errno.ENOSPC:
             status = 507
         else:
@@ -527,15 +612,19 @@ class AssetTransferRegistry:
                     raise AssetTransportError("asset_too_large", 413)
             except ValueError as exc:
                 raise AssetTransportError("asset_size_invalid", 400) from exc
+        first, end, total = self._piece_of(state, headers)
         with self._lock:
-            if state.consumed:
+            if state.consumed or state.receiving:
                 raise AssetTransportError("asset_ticket_consumed", 410)
-            state.consumed = True
+            if first != state.received:
+                raise AssetTransportError("asset_piece_out_of_order", 409)
+            state.receiving = True
         target = self._root / f"{state.token}.upload"
-        digest = hashlib.sha256()
-        size = 0
+        digest = state.digest or hashlib.sha256()
+        size = first
+        whole = False
         try:
-            with target.open("xb") as output:
+            with target.open("ab" if first else "xb") as output:
                 while True:
                     chunk = body.read(_CHUNK_SIZE)
                     if not chunk:
@@ -549,11 +638,34 @@ class AssetTransferRegistry:
                         raise AssetTransportError("asset_too_large", 413)
                     output.write(chunk)
                     digest.update(chunk)
-                output.flush()
-                os.fsync(output.fileno())
+                if end is not None and size != end:
+                    raise AssetTransportError("asset_piece_invalid", 400)
+                whole = total is None or size == total
+                if whole:
+                    output.flush()
+                    # Stored straight away, it is forced to disk there: a second wait here buys nothing.
+                    if state.on_upload is None:
+                        os.fsync(output.fileno())
         except Exception:
+            with self._lock:
+                state.consumed = True
+                state.receiving = False
+                state.cleanup_path = None
             target.unlink(missing_ok=True)
             raise
+        if not whole:
+            with self._lock:
+                state.received = size
+                state.digest = digest
+                state.cleanup_path = target
+                state.receiving = False
+                # Each piece buys the next one its time: the whole file may take longer than one ticket lasts.
+                state.expires_at = self._now() + state.ttl
+            return AssetResourceResponse(204, "No Content", self._cors_headers())
+        with self._lock:
+            state.consumed = True
+            state.receiving = False
+            state.cleanup_path = None
         actual = digest.hexdigest()
         if state.expected_hash and not secrets.compare_digest(actual, state.expected_hash):
             target.unlink(missing_ok=True)
@@ -575,6 +687,62 @@ class AssetTransferRegistry:
         response_headers["X-Auvra-Asset-Size"] = str(size)
         response_headers["Access-Control-Expose-Headers"] = "X-Auvra-Asset-Sha256, X-Auvra-Asset-Size"
         return AssetResourceResponse(204, "No Content", response_headers)
+
+    def _piece_of(self, state: _TicketState, headers: Mapping[str, str]) -> tuple[int, int | None, int | None]:
+        """Where a piece starts, where it ends and the whole file's size. A request stating no range is the whole file."""
+        stated = self._header(headers, "Content-Range")
+        if not stated:
+            return 0, None, None
+        match = _RANGE_RE.fullmatch(stated)
+        if match is None:
+            raise AssetTransportError("asset_piece_invalid", 400)
+        first, last, total = (int(value, 10) for value in match.groups())
+        if first > last or last >= total:
+            raise AssetTransportError("asset_piece_invalid", 400)
+        if total > state.max_size:
+            raise AssetTransportError("asset_too_large", 413)
+        return first, last + 1, total
+
+    def _download_piece(self, state: _TicketState, asked: str) -> AssetResourceResponse:
+        """One piece of a stored file. The file is checked with the first piece asked for, and let go with the last."""
+        path = state.source_path
+        if path is None:
+            raise AssetTransportError("asset_unavailable", 404)
+        match = _ASKED_RANGE_RE.fullmatch(asked)
+        if match is None:
+            raise AssetTransportError("asset_piece_invalid", 400)
+        first, last = (int(value, 10) for value in match.groups())
+        if first > last or last >= state.max_size:
+            raise AssetTransportError("asset_piece_invalid", 416)
+        if not state.verified:
+            try:
+                _, actual = _hash_file(path, max_size=state.max_size)
+                if state.expected_hash is None or not secrets.compare_digest(actual, state.expected_hash):
+                    raise AssetTransportError("asset_hash_mismatch", 409)
+            except (AssetTransportError, OSError) as exc:
+                with self._lock:
+                    state.consumed = True
+                self._cleanup_staged_path(state.cleanup_path)
+                if isinstance(exc, AssetTransportError):
+                    raise
+                raise AssetTransportError("asset_unavailable", 404) from exc
+            state.verified = True
+        whole = last == state.max_size - 1
+        with self._lock:
+            state.consumed = whole
+            # Each piece buys the next one its time, as it does for an upload.
+            state.expires_at = self._now() + state.ttl
+        length = last - first + 1
+        response_headers = self._cors_headers()
+        response_headers.update(
+            {
+                "Content-Type": state.mime_type,
+                "Content-Length": str(length),
+                "Content-Range": f"bytes {first}-{last}/{state.max_size}",
+            }
+        )
+        release = (lambda: self._cleanup_staged_path(state.cleanup_path)) if whole else None
+        return AssetResourceResponse(206, "Partial Content", response_headers, _FilePiece(path, first, length, release))
 
     def _download(self, state: _TicketState) -> AssetResourceResponse:
         with self._lock:
@@ -649,6 +817,7 @@ class AssetTransferRegistry:
             return state
 
     def close(self) -> None:
+        self._session_lock.release()
         with self._lock:
             active = list(self._active_downloads)
             self._active_downloads.clear()
@@ -659,7 +828,7 @@ class AssetTransferRegistry:
             except OSError:
                 pass
         root = self._root
-        marker = root / ".auvra-asset-transfer"
+        marker = root / _MARKER_NAME
         try:
             if (
                 root.parent.resolve(strict=True) != self._parent
