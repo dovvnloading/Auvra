@@ -1,4 +1,5 @@
 
+import type { StoredBoneRole } from '../utils/retargeting';
 import React, { createContext, useContext, ReactNode, useState, useCallback } from 'react';
 import { 
     LoadedModelData, AttachmentData, SocketData, TextureData, AudioData, Blueprint, 
@@ -24,8 +25,9 @@ interface AssetContextType {
   // Models
   models: LoadedModelData[];
   addModel: (file: File, category: AssetCategory) => Promise<void>;
-  importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory) => Promise<void>;
-  reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings) => Promise<void>;
+  importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory, images?: readonly File[]) => Promise<void>;
+  readModelSource: (modelId: string) => Promise<File>;
+  reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings, images?: readonly File[]) => Promise<void>;
   updateModel: (id: string, updates: AssetInfoUpdate) => Promise<void>;
   removeModel: (id: string) => void;
   placeInScene: (id: string) => void; 
@@ -38,6 +40,7 @@ interface AssetContextType {
   resetModelTexture: (modelId: string) => Promise<void>;
   updateModelMaterialOverrides: (modelId: string, overrides: MaterialOverrides) => Promise<void>;
   mirrorClip: (modelId: string, clipName: string) => Promise<void>;
+  updateModelBoneRoles: (modelId: string, roles: StoredBoneRole[]) => Promise<void>;
   setModels: (models: LoadedModelData[]) => void;
 
   // Attachments
@@ -50,7 +53,7 @@ interface AssetContextType {
 
   // Sockets
   sockets: SocketData[];
-  addSocket: (parentModelId: string, name: string) => void;
+  addSocket: (parentModelId: string, name: string, boneName?: string) => void;
   updateSocket: (id: string, updates: Partial<SocketData>) => void;
   removeSocket: (id: string) => void;
   setSockets: (sockets: SocketData[]) => void;
@@ -178,6 +181,7 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     models: modelManager.models,
     addModel: modelManager.addModel,
     importModelWithOptions: modelManager.importModelWithOptions,
+    readModelSource: modelManager.readModelSource,
     reimportModel: modelManager.reimportModel,
     updateModel: modelManager.updateModel,
     removeModel: modelManager.removeModel,
@@ -190,6 +194,7 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     resetModelTexture: modelManager.resetModelTexture,
     updateModelMaterialOverrides: modelManager.updateModelMaterialOverrides,
     mirrorClip: modelManager.mirrorClip,
+    updateModelBoneRoles: modelManager.updateModelBoneRoles,
     setModels: modelManager.setModels,
 
     // Attachments

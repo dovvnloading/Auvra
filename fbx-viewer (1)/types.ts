@@ -6,6 +6,7 @@ import React from 'react';
 import type { ProjectStatus } from './utils/projectStatus';
 import type { MaterialOverrides } from './utils/materialOverrides';
 import type { ModelFileReport } from './utils/fbxImport/nativeImporter';
+import type { StoredBoneRole } from './utils/retargeting';
 import type { LevelBakedLighting } from './runtime/lighting/bakedLighting';
 import type { WeatherSettings } from './runtime/weather';
 import type { SkyAtmosphereSettings, SkyCloudSettings, SkyImageSettings, SkyLightSettings, SkyModel, SkyNightSettings } from './runtime/sky/skySettings';
@@ -87,6 +88,16 @@ export interface LoadedModelData {
   missingTextures?: number;
   /** What an FBX or OBJ source held and what was made of it, from its latest read. */
   importReport?: ModelFileReport;
+  /** Image files found for this model that its source names but does not hold. */
+  sourceImages?: ModelSourceImage[];
+  /** What the user says this model's bones are for, where the names and shape did not read right. */
+  boneRoles?: StoredBoneRole[];
+}
+
+/** An image a model's source file names, kept with the project. */
+export interface ModelSourceImage {
+  name: string;
+  assetId: string;
 }
 
 export type LevelObjectType = 'prop' | 'foliage' | 'foliage_set' | 'spawn_point' | 'audio_emitter' | 'terrain' | 'sky_sphere' | 'player_start';
@@ -291,6 +302,21 @@ export interface ModelImportSettings {
   /** Scale the model so its largest dimension equals targetSize (the old behaviour forced 5). */
   normalize: boolean;
   targetSize: number;
+  /** Bring in the file's animation clips. Absent: yes. */
+  animation?: boolean;
+  /** Takes to leave out, by their names in the file. */
+  excludedClips?: string[];
+  /** Largest change a dropped animation key may make to its track. Absent: the default, which shows no difference. */
+  keyThreshold?: number;
+  /** Bring in the file's blend shapes. Absent: yes. */
+  morphTargets?: boolean;
+  /** Keep meshes a rigged file's skeleton does not move. Absent: yes, as models imported before there was a choice were. */
+  looseMeshes?: boolean;
+  /** Work normals out from the faces, with edges sharper than smoothingAngle kept hard, rather than reading the file's. */
+  recomputeNormals?: boolean;
+  smoothingAngle?: number;
+  /** Generate tangents for normal maps. Absent: yes. */
+  tangents?: boolean;
 }
 
 export const DEFAULT_MODEL_IMPORT_SETTINGS: ModelImportSettings = { normalize: true, targetSize: 5 };
@@ -756,12 +782,13 @@ export interface SceneContextType {
   // Model Actions
   addModel: (file: File, category: AssetCategory) => Promise<void>;
   /** Import with explicit options; the settings are stored on the model document. */
-  importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory) => Promise<void>;
+  importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory, images?: readonly File[]) => Promise<void>;
+  readModelSource: (modelId: string) => Promise<File>;
   /**
    * Replace a model's source file in place (id, references and settings are kept), or without a
    * file read its stored source again; `settings` replaces its import settings (its size).
    */
-  reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings) => Promise<void>;
+  reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings, images?: readonly File[]) => Promise<void>;
   /** Rename and/or move a model; rejects when the change cannot be saved. */
   updateModel: (id: string, updates: AssetInfoUpdate) => Promise<void>;
   removeModel: (id: string) => void;
@@ -778,6 +805,7 @@ export interface SceneContextType {
   updateModelMaterialOverrides: (modelId: string, overrides: MaterialOverrides) => Promise<void>;
   /** Adds a mirrored copy (left and right swapped) of one of a model's clips. */
   mirrorClip: (modelId: string, clipName: string) => Promise<void>;
+  updateModelBoneRoles: (modelId: string, roles: StoredBoneRole[]) => Promise<void>;
 
   // Texture Actions
   textures: TextureData[];
@@ -799,7 +827,7 @@ export interface SceneContextType {
   removeAttachment: (id: string) => void;
 
   // Socket Actions
-  addSocket: (parentModelId: string, name: string) => void;
+  addSocket: (parentModelId: string, name: string, boneName?: string) => void;
   updateSocket: (id: string, updates: Partial<SocketData>) => void;
   removeSocket: (id: string) => void;
   triggerSocketFlash: (socketId: string) => void;

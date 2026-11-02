@@ -7,6 +7,7 @@ import { useScene } from '../../context/SceneContext';
 import { GraphRuntime, GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
 import { AttachmentController } from './AttachmentController';
 import { SocketController, resolveSocketFlashTextureUrl } from './SocketController';
+import { SkeletonOverlay } from './SkeletonOverlay';
 import { previewHeldWeapon, weaponMoveClips, weaponPlacements } from '../../runtime/weapons';
 import { weaponLocomotionGraph } from '../AnimationGraph/utils/clipMatching';
 import { CharacterIK, heldWeaponGrip } from '../Sandbox/CharacterIK';
@@ -177,6 +178,8 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
          ))}
 
          {supportGrip && <CharacterIK model={data.object} supportGrip={supportGrip} />}
+
+         {isSelected && <SkeletonOverlay root={data.object} />}
 
          {/* Blueprint Runtime Engine */}
          {isBlueprintActive && blueprint && previewGraph && (

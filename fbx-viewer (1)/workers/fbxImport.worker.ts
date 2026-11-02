@@ -2,15 +2,15 @@
 
 import { TGALoader } from 'three/examples/jsm/loaders/TGALoader.js';
 import { TIFFLoader } from 'three/examples/jsm/loaders/TIFFLoader.js';
-import { buildImportedGlb, type DecodeImage, type DecodeLegacyImage } from '../utils/fbxImport/importedModel';
+import { buildImportedGlb, describeImages, type DecodeImage, type DecodeLegacyImage } from '../utils/fbxImport/importedModel';
 import { instantiateImporter, runNativeImport, type ModelFileReport, type NativeImportOptions } from '../utils/fbxImport/nativeImporter';
 
 // Despite the file name this worker converts every format the native importer reads (FBX and OBJ)
 // into a GLB handoff for the renderer thread, and describes such a file for the import dialog.
 type ImportFormat = 'fbx' | 'obj';
-export type ModelConvertOptions = Pick<NativeImportOptions, 'animation' | 'morphTargets' | 'tangents' | 'recomputeNormals' | 'skin' | 'meshes' | 'sampleRate' | 'keyThreshold' | 'smoothingAngle'>;
+export type ModelConvertOptions = Pick<NativeImportOptions, 'animation' | 'morphTargets' | 'tangents' | 'recomputeNormals' | 'skin' | 'meshes' | 'looseMeshes' | 'excludedClips' | 'sampleRate' | 'keyThreshold' | 'smoothingAngle'>;
 type ImportRequest =
-  | { type: 'parse'; buffer: ArrayBuffer; format?: ImportFormat; name?: string; options?: ModelConvertOptions }
+  | { type: 'parse'; buffer: ArrayBuffer; format?: ImportFormat; name?: string; options?: ModelConvertOptions; images?: { name: string; buffer: ArrayBuffer }[] }
   | { type: 'inspect'; buffer: ArrayBuffer; format?: ImportFormat; name?: string };
 type ImportPhase = 'fbx_structure_parse' | 'model_structure_parse' | 'embedded_texture_decode' | 'runtime_asset_construction' | 'runtime_asset_transfer';
 type ImportProgress = { type: 'progress'; progress: number; phase: ImportPhase; workerState: 'parsing' | 'decoding' | 'constructing' | 'transferring' };
@@ -69,7 +69,7 @@ scope.onmessage = async (event: MessageEvent<ImportRequest>) => {
     const fileName = request.name || `model.${format}`;
     if (request.type === 'inspect') {
       const native = runNativeImport(importer, request.buffer, fileName, { inspect: true, obj: format === 'obj' });
-      const inspected = native.report;
+      const inspected: ModelFileReport = { ...native.report, images: describeImages(native) };
       native.close();
       scope.postMessage({ type: 'inspected', report: inspected } satisfies InspectComplete);
       return;
@@ -78,7 +78,8 @@ scope.onmessage = async (event: MessageEvent<ImportRequest>) => {
     if (format === 'obj' && native.report.triangles === 0) throw new Error('The OBJ file contains no mesh geometry.');
     report(0.48, 'embedded_texture_decode', 'decoding');
     report(0.64, 'runtime_asset_construction', 'constructing');
-    const built = await buildImportedGlb(native, { decode: decodeImage, decodeLegacy: decodeLegacyImage });
+    const externalImages = new Map((request.images ?? []).map(({ name, buffer }) => [name.toLowerCase(), new Uint8Array(buffer)]));
+    const built = await buildImportedGlb(native, { decode: decodeImage, decodeLegacy: decodeLegacyImage, externalImages });
     const itemCount = native.document.nodes.length;
     native.close();
     report(0.82, 'runtime_asset_transfer', 'transferring');

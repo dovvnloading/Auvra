@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({ loadFBXFile: vi.fn(), textures: [] as unknown[
 vi.mock('../../utils/modelLoader', () => ({ loadFBXFile: mocks.loadFBXFile, importPhaseLabel: () => 'Loading' }));
 vi.mock('../../utils/processing/ModelTransforms', () => ({
   applyModelImportSettings: () => undefined,
+  convertOptionsFor: () => ({}),
   stripGeometry: () => undefined,
 }));
 

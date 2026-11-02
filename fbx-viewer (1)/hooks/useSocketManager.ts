@@ -58,14 +58,14 @@ export const useSocketManager = () => {
       }
   }), []);
 
-  const addSocket = useCallback(async (parentModelId: string, name: string) => {
+  const addSocket = useCallback(async (parentModelId: string, name: string, boneName = '') => {
     projectService.assertWritable();
     const lease = editorSession.requireWritable(editorSession.captureReady(), projectService.getStatus());
     const newSocket: SocketData = {
         id: crypto.randomUUID(),
         name: name,
         parentModelId,
-        boneName: '', // Default to root or user must select
+        boneName, // Empty is the model's root, until the user picks a bone
         position: [0, 0, 0],
         rotation: [0, 0, 0],
         scale: [1, 1, 1]

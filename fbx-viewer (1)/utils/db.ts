@@ -330,6 +330,10 @@ class DBOperations {
       await this.canonicalChange('models', 'upsert', { id, mirroredClips }, id);
   }
 
+  async updateModelBoneRoles(id: string, boneRoles: { role: string; bone: string }[]): Promise<void> {
+      await this.canonicalChange('models', 'upsert', { id, boneRoles }, id);
+  }
+
   /** Rename and/or move a model in the content browser; folder '' is the library root. */
   /** `clipNames` keeps the model's clip names when it is renamed (they would follow the new name). */
   async updateModelInfo(id: string, updates: AssetInfoUpdate, clipNames?: string[]): Promise<void> {

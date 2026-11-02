@@ -31,6 +31,7 @@ vi.mock('../../utils/db', () => ({
 }));
 vi.mock('../../utils/processing/ModelTransforms', () => ({
   applyModelImportSettings: () => undefined,
+  convertOptionsFor: () => ({}),
   resolveImportSettings: (value: unknown) => value,
   stripGeometry: () => undefined,
 }));

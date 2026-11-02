@@ -55,7 +55,9 @@ _NESTED_KEYS = {
     # The weather a level's sky starts in: the preset it came from and its values.
     "weather": {"preset", "clouds", "rain", "snow", "fog", "wind", "windDirection", "lightning"},
     "dimensions": {"width", "height"},
-    "importSettings": {"normalize", "targetSize"},
+    "importSettings": {"normalize", "targetSize", "animation", "excludedClips", "keyThreshold", "morphTargets", "looseMeshes", "recomputeNormals", "smoothingAngle", "tangents"},
+    "sourceImages": {"name", "assetId"},
+    "boneRoles": {"role", "bone"},
     "size": {"width", "height"},
     "generation": {"providerId", "modelId", "modelVersion", "jobId", "createdAt", "routeOrigin", "routeConsent", "promptSha256", "settingsSha256", "artifactSha256", "inputAssetIds", "seed", "costMicroUsd"},
     "flashConfig": {"enabled", "textureId", "scale", "color", "duration", "rotationSpeed", "preview"},

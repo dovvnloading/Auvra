@@ -25,7 +25,7 @@ enum {
 	FLAG_RECOMPUTE_NORMALS = 32, // Ignore the file's normals and work them out from smoothing_angle.
 	FLAG_NO_SKIN = 64,           // Leave out skin weights and skeleton binding.
 	FLAG_NO_MESHES = 128,        // Leave out every mesh (an animation-only import).
-	FLAG_WELD_POSITIONS = 256,   // Merge vertices at the same position before computing normals.
+	FLAG_NO_LOOSE_MESHES = 512,  // Leave out meshes outside the skeleton of a rigged file.
 };
 
 // Glossy curved surfaces: past this many triangles in one mesh part, tangents would take longer and
@@ -181,6 +181,7 @@ typedef struct {
 	int max_influences_in_file;
 	Buffer clip_report;
 	size_t clip_count;
+	bool has_skin;
 } Import;
 
 static Import g;
@@ -718,6 +719,8 @@ static ufbx_blend_shape *channel_shape(const ufbx_blend_channel *channel) {
 	return NULL;
 }
 
+static bool node_is_loose(const ufbx_node *node);
+
 static void write_meshes(void) {
 	ufbx_scene *scene = g.scene;
 	bool first_mesh = true;
@@ -726,6 +729,7 @@ static void write_meshes(void) {
 		ufbx_mesh *mesh = scene->meshes.data[m];
 		g.mesh_index[m] = -1;
 		if (!mesh->num_triangles || !mesh->vertex_position.exists || !mesh->instances.count) continue;
+		if ((g.flags & FLAG_NO_LOOSE_MESHES) && node_is_loose(mesh->instances.data[0])) continue;
 
 		const ufbx_skin_deformer *skin = (g.flags & FLAG_NO_SKIN) || !mesh->skin_deformers.count ? NULL : mesh->skin_deformers.data[0];
 		if (skin && !skin->clusters.count) skin = NULL;
@@ -836,6 +840,16 @@ static void write_meshes(void) {
 
 // --- Skins and nodes ---
 
+/**
+ * A mesh in a rigged file that the skeleton does not move: not skinned, and not under a bone. Some
+ * exporters leave such things behind (Meshy's rigged characters come with a stray sphere).
+ */
+static bool node_is_loose(const ufbx_node *node) {
+	if (!g.has_skin || !node->mesh || node->mesh->skin_deformers.count) return false;
+	for (const ufbx_node *at = node->parent; at; at = at->parent) if (at->bone) return false;
+	return true;
+}
+
 static void write_skins(void) {
 	ufbx_scene *scene = g.scene;
 	for (size_t s = 0; s < scene->skin_deformers.count; s++) {
@@ -915,7 +929,7 @@ static void write_nodes(void) {
 			double value[3] = { t.scale.x, t.scale.y, t.scale.z };
 			json_key_floats(out, "scale", value, 3);
 		}
-		if (node->mesh && !(g.flags & FLAG_NO_MESHES) && g.mesh_index[node->mesh->typed_id] >= 0) {
+		if (node->mesh && !(g.flags & FLAG_NO_MESHES) && g.mesh_index[node->mesh->typed_id] >= 0 && !((g.flags & FLAG_NO_LOOSE_MESHES) && node_is_loose(node))) {
 			json_key_integer(out, "mesh", g.mesh_index[node->mesh->typed_id]);
 			int skin = node_skin(node);
 			if (skin >= 0) json_key_integer(out, "skin", skin);
@@ -1320,6 +1334,8 @@ static void write_report(Buffer *out) {
 	size_t triangles = 0, vertices = 0, skinned = 0, morphs = 0, ngons = 0, withoutUv = 0, withoutNormals = 0;
 	double box_min[3] = { INFINITY, INFINITY, INFINITY };
 	double box_max[3] = { -INFINITY, -INFINITY, -INFINITY };
+	double rig_min[3] = { INFINITY, INFINITY, INFINITY };
+	double rig_max[3] = { -INFINITY, -INFINITY, -INFINITY };
 	for (size_t m = 0; m < scene->meshes.count; m++) {
 		const ufbx_mesh *mesh = scene->meshes.data[m];
 		size_t instances = mesh->instances.count ? mesh->instances.count : 1;
@@ -1333,6 +1349,7 @@ static void write_report(Buffer *out) {
 		const ufbx_skin_deformer *skin = mesh->skin_deformers.count ? mesh->skin_deformers.data[0] : NULL;
 		for (size_t i = 0; i < mesh->instances.count; i++) {
 			const ufbx_matrix *to_world = &mesh->instances.data[i]->geometry_to_world;
+			bool loose = node_is_loose(mesh->instances.data[i]);
 			for (size_t v = 0; v < mesh->num_vertices; v++) {
 				// A skinned vertex is where its strongest bone puts it, whatever the mesh node's own transform says.
 				const ufbx_matrix *matrix = to_world;
@@ -1345,6 +1362,8 @@ static void write_report(Buffer *out) {
 				for (int axis = 0; axis < 3; axis++) {
 					if (p[axis] < box_min[axis]) box_min[axis] = p[axis];
 					if (p[axis] > box_max[axis]) box_max[axis] = p[axis];
+					if (!loose && p[axis] < rig_min[axis]) rig_min[axis] = p[axis];
+					if (!loose && p[axis] > rig_max[axis]) rig_max[axis] = p[axis];
 				}
 			}
 		}
@@ -1361,6 +1380,26 @@ static void write_report(Buffer *out) {
 		json_key_floats(out, "boundsMin", box_min, 3);
 		json_key_floats(out, "boundsMax", box_max, 3);
 	}
+	if (rig_min[0] <= rig_max[0]) {
+		json_key_floats(out, "boundsWithoutLooseMin", rig_min, 3);
+		json_key_floats(out, "boundsWithoutLooseMax", rig_max, 3);
+	}
+	json_key(out, "looseMeshes");
+	json_raw(out, "[");
+	{
+		bool first = true;
+		for (size_t i = 0; i < scene->nodes.count; i++) {
+			const ufbx_node *node = scene->nodes.data[i];
+			if (!node_is_loose(node)) continue;
+			if (!first) json_raw(out, ",");
+			first = false;
+			json_raw(out, "{");
+			json_key_string(out, "name", node->name);
+			json_key_integer(out, "triangles", (long long)node->mesh->num_triangles);
+			json_raw(out, "}");
+		}
+	}
+	json_raw(out, "]");
 
 	size_t bones = 0, collision = 0, sockets = 0;
 	for (size_t i = 0; i < scene->nodes.count; i++) {
@@ -1370,6 +1409,19 @@ static void write_report(Buffer *out) {
 		if (name_has_prefix(node->name, "SOCKET_")) sockets++;
 	}
 	json_key_integer(out, "bones", (long long)bones);
+	json_key(out, "boneNames");
+	json_raw(out, "[");
+	{
+		bool first = true;
+		for (size_t i = 0; i < scene->nodes.count; i++) {
+			const ufbx_node *node = scene->nodes.data[i];
+			if (!node->bone) continue;
+			if (!first) json_raw(out, ",");
+			first = false;
+			json_string(out, node->name);
+		}
+	}
+	json_raw(out, "]");
 	json_key_integer(out, "collisionMeshes", (long long)collision);
 	json_key_integer(out, "sockets", (long long)sockets);
 	json_key_integer(out, "lodGroups", (long long)scene->lod_groups.count);
@@ -1620,7 +1672,6 @@ EXPORT("fbx_import") int fbx_import(void *data, size_t size, const char *name, s
 	options.filename.length = name_length;
 	options.path_separator = '/';
 	if (flags & FLAG_OBJ) options.file_format = UFBX_FILE_FORMAT_OBJ;
-	if (flags & FLAG_INSPECT) options.ignore_embedded = true;
 	if (flags & FLAG_NO_ANIMATION) options.ignore_animation = true;
 
 	ufbx_error error;
@@ -1638,6 +1689,10 @@ EXPORT("fbx_import") int fbx_import(void *data, size_t size, const char *name, s
 	}
 
 	ufbx_scene *scene = g.scene;
+	for (size_t m = 0; m < scene->meshes.count && !g.has_skin; m++) {
+		const ufbx_mesh *mesh = scene->meshes.data[m];
+		for (size_t d = 0; d < mesh->skin_deformers.count; d++) if (mesh->skin_deformers.data[d]->clusters.count) g.has_skin = true;
+	}
 	g.node_index = checked_malloc(scene->nodes.count * sizeof(int));
 	g.mesh_index = checked_malloc((scene->meshes.count + 1) * sizeof(int));
 	g.skin_index = checked_malloc((scene->skin_deformers.count + 1) * sizeof(int));

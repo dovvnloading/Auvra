@@ -8,6 +8,7 @@ import { normalizeModel, SOURCE_METRES_PER_UNIT } from './processing/ModelTransf
 import { disposeObject } from './processing/ModelLifecycle';
 import { UV_ORIGIN_TOP_LEFT_KEY } from './materialOverrides';
 import { frontendDiagnostics } from '../diagnostics/runtime';
+import { gltfReport } from './fbxImport/gltfReport';
 import type { ModelFileReport } from './fbxImport/nativeImporter';
 import type { ModelConvertOptions } from '../workers/fbxImport.worker';
 
@@ -112,6 +113,8 @@ export interface ModelLoadOptions {
   compressTextures?: boolean;
   /** How an FBX or OBJ is read: what to bring in, and how. */
   convert?: ModelConvertOptions;
+  /** Image files the source names but does not hold, as `File`s named as it names them. */
+  images?: readonly File[];
 }
 
 type WorkerFormat = 'fbx' | 'obj';
@@ -178,6 +181,7 @@ const parseOffThread = async (
   diagnostics?: { operationId: string; traceId: string; spanId?: string; assetAlias: string },
   fileName?: string,
   convert?: ModelConvertOptions,
+  images?: readonly File[],
 ): Promise<ParsedModel> => {
   const label = format.toUpperCase();
   const parsePhase: ImportPhase = format === 'fbx' ? 'fbx_structure_parse' : 'model_structure_parse';
@@ -189,6 +193,8 @@ const parseOffThread = async (
     phase: 'worker_creation', workerState: 'created', queueState: 'worker_active', assetAlias: diagnostics.assetAlias, progressBucket: 0,
   }, diagnostics);
   try {
+    const imageMessages = await Promise.all((images ?? []).map(async (image) => ({ name: image.name, buffer: await image.arrayBuffer() })));
+    throwIfAborted(signal);
     const converted = await new Promise<Extract<WorkerResponse, { type: 'complete' }>>((resolve, reject) => {
       const onAbort = () => {
         worker.terminate();
@@ -228,7 +234,7 @@ const parseOffThread = async (
           resolve(message);
         }
       };
-      worker.postMessage({ type: 'parse', buffer: source, format, name: fileName, options: convert }, [source]);
+      worker.postMessage({ type: 'parse', buffer: source, format, name: fileName, options: convert, images: imageMessages }, [source, ...imageMessages.map((image) => image.buffer)]);
     });
     throwIfAborted(signal);
     onProgress?.(0.86, 'viewport_materialization');
@@ -376,6 +382,33 @@ const parseGltfNative = async (
   return { object, animations: loaded.animations };
 };
 
+/** Says what a model file holds without loading it, for the import dialog. Null when it cannot be read. */
+export const inspectModelFile = async (file: File): Promise<ModelFileReport | null> => {
+  const source = await file.arrayBuffer();
+  const format = detectModelFormat(file) ?? sniffModelFormat(source) ?? 'fbx';
+  if (format === 'glb' || format === 'gltf') {
+    try {
+      return gltfReport(format === 'glb' ? readGlb(source).json : parseGltfJson(new TextDecoder().decode(source)));
+    } catch {
+      return null;
+    }
+  }
+  if (typeof Worker === 'undefined') return null;
+  const worker = new Worker(new URL('../workers/fbxImport.worker.ts', import.meta.url), { type: 'module' });
+  try {
+    return await new Promise<ModelFileReport | null>((resolve) => {
+      worker.onerror = () => resolve(null);
+      worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+        if (event.data.type === 'inspected') resolve(event.data.report);
+        else if (event.data.type === 'error') resolve(null);
+      };
+      worker.postMessage({ type: 'inspect', buffer: source, format, name: file.name }, [source]);
+    });
+  } finally {
+    worker.terminate();
+  }
+};
+
 /**
  * Every model arrives as glTF, with metal/rough PBR materials, correct colour spaces, alpha modes
  * and sidedness, so only shadows are left to enable.
@@ -442,7 +475,7 @@ export const loadModelFile = async (file: File, options: ModelLoadOptions = { no
     // is materialized into Three objects here.
     const parsed = format === 'glb' || format === 'gltf'
       ? await parseGltfNative(source, format, options.signal, options.onProgress)
-      : await parseOffThread(source, format, options.signal, options.onProgress, options.diagnostics, file.name, options.convert);
+      : await parseOffThread(source, format, options.signal, options.onProgress, options.diagnostics, file.name, options.convert, options.images);
     object = parsed.object;
 
     // --- FILTER ANIMATIONS ---

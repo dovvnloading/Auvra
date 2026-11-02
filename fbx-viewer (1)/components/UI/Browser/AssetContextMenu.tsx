@@ -99,7 +99,7 @@ export const AssetContextMenu: React.FC<AssetContextMenuProps> = ({
                         {item('Rename', <Pencil size={12} />, rename, onRename)}
                         {item('Move to Folder', <FolderInput size={12} />, move, () => setMode('move'))}
                         {reimport && item('Reimport...', <RefreshCw size={12} />, reimport, onReimport)}
-                        {importSize && onImportSize && item('Import Size...', <Scaling size={12} />, importSize, onImportSize)}
+                        {importSize && onImportSize && item('Import Settings...', <Scaling size={12} />, importSize, onImportSize)}
                     </>
                 ) : (
                     <>

@@ -149,8 +149,8 @@ if (!/canonicalChange\('objects', 'upsert', obj, obj\.id, lease, prepareLevelObj
   failures.push('level object writes can still persist inline terrain heights');
 }
 if (!/category === 'Animation'[\s\S]*selectAnimationTarget\(models, selectedModelId\)[\s\S]*addAnimations\(files, target\.id\)/.test(contentBrowser)) failures.push('Library animation import is not routed to the selected skeletal model');
-if (!/prepareAnimationClips\(targetModel\.object, loaded\.object, loaded\.animations\)/.test(modelManager)) failures.push('animation import bypasses target skeleton binding');
-if (!/prepareAnimationClips\(loaded\.object, animationModel\.object, animationModel\.animations\)/.test(projectHydration)) failures.push('native project hydration bypasses target skeleton binding');
+if (!/prepareAnimationClips\(targetModel\.object, loaded\.object, loaded\.animations, targetModel\.boneRoles\)/.test(modelManager)) failures.push('animation import bypasses target skeleton binding');
+if (!/prepareAnimationClips\(loaded\.object, animationModel\.object, animationModel\.animations, item\.boneRoles\)/.test(projectHydration)) failures.push('native project hydration bypasses target skeleton binding');
 if (!/setActiveClip\(selectedAnimations\[0\] \|\| null\)/.test(app)) failures.push('valid imported animation is not selected for preview');
 if (!/retargetHumanoidClip/.test(animationBinding) || !/clipBindsDirectly/.test(animationBinding)) failures.push('animation binding lacks direct and retargeted paths');
 if (/clip\.duration > 0\.1/.test(modelLoader) || !/clip\.duration > 0/.test(modelLoader)) failures.push('valid short animation clips are still discarded');
