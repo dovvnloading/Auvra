@@ -477,6 +477,7 @@ export const FoliageTool: React.FC<FoliageToolProps> = ({
         };
 
         const handleDown = (event: PointerEvent) => {
+            if (!(event.target instanceof Node) || !domElement.contains(event.target)) return;
             shiftHeld.current = event.shiftKey;
             const { enabled: isEnabled, settings: current } = latest.current;
             if (!isEnabled || event.button !== 0 || event.altKey || gizmoPointer.owns()) return;
@@ -530,14 +531,16 @@ export const FoliageTool: React.FC<FoliageToolProps> = ({
             endStroke();
         };
 
-        domElement.addEventListener('pointerdown', handleDown);
+        // On the window, to hear a press after the canvas: the gizmo comes and goes with the
+        // selection, so its listener is always newer than this one and has to go first.
+        window.addEventListener('pointerdown', handleDown);
         domElement.addEventListener('pointermove', handleMove);
         window.addEventListener('pointerup', endStroke);
         window.addEventListener('keydown', handleKey);
         window.addEventListener('keyup', handleKey);
         window.addEventListener('blur', handleBlur);
         return () => {
-            domElement.removeEventListener('pointerdown', handleDown);
+            window.removeEventListener('pointerdown', handleDown);
             domElement.removeEventListener('pointermove', handleMove);
             window.removeEventListener('pointerup', endStroke);
             window.removeEventListener('keydown', handleKey);
