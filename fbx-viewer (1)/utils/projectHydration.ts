@@ -263,6 +263,7 @@ export async function loadGameContent(
         loaded.isPlacedInScene = Boolean(item.isPlacedInScene);
         loaded.textureOverrides = item.textureOverrides;
         if (sourceImages.length) loaded.sourceImages = sourceImages;
+        if (Array.isArray(item.boneRoles) && item.boneRoles.length) loaded.boneRoles = item.boneRoles;
         if (typeof item.folder === 'string') loaded.folder = item.folder;
         // A missing importSettings document field means the default (old) normalization.
         applyModelImportSettings(loaded, item.importSettings);
@@ -335,7 +336,7 @@ export async function loadGameContent(
               assertCurrent();
               animationPhase = 'animation_binding';
               report(`Binding animation — ${animationName}`, 0.96, animationPhase, animationDiagnostic);
-              const prepared = prepareAnimationClips(loaded.object, animationModel.object, animationModel.animations);
+              const prepared = prepareAnimationClips(loaded.object, animationModel.object, animationModel.animations, item.boneRoles);
               applyStoredClipNames(prepared.clips, animation.clipNames);
               animationDiagnostic = { ...animationDiagnostic, bindingMode: prepared.mode, clipCount: prepared.clips.length };
               loaded.animations.push(...prepared.clips);

@@ -6,6 +6,7 @@ import { importFailureMessage, importPhaseLabel, loadFBXFile } from '../utils/mo
 import { disposeModel, disposeObject } from '../utils/processing/ModelLifecycle';
 import { applyModelImportSettings, convertOptionsFor, resolveImportSettings, stripGeometry } from '../utils/processing/ModelTransforms';
 import { applyStoredClipNames, mirrorModelClips, prepareAnimationClips, uniqueClipNames } from '../utils/animationBinding';
+import type { StoredBoneRole } from '../utils/retargeting';
 import { generateThumbnail } from '../utils/thumbnailGenerator';
 import { dbOperations, normalizeAssetInfoUpdate, withoutMaterialOverrideAsset, withoutMaterialOverrideTexture } from '../utils/db';
 import { projectService } from '../utils/projectService';
@@ -341,6 +342,7 @@ export const useModelManager = (
       replacement.isPlacedInScene = existing.isPlacedInScene;
       replacement.textureOverrides = existing.textureOverrides;
       replacement.folder = existing.folder;
+      replacement.boneRoles = modelsRef.current.find((model) => model.id === modelId)?.boneRoles ?? existing.boneRoles;
       const importSettings = category === 'Animation' ? undefined : applyModelImportSettings(replacement, settings ?? existing.importSettings);
       if (category === 'Animation') {
         stripGeometry(replacement.object);
@@ -365,7 +367,7 @@ export const useModelManager = (
         const animationFile = new File([await response.blob()], animationName, { type: response.headers.get('Content-Type') || 'application/octet-stream' });
         const animationModel = await loadFBXFile(animationFile, { normalize: false, signal: operation.signal, diagnostics: trace });
         try {
-          const prepared = prepareAnimationClips(replacement.object, animationModel.object, animationModel.animations);
+          const prepared = prepareAnimationClips(replacement.object, animationModel.object, animationModel.animations, existing.boneRoles);
           applyStoredClipNames(prepared.clips, animation.clipNames);
           replacement.animations.push(...prepared.clips);
         } finally {
@@ -554,6 +556,13 @@ export const useModelManager = (
     }
   }, [addNotification]);
 
+  /** Records what the user says a model's bones are for. Clips already made keep theirs until they are made again. */
+  const updateModelBoneRoles = useCallback(async (modelId: string, boneRoles: StoredBoneRole[]): Promise<void> => {
+    projectService.assertWritable();
+    await dbOperations.updateModelBoneRoles(modelId, boneRoles);
+    setModels((previous) => previous.map((candidate) => (candidate.id === modelId ? { ...candidate, boneRoles } : candidate)));
+  }, []);
+
   const removeTextureReference = useCallback((textureId: string) => {
     setModels((previous) => previous.map((model) => {
       const overrides = model.textureOverrides;
@@ -626,7 +635,7 @@ export const useModelManager = (
         });
         try {
           operation.update({ phase: 'animation_binding', detail: `Binding animation — ${file.name}`, diagnostic });
-          const prepared = prepareAnimationClips(targetModel.object, loaded.object, loaded.animations);
+          const prepared = prepareAnimationClips(targetModel.object, loaded.object, loaded.animations, targetModel.boneRoles);
           const names = uniqueClipNames(prepared.clips.map((clip) => clip.name), takenClipNames);
           prepared.clips.forEach((clip, clipIndex) => { clip.name = names[clipIndex]; });
           clipNamesByFile.push(names);
@@ -855,6 +864,7 @@ export const useModelManager = (
     removeMaterialAssetReference,
     updateModelMaterialOverrides,
     mirrorClip,
+    updateModelBoneRoles,
     placeInScene,
     removeFromScene,
     addAnimations,

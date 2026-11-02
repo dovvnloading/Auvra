@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import * as THREE from 'three';
 import { HierarchyPanel } from './HierarchyPanel';
 import { PropertiesPanel } from './PropertiesPanel';
+import { SkeletonPanel } from '../Properties/SkeletonPanel';
 
 interface SidebarProps {
     activeClip: THREE.AnimationClip | null;
@@ -13,7 +14,7 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = (props) => {
-  const [activeTab, setActiveTab] = useState<'hierarchy' | 'properties'>('hierarchy');
+  const [activeTab, setActiveTab] = useState<'hierarchy' | 'properties' | 'skeleton'>('hierarchy');
   
   return (
     <div className="w-80 bg-gray-900/95 border-r border-gray-800 flex flex-col h-full shadow-xl z-20">
@@ -37,14 +38,18 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
           >
             Properties
           </button>
+          <button 
+            onClick={() => setActiveTab('skeleton')}
+            className={`flex-1 py-2 text-2xs font-bold transition-colors border-b-2 ${activeTab === 'skeleton' ? 'border-white text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+          >
+            Skeleton
+          </button>
       </div>
 
       <div className={`flex-1 flex flex-col min-h-0 ${activeTab === 'hierarchy' ? 'overflow-y-auto custom-scrollbar' : 'overflow-hidden'}`}>
-        {activeTab === 'hierarchy' ? (
-            <HierarchyPanel />
-        ) : (
-            <PropertiesPanel {...props} />
-        )}
+        {activeTab === 'hierarchy' && <HierarchyPanel />}
+        {activeTab === 'properties' && <PropertiesPanel {...props} />}
+        {activeTab === 'skeleton' && <SkeletonPanel />}
       </div>
     </div>
   );

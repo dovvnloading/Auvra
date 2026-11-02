@@ -57,6 +57,7 @@ _NESTED_KEYS = {
     "dimensions": {"width", "height"},
     "importSettings": {"normalize", "targetSize", "animation", "excludedClips", "keyThreshold", "morphTargets", "looseMeshes", "recomputeNormals", "smoothingAngle", "tangents"},
     "sourceImages": {"name", "assetId"},
+    "boneRoles": {"role", "bone"},
     "size": {"width", "height"},
     "generation": {"providerId", "modelId", "modelVersion", "jobId", "createdAt", "routeOrigin", "routeConsent", "promptSha256", "settingsSha256", "artifactSha256", "inputAssetIds", "seed", "costMicroUsd"},
     "flashConfig": {"enabled", "textureId", "scale", "color", "duration", "rotationSpeed", "preview"},

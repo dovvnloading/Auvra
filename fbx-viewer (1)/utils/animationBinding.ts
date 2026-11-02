@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { animatedSkeleton, humanoidRole, matchHumanoidBones, mirrorHumanoidClip, retargetHumanoidClip } from './retargeting';
+import { animatedSkeleton, CORE_ROLES, humanoidRoles, matchHumanoidBones, mirrorHumanoidClip, retargetHumanoidClip, type StoredBoneRole } from './retargeting';
 
 export class AnimationImportError extends Error {
   constructor(message: string) {
@@ -33,34 +33,32 @@ const skinnedMesh = (root: THREE.Object3D): THREE.SkinnedMesh | null => {
   return result;
 };
 
-/** Puts every bone any part of `root` is bound to at its bind pose, parents before children. */
+/**
+ * Puts every bone any part of `root` is bound to at its bind pose, parents before children. A bind
+ * matrix says where a bone was against the mesh bound to it, so the mesh's place gives the bone's.
+ * A bone no part binds keeps its offset from its parent.
+ */
 const poseAtBind = (root: THREE.Object3D): void => {
+  root.updateMatrixWorld(true);
   const bind = new Map<THREE.Object3D, THREE.Matrix4>();
   root.traverse((child) => {
     const mesh = child as THREE.SkinnedMesh;
     if (!mesh.isSkinnedMesh) return;
     mesh.skeleton.bones.forEach((bone, index) => {
       const inverse = mesh.skeleton.boneInverses[index];
-      if (inverse && !bind.has(bone)) bind.set(bone, inverse.clone().invert());
+      if (inverse && !bind.has(bone)) bind.set(bone, mesh.matrixWorld.clone().multiply(inverse.clone().invert()));
     });
   });
-  // Bind matrices are in the skeleton's own space, as Skeleton.pose() reads them: a bone under
-  // another bone is offset from that bone's bind, and any other bone's bind is its own transform.
-  // A bone no part binds keeps its offset and passes its parent's bind on to its children.
-  root.updateMatrixWorld(true);
-  const posed = new Map<THREE.Object3D, THREE.Matrix4>();
+  const inverseParent = new THREE.Matrix4();
   root.traverse((node) => {
-    const parentBind = node.parent && (node.parent as THREE.Bone).isBone ? posed.get(node.parent) ?? null : null;
     const own = bind.get(node);
-    if (own) {
-      node.matrix.copy(parentBind ? parentBind.clone().invert().multiply(own) : own);
+    if (own && node.parent) {
+      node.parent.updateWorldMatrix(false, false);
+      node.matrix.copy(inverseParent.copy(node.parent.matrixWorld).invert()).multiply(own);
       node.matrix.decompose(node.position, node.quaternion, node.scale);
-      posed.set(node, own);
-    } else if ((node as THREE.Bone).isBone) {
-      posed.set(node, parentBind ? parentBind.clone().multiply(node.matrix) : node.matrix.clone());
     }
+    node.updateMatrixWorld(true);
   });
-  root.updateMatrixWorld(true);
 };
 
 /**
@@ -68,7 +66,7 @@ const poseAtBind = (root: THREE.Object3D): void => {
  * character split into parts (body, hair, eyes) can bind each to bones the others do not use. Null
  * without a bound skeleton.
  */
-const bindPoseRig = (object: THREE.Object3D): { root: THREE.Object3D; bones: THREE.Bone[] } | null => {
+export const bindPoseRig = (object: THREE.Object3D): { root: THREE.Object3D; bones: THREE.Bone[] } | null => {
   const root = cloneSkeleton(object);
   const bones = new Set<THREE.Bone>();
   root.traverse((child) => {
@@ -179,17 +177,14 @@ const clipBindsDirectly = (root: THREE.Object3D, clip: THREE.AnimationClip): boo
   })
 );
 
-/** Roles a humanoid's arms, legs, spine and head fill; most of the target's must pair to retarget. */
-const CORE_ROLES = [
-  'Hips', 'Spine', 'Head', 'LeftUpperArm', 'LeftLowerArm', 'RightUpperArm', 'RightLowerArm',
-  'LeftUpperLeg', 'LeftLowerLeg', 'RightUpperLeg', 'RightLowerLeg',
-];
+/** Most of a humanoid's arms, legs, spine and head must pair to retarget. */
 const REQUIRED_CORE_SHARE = 0.8;
 
 const retargetAnimations = (
   targetRoot: THREE.Object3D,
   sourceRoot: THREE.Object3D,
   clips: THREE.AnimationClip[],
+  storedRoles?: readonly StoredBoneRole[],
 ): PreparedAnimationClips => {
   // A copy at its bind pose, whatever pose the library model is in now.
   const rig = bindPoseRig(targetRoot);
@@ -204,9 +199,9 @@ const retargetAnimations = (
     throw new AnimationImportError('The animation FBX does not contain a skeleton.');
   }
 
-  const pairs = matchHumanoidBones(targetBones, sourceBones, targetClone, sourceRoot);
-  const roleOf = new Map(targetBones.map((bone) => [bone, humanoidRole(bone.name)]));
-  const core = targetBones.filter((bone) => CORE_ROLES.includes(roleOf.get(bone) ?? ''));
+  const roleOf = humanoidRoles(targetBones, targetClone, storedRoles);
+  const pairs = matchHumanoidBones(targetBones, sourceBones, targetClone, sourceRoot, roleOf);
+  const core = targetBones.filter((bone) => (CORE_ROLES as readonly string[]).includes(roleOf.get(bone) ?? ''));
   // A humanoid target needs most of its limbs paired; any other rig most of its bones.
   const judged = core.length >= 5 ? core : targetBones;
   const paired = judged.filter((bone) => pairs.has(bone)).length;
@@ -220,7 +215,7 @@ const retargetAnimations = (
     ?? [...pairs.keys()].sort((a, b) => depth(a) - depth(b))[0]
     ?? null;
   const prepared = clips.map((clip) => {
-    const result = retargetHumanoidClip({ root: targetClone, bones: targetBones }, { root: sourceRoot, bones: sourceBones }, clip, pairs, hip);
+    const result = retargetHumanoidClip({ root: targetClone, bones: targetBones }, { root: sourceRoot, bones: sourceBones }, clip, pairs, hip, { roles: roleOf });
     if (!result.tracks.length) {
       throw new AnimationImportError(`Animation "${clip.name}" produced no tracks for the target skeleton.`);
     }
@@ -245,6 +240,8 @@ export const prepareAnimationClips = (
   targetRoot: THREE.Object3D,
   sourceRoot: THREE.Object3D,
   clips: THREE.AnimationClip[],
+  /** The target model's own say in what its bones are. */
+  storedRoles?: readonly StoredBoneRole[],
 ): PreparedAnimationClips => {
   const usable = clips.filter((clip) => clip.duration > 0 && clip.tracks.length > 0);
   if (!usable.length) throw new AnimationImportError('The FBX contains no usable animation clips.');
@@ -257,5 +254,5 @@ export const prepareAnimationClips = (
       animatedBones: 0,
     };
   }
-  return retargetAnimations(targetRoot, sourceRoot, usable);
+  return retargetAnimations(targetRoot, sourceRoot, usable, storedRoles);
 };

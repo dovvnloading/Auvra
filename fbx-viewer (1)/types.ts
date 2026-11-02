@@ -6,6 +6,7 @@ import React from 'react';
 import type { ProjectStatus } from './utils/projectStatus';
 import type { MaterialOverrides } from './utils/materialOverrides';
 import type { ModelFileReport } from './utils/fbxImport/nativeImporter';
+import type { StoredBoneRole } from './utils/retargeting';
 import type { LevelBakedLighting } from './runtime/lighting/bakedLighting';
 import type { WeatherSettings } from './runtime/weather';
 import type { SkyAtmosphereSettings, SkyCloudSettings, SkyImageSettings, SkyLightSettings, SkyModel, SkyNightSettings } from './runtime/sky/skySettings';
@@ -89,6 +90,8 @@ export interface LoadedModelData {
   importReport?: ModelFileReport;
   /** Image files found for this model that its source names but does not hold. */
   sourceImages?: ModelSourceImage[];
+  /** What the user says this model's bones are for, where the names and shape did not read right. */
+  boneRoles?: StoredBoneRole[];
 }
 
 /** An image a model's source file names, kept with the project. */
@@ -802,6 +805,7 @@ export interface SceneContextType {
   updateModelMaterialOverrides: (modelId: string, overrides: MaterialOverrides) => Promise<void>;
   /** Adds a mirrored copy (left and right swapped) of one of a model's clips. */
   mirrorClip: (modelId: string, clipName: string) => Promise<void>;
+  updateModelBoneRoles: (modelId: string, roles: StoredBoneRole[]) => Promise<void>;
 
   // Texture Actions
   textures: TextureData[];
@@ -823,7 +827,7 @@ export interface SceneContextType {
   removeAttachment: (id: string) => void;
 
   // Socket Actions
-  addSocket: (parentModelId: string, name: string) => void;
+  addSocket: (parentModelId: string, name: string, boneName?: string) => void;
   updateSocket: (id: string, updates: Partial<SocketData>) => void;
   removeSocket: (id: string) => void;
   triggerSocketFlash: (socketId: string) => void;

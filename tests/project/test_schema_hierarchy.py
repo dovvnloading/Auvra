@@ -144,6 +144,15 @@ class AssetDocumentTests(unittest.TestCase):
             with self.subTest(images=bad), self.assertRaises(ValueError):
                 validate_domain("models", {"schemaVersion": 1, "documents": [{**model, "sourceImages": bad}]})
 
+    def test_model_bone_roles(self):
+        model = {"id": "m", "name": "Model", "assetId": self.asset}
+        roles = [{"role": "LeftFoot", "bone": "Bone.012"}, {"role": "", "bone": "Bone.013"}]
+        accepted = validate_domain("models", {"schemaVersion": 1, "documents": [{**model, "boneRoles": roles}]})
+        self.assertEqual(accepted["documents"][0]["boneRoles"], roles)
+        for bad in ([{"role": "LeftFoot"}], [{"bone": "Bone.012"}], [{"role": "LeftFoot", "bone": ""}], [{"role": 1, "bone": "Bone.012"}], [{"role": "LeftFoot", "bone": "Bone.012", "extra": 1}]):
+            with self.subTest(roles=bad), self.assertRaises(ValueError):
+                validate_domain("models", {"schemaVersion": 1, "documents": [{**model, "boneRoles": bad}]})
+
 
 class HierarchyReferenceTests(unittest.TestCase):
     def test_valid_tree_and_prefab_instance(self):

@@ -205,6 +205,7 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
         resetModelTexture: assets.resetModelTexture,
         updateModelMaterialOverrides: assets.updateModelMaterialOverrides,
         mirrorClip: assets.mirrorClip,
+        updateModelBoneRoles: assets.updateModelBoneRoles,
 
         attachments: assets.attachments,
         addAttachment: assets.addAttachment,
