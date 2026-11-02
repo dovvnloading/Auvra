@@ -851,9 +851,9 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                         const source = objectById.get(id);
                         if (source) updateLevelObject(id, { terrainData: { ...source.terrainData!, heights } });
                     }}
-                    onPaintCommit={(id, splat) => {
+                    onPaintCommit={(id, splat, splat2) => {
                         const source = objectById.get(id);
-                        if (source) updateLevelObject(id, { terrainData: { ...source.terrainData!, splat } });
+                        if (source) updateLevelObject(id, { terrainData: { ...source.terrainData!, splat, ...(splat2 ? { splat2 } : {}) } });
                     }}
                     onHolesCommit={(id, holes) => {
                         const source = objectById.get(id);

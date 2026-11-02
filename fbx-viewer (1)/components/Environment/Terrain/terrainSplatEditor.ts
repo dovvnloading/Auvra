@@ -3,6 +3,7 @@ import type { TerrainPaintState } from './terrainSplatCodec';
 import {
   externalizeTerrainHoles as externalizeTerrainHolesWith,
   externalizeTerrainSplat as externalizeTerrainSplatWith,
+  externalizeTerrainSplat2 as externalizeTerrainSplat2With,
   resolveTerrainHolemap as resolveTerrainHolemapWith,
   resolveTerrainSplatmap as resolveTerrainSplatmapWith,
   type ExternalizedTerrainSplat,
@@ -35,6 +36,11 @@ export function externalizeTerrainSplat<T extends TerrainPaintState>(
   } = {},
 ): Promise<{ terrainData: ExternalizedTerrainSplat<T>; remember?: () => void }> {
   return externalizeTerrainSplatWith(terrain, { storedSplatmap, upload });
+}
+
+/** externalizeTerrainSplat2 that uploads to the open project. */
+export function externalizeTerrainSplat2<T extends TerrainPaintState>(terrain: T): Promise<{ terrainData: Omit<T, 'splat2'> }> {
+  return externalizeTerrainSplat2With(terrain, uploadSplatmap);
 }
 
 /** externalizeTerrainHoles that uploads to the open project. */

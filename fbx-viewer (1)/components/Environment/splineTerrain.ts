@@ -3,7 +3,8 @@ import type { LevelObject } from '../../types';
 import type { Spline } from '../../runtime/splines';
 import { createSplineFrame } from '../../runtime/splines';
 import { terrainSamplesPerSide } from '../../utils/terrainHeightfieldCodec';
-import { TERRAIN_SPLAT_CHANNELS, createDefaultTerrainSplat } from './Terrain/terrainSplatCodec';
+import { MAX_TERRAIN_LAYERS, TERRAIN_SPLAT_CHANNELS, createDefaultTerrainSplat } from './Terrain/terrainSplatCodec';
+import { blendSampleTowardsLayer, type TerrainWeightGrid } from './Terrain/terrainWeightTools';
 
 /**
  * TERRAIN ALONG A SPLINE
@@ -146,34 +147,27 @@ export const flattenTerrainAlongSpline = (terrain: LevelObject, spline: Spline, 
 };
 
 /** The terrain's splat weights with `layer` painted under the spline, or null when the strip misses it. */
-export const paintTerrainAlongSpline = (terrain: LevelObject, spline: Spline, matrix: THREE.Matrix4, brush: SplineTerrainBrush, layer: number): number[] | null => {
+export const paintTerrainAlongSpline = (terrain: LevelObject, spline: Spline, matrix: THREE.Matrix4, brush: SplineTerrainBrush, layer: number): { splat: number[]; splat2?: number[] } | null => {
     const grid = terrainGrid(terrain);
-    if (!grid || layer < 0 || layer >= TERRAIN_SPLAT_CHANNELS) return null;
+    if (!grid || layer < 0 || layer >= MAX_TERRAIN_LAYERS) return null;
     const data = terrain.terrainData;
-    if (data?.splatmap && !(data.splat?.length)) return null;
+    if ((data?.splatmap && !(data.splat?.length)) || (data?.splatmap2 && !(data.splat2?.length))) return null;
     const path = splineWorldPath(spline, matrix, brush.width, pathStep(grid));
     const covered = footprint(grid, path, Math.max(0, brush.falloff));
     if (!covered) return null;
     const length = grid.samples * grid.samples * TERRAIN_SPLAT_CHANNELS;
-    const weights = data?.splat && data.splat.length === length ? data.splat.slice() : Array.from(createDefaultTerrainSplat(grid.samples, grid.samples));
-    const blended = [0, 0, 0, 0];
+    const weights = data?.splat && data.splat.length === length ? Uint8Array.from(data.splat) : createDefaultTerrainSplat(grid.samples, grid.samples);
+    const needsSecond = layer >= TERRAIN_SPLAT_CHANNELS || data?.splat2?.length === length;
+    const weights2 = needsSecond ? (data?.splat2?.length === length ? Uint8Array.from(data.splat2) : new Uint8Array(length)) : null;
+    const target: TerrainWeightGrid = {
+        columns: grid.samples, rows: grid.samples, width: data?.width ?? 1, depth: data?.depth ?? 1,
+        weights, weights2, layerCount: Math.max(layer + 1, data?.textureLayers?.length ?? 1),
+    };
     for (let i = 0; i < grid.samples * grid.samples; i++) {
         const amount = covered.weight[i];
-        if (amount <= 0) continue;
-        const base = i * TERRAIN_SPLAT_CHANNELS;
-        let sum = 0;
-        for (let c = 0; c < TERRAIN_SPLAT_CHANNELS; c++) sum += weights[base + c];
-        let rounded = 0;
-        for (let c = 0; c < TERRAIN_SPLAT_CHANNELS; c++) {
-            const share = sum > 0 ? weights[base + c] / sum : (c === 0 ? 1 : 0);
-            blended[c] = Math.round((share * (1 - amount) + (c === layer ? amount : 0)) * 255);
-            rounded += blended[c];
-        }
-        // Rounding can leave a unit off 255: the painted layer takes it.
-        blended[layer] = Math.min(255, Math.max(0, blended[layer] + 255 - rounded));
-        for (let c = 0; c < TERRAIN_SPLAT_CHANNELS; c++) weights[base + c] = blended[c];
+        if (amount > 0) blendSampleTowardsLayer(target, i, layer, amount);
     }
-    return weights;
+    return weights2 ? { splat: Array.from(weights), splat2: Array.from(weights2) } : { splat: Array.from(weights) };
 };
 
 /** Each point's height set to the terrain under it (in the spline's space), where a terrain is under it. */

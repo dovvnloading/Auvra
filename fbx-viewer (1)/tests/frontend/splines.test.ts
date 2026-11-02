@@ -329,7 +329,7 @@ describe('terrain along a spline', () => {
 
   it('paints a layer under the curve, keeping weights summing to 255', () => {
     const road = buildSpline(spline([[-15, 0, 0], [15, 0, 0]], {}, 'linear'));
-    const splat = paintTerrainAlongSpline(terrain(), road, new THREE.Matrix4(), { width: 4, falloff: 2, depth: 0 }, 2)!;
+    const { splat } = paintTerrainAlongSpline(terrain(), road, new THREE.Matrix4(), { width: 4, falloff: 2, depth: 0 }, 2)!;
     const at = (x: number, z: number) => splat.slice(((z + 20) * 41 + (x + 20)) * 4, ((z + 20) * 41 + (x + 20)) * 4 + 4);
     expect(at(0, 0)).toEqual([0, 0, 255, 0]);
     expect(at(0, 15)).toEqual([255, 0, 0, 0]);

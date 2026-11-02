@@ -120,12 +120,22 @@ export const skirtGeometryData = (
     level: number,
     depth: number,
     holes?: ArrayLike<number> | null,
-): { positions: Float32Array; normals: Float32Array; indices: Uint32Array } => {
+): { positions: Float32Array; normals: Float32Array; uvs: Float32Array; indices: Uint32Array } => {
     const edge = chunkEdge(segments, chunk, level);
     const count = edge.length;
     const out = new Float32Array(count * 2 * 3);
     const outNormals = new Float32Array(count * 2 * 3);
+    const outUvs = new Float32Array(count * 2 * 2);
     edge.forEach((vertex, i) => {
+        // As PlaneGeometry lays them out, so a skirt reads its layers from where it hangs.
+        const column = vertex % (segments + 1);
+        const row = (vertex - column) / (segments + 1);
+        const u = column / segments;
+        const v = 1 - row / segments;
+        outUvs[i * 2] = u;
+        outUvs[i * 2 + 1] = v;
+        outUvs[(count + i) * 2] = u;
+        outUvs[(count + i) * 2 + 1] = v;
         for (let k = 0; k < 3; k++) {
             out[i * 3 + k] = positions[vertex * 3 + k];
             out[(count + i) * 3 + k] = positions[vertex * 3 + k];
@@ -158,7 +168,7 @@ export const skirtGeometryData = (
         indices.set([top, bottom, topNext, bottom, bottomNext, topNext, top, topNext, bottom, bottom, topNext, bottomNext], written);
         written += 12;
     }
-    return { positions: out, normals: outNormals, indices: written === indices.length ? indices : indices.slice(0, written) };
+    return { positions: out, normals: outNormals, uvs: outUvs, indices: written === indices.length ? indices : indices.slice(0, written) };
 };
 
 /**

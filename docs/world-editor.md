@@ -589,13 +589,40 @@ Copies stand on the terrain and meshes in the area, never on other scatters. Whe
 
 ## Terrain painting
 
-A terrain can blend up to four textures. Import the textures in the Content Browser first.
+A terrain can blend up to eight texture layers, each with its own colour, normal, roughness and height maps. Import the textures in the Content Browser first, then open the **Terrain** tool's **Paint** tab.
 
-1. Open the **Terrain** tool's **Paint** tab.
-2. Under **Texture Layers**, click **+ Add Layer** and choose a **Texture**. **Tiling** sets how many times the texture repeats across the terrain's width (default 16). Layer 1 is the base layer that covers the whole terrain.
-3. In the **Paint** tab, click a layer's brush icon to paint that layer. The [brush](#brush) settings set its size and strength.
+**Add** makes a layer. Layer 1 is the base: it covers the terrain until other layers are painted over it. Click a layer to paint with it and to see its settings. Its row shows how much of the ground it covers. The arrows move a layer up or down the list, and the bin removes it, giving its paint to the base layer.
 
-To erase paint, paint layer 1 over it. Only the last layer can be removed; its paint goes back to layer 1. Removing layer 1 returns the terrain to its plain material.
+### Paint tools
+
+| Tool | Use |
+|---|---|
+| Paint | Paints the layer on, building up to **Up to** percent. **Shift** takes it away |
+| Smooth | Softens where the layer meets the others. **Reach** is how many grid cells each way it averages over |
+| Flatten | Brings the layer to the amount under the first click |
+| Noise | Breaks the layer's edge up in patches **Patch size** metres across; **Shift** works the other way |
+
+They use the same [brush](#brush) as sculpting. Weights at a point always add up to one: painting one layer in takes the others down in proportion.
+
+**Fill** paints the layer over the whole terrain and **Clear** takes it off. **Import** sets the layer's weights from a grey PNG, resampled to the terrain's grid, and **Export** saves them as one.
+
+**Paint by Slope and Height** paints the selected layer wherever the ground fits: rock on anything steeper than 35 degrees, snow above 200 metres. **Soft edge** sets how gradually it starts and stops.
+
+### Layer settings
+
+| Setting | What it does |
+|---|---|
+| Colour, Normal, Roughness, Height | Its maps. Normal is read as a green-up normal map, Roughness from its green channel and Height from its red |
+| Tile size | How many metres one repeat of its textures covers |
+| Turn | Degrees its textures are turned by, so layers do not line up |
+| Tint | A colour multiplied over it |
+| Roughness | How dull it is, or with a map how far the map goes |
+| Normal strength | How strongly its normal map shows |
+| Height blend | 0 blends the layer evenly with its neighbours. Higher lets its height map decide where it shows first, so stones stand out of the dirt before the dirt covers them. It needs a Height map, and works best with one on the neighbouring layer too |
+| Variation | Broad, soft changes of colour that hide the repeat of the texture across large areas |
+| Project onto cliffs | Also takes its textures from the sides on steep ground, so they do not stretch down cliffs. It costs more where the ground is steep |
+
+All of a layer's maps are scaled to 1024 by 1024 on the terrain. They are kept in two texture arrays, so eight layers take no more of the shader's texture slots than one, and a point only pays for the layers showing there.
 
 ## Prefabs
 

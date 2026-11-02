@@ -8,8 +8,20 @@ import {
 // checkable under the strict test compiler); they match TerrainData,
 // TerrainTextureLayer and TerrainSplatmapReference in types.ts.
 export interface TerrainTextureLayerSettings {
+  name?: string;
   textureId?: string;
+  normalTextureId?: string;
+  roughnessTextureId?: string;
+  heightTextureId?: string;
   tiling: number;
+  tileSize?: number;
+  rotation?: number;
+  tint?: string;
+  roughness?: number;
+  normalStrength?: number;
+  heightContrast?: number;
+  cliffProjection?: boolean;
+  variation?: number;
 }
 
 /** Holes are stored as a splat map asset: red is non-zero at a cell cut out, one sample per cell plus the grid's far edge. */
@@ -46,6 +58,8 @@ export interface TerrainPaintState {
   textureLayers?: readonly TerrainTextureLayerSettings[];
   splat?: readonly number[];
   splatmap?: TerrainSplatGrid & { assetId: string; encoding: string };
+  splat2?: readonly number[];
+  splatmap2?: TerrainSplatGrid & { assetId: string; encoding: string };
   holes?: readonly number[];
   holemap?: TerrainSplatGrid & { assetId: string; encoding: string };
 }
@@ -64,8 +78,9 @@ export const TERRAIN_SPLATMAP_ENCODING = 'rgba8' as const;
 export const TERRAIN_SPLATMAP_HEADER_BYTES = 16;
 export const TERRAIN_SPLATMAP_FILE_NAME = 'terrain-splatmap.bin';
 export const TERRAIN_SPLAT_CHANNELS = 4;
-export const MAX_TERRAIN_LAYERS = TERRAIN_SPLAT_CHANNELS;
+export const MAX_TERRAIN_LAYERS = TERRAIN_SPLAT_CHANNELS * 2;
 export const DEFAULT_TERRAIN_LAYER_TILING = 16;
+export const DEFAULT_TERRAIN_LAYER_TILE_SIZE = 8;
 export const MAX_TERRAIN_LAYER_TILING = 10000;
 const MAGIC = 'AUVRASP1';
 const FULL_WEIGHT = 255;
@@ -97,6 +112,11 @@ export function terrainSplatLength(resolution: number): number {
 /** True while a terrain's weights are stored in an asset that is not loaded yet. */
 export function isTerrainSplatPending(terrain: Pick<TerrainPaintState, 'splat' | 'splatmap'> | null | undefined): boolean {
   return Boolean(terrain?.splatmap && !(terrain.splat && terrain.splat.length > 0));
+}
+
+/** True while the weights of a terrain's layers 5 to 8 are stored in an asset that is not loaded yet. */
+export function isTerrainSplat2Pending(terrain: Pick<TerrainPaintState, 'splat2' | 'splatmap2'> | null | undefined): boolean {
+  return Boolean(terrain?.splatmap2 && !(terrain.splat2 && terrain.splat2.length > 0));
 }
 
 /** True while a terrain's holes are stored in an asset that is not loaded yet. */
@@ -166,16 +186,34 @@ const normalizeTiling = (value: unknown): number => (
     : DEFAULT_TERRAIN_LAYER_TILING
 );
 
-/** At most four layers, each with a positive tiling and an optional texture id. */
+const LAYER_TEXTURE_FIELDS = ['textureId', 'normalTextureId', 'roughnessTextureId', 'heightTextureId'] as const;
+const LAYER_NUMBER_FIELDS = ['tileSize', 'rotation', 'roughness', 'normalStrength', 'heightContrast', 'variation'] as const;
+
+/** At most eight layers, each with a positive tiling and only the settings it really has. */
 export function normalizeTerrainLayers(layers: unknown): TerrainTextureLayerSettings[] {
   if (!Array.isArray(layers)) return [];
   return layers.slice(0, MAX_TERRAIN_LAYERS).map((layer): TerrainTextureLayerSettings => {
-    const value = (layer && typeof layer === 'object' ? layer : {}) as { textureId?: unknown; tiling?: unknown };
-    const tiling = normalizeTiling(value.tiling);
-    return typeof value.textureId === 'string' && value.textureId
-      ? { textureId: value.textureId, tiling }
-      : { tiling };
+    const value = (layer && typeof layer === 'object' ? layer : {}) as Record<string, unknown>;
+    const normalized: TerrainTextureLayerSettings = { tiling: normalizeTiling(value.tiling) };
+    for (const field of LAYER_TEXTURE_FIELDS) {
+      const id = value[field];
+      if (typeof id === 'string' && id) normalized[field] = id;
+    }
+    for (const field of LAYER_NUMBER_FIELDS) {
+      const number = value[field];
+      if (typeof number === 'number' && Number.isFinite(number)) normalized[field] = number;
+    }
+    if (typeof value.name === 'string' && value.name) normalized.name = value.name;
+    if (typeof value.tint === 'string' && value.tint) normalized.tint = value.tint;
+    if (value.cliffProjection === true) normalized.cliffProjection = true;
+    return normalized;
   });
+}
+
+/** World metres one tile of a layer covers on a terrain this many world metres wide. */
+export function terrainLayerTileSize(layer: TerrainTextureLayerSettings, worldWidth: number): number {
+  if (layer.tileSize && layer.tileSize > 0) return layer.tileSize;
+  return worldWidth > 0 ? worldWidth / layer.tiling : DEFAULT_TERRAIN_LAYER_TILE_SIZE;
 }
 
 /** True when any layer of the terrain samples the texture. */
@@ -183,7 +221,7 @@ export function terrainLayersReferenceTexture(
   terrain: { textureLayers?: readonly TerrainTextureLayerSettings[] } | null | undefined,
   textureId: string,
 ): boolean {
-  return Boolean(terrain?.textureLayers?.some((layer) => layer.textureId === textureId));
+  return Boolean(terrain?.textureLayers?.some((layer) => LAYER_TEXTURE_FIELDS.some((field) => layer[field] === textureId)));
 }
 
 /**
@@ -196,9 +234,13 @@ export function withoutTerrainLayerTexture<T extends { textureLayers?: readonly 
   textureId: string,
 ): T {
   if (!terrainLayersReferenceTexture(terrain, textureId)) return terrain;
-  const textureLayers = (terrain.textureLayers ?? []).map((layer) => (
-    layer.textureId === textureId ? { tiling: layer.tiling } : layer
-  ));
+  const textureLayers = (terrain.textureLayers ?? []).map((layer) => {
+    const kept = { ...layer };
+    for (const field of LAYER_TEXTURE_FIELDS) {
+      if (kept[field] === textureId) delete kept[field];
+    }
+    return kept;
+  });
   return { ...terrain, textureLayers };
 }
 

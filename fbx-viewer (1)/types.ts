@@ -127,8 +127,20 @@ export interface TerrainSplatmapReference {
 
 /** One terrain texture layer; splat channel N (R, G, B, A) weights layer N. */
 export interface TerrainTextureLayer {
+    name?: string;
     textureId?: string; // textures domain id; a layer without one renders flat grey
-    tiling: number;     // texture repeats across the terrain width
+    normalTextureId?: string;
+    roughnessTextureId?: string;
+    heightTextureId?: string;
+    tiling: number;     // texture repeats across the terrain width; tileSize wins over it
+    tileSize?: number;  // world metres one tile covers
+    rotation?: number;  // degrees the textures are turned by
+    tint?: string;      // colour the albedo is multiplied by
+    roughness?: number;
+    normalStrength?: number;
+    heightContrast?: number; // above 0: its height map decides where it shows first
+    cliffProjection?: boolean;
+    variation?: number;
 }
 
 export interface TerrainData {
@@ -141,11 +153,14 @@ export interface TerrainData {
     heights?: number[];
     heightfield?: TerrainHeightfieldReference;
     textureId?: string; // Optional texture override
-    textureLayers?: TerrainTextureLayer[]; // at most 4, blended by the splat map
+    textureLayers?: TerrainTextureLayer[]; // at most 8, blended by the splat maps
     // Flattened (resolution + 1)^2 * 4 RGBA weights (0-255, heights order). In memory these are
     // resolved from `splatmap`; persisted documents carry only the reference.
     splat?: number[];
     splatmap?: TerrainSplatmapReference;
+    // The same for layers 5 to 8, only there once a terrain has more than four.
+    splat2?: number[];
+    splatmap2?: TerrainSplatmapReference;
     // resolution * resolution cells cut out of the terrain, row by row: non-zero is a hole. In memory
     // these are resolved from `holemap` (red channel); persisted documents carry only the reference.
     holes?: number[];

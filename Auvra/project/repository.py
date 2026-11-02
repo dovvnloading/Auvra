@@ -684,7 +684,7 @@ def _fsync_tree(root: Path) -> None:
         elif path.is_dir():
             _fsync_directory(path)
 
-_TERRAIN_ASSET_KEYS = ("heightfield", "splatmap", "holemap")
+_TERRAIN_ASSET_KEYS = ("heightfield", "splatmap", "splatmap2", "holemap")
 
 def _terrain_assets(objects: dict[str, Any]) -> dict[tuple[Any, str], str]:
     """Map each (terrain object id, terrainData key) to its heightfield or splat map asset id."""

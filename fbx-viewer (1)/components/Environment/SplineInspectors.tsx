@@ -120,7 +120,7 @@ export const SplineInspector: React.FC<ComponentInspectorProps> = ({ object, com
         }
         snapshotHistory();
         for (const { terrain, result } of changes) {
-            updateLevelObject(terrain.id, { terrainData: { ...terrain.terrainData!, ...(kind === 'flatten' ? { heights: result } : { splat: result }) } });
+            updateLevelObject(terrain.id, { terrainData: { ...terrain.terrainData!, ...(Array.isArray(result) ? { heights: result } : result) } });
         }
         setNotice(kind === 'flatten' ? `Flattened ${changes.length === 1 ? 'the terrain' : `${changes.length} terrains`} under the spline.` : `Painted layer ${layer} under the spline.`);
     };
@@ -252,7 +252,7 @@ export const SplineInspector: React.FC<ComponentInspectorProps> = ({ object, com
                 </div>
                 <div className="flex items-center gap-1">
                     <select aria-label="Terrain layer" value={layer} onChange={(event) => setLayer(Number(event.target.value))} className={`${FIELD} w-20`}>
-                        {[1, 2, 3, 4].map(entry => <option key={entry} value={entry}>Layer {entry}</option>)}
+                        {[1, 2, 3, 4, 5, 6, 7, 8].map(entry => <option key={entry} value={entry}>Layer {entry}</option>)}
                     </select>
                     <button type="button" className={`${BUTTON} flex-1`} onClick={() => shapeTerrain('paint')}><Paintbrush size={10} /> Paint under</button>
                 </div>
