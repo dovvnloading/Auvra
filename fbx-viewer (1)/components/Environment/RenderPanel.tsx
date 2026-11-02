@@ -5,7 +5,7 @@ import { useAssets } from '../../context/AssetContext';
 import { describeProviderFailure, hostProviderService } from '../../services/HostProviderService';
 import { textureService } from '../../services/TextureGenerationService';
 import { Button, IconButton, Popover, Segmented, Spinner } from '../UI/kit';
-import { buildRenderBundle } from './renderBundle';
+import { buildRenderBundle, frameHeight } from './renderBundle';
 
 const PROVIDER = 'reframe';
 const MODEL = 'path-tracer';
@@ -79,10 +79,10 @@ export const RenderPanel: React.FC = () => {
     setPhase('Gathering the scene');
     const started = performance.now();
     try {
-      const built = await buildRenderBundle();
-      if (!built) throw new Error('There is nothing in view to render.');
       const width = chosen.width;
-      const height = Math.max(16, Math.round(width / built.aspect / 2) * 2);
+      const height = frameHeight(width);
+      const built = await buildRenderBundle({ width, height });
+      if (!built) throw new Error('There is nothing in view to render.');
       const scene = await textureService.ingestPicture(new File([built.bundle], 'render-scene.bin', { type: 'application/octet-stream' }));
       const route = await hostProviderService.loadConfiguredRoute('media.render');
       if (route?.modelId !== MODEL) await hostProviderService.routeCapability(PROVIDER, 'media.render', MODEL);

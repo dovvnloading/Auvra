@@ -49,7 +49,12 @@ _STOP_GRACE_SECONDS = 5.0
 _FIREFLY_LIMIT = 1.5
 # What brings the renderer's filmic curve to the viewport's at the viewport's usual settings.
 _VIEWPORT_EXPOSURE = 0.737
-_MATERIAL_TEXTURES = {"baseColorTexture": "baseColorTexture", "normalTexture": "normalMap", "roughnessTexture": "roughnessTexture", "metallicTexture": "metallicTexture", "opacityTexture": "opacityTexture"}
+# How the viewport's bloom strength reads as a share of light scattered, and how far that spreads, as a share of the frame.
+_BLOOM_SCATTER = 0.3
+_BLOOM_RADIUS = 0.05
+# The viewport's depth of field is given in pixels of blur, the renderer's as the size of a lens in the world.
+_APERTURE_OF_BOKEH = 0.01
+_MATERIAL_TEXTURES = {"baseColorTexture": "baseColorTexture", "normalTexture": "normalMap", "roughnessTexture": "roughnessTexture", "metallicTexture": "metallicTexture", "opacityTexture": "opacityTexture", "emissionTexture": "emissionTexture"}
 
 
 def holds_reframe(folder: Path) -> bool:
@@ -171,13 +176,64 @@ def _fog(source: Any) -> dict[str, Any]:
     return {"kind": "linear", "color": color, "near": near, "far": far} if far > near else {"kind": "none"}
 
 
-def _finish(header: Mapping[str, Any]) -> dict[str, Any] | None:
-    """What the worker is to do to a frame to bring it to the view: its fog, and how much light the sky stands in for. The renderer hands over the depth for it only with fog asked for."""
+_LOOK_SIZES = {16, 32, 64}
+
+
+def _grade(post: Any, blobs: _Blobs) -> dict[str, Any]:
+    """What a view's post-process stack does to the picture once it is tone mapped, or to its light before that, for the worker to do the same."""
+    if not isinstance(post, Mapping):
+        return {}
+    grade: dict[str, Any] = {
+        "saturation": _number(post.get("saturation"), 0.0, -1.0, 1.0),
+        "brightness": _number(post.get("brightness"), 0.0, -1.0, 1.0),
+        "contrast": _number(post.get("contrast"), 0.0, -1.0, 1.0),
+        "vignette": _number(post.get("vignette"), 0.0, 0.0, 1.0),
+    }
+    balance = post.get("whiteBalance")
+    if balance is not None:
+        grade["white_balance"] = _triple(balance, (1.0, 1.0, 1.0), 0.0, 4.0)
+    look = post.get("look")
+    if isinstance(look, Mapping) and look.get("size") in _LOOK_SIZES:
+        grade["look"] = {"table": str(blobs.write(look.get("table"), ".bin")), "size": look["size"], "strength": _number(look.get("strength"), 1.0, 0.0, 1.0)}
+    return grade
+
+
+def _frame_picture(picture: Mapping[str, Any], blobs: _Blobs) -> dict[str, Any]:
+    """A picture the size of the frame, of float pixels, for the worker to read."""
+    return {"picture": str(blobs.write(picture.get("picture"), ".bin")), "width": int(_number(picture.get("width"), 16, 16, _MAX_SIZE)), "height": int(_number(picture.get("height"), 16, 16, _MAX_SIZE))}
+
+
+def _finish(header: Mapping[str, Any], blobs: _Blobs) -> dict[str, Any]:
+    """What the worker is to do to a frame to bring it to the view: its fog, the sky it shows, and what its stack does. The renderer hands over the depth for it only with fog asked for."""
     finish = _fog(header.get("fog"))
-    fill = header.get("skyFill")
-    if isinstance(fill, (int, float)) and not isinstance(fill, bool):
-        finish["sky_fill"] = _number(fill, 0.0, 0.0, 100.0)
-    return {**finish, "enabled": True} if finish["kind"] != "none" or "sky_fill" in finish else None
+    finish["on_screen"] = header.get("blendsOnScreen") is not False
+    if finish["kind"] != "none" and isinstance(header["fog"].get("picture"), Mapping):
+        finish["fog_picture"] = _frame_picture(header["fog"]["picture"], blobs)
+    post = header.get("post")
+    if isinstance(post, Mapping):
+        finish["grade"] = _grade(post, blobs)
+    over = header.get("over")
+    if isinstance(over, Mapping):
+        finish["over"] = _frame_picture(over, blobs)
+    shade = header.get("cloudShade")
+    if isinstance(shade, Mapping):
+        finish["cloud_shade"] = _frame_picture(shade, blobs)
+    return {**finish, "enabled": True}
+
+
+def _optics(post: Any) -> dict[str, Any] | None:
+    """A view's bloom and lens fringe, as the renderer has its own."""
+    if not isinstance(post, Mapping):
+        return None
+    optics: dict[str, Any] = {"enabled": True}
+    bloom = post.get("bloom")
+    if isinstance(bloom, Mapping):
+        optics["bloom"] = {"enabled": True, "threshold": _number(bloom.get("threshold"), 1.0, 0.0, 64.0), "intensity": 1.0, "knee": 0.5,
+                           "scatter": min(0.9, _number(bloom.get("intensity"), 0.0, 0.0, 10.0) * _BLOOM_SCATTER), "radius": _BLOOM_RADIUS}
+    fringe = _number(post.get("fringe"), 0.0, 0.0, 1.0)
+    if fringe > 0.0:
+        optics["chromatic_aberration"] = {"enabled": True, "amount": fringe * 0.004}
+    return optics if len(optics) > 1 else None
 
 
 def build_render_config(header: Mapping[str, Any], settings: Mapping[str, Any], blobs: _Blobs) -> dict[str, Any]:
@@ -209,6 +265,7 @@ def build_render_config(header: Mapping[str, Any], settings: Mapping[str, Any], 
         if raw["type"] == "spot":
             light["direction"] = _triple(raw.get("direction"), (0.0, -1.0, 0.0))
             light["cone_angle"] = _number(raw.get("angle"), 30.0, 0.0, 180.0)
+            light["spot_softness"] = _number(raw.get("softness"), 0.0, 0.0, 1.0)
         lights.append(light)
     camera = header.get("camera") if isinstance(header.get("camera"), Mapping) else {}
     raw_environment = header.get("environment") if isinstance(header.get("environment"), Mapping) else {}
@@ -216,21 +273,33 @@ def build_render_config(header: Mapping[str, Any], settings: Mapping[str, Any], 
         "background": _triple(raw_environment.get("background"), (0.5, 0.55, 0.62), 0.0, 100.0),
         "intensity": _number(raw_environment.get("intensity"), 1.0, 0.0, 100.0),
     }
-    if raw_environment.get("panorama") is not None:
-        environment["hdri_path"] = str(blobs.write(raw_environment["panorama"], ".png"))
-        environment["rotation_deg"] = _number(raw_environment.get("rotation"), 0.0, -360000.0, 360000.0)
-    finish = _finish(header)
+    finish = _finish(header, blobs)
+    # What a surface is lit by and what the frame shows of the sky can differ, as they do in the view. The frame's sky is put on after.
+    if raw_environment.get("lightAround") is not None:
+        environment["hdri_path"] = str(blobs.write(raw_environment["lightAround"], ".hdr"))
+        shown: dict[str, Any] = {"light_around": environment["hdri_path"], "intensity": environment["intensity"], "colour": environment["background"]}
+        environment["intensity"] = 1.0
+        if raw_environment.get("panorama") is not None:
+            shown["panorama"] = str(blobs.write(raw_environment["panorama"], ".hdr" if raw_environment.get("panoramaIsLight") is True else ".png"))
+            shown["rotation_deg"] = _number(raw_environment.get("rotation"), 0.0, -360000.0, 360000.0)
+        finish["sky"] = shown
+        finish["camera"] = {"lookfrom": _triple(camera.get("position"), (0.0, 2.0, 5.0)), "lookat": _triple(camera.get("target"), (0.0, 1.0, 0.0)), "vfov": _number(camera.get("fov"), 45.0, 1.0, 170.0)}
+    optics = _optics(header.get("post"))
+    tone_map = header.get("toneMapping") if header.get("toneMapping") in {"aces", "reinhard", "linear"} else "aces"
+    focus = header.get("post").get("depthOfField") if isinstance(header.get("post"), Mapping) else None
     return {
-        "scene": "custom", "schema_version": 1, "device": "gpu", "backend": "cuda", "tone_map": "aces", "denoise": {"enabled": settings.get("denoise") is True, "provider": "oidn"},
+        "scene": "custom", "schema_version": 1, "device": "gpu", "backend": "cuda", "tone_map": tone_map, "denoise": {"enabled": settings.get("denoise") is True, "provider": "oidn"},
         "exposure": _number(header.get("exposure"), _VIEWPORT_EXPOSURE, -20.0, 20.0), "firefly_clamp": _FIREFLY_LIMIT,
-        **({"volumetric_fog": finish} if finish else {}),
+        "volumetric_fog": finish,
+        **({"post": optics} if optics else {}),
         "width": int(_number(settings.get("width"), 960, 16, _MAX_SIZE)),
         "height": int(_number(settings.get("height"), 540, 16, _MAX_SIZE)),
         "samples_per_pixel": int(_number(settings.get("samples"), 64, 1, _MAX_SAMPLES)),
         "max_bounces": int(_number(settings.get("bounces"), 6, 1, _MAX_BOUNCES)),
         "objects": objects, "lights": lights, "environment": environment,
         "camera": {
-            "projection": "perspective", "dof_enabled": False,
+            "projection": "perspective", "dof_enabled": isinstance(focus, Mapping),
+            **({"focus_distance": _number(focus.get("focus"), 10.0, 0.01, 1e6), "aperture": _number(focus.get("bokeh"), 2.0, 0.0, 100.0) * _APERTURE_OF_BOKEH} if isinstance(focus, Mapping) else {}),
             "lookfrom": _triple(camera.get("position"), (0.0, 2.0, 5.0)),
             "lookat": _triple(camera.get("target"), (0.0, 1.0, 0.0)),
             "vfov": _number(camera.get("fov"), 45.0, 1.0, 170.0),

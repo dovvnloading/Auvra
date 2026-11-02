@@ -125,6 +125,7 @@ varying float vWaveHeight;
 
 const createWaterMaterial = (uniforms: Record<string, THREE.IUniform>): THREE.MeshStandardMaterial => {
     const material = new THREE.MeshStandardMaterial({ transparent: true, metalness: 0.1, side: THREE.DoubleSide });
+    material.userData.movesVertices = true;
     material.onBeforeCompile = (shader) => {
         Object.assign(shader.uniforms, uniforms);
         shader.vertexShader = shader.vertexShader

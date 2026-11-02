@@ -17,7 +17,8 @@ from typing import Any, Callable
 _FINAL_REPORT_ATTEMPTS = 100
 _FINAL_REPORT_WAIT_SECONDS = 0.05
 # However little a fill gives, a sky still gives some light: with none at all, what the sun misses would go black.
-_LEAST_SKY_SHARE = 0.05
+# The viewport's vignette, from where it starts.
+_VIGNETTE_OFFSET = 0.35
 
 
 def fog_transmittance(distance: Any, fog: dict[str, Any], exp: Callable[[Any], Any], clip: Callable[[Any, float, float], Any]) -> Any:
@@ -27,31 +28,6 @@ def fog_transmittance(distance: Any, fog: dict[str, Any], exp: Callable[[Any], A
         return 1.0 - clip((distance - near) / (far - near), 0.0, 1.0)
     density = float(fog.get("density", 0.0))
     return exp(-(density * distance) ** 2)
-
-
-def sky_light_share(fill: float, sky: float) -> float:
-    """
-    How much of its own light a sky should give, for what it lights to come out as in the viewport. There a plain fill stands in
-    for the sky, a good deal dimmer than a real one of that brightness: at full strength a frame is washed out, its shadows pale.
-    """
-    if sky <= 0.0:
-        return 1.0
-    return max(_LEAST_SKY_SHARE, min(1.0, fill / sky))
-
-
-def _balance_sky(config: dict[str, Any], load_image: Callable[[str], Any]) -> None:
-    """Lights the frame with as much as the viewport's fill gives, and notes how far that leaves the sky to be brought back up to what it should show."""
-    finish = config.get("volumetric_fog")
-    environment = config.get("environment")
-    if not isinstance(finish, dict) or "sky_fill" not in finish or not isinstance(environment, dict) or not environment.get("hdri_path"):
-        return
-    image = load_image(environment["hdri_path"])
-    above = image[: image.shape[0] // 2]
-    brightness = float((0.2126 * above[:, :, 0] + 0.7152 * above[:, :, 1] + 0.0722 * above[:, :, 2]).mean())
-    intensity = float(environment.get("intensity", 1.0))
-    share = sky_light_share(float(finish["sky_fill"]), brightness * intensity)
-    environment["intensity"] = intensity * share
-    finish["sky_shown"] = 1.0 / share
 
 
 def _sky_in_each_pixel(np: Any, distance: Any) -> Any:
@@ -64,36 +40,143 @@ def _sky_in_each_pixel(np: Any, distance: Any) -> Any:
     return np.where(distance <= 0.0, 1.0, 1.0 - np.clip(covered, 0.0, 1.0))
 
 
-def _use_viewport_finish(film: Any) -> None:
+def panorama_along_view(np: Any, panorama: Any, rotation_deg: float, camera: dict[str, Any], rows: int, columns: int) -> Any:
+    """What a panorama shows behind each pixel of a frame, from the bottom row up, the way round the renderer reads one."""
+    eye = np.array(camera["lookfrom"], dtype=np.float64)
+    forward = np.array(camera["lookat"], dtype=np.float64) - eye
+    forward /= np.linalg.norm(forward)
+    right = np.cross(forward, (0.0, 1.0, 0.0))
+    right = right / np.linalg.norm(right) if np.linalg.norm(right) > 1e-6 else np.array((1.0, 0.0, 0.0))
+    up = np.cross(right, forward)
+    extent = np.tan(np.radians(float(camera["vfov"])) / 2.0)
+    x, y = np.meshgrid(((np.arange(columns) + 0.5) / columns * 2.0 - 1.0) * extent * columns / rows, ((np.arange(rows) + 0.5) / rows * 2.0 - 1.0) * extent)
+    rays = forward[None, None, :] + x[:, :, None] * right[None, None, :] + y[:, :, None] * up[None, None, :]
+    rays /= np.linalg.norm(rays, axis=2, keepdims=True)
+    height, width = panorama.shape[:2]
+    across = ((np.arctan2(rays[:, :, 2], rays[:, :, 0]) - np.radians(rotation_deg)) / (2.0 * np.pi) + 0.5) % 1.0 * width - 0.5
+    down = np.arccos(np.clip(rays[:, :, 1], -1.0, 1.0)) / np.pi * height - 0.5
+    left, top = np.floor(across).astype(np.int64), np.floor(down).astype(np.int64)
+    part_x, part_y = (across - left)[:, :, None], (down - top)[:, :, None]
+    upper, lower = np.clip(top, 0, height - 1), np.clip(top + 1, 0, height - 1)
+    beside = (left + 1) % width
+    left = left % width
+    return (panorama[upper, left] * (1.0 - part_x) + panorama[upper, beside] * part_x) * (1.0 - part_y) + (panorama[lower, left] * (1.0 - part_x) + panorama[lower, beside] * part_x) * part_y
+
+
+def _graded(np: Any, film: Any, mapped: Any, grade: dict[str, Any]) -> Any:
+    """What a view's stack does to the picture once it is tone mapped, each in the order and by the sum the stack has it."""
+    out = mapped
+    saturation = float(grade.get("saturation", 0.0))
+    if saturation != 0.0:
+        grey = out.mean(axis=2, keepdims=True)
+        out = out + (grey - out) * ((1.0 - 1.0 / (1.001 - saturation)) if saturation > 0.0 else -saturation)
+    brightness, contrast = float(grade.get("brightness", 0.0)), float(grade.get("contrast", 0.0))
+    if brightness != 0.0 or contrast != 0.0:
+        centred = out + brightness - 0.5
+        out = (centred / (1.0 - contrast) if contrast > 0.0 else centred * (1.0 + contrast)) + 0.5
+    look = grade.get("look")
+    if isinstance(look, dict):
+        size = int(look["size"])
+        table = np.fromfile(look["table"], dtype=np.float32).reshape(size, size, size, 4)[:, :, :, :3]
+        place = np.clip(film.linear_to_srgb(np.clip(out, 0.0, 1.0)), 0.0, 1.0) * (size - 1)
+        low = np.floor(place).astype(np.int32)
+        high = np.minimum(low + 1, size - 1)
+        part = (place - low)[..., None]
+        def corner(red: Any, green: Any, blue: Any) -> Any:
+            return table[blue[..., 2], green[..., 1], red[..., 0]]
+        reds = [low, high]
+        blended = 0.0
+        for r in (0, 1):
+            for g in (0, 1):
+                for b in (0, 1):
+                    weight = (part[:, :, 0] if r else 1.0 - part[:, :, 0]) * (part[:, :, 1] if g else 1.0 - part[:, :, 1]) * (part[:, :, 2] if b else 1.0 - part[:, :, 2])
+                    blended = blended + corner(reds[r], reds[g], reds[b]) * weight
+        strength = float(look["strength"])
+        on_screen = np.clip(film.linear_to_srgb(np.clip(out, 0.0, 1.0)), 0.0, 1.0)
+        mixed = on_screen * (1.0 - strength) + np.clip(blended, 0.0, 1.0) * strength
+        out = np.where(mixed <= 0.04045, mixed / 12.92, np.power((mixed + 0.055) / 1.055, 2.4))
+    darkness = float(grade.get("vignette", 0.0))
+    if darkness > 0.0:
+        rows, columns = out.shape[0], out.shape[1]
+        y, x = np.meshgrid((np.arange(rows) + 0.5) / rows - 0.5, (np.arange(columns) + 0.5) / columns - 0.5, indexing="ij")
+        reach = np.sqrt(x * x + y * y) * (darkness + _VIGNETTE_OFFSET)
+        edge = _VIGNETTE_OFFSET * 0.799
+        step = np.clip((reach - 0.8) / (edge - 0.8), 0.0, 1.0)
+        out = out * (step * step * (3.0 - 2.0 * step))[:, :, None]
+    return np.clip(out, 0.0, 1.0)
+
+
+def _use_viewport_finish(film: Any, load_image: Callable[[str], Any]) -> None:
     """
     Puts on a frame what brings it to the view, where the renderer hands over its light and depth for fog. Its own fog thins by
-    another law and goes on before tone mapping, where the viewport's goes on after, in the colours on screen.
+    another law. Fog and particles go on where the viewport has them: in the light with a post-process stack, and otherwise after
+    tone mapping, in the colours on screen. What a stack does after tone mapping follows that.
     """
     import numpy as np
 
-    fog: dict[str, Any] = {}
+    held: dict[str, Any] = {}
     tone_map = film.tonemap
+
+    def picture_of(part: dict[str, Any], like: Any) -> Any:
+        drawn = np.fromfile(part["picture"], dtype=np.float32).reshape(int(part["height"]), int(part["width"]), 4)
+        return drawn if drawn.shape[:2] == like.shape[:2] else None
 
     def apply_depth_fog(hdr: Any, depth: Any, finish: Any) -> Any:
         if not isinstance(finish, dict) or not finish.get("enabled"):
             return hdr
         distance = depth.reshape(hdr.shape[0], hdr.shape[1]).astype(np.float32)
         sky = _sky_in_each_pixel(np, distance)
+        out = hdr
+        if isinstance(finish.get("cloud_shade"), dict):
+            drawn = picture_of(finish["cloud_shade"], out)
+            if drawn is not None:
+                out = out * drawn[:, :, :3]
+        shown = finish.get("sky")
+        if isinstance(shown, dict):
+            # The renderer's rays saw the light around where they met nothing. The view shows its sky there.
+            rows, columns = hdr.shape[:2]
+            around = panorama_along_view(np, load_image(shown["light_around"]), 0.0, finish["camera"], rows, columns)
+            behind = np.array(shown["colour"], dtype=np.float32)[None, None, :]
+            if shown.get("panorama"):
+                behind = panorama_along_view(np, load_image(shown["panorama"]), float(shown.get("rotation_deg", 0.0)), finish["camera"], rows, columns)
+            out = np.maximum(out + sky[:, :, None] * (behind * float(shown["intensity"]) - around), 0.0)
+        grade = finish.get("grade") if isinstance(finish.get("grade"), dict) else {}
+        on_screen = finish.get("on_screen", True)
         if finish.get("kind") in {"squared", "linear"}:
             # Sky has no fog in the viewport. A pixel on an edge is as far as what covers it.
             far = distance / np.maximum(1.0 - sky, 1e-3)
-            fog["through"] = (sky + (1.0 - sky) * fog_transmittance(far, finish, np.exp, np.clip))[:, :, None]
-            fog["color"] = film.linear_to_srgb(np.array(finish["color"][:3], dtype=np.float32))
-        shown = float(finish.get("sky_shown", 1.0))
-        return (hdr * (1.0 + sky * (shown - 1.0))[:, :, None]).astype(np.float32) if shown != 1.0 else hdr
+            through = (sky + (1.0 - sky) * fog_transmittance(far, finish, np.exp, np.clip))[:, :, None]
+            drawn = picture_of(finish["fog_picture"], out) if isinstance(finish.get("fog_picture"), dict) else None
+            colour = drawn[:, :, :3] if drawn is not None else np.array(finish["color"][:3], dtype=np.float32)[None, None, :]
+            if on_screen:
+                held["through"], held["colour"] = through, colour
+            else:
+                out = out * through + colour * (1.0 - through)
+        if isinstance(finish.get("over"), dict):
+            drawn = picture_of(finish["over"], out)
+            if drawn is not None and on_screen:
+                held["over"] = drawn
+            elif drawn is not None:
+                out = out * (1.0 - np.clip(drawn[:, :, 3:], 0.0, 1.0)) + drawn[:, :, :3]
+        balance = grade.get("white_balance")
+        if balance is not None:
+            out = out * np.array(balance, dtype=np.float32)[None, None, :]
+        held["grade"] = grade
+        return out.astype(np.float32)
 
     def tonemap(hdr: Any, mode: Any = "filmic", exposure: Any = 0.0) -> Any:
         mapped = tone_map(hdr, mode, exposure)
-        through = fog.get("through")
-        if through is None or through.shape[:2] != mapped.shape[:2]:
-            return mapped
-        on_screen = film.linear_to_srgb(mapped) * through + fog["color"][None, None, :] * (1.0 - through)
-        return np.where(on_screen <= 0.04045, on_screen / 12.92, np.power((on_screen + 0.055) / 1.055, 2.4)).astype(np.float32)
+        through, over = held.get("through"), held.get("over")
+        if through is not None or over is not None:
+            on_screen = film.linear_to_srgb(mapped)
+            if through is not None:
+                on_screen = on_screen * through + held["colour"] * (1.0 - through)
+            if over is not None:
+                on_screen = on_screen * (1.0 - np.clip(over[:, :, 3:], 0.0, 1.0)) + over[:, :, :3]
+            on_screen = np.clip(on_screen, 0.0, 1.0)
+            mapped = np.where(on_screen <= 0.04045, on_screen / 12.92, np.power((on_screen + 0.055) / 1.055, 2.4))
+        grade = held.get("grade")
+        return (_graded(np, film, mapped, grade) if grade else mapped).astype(np.float32)
 
     film.apply_depth_fog = apply_depth_fog
     film.tonemap = tonemap
@@ -127,9 +210,8 @@ def main(home: str, job_dir: str) -> int:
         from gi_renderer.engine.render import render_job
         from gi_renderer.engine.scene import load_image_linear
 
-        _use_viewport_finish(film)
+        _use_viewport_finish(film, load_image_linear)
         config = json.loads((folder / "config.json").read_text(encoding="utf-8"))
-        _balance_sky(config, load_image_linear)
         outcome = render_job(str(folder), config, on_update, (folder / "cancel").exists)
     except Exception:
         (folder / "error.log").write_text(traceback.format_exc(), encoding="utf-8")

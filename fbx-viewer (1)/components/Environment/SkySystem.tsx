@@ -400,11 +400,6 @@ export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects, live = false
         [live, physics, queries, camera],
     );
     useEffect(() => {
-        renderView.skyLights = skyLit;
-        return () => { renderView.skyLights = false; };
-    }, [skyLit]);
-
-    useEffect(() => {
         if (!skyObject) return undefined;
         renderView.drawSky = atmospheric
             ? (renderer, onto) => skyRenderer.drawSkyOnto(renderer, onto)
