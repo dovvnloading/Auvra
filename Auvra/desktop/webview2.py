@@ -679,7 +679,9 @@ class WebView2Frame:
             count = int(self.stream.Read(buffer, 0, size))
             if count <= 0:
                 return b""
-            return bytes(buffer[index] for index in range(count))
+            # Copied whole: asking .NET for each byte in turn takes 0.4 s a megabyte.
+            with memoryview(buffer) as view:
+                return bytes(view[:count])
 
     def _on_asset_resource(self, args: Any, request: Any, uri: str) -> None:
         callback = self.config.on_asset_resource

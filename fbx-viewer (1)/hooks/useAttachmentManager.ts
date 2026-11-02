@@ -1,7 +1,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { AttachmentData, LoadedModelData } from '../types';
-import { importPhaseLabel, loadFBXFile } from '../utils/modelLoader';
+import { importFailureMessage, importPhaseLabel, loadFBXFile } from '../utils/modelLoader';
 import { disposeObject } from '../utils/processing/ModelLifecycle';
 import { dbOperations } from '../utils/db';
 import { projectService } from '../utils/projectService';
@@ -148,7 +148,7 @@ export const useAttachmentManager = (
           disposeObject(loaded.object);
         }
         addNotification({
-          message: isAbortError(error) ? `Cancelled import of "${file.name}".` : `Failed to import attachment "${file.name}".`,
+          message: isAbortError(error) ? `Cancelled import of "${file.name}".` : importFailureMessage(`Failed to import attachment "${file.name}"`, error),
           type: isAbortError(error) ? 'info' : 'error',
         });
     } finally {

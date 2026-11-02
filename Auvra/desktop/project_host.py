@@ -255,12 +255,15 @@ class NativeProjectHost:
 
     def asset_resource(self, request: AssetResourceRequest):
         with self._operation_lock:
-            return self.assets.handle(
-                method=request.method,
-                url=request.url,
-                headers=request.headers,
-                body=request.body,
-            )
+            try:
+                return self.assets.handle(
+                    method=request.method,
+                    url=request.url,
+                    headers=request.headers,
+                    body=request.body,
+                )
+            except Exception as exc:
+                return self.assets.failure_response(request.headers, exc)
 
     def drain_events(self) -> list[tuple[str, dict[str, Any]]]:
         with self._event_lock:

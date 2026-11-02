@@ -8,6 +8,7 @@ through bounded chunks.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import errno
 import hashlib
 import os
 from pathlib import Path
@@ -16,6 +17,7 @@ import secrets
 import shutil
 import threading
 from Auvra.diagnostics import trace_public_class
+from Auvra.project.errors import ReadOnlyError
 import time
 from typing import Any, BinaryIO, Callable, Mapping
 from urllib.parse import urlsplit
@@ -493,6 +495,19 @@ class AssetTransferRegistry:
         if method == "PUT":
             return self._upload(state, headers, body)
         return self._download(state)
+
+    def failure_response(self, headers: Mapping[str, str], error: Exception) -> AssetResourceResponse:
+        """A failed transfer as an answer the page that asked can read, to say what went wrong. Anything else that asks gets a bare refusal."""
+        if isinstance(error, AssetTransportError):
+            status = error.status
+        elif isinstance(error, ReadOnlyError):
+            status = 423
+        elif isinstance(error, OSError) and error.errno == errno.ENOSPC:
+            status = 507
+        else:
+            status = 500
+        trusted = self._header(headers, "Origin") == self.trusted_origin
+        return AssetResourceResponse(status, "Denied", self._cors_headers() if trusted else {"Cache-Control": "no-store"})
 
     def _upload(
         self,
