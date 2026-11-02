@@ -9,7 +9,8 @@ interface SandboxUIProps {
     isPlaying: boolean;
     isGameOver?: boolean;
     onStart: () => void;
-    onStop: () => void;
+    /** Leaves play. Without it the HUD offers no way out: the host has its own. */
+    onStop?: () => void;
     playerBlueprint: Blueprint;
     enemyBlueprint: Blueprint;
     playerModel: LoadedModelData | undefined;
@@ -307,14 +308,16 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
             )}
 
             {/* Bottom Controls */}
-            <div className="absolute bottom-6 right-6 z-50 pointer-events-auto">
-                <button 
-                    onClick={onStop}
-                    className="flex items-center gap-2 px-4 py-2 bg-gray-900/90 hover:bg-gray-800 text-red-400 hover:text-red-300 font-bold text-2xs rounded border border-gray-700 shadow-xl transition-all"
-                >
-                    <Square size={10} fill="currentColor" /> Stop Simulation
-                </button>
-            </div>
+            {onStop && (
+                <div className="absolute bottom-6 right-6 z-50 pointer-events-auto">
+                    <button 
+                        onClick={onStop}
+                        className="flex items-center gap-2 px-4 py-2 bg-gray-900/90 hover:bg-gray-800 text-red-400 hover:text-red-300 font-bold text-2xs rounded border border-gray-700 shadow-xl transition-all"
+                    >
+                        <Square size={10} fill="currentColor" /> Stop Simulation
+                    </button>
+                </div>
+            )}
         </div>
     );
 };

@@ -303,6 +303,7 @@ export const PlayerApp: React.FC = () => {
                             host={host}
                             sessionKey={session.key}
                             overlay={hudOverlay}
+                            hostMenus
                             restore={session.restore}
                             playerOptions={optionsStore ?? undefined}
                             saveStateRef={saveStateRef}

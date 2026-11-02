@@ -438,14 +438,15 @@ const FallbackHud: React.FC<{
     highQuality: boolean;
     onToggleQuality: () => void;
     host: RuntimeHost;
-}> = ({ player, isGameOver, highQuality, onToggleQuality, host }) => {
+    hostMenus: boolean;
+}> = ({ player, isGameOver, highQuality, onToggleQuality, host, hostMenus }) => {
     const stats = useGameState(state => state.player);
     return (
         <SandboxUI
             isPlaying={true}
-            isGameOver={isGameOver}
+            isGameOver={isGameOver && !hostMenus}
             onStart={host.restartLevel}
-            onStop={host.endLevel}
+            onStop={hostMenus ? undefined : host.endLevel}
             playerBlueprint={player.blueprint}
             enemyBlueprint={player.blueprint}
             playerModel={player.model}
@@ -942,7 +943,7 @@ DefaultPostProcess.displayName = 'DefaultPostProcess';
  * Plays one level. Shared by play-in-editor and the standalone player: content comes from the
  * runtime content context, flow control (restart, end, open level, save, load, pause) from the host.
  */
-export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, playerStart, paused, host, sessionKey, overlay, restore, playerOptions, stepRequest = 0, inspectRef, saveStateRef }) => {
+export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, playerStart, paused, host, sessionKey, overlay, hostMenus = false, restore, playerOptions, stepRequest = 0, inspectRef, saveStateRef }) => {
     const content = useGameContent();
     const player = useMemo(() => resolvePlayerAssets(content, settings.playerBlueprintId), [content, settings.playerBlueprintId]);
     const start = useMemo(() => resolvePlayerStart(level, playerStart, restore), [level, playerStart, restore]);
@@ -1113,6 +1114,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                         highQuality={highQuality}
                         onToggleQuality={toggleQuality}
                         host={runtimeHost}
+                        hostMenus={hostMenus}
                     />
                 )}
             </div>
