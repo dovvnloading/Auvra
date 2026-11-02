@@ -30,7 +30,8 @@ _NESTED_KEYS = {
     # binary heightfield asset instead (see ``_validate_terrain_heightfields``).
     # Paint weights likewise live in a binary splat map asset (``splatmap``);
     # the editor's in-memory ``splat`` array is never persisted.
-    "terrainData": {"resolution", "width", "depth", "heights", "heightfield", "textureId", "textureLayers", "splatmap", "splatmap2", "holemap"},
+    "terrainData": {"resolution", "width", "depth", "heights", "heightfield", "textureId", "textureLayers", "splatmap", "splatmap2", "holemap", "editLayers", "activeEditLayer"},
+    "editLayers": {"id", "name", "visible", "locked", "opacity", "heightfield"},
     "heightfield": {"assetId", "encoding", "columns", "rows"},
     "splatmap": {"assetId", "encoding", "columns", "rows"},
     "splatmap2": {"assetId", "encoding", "columns", "rows"},
@@ -349,6 +350,13 @@ def _validate_terrain_heightfields(value: Any) -> None:
             samples = int(resolution) + 1
             if reference.get("columns") != samples or reference.get("rows") != samples:
                 raise ValueError(f"objects document {index} terrain {label} does not match its resolution")
+        for layer in terrain.get("editLayers") or []:
+            reference = layer.get("heightfield") if isinstance(layer, dict) else None
+            if not isinstance(reference, dict):
+                continue
+            resolution = terrain.get("resolution")
+            if not _is_number(resolution) or not float(resolution).is_integer() or reference.get("columns") != int(resolution) + 1 or reference.get("rows") != int(resolution) + 1:
+                raise ValueError(f"objects document {index} terrain edit layer does not match its resolution")
 
 def _documents(value: Any) -> list[Any]:
     documents = value.get("documents") if isinstance(value, dict) else None

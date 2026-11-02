@@ -210,7 +210,7 @@ export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, s
                         <NumberRow label="Up to" unit="%" value={Math.round(settings.paintTarget * 100)} min={1} max={100} hint="How much of this layer painting builds up to" onChange={(value) => change({ paintTarget: value / 100 })} />
                     )}
                     {settings.paintTool === 'smooth' && (
-                        <NumberRow label="Reach" unit="cells" value={settings.smoothKernel} min={1} max={16} onChange={(value) => change({ smoothKernel: Math.round(value) })} />
+                        <NumberRow label="Reach (cells)" unit="" value={settings.smoothKernel} min={1} max={16} onChange={(value) => change({ smoothKernel: Math.round(value) })} />
                     )}
                     {settings.paintTool === 'noise' && (
                         <NumberRow label="Patch size" unit="m" value={settings.paintNoiseScale} step={0.5} min={0.1} onChange={(paintNoiseScale) => change({ paintNoiseScale })} />
@@ -367,7 +367,7 @@ export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, s
                                         <Button size="sm" variant="ghost" title="Stop growing this" onClick={() => commitLayers(layers.map((current, at) => (at === selected ? { ...current, grass: (current.grass ?? []).filter((_, kept) => kept !== index) } : current)))}><Trash2 size={11} /></Button>
                                     </div>
                                     <div className="space-y-1">
-                                        <NumberRow label="Density" unit="/m²" step={0.5} min={0} max={64} value={grass.density} hint="Copies per square metre" onChange={(density) => write({ density })} />
+                                        <NumberRow label="Per m²" unit="" step={0.5} min={0} max={64} value={grass.density} hint="Copies per square metre" onChange={(density) => write({ density })} />
                                         <Row label="Scale">
                                             <div className="grid grid-cols-2 gap-1">
                                                 <ScrubbableInput label="" labelWidth="w-0" value={grass.scale[0]} step={0.05} onChange={(value) => { if (Number.isFinite(value) && value > 0) write({ scale: [value, Math.max(value, grass.scale[1])] }); }} />

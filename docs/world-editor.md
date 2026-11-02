@@ -554,6 +554,19 @@ Brush tools keep working while the left button is held, even with the mouse stil
 
 Escape cancels a ramp or a paste in progress.
 
+A stroke works on every terrain the brush reaches, so it does not stop at a seam between neighbours.
+
+### Edit layers
+
+**Edit Layers**, under the brush, keeps sculpting apart from what is under it, so you can change your mind about it long after. **Add** makes a layer and sends the next strokes into it; **Ground** sends them straight into the terrain again.
+
+- The eye hides a layer, taking its work off the ground and putting it back as it was, however much else was done since.
+- The padlock stops strokes going into it by mistake.
+- **Strength** fades its work in or out, or past 100% to exaggerate it.
+- **Merge** keeps its work for good as part of the ground. **Remove** takes it away.
+
+Layers add together, so their order does not matter. The brush turns grey over a layer that cannot take a stroke, and the panel says why. Layers hold sculpting only: holes and paint go straight onto the terrain. A built game only carries the finished ground.
+
 ### Manage
 
 **New Terrain** sets its width, depth and resolution (cells along each side) and where its middle goes; a new terrain starts beside the last, so their edges meet. A level can hold as many terrains as you like. **From File** makes one from a heightmap.

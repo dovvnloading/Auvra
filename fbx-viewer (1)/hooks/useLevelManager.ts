@@ -11,6 +11,7 @@ import { resolveTerrainHeightfield } from '../utils/terrainHeightfieldEditor';
 import { isTerrainHeightfieldPending, TerrainHeightfieldEncodingError } from '../utils/terrainHeightfieldCodec';
 import { resolveTerrainHolemap, resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplatEditor';
 import { isFoliageTypePending, resolveFoliageInstances, type FoliageInstanceReference, type FoliageType } from '../runtime/foliage';
+import { isEditLayerPending, resolveEditLayer } from '../components/Environment/Terrain/terrainEditLayers';
 import { isTerrainHolesPending, isTerrainSplat2Pending, isTerrainSplatPending, terrainLayersReferenceTexture, withoutTerrainLayerModel, withoutTerrainLayerTexture } from '../components/Environment/Terrain/terrainSplatCodec';
 import { collectSubtree, sortByHierarchy } from '../utils/sceneGraph';
 import type { LevelBakedLighting } from '../runtime/lighting/bakedLighting';
@@ -71,7 +72,10 @@ const snapshotLevelObjects = (objects: readonly LevelObject[]): LevelObject[] =>
     if (!terrain) return JSON.parse(JSON.stringify(object)) as LevelObject;
     const light: Record<string, unknown> = { ...terrain };
     for (const field of SHARED_TERRAIN_FIELDS) delete light[field];
+    // Edit layers hold as many numbers again.
+    delete light.editLayers;
     const copy = JSON.parse(JSON.stringify({ ...object, terrainData: light })) as LevelObject;
+    if (terrain.editLayers) copy.terrainData!.editLayers = terrain.editLayers.map(layer => ({ ...layer }));
     for (const field of SHARED_TERRAIN_FIELDS) {
         const value = terrain[field];
         if (value) (copy.terrainData as unknown as Record<string, unknown>)[field] = value;
@@ -105,7 +109,13 @@ const sameTerrainObject = (a: LevelObject, b: LevelObject): boolean => {
         if (!a.terrainData || !b.terrainData) return false;
         if (!sameNumbers(a.terrainData[field], b.terrainData[field])) return false;
     }
-    const replacer = (key: string, value: unknown) => ((SHARED_TERRAIN_FIELDS as readonly string[]).includes(key) ? undefined : value);
+    const leftLayers = a.terrainData?.editLayers ?? [];
+    const rightLayers = b.terrainData?.editLayers ?? [];
+    if (leftLayers.length !== rightLayers.length) return false;
+    for (let index = 0; index < leftLayers.length; index++) {
+        if (!sameNumbers(leftLayers[index].deltas, rightLayers[index].deltas)) return false;
+    }
+    const replacer = (key: string, value: unknown) => ((SHARED_TERRAIN_FIELDS as readonly string[]).includes(key) || key === 'deltas' ? undefined : value);
     return JSON.stringify(a, replacer) === JSON.stringify(b, replacer);
 };
 
@@ -673,6 +683,48 @@ export const useLevelManager = (models: LoadedModelData[]) => {
               failedSplatmapsRef.current.add(reference.assetId);
               frontendDiagnostics.failure('terrain_splatmap_resolve_failed', error);
               addNotification({ message: `Terrain paint could not be loaded (${describeError(error)}); painting is disabled for that terrain.`, type: 'error' });
+          });
+      }
+      return () => { active = false; };
+  }, [addNotification, levelObjects]);
+
+  // A terrain's edit layers are resolved the same way, each into its own deltas.
+  const failedEditLayersRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+      const references = new Map<string, TerrainHeightfieldReference>();
+      for (const object of levelObjects) {
+          for (const layer of object.terrainData?.editLayers ?? []) {
+              if (layer.heightfield && isEditLayerPending(layer) && !failedEditLayersRef.current.has(layer.heightfield.assetId)) {
+                  references.set(layer.heightfield.assetId, layer.heightfield);
+              }
+          }
+      }
+      if (references.size === 0) return;
+      let active = true;
+      const resolveIn = (object: LevelObject, assetId: string, deltas: number[]): LevelObject => {
+          const layers = object.terrainData?.editLayers;
+          if (!layers?.some(layer => layer.heightfield?.assetId === assetId && isEditLayerPending(layer))) return object;
+          return { ...object, terrainData: { ...object.terrainData!, editLayers: layers.map(layer => (layer.heightfield?.assetId === assetId && isEditLayerPending(layer) ? { ...layer, deltas } : layer)) } };
+      };
+      for (const reference of references.values()) {
+          resolveEditLayer(reference, async (assetId) => {
+              const response = await fetch(await projectService.resolveAsset(assetId), { method: 'GET' });
+              if (!response.ok) throw new Error(`Terrain layer download failed (${response.status})`);
+              return response.arrayBuffer();
+          }).then((deltas) => {
+              if (!active) return;
+              for (const snapshot of [...history.current.past, ...history.current.future]) {
+                  snapshot.forEach((object, index) => { snapshot[index] = resolveIn(object, reference.assetId, deltas); });
+              }
+              setWorkingState((current) => {
+                  const nextObjects = current.levelObjects.map(object => resolveIn(object, reference.assetId, deltas));
+                  return nextObjects.some((object, index) => object !== current.levelObjects[index]) ? { ...current, levelObjects: nextObjects } : current;
+              });
+          }, (error) => {
+              if (!active) return;
+              failedEditLayersRef.current.add(reference.assetId);
+              frontendDiagnostics.failure('terrain_edit_layer_resolve_failed', error);
+              addNotification({ message: `A terrain layer could not be loaded (${describeError(error)}); it cannot be edited.`, type: 'error' });
           });
       }
       return () => { active = false; };

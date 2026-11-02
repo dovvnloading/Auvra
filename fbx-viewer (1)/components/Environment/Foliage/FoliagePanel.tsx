@@ -359,7 +359,7 @@ export const FoliagePanel: React.FC<FoliagePanelProps> = ({ settings, onSettings
                                 )}
                             >
                                 <div className="space-y-1">
-                                    <NumberRow label="Density" unit="/100m²" value={focused.density} step={focused.density < 2 ? 0.1 : 1} min={0.01} max={100000} hint="How many per 100 square metres" onChange={(density) => updateFocused({ density })} />
+                                    <NumberRow label="Per 100 m²" unit="" value={focused.density} step={focused.density < 2 ? 0.1 : 1} min={0.01} max={100000} hint="How many per 100 square metres" onChange={(density) => updateFocused({ density })} />
                                     <NumberRow label="Spacing" unit="m" value={focused.radius} step={0.1} min={0} max={1000} hint="Metres kept clear around each one, from others of this type" onChange={(radius) => updateFocused({ radius })} />
                                     <Row label="Scaling"><Select value={focused.scaleMode} options={SCALE_MODES} onChange={(scaleMode: FoliageType['scaleMode']) => updateFocused({ scaleMode })} /></Row>
                                     <RangeRow label={focused.scaleMode === 'uniform' ? 'Scale' : focused.scaleMode === 'lockWidth' ? 'Width' : 'Scale X'} value={focused.scaleX} min={0.001} max={1000} onChange={(scaleX) => updateFocused({ scaleX })} />

@@ -23,7 +23,7 @@ export const TimelineInspector: React.FC<ComponentInspectorProps> = ({ object, c
     const { levelObjects, activeLevelBlueprint, models, blueprints, audioAssets } = useScene();
     const [editing, setEditing] = useState(false);
     const timeline = useMemo(() => normalizeTimeline(component.props.timeline), [component.props.timeline]);
-    const objects = useMemo(() => levelObjects.filter(candidate => candidate.levelId === object.levelId), [levelObjects, object.levelId]);
+    const objects = useMemo(() => levelObjects.filter(candidate => candidate.levelId === object.levelId && candidate.type !== 'foliage_set'), [levelObjects, object.levelId]);
     const variableNames = useMemo(
         () => [...new Set((activeLevelBlueprint?.variables ?? []).map(variable => variable.name.trim()).filter(Boolean))],
         [activeLevelBlueprint],

@@ -179,6 +179,21 @@ export interface TerrainData {
     // these are resolved from `holemap` (red channel); persisted documents carry only the reference.
     holes?: number[];
     holemap?: TerrainSplatmapReference;
+    // Sculpting kept apart so it can be hidden, faded, merged or removed later (terrainEditLayers.ts).
+    // `heights` is always the finished result; only the editor reads these.
+    editLayers?: TerrainEditLayer[];
+    activeEditLayer?: string;
+}
+
+export interface TerrainEditLayer {
+    id: string;
+    name: string;
+    visible: boolean;
+    locked: boolean;
+    opacity: number;
+    // What this layer changes, sample by sample. In memory these are resolved from `heightfield`.
+    deltas?: number[];
+    heightfield?: TerrainHeightfieldReference;
 }
 
 export interface SkyConfig {

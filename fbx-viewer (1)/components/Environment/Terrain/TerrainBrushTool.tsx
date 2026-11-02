@@ -99,8 +99,6 @@ interface TerrainBrushToolProps {
 interface Stroke {
     mesh: THREE.Mesh;
     live: TerrainLiveEdit;
-    /** Plane-local point it last applied at. */
-    last: THREE.Vector3;
     changed: boolean;
     dirty: TerrainGridRect | null;
     flattenTarget: number;
@@ -114,7 +112,6 @@ interface Stroke {
     before: Float32Array | null;
 }
 
-const _local = new THREE.Vector3();
 const _scale = new THREE.Vector3();
 const _step = new THREE.Vector3();
 
@@ -145,7 +142,10 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
 
     const meshes = useRef<THREE.Mesh[]>([]);
     const sinceRefresh = useRef(Infinity);
-    const stroke = useRef<Stroke | null>(null);
+    /** A stroke works on every terrain the brush reaches: the one pressed on comes first. */
+    const stroke = useRef<Stroke[] | null>(null);
+    const strokeWorld = useRef(new THREE.Vector3());
+    const snapshotTaken = useRef(false);
     const shiftHeld = useRef(false);
     const pressedAt = useRef<{ pressure: number }>({ pressure: 1 });
     const hoverPoint = useRef<THREE.Vector3 | null>(null);
@@ -218,8 +218,9 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
     };
 
     const noteChange = (active: Stroke) => {
-        if (active.changed) return;
         active.changed = true;
+        if (snapshotTaken.current) return;
+        snapshotTaken.current = true;
         latest.current.onStrokeStart();
     };
 
@@ -338,14 +339,14 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
         raycaster.setFromCamera(pointer, camera);
         const hit = castTerrainMeshes(meshes.current, raycaster);
         const current = latest.current.settings;
-        const active = stroke.current;
+        const strokes = stroke.current;
         hoverPoint.current = hit ? hit.point : null;
         hoverMesh.current = hit ? hit.mesh : hoverMesh.current;
 
         if (hit) {
             const painting = current.tab === 'paint';
             const paintable = !painting || canPaint(getTerrainPaintTarget(hit.mesh), current.paintLayer);
-            const editable = !hit.mesh.userData.heightsPending && paintable;
+            const editable = !hit.mesh.userData.heightsPending && paintable && (painting || !hit.mesh.userData.terrainEditBlock);
             const colour = !editable ? OFF_COLOUR : shiftHeld.current ? INVERT_COLOUR : BRUSH_COLOUR;
             const discrete = !painting && (current.tool === 'ramp' || current.tool === 'mirror' || (current.tool === 'copy' && !toolState.pasting));
             const radius = discrete ? 0.6 : current.radius;
@@ -355,61 +356,60 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
             hideTerrainBrush();
         }
 
-        if (active && active.regionStart && hit) {
-            const a = active.regionStart;
+        const regionStart = strokes?.[0]?.regionStart;
+        if (regionStart && hit) {
             const b = hit.point;
-            showTerrainRect(Math.min(a.x, b.x), Math.min(a.z, b.z), Math.max(a.x, b.x), Math.max(a.z, b.z));
+            showTerrainRect(Math.min(regionStart.x, b.x), Math.min(regionStart.z, b.z), Math.max(regionStart.x, b.x), Math.max(regionStart.z, b.z));
             return;
         }
 
-        if (!active || active.regionStart || !hit || hit.mesh !== active.mesh) return;
+        if (!strokes || regionStart || !hit) return;
 
         const dt = Math.min(MAX_FRAME_TIME, delta);
-        _local.copy(hit.point);
-        active.mesh.worldToLocal(_local);
-        active.mesh.getWorldScale(_scale);
-        const radiusLocal = current.radius / Math.max(1e-6, (_scale.x + _scale.y) / 2);
-        const travelled = Math.hypot(_local.x - active.last.x, _local.y - active.last.y);
-        const steps = Math.max(1, Math.min(MAX_STROKE_STEPS, Math.ceil(travelled / Math.max(1e-6, radiusLocal * STROKE_SPACING))));
+        const travelled = Math.hypot(hit.point.x - strokeWorld.current.x, hit.point.z - strokeWorld.current.z);
+        const steps = Math.max(1, Math.min(MAX_STROKE_STEPS, Math.ceil(travelled / Math.max(1e-6, current.radius * STROKE_SPACING))));
         const invert = shiftHeld.current;
         const painting = current.tab === 'paint';
-        let dirty: TerrainGridRect | null = null;
-        for (let step = 1; step <= steps; step++) {
-            _step.lerpVectors(active.last, _local, step / steps);
-            if (painting) {
-                const target = getTerrainPaintTarget(active.mesh);
-                if (!canPaint(target, current.paintLayer)) break;
-                const context: WeightToolContext = {
-                    grid: target,
-                    stamp: stampAt(active.mesh, _step.x, _step.y),
-                    layer: current.paintLayer,
-                    strength: current.strength * pressedAt.current.pressure,
-                    dt: dt / steps,
-                    invert,
-                };
-                let modified: TerrainGridRect | null = null;
-                switch (current.paintTool) {
-                    case 'paint': modified = applyPaintLayer(context, current.paintTarget); break;
-                    case 'smooth': modified = applySmoothLayer(context, current.smoothKernel); break;
-                    case 'flatten': modified = applyFlattenLayer(context, active.weightTarget); break;
-                    case 'noise': modified = applyNoiseLayer(context, current.paintNoiseScale / Math.max(1e-6, _scale.x)); break;
+        for (const active of strokes) {
+            let dirty: TerrainGridRect | null = null;
+            for (let step = 1; step <= steps; step++) {
+                _step.lerpVectors(strokeWorld.current, hit.point, step / steps);
+                active.mesh.worldToLocal(_step);
+                if (painting) {
+                    const target = getTerrainPaintTarget(active.mesh);
+                    if (!canPaint(target, current.paintLayer)) break;
+                    const context: WeightToolContext = {
+                        grid: target,
+                        stamp: stampAt(active.mesh, _step.x, _step.y),
+                        layer: current.paintLayer,
+                        strength: current.strength * pressedAt.current.pressure,
+                        dt: dt / steps,
+                        invert,
+                    };
+                    let modified: TerrainGridRect | null = null;
+                    switch (current.paintTool) {
+                        case 'paint': modified = applyPaintLayer(context, current.paintTarget); break;
+                        case 'smooth': modified = applySmoothLayer(context, current.smoothKernel); break;
+                        case 'flatten': modified = applyFlattenLayer(context, active.weightTarget); break;
+                        case 'noise': modified = applyNoiseLayer(context, current.paintNoiseScale / Math.max(1e-6, _scale.x)); break;
+                    }
+                    if (modified) {
+                        noteChange(active);
+                        target.markDirty();
+                    }
+                } else if (current.tool === 'holes') {
+                    if (applyHoles(active.live, stampAt(active.mesh, _step.x, _step.y), invert, (rect, weights, cut) => active.live.markHoles(rect, weights, cut))) noteChange(active);
+                } else {
+                    dirty = unionRect(dirty, applyTool(active, _step.x, _step.y, dt / steps, invert));
                 }
-                if (modified) {
-                    noteChange(active);
-                    target.markDirty();
-                }
-            } else if (current.tool === 'holes') {
-                if (applyHoles(active.live, stampAt(active.mesh, _step.x, _step.y), invert, (rect, weights, cut) => active.live.markHoles(rect, weights, cut))) noteChange(active);
-            } else {
-                dirty = unionRect(dirty, applyTool(active, _step.x, _step.y, dt / steps, invert));
+            }
+            if (dirty) {
+                noteChange(active);
+                active.live.writeRegion(dirty);
+                active.dirty = unionRect(active.dirty, dirty);
             }
         }
-        active.last.copy(_local);
-        if (dirty) {
-            noteChange(active);
-            active.live.writeRegion(dirty);
-            active.dirty = unionRect(active.dirty, dirty);
-        }
+        strokeWorld.current.copy(hit.point);
     });
 
     // Input
@@ -419,9 +419,11 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
         const domElement: HTMLElement = events.connected ?? gl.domElement;
 
         const endStroke = () => {
-            const active = stroke.current;
-            if (!active) return;
+            const strokes = stroke.current;
+            if (!strokes) return;
             stroke.current = null;
+            snapshotTaken.current = false;
+            const active = strokes[0];
             if (active.regionStart) {
                 const point = hoverPoint.current;
                 const a = active.regionStart;
@@ -441,7 +443,7 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
                 }
                 return;
             }
-            commitStroke(active);
+            strokes.forEach(commitStroke);
         };
 
         const handleDown = (event: PointerEvent) => {
@@ -494,38 +496,46 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
                     return;
                 }
                 terrainToolStore.set({ region: null });
-                stroke.current = {
-                    mesh: hit.mesh, live, last: local.clone(), changed: false, dirty: null,
+                stroke.current = [{
+                    mesh: hit.mesh, live, changed: false, dirty: null,
                     flattenTarget: 0, flattenSlope: { x: 0, y: 0 }, origin: local.clone(),
                     regionStart: hit.point.clone(),
                     weightTarget: 0,
                     before: null,
-                };
+                }];
                 return;
             }
 
+            if (!painting && current.tool !== 'holes' && hit.mesh.userData.terrainEditBlock) return;
             const grid = live;
             const paintTarget = getTerrainPaintTarget(hit.mesh);
             hit.mesh.getWorldScale(_scale);
-            const flattenTarget = current.flattenUseHeight
-                ? hit.mesh.worldToLocal(new THREE.Vector3(hit.point.x, current.flattenHeight, hit.point.z)).z
-                : heightAt(grid, local.x, local.y);
+            const worldTarget = current.flattenUseHeight ? current.flattenHeight : hit.point.y;
+            const flattenSlope = slopeAt(grid, local.x, local.y);
+            const weightTarget = paintTarget && canPaint(paintTarget, current.paintLayer)
+                ? layerWeightNear(paintTarget as TerrainWeightGrid, local.x, local.y, current.paintLayer)
+                : 0;
             pressedAt.current.pressure = event.pointerType === 'pen' && event.pressure > 0 ? event.pressure : 1;
-            stroke.current = {
-                mesh: hit.mesh,
-                live,
-                last: local.clone(),
-                changed: false,
-                dirty: null,
-                flattenTarget,
-                flattenSlope: slopeAt(grid, local.x, local.y),
-                origin: local.clone(),
-                regionStart: null,
-                weightTarget: paintTarget && canPaint(paintTarget, current.paintLayer)
-                    ? layerWeightNear(paintTarget as TerrainWeightGrid, local.x, local.y, current.paintLayer)
-                    : 0,
-                before: painting ? null : live.heights.slice(),
-            };
+            snapshotTaken.current = false;
+            strokeWorld.current.copy(hit.point);
+            // Neighbouring terrains take the stroke too, so it does not stop at a seam.
+            const editable = [hit.mesh, ...meshes.current.filter(mesh => mesh !== hit.mesh && !mesh.userData.heightsPending && (painting || current.tool === 'holes' || !mesh.userData.terrainEditBlock))];
+            stroke.current = editable.flatMap((mesh): Stroke[] => {
+                const edit = liveEditOf(mesh);
+                if (!edit) return [];
+                return [{
+                    mesh,
+                    live: edit,
+                    changed: false,
+                    dirty: null,
+                    flattenTarget: mesh.worldToLocal(new THREE.Vector3(hit.point.x, worldTarget, hit.point.z)).z,
+                    flattenSlope,
+                    origin: mesh.worldToLocal(hit.point.clone()),
+                    regionStart: null,
+                    weightTarget,
+                    before: painting ? null : edit.heights.slice(),
+                }];
+            });
         };
 
         const handleMove = (event: PointerEvent) => {

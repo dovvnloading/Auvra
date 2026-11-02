@@ -439,7 +439,7 @@ export const FoliageTool: React.FC<FoliageToolProps> = ({
         const colour = erasing || (current.tool === 'lasso' && shiftHeld.current) ? ERASE_COLOUR : current.tool === 'paint' ? PAINT_COLOUR : OTHER_COLOUR;
         const onTerrain = Boolean(hit?.object?.userData?.terrainEdit);
         const radius = brushTool ? current.radius : 0.6;
-        if (hit && onTerrain) showTerrainBrush(hit.point.x, hit.point.z, radius, Math.max(0, radius - 0.01), colour);
+        if (hit && onTerrain) showTerrainBrush(hit.point.x, hit.point.z, radius, 0, colour);
         else hideTerrainBrush();
 
         const cursor = cursorRef.current;

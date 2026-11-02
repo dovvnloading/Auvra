@@ -7,7 +7,7 @@ import type { ComponentInspectorProps } from '../../runtime/components/types';
 export const ReachIKInspector: React.FC<ComponentInspectorProps> = ({ object, component, onChangeProps }) => {
     const { levelObjects } = useScene();
     const target = typeof component.props.target === 'string' ? component.props.target : '';
-    const choices = levelObjects.filter(candidate => candidate.id !== object.id);
+    const choices = levelObjects.filter(candidate => candidate.id !== object.id && candidate.type !== 'foliage_set');
     const known = target === 'player' || choices.some(candidate => candidate.id === target);
     return (
         <div className="space-y-1">

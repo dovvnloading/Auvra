@@ -35,7 +35,6 @@ const _position = new THREE.Vector3();
 const _quaternion = new THREE.Quaternion();
 const _align = new THREE.Quaternion();
 const _scale = new THREE.Vector3();
-const _matrix = new THREE.Matrix4();
 const _normal = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
 const _camera = new THREE.Vector3();

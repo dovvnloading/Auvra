@@ -5,6 +5,7 @@ import { nativeDomainRecords } from './projectRecords';
 import { externalizeTerrainData } from './terrainHeightfieldEditor';
 import { externalizeTerrainHoles, externalizeTerrainSplat, externalizeTerrainSplat2 } from '../components/Environment/Terrain/terrainSplatEditor';
 import { externalizeFoliageData, type FoliageData } from '../runtime/foliage';
+import { externalizeEditLayers } from '../components/Environment/Terrain/terrainEditLayers';
 import { terrainLayersReferenceTexture, withoutTerrainLayerTexture } from '../components/Environment/Terrain/terrainSplatCodec';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { editorSession, type EditorSessionLease } from './editorSession';
@@ -882,8 +883,10 @@ async function prepareLevelObjectDocument(value: unknown, readStored?: () => Pro
   });
   const splat2 = await externalizeTerrainSplat2(splat.terrainData as TerrainData);
   const holes = await externalizeTerrainHoles(splat2.terrainData as TerrainData);
+  const storedLayers = readStoredTerrain ? (await readStoredTerrain())?.editLayers : undefined;
+  const layered = await externalizeEditLayers(holes.terrainData as TerrainData, (file) => projectService.uploadAsset(file), new Set((storedLayers ?? []).flatMap(layer => (layer.heightfield ? [layer.heightfield.assetId] : []))));
   return {
-    value: { ...(value as Record<string, unknown>), terrainData: holes.terrainData },
+    value: { ...(value as Record<string, unknown>), terrainData: layered },
     afterCommit: () => { prepared.remember?.(); splat.remember?.(); },
   };
 }

@@ -29,6 +29,7 @@ import {
 } from './terrainLayerMaterial';
 import { useTerrainLayerArrays, type TerrainLayerSources } from './terrainLayerTextures';
 import { TerrainGrass } from './terrainGrass';
+import { editLayerBlock } from './terrainEditLayers';
 
 interface TerrainObjectProps {
     data: LevelObject;
@@ -242,7 +243,7 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
                 material={layerMaterial ?? material}
                 raycast={raycastTerrainMesh}
                 onPointerDown={onClick}
-                userData={{ levelObjectId: data.id, isTerrain: true, heightsPending, terrainPaint: paintTarget, terrainEdit: live }}
+                userData={{ levelObjectId: data.id, isTerrain: true, heightsPending, terrainPaint: paintTarget, terrainEdit: live, terrainEditBlock: editLayerBlock(data.terrainData) }}
             />
             {chunked && (
                 <group rotation={[-Math.PI / 2, 0, 0]}>
