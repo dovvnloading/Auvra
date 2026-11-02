@@ -112,6 +112,7 @@ const EXEMPT = new Map(Object.entries({
   'components/Environment/Terrain/terrainSplatCodec.ts': 'pure-utility',
   'components/Environment/Terrain/terrainChunks.ts': 'pure-utility',
   'components/Environment/Terrain/terrainBrush.ts': 'pure-utility',
+  'components/Environment/Terrain/terrainEditLayers.ts': 'pure-utility',
   'components/Environment/Foliage/foliagePlacement.ts': 'pure-utility',
   'components/Environment/Foliage/foliageSettings.ts': 'pure-utility',
   'components/Environment/Terrain/terrainLayerTextures.ts': 'pure-utility',

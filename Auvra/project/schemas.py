@@ -30,7 +30,8 @@ _NESTED_KEYS = {
     # binary heightfield asset instead (see ``_validate_terrain_heightfields``).
     # Paint weights likewise live in a binary splat map asset (``splatmap``);
     # the editor's in-memory ``splat`` array is never persisted.
-    "terrainData": {"resolution", "width", "depth", "heights", "heightfield", "textureId", "textureLayers", "splatmap", "splatmap2", "holemap"},
+    "terrainData": {"resolution", "width", "depth", "heights", "heightfield", "textureId", "textureLayers", "splatmap", "splatmap2", "holemap", "editLayers", "activeEditLayer"},
+    "editLayers": {"id", "name", "visible", "locked", "opacity", "heightfield"},
     "heightfield": {"assetId", "encoding", "columns", "rows"},
     "splatmap": {"assetId", "encoding", "columns", "rows"},
     "splatmap2": {"assetId", "encoding", "columns", "rows"},
@@ -42,7 +43,8 @@ _NESTED_KEYS = {
     # A level's baked lighting: bake settings and the light probe volume asset.
     "bakedLighting": {"spacing", "bounces", "intensity", "probes"},
     "probes": {"assetId", "encoding", "origin", "spacing", "counts", "bakedAt", "signature"},
-    "textureLayers": {"name", "textureId", "normalTextureId", "roughnessTextureId", "heightTextureId", "tiling", "tileSize", "rotation", "tint", "roughness", "normalStrength", "heightContrast", "cliffProjection", "variation"},
+    "textureLayers": {"name", "textureId", "normalTextureId", "roughnessTextureId", "heightTextureId", "tiling", "tileSize", "rotation", "tint", "roughness", "normalStrength", "heightContrast", "cliffProjection", "variation", "grass"},
+    "grass": {"modelId", "density", "scale", "fadeStart", "fadeEnd", "randomRotation", "alignToSurface", "castShadow"},
     "skyConfig": {"timeOfDay", "sunIntensity", "ambienceIntensity", "sunColor", "fogColor", "fogDensity", "turbidity", "rayleigh", "mieCoefficient", "mieDirectionalG", "inclination", "azimuth", "dayLength", "weather", "fogMode", "shadowDistance", "model", "preset", "sunTilt", "sunSize", "atmosphere", "cloudLayer", "night", "skyLight", "panorama"},
     # The physically based sky: its air, its clouds, its night, the Sky Light it lights the level with and a panorama image.
     "atmosphere": {"rayleigh", "rayleighTint", "haze", "hazeGlow", "ozone", "ground", "brightness"},
@@ -202,6 +204,8 @@ def validate_project_references(
         for layer in ((value.get("terrainData") or {}).get("textureLayers") or []):
             for field in ("textureId", "normalTextureId", "roughnessTextureId", "heightTextureId"):
                 require("textures", layer.get(field) if isinstance(layer, dict) else None, "terrain layer texture", optional=True)
+            for grass in ((layer.get("grass") or []) if isinstance(layer, dict) else []):
+                require("models", grass.get("modelId") if isinstance(grass, dict) else None, "terrain grass model", optional=True)
         for foliage_type in ((value.get("foliageData") or {}).get("types") or []):
             require("models", foliage_type.get("modelId") if isinstance(foliage_type, dict) else None, "foliage model", optional=True)
         require("prefabs", value.get("prefabId"), "object prefab", optional=True)
@@ -346,6 +350,13 @@ def _validate_terrain_heightfields(value: Any) -> None:
             samples = int(resolution) + 1
             if reference.get("columns") != samples or reference.get("rows") != samples:
                 raise ValueError(f"objects document {index} terrain {label} does not match its resolution")
+        for layer in terrain.get("editLayers") or []:
+            reference = layer.get("heightfield") if isinstance(layer, dict) else None
+            if not isinstance(reference, dict):
+                continue
+            resolution = terrain.get("resolution")
+            if not _is_number(resolution) or not float(resolution).is_integer() or reference.get("columns") != int(resolution) + 1 or reference.get("rows") != int(resolution) + 1:
+                raise ValueError(f"objects document {index} terrain edit layer does not match its resolution")
 
 def _documents(value: Any) -> list[Any]:
     documents = value.get("documents") if isinstance(value, dict) else None

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-    Activity, Box, ClipboardCopy, Download, Droplets, FlipHorizontal2, Hammer, Layers, Minus, Mountain, Plus, Rows3, Trash2, TrendingUp, Upload, Waves, Wind, CircleDashed, Scaling,
+    Activity, Box, ClipboardCopy, Combine, Download, Droplets, Eye, EyeOff, FlipHorizontal2, Hammer, Layers, Lock, LockOpen, Minus, Mountain, Plus, Rows3, Trash2, TrendingUp, Upload, Waves, Wind, CircleDashed, Scaling,
 } from 'lucide-react';
 import { useScene } from '../../../context/SceneContext';
 import { useNotification } from '../../../context/NotificationContext';
@@ -19,6 +19,9 @@ import {
 } from './terrainTool';
 import type { TerrainBrushFalloff, TerrainBrushShape } from './terrainBrush';
 import { terrainSamplesPerSide } from '../../../utils/terrainHeightfieldCodec';
+import {
+    editLayerBlock, isEditLayerPending, MAX_TERRAIN_EDIT_LAYERS, withEditLayerChange, withEditLayerMerged, withoutEditLayer,
+} from './terrainEditLayers';
 
 interface TerrainPanelProps {
     settings: TerrainToolSettings;
@@ -128,7 +131,7 @@ const ToolOptions: React.FC<{ settings: TerrainToolSettings; change: (changes: P
             return (
                 <>
                     {strength}
-                    <NumberRow label="Reach" unit="cells" value={settings.smoothKernel} min={1} max={32} hint="How many grid cells each way it averages over" onChange={(value) => change({ smoothKernel: Math.round(value) })} />
+                    <NumberRow label="Reach (cells)" unit="" value={settings.smoothKernel} min={1} max={32} hint="How many grid cells each way it averages over" onChange={(value) => change({ smoothKernel: Math.round(value) })} />
                 </>
             );
         case 'flatten':
@@ -244,6 +247,83 @@ const ToolOptions: React.FC<{ settings: TerrainToolSettings; change: (changes: P
     }
 };
 
+/** Layers of sculpting that can be hidden, faded, merged or removed later. */
+const EditLayersSection: React.FC<{ terrain: LevelObject }> = ({ terrain }) => {
+    const { updateLevelObject, snapshotHistory } = useScene();
+    const data = terrain.terrainData;
+    const armed = useRef(true);
+    if (!data) return null;
+    const layers = data.editLayers ?? [];
+    const write = (next: TerrainData, snapshot = true) => {
+        if (editorSession.captureReady() === null) return;
+        if (snapshot) snapshotHistory();
+        updateLevelObject(terrain.id, { terrainData: next });
+    };
+    const block = editLayerBlock(data);
+    const rowClass = (active: boolean) => `flex items-center gap-1 rounded border px-1.5 py-1 transition-colors duration-75 ${active ? 'border-accent/70 bg-accent/15' : 'border-line hover:bg-gray-750'}`;
+    const active = layers.find(layer => layer.id === data.activeEditLayer);
+    return (
+        <Section
+            title="Edit Layers"
+            actions={(
+                <Button
+                    size="sm"
+                    disabled={layers.length >= MAX_TERRAIN_EDIT_LAYERS}
+                    title="Keep the next strokes in a layer of their own"
+                    onClick={() => {
+                        const id = crypto.randomUUID();
+                        write({ ...data, editLayers: [...layers, { id, name: `Layer ${layers.length + 1}`, visible: true, locked: false, opacity: 1 }], activeEditLayer: id });
+                    }}
+                ><Plus size={11} /> Add</Button>
+            )}
+        >
+            <div className="space-y-1" onPointerDownCapture={() => { armed.current = true; }}>
+                <button
+                    type="button"
+                    aria-pressed={!active}
+                    onClick={() => {
+                        const { activeEditLayer: _active, ...rest } = data;
+                        write(rest, false);
+                    }}
+                    className={`${rowClass(!active)} w-full text-left text-xs text-ink`}
+                >
+                    <Mountain size={11} className="mr-1 shrink-0 text-ink-3" /> Ground
+                </button>
+                {layers.map(layer => (
+                    <div key={layer.id} className={rowClass(layer.id === data.activeEditLayer)}>
+                        <button type="button" title={layer.visible ? 'Hide this layer' : 'Show this layer'} aria-pressed={layer.visible} disabled={isEditLayerPending(layer)} onClick={() => write(withEditLayerChange(data, layer.id, { visible: !layer.visible }))} className="shrink-0 p-0.5 text-ink-2 hover:text-ink disabled:opacity-40">
+                            {layer.visible ? <Eye size={12} /> : <EyeOff size={12} />}
+                        </button>
+                        <button type="button" title={layer.locked ? 'Unlock this layer' : 'Lock this layer'} aria-pressed={layer.locked} onClick={() => write(withEditLayerChange(data, layer.id, { locked: !layer.locked }), false)} className="shrink-0 p-0.5 text-ink-2 hover:text-ink">
+                            {layer.locked ? <Lock size={12} /> : <LockOpen size={12} />}
+                        </button>
+                        <button type="button" onClick={() => write({ ...data, activeEditLayer: layer.id }, false)} className="min-w-0 flex-1 truncate text-left text-xs text-ink">
+                            {layer.name}{isEditLayerPending(layer) ? ' (loading)' : ''}
+                        </button>
+                    </div>
+                ))}
+            </div>
+            {block && <p className="pt-1.5 text-2xs leading-relaxed text-amber-400/90">{block}</p>}
+            {active && (
+                <div className="mt-1.5 space-y-1">
+                    <NumberRow
+                        label="Strength" unit="%" min={0} max={200} step={5} value={Math.round(active.opacity * 100)}
+                        hint="How much of this layer's work shows"
+                        onChange={(value) => {
+                            write(withEditLayerChange(data, active.id, { opacity: value / 100 }), armed.current);
+                            armed.current = false;
+                        }}
+                    />
+                    <div className="grid grid-cols-2 gap-1 pt-0.5">
+                        <Button size="sm" disabled={isEditLayerPending(active)} title="Keep this layer's work for good, as part of the ground" onClick={() => write(withEditLayerMerged(data, active.id))}><Combine size={11} /> Merge</Button>
+                        <Button size="sm" variant="danger" disabled={isEditLayerPending(active)} title="Remove this layer and all its work" onClick={() => write(withoutEditLayer(data, active.id))}><Trash2 size={11} /> Remove</Button>
+                    </div>
+                </div>
+            )}
+        </Section>
+    );
+};
+
 const SculptTab: React.FC<{ settings: TerrainToolSettings; change: (changes: Partial<TerrainToolSettings>) => void; terrain: LevelObject | undefined }> = ({ settings, change, terrain }) => {
     const current = SCULPT_TOOLS.find(entry => entry.tool === settings.tool) ?? SCULPT_TOOLS[0];
     const options = <ToolOptions settings={settings} change={change} terrain={terrain} />;
@@ -274,6 +354,7 @@ const SculptTab: React.FC<{ settings: TerrainToolSettings; change: (changes: Par
                 </Section>
             )}
             {usesBrush && <BrushSection settings={settings} change={change} />}
+            {terrain && <EditLayersSection terrain={terrain} />}
         </>
     );
 };
@@ -382,6 +463,13 @@ const ManageTab: React.FC<{
         delete next.splatmap;
         delete next.splatmap2;
         delete next.holemap;
+        // Layers keep their work, resampled with the ground.
+        if (data.editLayers?.length) {
+            next.editLayers = data.editLayers.map((layer) => {
+                const { heightfield: _stored, deltas, ...rest } = layer;
+                return deltas?.length === from * from ? { ...rest, deltas: Array.from(resampleGrid(deltas, from, from, to, to)) } : rest;
+            });
+        }
         next.heights = data.heights?.length === from * from ? Array.from(resampleGrid(data.heights, from, from, to, to)) : [];
         if (data.splat?.length === from * from * 4) {
             const weights = resampleGrid(data.splat, from, from, to, to, 4);

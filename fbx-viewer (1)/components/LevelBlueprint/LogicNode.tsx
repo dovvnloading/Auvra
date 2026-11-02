@@ -383,7 +383,7 @@ export const LogicNodeComponent: React.FC<LogicNodeProps> = ({
                         >
                             <option value="" disabled>Select Actor</option>
                             {overlapTarget.kind === 'missing' && <option value={overlapTarget.actorId} disabled>Missing actor</option>}
-                            {levelObjects.map(obj => <option key={obj.id} value={obj.id}>{describeActor(obj)}</option>)}
+                            {levelObjects.filter(obj => obj.type !== 'foliage_set').map(obj => <option key={obj.id} value={obj.id}>{describeActor(obj)}</option>)}
                         </select>
                     )}
 

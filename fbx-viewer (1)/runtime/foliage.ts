@@ -292,6 +292,35 @@ export const editFoliageInstances = (instances: Float32Array | undefined, remove
     return next;
 };
 
+/** Where a terrain stands and how large, to read its world height. */
+export interface FoliageGroundTerrain {
+    position: readonly number[];
+    scale: readonly number[];
+    width: number;
+    depth: number;
+    resolution: number;
+    heights: ArrayLike<number> | null | undefined;
+}
+
+/** A terrain's world height under a point (bilinear), or null off it; heights that do not fit its grid read as flat. */
+export const groundHeightUnder = (terrain: FoliageGroundTerrain, x: number, z: number): number | null => {
+    const samples = terrain.resolution + 1;
+    const u = (x - terrain.position[0]) / (terrain.width * (terrain.scale[0] || 1)) + 0.5;
+    const v = (z - terrain.position[2]) / (terrain.depth * (terrain.scale[2] || 1)) + 0.5;
+    if (!(u >= 0 && u <= 1 && v >= 0 && v <= 1)) return null;
+    const { heights } = terrain;
+    if (!heights || heights.length !== samples * samples) return terrain.position[1];
+    const fx = u * terrain.resolution;
+    const fy = v * terrain.resolution;
+    const c0 = Math.min(terrain.resolution - 1, Math.floor(fx));
+    const r0 = Math.min(terrain.resolution - 1, Math.floor(fy));
+    const tx = fx - c0;
+    const ty = fy - r0;
+    const top = heights[r0 * samples + c0] * (1 - tx) + heights[r0 * samples + c0 + 1] * tx;
+    const bottom = heights[(r0 + 1) * samples + c0] * (1 - tx) + heights[(r0 + 1) * samples + c0 + 1] * tx;
+    return terrain.position[1] + (top * (1 - ty) + bottom * ty) * (terrain.scale[1] || 1);
+};
+
 /**
  * Keeps instances on the ground after a terrain changed under them. `before` and `after` give the
  * terrain's world height under a point, or null off it. An instance stands on the terrain if it is
@@ -317,4 +346,16 @@ export const followTerrainEdit = (
         next[at + 1] = y + (now - old);
     }
     return next;
+};
+
+/** A set's types after a terrain's heights changed, or null when no instance had to move. */
+export const foliageAfterTerrainEdit = (types: readonly FoliageType[], before: FoliageGroundTerrain, after: FoliageGroundTerrain): FoliageType[] | null => {
+    let changed = false;
+    const next = types.map((type) => {
+        const moved = type.instances && followTerrainEdit(type.instances, (x, z) => groundHeightUnder(before, x, z), (x, z) => groundHeightUnder(after, x, z));
+        if (!moved) return type;
+        changed = true;
+        return { ...type, instances: moved };
+    });
+    return changed ? next : null;
 };

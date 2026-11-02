@@ -28,6 +28,8 @@ import {
     type TerrainLayerLook,
 } from './terrainLayerMaterial';
 import { useTerrainLayerArrays, type TerrainLayerSources } from './terrainLayerTextures';
+import { TerrainGrass } from './terrainGrass';
+import { editLayerBlock } from './terrainEditLayers';
 
 interface TerrainObjectProps {
     data: LevelObject;
@@ -108,11 +110,13 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
     const layers = useMemo(() => normalizeTerrainLayers(storedLayers), [storedLayers]);
     const splat = paintState?.splat;
     const splat2 = paintState?.splat2;
+    const holes = data.terrainData?.holes;
     // Weights stored in a splat map asset are loaded after the level opens.
     // Until then layer 0 is shown and the terrain must not be painted.
     const splatPending = isTerrainSplatPending(paintState) || isTerrainSplat2Pending(paintState);
 
-    const { textures } = useGameContent();
+    const { textures, models } = useGameContent();
+    const hasGrass = layers.some(layer => layer.grass?.length);
     const layerSources = useMemo<TerrainLayerSources[]>(() => {
         const urlOf = (id: string | undefined) => (id ? textures.find(texture => texture.id === id)?.url : undefined);
         return layers.map(layer => ({
@@ -164,6 +168,9 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
     const layerMaterial = useMemo(() => (layered ? createTerrainLayerMaterial(splatResources.texture) : null), [layered]);
     useEffect(() => () => layerMaterial?.dispose(), [layerMaterial]);
 
+    // The grass grows again when anything it grows from changes.
+    const grassVersion = useMemo(() => ({}), [heights, splat, splat2, holes]);
+
     const scaleX = data.scale[0];
     useLayoutEffect(() => {
         if (!layerMaterial) return;
@@ -212,7 +219,6 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
         live.setAll(heights);
     }, [heights, live]);
 
-    const holes = data.terrainData?.holes;
     useLayoutEffect(() => {
         if (holes && holes === live.committedHoles) return;
         live.setHoles(holes);
@@ -237,7 +243,7 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
                 material={layerMaterial ?? material}
                 raycast={raycastTerrainMesh}
                 onPointerDown={onClick}
-                userData={{ levelObjectId: data.id, isTerrain: true, heightsPending, terrainPaint: paintTarget, terrainEdit: live }}
+                userData={{ levelObjectId: data.id, isTerrain: true, heightsPending, terrainPaint: paintTarget, terrainEdit: live, terrainEditBlock: editLayerBlock(data.terrainData) }}
             />
             {chunked && (
                 <group rotation={[-Math.PI / 2, 0, 0]}>
@@ -254,6 +260,16 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
             )}
             
             {isSelected && <TerrainOutline live={live} version={heights} />}
+            {hasGrass && (
+                <TerrainGrass
+                    live={live}
+                    layers={layers}
+                    models={models}
+                    weights={splatResources.weights}
+                    weights2={secondSplat?.weights ?? null}
+                    version={grassVersion}
+                />
+            )}
         </group>
     );
 });

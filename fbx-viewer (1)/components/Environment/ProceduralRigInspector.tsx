@@ -99,7 +99,7 @@ export const ProceduralRigInspector: React.FC<ComponentInspectorProps> = ({ comp
                                     <option value="camera">The camera</option>
                                     <option value="player">The player</option>
                                     <option value="point">A point</option>
-                                    {levelObjects.map(entry => <option key={entry.id} value={`object:${entry.id}`}>{entry.name}</option>)}
+                                    {levelObjects.filter(entry => entry.type !== 'foliage_set').map(entry => <option key={entry.id} value={`object:${entry.id}`}>{entry.name}</option>)}
                                 </select>
                             </Row>
                             {c.target.kind === 'point' && <Angles label="Point (m)" value={c.target.point} onCommit={(point) => update(index, { target: { kind: 'point', point } })} />}

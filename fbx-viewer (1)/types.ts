@@ -142,6 +142,19 @@ export interface TerrainTextureLayer {
     heightContrast?: number; // above 0: its height map decides where it shows first
     cliffProjection?: boolean;
     variation?: number;
+    grass?: TerrainGrassVariety[]; // what grows by itself wherever the layer is painted
+}
+
+/** A model that grows by itself where a terrain layer is painted. */
+export interface TerrainGrassVariety {
+    modelId: string;
+    density: number;   // copies per square metre
+    scale: [number, number];
+    fadeStart: number; // metres from the camera where it starts to thin out
+    fadeEnd: number;   // metres where none is left
+    randomRotation?: boolean;
+    alignToSurface?: boolean;
+    castShadow?: boolean;
 }
 
 export interface TerrainData {
@@ -166,6 +179,21 @@ export interface TerrainData {
     // these are resolved from `holemap` (red channel); persisted documents carry only the reference.
     holes?: number[];
     holemap?: TerrainSplatmapReference;
+    // Sculpting kept apart so it can be hidden, faded, merged or removed later (terrainEditLayers.ts).
+    // `heights` is always the finished result; only the editor reads these.
+    editLayers?: TerrainEditLayer[];
+    activeEditLayer?: string;
+}
+
+export interface TerrainEditLayer {
+    id: string;
+    name: string;
+    visible: boolean;
+    locked: boolean;
+    opacity: number;
+    // What this layer changes, sample by sample. In memory these are resolved from `heightfield`.
+    deltas?: number[];
+    heightfield?: TerrainHeightfieldReference;
 }
 
 export interface SkyConfig {

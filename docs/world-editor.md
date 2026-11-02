@@ -554,6 +554,19 @@ Brush tools keep working while the left button is held, even with the mouse stil
 
 Escape cancels a ramp or a paste in progress.
 
+A stroke works on every terrain the brush reaches, so it does not stop at a seam between neighbours.
+
+### Edit layers
+
+**Edit Layers**, under the brush, keeps sculpting apart from what is under it, so you can change your mind about it long after. **Add** makes a layer and sends the next strokes into it; **Ground** sends them straight into the terrain again.
+
+- The eye hides a layer, taking its work off the ground and putting it back as it was, however much else was done since.
+- The padlock stops strokes going into it by mistake.
+- **Strength** fades its work in or out, or past 100% to exaggerate it.
+- **Merge** keeps its work for good as part of the ground. **Remove** takes it away.
+
+Layers add together, so their order does not matter. The brush turns grey over a layer that cannot take a stroke, and the panel says why. Layers hold sculpting only: holes and paint go straight onto the terrain. A built game only carries the finished ground.
+
 ### Manage
 
 **New Terrain** sets its width, depth and resolution (cells along each side) and where its middle goes; a new terrain starts beside the last, so their edges meet. A level can hold as many terrains as you like. **From File** makes one from a heightmap.
@@ -622,6 +635,21 @@ They use the same [brush](#brush) as sculpting. Weights at a point always add up
 | Variation | Broad, soft changes of colour that hide the repeat of the texture across large areas |
 | Project onto cliffs | Also takes its textures from the sides on steep ground, so they do not stretch down cliffs. It costs more where the ground is steep |
 
+### Grass
+
+**Grass on This Layer** makes a layer grow models by itself wherever it is painted: **Grow a model** adds one. Nothing is placed or stored: copies are made in cells around the camera from the layer's weights, thicker where it is painted more strongly, and always the same in the same place. Repaint the layer and the grass follows.
+
+| Setting | What it does |
+|---|---|
+| Density | Copies per square metre |
+| Scale | A size picked between the two |
+| Thins from, Gone at | The distances from the camera where it starts to thin out and where none is left. Further costs far more: twice the distance is four times the grass |
+| Lean with the ground | Tilts with the surface |
+| Random turn | A random turn about its up axis |
+| Cast shadows | Off by default, which saves a lot for small plants |
+
+It grows again when you finish a stroke, not during one. Name a model's material `grass` or `leaf` and it sways in the wind (see [Wind](#wind-cloth-and-swaying)). Use the **Foliage** tool for what should stay where you put it, or is big enough to collide with.
+
 All of a layer's maps are scaled to 1024 by 1024 on the terrain. They are kept in two texture arrays, so eight layers take no more of the shader's texture slots than one, and a point only pays for the layers showing there.
 
 ## Foliage
@@ -646,7 +674,7 @@ Click a model in the browser, drag one onto the palette or pick one under it to 
 
 **Size** (keys **[** and **]**) is across the brush. **Paint density** multiplies every type's density while painting, and **Erase density** is the share of it erasing leaves behind: 0 removes everything. **On terrain**, **On meshes**, **On foliage** and **Translucent** say what the brush can paint on.
 
-Sculpting the terrain moves the foliage standing on it, as part of the same undo step. Only its height changes, so what you turned by hand stays turned.
+Anything that changes the ground's height (a brush, Mirror, an imported heightmap, an edit layer turned off) moves the foliage standing on it, as part of the same undo step. Only its height changes, so what you turned by hand stays turned.
 
 ### A type's rules
 

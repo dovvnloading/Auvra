@@ -402,7 +402,7 @@ const RegistryNodeFields: React.FC<RegistryNodeFieldsProps> = ({
                         <option value="">-- None --</option>
                         {offersPlayer && <option value={PLAYER_ACTOR_ID}>Player character</option>}
                         {missing && <option value={text} disabled>Missing actor</option>}
-                        {levelObjects.map(obj => <option key={obj.id} value={obj.id}>{describeActor(obj)}</option>)}
+                        {levelObjects.filter(obj => obj.type !== 'foliage_set').map(obj => <option key={obj.id} value={obj.id}>{describeActor(obj)}</option>)}
                     </select>
                     {missing && <Warning>Missing actor: it was deleted.</Warning>}
                     {offersPlayer && text === '' && <Warning>No actor; this node changes nothing.</Warning>}

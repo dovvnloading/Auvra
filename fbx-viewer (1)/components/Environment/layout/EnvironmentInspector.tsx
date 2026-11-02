@@ -202,7 +202,7 @@ const ParentField: React.FC<{
             const level = candidate.parentId && depth.has(candidate.parentId) ? depth.get(candidate.parentId)! + 1 : 0;
             depth.set(candidate.id, level);
             if (excluded.has(candidate.id)) continue;
-            result.push({ id: candidate.id, label: `${'\u00A0\u00A0'.repeat(level)}${candidate.name || candidate.type}` });
+            if (candidate.type !== 'foliage_set') result.push({ id: candidate.id, label: `${'\u00A0\u00A0'.repeat(level)}${candidate.name || candidate.type}` });
         }
         return result;
     }, [objects, object.id]);

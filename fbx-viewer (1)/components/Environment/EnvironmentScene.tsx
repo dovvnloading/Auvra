@@ -10,12 +10,11 @@ import { InteractionMode, TransformSettings, TransformTool } from './types';
 import type { FoliageToolSettings } from './Foliage/foliageSettings';
 import { FoliageTool } from './Foliage/FoliageTool';
 import { FoliageLayer } from '../../runtime/foliageLayer';
-import { followTerrainEdit, type FoliageType } from '../../runtime/foliage';
-import { terrainSurfaceHeight } from '../../runtime/terrainPhysics';
 import type { TerrainToolSettings } from './Terrain/terrainTool';
 import { LevelObjectRenderer, LevelComponentPreviews } from './LevelObjectRenderer';
 import { TerrainObject } from './Terrain/TerrainObject';
 import { TerrainBrushTool } from './Terrain/TerrainBrushTool';
+import { withStroke } from './Terrain/terrainEditLayers';
 import { InstancedLevelLayer } from './InstancedLevelLayer';
 import { LodEditorPreviewContext, useLodEditorPreview } from '../../runtime/components/lodComponents';
 import { AudioSystem } from './AudioSystem';
@@ -754,23 +753,6 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
         return { foliageObjects: foliage, propObjects: props, markerObjects: markers, terrainObjects: terrains, foliageSet: set as LevelObject | null };
     }, [resolvedObjects]);
 
-    // Sculpting moves what stands on the ground with it, as one undo step with the stroke.
-    const followTerrain = (terrainId: string, before: Float32Array | null, heights: number[]) => {
-        const types = foliageSet?.foliageData?.types;
-        const terrain = objectById.get(terrainId);
-        if (!before || !types?.length || !foliageSet || !terrain?.terrainData) return;
-        const old = { ...terrain, terrainData: { ...terrain.terrainData, heights: before as unknown as number[] } };
-        const now = { ...terrain, terrainData: { ...terrain.terrainData, heights } };
-        let changed = false;
-        const next = types.map((type): FoliageType => {
-            const moved = type.instances && followTerrainEdit(type.instances, (x, z) => terrainSurfaceHeight(x, z, old), (x, z) => terrainSurfaceHeight(x, z, now));
-            if (!moved) return type;
-            changed = true;
-            return { ...type, instances: moved };
-        });
-        if (changed) updateLevelObject(foliageSet.id, { foliageData: { types: next } });
-    };
-
     const promotedObjects = useMemo(
         () => Array.from(promotedIds, id => resolvedById.get(id)).filter((object): object is LevelObject => Boolean(object)),
         [promotedIds, resolvedById]
@@ -859,15 +841,14 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
             ))}
 
             {/* The Terrain tool's brush */}
-            {interactionMode === 'sculpt' && sculptSettings && onSculptSettingsChange && (
+            {interactionMode === 'sculpt' && isActiveView && sculptSettings && onSculptSettingsChange && (
                 <TerrainBrushTool
                     settings={sculptSettings}
                     onSettingsChange={onSculptSettingsChange}
-                    enabled={isActiveView && sculptSettings.tab !== 'manage'}
+                    enabled={sculptSettings.tab !== 'manage'}
                     onHeightsCommit={(id, heights, before) => {
                         const source = objectById.get(id);
-                        if (source) updateLevelObject(id, { terrainData: { ...source.terrainData!, heights } });
-                        followTerrain(id, before, heights);
+                        if (source) updateLevelObject(id, { terrainData: withStroke(source.terrainData!, before, heights) });
                     }}
                     onPaintCommit={(id, splat, splat2) => {
                         const source = objectById.get(id);
