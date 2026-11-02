@@ -1,5 +1,6 @@
 
 // ... existing imports ...
+import type { FoliageData } from './runtime/foliage';
 import * as THREE from 'three';
 import React from 'react';
 import type { ProjectStatus } from './utils/projectStatus';
@@ -85,7 +86,7 @@ export interface LoadedModelData {
   missingTextures?: number;
 }
 
-export type LevelObjectType = 'prop' | 'foliage' | 'spawn_point' | 'audio_emitter' | 'terrain' | 'sky_sphere' | 'player_start';
+export type LevelObjectType = 'prop' | 'foliage' | 'foliage_set' | 'spawn_point' | 'audio_emitter' | 'terrain' | 'sky_sphere' | 'player_start';
 
 export interface SpawnConfig {
     blueprintId: string; // ID of the Enemy Blueprint to spawn
@@ -226,6 +227,7 @@ export interface LevelObject {
   spawnConfig?: SpawnConfig; // Only if type === 'spawn_point'
   audioConfig?: AudioConfig; // Only if type === 'audio_emitter'
   terrainData?: TerrainData; // Only if type === 'terrain'
+  foliageData?: FoliageData; // Only if type === 'foliage_set'
   skyConfig?: SkyConfig;     // Only if type === 'sky_sphere'
   /** Transform parent in the same level; position/rotation/scale are local to it. */
   parentId?: string | null;

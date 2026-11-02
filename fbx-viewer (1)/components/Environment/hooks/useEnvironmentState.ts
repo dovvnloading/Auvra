@@ -1,7 +1,8 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
-import { InteractionMode, PaintMode, PaintSettings, TransformSettings, ViewportLayout } from '../types';
+import { InteractionMode, TransformSettings, ViewportLayout } from '../types';
+import { DEFAULT_FOLIAGE_TOOL_SETTINGS, type FoliageToolSettings } from '../Foliage/foliageSettings';
 import { DEFAULT_TERRAIN_TOOL_SETTINGS, type TerrainToolSettings } from '../Terrain/terrainTool';
 import { useScene } from '../../../context/SceneContext';
 import { projectService } from '../../../utils/projectService';
@@ -27,7 +28,6 @@ export const useEnvironmentState = () => {
 
     // --- State Definitions ---
     const [interactionMode, setInteractionMode] = useState<InteractionMode>('select');
-    const [paintMode, setPaintMode] = useState<PaintMode>('add');
     const [selectedBrushId, setSelectedBrushId] = useState<string | null>(null);
     const [selection, setSelectionState] = useState<SelectionState>(EMPTY_SELECTION);
     const [focusRequest, setFocusRequest] = useState<{ id: string; nonce: number } | null>(null);
@@ -52,14 +52,7 @@ export const useEnvironmentState = () => {
         snapAngle: 15
     });
 
-    const [paintSettings, setPaintSettings] = useState<PaintSettings>({
-        radius: 2.0,
-        density: 0.5,
-        scaleMin: 0.8,
-        scaleMax: 1.2,
-        rotationVariation: 360,
-        alignToNormal: true
-    });
+    const [foliageSettings, setFoliageSettings] = useState<FoliageToolSettings>(DEFAULT_FOLIAGE_TOOL_SETTINGS);
 
     const [sculptSettings, setSculptSettings] = useState<TerrainToolSettings>(DEFAULT_TERRAIN_TOOL_SETTINGS);
 
@@ -177,13 +170,12 @@ export const useEnvironmentState = () => {
     return {
         state: {
             interactionMode,
-            paintMode,
             selectedBrushId,
             selectedObjectId,
             selectedObjectIds,
             focusRequest,
             transformSettings,
-            paintSettings,
+            foliageSettings,
             sculptSettings,
             isPlaying,
             playFromCamera,
@@ -195,7 +187,6 @@ export const useEnvironmentState = () => {
         },
         actions: frontendDiagnostics.traceActions('environment_editor', {
             setInteractionMode,
-            setPaintMode,
             setSelectedBrushId,
             setSelectedObjectId,
             setSelection,
@@ -205,7 +196,7 @@ export const useEnvironmentState = () => {
             handlePlayStart,
             handlePlayStop,
             updateTransformSettings,
-            setPaintSettings,
+            setFoliageSettings,
             setSculptSettings,
             setLayout,
             setCameraSpeed,

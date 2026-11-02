@@ -20,6 +20,8 @@ import { getWorldMatrix } from './sceneGraph';
 export interface PlacementHit {
     point: THREE.Vector3;
     normal: THREE.Vector3;
+    /** The terrain mesh or mesh it landed on; none for the ground plane or a terrain that is not drawn. */
+    object?: THREE.Object3D;
 }
 
 export interface PlacementOptions {
@@ -27,6 +29,14 @@ export interface PlacementOptions {
     ignore?: THREE.Object3D[];
     /** False: a ray that hits no terrain or mesh finds nothing, rather than the y = 0 ground plane. */
     groundPlane?: boolean;
+    /** False: rays pass through terrains. */
+    terrain?: boolean;
+    /** False: rays pass through meshes. */
+    meshes?: boolean;
+    /** True: painted foliage counts as a surface. */
+    foliage?: boolean;
+    /** False: rays pass through surfaces you can see through. */
+    translucent?: boolean;
 }
 
 /** A prepared query that can be cast many times against one collected scene. */
@@ -78,6 +88,7 @@ interface RayHit {
     distance: number;
     point: THREE.Vector3;
     normal: THREE.Vector3;
+    object?: THREE.Object3D;
 }
 
 const heightRangeCache = new WeakMap<object, { version: number; min: number; max: number }>();
@@ -325,6 +336,11 @@ const materialIsSurface = (material: THREE.Material | THREE.Material[]): boolean
     return materials.some((entry) => entry && entry.visible && !(entry as THREE.ShaderMaterial).isShaderMaterial);
 };
 
+const isTranslucent = (material: THREE.Material | THREE.Material[]): boolean => {
+    const materials = Array.isArray(material) ? material : [material];
+    return materials.every(entry => entry.transparent && entry.opacity < 1);
+};
+
 const meshHitNormal = (hit: THREE.Intersection): THREE.Vector3 => {
     const face = hit.face;
     if (!face) return UP.clone();
@@ -357,10 +373,16 @@ export const createPlacementQuery = (
     const renderedTerrainIds = new Set<string>();
     const meshes: THREE.Object3D[] = [];
 
+    const useTerrain = options.terrain !== false;
+    const useMeshes = options.meshes !== false;
+    const useTranslucent = options.translucent !== false;
+
     const visit = (object: THREE.Object3D) => {
         // A chunked terrain draws its chunks and hides its full mesh, which is still the shape of the ground.
         const terrainSource = (object as THREE.Mesh).isMesh === true && object.userData?.isTerrain === true;
-        if ((!object.visible && !terrainSource) || ignored.has(object) || isEditorHelper(object)) return;
+        const foliage = object.userData?.foliageMesh === true;
+        if (foliage && !options.foliage) return;
+        if ((!object.visible && !terrainSource) || ignored.has(object) || (!foliage && isEditorHelper(object))) return;
         const levelObjectId = object.userData?.levelObjectId;
         const levelObjectType = typeof levelObjectId === 'string' ? typeById.get(levelObjectId) : undefined;
         if (levelObjectType && NON_SURFACE_TYPES.has(levelObjectType)) return;
@@ -369,9 +391,9 @@ export const createPlacementQuery = (
         if (mesh.isMesh && materialIsSurface(mesh.material)) {
             const surface = object.userData?.isTerrain ? surfaceFromMesh(mesh) : null;
             if (surface) {
-                surfaces.push(surface);
+                if (useTerrain) surfaces.push(surface);
                 if (typeof levelObjectId === 'string') renderedTerrainIds.add(levelObjectId);
-            } else {
+            } else if ((useMeshes || foliage) && (useTranslucent || !isTranslucent(mesh.material))) {
                 meshes.push(object);
             }
         }
@@ -380,7 +402,7 @@ export const createPlacementQuery = (
     visit(scene);
 
     for (const object of levelObjects) {
-        if (object.type !== 'terrain' || renderedTerrainIds.has(object.id)) continue;
+        if (!useTerrain || object.type !== 'terrain' || renderedTerrainIds.has(object.id)) continue;
         const surface = surfaceFromLevelObject(object, levelObjects);
         if (surface) surfaces.push(surface);
     }
@@ -389,7 +411,7 @@ export const createPlacementQuery = (
         let nearest: RayHit | null = null;
         for (const surface of surfaces) {
             const hit = intersectSurface(surface, raycaster);
-            if (hit && (!nearest || hit.distance < nearest.distance)) nearest = hit;
+            if (hit && (!nearest || hit.distance < nearest.distance)) nearest = { ...hit, object: surface.object ?? undefined };
         }
 
         const intersections: THREE.Intersection[] = [];
@@ -400,9 +422,9 @@ export const createPlacementQuery = (
             if (nearest && hit.distance >= nearest.distance) continue;
             const normal = meshHitNormal(hit);
             if (normal.dot(raycaster.ray.direction) > 0) normal.negate();
-            nearest = { distance: hit.distance, point: hit.point.clone(), normal };
+            nearest = { distance: hit.distance, point: hit.point.clone(), normal, object: hit.object };
         }
-        if (nearest) return { point: nearest.point, normal: nearest.normal };
+        if (nearest) return { point: nearest.point, normal: nearest.normal, object: nearest.object };
         if (options.groundPlane === false) return null;
 
         const point = new THREE.Vector3();

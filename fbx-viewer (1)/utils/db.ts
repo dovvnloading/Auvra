@@ -4,6 +4,7 @@ import { AssetTransferOptions, projectService } from './projectService';
 import { nativeDomainRecords } from './projectRecords';
 import { externalizeTerrainData } from './terrainHeightfieldEditor';
 import { externalizeTerrainHoles, externalizeTerrainSplat, externalizeTerrainSplat2 } from '../components/Environment/Terrain/terrainSplatEditor';
+import { externalizeFoliageData, type FoliageData } from '../runtime/foliage';
 import { terrainLayersReferenceTexture, withoutTerrainLayerTexture } from '../components/Environment/Terrain/terrainSplatCodec';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { editorSession, type EditorSessionLease } from './editorSession';
@@ -859,6 +860,12 @@ type DocumentPreparation = (value: unknown, readStored?: () => Promise<Record<st
  * objects domain unreadable. */
 async function prepareLevelObjectDocument(value: unknown, readStored?: () => Promise<Record<string, unknown> | undefined>): Promise<{ value: unknown; afterCommit?: () => void }> {
   if (!value || typeof value !== 'object') return { value };
+  const foliageData = (value as { foliageData?: FoliageData }).foliageData;
+  if (foliageData) {
+    const stored = await readStored?.();
+    const storedAssets = new Set(((stored?.foliageData as FoliageData | undefined)?.types ?? []).flatMap(type => (type.instancemap ? [type.instancemap.assetId] : [])));
+    return { value: { ...(value as Record<string, unknown>), foliageData: await externalizeFoliageData(foliageData, (file) => projectService.uploadAsset(file), storedAssets) } };
+  }
   const terrainData = (value as { terrainData?: unknown }).terrainData;
   if (!terrainData || typeof terrainData !== 'object') return { value };
   // Both steps compare against the document being replaced: read it once.

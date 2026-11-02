@@ -34,6 +34,13 @@ SPLATMAP_MAGIC = b"AUVRASP1"
 SPLATMAP_ENCODING = "rgba8"
 _SPLATMAP_CHANNELS = 4
 
+# Foliage instances: a 16-byte header (magic, uint32 count, uint32 floats per
+# instance) followed by count * floats little-endian Float32 values.
+FOLIAGE_MIME = "application/vnd.auvra.foliage"
+FOLIAGE_MAGIC = b"AUVRAFO1"
+FOLIAGE_ENCODING = "float32le-10"
+_FOLIAGE_FLOATS = 10
+
 # Baked light volumes (a level's light probes): a 20-byte header (magic, uint32
 # x, y and z probe counts) followed by 12 float32 spherical harmonics
 # coefficients per probe (four RGB bands), x fastest, all little-endian.
@@ -115,7 +122,7 @@ class AssetStore:
             if size is not None and total != size:
                 raise ValueError("asset size does not match declared size")
             detected = sniff_mime(bytes(prefix))
-            known_media = {"image/png", "image/jpeg", "image/webp", "audio/wav", "audio/ogg", GLB_MIME, HEIGHTFIELD_MIME, SPLATMAP_MIME, LIGHT_VOLUME_MIME}
+            known_media = {"image/png", "image/jpeg", "image/webp", "audio/wav", "audio/ogg", GLB_MIME, HEIGHTFIELD_MIME, SPLATMAP_MIME, FOLIAGE_MIME, LIGHT_VOLUME_MIME}
             if mime in known_media and detected != mime:
                 raise AssetContentError("asset MIME does not match its content")
             declared = mime.lower() if isinstance(mime, str) else None
@@ -126,6 +133,8 @@ class AssetStore:
                 validate_heightfield_file(tmp)
             elif mime == SPLATMAP_MIME:
                 validate_splatmap_file(tmp)
+            elif mime == FOLIAGE_MIME:
+                validate_foliage_file(tmp)
             elif mime == LIGHT_VOLUME_MIME:
                 validate_light_volume_file(tmp)
             asset_id = digest.hexdigest(); target = self.path_for(asset_id)
@@ -305,6 +314,7 @@ def sniff_mime(prefix: bytes) -> str | None:
     if prefix.startswith(b"glTF"): return "model/gltf-binary"
     if prefix.startswith(HEIGHTFIELD_MAGIC): return HEIGHTFIELD_MIME
     if prefix.startswith(SPLATMAP_MAGIC): return SPLATMAP_MIME
+    if prefix.startswith(FOLIAGE_MAGIC): return FOLIAGE_MIME
     if prefix.startswith(LIGHT_VOLUME_MAGIC): return LIGHT_VOLUME_MIME
     return None
 
@@ -419,6 +429,26 @@ def validate_splatmap_file(path: Path) -> None:
                 raise ValueError("terrain splat map dimensions are out of range")
         if os.fstat(stream.fileno()).st_size != _HEIGHTFIELD_HEADER.size + _SPLATMAP_CHANNELS * columns * rows:
             raise ValueError("terrain splat map asset size does not match its dimensions")
+
+def validate_foliage_file(path: Path, *, chunk_size: int = 1024 * 1024) -> None:
+    """Structurally validate foliage instances: header, size and finite values."""
+
+    with path.open("rb") as stream:
+        header = stream.read(_HEIGHTFIELD_HEADER.size)
+        if len(header) != _HEIGHTFIELD_HEADER.size:
+            raise ValueError("foliage asset is truncated")
+        magic, count, floats = _HEIGHTFIELD_HEADER.unpack(header)
+        if magic != FOLIAGE_MAGIC:
+            raise ValueError("foliage asset has an unknown format")
+        if floats != _FOLIAGE_FLOATS:
+            raise ValueError("foliage asset has an unknown layout")
+        if os.fstat(stream.fileno()).st_size != _HEIGHTFIELD_HEADER.size + 4 * floats * count:
+            raise ValueError("foliage asset size does not match its count")
+        step = chunk_size - chunk_size % 4
+        while block := stream.read(step):
+            for value in struct.iter_unpack("<f", block):
+                if not math.isfinite(value[0]):
+                    raise ValueError("foliage values must be finite")
 
 def validate_light_volume_file(path: Path, *, chunk_size: int = 1024 * 1024) -> None:
     """Structurally validate a baked light volume: header, dimensions, size and finite samples."""

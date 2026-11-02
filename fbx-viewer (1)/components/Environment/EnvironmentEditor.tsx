@@ -118,9 +118,9 @@ export const EnvironmentEditor: React.FC = () => {
                     selectedObjectIds={state.selectedObjectIds}
                     focusRequest={state.focusRequest}
                     interactionMode={state.interactionMode === 'mask' ? 'select' : state.interactionMode} 
-                    paintMode={state.paintMode}
                     transformSettings={state.transformSettings}
-                    paintSettings={state.paintSettings}
+                    foliageSettings={state.foliageSettings}
+                    onFoliageSettingsChange={actions.setFoliageSettings}
                     sculptSettings={state.sculptSettings}
                     onSculptSettingsChange={actions.setSculptSettings}
                     layout={state.layout}
@@ -135,8 +135,8 @@ export const EnvironmentEditor: React.FC = () => {
                 state={state}
                 selectedObject={selectedObject}
                 actions={{
-                    setPaintMode: actions.setPaintMode,
-                    setPaintSettings: actions.setPaintSettings,
+                    setFoliageSettings: actions.setFoliageSettings,
+                    setSelectedBrushId: actions.setSelectedBrushId,
                     setSelectedObjectId: actions.setSelectedObjectId,
                     updateLevelObject: guardedUpdateLevelObject,
                     removeLevelObject: guardedRemoveLevelObject,

@@ -10,7 +10,7 @@ import { DescribeWithAI, nameFromWords } from '../../Tools/DescribeWithAI';
 import { decalInstruction } from '../../Tools/paintedPictures';
 import { PrefabInstanceSection } from '../PrefabInstanceSection';
 import { LevelComponent, LevelObject, SpawnConfig } from '../../../types';
-import { EnvironmentBrushPanel } from '../EnvironmentBrushPanel';
+import { FoliagePanel } from '../Foliage/FoliagePanel';
 import { EnvironmentMaskTool } from '../EnvironmentMaskTool';
 import { TerrainPanel } from '../Terrain/TerrainPanel';
 import { ScrubbableInput } from '../../UI/Properties/ScrubbableInput';
@@ -34,8 +34,8 @@ interface EnvironmentInspectorProps {
     state: EditorState & { selectedObjectIds?: string[] };
     selectedObject: LevelObject | undefined;
     actions: {
-        setPaintMode: (mode: any) => void;
-        setPaintSettings: (settings: any) => void;
+        setFoliageSettings: (settings: any) => void;
+        setSelectedBrushId: (id: string | null) => void;
         setSelectedObjectId: (id: string | null) => void;
         updateLevelObject: (id: string, updates: any) => void;
         removeLevelObject: (id: string) => void;
@@ -667,7 +667,7 @@ const MultiSelectionInspector: React.FC<{
 export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ state, selectedObject, actions }) => {
     const { blueprints, audioAssets, levelObjects, removeLevelObjects } = useScene();
     const edits = useInspectorEdits();
-    const { interactionMode, paintMode, paintSettings, selectedBrushId, sculptSettings } = state;
+    const { interactionMode, foliageSettings, selectedBrushId, sculptSettings } = state;
 
     if (interactionMode === 'sculpt') {
         return (
@@ -690,14 +690,12 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
 
     if (interactionMode === 'paint') {
         return (
-            <div className="absolute right-0 top-12 bottom-0 z-20 pointer-events-auto flex">
-                <EnvironmentBrushPanel
-                    mode={paintMode}
-                    setMode={actions.setPaintMode}
-                    settings={paintSettings}
-                    setSettings={actions.setPaintSettings}
-                />
-            </div>
+            <FoliagePanel
+                settings={foliageSettings}
+                onSettingsChange={actions.setFoliageSettings}
+                brushModelId={selectedBrushId}
+                onBrushUsed={() => actions.setSelectedBrushId(null)}
+            />
         );
     }
 

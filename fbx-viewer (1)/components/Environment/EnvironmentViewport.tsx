@@ -8,10 +8,10 @@ import { View, PerspectiveCamera, OrthographicCamera, OrbitControls } from '@rea
 import { PostProcessAllowedContext } from '../../runtime/components/postProcess';
 import { useAssets, useLevel } from '../../context/SceneContext';
 import { LevelObject } from '../../types';
-import { InteractionMode, PaintMode, PaintSettings, TransformSettings, ViewportLayout } from './types';
+import { InteractionMode, TransformSettings, ViewportLayout } from './types';
+import type { FoliageToolSettings } from './Foliage/foliageSettings';
 import type { TerrainToolSettings } from './Terrain/terrainTool';
 import { EnvironmentScene } from './EnvironmentScene';
-import type { FoliagePlacement } from './FoliageBrushTool';
 import { editorSession } from '../../utils/editorSession';
 import { raycastPlacement } from '../../utils/surfacePlacement';
 import { getWorldMatrix } from '../../utils/sceneGraph';
@@ -32,9 +32,9 @@ interface EnvironmentViewportProps {
     /** The editor's full selection (includes the primary). */
     selectedObjectIds?: string[];
     interactionMode: InteractionMode;
-    paintMode?: PaintMode;
     transformSettings: TransformSettings;
-    paintSettings?: PaintSettings;
+    foliageSettings?: FoliageToolSettings;
+    onFoliageSettingsChange?: (settings: FoliageToolSettings) => void;
     sculptSettings?: TerrainToolSettings;
     onSculptSettingsChange?: (settings: TerrainToolSettings) => void;
     layout?: ViewportLayout;
@@ -418,9 +418,9 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
     selectedObjectId = null,
     selectedObjectIds,
     interactionMode,
-    paintMode = 'add',
     transformSettings,
-    paintSettings,
+    foliageSettings,
+    onFoliageSettingsChange,
     sculptSettings,
     onSculptSettingsChange,
     layout = 'single',
@@ -476,29 +476,6 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
         addLevelObject(activeModelId, pos.toArray(), [0, rotY, 0], [1, 1, 1], 'prop');
     };
 
-    // A whole paint or erase stroke is saved at once, as one undo step.
-    const handlePaint = async (placements: FoliagePlacement[]) => {
-        const model = activeModelId ? models.find(m => m.id === activeModelId) : undefined;
-        if (!canEdit() || !model) return;
-        try {
-            await addLevelObjects(placements.map((placement): LevelObject => ({
-                id: crypto.randomUUID(),
-                levelId: '',
-                modelId: model.id,
-                name: `${model.name}_Foliage`,
-                type: 'foliage',
-                ...placement,
-            })));
-        } catch {
-            // addLevelObjects has already reported the failure.
-        }
-    };
-
-    const handleErase = async (ids: string[]) => {
-        if (!canEdit()) return;
-        await removeLevelObjects(ids);
-    };
-
     // --- Content browser drag & drop ---
     const viewUnderPointer = (clientX: number, clientY: number): { viewId: string; element: HTMLElement } | null => {
         const tracked: [string, HTMLDivElement | null][] = layout === 'single'
@@ -550,17 +527,15 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
     const baseSceneProps = {
         activeModel,
         interactionMode,
-        paintMode,
         onPlace: handlePlace,
-        onPaint: handlePaint,
-        onErase: handleErase,
         models,
         levelObjects,
         updateLevelObject: (id: string, updates: Parameters<typeof updateLevelObject>[1]) => {
             if (canEdit()) updateLevelObject(id, updates);
         },
         transformSettings,
-        paintSettings,
+        foliageSettings,
+    onFoliageSettingsChange,
         sculptSettings,
     onSculptSettingsChange,
         onSnapshot: () => { if (canEdit()) snapshotHistory(); },
