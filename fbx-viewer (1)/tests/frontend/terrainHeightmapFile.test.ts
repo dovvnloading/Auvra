@@ -4,7 +4,8 @@ import {
 } from '../../components/Environment/Terrain/terrainHeightmapFile';
 import { decodeTerrainHoles, encodeTerrainHoles } from '../../components/Environment/Terrain/terrainSplatCodec';
 import { chunkIndices, terrainIndices } from '../../components/Environment/Terrain/terrainChunks';
-import { terrainShapeTriangles } from '../../runtime/terrainPhysics';
+import { startOnTheGround, terrainShapeTriangles } from '../../runtime/terrainPhysics';
+import type { LevelObject } from '../../types';
 
 const ramp = (width: number, height: number): Float32Array => {
   const values = new Float32Array(width * height);
@@ -54,6 +55,22 @@ describe('terrain heightmap files', () => {
   it('reads the height range an exported name records', () => {
     expect(heightRangeFromName('Terrain_513x513_h-12.500_88.250.png')).toEqual({ low: -12.5, high: 88.25 });
     expect(heightRangeFromName('mountain.png')).toBeNull();
+  });
+});
+
+describe('starting on sculpted ground', () => {
+  const terrain = {
+    id: 't', levelId: 'l', modelId: '', name: 'Terrain', type: 'terrain', position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1],
+    terrainData: { resolution: 2, width: 10, depth: 10, heights: new Array<number>(9).fill(6) },
+  } as LevelObject;
+
+  it('lifts a start buried by a hill to the surface', () => {
+    expect(startOnTheGround([0, 0.5, 0], [terrain])).toEqual([0, 6, 0]);
+  });
+
+  it('leaves a start above the ground, or off the terrain, where it is', () => {
+    expect(startOnTheGround([0, 20, 0], [terrain])).toEqual([0, 20, 0]);
+    expect(startOnTheGround([100, 0, 0], [terrain])).toEqual([100, 0, 0]);
   });
 });
 

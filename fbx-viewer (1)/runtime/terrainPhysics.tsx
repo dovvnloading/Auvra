@@ -177,6 +177,18 @@ export const terrainSurfaceHeight = (worldX: number, worldZ: number, terrain: Le
     return terrain.position[1] + (near * (1 - ty) + far * ty) * scale.y;
 };
 
+/** A start under a terrain, as sculpting can leave one, goes up to its surface: nothing can stand under the ground. */
+export const startOnTheGround = (position: [number, number, number], objects: readonly LevelObject[]): [number, number, number] => {
+    const [x, y, z] = position;
+    let height = y;
+    for (const object of objects) {
+        if (object.type !== 'terrain') continue;
+        const surface = terrainSurfaceHeight(x, z, object);
+        if (surface !== null && surface > height) height = surface;
+    }
+    return height === y ? position : [x, height, z];
+};
+
 /**
  * The ground a terrain is made of under a world point: the painted layer with the most weight at the
  * nearest grid sample, each layer's surface named by its texture (a 'Grass' or 'gravel_01' texture);

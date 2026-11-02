@@ -622,6 +622,21 @@ They use the same [brush](#brush) as sculpting. Weights at a point always add up
 | Variation | Broad, soft changes of colour that hide the repeat of the texture across large areas |
 | Project onto cliffs | Also takes its textures from the sides on steep ground, so they do not stretch down cliffs. It costs more where the ground is steep |
 
+### Grass
+
+**Grass on This Layer** makes a layer grow models by itself wherever it is painted: **Grow a model** adds one. Nothing is placed or stored: copies are made in cells around the camera from the layer's weights, thicker where it is painted more strongly, and always the same in the same place. Repaint the layer and the grass follows.
+
+| Setting | What it does |
+|---|---|
+| Density | Copies per square metre |
+| Scale | A size picked between the two |
+| Thins from, Gone at | The distances from the camera where it starts to thin out and where none is left. Further costs far more: twice the distance is four times the grass |
+| Lean with the ground | Tilts with the surface |
+| Random turn | A random turn about its up axis |
+| Cast shadows | Off by default, which saves a lot for small plants |
+
+It grows again when you finish a stroke, not during one. Name a model's material `grass` or `leaf` and it sways in the wind (see [Wind](#wind-cloth-and-swaying)). Use the **Foliage** tool for what should stay where you put it, or is big enough to collide with.
+
 All of a layer's maps are scaled to 1024 by 1024 on the terrain. They are kept in two texture arrays, so eight layers take no more of the shader's texture slots than one, and a point only pays for the layers showing there.
 
 ## Foliage

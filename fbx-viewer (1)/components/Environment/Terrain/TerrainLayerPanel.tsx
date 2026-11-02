@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Download, Eraser, ImageOff, PaintBucket, Plus, Trash2, Upload, Wand2 } from 'lucide-react';
-import { LevelObject, TerrainData, TerrainTextureLayer } from '../../../types';
+import { LevelObject, TerrainData, TerrainGrassVariety, TerrainTextureLayer } from '../../../types';
 import { useScene } from '../../../context/SceneContext';
 import { useNotification } from '../../../context/NotificationContext';
 import { editorSession } from '../../../utils/editorSession';
@@ -11,7 +11,9 @@ import { ScrubbableInput } from '../../UI/Properties/ScrubbableInput';
 import { decodeHeightmapFile, downloadBytes, encodeWeightmapPng, resampleGrid } from './terrainHeightmapFile';
 import {
     createDefaultTerrainSplat,
+    DEFAULT_TERRAIN_GRASS,
     DEFAULT_TERRAIN_LAYER_TILE_SIZE,
+    MAX_TERRAIN_GRASS_VARIETIES,
     isTerrainSplatPending,
     MAX_TERRAIN_LAYERS,
     normalizeTerrainLayers,
@@ -61,7 +63,7 @@ const NOT_CHOSEN = '';
  * layer being painted. Up to eight layers, each with its own maps.
  */
 export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, settings, onSettingsChange, brush }) => {
-    const { textures, updateLevelObject, snapshotHistory } = useScene();
+    const { textures, models, updateLevelObject, snapshotHistory } = useScene();
     const { addNotification } = useNotification();
     const terrainData = terrain.terrainData;
     const paintState: TerrainPaintState | undefined = terrainData;
@@ -349,6 +351,49 @@ export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, s
                             if (file) void importWeights(file);
                         }}
                     />
+                </Section>
+            )}
+
+            {layer && (
+                <Section title="Grass on This Layer">
+                    <p className="pb-1.5 text-2xs leading-relaxed text-ink-3">Grows by itself wherever this layer is painted, around the camera. Nothing is stored: repaint the layer and the grass follows.</p>
+                    <div className="space-y-2">
+                        {(layer.grass ?? []).map((grass, index) => {
+                            const write = (changes: Partial<TerrainGrassVariety>) => scrubLayer({ grass: (layer.grass ?? []).map((entry, at) => (at === index ? { ...entry, ...changes } : entry)) });
+                            return (
+                                <div key={index} className="rounded border border-line p-1.5">
+                                    <div className="flex items-center gap-1.5 pb-1">
+                                        <span className="flex-1 truncate text-xs text-ink">{models.find(model => model.id === grass.modelId)?.name ?? 'Missing model'}</span>
+                                        <Button size="sm" variant="ghost" title="Stop growing this" onClick={() => commitLayers(layers.map((current, at) => (at === selected ? { ...current, grass: (current.grass ?? []).filter((_, kept) => kept !== index) } : current)))}><Trash2 size={11} /></Button>
+                                    </div>
+                                    <div className="space-y-1">
+                                        <NumberRow label="Density" unit="/m²" step={0.5} min={0} max={64} value={grass.density} hint="Copies per square metre" onChange={(density) => write({ density })} />
+                                        <Row label="Scale">
+                                            <div className="grid grid-cols-2 gap-1">
+                                                <ScrubbableInput label="" labelWidth="w-0" value={grass.scale[0]} step={0.05} onChange={(value) => { if (Number.isFinite(value) && value > 0) write({ scale: [value, Math.max(value, grass.scale[1])] }); }} />
+                                                <ScrubbableInput label="" labelWidth="w-0" value={grass.scale[1]} step={0.05} onChange={(value) => { if (Number.isFinite(value) && value > 0) write({ scale: [Math.min(value, grass.scale[0]), value] }); }} />
+                                            </div>
+                                        </Row>
+                                        <NumberRow label="Thins from" unit="m" step={5} min={0} max={2000} value={grass.fadeStart} hint="Distance from the camera where it starts to thin out" onChange={(fadeStart) => write({ fadeStart: Math.min(fadeStart, grass.fadeEnd) })} />
+                                        <NumberRow label="Gone at" unit="m" step={5} min={1} max={2000} value={grass.fadeEnd} hint="Distance where none is left. Further costs a lot more" onChange={(fadeEnd) => write({ fadeEnd, fadeStart: Math.min(grass.fadeStart, fadeEnd) })} />
+                                        <label className="flex min-h-[26px] cursor-pointer items-center justify-between gap-2"><span className="truncate text-xs text-ink-2">Lean with the ground</span><input type="checkbox" checked={grass.alignToSurface !== false} onChange={(event) => write({ alignToSurface: event.target.checked ? undefined : false })} className="h-3.5 w-3.5" /></label>
+                                        <label className="flex min-h-[26px] cursor-pointer items-center justify-between gap-2"><span className="truncate text-xs text-ink-2">Random turn</span><input type="checkbox" checked={grass.randomRotation !== false} onChange={(event) => write({ randomRotation: event.target.checked ? undefined : false })} className="h-3.5 w-3.5" /></label>
+                                        <label className="flex min-h-[26px] cursor-pointer items-center justify-between gap-2" title="Costs a lot for small plants"><span className="truncate text-xs text-ink-2">Cast shadows</span><input type="checkbox" checked={grass.castShadow === true} onChange={(event) => write({ castShadow: event.target.checked ? true : undefined })} className="h-3.5 w-3.5" /></label>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                    {(layer.grass?.length ?? 0) < MAX_TERRAIN_GRASS_VARIETIES && (
+                        <div className="mt-1.5">
+                            <Select
+                                value=""
+                                placeholder="Grow a model..."
+                                options={[...models].sort((a, b) => a.name.localeCompare(b.name)).map(model => ({ label: model.name, value: model.id }))}
+                                onChange={(modelId: string) => { if (modelId) commitLayers(layers.map((current, index) => (index === selected ? { ...current, grass: [...(current.grass ?? []), { ...DEFAULT_TERRAIN_GRASS, modelId }] } : current))); }}
+                            />
+                        </div>
+                    )}
                 </Section>
             )}
 

@@ -11,7 +11,7 @@ import { resolveTerrainHeightfield } from '../utils/terrainHeightfieldEditor';
 import { isTerrainHeightfieldPending, TerrainHeightfieldEncodingError } from '../utils/terrainHeightfieldCodec';
 import { resolveTerrainHolemap, resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplatEditor';
 import { isFoliageTypePending, resolveFoliageInstances, type FoliageInstanceReference, type FoliageType } from '../runtime/foliage';
-import { isTerrainHolesPending, isTerrainSplat2Pending, isTerrainSplatPending, terrainLayersReferenceTexture, withoutTerrainLayerTexture } from '../components/Environment/Terrain/terrainSplatCodec';
+import { isTerrainHolesPending, isTerrainSplat2Pending, isTerrainSplatPending, terrainLayersReferenceTexture, withoutTerrainLayerModel, withoutTerrainLayerTexture } from '../components/Environment/Terrain/terrainSplatCodec';
 import { collectSubtree, sortByHierarchy } from '../utils/sceneGraph';
 import type { LevelBakedLighting } from '../runtime/lighting/bakedLighting';
 
@@ -135,7 +135,18 @@ const withoutTerrainTexture = (terrain: TerrainData, textureId: string): Terrain
 const applyDomainCascade = (objects: LevelObject[], event: DomainCascadeEvent): LevelObject[] => {
     if (event.kind === 'model') {
         const removed = modelCascadeIds(objects, event.id);
-        return removed.size === 0 ? objects : objects.filter((object) => !removed.has(object.id));
+        const kept = removed.size === 0 ? objects : objects.filter((object) => !removed.has(object.id));
+        // A model goes from what grows it and paints it as well.
+        return kept.map((object) => {
+            if (object.terrainData) {
+                const terrainData = withoutTerrainLayerModel(object.terrainData, event.id);
+                return terrainData === object.terrainData ? object : { ...object, terrainData };
+            }
+            if (object.foliageData?.types.some(type => type.modelId === event.id)) {
+                return { ...object, foliageData: { types: object.foliageData.types.filter(type => type.modelId !== event.id) } };
+            }
+            return object;
+        });
     }
     return objects.map((object) => {
         if (event.kind === 'texture' && object.terrainData && terrainReferencesTexture(object.terrainData, event.id)) {

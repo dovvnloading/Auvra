@@ -142,6 +142,19 @@ export interface TerrainTextureLayer {
     heightContrast?: number; // above 0: its height map decides where it shows first
     cliffProjection?: boolean;
     variation?: number;
+    grass?: TerrainGrassVariety[]; // what grows by itself wherever the layer is painted
+}
+
+/** A model that grows by itself where a terrain layer is painted. */
+export interface TerrainGrassVariety {
+    modelId: string;
+    density: number;   // copies per square metre
+    scale: [number, number];
+    fadeStart: number; // metres from the camera where it starts to thin out
+    fadeEnd: number;   // metres where none is left
+    randomRotation?: boolean;
+    alignToSurface?: boolean;
+    castShadow?: boolean;
 }
 
 export interface TerrainData {

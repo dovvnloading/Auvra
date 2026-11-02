@@ -17,7 +17,7 @@ import { GUNSHOT_NOISE_RADIUS, NoiseBus, NoiseBusContext, useNoiseBus } from './
 import { LevelDynamicGi } from './lighting/dynamicGi/LevelDynamicGi';
 import { LevelLightVolume } from './lighting/LevelLightVolume';
 import { ShadowDetailContext } from './lighting/DistanceShadowLights';
-import { LevelGroundColliders } from './terrainPhysics';
+import { LevelGroundColliders, startOnTheGround } from './terrainPhysics';
 import { InstancedLevelLayer } from '../components/Environment/InstancedLevelLayer';
 import { AudioSystem } from '../components/Environment/AudioSystem';
 import { SkySystem } from '../components/Environment/SkySystem';
@@ -139,9 +139,10 @@ const resolvePlayerAssets = (content: GameContent, playerBlueprintId: string | n
 /** Load game position, then the host's start, then the level's Player Start, then the origin. */
 const resolvePlayerStart = (level: RuntimeLevel, playerStart: PlayerStart | null, restore: SaveGameData | null | undefined): PlayerStart => {
     if (restore) return { position: restore.player.position, rotation: restore.player.rotation };
-    if (playerStart) return playerStart;
+    if (playerStart) return { ...playerStart, position: startOnTheGround(playerStart.position, level.objects) };
     const authored = level.objects.find(obj => obj.type === 'player_start');
-    return authored ? { position: authored.position, rotation: authored.rotation } : ORIGIN_START;
+    const start = authored ? { position: authored.position, rotation: authored.rotation } : ORIGIN_START;
+    return { ...start, position: startOnTheGround(start.position, level.objects) };
 };
 
 // --- INTERNAL COMPONENT: SPAWNER SYSTEM ---

@@ -7,8 +7,20 @@ import {
 // Structural types keep this codec free of runtime/project imports (and so
 // checkable under the strict test compiler); they match TerrainData,
 // TerrainTextureLayer and TerrainSplatmapReference in types.ts.
+export interface TerrainGrassVariety {
+  modelId: string;
+  density: number;
+  scale: [number, number];
+  fadeStart: number;
+  fadeEnd: number;
+  randomRotation?: boolean;
+  alignToSurface?: boolean;
+  castShadow?: boolean;
+}
+
 export interface TerrainTextureLayerSettings {
   name?: string;
+  grass?: TerrainGrassVariety[];
   textureId?: string;
   normalTextureId?: string;
   roughnessTextureId?: string;
@@ -186,6 +198,48 @@ const normalizeTiling = (value: unknown): number => (
     : DEFAULT_TERRAIN_LAYER_TILING
 );
 
+const clampNumber = (value: unknown, fallback: number, low: number, high: number): number => (
+  Math.min(high, Math.max(low, typeof value === 'number' && Number.isFinite(value) ? value : fallback))
+);
+
+export const MAX_TERRAIN_GRASS_VARIETIES = 8;
+export const DEFAULT_TERRAIN_GRASS: Omit<TerrainGrassVariety, 'modelId'> = { density: 2, scale: [0.8, 1.2], fadeStart: 30, fadeEnd: 60 };
+
+/** Each variety with a model, every field in range. */
+export function normalizeGrass(value: unknown): TerrainGrassVariety[] {
+  if (!Array.isArray(value)) return [];
+  const out: TerrainGrassVariety[] = [];
+  for (const entry of value.slice(0, MAX_TERRAIN_GRASS_VARIETIES)) {
+    const grass = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
+    if (typeof grass.modelId !== 'string' || !grass.modelId) continue;
+    const range = Array.isArray(grass.scale) ? grass.scale : DEFAULT_TERRAIN_GRASS.scale;
+    const a = clampNumber(range[0], 1, 0.001, 1000);
+    const b = clampNumber(range[1], 1, 0.001, 1000);
+    const end = clampNumber(grass.fadeEnd, DEFAULT_TERRAIN_GRASS.fadeEnd, 1, 2000);
+    const variety: TerrainGrassVariety = {
+      modelId: grass.modelId,
+      density: clampNumber(grass.density, DEFAULT_TERRAIN_GRASS.density, 0, 64),
+      scale: a <= b ? [a, b] : [b, a],
+      fadeStart: Math.min(end, clampNumber(grass.fadeStart, DEFAULT_TERRAIN_GRASS.fadeStart, 0, 2000)),
+      fadeEnd: end,
+    };
+    if (grass.randomRotation === false) variety.randomRotation = false;
+    if (grass.alignToSurface === false) variety.alignToSurface = false;
+    if (grass.castShadow === true) variety.castShadow = true;
+    out.push(variety);
+  }
+  return out;
+}
+
+/** The terrain without a deleted model in its layers' grass. Returns the same object when no layer grows it. */
+export function withoutTerrainLayerModel<T extends { textureLayers?: readonly TerrainTextureLayerSettings[] }>(terrain: T, modelId: string): T {
+  if (!terrain.textureLayers?.some(layer => layer.grass?.some(grass => grass.modelId === modelId))) return terrain;
+  return {
+    ...terrain,
+    textureLayers: terrain.textureLayers.map(layer => (layer.grass ? { ...layer, grass: layer.grass.filter(grass => grass.modelId !== modelId) } : layer)),
+  };
+}
+
 const LAYER_TEXTURE_FIELDS = ['textureId', 'normalTextureId', 'roughnessTextureId', 'heightTextureId'] as const;
 const LAYER_NUMBER_FIELDS = ['tileSize', 'rotation', 'roughness', 'normalStrength', 'heightContrast', 'variation'] as const;
 
@@ -206,6 +260,8 @@ export function normalizeTerrainLayers(layers: unknown): TerrainTextureLayerSett
     if (typeof value.name === 'string' && value.name) normalized.name = value.name;
     if (typeof value.tint === 'string' && value.tint) normalized.tint = value.tint;
     if (value.cliffProjection === true) normalized.cliffProjection = true;
+    const grass = normalizeGrass(value.grass);
+    if (grass.length) normalized.grass = grass;
     return normalized;
   });
 }

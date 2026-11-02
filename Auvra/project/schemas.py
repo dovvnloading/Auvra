@@ -42,7 +42,8 @@ _NESTED_KEYS = {
     # A level's baked lighting: bake settings and the light probe volume asset.
     "bakedLighting": {"spacing", "bounces", "intensity", "probes"},
     "probes": {"assetId", "encoding", "origin", "spacing", "counts", "bakedAt", "signature"},
-    "textureLayers": {"name", "textureId", "normalTextureId", "roughnessTextureId", "heightTextureId", "tiling", "tileSize", "rotation", "tint", "roughness", "normalStrength", "heightContrast", "cliffProjection", "variation"},
+    "textureLayers": {"name", "textureId", "normalTextureId", "roughnessTextureId", "heightTextureId", "tiling", "tileSize", "rotation", "tint", "roughness", "normalStrength", "heightContrast", "cliffProjection", "variation", "grass"},
+    "grass": {"modelId", "density", "scale", "fadeStart", "fadeEnd", "randomRotation", "alignToSurface", "castShadow"},
     "skyConfig": {"timeOfDay", "sunIntensity", "ambienceIntensity", "sunColor", "fogColor", "fogDensity", "turbidity", "rayleigh", "mieCoefficient", "mieDirectionalG", "inclination", "azimuth", "dayLength", "weather", "fogMode", "shadowDistance", "model", "preset", "sunTilt", "sunSize", "atmosphere", "cloudLayer", "night", "skyLight", "panorama"},
     # The physically based sky: its air, its clouds, its night, the Sky Light it lights the level with and a panorama image.
     "atmosphere": {"rayleigh", "rayleighTint", "haze", "hazeGlow", "ozone", "ground", "brightness"},
@@ -202,6 +203,8 @@ def validate_project_references(
         for layer in ((value.get("terrainData") or {}).get("textureLayers") or []):
             for field in ("textureId", "normalTextureId", "roughnessTextureId", "heightTextureId"):
                 require("textures", layer.get(field) if isinstance(layer, dict) else None, "terrain layer texture", optional=True)
+            for grass in ((layer.get("grass") or []) if isinstance(layer, dict) else []):
+                require("models", grass.get("modelId") if isinstance(grass, dict) else None, "terrain grass model", optional=True)
         for foliage_type in ((value.get("foliageData") or {}).get("types") or []):
             require("models", foliage_type.get("modelId") if isinstance(foliage_type, dict) else None, "foliage model", optional=True)
         require("prefabs", value.get("prefabId"), "object prefab", optional=True)
