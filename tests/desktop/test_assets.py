@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import io
 from pathlib import Path
@@ -7,6 +8,7 @@ import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
+from Auvra.project.errors import ReadOnlyError
 from Auvra.desktop.assets import (
     ASSET_ORIGIN,
     AssetTransferRegistry,
@@ -29,6 +31,22 @@ class AssetTransferRegistryTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.registry.close()
         self.temp.cleanup()
+
+    def test_a_failure_says_what_went_wrong_to_the_page_that_asked_and_no_one_else(self) -> None:
+        asked = {"Origin": "http://127.0.0.1:3000"}
+        for error, status in (
+            (AssetTransportError("asset_too_large", 413), 413),
+            (ReadOnlyError("read only"), 423),
+            (OSError(errno.ENOSPC, "disk full"), 507),
+            (OSError(errno.EACCES, "denied"), 500),
+            (ValueError("anything else"), 500),
+        ):
+            answer = self.registry.failure_response(asked, error)
+            self.assertEqual(answer.status, status)
+            self.assertEqual(answer.headers["Access-Control-Allow-Origin"], "http://127.0.0.1:3000")
+            stranger = self.registry.failure_response({"Origin": "https://example.com"}, error)
+            self.assertEqual(stranger.status, status)
+            self.assertNotIn("Access-Control-Allow-Origin", stranger.headers)
 
     def test_exact_asset_origin_only(self) -> None:
         self.assertTrue(is_asset_resource_url(f"{ASSET_ORIGIN}/v1/get/token"))

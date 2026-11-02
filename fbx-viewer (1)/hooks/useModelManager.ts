@@ -2,7 +2,7 @@
 import { useState, useCallback, useRef } from 'react';
 import * as THREE from 'three';
 import { LoadedModelData, AssetCategory, AssetInfoUpdate, ModelImportSettings } from '../types';
-import { importPhaseLabel, loadFBXFile } from '../utils/modelLoader';
+import { importFailureMessage, importPhaseLabel, loadFBXFile } from '../utils/modelLoader';
 import { disposeModel, disposeObject } from '../utils/processing/ModelLifecycle';
 import { applyModelImportSettings, resolveImportSettings, stripGeometry } from '../utils/processing/ModelTransforms';
 import { applyStoredClipNames, mirrorModelClips, prepareAnimationClips, uniqueClipNames } from '../utils/animationBinding';
@@ -233,7 +233,7 @@ export const useModelManager = (
       failure = error;
       if (newModel) disposeModel(newModel);
       addNotification({
-        message: isAbortError(error) ? `Cancelled import of "${file.name}".` : `Failed to import "${file.name}".`,
+        message: isAbortError(error) ? `Cancelled import of "${file.name}".` : importFailureMessage(`Failed to import "${file.name}"`, error),
         type: isAbortError(error) ? 'info' : 'error',
       });
     } finally {
@@ -405,7 +405,7 @@ export const useModelManager = (
       addNotification({
         message: isAbortError(error)
           ? `Cancelled reimport of "${existing.name}".`
-          : `Failed to reimport "${existing.name}"${error instanceof Error && error.message ? `: ${error.message}` : '.'}`,
+          : importFailureMessage(`Failed to reimport "${existing.name}"`, error),
         type: isAbortError(error) ? 'info' : 'error',
       });
     } finally {

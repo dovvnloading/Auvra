@@ -69,6 +69,13 @@ export class ProjectHostError extends Error {
  * versioned host boundary and deliberately has no filesystem, archive, or
  * binary serialization capability.
  */
+/** What to tell someone when the project would not take a file, by the host's answer. */
+const uploadFailure = (status: number): string => ({
+  413: 'The file is larger than this project can take.',
+  423: 'This project is read-only.',
+  507: 'The disk is full.',
+}[status] ?? 'The project could not store this file.');
+
 export class ProjectService {
   private host: HostLike | null;
   private status: ProjectStatus = { ...EMPTY_STATUS };
@@ -221,7 +228,7 @@ export class ProjectService {
         body,
         signal: options.signal,
       }).then((response) => {
-        if (!response.ok) throw new Error(`Asset upload failed (${response.status})`);
+        if (!response.ok) throw new Error(uploadFailure(response.status));
         options.onProgress?.(1);
         return response.headers.get('X-Auvra-Asset-Sha256');
       });
@@ -247,13 +254,13 @@ export class ProjectService {
       };
       request.onload = () => finish(() => {
         if (request.status < 200 || request.status >= 300) {
-          reject(new Error(`Asset upload failed (${request.status})`));
+          reject(new Error(uploadFailure(request.status)));
           return;
         }
         options.onProgress?.(1);
         resolve(request.getResponseHeader('X-Auvra-Asset-Sha256'));
       });
-      request.onerror = () => finish(() => reject(new Error('Asset upload failed.')));
+      request.onerror = () => finish(() => reject(new Error('The file could not be sent to the project.')));
       request.onabort = () => finish(() => reject(new DOMException('Asset upload was cancelled.', 'AbortError')));
       options.signal?.addEventListener('abort', onAbort, { once: true });
       if (options.signal?.aborted) onAbort();

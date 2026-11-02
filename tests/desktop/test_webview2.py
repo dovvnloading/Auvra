@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import threading
+import time
 import types
 import unittest
 from unittest import mock
@@ -11,6 +12,40 @@ from Auvra.desktop.contracts import FrameConfig, FrameMode, FrameStartupError, F
 from Auvra.desktop.assets import ASSET_ORIGIN, AssetResourceResponse
 from Auvra.desktop.webview2 import WebView2Frame
 from .fakes import EventArgs, download, message, navigation, new_window, permission, resource
+
+
+class NativeBodyReaderTests(unittest.TestCase):
+    """What the page sends comes through .NET, which only Windows has here."""
+
+    def setUp(self) -> None:
+        try:
+            import clr  # type: ignore[import-not-found]  # noqa: F401
+            from System import Array, Byte  # type: ignore[import-not-found]
+            from System.IO import MemoryStream  # type: ignore[import-not-found]
+        except Exception as exc:
+            self.skipTest(f".NET is not available: {exc}")
+        self.stream_of = lambda data: MemoryStream(Array[Byte](data))
+
+    def test_it_hands_over_exactly_what_was_sent_a_chunk_at_a_time(self) -> None:
+        sent = bytes(range(256)) * 41
+        reader = WebView2Frame._NativeBodyReader(self.stream_of(sent))
+        received = []
+        while chunk := reader.read(4096):
+            self.assertIsInstance(chunk, bytes)
+            self.assertLessEqual(len(chunk), 4096)
+            received.append(chunk)
+        self.assertEqual(b"".join(received), sent)
+
+    def test_a_large_file_is_not_read_a_byte_at_a_time(self) -> None:
+        sent = bytes(16 * 1024 * 1024)
+        reader = WebView2Frame._NativeBodyReader(self.stream_of(sent))
+        started = time.perf_counter()
+        total = 0
+        while chunk := reader.read(1024 * 1024):
+            total += len(chunk)
+        self.assertEqual(total, len(sent))
+        # A byte at a time this takes over 6 seconds.
+        self.assertLess(time.perf_counter() - started, 2.0)
 
 
 class WebView2HandlerTests(unittest.TestCase):
