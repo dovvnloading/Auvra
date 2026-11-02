@@ -15,7 +15,7 @@ import { hideTerrainBrush, showTerrainBrush } from '../Terrain/terrainBrushOverl
 import { layerWeightNear } from '../Terrain/terrainWeightTools';
 import type { TerrainPaintTarget } from '../Terrain/TerrainBrushTool';
 import type { TransformSettings } from '../types';
-import { foliageFits, foliageHashOf, instancesWanted, placeFoliageInstance, type FoliageGround, type FoliageHash } from './foliagePlacement';
+import { foliageBoxIsClear, foliageFits, foliageHashOf, instancesWanted, placeFoliageInstance, type FoliageGround, type FoliageHash } from './foliagePlacement';
 import { foliageToolStore, useFoliageToolState, type FoliageToolCommand, type FoliageToolSettings } from './foliageSettings';
 
 const PAINT_COLOUR = '#5fd38a';
@@ -130,6 +130,34 @@ export const FoliageTool: React.FC<FoliageToolProps> = ({
         return query(sampleRaycaster);
     };
 
+    /** Finds objects along a line, for types that keep clear of them; null when no type being placed does. */
+    const worldCheck = (): ((from: THREE.Vector3, to: THREE.Vector3) => boolean) | null => {
+        if (!activeTypes().some(type => type.avoidWorld)) return null;
+        const query = createPlacementQuery(scene, latest.current.levelObjects, {
+            ignore: cursorRef.current ? [cursorRef.current] : [],
+            groundPlane: false,
+            terrain: false,
+            meshes: true,
+            foliage: false,
+            translucent: true,
+        });
+        return (from, to) => {
+            const length = from.distanceTo(to);
+            sampleRaycaster.layers.mask = raycaster.layers.mask;
+            sampleRaycaster.near = 0;
+            sampleRaycaster.far = length;
+            sampleRaycaster.set(from, _closest.subVectors(to, from).divideScalar(Math.max(length, 1e-6)));
+            return query(sampleRaycaster) !== null;
+        };
+    };
+
+    /** Takes back the instance just added from `start` when its type keeps clear of objects and one is in the way. */
+    const tookBack = (type: FoliageType, view: FoliageTypeView | undefined, added: number[], start: number, world: ReturnType<typeof worldCheck>): boolean => {
+        if (!type.avoidWorld || !view || !world || foliageBoxIsClear(view.modelBounds, added, start, world)) return false;
+        added.length = start;
+        return true;
+    };
+
     const strokeOf = (type: FoliageType): TypeStroke => {
         let stroke = strokes.current.get(type.id);
         if (!stroke) {
@@ -153,6 +181,7 @@ export const FoliageTool: React.FC<FoliageToolProps> = ({
         const current = latest.current.settings;
         const radius = Math.max(current.radius, 0.25);
         const area = Math.PI * radius * radius;
+        const world = worldCheck();
         for (const type of activeTypes()) {
             const stroke = strokeOf(type);
             const view = views?.get(type.id);
@@ -180,6 +209,7 @@ export const FoliageTool: React.FC<FoliageToolProps> = ({
                 if (!foliageFits(type, ground)) continue;
                 const start = stroke.added.length;
                 const position = placeFoliageInstance(type, ground, Math.random, stroke.added);
+                if (tookBack(type, view, stroke.added, start, world)) continue;
                 stroke.hash.add(stroke.nextId++, position.x, position.y, position.z);
                 view?.addPending(new Float32Array(stroke.added.slice(start, start + FOLIAGE_INSTANCE_FLOATS)));
                 placed++;
@@ -215,6 +245,7 @@ export const FoliageTool: React.FC<FoliageToolProps> = ({
     /** Applies each type's current rules to the instances under the brush, once each in a stroke. */
     const reapplyAt = (point: THREE.Vector3, query: PlacementQuery, views: FoliageViews | null) => {
         const radius = Math.max(latest.current.settings.radius, 0.25);
+        const world = worldCheck();
         for (const type of activeTypes()) {
             const stroke = strokeOf(type);
             const view = views?.get(type.id);
@@ -236,6 +267,7 @@ export const FoliageTool: React.FC<FoliageToolProps> = ({
                 if (!foliageFits(type, ground) || stroke.hash.occupied(x, z, type.radius)) continue;
                 const start = stroke.added.length;
                 const position = placeFoliageInstance(type, ground, Math.random, stroke.added);
+                if (tookBack(type, view, stroke.added, start, world)) continue;
                 stroke.reapplied.add(stroke.nextId);
                 stroke.hash.add(stroke.nextId++, position.x, position.y, position.z);
                 view?.addPending(new Float32Array(stroke.added.slice(start, start + FOLIAGE_INSTANCE_FLOATS)));
@@ -326,8 +358,11 @@ export const FoliageTool: React.FC<FoliageToolProps> = ({
         const current = latest.current.settings;
         const changed = new Map<string, number[]>();
         const paint = target.userData?.terrainPaint as TerrainPaintTarget | undefined;
+        const views = viewsOf();
+        const world = worldCheck();
         for (const type of activeTypes()) {
             const stroke = strokeOf(type);
+            const view = views?.get(type.id);
             const added: number[] = [];
             if (paint) {
                 target.updateWorldMatrix(true, false);
@@ -342,26 +377,38 @@ export const FoliageTool: React.FC<FoliageToolProps> = ({
                     if (stroke.hash.occupied(below.point.x, below.point.z, type.radius)) continue;
                     const ground = groundOf(below);
                     if (!foliageFits(type, ground)) continue;
+                    const start = added.length;
                     const position = placeFoliageInstance(type, ground, Math.random, added);
+                    if (tookBack(type, view, added, start, world)) continue;
                     stroke.hash.add(stroke.nextId++, position.x, position.y, position.z);
                 }
-            } else if (target.isMesh && !(target as unknown as THREE.InstancedMesh).isInstancedMesh && target.geometry) {
-                const sampler = new MeshSurfaceSampler(target).build();
+            } else if (target.isMesh && target.geometry) {
+                // A placed object may be one instance of many: only that one is filled.
+                const sampler = new MeshSurfaceSampler(new THREE.Mesh(target.geometry)).build();
                 target.updateWorldMatrix(true, false);
-                const box = new THREE.Box3().setFromObject(target).getSize(new THREE.Vector3());
+                const matrixWorld = target.matrixWorld.clone();
+                const instanced = target as unknown as THREE.InstancedMesh;
+                if (instanced.isInstancedMesh && hit.instanceId !== undefined) {
+                    instanced.getMatrixAt(hit.instanceId, _matrix);
+                    matrixWorld.multiply(_matrix);
+                }
+                if (!target.geometry.boundingBox) target.geometry.computeBoundingBox();
+                const box = target.geometry.boundingBox!.clone().applyMatrix4(matrixWorld).getSize(new THREE.Vector3());
                 const area = (box.x * box.y + box.y * box.z + box.x * box.z) * 2;
                 const wanted = Math.min(MAX_FOLIAGE_INSTANCES, Math.round((type.density / 100) * area * current.paintDensity));
                 const position = new THREE.Vector3();
                 const normal = new THREE.Vector3();
-                const normalMatrix = new THREE.Matrix3().getNormalMatrix(target.matrixWorld);
+                const normalMatrix = new THREE.Matrix3().getNormalMatrix(matrixWorld);
                 for (let attempt = 0; attempt < wanted * 2 && added.length / FOLIAGE_INSTANCE_FLOATS < wanted; attempt++) {
                     sampler.sample(position, normal);
-                    position.applyMatrix4(target.matrixWorld);
+                    position.applyMatrix4(matrixWorld);
                     normal.applyMatrix3(normalMatrix).normalize();
                     if (stroke.hash.occupied(position.x, position.z, type.radius)) continue;
                     const ground: FoliageGround = { point: position.clone(), normal: normal.clone() };
                     if (!foliageFits(type, ground)) continue;
+                    const start = added.length;
                     placeFoliageInstance(type, ground, Math.random, added);
+                    if (tookBack(type, view, added, start, world)) continue;
                     stroke.hash.add(stroke.nextId++, position.x, position.y, position.z);
                 }
             }

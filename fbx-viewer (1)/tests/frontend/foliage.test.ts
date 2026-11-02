@@ -6,7 +6,7 @@ import {
   sanitizeFoliageType, writeFoliageMatrix, type FoliageType,
 } from '../../runtime/foliage';
 import {
-  FoliageHash, foliageDefaultsFor, foliageFits, foliageHashOf, foliageRotation, foliageScale, instancesWanted, placeFoliageInstance, type FoliageGround,
+  FoliageHash, foliageBoxIsClear, foliageDefaultsFor, foliageFits, foliageHashOf, foliageRotation, foliageScale, instancesWanted, placeFoliageInstance, type FoliageGround,
 } from '../../components/Environment/Foliage/foliagePlacement';
 
 const type = (changes: Partial<FoliageType> = {}): FoliageType => ({ ...DEFAULT_FOLIAGE_TYPE, id: 't', modelId: 'm', ...changes });
@@ -133,6 +133,41 @@ describe('foliage instances', () => {
     expect(moved[FOLIAGE_INSTANCE_FLOATS * 3 + 1]).toBe(10);
     expect(instances[1]).toBe(10);
     expect(followTerrainEdit(instances, before, before)).toBeNull();
+  });
+});
+
+describe('keeping clear of objects', () => {
+  const bounds = new THREE.Box3(new THREE.Vector3(-1, 0, -1), new THREE.Vector3(1, 4, 1));
+  const at = (x: number, scale = 1) => [x, 0, 0, 0, 0, 0, 1, scale, scale, scale];
+  const hitsWall = (wallX: number) => (from: THREE.Vector3, to: THREE.Vector3) => Math.min(from.x, to.x) <= wallX && Math.max(from.x, to.x) >= wallX;
+
+  it('is clear with nothing in the way, and with no box to test', () => {
+    expect(foliageBoxIsClear(bounds, at(0), 0, () => false)).toBe(true);
+    expect(foliageBoxIsClear(new THREE.Box3(), at(0), 0, () => true)).toBe(true);
+  });
+
+  it('finds what is inside the box, wherever and however large the instance is', () => {
+    expect(foliageBoxIsClear(bounds, at(0), 0, hitsWall(0.5))).toBe(false);
+    expect(foliageBoxIsClear(bounds, at(10), 0, hitsWall(0.5))).toBe(true);
+    expect(foliageBoxIsClear(bounds, at(10), 0, hitsWall(10.5))).toBe(false);
+    expect(foliageBoxIsClear(bounds, at(0, 3), 0, hitsWall(2.5))).toBe(false);
+  });
+
+  it('lets off the ground it stands on and what only touches its edge', () => {
+    const floor = (from: THREE.Vector3, to: THREE.Vector3) => Math.min(from.y, to.y) <= 0.2;
+    expect(foliageBoxIsClear(bounds, at(0), 0, floor)).toBe(true);
+    expect(foliageBoxIsClear(bounds, at(0), 0, hitsWall(0.98))).toBe(true);
+  });
+
+  it('reads the instance at the place given', () => {
+    const instances = [...at(100), ...at(0)];
+    expect(foliageBoxIsClear(bounds, instances, 10, hitsWall(0.5))).toBe(false);
+    expect(foliageBoxIsClear(bounds, instances, 0, hitsWall(0.5))).toBe(true);
+  });
+
+  it('is off unless asked for', () => {
+    expect(sanitizeFoliageType({ id: 'a', modelId: 'm' }).avoidWorld).toBe(false);
+    expect(sanitizeFoliageType({ id: 'a', modelId: 'm', avoidWorld: true }).avoidWorld).toBe(true);
   });
 });
 

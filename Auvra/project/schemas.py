@@ -38,7 +38,7 @@ _NESTED_KEYS = {
     "holemap": {"assetId", "encoding", "columns", "rows"},
     # A level's foliage set: its types, each with its instances in a binary asset.
     "foliageData": {"types"},
-    "types": {"id", "modelId", "active", "density", "radius", "scaleMode", "scaleX", "scaleY", "scaleZ", "zOffset", "alignToNormal", "alignMaxAngle", "randomYaw", "randomPitch", "slope", "height", "includeLayers", "excludeLayers", "minLayerWeight", "castShadow", "impostorDistance", "cullDistance", "collision", "instancemap"},
+    "types": {"id", "modelId", "active", "density", "radius", "scaleMode", "scaleX", "scaleY", "scaleZ", "zOffset", "alignToNormal", "alignMaxAngle", "randomYaw", "randomPitch", "slope", "height", "includeLayers", "excludeLayers", "minLayerWeight", "castShadow", "impostorDistance", "cullDistance", "collision", "avoidWorld", "instancemap"},
     "instancemap": {"assetId", "encoding", "count"},
     # A level's baked lighting: bake settings and the light probe volume asset.
     "bakedLighting": {"spacing", "bounces", "intensity", "probes"},

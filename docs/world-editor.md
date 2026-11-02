@@ -551,10 +551,13 @@ Brush tools keep working while the left button is held, even with the mouse stil
 | Holes | Cuts the ground away for cave and tunnel mouths; **Shift** fills it back in. Holes are real: you fall through them, enemies path around them and light comes through |
 | Mirror | Copies one half of the terrain onto the other about a line, or turned half way round, for symmetric maps |
 | Copy | Drag a box on the ground to copy it, then click to paste it anywhere, on this terrain or another. **Paste** can be limited to raising or lowering |
+| Region | Paints the part of the ground the brushes may change, shown in blue; **Shift** takes it away. See below |
 
 Escape cancels a ramp or a paste in progress.
 
 A stroke works on every terrain the brush reaches, so it does not stop at a seam between neighbours.
+
+With a **Region** chosen, every brush, in Sculpt and in Paint, only changes the chosen ground, fading where the region fades, and the panel says so. **Work outside it instead** protects the chosen ground and changes the rest. Turn off **Limit brushes to it** to work freely without losing it. A region lasts until you clear it or close the project; it is not saved, and a terrain resampled to another grid loses it. Ramp, Mirror and Paste ignore it.
 
 ### Edit layers
 
@@ -615,7 +618,9 @@ A terrain can blend up to eight texture layers, each with its own colour, normal
 | Flatten | Brings the layer to the amount under the first click |
 | Noise | Breaks the layer's edge up in patches **Patch size** metres across; **Shift** works the other way |
 
-They use the same [brush](#brush) as sculpting. Weights at a point always add up to one: painting one layer in takes the others down in proportion.
+They use the same [brush](#brush) as sculpting, and a [region](#sculpt-tools) limits them too. Weights at a point always add up to one: painting one layer in takes the others down in proportion.
+
+**Show where each layer is** colours the ground by layer while the Paint tab is up, with each layer's colour beside its name, to see what is painted where when layers look alike.
 
 **Fill** paints the layer over the whole terrain and **Clear** takes it off. **Import** sets the layer's weights from a grey PNG, resampled to the terrain's grid, and **Export** saves them as one.
 
@@ -670,11 +675,13 @@ Click a model in the browser, drag one onto the palette or pick one under it to 
 | Erase | Hold to erase the ticked types |
 | Reapply | Hold over painted instances to apply the types' current rules to them: size, lean, offset and spacing, removing those no longer on ground they may grow on |
 | Single | Click to place one instance. With several types ticked, each click takes the next |
-| Fill | Click a terrain or mesh to fill the whole of it with the ticked types |
+| Fill | Click a terrain or a placed object to fill the whole of it with the ticked types |
 
 **Size** (keys **[** and **]**) is across the brush. **Paint density** multiplies every type's density while painting, and **Erase density** is the share of it erasing leaves behind: 0 removes everything. **On terrain**, **On meshes**, **On foliage** and **Translucent** say what the brush can paint on.
 
-Anything that changes the ground's height (a brush, Mirror, an imported heightmap, an edit layer turned off) moves the foliage standing on it, as part of the same undo step. Only its height changes, so what you turned by hand stays turned.
+Anything that changes the ground's height (a brush, Mirror, an imported heightmap, an edit layer turned off) moves the foliage standing on it, as part of the same undo step.
+
+**Keep clear of objects** makes the brushes skip places where the model's box would overlap an object in the level, such as a rock or a wall. Terrain and other foliage do not count. Placing one with **Single** ignores it. Only its height changes, so what you turned by hand stays turned.
 
 ### A type's rules
 

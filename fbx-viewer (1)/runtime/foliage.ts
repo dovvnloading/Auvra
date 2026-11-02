@@ -71,6 +71,8 @@ export interface FoliageType {
     cullDistance: number;
     /** In play: nothing, a narrow column (trees), or the model's box. */
     collision: FoliageCollision;
+    /** The brushes skip places where the model's box would overlap an object in the level. */
+    avoidWorld: boolean;
 
     instancemap?: FoliageInstanceReference;
     /** In memory: resolved from `instancemap`, never written to a document. */
@@ -107,6 +109,7 @@ export const DEFAULT_FOLIAGE_TYPE: Omit<FoliageType, 'id' | 'modelId'> = {
     impostorDistance: 0,
     cullDistance: 0,
     collision: 'none',
+    avoidWorld: false,
 };
 
 const record = (value: unknown): Record<string, unknown> => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {});
@@ -150,6 +153,7 @@ export const sanitizeFoliageType = (value: unknown): FoliageType => {
         impostorDistance: num(t.impostorDistance, base.impostorDistance, 0, 1000000),
         cullDistance: num(t.cullDistance, base.cullDistance, 0, 1000000),
         collision,
+        avoidWorld: t.avoidWorld === true,
     };
     if (t.instancemap) type.instancemap = t.instancemap as FoliageInstanceReference;
     if (t.instances instanceof Float32Array) type.instances = t.instances;
