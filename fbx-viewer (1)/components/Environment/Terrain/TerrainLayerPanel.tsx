@@ -4,7 +4,7 @@ import { LevelObject, TerrainData } from '../../../types';
 import { useScene } from '../../../context/SceneContext';
 import { editorSession } from '../../../utils/editorSession';
 import { ScrubbableInput } from '../../UI/Properties/ScrubbableInput';
-import { TerrainBrushSettings } from './TerrainSculptor';
+import type { TerrainToolSettings } from './terrainTool';
 import {
     DEFAULT_TERRAIN_LAYER_TILING,
     hasTerrainSplat,
@@ -19,8 +19,8 @@ import {
 
 interface TerrainLayerPanelProps {
     terrain: LevelObject;
-    sculptSettings: TerrainBrushSettings;
-    onSculptSettingsChange: (settings: TerrainBrushSettings) => void;
+    sculptSettings: TerrainToolSettings;
+    onSculptSettingsChange: (settings: TerrainToolSettings) => void;
 }
 
 const SECTION_TITLE = 'flex items-center gap-2 text-2xs font-bold text-gray-500 border-b border-gray-800 pb-1';
@@ -39,7 +39,7 @@ export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, s
     const layers = useMemo(() => normalizeTerrainLayers(paintState?.textureLayers), [paintState?.textureLayers]);
     const splatPending = isTerrainSplatPending(paintState);
     const paintLayer = Math.max(0, Math.floor(sculptSettings.paintLayer ?? 0));
-    const painting = sculptSettings.tool === 'paint';
+    const painting = sculptSettings.tab === 'paint';
 
     const textureOptions = useMemo(
         () => [...textures].sort((a, b) => a.name.localeCompare(b.name)),
@@ -96,7 +96,7 @@ export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, s
     };
 
     const selectPaintLayer = (index: number) => {
-        onSculptSettingsChange({ ...sculptSettings, tool: 'paint', paintLayer: index });
+        onSculptSettingsChange({ ...sculptSettings, tab: 'paint', paintLayer: index });
     };
 
     return (

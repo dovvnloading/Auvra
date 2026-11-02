@@ -1,8 +1,9 @@
 
 
+import type { TerrainToolSettings } from './Terrain/terrainTool';
+
 export type InteractionMode = 'select' | 'place' | 'paint' | 'mask' | 'blueprint' | 'sculpt';
 export type PaintMode = 'add' | 'erase';
-export type SculptTool = 'raise' | 'lower' | 'flatten' | 'smooth' | 'paint';
 export type TransformTool = 'translate' | 'rotate' | 'scale';
 export type TransformSpace = 'world' | 'local';
 export type ViewportLayout = 'single' | 'quad';
@@ -14,15 +15,6 @@ export interface PaintSettings {
     scaleMax: number;
     rotationVariation: number;
     alignToNormal: boolean;
-}
-
-export interface SculptSettings {
-    tool: SculptTool;
-    radius: number;
-    strength: number;
-    flattenHeight: number;
-    /** Texture layer (0-3) the paint tool blends in. */
-    paintLayer?: number;
 }
 
 export interface TransformSettings {
@@ -38,7 +30,7 @@ export interface EditorState {
     paintMode: PaintMode;
     transformSettings: TransformSettings;
     paintSettings: PaintSettings;
-    sculptSettings: SculptSettings;
+    sculptSettings: TerrainToolSettings;
     selectedBrushId: string | null;
     selectedObjectId: string | null;
     isPlaying: boolean;

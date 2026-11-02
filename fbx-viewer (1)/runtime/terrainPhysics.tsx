@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo } from 'react';
 import * as THREE from 'three';
-import { HeightfieldCollider, RigidBody } from '@react-three/rapier';
+import { HeightfieldCollider, RigidBody, TrimeshCollider } from '@react-three/rapier';
 import type { RapierCollider } from '@react-three/rapier';
 import type { LevelObject, TextureData } from '../types';
 import { MAX_TERRAIN_HEIGHTFIELD_SAMPLES_PER_SIDE, terrainSamplesPerSide } from '../utils/terrainHeightfieldCodec';
@@ -71,6 +71,38 @@ export const terrainHeightfieldShape = (terrain: LevelObject): TerrainHeightfiel
         }
     }
     return { rows: grid.resolution, columns: grid.resolution, heights: columnMajor, scale: grid.scale };
+};
+
+/**
+ * A heightfield as triangles in the terrain object's space (without its position or rotation), leaving
+ * out the cells cut away by `holes` (a value per cell, row by row).
+ */
+export const terrainShapeTriangles = (shape: TerrainHeightfieldShape, holes?: ArrayLike<number> | null): { positions: Float32Array; indices: Uint32Array } => {
+    const { rows, columns, heights, scale } = shape;
+    const samplesX = columns + 1;
+    const samplesZ = rows + 1;
+    const positions = new Float32Array(samplesX * samplesZ * 3);
+    // Rows run along Z and columns along X, from -half to +half; heights are column-major.
+    for (let row = 0; row < samplesZ; row++) {
+        for (let column = 0; column < samplesX; column++) {
+            const at = (row * samplesX + column) * 3;
+            positions[at] = -scale.x / 2 + (column / columns) * scale.x;
+            positions[at + 1] = heights[row + column * samplesZ] * scale.y;
+            positions[at + 2] = -scale.z / 2 + (row / rows) * scale.z;
+        }
+    }
+    const indices = new Uint32Array(rows * columns * 6);
+    let index = 0;
+    for (let row = 0; row < rows; row++) {
+        for (let column = 0; column < columns; column++) {
+            if (holes?.[row * columns + column]) continue;
+            const a = row * samplesX + column;
+            const below = a + samplesX;
+            indices.set([a, below, a + 1, a + 1, below, below + 1], index);
+            index += 6;
+        }
+    }
+    return { positions, indices: index === indices.length ? indices : indices.slice(0, index) };
 };
 
 /** Lowest and highest finite height per heights array, so the ground plan does not rescan a big grid every render. */
@@ -230,6 +262,9 @@ const TerrainCollider: React.FC<{ terrain: LevelObject }> = ({ terrain }) => {
     // Keyed on what the shape reads, so a terrain object re-created with the same data keeps its collider.
     const shape = useMemo(() => terrainHeightfieldShape(terrain), [terrainData, scaleX, scaleY, scaleZ]);
     const args = useHeightfieldArgs(shape);
+    // A heightfield cannot have holes, so a terrain with holes is solid as triangles.
+    const holes = terrain.terrainData?.holes;
+    const triangles = useMemo(() => (holes?.some(cell => cell > 0) && shape ? terrainShapeTriangles(shape, holes) : null), [holes, shape]);
     // What it is made of, for tyres: tagged on the collider rather than rebuilding it.
     const { textures } = useGameContent();
     const surface = useMemo(() => terrainSurfaceTag(terrain, textures), [terrain, textures]);
@@ -246,7 +281,9 @@ const TerrainCollider: React.FC<{ terrain: LevelObject }> = ({ terrain }) => {
             rotation={terrain.rotation}
             userData={physicsUserData(terrain.id)}
         >
-            <HeightfieldCollider ref={tag} args={args} />
+            {triangles
+                ? <TrimeshCollider ref={tag} args={[triangles.positions, triangles.indices]} />
+                : <HeightfieldCollider ref={tag} args={args} />}
         </RigidBody>
     );
 };

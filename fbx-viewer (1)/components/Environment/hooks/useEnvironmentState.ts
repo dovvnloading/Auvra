@@ -1,7 +1,8 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
-import { InteractionMode, PaintMode, PaintSettings, TransformSettings, ViewportLayout, SculptSettings } from '../types';
+import { InteractionMode, PaintMode, PaintSettings, TransformSettings, ViewportLayout } from '../types';
+import { DEFAULT_TERRAIN_TOOL_SETTINGS, type TerrainToolSettings } from '../Terrain/terrainTool';
 import { useScene } from '../../../context/SceneContext';
 import { projectService } from '../../../utils/projectService';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
@@ -60,12 +61,7 @@ export const useEnvironmentState = () => {
         alignToNormal: true
     });
 
-    const [sculptSettings, setSculptSettings] = useState<SculptSettings>({
-        tool: 'raise',
-        radius: 5.0,
-        strength: 0.5,
-        flattenHeight: 0
-    });
+    const [sculptSettings, setSculptSettings] = useState<TerrainToolSettings>(DEFAULT_TERRAIN_TOOL_SETTINGS);
 
     /** Select exactly `id` (or nothing); the single-object form of setSelection. */
     const setSelectedObjectId = useCallback((id: string | null) => {

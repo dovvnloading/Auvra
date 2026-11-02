@@ -4,7 +4,7 @@ import type { LevelComponent, LevelObject } from '../types';
 import { planHull, type HostGeometry } from './components/physicsComponents';
 import { resolveNavSettings, type NavSettings } from './navSettings';
 import { isDynamicObject } from './levelObjectMotion';
-import { flatGroundHeight, terrainHeightfieldShape, terrainSurfaceHeight } from './terrainPhysics';
+import { flatGroundHeight, terrainHeightfieldShape, terrainShapeTriangles, terrainSurfaceHeight } from './terrainPhysics';
 import { hasSplineCollision } from './splineMesh';
 
 /**
@@ -281,30 +281,9 @@ const addTerrain = (soup: TriangleSoup, terrain: LevelObject, matrix: THREE.Matr
     const quaternion = new THREE.Quaternion();
     matrix.decompose(position, quaternion, new THREE.Vector3());
     const body = new THREE.Matrix4().compose(position, quaternion, new THREE.Vector3(1, 1, 1));
-    const { rows, columns, heights, scale } = shape;
-    const samplesX = columns + 1;
-    const samplesZ = rows + 1;
-    const local = new Float32Array(samplesX * samplesZ * 3);
-    // Rows run along Z and columns along X, from -half to +half; heights are column-major.
-    for (let row = 0; row < samplesZ; row++) {
-        for (let column = 0; column < samplesX; column++) {
-            const at = (row * samplesX + column) * 3;
-            local[at] = -scale.x / 2 + (column / columns) * scale.x;
-            local[at + 1] = heights[row + column * samplesZ] * scale.y;
-            local[at + 2] = -scale.z / 2 + (row / rows) * scale.z;
-        }
-    }
-    const indices = new Uint32Array(rows * columns * 6);
-    let index = 0;
-    for (let row = 0; row < rows; row++) {
-        for (let column = 0; column < columns; column++) {
-            const a = row * samplesX + column;
-            const below = a + samplesX;
-            indices.set([a, below, a + 1, a + 1, below, below + 1], index);
-            index += 6;
-        }
-    }
-    soup.add(local, indices, body);
+    const { scale } = shape;
+    const { positions, indices } = terrainShapeTriangles(shape, terrain.terrainData?.holes);
+    soup.add(positions, indices, body);
     return { inverse: body.clone().invert(), halfX: scale.x / 2, halfZ: scale.z / 2 };
 };
 

@@ -184,7 +184,8 @@ export const useEnvironmentHotkeys = (config: HotkeyConfig) => {
 
             // Selection Clearing
             if (e.key === 'Escape') {
-                actions.clearSelection();
+                // In the Terrain tool, Escape is the brush's: it cancels a paste or a ramp in progress.
+                if (state.interactionMode !== 'sculpt') actions.clearSelection();
                 return;
             }
 

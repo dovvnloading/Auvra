@@ -30,9 +30,10 @@ _NESTED_KEYS = {
     # binary heightfield asset instead (see ``_validate_terrain_heightfields``).
     # Paint weights likewise live in a binary splat map asset (``splatmap``);
     # the editor's in-memory ``splat`` array is never persisted.
-    "terrainData": {"resolution", "width", "depth", "heights", "heightfield", "textureId", "textureLayers", "splatmap"},
+    "terrainData": {"resolution", "width", "depth", "heights", "heightfield", "textureId", "textureLayers", "splatmap", "holemap"},
     "heightfield": {"assetId", "encoding", "columns", "rows"},
     "splatmap": {"assetId", "encoding", "columns", "rows"},
+    "holemap": {"assetId", "encoding", "columns", "rows"},
     # A level's baked lighting: bake settings and the light probe volume asset.
     "bakedLighting": {"spacing", "bounces", "intensity", "probes"},
     "probes": {"assetId", "encoding", "origin", "spacing", "counts", "bakedAt", "signature"},
@@ -327,7 +328,7 @@ def _validate_terrain_heightfields(value: Any) -> None:
         terrain = object_value.get("terrainData") if isinstance(object_value, dict) else None
         if not isinstance(terrain, dict):
             continue
-        for key, label in (("heightfield", "heightfield"), ("splatmap", "splat map")):
+        for key, label in (("heightfield", "heightfield"), ("splatmap", "splat map"), ("holemap", "hole map")):
             reference = terrain.get(key)
             if not isinstance(reference, dict):
                 continue

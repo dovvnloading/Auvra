@@ -1,11 +1,12 @@
-import { useRef, useLayoutEffect, useMemo, forwardRef, useImperativeHandle, useState, useEffect } from 'react';
+import React, { useRef, useLayoutEffect, useMemo, forwardRef, useImperativeHandle, useState, useEffect } from 'react';
 import * as THREE from 'three';
-import { ThreeEvent } from '@react-three/fiber';
 import { LevelObject } from '../../../types';
 import { isTerrainHeightfieldPending, terrainSamplesPerSide } from '../../../utils/terrainHeightfieldCodec';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { useGameContent } from '../../../runtime/GameContentContext';
-import { TerrainBrushSettings, TerrainPaintTarget, TERRAIN_PAINT_CURSOR_COLOR } from './TerrainSculptor';
+import { raycastTerrainMesh } from '../../../utils/surfacePlacement';
+import type { TerrainPaintTarget } from './TerrainBrushTool';
+import { TerrainLiveEdit } from './terrainLiveEdit';
 import { TerrainLodMesh } from './TerrainLodMesh';
 import {
     createDefaultTerrainSplat,
@@ -30,15 +31,9 @@ interface TerrainObjectProps {
     receiveShadow?: boolean;
     castShadow?: boolean;
     onClick?: (e: any) => void;
-    // Sculpting Props
-    sculptingEnabled?: boolean;
-    sculptSettings?: TerrainBrushSettings;
-    onHeightUpdate?: (id: string, heights: number[]) => void;
-    /** Runs as a height stroke begins, before it changes anything (the undo snapshot). */
-    onStrokeStart?: () => void;
     /**
-     * Draw distant parts with fewer vertices (TerrainLodMesh). Used by the game runtime; the editor keeps
-     * the full-resolution mesh, which sculpting and placement work on directly.
+     * Draw distant parts with fewer vertices (TerrainLodMesh). Tools still edit the full-resolution
+     * heights, which every chunk shares.
      */
     lod?: boolean;
 }
@@ -90,6 +85,35 @@ const useTerrainLayerTextures = (urls: readonly (string | undefined)[]): (THREE.
     return useMemo(() => urls.map(url => (url ? cacheRef.current.get(url) ?? null : null)), [key, version]);
 };
 
+/** The terrain's edge, following the ground: how a selected terrain shows, whatever its size. */
+const TerrainOutline: React.FC<{ live: TerrainLiveEdit; version: unknown }> = ({ live, version }) => {
+    const line = useMemo(() => {
+        const { columns, rows, width, depth, heights } = live;
+        const points: number[] = [];
+        const add = (column: number, row: number) => points.push(
+            (column * width) / (columns - 1) - width / 2,
+            depth / 2 - (row * depth) / (rows - 1),
+            heights[row * columns + column] + 0.05,
+        );
+        for (let column = 0; column < columns; column++) add(column, 0);
+        for (let row = 1; row < rows; row++) add(columns - 1, row);
+        for (let column = columns - 2; column >= 0; column--) add(column, rows - 1);
+        for (let row = rows - 2; row > 0; row--) add(0, row);
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
+        const outline = new THREE.LineLoop(geometry, new THREE.LineBasicMaterial({ color: '#3b82f6', transparent: true, opacity: 0.9, depthTest: false, toneMapped: false }));
+        outline.raycast = () => undefined;
+        outline.renderOrder = 998;
+        outline.userData.ignorePlacement = true;
+        return outline;
+    }, [live, version]);
+    useEffect(() => () => {
+        line.geometry.dispose();
+        (line.material as THREE.Material).dispose();
+    }, [line]);
+    return <group rotation={[-Math.PI / 2, 0, 0]}><primitive object={line} /></group>;
+};
+
 export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
     data,
     isSelected,
@@ -97,23 +121,13 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
     receiveShadow,
     castShadow,
     onClick,
-    sculptingEnabled: sculptingRequested,
-    sculptSettings,
-    onHeightUpdate,
-    onStrokeStart,
     lod = false
 }, ref) => {
     // Heights stored in a heightfield asset are loaded after the level opens.
     // Until then the flat placeholder must not be sculpted and committed.
     const heightsPending = isTerrainHeightfieldPending(data.terrainData);
-    const sculptingEnabled = Boolean(sculptingRequested) && !heightsPending;
     const meshRef = useRef<THREE.Mesh>(null);
     const groupRef = useRef<THREE.Group>(null);
-    const geometryRef = useRef<THREE.PlaneGeometry | null>(null);
-    
-    // Sculpting State
-    const [hoverPoint, setHoverPoint] = useState<THREE.Vector3 | null>(null);
-    const isSculpting = useRef(false);
 
     useImperativeHandle(ref, () => groupRef.current!, []);
 
@@ -122,9 +136,9 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
     const samplesPerSide = terrainSamplesPerSide(resolution);
     // Built here rather than in JSX so LOD chunks can share its vertex buffers.
     const planeGeometry = useMemo(() => new THREE.PlaneGeometry(width, depth, resolution, resolution), [width, depth, resolution]);
-    geometryRef.current = planeGeometry;
     useEffect(() => () => planeGeometry.dispose(), [planeGeometry]);
-    const chunked = lod && !sculptingEnabled && resolution >= MIN_LOD_SEGMENTS;
+    const live = useMemo(() => new TerrainLiveEdit(planeGeometry, resolution, width, depth), [planeGeometry, resolution, width, depth]);
+    const chunked = lod && resolution >= MIN_LOD_SEGMENTS;
 
     // --- Texture Layers ---
     // Up to four layers blended by the splat map. Without layers the terrain
@@ -191,179 +205,16 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
 
     // --- Geometry Init ---
     useLayoutEffect(() => {
-        if (!geometryRef.current) return;
-        
-        const geom = geometryRef.current;
-        const posAttr = geom.attributes.position;
-        
-        if (heights && heights.length > 0) {
-            if (heights.length !== posAttr.count) {
-                // If resolution changed, mismatch might occur briefly. Safe to ignore or reset.
-                return;
-            }
-            
-            for (let i = 0; i < posAttr.count; i++) {
-                posAttr.setZ(i, heights[i]);
-            }
-            posAttr.needsUpdate = true;
-            geom.computeVertexNormals();
-            geom.computeBoundingSphere();
-        }
-    }, [heights, resolution, width, depth]);
+        // Heights a tool just committed are the ones the mesh already shows.
+        if (heights && heights.length > 0 && heights === live.committed) return;
+        live.setAll(heights);
+    }, [heights, live]);
 
-    // --- Sculpting Logic ---
-    // Painting is done by the TerrainSculptor; this mesh only sculpts heights.
-    const sculptsHeights = sculptSettings?.tool !== 'paint';
-
-    const handlePointerMove = (e: ThreeEvent<PointerEvent>) => {
-        if (!sculptingEnabled || !sculptSettings || !meshRef.current || !geometryRef.current) return;
-        
-        // Always stop propagation in sculpt mode to prevent selecting objects behind terrain
-        e.stopPropagation();
-        
-        // Update Brush Visual
-        setHoverPoint(e.point.clone());
-
-        // Perform Sculpt
-        if (isSculpting.current && sculptsHeights) {
-            applySculpt(e.point);
-        }
-    };
-
-    const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
-        if (!sculptingEnabled) {
-            if(onClick) onClick(e);
-            return;
-        }
-        
-        // Only allow Left Click (0) for sculpting. Middle (1) and Right (2) should fall through for camera controls.
-        if (e.button !== 0) return;
-
-        e.stopPropagation();
-        if (!sculptsHeights) return;
-        // R3F automatically captures pointer on the target mesh
-        isSculpting.current = true;
-        onStrokeStart?.();
-        
-        // Initial sculpt on click
-        if (sculptSettings) {
-            applySculpt(e.point);
-        }
-    };
-
-    const handlePointerUp = (_e: ThreeEvent<PointerEvent>) => {
-        if (isSculpting.current) {
-            isSculpting.current = false;
-            
-            // Commit changes to global state
-            if (geometryRef.current && onHeightUpdate) {
-                const posAttr = geometryRef.current.attributes.position;
-                const newHeights: number[] = [];
-                for(let i=0; i<posAttr.count; i++) {
-                    newHeights.push(posAttr.getZ(i));
-                }
-                onHeightUpdate(data.id, newHeights);
-            }
-        }
-    };
-
-    const handlePointerOut = () => {
-        setHoverPoint(null);
-        if (isSculpting.current) {
-            // End sculpt if we drag off the mesh entirely (failsafe)
-            // Ideally pointer capture prevents this, but good to have.
-            // We DON'T set isSculpting false here because R3F pointer capture keeps events firing on this mesh
-            // even if mouse is outside, which is what we want. 
-            // So we only hide the cursor.
-        }
-    };
-
-    const applySculpt = (worldPoint: THREE.Vector3) => {
-        const mesh = meshRef.current;
-        const geom = geometryRef.current;
-        if (!mesh || !geom || !sculptSettings) return;
-
-        mesh.worldToLocal(worldPoint); // Modifies worldPoint in place to be local
-
-        const posAttr = geom.attributes.position;
-        const count = posAttr.count;
-        
-        // Retrieve settings
-        const { radius, strength, tool, flattenHeight } = sculptSettings;
-        
-        // Adjust radius for local space scaling (average of X/Y scale since plane is X/Y in local)
-        const avgScale = (mesh.scale.x + mesh.scale.y) / 2; 
-        const localRadius = radius / avgScale;
-        const radiusSq = localRadius * localRadius;
-        
-        // Power factor for smoothness
-        const effectStrength = strength * 0.5;
-
-        let modified = false;
-
-        for (let i = 0; i < count; i++) {
-            const x = posAttr.getX(i);
-            const y = posAttr.getY(i); // Local Y is vertical on the plane geometry before rotation
-            
-            // Calc distance in 2D plane
-            const dx = x - worldPoint.x;
-            const dy = y - worldPoint.y;
-            const distSq = dx*dx + dy*dy;
-
-            if (distSq < radiusSq) {
-                const dist = Math.sqrt(distSq);
-                // Smooth falloff: (1 - r^2)^2 or Cosine falloff
-                const falloff = Math.pow(1 - (dist / localRadius), 2); 
-                const influence = falloff * effectStrength;
-
-                const currentZ = posAttr.getZ(i); // Z is the displacement/height
-                let newZ = currentZ;
-
-                switch (tool) {
-                    case 'raise':
-                        newZ += influence;
-                        break;
-                    case 'lower':
-                        newZ -= influence;
-                        break;
-                    case 'flatten':
-                        // Lerp towards target height
-                        newZ = THREE.MathUtils.lerp(currentZ, flattenHeight, influence * 0.5);
-                        break;
-                    case 'smooth':
-                        // Simple smooth: Move towards average of neighbors (approximated by moving towards 0 relative to brush center or keeping inertia)
-                        // Better simple smooth: Average current with pre-stroke average? 
-                        // For now, just dampening peaks:
-                        newZ = THREE.MathUtils.lerp(currentZ, currentZ * 0.9, influence);
-                        break;
-                }
-
-                if (newZ !== currentZ) {
-                    posAttr.setZ(i, newZ);
-                    modified = true;
-                }
-            }
-        }
-
-        if (modified) {
-            posAttr.needsUpdate = true;
-            geom.computeVertexNormals();
-            geom.computeBoundingSphere();
-        }
-    };
-
-    // --- Cursor Color ---
-    const cursorColor = useMemo(() => {
-        if (!sculptSettings) return '#ffffff';
-        switch(sculptSettings.tool) {
-            case 'raise': return '#4ade80';
-            case 'lower': return '#ef4444';
-            case 'flatten': return '#3b82f6';
-            case 'smooth': return '#f59e0b';
-            case 'paint': return TERRAIN_PAINT_CURSOR_COLOR;
-            default: return '#ffffff';
-        }
-    }, [sculptSettings?.tool]);
+    const holes = data.terrainData?.holes;
+    useLayoutEffect(() => {
+        if (holes && holes === live.committedHoles) return;
+        live.setHoles(holes);
+    }, [holes, live]);
 
     return (
         <group 
@@ -382,11 +233,9 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
                 visible={!chunked}
                 geometry={planeGeometry}
                 material={layerMaterial ?? material}
-                onPointerMove={handlePointerMove}
-                onPointerDown={handlePointerDown}
-                onPointerUp={handlePointerUp}
-                onPointerOut={handlePointerOut}
-                userData={{ levelObjectId: data.id, isTerrain: true, heightsPending, terrainPaint: paintTarget }}
+                raycast={raycastTerrainMesh}
+                onPointerDown={onClick}
+                userData={{ levelObjectId: data.id, isTerrain: true, heightsPending, terrainPaint: paintTarget, terrainEdit: live }}
             />
             {chunked && (
                 <group rotation={[-Math.PI / 2, 0, 0]}>
@@ -394,6 +243,7 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
                         source={planeGeometry}
                         segments={resolution}
                         version={heights}
+                        live={live}
                         material={layerMaterial ?? material}
                         castShadow={castShadow}
                         receiveShadow={receiveShadow}
@@ -401,31 +251,7 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
                 </group>
             )}
             
-            {/* Sculpt Brush Cursor - Rendered in WORLD space relative to group, or projected? 
-                Actually, simpler to put it in the scene. 
-                But putting it here makes it follow the terrain object transforms easily.
-            */}
-            {sculptingEnabled && hoverPoint && sculptSettings && (
-                <mesh 
-                    position={[hoverPoint.x - data.position[0], hoverPoint.y - data.position[1] + 0.1, hoverPoint.z - data.position[2]]} 
-                    rotation={[-Math.PI / 2, 0, 0]}
-                    // Undo the terrain rotation for the cursor to stay flat relative to world up?
-                    // No, we want it flat on the ground. The Terrain Mesh is rotated -90 X. 
-                    // So its local system has Z up. 
-                    // We need to match.
-                >
-                    <ringGeometry args={[sculptSettings.radius - 0.2, sculptSettings.radius, 64]} />
-                    <meshBasicMaterial color={cursorColor} transparent opacity={0.8} depthTest={false} depthWrite={false} toneMapped={false} />
-                </mesh>
-            )}
-
-            {/* Selection Grid Overlay */}
-            {isSelected && !sculptingEnabled && (
-                <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.05, 0]} raycast={() => undefined}>
-                    <planeGeometry args={[width, depth, resolution, resolution]} />
-                    <meshBasicMaterial color="#3b82f6" wireframe transparent opacity={0.15} depthTest={false} />
-                </mesh>
-            )}
+            {isSelected && <TerrainOutline live={live} version={heights} />}
         </group>
     );
 });

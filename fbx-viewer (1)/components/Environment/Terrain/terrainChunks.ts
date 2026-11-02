@@ -55,16 +55,29 @@ const stops = (start: number, end: number, step: number): number[] => {
 /** The vertex step of a level. */
 export const lodStep = (level: number): number => 1 << Math.max(0, Math.min(MAX_LOD_LEVEL, Math.floor(level)));
 
-/** Triangle indices for `chunk` at `level`, wound like PlaneGeometry's own faces. */
-export const chunkIndices = (segments: number, chunk: TerrainChunk, level: number): Uint32Array => {
+/**
+ * Triangle indices for `chunk` at `level`, wound like PlaneGeometry's own faces. `holes` holds a value
+ * per cell, row by row, non-zero where the terrain is cut away. A coarse quad stays while any of the
+ * cells it covers is solid: only the nearest level shows a small hole exactly.
+ */
+export const chunkIndices = (segments: number, chunk: TerrainChunk, level: number, holes?: ArrayLike<number> | null): Uint32Array => {
     const step = lodStep(level);
     const columns = stops(chunk.x0, chunk.x1, step);
     const rows = stops(chunk.y0, chunk.y1, step);
     const stride = segments + 1;
     const indices = new Uint32Array((columns.length - 1) * (rows.length - 1) * 6);
     let offset = 0;
+    const allCut = (c0: number, r0: number, c1: number, r1: number): boolean => {
+        for (let row = r0; row < r1; row++) {
+            for (let column = c0; column < c1; column++) {
+                if (!holes![row * segments + column]) return false;
+            }
+        }
+        return true;
+    };
     for (let r = 0; r < rows.length - 1; r++) {
         for (let c = 0; c < columns.length - 1; c++) {
+            if (holes && allCut(columns[c], rows[r], columns[c + 1], rows[r + 1])) continue;
             const a = columns[c] + stride * rows[r];
             const b = columns[c] + stride * rows[r + 1];
             const cc = columns[c + 1] + stride * rows[r + 1];
@@ -73,8 +86,12 @@ export const chunkIndices = (segments: number, chunk: TerrainChunk, level: numbe
             indices[offset++] = b; indices[offset++] = cc; indices[offset++] = d;
         }
     }
-    return indices;
+    return offset === indices.length ? indices : indices.slice(0, offset);
 };
+
+/** The whole grid's triangle indices, leaving out the cells cut away. */
+export const terrainIndices = (segments: number, holes?: ArrayLike<number> | null): Uint32Array =>
+    chunkIndices(segments, { cx: 0, cy: 0, x0: 0, y0: 0, x1: segments, y1: segments }, 0, holes);
 
 /** The vertex indices around a chunk's edge at `level`, in order (closed loop, first vertex not repeated). */
 export const chunkEdge = (segments: number, chunk: TerrainChunk, level: number): number[] => {
@@ -93,7 +110,7 @@ export const chunkEdge = (segments: number, chunk: TerrainChunk, level: number):
 /**
  * Skirt geometry for a chunk: for each edge vertex (positions read from the shared buffer, in the
  * plane's local space where Z is the height), a copy lowered by `depth`, joined into a strip around
- * the chunk. Both faces are drawn by the terrain's double-sided material, so the winding is free.
+ * the chunk, lit like the ground it hangs from.
  */
 export const skirtGeometryData = (
     positions: ArrayLike<number>,
@@ -102,6 +119,7 @@ export const skirtGeometryData = (
     chunk: TerrainChunk,
     level: number,
     depth: number,
+    holes?: ArrayLike<number> | null,
 ): { positions: Float32Array; normals: Float32Array; indices: Uint32Array } => {
     const edge = chunkEdge(segments, chunk, level);
     const count = edge.length;
@@ -117,13 +135,30 @@ export const skirtGeometryData = (
         }
         out[(count + i) * 3 + 2] -= depth;
     });
-    const indices = new Uint32Array(count * 6);
+    // A skirt beside a hole would hang in plain sight, so it stops at the hole's edge.
+    const stride = segments + 1;
+    const nearHole = (vertex: number): boolean => {
+        if (!holes) return false;
+        const column = vertex % stride;
+        const row = (vertex - column) / stride;
+        for (let r = Math.max(0, row - 1); r <= Math.min(segments - 1, row); r++) {
+            for (let c = Math.max(0, column - 1); c <= Math.min(segments - 1, column); c++) {
+                if (holes[r * segments + c]) return true;
+            }
+        }
+        return false;
+    };
+    // Wound both ways: the terrain's material draws one side, and a seam can be seen from either.
+    const indices = new Uint32Array(count * 12);
+    let written = 0;
     for (let i = 0; i < count; i++) {
         const next = (i + 1) % count;
+        if (nearHole(edge[i]) || nearHole(edge[next])) continue;
         const top = i, topNext = next, bottom = count + i, bottomNext = count + next;
-        indices.set([top, bottom, topNext, bottom, bottomNext, topNext], i * 6);
+        indices.set([top, bottom, topNext, bottom, bottomNext, topNext, top, topNext, bottom, bottom, topNext, bottomNext], written);
+        written += 12;
     }
-    return { positions: out, normals: outNormals, indices };
+    return { positions: out, normals: outNormals, indices: written === indices.length ? indices : indices.slice(0, written) };
 };
 
 /**

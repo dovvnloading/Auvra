@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { MAX_TERRAIN_LAYERS, TERRAIN_SPLAT_CHANNELS } from './terrainSplatCodec';
+import { patchTerrainBrushOverlay } from './terrainBrushOverlay';
 
 /**
  * Terrain material that blends up to four tiled texture layers by a splat map.
@@ -150,15 +151,19 @@ export function createTerrainLayerMaterial(splat: THREE.DataTexture): TerrainLay
     color: '#ffffff',
     roughness: 0.9,
     metalness: 0,
-    flatShading: true,
-    side: THREE.DoubleSide,
+    // One side: drawn double-sided, the skirts hiding level-of-detail seams were lit from behind, as black cracks.
+    side: THREE.FrontSide,
+    shadowSide: THREE.DoubleSide,
   }) as TerrainLayerMaterial;
   material.name = 'TerrainLayerMaterial';
   // Rain wets it and snow settles on it (runtime/weatherSurfaces.ts).
   material.userData.weatherSurface = true;
   material.userData.raySolid = true;
   material.userData.terrainUniforms = uniforms;
-  material.onBeforeCompile = (shader) => patchTerrainLayerShader(shader, uniforms);
+  material.onBeforeCompile = (shader) => {
+    patchTerrainLayerShader(shader, uniforms);
+    patchTerrainBrushOverlay(shader);
+  };
   material.customProgramCacheKey = () => PROGRAM_KEY;
   return material;
 }
@@ -175,7 +180,8 @@ export function createTerrainGroundMaterial(): THREE.MeshStandardMaterial {
     color: '#ffffff',
     roughness: 0.95,
     metalness: 0,
-    side: THREE.DoubleSide,
+    side: THREE.FrontSide,
+    shadowSide: THREE.DoubleSide,
   });
   material.name = 'TerrainGroundMaterial';
   // Rain wets it and snow settles on it (runtime/weatherSurfaces.ts).
@@ -213,6 +219,7 @@ float groundNoise(vec2 p) {
   ground = mix(ground, rock, smoothstep(0.42, 0.62, slope));
   diffuseColor.rgb *= ground;
 }`);
+    patchTerrainBrushOverlay(shader);
   };
   material.customProgramCacheKey = () => GROUND_PROGRAM_KEY;
   return material;

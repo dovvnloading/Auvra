@@ -64,6 +64,8 @@ interface TerrainSurface {
     height: (index: number) => number;
     minHeight: number;
     maxHeight: number;
+    /** Cells (columns * rows, row by row) cut out of the terrain; a ray passes through them. */
+    holes?: ArrayLike<number> | null;
 }
 
 interface SurfaceSample {
@@ -106,6 +108,7 @@ const createSurface = (
     rows: number,
     height: (index: number) => number,
     range: { min: number; max: number },
+    holes?: ArrayLike<number> | null,
 ): TerrainSurface | null => {
     if (!(width > 0) || !(depth > 0) || columns < 1 || rows < 1) return null;
     if (Math.abs(matrix.determinant()) < 1e-12) return null;
@@ -121,6 +124,7 @@ const createSurface = (
         height,
         minHeight: range.min,
         maxHeight: range.max,
+        holes: holes ?? null,
     };
 };
 
@@ -134,9 +138,12 @@ const surfaceFromMesh = (mesh: THREE.Mesh): TerrainSurface | null => {
     const columns = Math.floor(parameters.widthSegments);
     const rows = Math.floor(parameters.heightSegments);
     if (position.count !== (columns + 1) * (rows + 1)) return null;
-    const height = (index: number) => finiteOrZero(position.getZ(index));
-    const range = heightRange(position, position.version, position.count, height);
-    return createSurface(mesh, mesh.matrixWorld, parameters.width, parameters.height, columns, rows, height, range);
+    const positions = position.array;
+    const height = (index: number) => finiteOrZero(positions[index * 3 + 2]);
+    // A terrain that keeps its own bounds says so; searching every vertex is for one that does not.
+    const known = geometry.userData.terrainHeightRange as { min: number; max: number } | undefined;
+    const range = known ?? heightRange(position, position.version, position.count, height);
+    return createSurface(mesh, mesh.matrixWorld, parameters.width, parameters.height, columns, rows, height, range, (mesh.userData?.terrainEdit as { holes?: Uint8Array | null } | undefined)?.holes);
 };
 
 /** A terrain level object that is not rendered in this scene, sampled from its resolved heights. */
@@ -150,7 +157,16 @@ const surfaceFromLevelObject = (terrain: LevelObject, levelObjects: readonly Lev
     const height = usable ? (index: number) => finiteOrZero(usable[index]) : () => 0;
     const range = usable ? heightRange(usable, 0, count, height) : { min: 0, max: 0 };
     const matrix = getWorldMatrix(levelObjects, terrain.id).multiply(TERRAIN_PLANE_ROTATION);
-    return createSurface(null, matrix, width, depth, columns, columns, height, range);
+    return createSurface(null, matrix, width, depth, columns, columns, height, range, terrain.terrainData?.holes);
+};
+
+/** True over a cell cut out of the terrain. */
+const inHole = (surface: TerrainSurface, x: number, y: number): boolean => {
+    if (!surface.holes) return false;
+    const { width, depth, columns, rows, holes } = surface;
+    const column = Math.min(columns - 1, Math.max(0, Math.floor(((x + width / 2) / width) * columns)));
+    const row = Math.min(rows - 1, Math.max(0, Math.floor(((depth / 2 - y) / depth) * rows)));
+    return holes[row * columns + column] > 0;
 };
 
 /** Height and slope of the rendered triangle under plane-local (x, y). */
@@ -221,7 +237,7 @@ const intersectSurface = (surface: TerrainSurface, raycaster: THREE.Raycaster): 
     const planarLength = (end - start) * Math.hypot(direction.x, direction.y);
     const steps = THREE.MathUtils.clamp(Math.ceil(planarLength / (cell * 0.5)), 1, MAX_MARCH_STEPS);
     const startGap = gap(start);
-    const above = startGap > 0;
+    let above = startGap > 0;
     let hitT: number | null = startGap === 0 ? start : null;
     let previous = start;
     for (let step = 1; hitT === null && step <= steps; step++) {
@@ -239,6 +255,11 @@ const intersectSurface = (surface: TerrainSurface, raycaster: THREE.Raycaster): 
             }
             hitT = (low + high) / 2;
         }
+        // Through a hole the ray goes on: it is now on the ground's other side.
+        if (hitT !== null && inHole(surface, origin.x + hitT * direction.x, origin.y + hitT * direction.y)) {
+            hitT = null;
+            above = !above;
+        }
         previous = t;
     }
     if (hitT === null) return null;
@@ -249,6 +270,38 @@ const intersectSurface = (surface: TerrainSurface, raycaster: THREE.Raycaster): 
     const normal = new THREE.Vector3(-sample.dhdx, -sample.dhdy, 1).applyMatrix3(surface.normalMatrix).normalize();
     if (normal.dot(worldRay.direction) > 0) normal.negate();
     return { distance: point.distanceTo(worldRay.origin), point, normal };
+};
+
+/**
+ * A terrain mesh's raycast (set as its `raycast`): the ray marched over the heightfield, in place of
+ * testing every triangle, which at 512 x 512 costs half a million tests per pointer move.
+ */
+export function raycastTerrainMesh(this: THREE.Mesh, raycaster: THREE.Raycaster, intersects: THREE.Intersection[]): void {
+    const surface = surfaceFromMesh(this);
+    if (!surface) return;
+    const hit = intersectSurface(surface, raycaster);
+    if (!hit) return;
+    intersects.push({
+        distance: hit.distance,
+        point: hit.point,
+        object: this,
+        face: { a: 0, b: 0, c: 0, normal: hit.normal, materialIndex: 0 },
+    });
+}
+
+/** Where the ray first meets these terrain meshes, hidden or not; null when it misses them all. */
+export const castTerrainMeshes = (meshes: readonly THREE.Mesh[], raycaster: THREE.Raycaster): (PlacementHit & { mesh: THREE.Mesh }) | null => {
+    let nearest: RayHit | null = null;
+    let nearestMesh: THREE.Mesh | null = null;
+    for (const mesh of meshes) {
+        const surface = surfaceFromMesh(mesh);
+        const hit = surface ? intersectSurface(surface, raycaster) : null;
+        if (hit && (!nearest || hit.distance < nearest.distance)) {
+            nearest = hit;
+            nearestMesh = mesh;
+        }
+    }
+    return nearest && nearestMesh ? { point: nearest.point, normal: nearest.normal, mesh: nearestMesh } : null;
 };
 
 const isEditorHelper = (object: THREE.Object3D): boolean => {

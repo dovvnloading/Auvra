@@ -122,6 +122,7 @@ export const EnvironmentEditor: React.FC = () => {
                     transformSettings={state.transformSettings}
                     paintSettings={state.paintSettings}
                     sculptSettings={state.sculptSettings}
+                    onSculptSettingsChange={actions.setSculptSettings}
                     layout={state.layout}
                     cameraSpeed={state.cameraSpeed}
                     isMuted={state.isMuted}

@@ -3,7 +3,7 @@ import { AssetCategory, AssetInfoUpdate, Blueprint, SocketData, LevelObject, Lev
 import { AssetTransferOptions, projectService } from './projectService';
 import { nativeDomainRecords } from './projectRecords';
 import { externalizeTerrainData } from './terrainHeightfieldEditor';
-import { externalizeTerrainSplat } from '../components/Environment/Terrain/terrainSplatEditor';
+import { externalizeTerrainHoles, externalizeTerrainSplat } from '../components/Environment/Terrain/terrainSplatEditor';
 import { terrainLayersReferenceTexture, withoutTerrainLayerTexture } from '../components/Environment/Terrain/terrainSplatCodec';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { editorSession, type EditorSessionLease } from './editorSession';
@@ -873,8 +873,9 @@ async function prepareLevelObjectDocument(value: unknown, readStored?: () => Pro
   const splat = await externalizeTerrainSplat(prepared.terrainData, {
     storedSplatmap: readStoredTerrain && (async () => (await readStoredTerrain())?.splatmap),
   });
+  const holes = await externalizeTerrainHoles(splat.terrainData as TerrainData);
   return {
-    value: { ...(value as Record<string, unknown>), terrainData: splat.terrainData },
+    value: { ...(value as Record<string, unknown>), terrainData: holes.terrainData },
     afterCommit: () => { prepared.remember?.(); splat.remember?.(); },
   };
 }

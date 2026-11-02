@@ -9,7 +9,7 @@ The **Environment** tab is where levels are built.
 | Select | Q | Select objects and move them with the gizmo |
 | Place | — | Click to place the chosen model on terrain or other surfaces |
 | Paint | B | Paint or erase foliage and props with a brush |
-| Terrain | — | Create, sculpt (raise, lower, flatten, smooth) and texture-paint terrain |
+| Terrain | — | Create, sculpt and texture-paint terrain (see [Terrain](#terrain)) |
 | Mask | M | Create texture masks on objects |
 
 The left panel's **Logic Actors** add a Player Start, an Enemy Spawner, an Audio Emitter, a Sky Sphere, an **Empty Object** (an object with no model, drawn in the editor as a small marker, for components such as trigger colliders, timelines, cameras and level streaming, or as a parent to group other objects under) and a **Spline** (an empty object with a [Spline](#splines) component).
@@ -520,9 +520,53 @@ Big worlds can be split into levels that load as the player moves. Build each ar
 
 While the player is inside the box, every object of that level joins the play session: props, lights, terrain, colliders, components and scripts. Areas keep their own coordinates, so build them where they sit in the world. The area's player start and sky are not loaded; the starting level's are used. Objects loaded this way can be destroyed and moved like any others; unloading discards those changes, and the area loads fresh next time. Loading never changes the project. In the editor, play reads the other levels as they were when play started; a streamed level's sculpted terrain shows flat in play-in-editor until it is opened in the editor once.
 
-## Terrain detail in play
+## Terrain
 
-In play and in built games, a terrain with a resolution of 64 or more is drawn in chunks of 32 by 32 cells. Chunks far from the camera use a half, a quarter or an eighth of the vertices per side, and short skirts under their edges hide the seams where chunks of different detail meet. The editor always shows the full-resolution terrain, which sculpting, painting and placement work on. Collisions always use the full-resolution heights.
+The **Terrain** tool has three tabs: **Manage** makes terrains and exchanges them with other tools, **Sculpt** shapes the ground and **Paint** textures it. The brush lies on the ground itself, showing its outer edge and the ring where its strength starts to fade. It works on whichever terrain is under it, in strokes that are one undo step each.
+
+### Brush
+
+| Setting | What it does |
+|---|---|
+| Size | Across the brush, in metres. Keys: **[** and **]** |
+| Falloff | How much of the brush fades towards its edge: 0 is full strength right up to the edge, 100 fades from the very centre. Keys: **Shift+[** and **Shift+]** |
+| Falloff shape | **Smooth**, **Linear**, **Spherical** (stays strong, then drops at the edge) or **Tip** (a sharp point) |
+| Shape | **Circle**; **Stamp**, a picture from your textures stretched across the brush, whose brightness sets its strength, for stamping craters, peaks and rock shapes; or **Pattern**, a picture tiled over the ground and seen through the circle |
+| Strength | How fast a tool works. Keys: **,** and **.** |
+
+Brush tools keep working while the left button is held, even with the mouse still, and do the same work in the same time at any frame rate. With a pen, pressure scales the strength.
+
+### Sculpt tools
+
+| Tool | Use |
+|---|---|
+| Sculpt | Raises the ground; **Shift** lowers it |
+| Smooth | Evens out bumps without changing the overall height. **Reach** is how many grid cells each way it averages over |
+| Flatten | Levels to the height under the first click. **Direction** can limit it to filling up or cutting down. **Fixed height** levels to a height you set (**Ctrl-click** the ground to take its height). **Follow the slope** levels along the slope under the first click, for roads on a hillside. **Keep sampling** takes the height again all through the stroke |
+| Ramp | Click the bottom and the top, then **Build Ramp**: a straight road of ground **Width** across, whose sides blend back into the terrain |
+| Erosion | Steep ground slumps, as weathering does. **Steepest** is how much higher than its neighbour a point can stand |
+| Hydro Erosion | Rain runs downhill, cutting channels and dropping silt where it slows |
+| Noise | Roughens the ground with bumps **Scale** metres across; **Direction** can make them only rise or only cut in |
+| Terrace | Cuts the ground into steps **Step height** metres apart |
+| Holes | Cuts the ground away for cave and tunnel mouths; **Shift** fills it back in. Holes are real: you fall through them, enemies path around them and light comes through |
+| Mirror | Copies one half of the terrain onto the other about a line, or turned half way round, for symmetric maps |
+| Copy | Drag a box on the ground to copy it, then click to paste it anywhere, on this terrain or another. **Paste** can be limited to raising or lowering |
+
+Escape cancels a ramp or a paste in progress.
+
+### Manage
+
+**New Terrain** sets its width, depth and resolution (cells along each side) and where its middle goes; a new terrain starts beside the last, so their edges meet. A level can hold as many terrains as you like. **From File** makes one from a heightmap.
+
+For the selected terrain:
+
+- **Resolution** resamples its heights and paint to a finer or coarser grid, keeping its shape.
+- **Import** replaces its heights from a heightmap: a 16-bit (or 8-bit) grey PNG, or a square of 16-bit samples as a RAW file (`.r16`, `.raw`). **Height range** says which heights the file's darkest and brightest values stand for.
+- **Export PNG** and **Export RAW** save its heights as 16-bit files. The file's name records its height range, and importing it again restores the same heights.
+
+### Detail
+
+A terrain with a resolution of 64 or more is drawn in chunks of 32 by 32 cells, in the editor as in play. Chunks far from the camera use a half, a quarter or an eighth of the vertices per side, and short skirts under their edges hide the seams where chunks of different detail meet. Tools always work on the full-resolution heights, and collisions use them too. A stroke only updates what its brush covers, so large terrains sculpt as smoothly as small ones.
 
 ## Procedural scatter
 
@@ -547,9 +591,9 @@ Copies stand on the terrain and meshes in the area, never on other scatters. Whe
 
 A terrain can blend up to four textures. Import the textures in the Content Browser first.
 
-1. Select the terrain and open the **Sculpt** tab of the terrain inspector.
+1. Open the **Terrain** tool's **Paint** tab.
 2. Under **Texture Layers**, click **+ Add Layer** and choose a **Texture**. **Tiling** sets how many times the texture repeats across the terrain's width (default 16). Layer 1 is the base layer that covers the whole terrain.
-3. Click **Paint** (under Raise, Lower, Flatten and Smooth), or a layer's brush icon to paint that layer. **Radius (m)** and **Strength (%)** set the brush.
+3. In the **Paint** tab, click a layer's brush icon to paint that layer. The [brush](#brush) settings set its size and strength.
 
 To erase paint, paint layer 1 over it. Only the last layer can be removed; its paint goes back to layer 1. Removing layer 1 returns the terrain to its plain material.
 
