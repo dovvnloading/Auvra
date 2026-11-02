@@ -8,7 +8,7 @@ import type { PartWeights, SkinnedPart } from '../utils/autoRig/skinWeights';
 // Reads a body from its mesh and fits a skeleton and weights to it, which takes too long for the UI thread.
 export type AutoRigRequest =
   | { type: 'read'; triangles: Float32Array }
-  | { type: 'rig'; triangles: Float32Array; parts: SkinnedPart[]; reading: BodyReading; moved: MarkerName[]; original: BodyMarkers };
+  | { type: 'rig'; triangles: Float32Array; parts: SkinnedPart[]; reading: BodyReading; moved: MarkerName[]; original: BodyMarkers; withFingers: boolean };
 
 export type AutoRigResponse =
   | { type: 'progress'; share: number }
@@ -33,7 +33,7 @@ scope.onmessage = (event: MessageEvent<AutoRigRequest>) => {
     }
     const { joints, weights } = rigBody(request.triangles, request.parts, request.reading, request.moved, (share) => {
       scope.postMessage({ type: 'progress', share } satisfies AutoRigResponse);
-    }, request.original);
+    }, request.original, request.withFingers);
     const buffers = weights.flatMap((part) => [part.joints.buffer, part.weights.buffer]) as ArrayBuffer[];
     scope.postMessage({ type: 'rigged', joints, weights } satisfies AutoRigResponse, buffers);
   } catch (error) {

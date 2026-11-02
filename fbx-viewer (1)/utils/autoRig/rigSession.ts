@@ -22,6 +22,8 @@ export interface RigSessionState {
   guessed: boolean;
   /** Moving a marker moves its partner on the other side, as in a mirror. */
   bothSides: boolean;
+  /** Hands that have room for them get finger bones. */
+  withFingers: boolean;
   /** The marker under the pointer, or being moved. */
   activeMarker: MarkerName | null;
   /** How far the skeleton is along, from 0 to 1. */
@@ -29,7 +31,7 @@ export interface RigSessionState {
   error: string | null;
 }
 
-const IDLE: RigSessionState = { stage: 'idle', modelId: null, reading: null, guessed: false, bothSides: true, activeMarker: null, progress: 0, error: null };
+const IDLE: RigSessionState = { stage: 'idle', modelId: null, reading: null, guessed: false, bothSides: true, withFingers: true, activeMarker: null, progress: 0, error: null };
 
 let state: RigSessionState = IDLE;
 const listeners = new Set<() => void>();
@@ -69,11 +71,12 @@ const dropWorking = (): void => {
 
 export const cancelRig = (): void => {
   dropWorking();
-  state = { ...IDLE, bothSides: state.bothSides };
+  state = { ...IDLE, bothSides: state.bothSides, withFingers: state.withFingers };
   for (const listener of listeners) listener();
 };
 
 export const setRigBothSides = (bothSides: boolean): void => setState({ bothSides });
+export const setRigWithFingers = (withFingers: boolean): void => setState({ withFingers });
 export const setActiveRigMarker = (activeMarker: MarkerName | null): void => setState({ activeMarker });
 
 /** The primitives of a source's geometry, in the document's space, skipping what is not a triangle mesh. */
@@ -115,7 +118,7 @@ const askWorker = (worker: Worker, request: AutoRigRequest, onProgress?: (share:
 export const failRig = (error: unknown, fallback: string): void => {
   frontendDiagnostics.failure('auto_rig_read_failed', error);
   dropWorking();
-  state = { ...IDLE, bothSides: state.bothSides, error: error instanceof Error ? error.message : fallback };
+  state = { ...IDLE, bothSides: state.bothSides, withFingers: state.withFingers, error: error instanceof Error ? error.message : fallback };
   for (const listener of listeners) listener();
 };
 
@@ -123,7 +126,7 @@ export const failRig = (error: unknown, fallback: string): void => {
 export const startRig = async (modelId: string, file: File, options: { convert?: ModelConvertOptions; images?: readonly File[] } = {}): Promise<void> => {
   dropWorking();
   const mine = session;
-  setState({ ...IDLE, bothSides: state.bothSides, stage: 'reading', modelId });
+  setState({ ...IDLE, bothSides: state.bothSides, withFingers: state.withFingers, stage: 'reading', modelId });
   try {
     const source = await readGltfSource(file, options);
     if (mine !== session) return;
@@ -192,7 +195,7 @@ export const finishRig = async (fileName: string): Promise<File | null> => {
     const parts = current.primitives.map((part) => ({ positions: part.positions, indices: part.indices }));
     const response = await askWorker(
       current.worker,
-      { type: 'rig', triangles: current.triangles, parts, reading, moved: [...current.moved], original: current.original },
+      { type: 'rig', triangles: current.triangles, parts, reading, moved: [...current.moved], original: current.original, withFingers: state.withFingers },
       (share) => { if (mine === session) setState({ progress: share }); },
     );
     if (mine !== session) return null;

@@ -1,6 +1,7 @@
 import { largestPiece } from './bodyField';
 import { turnAboutY, turnSoupAboutY, type BodyExtents, type BodyMarkers, type BodyReading, type MarkerName, type Point } from './bodyMarkers';
 import { bodySkeleton, turnJointsAboutY, type RigJoint } from './bodySkeleton';
+import { readFingers } from './handReading';
 import { bindSkin, type PartWeights, type SkinnedPart } from './skinWeights';
 import { soupBounds, voxelIndex, voxelize, voxelOf, type TriangleSoup, type VoxelGrid } from './voxels';
 
@@ -103,7 +104,7 @@ export interface RiggedBody {
 /**
  * The skeleton for `reading`'s markers, with `moved` ones put back in the limb's middle, and its
  * weights on `parts`. `original` holds where the markers were before they were moved, if any were;
- * everything is in the mesh's space.
+ * everything is in the mesh's space. With `withFingers`, hands that have room for them get fingers.
  */
 export const rigBody = (
   triangles: TriangleSoup,
@@ -112,6 +113,7 @@ export const rigBody = (
   moved: readonly MarkerName[],
   onProgress?: (share: number) => void,
   original?: BodyMarkers,
+  withFingers = true,
 ): RiggedBody => {
   // Everything is worked out on a body turned to face +Z, then turned back.
   const cos = reading.facing[1];
@@ -140,7 +142,10 @@ export const rigBody = (
     }
   }
   onProgress?.(0.05);
-  const joints = bodySkeleton(markers, extents);
+  const joints = bodySkeleton(markers, extents, withFingers ? {
+    left: readFingers(uprightTriangles, markers.leftWrist, extents.leftHandTip),
+    right: readFingers(uprightTriangles, markers.rightWrist, extents.rightHandTip),
+  } : {});
   const uprightParts = square ? parts : parts.map((part) => ({ ...part, positions: turnSoupAboutY(part.positions, sin, cos) }));
   const weights = bindSkin(uprightTriangles, joints, uprightParts, (share) => onProgress?.(0.05 + share * 0.95));
   return { joints: square ? joints : turnJointsAboutY(joints, -sin, cos), weights };

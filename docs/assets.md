@@ -52,6 +52,8 @@ The body is read from its mesh, and markers appear on its chin, shoulders, elbow
 
 **Make the skeleton** gives the model the bones most character rigs have, turned the way those rigs turn them, with each vertex following the bones nearest it through the body, in lengths of the limb's own thickness. A hand resting on a thigh does not pull the thigh along, and loose pieces such as a belt follow the bones nearest them. Materials and images stay as they were.
 
+**Give the hands fingers** adds three bones to each finger, so clips that curl the fingers, such as holding a weapon, show. Fingers that stand apart are followed where they are. A hand whose fingers are grown together into a mitten, as on many generated meshes, is shared out across its width, with each finger ending at the hand's outline. Nothing behind the wrist follows a finger. Turn it off to keep each hand as one bone.
+
 The model keeps its place in levels and blueprints and goes among the characters, its source now a GLB in metres. Clips from any humanoid rig can then be imported onto it.
 
 ## Reimport and import settings

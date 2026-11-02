@@ -1,5 +1,6 @@
 import { Matrix4, Quaternion, Vector3 } from 'three';
 import type { BodyExtents, BodyMarkers, Point } from './bodyMarkers';
+import type { FingerReading } from './handReading';
 
 /**
  * The skeleton a rigged body gets, fitted to its markers. Its bones are named as most character rigs
@@ -17,6 +18,8 @@ export interface RigJoint {
   rotation: [number, number, number, number];
   /** Whether the mesh moves with it: the last joint of a chain only marks where its parent ends. */
   skins: boolean;
+  /** For a finger's joint, the hand it belongs to: the hand's weights are shared out among them on a finer grid. */
+  handOf?: number;
 }
 
 /** Shares of the body's height. */
@@ -50,9 +53,9 @@ const along = (a: Point, b: Point, share: number): Point => [a[0] + (b[0] - a[0]
 
 /**
  * Joints, parents before children, for a body with these markers, standing facing +Z with its left
- * at +X. A chain's first child is the next bone along it.
+ * at +X. A chain's first child is the next bone along it. Hands without `fingers` are one bone.
  */
-export const bodySkeleton = (markers: BodyMarkers, extents: BodyExtents): RigJoint[] => {
+export const bodySkeleton = (markers: BodyMarkers, extents: BodyExtents, fingers: { left?: readonly FingerReading[] | null; right?: readonly FingerReading[] | null } = {}): RigJoint[] => {
   const height = extents.headTop[1] - extents.floor;
   const joints: RigJoint[] = [];
   const add = (name: string, parent: number, position: Point, skins = true): number => {
@@ -71,16 +74,23 @@ export const bodySkeleton = (markers: BodyMarkers, extents: BodyExtents): RigJoi
   const head = add('Head', neck, [chin[0], chin[1] + height * PROPORTION.headAboveChin, chin[2]]);
   add('HeadTop_End', head, [chin[0], extents.headTop[1], chin[2]], false);
 
-  const arm = (side: 'Left' | 'Right', shoulder: Point, elbow: Point, wrist: Point, tip: Point): void => {
+  const arm = (side: 'Left' | 'Right', shoulder: Point, elbow: Point, wrist: Point, tip: Point, sideFingers?: readonly FingerReading[] | null): void => {
     const sign = side === 'Left' ? 1 : -1;
     const collar = add(`${side}Shoulder`, spine2, [chin[0] + sign * height * PROPORTION.collarAcross, shoulder[1], (shoulder[2] + neckAt[2]) / 2]);
     const upper = add(`${side}Arm`, collar, shoulder);
     const lower = add(`${side}ForeArm`, upper, elbow);
     const hand = add(`${side}Hand`, lower, wrist);
     add(`${side}HandTip_End`, hand, tip, false);
+    for (const finger of sideFingers ?? []) {
+      let parent = hand;
+      finger.joints.forEach((place, joint) => {
+        parent = add(`${side}Hand${finger.name}${joint + 1}`, parent, place, joint < 3);
+        joints[parent].handOf = hand;
+      });
+    }
   };
-  arm('Left', markers.leftShoulder, markers.leftElbow, markers.leftWrist, extents.leftHandTip);
-  arm('Right', markers.rightShoulder, markers.rightElbow, markers.rightWrist, extents.rightHandTip);
+  arm('Left', markers.leftShoulder, markers.leftElbow, markers.leftWrist, extents.leftHandTip, fingers.left);
+  arm('Right', markers.rightShoulder, markers.rightElbow, markers.rightWrist, extents.rightHandTip, fingers.right);
 
   const leg = (side: 'Left' | 'Right', knee: Point, ankle: Point, toe: Point): void => {
     const thigh: Point = [groin[0] + (knee[0] - groin[0]) * PROPORTION.thighAcross, groin[1] + height * PROPORTION.thighAboveGroin, groin[2]];

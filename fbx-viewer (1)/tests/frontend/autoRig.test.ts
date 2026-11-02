@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { describe, expect, it } from 'vitest';
 import { readBody, turnAboutY, turnSoupAboutY, type Point } from '../../utils/autoRig/bodyMarkers';
 import { bodySkeleton } from '../../utils/autoRig/bodySkeleton';
+import { readFingers } from '../../utils/autoRig/handReading';
 import { buildRiggedGlb, trianglesOf, type GltfJson, type RigPrimitive } from '../../utils/autoRig/riggedGlb';
 import { rigBody, standardReading } from '../../utils/autoRig/rigBody';
 import { bindSkin } from '../../utils/autoRig/skinWeights';
@@ -246,6 +247,101 @@ describe('skin weights', () => {
       }
     }
     expect([...moved].some((name) => /Hips|Spine/.test(name))).toBe(true);
+  });
+});
+
+describe('fingers', () => {
+  /** An arm held out with a palm, as long as the hand takes it, in `pieces`. */
+  const handWith = (pieces: [Point, Point][]): Float32Array => Float32Array.from([
+    ...box([0, -0.03, -0.03], [0.1, 0.03, 0.03], 0.01),
+    ...pieces.flatMap(([min, max]) => box(min, max, 0.005)),
+  ]);
+  const WRIST: Point = [0.1, 0, 0];
+  const TIP: Point = [0.28, 0, 0];
+
+  it('shares a mitten out across its width, index towards the front', () => {
+    const fingers = readFingers(handWith([[[0.1, -0.015, -0.05], [0.28, 0.015, 0.05]]]), WRIST, TIP)!;
+    expect(fingers.map((finger) => finger.name)).toEqual(['Index', 'Middle', 'Ring', 'Pinky']);
+    const across = fingers.map((finger) => finger.joints[0][2]);
+    expect([...across].sort((a, b) => b - a)).toEqual(across);
+    expect(across[0]).toBeGreaterThan(0.02);
+    expect(across[3]).toBeLessThan(-0.02);
+    for (const finger of fingers) {
+      // From about halfway along the hand to its end, in the middle of its thickness.
+      expect(finger.joints[0][0]).toBeGreaterThan(0.18);
+      expect(finger.joints[0][0]).toBeLessThan(0.23);
+      expect(finger.joints[3][0]).toBeGreaterThan(0.26);
+      expect(Math.abs(finger.joints[1][1])).toBeLessThan(0.005);
+    }
+  });
+
+  it('finds a thumb standing out from the hand', () => {
+    const thumb: [Point, Point] = [[0.12, -0.012, 0.05], [0.17, 0.012, 0.09]];
+    const fingers = readFingers(handWith([[[0.1, -0.015, -0.05], [0.28, 0.015, 0.05]], thumb]), WRIST, TIP)!;
+    expect(fingers[0].name).toBe('Thumb');
+    expect(fingers[0].joints[3][2]).toBeGreaterThan(0.08);
+    expect(fingers).toHaveLength(5);
+  });
+
+  it('follows fingers that stand apart, each to its own length', () => {
+    const fingers = readFingers(handWith([
+      [[0.1, -0.015, -0.05], [0.19, 0.015, 0.05]],
+      [[0.19, -0.01, 0.033], [0.27, 0.01, 0.05]],
+      [[0.19, -0.01, 0.008], [0.28, 0.01, 0.025]],
+      [[0.19, -0.01, -0.025], [0.27, 0.01, -0.008]],
+      [[0.19, -0.01, -0.05], [0.24, 0.01, -0.033]],
+    ]), WRIST, TIP)!;
+    expect(fingers.map((finger) => finger.name)).toEqual(['Index', 'Middle', 'Ring', 'Pinky']);
+    expect(fingers[0].joints[3][2]).toBeCloseTo(0.04, 1);
+    expect(fingers[3].joints[3][0]).toBeLessThan(0.25);
+    expect(fingers[1].joints[3][0]).toBeGreaterThan(0.26);
+  });
+
+  it('leaves a stump with nothing to read as one bone', () => {
+    expect(readFingers(handWith([]), [0.5, 0, 0], [0.6, 0, 0])).toBeNull();
+  });
+
+  describe('on a rigged body', () => {
+    const soup = figure();
+    const reading = readBody(soup)!;
+    const { joints, weights } = rigBody(soup, [partOf(soup)], reading, []);
+    const [part] = weights;
+    const influenced = (x: number, y: number, z: number): string[] => {
+      let best = 0;
+      let bestDistance = Infinity;
+      for (let vertex = 0; vertex < soup.length / 3; vertex += 1) {
+        const gap = (soup[vertex * 3] - x) ** 2 + (soup[vertex * 3 + 1] - y) ** 2 + (soup[vertex * 3 + 2] - z) ** 2;
+        if (gap < bestDistance) {
+          bestDistance = gap;
+          best = vertex;
+        }
+      }
+      const names: string[] = [];
+      for (let slot = 0; slot < 4; slot += 1) if (part.weights[best * 4 + slot] > 0) names.push(joints[part.joints[best * 4 + slot]].name);
+      return names;
+    };
+
+    it('names them so they read as fingers, and ends each on a joint that moves nothing', () => {
+      expect(humanoidRole('LeftHandIndex1')).toBe('LeftIndex1');
+      for (const name of ['LeftHandIndex1', 'LeftHandPinky3', 'RightHandMiddle2']) {
+        const joint = joints.find((candidate) => candidate.name === name)!;
+        expect(joint.skins).toBe(true);
+        expect(joint.handOf).toBeDefined();
+      }
+      expect(joints.find((joint) => joint.name === 'LeftHandIndex4')!.skins).toBe(false);
+    });
+
+    it('gives the end of the hand to the fingers, and nothing behind the wrist', () => {
+      expect(influenced(0.82, 1.41, 0.04).some((name) => /LeftHand(Index|Middle)/.test(name))).toBe(true);
+      expect(influenced(0.82, 1.41, -0.04).some((name) => /LeftHand(Ring|Pinky)/.test(name))).toBe(true);
+      expect(influenced(0.6, 1.45, 0.04).some((name) => /LeftHand[A-Z]/.test(name))).toBe(false);
+      expect(influenced(0.82, 1.41, 0.04).some((name) => name.startsWith('Right'))).toBe(false);
+    });
+
+    it('can leave them out', () => {
+      const { joints: plain } = rigBody(soup, [partOf(soup)], reading, [], undefined, undefined, false);
+      expect(plain.some((joint) => joint.handOf !== undefined)).toBe(false);
+    });
   });
 });
 

@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import { Bone, Loader2 } from 'lucide-react';
 import { useScene } from '../../../context/SceneContext';
 import type { LoadedModelData } from '../../../types';
-import { cancelRig, failRig, finishRig, setRigBothSides, startRig, useRigSession } from '../../../utils/autoRig/rigSession';
+import { cancelRig, failRig, finishRig, setRigBothSides, setRigWithFingers, startRig, useRigSession } from '../../../utils/autoRig/rigSession';
 import { convertOptionsFor } from '../../../utils/processing/ModelTransforms';
 import { Button } from '../kit';
 
@@ -41,6 +41,10 @@ export const AutoRigPanel: React.FC<{ model: LoadedModelData }> = ({ model }) =>
         <label className="flex h-6 cursor-pointer items-center gap-2">
           <input type="checkbox" checked={session.bothSides} onChange={(event) => setRigBothSides(event.target.checked)} className="h-3.5 w-3.5 shrink-0 accent-blue-500" />
           Move both sides together
+        </label>
+        <label className="flex h-6 cursor-pointer items-center gap-2">
+          <input type="checkbox" checked={session.withFingers} onChange={(event) => setRigWithFingers(event.target.checked)} className="h-3.5 w-3.5 shrink-0 accent-blue-500" />
+          Give the hands fingers
         </label>
         {session.error && <p className="text-red-400">{session.error}</p>}
         <div className="flex items-center gap-2">
