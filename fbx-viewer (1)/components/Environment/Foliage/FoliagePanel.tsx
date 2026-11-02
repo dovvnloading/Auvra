@@ -380,6 +380,7 @@ export const FoliagePanel: React.FC<FoliagePanelProps> = ({ settings, onSettings
                             </Section>
                             <Section title="Where It Grows">
                                 <div className="space-y-1">
+                                    <Toggle label="Keep clear of objects" checked={focused.avoidWorld} hint="Skip places where the model's box would overlap an object in the level, such as a rock or a wall" onChange={(avoidWorld) => updateFocused({ avoidWorld })} />
                                     <RangeRow label="Slope" value={focused.slope} step={1} min={0} max={90} hint="Degrees of ground slope" onChange={(slope) => updateFocused({ slope })} />
                                     <RangeRow label="Height" value={focused.height} step={1} hint="World heights, in metres" onChange={(height) => updateFocused({ height })} />
                                 </div>

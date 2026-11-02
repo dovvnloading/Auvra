@@ -4,8 +4,8 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { castTerrainMeshes } from '../../../utils/surfacePlacement';
 import { useGameContent } from '../../../runtime/GameContentContext';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
-import { pictureFromImage, unionRect, type TerrainBrushPicture, type TerrainBrushStamp, type TerrainGridRect } from './terrainBrush';
-import { hideTerrainBrush, hideTerrainRect, showTerrainBrush, showTerrainRect } from './terrainBrushOverlay';
+import { brushMask, pictureFromImage, unionRect, type TerrainBrushPicture, type TerrainBrushStamp, type TerrainGridRect } from './terrainBrush';
+import { getNoRegion, hideTerrainBrush, hideTerrainRect, hideTerrainWorkingViews, showTerrainBrush, showTerrainRect, TERRAIN_BRUSH_UNIFORMS } from './terrainBrushOverlay';
 import type { TerrainLiveEdit } from './terrainLiveEdit';
 import { applyFlattenLayer, applyNoiseLayer, applyPaintLayer, applySmoothLayer, layerWeightNear, type TerrainWeightGrid, type WeightToolContext } from './terrainWeightTools';
 import {
@@ -58,6 +58,8 @@ const MAX_STROKE_STEPS = 16;
 /** Longest time one frame counts for: a hitch must not make a stroke jump. */
 const MAX_FRAME_TIME = 0.05;
 const REFRESH_INTERVAL = 0.5;
+/** How fast the Region tool chooses ground at full strength: the whole way in about a tenth of a second. */
+const REGION_SPEED = 10;
 
 const isTyping = (target: EventTarget | null): boolean => {
     const element = target as HTMLElement | null;
@@ -92,7 +94,7 @@ interface TerrainBrushToolProps {
     onHolesCommit: (objectId: string, holes: number[] | undefined) => void;
     /** The first edit of a stroke, before it is committed (take an undo snapshot). */
     onStrokeStart: () => void;
-    /** A stroke began on this terrain: it becomes the one the panel shows. */
+    /** The brush moved onto this terrain, or a stroke began on it: it becomes the one the panel shows. */
     onTerrainTouched: (objectId: string) => void;
 }
 
@@ -160,9 +162,11 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
         mesh.getWorldScale(_scale);
         const scaleX = Math.max(1e-6, _scale.x);
         const scaleY = Math.max(1e-6, _scale.y);
-        const { radius, falloff, falloffType, shape, pictureRotation, patternSize } = latest.current.settings;
+        const { radius, falloff, falloffType, shape, pictureRotation, patternSize, regionLimit, regionInvert, tab, tool } = latest.current.settings;
+        const limited = regionLimit && terrainToolStore.get().hasRegion && !(tab === 'sculpt' && tool === 'region');
         return {
             x, y,
+            region: limited ? { data: liveEditOf(mesh)?.regionData ?? null, invert: regionInvert } : null,
             radiusX: radius / scaleX,
             radiusY: radius / scaleY,
             falloff, falloffType,
@@ -271,6 +275,13 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
             if ((child as THREE.Mesh).isMesh && child.userData.terrainEdit) found.push(child as THREE.Mesh);
         });
         meshes.current = found;
+        noteRegions();
+    };
+
+    /** The terrains can change under the tool, and a region goes with its terrain. */
+    const noteRegions = () => {
+        const hasRegion = meshes.current.some(mesh => liveEditOf(mesh)?.regionData);
+        if (hasRegion !== terrainToolStore.get().hasRegion) terrainToolStore.set({ hasRegion });
     };
 
     // One-off actions from the panel.
@@ -319,6 +330,9 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
                 if (rect.c1 - rect.c0 < 1 || rect.r1 - rect.r0 < 1) return;
                 const clip = copyRegion(live, rect, 1 / Math.max(1e-6, _scale.z), _scale.x, _scale.y);
                 terrainToolStore.set({ clip, pasting: true });
+            } else if (command.kind === 'clear-region') {
+                for (const mesh of meshes.current) liveEditOf(mesh)?.clearRegion();
+                noteRegions();
             }
         };
         terrainToolStore.handleCommands(handle);
@@ -328,6 +342,7 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
     useFrame((_state, delta) => {
         if (!enabled) {
             hideTerrainBrush();
+            hideTerrainWorkingViews();
             return;
         }
         sinceRefresh.current += delta;
@@ -340,13 +355,21 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
         const hit = castTerrainMeshes(meshes.current, raycaster);
         const current = latest.current.settings;
         const strokes = stroke.current;
+        const regionTool = current.tab === 'sculpt' && current.tool === 'region';
+        TERRAIN_BRUSH_UNIFORMS.terrainRegionShow.value = regionTool || current.regionLimit ? 1 : 0;
+        TERRAIN_BRUSH_UNIFORMS.terrainShowLayerUsage.value = current.tab === 'paint' && current.showLayerUsage ? 1 : 0;
+        for (const mesh of meshes.current) {
+            const uniform = (mesh.material as THREE.Material).userData.terrainRegion as THREE.IUniform<THREE.Texture> | undefined;
+            if (uniform) uniform.value = liveEditOf(mesh)?.regionTexture ?? getNoRegion();
+        }
         hoverPoint.current = hit ? hit.point : null;
+        if (hit && !strokes && hit.mesh !== hoverMesh.current) latest.current.onTerrainTouched(hit.mesh.userData.levelObjectId as string);
         hoverMesh.current = hit ? hit.mesh : hoverMesh.current;
 
         if (hit) {
             const painting = current.tab === 'paint';
             const paintable = !painting || canPaint(getTerrainPaintTarget(hit.mesh), current.paintLayer);
-            const editable = !hit.mesh.userData.heightsPending && paintable && (painting || !hit.mesh.userData.terrainEditBlock);
+            const editable = !hit.mesh.userData.heightsPending && paintable && (painting || regionTool || !hit.mesh.userData.terrainEditBlock);
             const colour = !editable ? OFF_COLOUR : shiftHeld.current ? INVERT_COLOUR : BRUSH_COLOUR;
             const discrete = !painting && (current.tool === 'ramp' || current.tool === 'mirror' || (current.tool === 'copy' && !toolState.pasting));
             const radius = discrete ? 0.6 : current.radius;
@@ -399,6 +422,9 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
                     }
                 } else if (current.tool === 'holes') {
                     if (applyHoles(active.live, stampAt(active.mesh, _step.x, _step.y), invert, (rect, weights, cut) => active.live.markHoles(rect, weights, cut))) noteChange(active);
+                } else if (regionTool) {
+                    const mask = brushMask(active.live, stampAt(active.mesh, _step.x, _step.y));
+                    if (mask) active.live.markRegion(mask, current.strength * pressedAt.current.pressure * REGION_SPEED * (dt / steps), invert);
                 } else {
                     dirty = unionRect(dirty, applyTool(active, _step.x, _step.y, dt / steps, invert));
                 }
@@ -410,6 +436,7 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
             }
         }
         strokeWorld.current.copy(hit.point);
+        if (regionTool) noteRegions();
     });
 
     // Input
@@ -441,6 +468,12 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
                     hideTerrainRect();
                     terrainToolStore.set({ region: null });
                 }
+                return;
+            }
+            const { tab, tool } = latest.current.settings;
+            if (tab === 'sculpt' && tool === 'region') {
+                for (const { live } of strokes) live.settleRegion();
+                noteRegions();
                 return;
             }
             strokes.forEach(commitStroke);
@@ -506,7 +539,8 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
                 return;
             }
 
-            if (!painting && current.tool !== 'holes' && hit.mesh.userData.terrainEditBlock) return;
+            const regionTool = !painting && current.tool === 'region';
+            if (!painting && !regionTool && current.tool !== 'holes' && hit.mesh.userData.terrainEditBlock) return;
             const grid = live;
             const paintTarget = getTerrainPaintTarget(hit.mesh);
             hit.mesh.getWorldScale(_scale);
@@ -519,7 +553,7 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
             snapshotTaken.current = false;
             strokeWorld.current.copy(hit.point);
             // Neighbouring terrains take the stroke too, so it does not stop at a seam.
-            const editable = [hit.mesh, ...meshes.current.filter(mesh => mesh !== hit.mesh && !mesh.userData.heightsPending && (painting || current.tool === 'holes' || !mesh.userData.terrainEditBlock))];
+            const editable = [hit.mesh, ...meshes.current.filter(mesh => mesh !== hit.mesh && !mesh.userData.heightsPending && (painting || regionTool || current.tool === 'holes' || !mesh.userData.terrainEditBlock))];
             stroke.current = editable.flatMap((mesh): Stroke[] => {
                 const edit = liveEditOf(mesh);
                 if (!edit) return [];
@@ -533,7 +567,7 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
                     origin: mesh.worldToLocal(hit.point.clone()),
                     regionStart: null,
                     weightTarget,
-                    before: painting ? null : edit.heights.slice(),
+                    before: painting || regionTool ? null : edit.heights.slice(),
                 }];
             });
         };
@@ -591,6 +625,7 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
     useEffect(() => () => {
         hideTerrainBrush();
         hideTerrainRect();
+        hideTerrainWorkingViews();
     }, []);
 
     // The picked region stays outlined while the Copy tool is up.

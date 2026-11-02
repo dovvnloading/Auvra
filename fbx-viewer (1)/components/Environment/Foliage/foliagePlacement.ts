@@ -164,6 +164,47 @@ export const placeFoliageInstance = (type: FoliageType, ground: FoliageGround, r
     return position;
 };
 
+const _box = new THREE.Matrix4();
+const _at = new THREE.Vector3();
+const _turn = new THREE.Quaternion();
+const _size = new THREE.Vector3();
+const _from = new THREE.Vector3();
+const _to = new THREE.Vector3();
+
+/**
+ * Whether the box of an instance (10 floats from `at`) is clear of whatever `blocked` finds along a line.
+ * It looks down through a grid of columns, which finds anything with a top, and across the box both ways,
+ * which finds walls. The bottom tenth and the outer edge are let off: models sit a little into what they
+ * stand on, and touching is not overlapping.
+ */
+export const foliageBoxIsClear = (bounds: THREE.Box3, instance: ArrayLike<number>, at: number, blocked: (from: THREE.Vector3, to: THREE.Vector3) => boolean): boolean => {
+    if (bounds.isEmpty()) return true;
+    _box.compose(
+        _at.set(instance[at], instance[at + 1], instance[at + 2]),
+        _turn.set(instance[at + 3], instance[at + 4], instance[at + 5], instance[at + 6]),
+        _size.set(instance[at + 7], instance[at + 8], instance[at + 9]),
+    );
+    const { min, max } = bounds;
+    const insetX = (max.x - min.x) * 0.05;
+    const insetZ = (max.z - min.z) * 0.05;
+    const low = min.y + (max.y - min.y) * 0.1;
+    const xs = [min.x + insetX, (min.x + max.x) / 2, max.x - insetX];
+    const zs = [min.z + insetZ, (min.z + max.z) / 2, max.z - insetZ];
+    const across = (low + max.y) / 2;
+    const line = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): boolean => blocked(
+        _from.set(x0, y0, z0).applyMatrix4(_box),
+        _to.set(x1, y1, z1).applyMatrix4(_box),
+    );
+    for (const x of xs) {
+        for (const z of zs) if (line(x, max.y, z, x, low, z)) return false;
+        if (line(x, across, zs[0], x, across, zs[2]) || line(x, across, zs[2], x, across, zs[0])) return false;
+    }
+    for (const z of zs) {
+        if (line(xs[0], across, z, xs[2], across, z) || line(xs[2], across, z, xs[0], across, z)) return false;
+    }
+    return true;
+};
+
 /** Instances the brush should hold of a type at this density, a fraction left to chance. */
 export const instancesWanted = (density: number, area: number, scale: number, random: () => number): number => {
     const exact = (density / 100) * area * scale;

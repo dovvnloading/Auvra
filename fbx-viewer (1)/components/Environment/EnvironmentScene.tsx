@@ -886,6 +886,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                 levelObjects={propObjects}
                 onSelect={handleInstancedSelect}
                 interactive={objectsInteractive}
+                placementSurface
                 hiddenIds={layerHiddenIds}
                 selectedIds={highlightedIds}
             />

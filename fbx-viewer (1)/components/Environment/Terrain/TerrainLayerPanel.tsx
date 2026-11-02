@@ -25,6 +25,8 @@ import {
     type TerrainWeightGrid,
 } from './terrainWeightTools';
 import type { PaintToolName, TerrainToolSettings } from './terrainTool';
+import { TERRAIN_LAYER_USAGE_COLOURS } from './terrainLayerMaterial';
+import { TerrainRegionNote } from './TerrainRegionNote';
 
 interface TerrainLayerPanelProps {
     terrain: LevelObject;
@@ -204,6 +206,7 @@ export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, s
             <Section title="Tool">
                 <Segmented value={settings.paintTool} options={PAINT_TOOLS} label="Paint tool" onChange={(paintTool) => change({ paintTool })} className="w-full" />
                 <p className="mt-2 text-2xs leading-relaxed text-ink-3">{toolHint}</p>
+                <TerrainRegionNote settings={settings} />
                 <div className="mt-1 space-y-1">
                     <NumberRow label="Strength" unit="%" value={Math.round(settings.strength * 100)} min={1} max={100} hint="How fast the tool works. Keys: , and ." onChange={(value) => change({ strength: value / 100 })} />
                     {settings.paintTool === 'paint' && (
@@ -255,10 +258,17 @@ export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, s
                                     <span className="block truncate text-xs text-ink">{entry.name || texture?.name || `Layer ${index + 1}`}</span>
                                     <span className="block truncate text-[10px] text-ink-3">{index === 0 ? 'Base, ' : ''}{Math.round((coverage[index] ?? 0) * 100)}% of the ground</span>
                                 </span>
+                                {settings.showLayerUsage && <span className="mr-1 h-3 w-3 shrink-0 rounded-sm" style={{ background: TERRAIN_LAYER_USAGE_COLOURS[index] }} />}
                             </button>
                         );
                     })}
                 </div>
+                {layers.length > 0 && (
+                    <label className="mt-1.5 flex min-h-[26px] cursor-pointer items-center justify-between gap-2" title="Colours the ground by layer, to see what is painted where when layers look alike">
+                        <span className="truncate text-xs text-ink-2">Show where each layer is</span>
+                        <input type="checkbox" checked={settings.showLayerUsage} onChange={(event) => change({ showLayerUsage: event.target.checked })} className="h-3.5 w-3.5 accent-[var(--accent,#e8842c)]" />
+                    </label>
+                )}
             </Section>
 
             {layer && (

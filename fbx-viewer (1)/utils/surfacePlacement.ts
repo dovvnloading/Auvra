@@ -22,6 +22,8 @@ export interface PlacementHit {
     normal: THREE.Vector3;
     /** The terrain mesh or mesh it landed on; none for the ground plane or a terrain that is not drawn. */
     object?: THREE.Object3D;
+    /** Which instance, when that mesh draws many. */
+    instanceId?: number;
 }
 
 export interface PlacementOptions {
@@ -89,6 +91,7 @@ interface RayHit {
     point: THREE.Vector3;
     normal: THREE.Vector3;
     object?: THREE.Object3D;
+    instanceId?: number;
 }
 
 const heightRangeCache = new WeakMap<object, { version: number; min: number; max: number }>();
@@ -422,9 +425,9 @@ export const createPlacementQuery = (
             if (nearest && hit.distance >= nearest.distance) continue;
             const normal = meshHitNormal(hit);
             if (normal.dot(raycaster.ray.direction) > 0) normal.negate();
-            nearest = { distance: hit.distance, point: hit.point.clone(), normal, object: hit.object };
+            nearest = { distance: hit.distance, point: hit.point.clone(), normal, object: hit.object, instanceId: hit.instanceId };
         }
-        if (nearest) return { point: nearest.point, normal: nearest.normal, object: nearest.object };
+        if (nearest) return { point: nearest.point, normal: nearest.normal, object: nearest.object, instanceId: nearest.instanceId };
         if (options.groundPlane === false) return null;
 
         const point = new THREE.Vector3();

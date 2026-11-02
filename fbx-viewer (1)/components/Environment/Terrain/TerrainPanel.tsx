@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-    Activity, Box, ClipboardCopy, Combine, Download, Droplets, Eye, EyeOff, FlipHorizontal2, Hammer, Layers, Lock, LockOpen, Minus, Mountain, Plus, Rows3, Trash2, TrendingUp, Upload, Waves, Wind, CircleDashed, Scaling,
+    Activity, Box, BoxSelect, ClipboardCopy, Combine, Download, Droplets, Eye, EyeOff, FlipHorizontal2, Hammer, Layers, Lock, LockOpen, Minus, Mountain, Plus, Rows3, Trash2, TrendingUp, Upload, Waves, Wind, CircleDashed, Scaling,
 } from 'lucide-react';
 import { useScene } from '../../../context/SceneContext';
+import { TerrainRegionNote } from './TerrainRegionNote';
 import { useNotification } from '../../../context/NotificationContext';
 import { LevelObject, TerrainData } from '../../../types';
 import { editorSession } from '../../../utils/editorSession';
@@ -44,6 +45,7 @@ const SCULPT_TOOLS: { tool: SculptToolName; icon: React.ReactNode; hint: string 
     { tool: 'holes', icon: <CircleDashed size={14} />, hint: 'Hold to cut holes in the ground for caves and tunnels. Shift fills them.' },
     { tool: 'mirror', icon: <FlipHorizontal2 size={14} />, hint: 'Copies one half of the terrain onto the other, for symmetric maps.' },
     { tool: 'copy', icon: <ClipboardCopy size={14} />, hint: 'Drag a box on the ground to copy it, then click to paste it anywhere.' },
+    { tool: 'region', icon: <BoxSelect size={14} />, hint: 'Hold to choose the ground the brushes may change. Shift takes it away.' },
 ];
 
 const FALLOFFS: { label: string; value: TerrainBrushFalloff }[] = [
@@ -199,6 +201,15 @@ const ToolOptions: React.FC<{ settings: TerrainToolSettings; change: (changes: P
                     <NumberRow label="Sharpness" unit="%" value={Math.round(settings.terraceSharpness * 100)} min={0} max={100} onChange={(value) => change({ terraceSharpness: value / 100 })} />
                 </>
             );
+        case 'region':
+            return (
+                <>
+                    {strength}
+                    <Toggle label="Limit brushes to it" checked={settings.regionLimit} hint="Every brush, in Sculpt and in Paint, only changes the chosen ground" onChange={(regionLimit) => change({ regionLimit })} />
+                    <Toggle label="Work outside it instead" checked={settings.regionInvert} hint="Protect the chosen ground and change the rest" onChange={(regionInvert) => change({ regionInvert })} />
+                    <Button size="md" className="mt-1 w-full" disabled={!toolState.hasRegion} onClick={() => terrainToolStore.command({ kind: 'clear-region' })}>Clear Region</Button>
+                </>
+            );
         case 'mirror':
             return (
                 <>
@@ -347,6 +358,7 @@ const SculptTab: React.FC<{ settings: TerrainToolSettings; change: (changes: Par
                     ))}
                 </div>
                 <p className="mt-2 text-2xs leading-relaxed text-ink-3">{current.hint}</p>
+                {settings.tool !== 'region' && <TerrainRegionNote settings={settings} />}
             </Section>
             {settings.tool !== 'holes' && (
                 <Section title={`${SCULPT_TOOL_LABELS[settings.tool]} Settings`}>

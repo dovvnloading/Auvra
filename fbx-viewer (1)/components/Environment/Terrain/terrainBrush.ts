@@ -33,6 +33,14 @@ export interface TerrainEditGrid {
   depth: number;
 }
 
+/** A part of the terrain the brushes are limited to. */
+export interface TerrainBrushRegion {
+  /** How chosen each sample is (0-255), row by row; null when none of this terrain is. */
+  data: Uint8Array | null;
+  /** Brushes work outside it instead. */
+  invert: boolean;
+}
+
 export interface TerrainBrushStamp {
   /** Centre in the plane's local units. */
   x: number;
@@ -49,6 +57,7 @@ export interface TerrainBrushStamp {
   rotation?: number;
   /** Local units one tile of a pattern covers. */
   patternSize?: number;
+  region?: TerrainBrushRegion | null;
 }
 
 /** The weight of a sample `t` of the way through the falloff band (0 inner edge, 1 outer edge). */
@@ -107,6 +116,22 @@ export interface TerrainBrushMask {
 
 let scratchMask = new Float32Array(1024);
 
+/** Scales a mask by a region; false when none of the mask is left. */
+const limitToRegion = (grid: TerrainEditGrid, { rect, weights, stride }: TerrainBrushMask, { data, invert }: TerrainBrushRegion): boolean => {
+  if (!data || data.length !== grid.columns * grid.rows) return invert;
+  let left = false;
+  let slot = 0;
+  for (let row = rect.r0; row <= rect.r1; row++) {
+    for (let column = rect.c0; column < rect.c0 + stride; column++, slot++) {
+      const chosen = data[row * grid.columns + column] / 255;
+      const weight = weights[slot] * (invert ? 1 - chosen : chosen);
+      weights[slot] = weight;
+      if (weight > 0) left = true;
+    }
+  }
+  return left;
+};
+
 /** The brush's weight (0-1) at every sample under it; null when it is off the terrain. */
 export const brushMask = (grid: TerrainEditGrid, stamp: TerrainBrushStamp): TerrainBrushMask | null => {
   const { x, y, radiusX, radiusY, shape, picture } = stamp;
@@ -155,7 +180,8 @@ export const brushMask = (grid: TerrainEditGrid, stamp: TerrainBrushStamp): Terr
       weights[slot] = weight;
     }
   }
-  return { rect, weights, stride };
+  const mask = { rect, weights, stride };
+  return stamp.region && !limitToRegion(grid, mask, stamp.region) ? null : mask;
 };
 
 /** Reads a loaded image into a brush picture: its brightness, at most `limit` samples a side. */

@@ -101,6 +101,7 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
     const planeGeometry = useMemo(() => new THREE.PlaneGeometry(width, depth, resolution, resolution), [width, depth, resolution]);
     useEffect(() => () => planeGeometry.dispose(), [planeGeometry]);
     const live = useMemo(() => new TerrainLiveEdit(planeGeometry, resolution, width, depth), [planeGeometry, resolution, width, depth]);
+    useEffect(() => () => live.clearRegion(), [live]);
     const chunked = lod && resolution >= MIN_LOD_SEGMENTS;
 
     // --- Texture Layers ---
