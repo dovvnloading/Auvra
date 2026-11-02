@@ -1,40 +1,8 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { CARD_ALPHA_CUTOFF, CARD_FRINGE_KEY, optimizeModelMaterials, splitAlphaCards } from '../../utils/processing/ModelMaterials';
+import { CARD_ALPHA_CUTOFF, CARD_FRINGE_KEY, splitAlphaCards } from '../../utils/processing/ModelMaterials';
 import { listModelMaterials } from '../../utils/materialOverrides';
 import { writeOpacity } from '../../utils/processing/opacityMaps';
-
-const meshWith = (material: THREE.Material) => {
-  const group = new THREE.Group();
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(), material);
-  group.add(mesh);
-  optimizeModelMaterials(group);
-  return mesh.material as THREE.MeshStandardMaterial;
-};
-
-describe('model material optimization', () => {
-  it('drops the white emissive exporters write on standard materials (glTF round trip)', () => {
-    const material = meshWith(new THREE.MeshStandardMaterial({ color: 0xcccccc, emissive: 0xffffff }));
-    expect(material.emissive.getHex()).toBe(0x000000);
-  });
-
-  it('drops emissive colour whose strength is zero', () => {
-    const material = meshWith(new THREE.MeshStandardMaterial({ emissive: 0x4080ff, emissiveIntensity: 0 }));
-    expect(material.emissive.getHex()).toBe(0x000000);
-  });
-
-  it('keeps real emissive colour and emissive maps', () => {
-    expect(meshWith(new THREE.MeshStandardMaterial({ emissive: 0xff2000 })).emissive.getHex()).toBe(0xff2000);
-    const map = new THREE.Texture();
-    const mapped = meshWith(new THREE.MeshStandardMaterial({ emissive: 0xffffff, emissiveMap: map }));
-    expect(mapped.emissive.getHex()).toBe(0xffffff);
-  });
-
-  it('keeps a material drawn through the alpha of its colour map transparent (an FBX opacity map baked for glTF)', () => {
-    const material = meshWith(new THREE.MeshStandardMaterial({ map: new THREE.Texture(), transparent: true, depthWrite: false }));
-    expect(material.transparent).toBe(true);
-  });
-});
 
 describe('opacity baking', () => {
   const pixels = (...values: number[][]) => new Uint8ClampedArray(values.flat());

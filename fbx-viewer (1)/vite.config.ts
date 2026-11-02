@@ -179,9 +179,8 @@ export default defineConfig(({ command, mode }) => {
   // Draco decoders are also CommonJS, which only this conversion makes importable.
   optimizeDeps: {
     include: [
-      'three/examples/jsm/loaders/FBXLoader.js',
-      'three/examples/jsm/loaders/OBJLoader.js',
-      'three/examples/jsm/exporters/GLTFExporter.js',
+      'three/examples/jsm/loaders/TGALoader.js',
+      'three/examples/jsm/loaders/TIFFLoader.js',
       'three/examples/jsm/libs/basis/basis_transcoder.js',
       'three/examples/jsm/libs/draco/gltf/draco_wasm_wrapper.js',
       '@recast-navigation/wasm',

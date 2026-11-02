@@ -155,8 +155,8 @@ if (!/setActiveClip\(selectedAnimations\[0\] \|\| null\)/.test(app)) failures.pu
 if (!/retargetHumanoidClip/.test(animationBinding) || !/clipBindsDirectly/.test(animationBinding)) failures.push('animation binding lacks direct and retargeted paths');
 if (/clip\.duration > 0\.1/.test(modelLoader) || !/clip\.duration > 0/.test(modelLoader)) failures.push('valid short animation clips are still discarded');
 if (!/new Worker\(new URL\(['"]\.\.\/workers\/fbxImport\.worker\.ts['"]/.test(modelLoader)) failures.push('FBX import is not isolated in a module worker');
-if (/import\s*\{\s*FBXLoader\s*\}/.test(modelLoader)) failures.push('renderer model loader still imports FBXLoader directly');
-if (!/new FBXLoader\(\)\.parse/.test(importWorker) || !/new GLTFExporter\(\)\.parseAsync/.test(importWorker)) failures.push('FBX worker does not own parse and transient runtime conversion');
+if (/runNativeImport/.test(modelLoader)) failures.push('renderer model loader runs the native importer on its own thread');
+if (!/runNativeImport\(importer, request\.buffer/.test(importWorker) || !/buildImportedGlb\(native,/.test(importWorker)) failures.push('FBX worker does not own parse and transient runtime conversion');
 if (!/signal\?\.addEventListener\(['"]abort/.test(modelLoader) || !/worker\.terminate\(\)/.test(modelLoader)
   || !/Promise\.race\(\[parsedPromise, cancelled\]\)/.test(modelLoader)
   || !/disposeObject\(loaded\.scene\)/.test(modelLoader)

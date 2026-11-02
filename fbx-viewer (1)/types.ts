@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import React from 'react';
 import type { ProjectStatus } from './utils/projectStatus';
 import type { MaterialOverrides } from './utils/materialOverrides';
+import type { ModelFileReport } from './utils/fbxImport/nativeImporter';
 import type { LevelBakedLighting } from './runtime/lighting/bakedLighting';
 import type { WeatherSettings } from './runtime/weather';
 import type { SkyAtmosphereSettings, SkyCloudSettings, SkyImageSettings, SkyLightSettings, SkyModel, SkyNightSettings } from './runtime/sky/skySettings';
@@ -84,6 +85,8 @@ export interface LoadedModelData {
   sourceClipNames?: string[];
   /** On import: textures the source file names but does not contain, which it was imported without. */
   missingTextures?: number;
+  /** What an FBX or OBJ source held and what was made of it, from its latest read. */
+  importReport?: ModelFileReport;
 }
 
 export type LevelObjectType = 'prop' | 'foliage' | 'foliage_set' | 'spawn_point' | 'audio_emitter' | 'terrain' | 'sky_sphere' | 'player_start';

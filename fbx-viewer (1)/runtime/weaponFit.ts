@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { findBone, handGripPoint } from './ik';
 import { mirrorBoneName } from '../utils/retargeting';
-import { isPartCopy, originalBone } from '../utils/partCopies';
 
 /**
  * FITTING A WEAPON TO THE HANDS
@@ -204,8 +203,8 @@ export const seatCarryOnBody = (
 
         // Out from the bone's axis (bone to child) through the weapon's middle.
         const start = bone.getWorldPosition(new THREE.Vector3());
-        // A part's copy of the bone sits on it with no offset: the bone's own child gives its direction.
-        const child = bone.children.find(node => (node as THREE.Bone).isBone && !isPartCopy(node));
+        // A helper bone can sit exactly on its parent (a twist bone): the first child away from it gives its direction.
+        const child = bone.children.find(node => (node as THREE.Bone).isBone && node.position.lengthSq() > 1e-12);
         const axis = child ? child.getWorldPosition(new THREE.Vector3()).sub(start) : new THREE.Vector3(0, 1, 0);
         if (axis.lengthSq() < 1e-12) return null;
         axis.normalize();
@@ -243,7 +242,7 @@ export const seatCarryOnBody = (
                     let dominant = 0;
                     for (let k = 1; k < 4; k++) if (skinWeight.getComponent(i, k) > skinWeight.getComponent(i, dominant)) dominant = k;
                     const owner = mesh.skeleton.bones[skinIndex.getComponent(i, dominant)];
-                    if (!owner || !chain.has(originalBone(owner))) continue;
+                    if (!owner || !chain.has(owner)) continue;
                 }
                 mesh.getVertexPosition(i, vertex).applyMatrix4(mesh.matrixWorld);
                 const [a, s] = along(vertex);

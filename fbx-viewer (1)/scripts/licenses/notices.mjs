@@ -21,6 +21,12 @@ const VENDORED_LIBRARIES = [
   { name: 'Recast & Detour', package: '@recast-navigation/wasm', folder: 'dist', copyright: 'Copyright (c) 2009 Mikko Mononen', project: 'github.com/recastnavigation/recastnavigation', license: 'Zlib' },
 ];
 
+// Libraries compiled into the model importer from sources kept in vendor/ (vendor/fbxImporter).
+const LOCAL_LIBRARIES = [
+  { name: 'ufbx', folder: 'vendor/ufbx', copyright: 'Copyright (c) 2020 Samuli Raivio', project: 'github.com/ufbx/ufbx', license: 'MIT', licenseFile: 'vendor/ufbx/LICENSE' },
+  { name: 'MikkTSpace', folder: 'vendor/mikktspace', copyright: 'Copyright (C) 2011 by Morten S. Mikkelsen', project: 'github.com/mmikk/MikkTSpace', license: 'Zlib', licenseFile: 'scripts/licenses/Zlib.txt' },
+];
+
 export const productionPackages = (root) => {
   const lock = readJson(path.join(root, 'package-lock.json'));
   return Object.entries(lock.packages ?? {})
@@ -56,6 +62,12 @@ export const collectThirdPartyNotices = (root) => {
     if (!owner || !existsSync(path.join(root, owner.dir, library.folder))) continue;
     const text = readFileSync(path.join(root, 'scripts', 'licenses', `${library.license}.txt`), 'utf8').replace(/\r\n/g, '\n').trim();
     sections.push(`${'='.repeat(78)}\n${library.name} (${library.license}), inside ${library.package}@${owner.version} (${library.folder})\n${'='.repeat(78)}\n\n`
+      + `${library.copyright}. ${library.project}\n\n${text}\n`);
+  }
+  for (const library of LOCAL_LIBRARIES) {
+    if (!existsSync(path.join(root, library.folder))) continue;
+    const text = readFileSync(path.join(root, library.licenseFile), 'utf8').replace(/\r\n/g, '\n').trim();
+    sections.push(`${'='.repeat(78)}\n${library.name} (${library.license}), compiled into the model importer (${library.folder})\n${'='.repeat(78)}\n\n`
       + `${library.copyright}. ${library.project}\n\n${text}\n`);
   }
   const header = 'Third-party software notices\n\nThis software includes the following open-source packages. '

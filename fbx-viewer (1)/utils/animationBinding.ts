@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { animatedSkeleton, humanoidRole, matchHumanoidBones, mirrorHumanoidClip, retargetHumanoidClip } from './retargeting';
-import { originalBone } from './partCopies';
 
 export class AnimationImportError extends Error {
   constructor(message: string) {
@@ -24,10 +23,7 @@ export interface PreparedAnimationClips {
   animatedBones: number;
 }
 
-/**
- * The skinned mesh whose skeleton has the most bones. A character split into parts (Mixamo's body,
- * shoes, hair) often gives each part a small skeleton of copied bones; only the body's is complete.
- */
+/** The skinned mesh whose skeleton has the most bones: a split character's body, over its shoes and hair. */
 const skinnedMesh = (root: THREE.Object3D): THREE.SkinnedMesh | null => {
   let result: THREE.SkinnedMesh | null = null;
   root.traverse((child) => {
@@ -37,10 +33,7 @@ const skinnedMesh = (root: THREE.Object3D): THREE.SkinnedMesh | null => {
   return result;
 };
 
-/**
- * Puts every bone any part of `root` is bound to at its bind pose, parents before children, so a
- * part's copy of a bone sits on the original with no offset again whatever pose the model was in.
- */
+/** Puts every bone any part of `root` is bound to at its bind pose, parents before children. */
 const poseAtBind = (root: THREE.Object3D): void => {
   const bind = new Map<THREE.Object3D, THREE.Matrix4>();
   root.traverse((child) => {
@@ -71,16 +64,20 @@ const poseAtBind = (root: THREE.Object3D): void => {
 };
 
 /**
- * A copy of `object` at its bind pose and the bones clips are made for: the complete skeleton's,
- * each as the original bone rather than a part's copy of it, so a clip turns the original and every
- * part bound to a copy follows. Null without a bound skeleton.
+ * A copy of `object` at its bind pose and the bones clips are made for: those of every part, as a
+ * character split into parts (body, hair, eyes) can bind each to bones the others do not use. Null
+ * without a bound skeleton.
  */
 const bindPoseRig = (object: THREE.Object3D): { root: THREE.Object3D; bones: THREE.Bone[] } | null => {
   const root = cloneSkeleton(object);
-  const mesh = skinnedMesh(root);
-  if (!mesh) return null;
+  const bones = new Set<THREE.Bone>();
+  root.traverse((child) => {
+    const mesh = child as THREE.SkinnedMesh;
+    if (mesh.isSkinnedMesh) mesh.skeleton.bones.forEach((bone) => bones.add(bone));
+  });
+  if (!bones.size) return null;
   poseAtBind(root);
-  return { root, bones: [...new Set(mesh.skeleton.bones.map(originalBone))] };
+  return { root, bones: [...bones] };
 };
 
 const bones = (root: THREE.Object3D): THREE.Bone[] => {
