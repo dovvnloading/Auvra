@@ -10,6 +10,7 @@ import { subscribeDomainCascade, type DomainCascadeEvent } from '../utils/domain
 import { resolveTerrainHeightfield } from '../utils/terrainHeightfieldEditor';
 import { isTerrainHeightfieldPending, TerrainHeightfieldEncodingError } from '../utils/terrainHeightfieldCodec';
 import { resolveTerrainHolemap, resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplatEditor';
+import { isFoliageTypePending, resolveFoliageInstances, type FoliageInstanceReference, type FoliageType } from '../runtime/foliage';
 import { isTerrainHolesPending, isTerrainSplat2Pending, isTerrainSplatPending, terrainLayersReferenceTexture, withoutTerrainLayerTexture } from '../components/Environment/Terrain/terrainSplatCodec';
 import { collectSubtree, sortByHierarchy } from '../utils/sceneGraph';
 import type { LevelBakedLighting } from '../runtime/lighting/bakedLighting';
@@ -53,6 +54,19 @@ const SHARED_TERRAIN_FIELDS = ['heights', 'splat', 'splat2', 'holes'] as const;
 
 /** A copy of the level's objects for the undo history, sharing the terrains' largest arrays. */
 const snapshotLevelObjects = (objects: readonly LevelObject[]): LevelObject[] => objects.map((object) => {
+    if (object.foliageData) {
+        // A type's instances are replaced whole too.
+        return {
+            ...(JSON.parse(JSON.stringify({ ...object, foliageData: undefined })) as LevelObject),
+            foliageData: {
+                types: object.foliageData.types.map((type) => {
+                    const { instances, ...rest } = type;
+                    const copy = JSON.parse(JSON.stringify(rest)) as FoliageType;
+                    return instances ? { ...copy, instances } : copy;
+                }),
+            },
+        };
+    }
     const terrain = object.terrainData;
     if (!terrain) return JSON.parse(JSON.stringify(object)) as LevelObject;
     const light: Record<string, unknown> = { ...terrain };
@@ -72,6 +86,17 @@ const sameNumbers = (a: readonly number[] | undefined, b: readonly number[] | un
         if (a[index] !== b[index]) return false;
     }
     return true;
+};
+
+const sameFoliageObject = (a: LevelObject, b: LevelObject): boolean => {
+    const left = a.foliageData?.types ?? [];
+    const right = b.foliageData?.types ?? [];
+    if (left.length !== right.length) return false;
+    for (let index = 0; index < left.length; index++) {
+        if (left[index].instances !== right[index].instances) return false;
+    }
+    const replacer = (key: string, value: unknown) => (key === 'instances' ? undefined : value);
+    return JSON.stringify(a, replacer) === JSON.stringify(b, replacer);
 };
 
 /** Whether two versions of a terrain say the same, without writing its millions of numbers out as text. */
@@ -156,9 +181,11 @@ const diffLevelObjects = (currentState: LevelObject[], nextState: LevelObject[])
             // A level object is an authored document. Compare the complete
             // document so name/type/audio/spawn/terrain/sky and every
             // transform component survive undo/redo round trips.
-            const changed = oldItem.terrainData && item.terrainData
-                ? !sameTerrainObject(oldItem, item)
-                : JSON.stringify(oldItem) !== JSON.stringify(item);
+            const changed = oldItem.foliageData || item.foliageData
+                ? !sameFoliageObject(oldItem, item)
+                : oldItem.terrainData && item.terrainData
+                    ? !sameTerrainObject(oldItem, item)
+                    : JSON.stringify(oldItem) !== JSON.stringify(item);
             if (changed) {
                 toUpdate.push(item);
             }
@@ -635,6 +662,48 @@ export const useLevelManager = (models: LoadedModelData[]) => {
               failedSplatmapsRef.current.add(reference.assetId);
               frontendDiagnostics.failure('terrain_splatmap_resolve_failed', error);
               addNotification({ message: `Terrain paint could not be loaded (${describeError(error)}); painting is disabled for that terrain.`, type: 'error' });
+          });
+      }
+      return () => { active = false; };
+  }, [addNotification, levelObjects]);
+
+  // A foliage set's instances are resolved the same way, type by type, into foliageData.
+  const failedFoliageRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+      const references = new Map<string, FoliageInstanceReference>();
+      for (const object of levelObjects) {
+          for (const type of object.foliageData?.types ?? []) {
+              if (type.instancemap && isFoliageTypePending(type) && !failedFoliageRef.current.has(type.instancemap.assetId)) {
+                  references.set(type.instancemap.assetId, type.instancemap);
+              }
+          }
+      }
+      if (references.size === 0) return;
+      let active = true;
+      const resolveIn = (object: LevelObject, assetId: string, instances: Float32Array): LevelObject => {
+          const types = object.foliageData?.types;
+          if (!types?.some(type => type.instancemap?.assetId === assetId && isFoliageTypePending(type))) return object;
+          return { ...object, foliageData: { types: types.map(type => (type.instancemap?.assetId === assetId && isFoliageTypePending(type) ? { ...type, instances } : type)) } };
+      };
+      for (const reference of references.values()) {
+          resolveFoliageInstances(reference, async (assetId) => {
+              const response = await fetch(await projectService.resolveAsset(assetId), { method: 'GET' });
+              if (!response.ok) throw new Error(`Foliage download failed (${response.status})`);
+              return response.arrayBuffer();
+          }).then((instances) => {
+              if (!active) return;
+              for (const snapshot of [...history.current.past, ...history.current.future]) {
+                  snapshot.forEach((object, index) => { snapshot[index] = resolveIn(object, reference.assetId, instances); });
+              }
+              setWorkingState((current) => {
+                  const nextObjects = current.levelObjects.map(object => resolveIn(object, reference.assetId, instances));
+                  return nextObjects.some((object, index) => object !== current.levelObjects[index]) ? { ...current, levelObjects: nextObjects } : current;
+              });
+          }, (error) => {
+              if (!active) return;
+              failedFoliageRef.current.add(reference.assetId);
+              frontendDiagnostics.failure('foliage_instances_resolve_failed', error);
+              addNotification({ message: `Foliage could not be loaded (${describeError(error)}); it will not be drawn.`, type: 'error' });
           });
       }
       return () => { active = false; };

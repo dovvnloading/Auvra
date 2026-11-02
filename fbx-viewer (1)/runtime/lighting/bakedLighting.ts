@@ -233,7 +233,7 @@ export const fillInvalidProbes = (sh: Float32Array, valid: Uint8Array, counts: r
 export const LIGHT_BAKE_VOLUME_COMPONENT_TYPE = 'lightBakeVolume';
 
 /** Level objects that can stand in the bake: the rest are markers, sounds and spawns. */
-const BAKED_OBJECT_TYPES = new Set<LevelObject['type']>(['prop', 'foliage', 'terrain']);
+const BAKED_OBJECT_TYPES = new Set<LevelObject['type']>(['prop', 'foliage', 'foliage_set', 'terrain']);
 
 /** The level objects that never move, whose geometry and lights the bake sees. */
 export const staticLightingObjectIds = (levelObjects: readonly LevelObject[]): Set<string> => {
@@ -294,6 +294,7 @@ export const bakeSignature = (levelObjects: readonly LevelObject[], settings: Ba
             object.id, object.type, object.modelId, object.parentId ?? null, object.position, object.rotation, object.scale,
             object.skyConfig ?? null, object.terrainData?.heightfield?.assetId ?? null, object.terrainData?.textureId ?? null,
             object.terrainData?.splatmap?.assetId ?? null, object.terrainData?.textureLayers ?? null,
+            object.foliageData?.types.map(type => [type.modelId, type.instancemap?.assetId ?? type.instances?.length ?? null]) ?? null,
             (object.components ?? []).filter(component => component.enabled !== false && /light/i.test(component.type))
                 .map(component => [component.type, component.props]),
         ])

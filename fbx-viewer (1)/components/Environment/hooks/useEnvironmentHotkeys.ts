@@ -128,7 +128,7 @@ export const useEnvironmentHotkeys = (config: HotkeyConfig) => {
                     void current.saveProject();
                 } else if (key === 'a') {
                     e.preventDefault();
-                    if (canEdit()) actions.setSelection(current.levelObjects.map((object) => object.id), state.selectedObjectId ?? undefined);
+                    if (canEdit()) actions.setSelection(current.levelObjects.filter((object) => object.type !== 'foliage_set').map((object) => object.id), state.selectedObjectId ?? undefined);
                 } else if (key === 'd') {
                     e.preventDefault();
                     if (canEdit() && selection.length) place(copyLevelObjects(current.levelObjects, selection), [gridStep, 0, gridStep]);
@@ -184,8 +184,8 @@ export const useEnvironmentHotkeys = (config: HotkeyConfig) => {
 
             // Selection Clearing
             if (e.key === 'Escape') {
-                // In the Terrain tool, Escape is the brush's: it cancels a paste or a ramp in progress.
-                if (state.interactionMode !== 'sculpt') actions.clearSelection();
+                // In the Terrain and Foliage tools, Escape is the brush's: it cancels what is in progress there.
+                if (state.interactionMode !== 'sculpt' && state.interactionMode !== 'paint') actions.clearSelection();
                 return;
             }
 
@@ -199,8 +199,8 @@ export const useEnvironmentHotkeys = (config: HotkeyConfig) => {
             if (e.key === 'b' || e.key === 'B') actions.setInteractionMode('paint');
             if (e.key === 'm' || e.key === 'M') actions.setInteractionMode('mask');
 
-            // Transform Tools (Only in select mode)
-            if (state.interactionMode === 'select') {
+            // Transform Tools (Only in select mode, and the Foliage tool, whose Select moves instances)
+            if (state.interactionMode === 'select' || state.interactionMode === 'paint') {
                 if (e.key === 'w' || e.key === 'W') actions.updateTransformSettings({ tool: 'translate' });
                 if (e.key === 'e' || e.key === 'E') actions.updateTransformSettings({ tool: 'rotate' });
                 if (e.key === 'r' || e.key === 'R') actions.updateTransformSettings({ tool: 'scale' });

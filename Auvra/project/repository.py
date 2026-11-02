@@ -697,6 +697,12 @@ def _terrain_assets(objects: dict[str, Any]) -> dict[tuple[Any, str], str]:
             reference = terrain.get(key)
             if isinstance(reference, dict) and isinstance(reference.get("assetId"), str):
                 references[(document.get("id"), key)] = reference["assetId"]
+    for document in objects.get("documents", []):
+        foliage = document.get("foliageData") if isinstance(document, dict) else None
+        for foliage_type in (foliage.get("types") or []) if isinstance(foliage, dict) else []:
+            reference = foliage_type.get("instancemap") if isinstance(foliage_type, dict) else None
+            if isinstance(reference, dict) and isinstance(reference.get("assetId"), str):
+                references[(document.get("id"), f"foliage:{foliage_type.get('id')}")] = reference["assetId"]
     return references
 
 def _superseded_terrain_assets(previous: dict[str, Any], committed: dict[str, Any]) -> set[str]:

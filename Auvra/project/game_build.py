@@ -115,6 +115,7 @@ _MIME_EXTENSIONS = {
     "audio/ogg": "ogg",
     "application/vnd.auvra.heightfield": "ahf",
     "application/vnd.auvra.splatmap": "splat",
+    "application/vnd.auvra.foliage": "afo",
     "application/vnd.auvra.lightvolume": "alv",
 }
 _GENERIC_MIME = "application/octet-stream"

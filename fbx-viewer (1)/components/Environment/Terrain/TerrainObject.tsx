@@ -197,12 +197,13 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
         weights: splatResources.weights,
         weights2: secondSplat?.weights ?? null,
         layerCount: layers.length,
+        layerNames: layers.map((layer, index) => layer.name || `Layer ${index + 1}`),
         pending: splatPending,
         markDirty: () => {
             splatResources.texture.needsUpdate = true;
             if (secondSplat) secondSplat.texture.needsUpdate = true;
         },
-    }), [samplesPerSide, width, depth, splatResources, secondSplat, layers.length, splatPending]);
+    }), [samplesPerSide, width, depth, splatResources, secondSplat, layers, splatPending]);
 
     // --- Geometry Init ---
     useLayoutEffect(() => {

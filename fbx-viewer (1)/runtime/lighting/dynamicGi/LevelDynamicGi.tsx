@@ -13,7 +13,7 @@ import { PROBES_PER_CASCADE, resolveDynamicGiSettings, type DynamicGiSettings } 
 export const DYNAMIC_GI_COMPONENT_TYPE = 'dynamicGi';
 
 /** Level objects rays can meet: the rest are markers, sounds and spawns. */
-const TRACED_TYPES = new Set<LevelObject['type']>(['prop', 'foliage', 'terrain']);
+const TRACED_TYPES = new Set<LevelObject['type']>(['prop', 'foliage', 'foliage_set', 'terrain']);
 
 /** The level's settings: those of the first enabled component, or null with none. */
 export const dynamicGiSettingsOf = (levelObjects: readonly LevelObject[]): DynamicGiSettings | null => {

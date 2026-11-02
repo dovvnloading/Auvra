@@ -98,11 +98,12 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
 
     // Hierarchy derived from parentId. Orphans (missing parent) and members of a corrupt
     // parent cycle are shown as roots so nothing ever disappears from the outliner.
+    const listedObjects = useMemo(() => levelObjects.filter(object => object.type !== 'foliage_set'), [levelObjects]);
     const hierarchy = useMemo(() => {
         const index = new Map<string, LevelObject>();
-        for (const obj of levelObjects) index.set(obj.id, obj);
+        for (const obj of listedObjects) index.set(obj.id, obj);
         const children = new Map<string | null, LevelObject[]>();
-        for (const obj of levelObjects) {
+        for (const obj of listedObjects) {
             const parentId = resolveParentId(index, obj);
             const siblings = children.get(parentId);
             if (siblings) siblings.push(obj);
@@ -116,9 +117,9 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
             reachable.add(obj.id);
             stack.push(...(children.get(obj.id) ?? []));
         }
-        const roots = [...(children.get(null) ?? []), ...levelObjects.filter(o => !reachable.has(o.id) && resolveParentId(index, o) !== null)];
+        const roots = [...(children.get(null) ?? []), ...listedObjects.filter(o => !reachable.has(o.id) && resolveParentId(index, o) !== null)];
         return { index, children, roots };
-    }, [levelObjects]);
+    }, [listedObjects]);
 
     const searchTerm = search.trim().toLowerCase();
 
@@ -139,8 +140,8 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
     }, [levelObjects, hierarchy, searchTerm]);
 
     const matchCount = useMemo(() => (
-        searchTerm ? levelObjects.filter(o => objectDisplayName(o).toLowerCase().includes(searchTerm)).length : levelObjects.length
-    ), [levelObjects, searchTerm]);
+        searchTerm ? listedObjects.filter(o => objectDisplayName(o).toLowerCase().includes(searchTerm)).length : listedObjects.length
+    ), [listedObjects, searchTerm]);
 
     // Flattened, visible rows in display order (also the order shift-range selection uses).
     const rows = useMemo(() => {

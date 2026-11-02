@@ -8,7 +8,7 @@ The **Environment** tab is where levels are built.
 |---|---|---|
 | Select | Q | Select objects and move them with the gizmo |
 | Place | — | Click to place the chosen model on terrain or other surfaces |
-| Paint | B | Paint or erase foliage and props with a brush |
+| Foliage | B | Paint trees, grass, rocks and other things by the thousand with a brush (see [Foliage](#foliage)) |
 | Terrain | — | Create, sculpt and texture-paint terrain (see [Terrain](#terrain)) |
 | Mask | M | Create texture masks on objects |
 
@@ -624,6 +624,51 @@ They use the same [brush](#brush) as sculpting. Weights at a point always add up
 
 All of a layer's maps are scaled to 1024 by 1024 on the terrain. They are kept in two texture arrays, so eight layers take no more of the shader's texture slots than one, and a point only pays for the layers showing there.
 
+## Foliage
+
+The **Foliage** tool (**B**) paints models over a level by the hundred thousand: trees, grass, rocks, ruins. They are kept compactly, as one record per level with its instances in a binary asset, so a forest does not fill the Outliner or slow saving. A level drew 98,000 instances of a low-detail rock at full frame rate in testing.
+
+### The palette
+
+Click a model in the browser, drag one onto the palette or pick one under it to add it as a type. Tick the types the brush should paint; the row of each shows how many are placed. Click a row to see its rules.
+
+### Tools
+
+| Tool | Use |
+|---|---|
+| Select | Click an instance, Ctrl-click to add more. Move, turn and scale them with the gizmo (**W**, **E**, **R**), and **Delete** removes them. **All** selects every instance of the ticked types, **None** clears it, and **Floating** selects those with nothing under them |
+| Lasso | Drag the brush over instances to select them; **Shift** takes them off |
+| Paint | Hold to paint the ticked types, each up to its own density, so going over the same place again adds nothing. **Shift** erases |
+| Erase | Hold to erase the ticked types |
+| Reapply | Hold over painted instances to apply the types' current rules to them: size, lean, offset and spacing, removing those no longer on ground they may grow on |
+| Single | Click to place one instance. With several types ticked, each click takes the next |
+| Fill | Click a terrain or mesh to fill the whole of it with the ticked types |
+
+**Size** (keys **[** and **]**) is across the brush. **Paint density** multiplies every type's density while painting, and **Erase density** is the share of it erasing leaves behind: 0 removes everything. **On terrain**, **On meshes**, **On foliage** and **Translucent** say what the brush can paint on.
+
+Sculpting the terrain moves the foliage standing on it, as part of the same undo step. Only its height changes, so what you turned by hand stays turned.
+
+### A type's rules
+
+| Setting | What it does |
+|---|---|
+| Density | How many per 100 square metres |
+| Spacing | Metres kept clear around each one, from others of its type |
+| Scaling, Scale | **Uniform** picks one size between the two values. **Same width** picks a width and a height. **Free** picks each axis |
+| Offset up | Metres moved along its up axis, picked between the two: negative sinks it in |
+| Lean with the ground | Tilts it with the surface, as rocks and grass do, up to **At most** degrees. Trees stand upright with this off |
+| Random turn, Random lean | A turn about its up axis, and a random tilt up to so many degrees |
+| Slope, Height | The ground slope, in degrees, and the world heights it grows on |
+| Terrain layer: Only, Never | Layers it only grows on or never grows on: grass on the Grass layer and not on the Road. **Counts from** is how much of a layer must be there to count as being on it |
+| Cast shadows | Off for small plants, which saves a lot |
+| Pictures beyond | Beyond this many metres it draws as flat pictures of the model. 0: never |
+| Hidden beyond | Beyond this many metres it is not drawn. 0: never |
+| Collision | In play: nothing, **A trunk** (a narrow column, for trees) or **Its box**. At most 4,000 instances in a level collide |
+
+Instances are drawn in cells of 32 metres, each at the detail its distance calls for, in the editor and in play. Painting only rebuilds the cells it changes.
+
+A level with copies painted before this tool existed shows them under the palette, with a button to turn them into palette instances as one undo step.
+
 ## Prefabs
 
 A prefab is a reusable object tree. Select an object (its children come with it) and choose **Create from selection** in the prefab panel under the outliner; the selection becomes the prefab's first instance. **Place** adds another instance to the current level. The **Spawn Prefab** blueprint node places copies during play.
@@ -638,4 +683,4 @@ When a prefab changes, a property an instance changed itself (an override, such 
 
 ## Placement
 
-Placement, dropping models from the Content Browser and foliage painting all land on the surface under the cursor: terrain, other meshes, or the ground plane.
+Placement and dropping models from the Content Browser land on the surface under the cursor: terrain, other meshes, or the ground plane. Foliage paints on terrain and meshes, as its brush is set.

@@ -23,6 +23,7 @@ import { AudioSystem } from '../components/Environment/AudioSystem';
 import { SkySystem } from '../components/Environment/SkySystem';
 import { WeatherAudio } from './WeatherAudio';
 import { Destruction } from './Destruction';
+import { FoliageLayer } from './foliageLayer';
 import { TerrainObject } from '../components/Environment/Terrain/TerrainObject';
 import { SandboxEntity, SandboxEntityHandle } from '../components/Sandbox/SandboxEntity';
 import { PlayerController } from '../components/Sandbox/PlayerController';
@@ -278,6 +279,8 @@ interface LevelRenderPlan {
     groupChildren: Map<string, LevelObject[]>;
     /** Static leaf props and foliage, in world space, drawn through the instanced layers. */
     instancedFoliage: LevelObject[];
+    /** The level's painted foliage sets. */
+    foliageSets: LevelObject[];
     instancedProps: LevelObject[];
     terrains: LevelObject[];
 }
@@ -366,7 +369,7 @@ const planLevelRender = (objects: LevelObject[]): LevelRenderPlan => {
         : objects;
 
     const playerObstacles = underBody.size ? worldObjects.filter((_, i) => !underBody.has(objects[i].id)) : worldObjects;
-    const plan: LevelRenderPlan = { worldObjects, playerObstacles, groupRoots: [], groupChildren: new Map(), instancedFoliage: [], instancedProps: [], terrains: [] };
+    const plan: LevelRenderPlan = { worldObjects, playerObstacles, groupRoots: [], groupChildren: new Map(), instancedFoliage: [], foliageSets: [], instancedProps: [], terrains: [] };
     objects.forEach((obj, i) => {
         const worldObject = worldObjects[i];
         if (obj.type === 'terrain') plan.terrains.push(worldObject);
@@ -378,7 +381,8 @@ const planLevelRender = (objects: LevelObject[]): LevelRenderPlan => {
                 if (siblings) siblings.push(obj);
                 else plan.groupChildren.set(parentId, [obj]);
             }
-        } else if (obj.type === 'foliage') plan.instancedFoliage.push(worldObject);
+        } else if (obj.type === 'foliage_set') plan.foliageSets.push(worldObject);
+        else if (obj.type === 'foliage') plan.instancedFoliage.push(worldObject);
         else if (obj.type === 'prop') plan.instancedProps.push(worldObject);
     });
     return plan;
@@ -770,6 +774,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
                     />
                 ))}
 
+                {renderPlan.foliageSets.map(set => <FoliageLayer key={set.id} set={set} models={models} runtime />)}
                 <InstancedLevelLayer models={models} levelObjects={renderPlan.instancedFoliage} interactive={false} />
                 <InstancedLevelLayer models={models} levelObjects={renderPlan.instancedProps} interactive={false} />
 

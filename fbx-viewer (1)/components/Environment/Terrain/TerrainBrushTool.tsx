@@ -31,6 +31,8 @@ export interface TerrainPaintTarget {
     layerCount: number;
     /** The stored weights are still loading; painting would overwrite them. */
     pending: boolean;
+    /** Each layer's name, for foliage that only grows on some. */
+    layerNames: readonly string[];
     /** Upload the edited weights to the GPU. */
     markDirty(): void;
 }
@@ -82,8 +84,8 @@ interface TerrainBrushToolProps {
     settings: TerrainToolSettings;
     onSettingsChange: (settings: TerrainToolSettings) => void;
     enabled: boolean;
-    /** A stroke ended: the terrain's new heights. */
-    onHeightsCommit: (objectId: string, heights: number[]) => void;
+    /** A stroke ended: the terrain's new heights, and the ones it had. */
+    onHeightsCommit: (objectId: string, heights: number[], before: Float32Array | null) => void;
     /** A paint stroke ended: the terrain's splat weights (0-255 RGBA per sample) and, past four layers, its second map's. */
     onPaintCommit: (objectId: string, splat: number[], splat2: number[] | undefined) => void;
     /** A holes stroke ended: the cells cut out, or undefined when none are. */
@@ -108,6 +110,8 @@ interface Stroke {
     regionStart: THREE.Vector3 | null;
     /** The layer's weight under the first click, for the paint Flatten tool. */
     weightTarget: number;
+    /** The heights when the stroke began: what stands on the ground moves with the change. */
+    before: Float32Array | null;
 }
 
 const _local = new THREE.Vector3();
@@ -240,19 +244,20 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
         const heights = Array.from(active.live.heights);
         // The level will hand these same heights back: the mesh already shows them.
         active.live.committed = heights;
-        latest.current.onHeightsCommit(objectId, heights);
+        latest.current.onHeightsCommit(objectId, heights, active.before);
     };
 
     const applyOnce = (mesh: THREE.Mesh, run: (grid: TerrainHeightGrid, live: TerrainLiveEdit) => TerrainGridRect | null) => {
         const live = liveEditOf(mesh);
         if (!live || mesh.userData.heightsPending) return;
         latest.current.onStrokeStart();
+        const before = live.heights.slice();
         const rect = run(live, live);
         if (rect) live.writeRegion(rect);
         live.settle();
         const heights = Array.from(live.heights);
         live.committed = heights;
-        latest.current.onHeightsCommit(mesh.userData.levelObjectId as string, heights);
+        latest.current.onHeightsCommit(mesh.userData.levelObjectId as string, heights, before);
     };
 
     const meshOf = (terrainId: string): THREE.Mesh | null => {
@@ -494,6 +499,7 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
                     flattenTarget: 0, flattenSlope: { x: 0, y: 0 }, origin: local.clone(),
                     regionStart: hit.point.clone(),
                     weightTarget: 0,
+                    before: null,
                 };
                 return;
             }
@@ -518,6 +524,7 @@ export const TerrainBrushTool: React.FC<TerrainBrushToolProps> = ({
                 weightTarget: paintTarget && canPaint(paintTarget, current.paintLayer)
                     ? layerWeightNear(paintTarget as TerrainWeightGrid, local.x, local.y, current.paintLayer)
                     : 0,
+                before: painting ? null : live.heights.slice(),
             };
         };
 

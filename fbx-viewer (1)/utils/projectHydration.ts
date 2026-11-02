@@ -5,6 +5,7 @@ import { resolveTerrainHeightfield } from './terrainHeightfield';
 import { isTerrainHeightfieldPending } from './terrainHeightfieldCodec';
 import { resolveTerrainHolemap, resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplat';
 import { isTerrainHolesPending, isTerrainSplat2Pending, isTerrainSplatPending } from '../components/Environment/Terrain/terrainSplatCodec';
+import { isFoliageTypePending, resolveFoliageInstances } from '../runtime/foliage';
 import { applyModelImportSettings, stripGeometry } from './processing/ModelTransforms';
 import { generateThumbnail } from './thumbnailGenerator';
 import { disposeModel, disposeObject } from './processing/ModelLifecycle';
@@ -144,6 +145,7 @@ export async function loadGameContent(
       if (isTerrainSplatPending(object?.terrainData)) terrainWork += 1;
       if (isTerrainSplat2Pending(object?.terrainData)) terrainWork += 1;
       if (isTerrainHolesPending(object?.terrainData)) terrainWork += 1;
+      terrainWork += object?.foliageData?.types.filter(isFoliageTypePending).length ?? 0;
     }
   }
   const assetWork = Math.max(1,
@@ -395,6 +397,28 @@ export async function loadGameContent(
       const splatmaps = new Map<string, Promise<number[]>>();
       const resolvedObjects: LevelObject[] = [];
       for (const object of objectDocuments) {
+        if (object?.foliageData) {
+          // A type whose instances cannot be read draws nothing; the rest of the level still plays.
+          const types = await Promise.all(object.foliageData.types.map(async (type) => {
+            if (!type.instancemap || !isFoliageTypePending(type)) return type;
+            const assetAlias = frontendDiagnostics.nextAssetAlias();
+            const diagnostic: DiagnosticAttributes = { assetAlias, assetKind: 'foliage_instances' };
+            try {
+              report('Loading foliage', 0.1, 'source_read', diagnostic);
+              const instances = await resolveFoliageInstances(type.instancemap, (assetId) => loadProjectAssetBytes(assetId, traceAsset(assetAlias)));
+              assertCurrent();
+              return { ...type, instances };
+            } catch (error) {
+              assertCurrent();
+              recordAssetDiagnostic('foliage_instances_hydration_failed', error, 'source_read', { ...diagnostic, fallback: 'not_drawn' });
+              return type;
+            } finally {
+              complete('Loaded foliage', diagnostic);
+            }
+          }));
+          resolvedObjects.push({ ...object, foliageData: { types } });
+          continue;
+        }
         const terrain = object?.terrainData;
         if (!terrain) {
           resolvedObjects.push(object);

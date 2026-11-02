@@ -35,6 +35,10 @@ _NESTED_KEYS = {
     "splatmap": {"assetId", "encoding", "columns", "rows"},
     "splatmap2": {"assetId", "encoding", "columns", "rows"},
     "holemap": {"assetId", "encoding", "columns", "rows"},
+    # A level's foliage set: its types, each with its instances in a binary asset.
+    "foliageData": {"types"},
+    "types": {"id", "modelId", "active", "density", "radius", "scaleMode", "scaleX", "scaleY", "scaleZ", "zOffset", "alignToNormal", "alignMaxAngle", "randomYaw", "randomPitch", "slope", "height", "includeLayers", "excludeLayers", "minLayerWeight", "castShadow", "impostorDistance", "cullDistance", "collision", "instancemap"},
+    "instancemap": {"assetId", "encoding", "count"},
     # A level's baked lighting: bake settings and the light probe volume asset.
     "bakedLighting": {"spacing", "bounces", "intensity", "probes"},
     "probes": {"assetId", "encoding", "origin", "spacing", "counts", "bakedAt", "signature"},
@@ -198,6 +202,8 @@ def validate_project_references(
         for layer in ((value.get("terrainData") or {}).get("textureLayers") or []):
             for field in ("textureId", "normalTextureId", "roughnessTextureId", "heightTextureId"):
                 require("textures", layer.get(field) if isinstance(layer, dict) else None, "terrain layer texture", optional=True)
+        for foliage_type in ((value.get("foliageData") or {}).get("types") or []):
+            require("models", foliage_type.get("modelId") if isinstance(foliage_type, dict) else None, "foliage model", optional=True)
         require("prefabs", value.get("prefabId"), "object prefab", optional=True)
     # Transform parents live in the same level, so a hierarchy never spans
     # levels and a level can be loaded (or deleted) as one tree.
