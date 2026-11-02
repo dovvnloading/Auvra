@@ -8,7 +8,7 @@ import { fbxTakeOrder, inTakeOrder } from './clipOrder';
 
 /** What the file holds, for the import dialog and the import report. */
 export interface ModelFileReport {
-  format: 'fbx' | 'obj';
+  format: 'fbx' | 'obj' | 'gltf';
   version: number;
   ascii: boolean;
   creator: string;
@@ -29,7 +29,13 @@ export interface ModelFileReport {
   /** The model's bounds at its default pose, in file units; absent with no geometry. */
   boundsMin?: [number, number, number];
   boundsMax?: [number, number, number];
+  /** The same, leaving out `looseMeshes`. */
+  boundsWithoutLooseMin?: [number, number, number];
+  boundsWithoutLooseMax?: [number, number, number];
+  /** Meshes in a rigged file that the skeleton does not move (Meshy's rigged characters come with a stray sphere). */
+  looseMeshes: { name: string; triangles: number }[];
   bones: number;
+  boneNames: string[];
   collisionMeshes: number;
   sockets: number;
   lodGroups: number;
@@ -47,6 +53,8 @@ export interface ModelFileReport {
   verticesWithoutWeights: number;
   clips: ModelFileClip[];
   warnings: string[];
+  /** The image files its materials read, and which of them the file holds itself. */
+  images?: { file: string; embedded: boolean }[];
 }
 
 export interface ModelFileClip {
@@ -152,6 +160,10 @@ export interface NativeImportOptions {
   skin?: boolean;
   /** False for an animation-only import: nodes and clips only. */
   meshes?: boolean;
+  /** False to leave out meshes outside the skeleton of a rigged file. */
+  looseMeshes?: boolean;
+  /** Takes to leave out, by their names in the file. */
+  excludedClips?: readonly string[];
   /** Keys per second animation is resampled at where it must be; defaults to the file's rate, at least 30. */
   sampleRate?: number;
   /** Largest change a dropped key may make to a track's value; 0 keeps every key. */
@@ -171,6 +183,7 @@ const FLAG_OBJ = 16;
 const FLAG_RECOMPUTE_NORMALS = 32;
 const FLAG_NO_SKIN = 64;
 const FLAG_NO_MESHES = 128;
+const FLAG_NO_LOOSE_MESHES = 512;
 
 interface ImporterExports {
   memory: WebAssembly.Memory;
@@ -210,7 +223,8 @@ const toFlags = (options: NativeImportOptions): number =>
   | (options.tangents === false ? FLAG_NO_TANGENTS : 0)
   | (options.recomputeNormals ? FLAG_RECOMPUTE_NORMALS : 0)
   | (options.skin === false ? FLAG_NO_SKIN : 0)
-  | (options.meshes === false ? FLAG_NO_MESHES : 0);
+  | (options.meshes === false ? FLAG_NO_MESHES : 0)
+  | (options.looseMeshes === false ? FLAG_NO_LOOSE_MESHES : 0);
 
 /** Reads `source` into the importer. Running out of memory traps, which surfaces as a clear error. */
 export const runNativeImport = (importer: ImporterExports, source: ArrayBuffer | Uint8Array, fileName: string, options: NativeImportOptions = {}): NativeImport => {
@@ -243,6 +257,12 @@ export const runNativeImport = (importer: ImporterExports, source: ArrayBuffer |
     const order = fbxTakeOrder(bytes);
     result.report.clips = inTakeOrder(result.report.clips, order);
     if (result.document.animations) result.document.animations = inTakeOrder(result.document.animations, order);
+  }
+  // The report keeps every take, so the dialog can offer them again.
+  if (options.excludedClips?.length && result.document.animations) {
+    const excluded = new Set(options.excludedClips);
+    result.document.animations = result.document.animations.filter((clip) => !excluded.has(clip.name ?? ''));
+    if (!result.document.animations.length) delete result.document.animations;
   }
   return {
     ...result,

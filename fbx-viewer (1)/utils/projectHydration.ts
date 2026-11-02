@@ -1,12 +1,12 @@
 import * as THREE from 'three';
-import type { AttachmentData, AudioData, Blueprint, LevelData, LevelObject, LoadedModelData, PrefabData, SocketData, TerrainData, TextureData } from '../types';
+import type { AttachmentData, AudioData, Blueprint, LevelData, LevelObject, LoadedModelData, ModelSourceImage, PrefabData, SocketData, TerrainData, TextureData } from '../types';
 import { importPhaseLabel, loadFBXFile } from './modelLoader';
 import { resolveTerrainHeightfield } from './terrainHeightfield';
 import { isTerrainHeightfieldPending } from './terrainHeightfieldCodec';
 import { resolveTerrainHolemap, resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplat';
 import { isTerrainHolesPending, isTerrainSplat2Pending, isTerrainSplatPending } from '../components/Environment/Terrain/terrainSplatCodec';
 import { isFoliageTypePending, resolveFoliageInstances } from '../runtime/foliage';
-import { applyModelImportSettings, stripGeometry } from './processing/ModelTransforms';
+import { applyModelImportSettings, convertOptionsFor, stripGeometry } from './processing/ModelTransforms';
 import { generateThumbnail } from './thumbnailGenerator';
 import { disposeModel, disposeObject } from './processing/ModelLifecycle';
 import { applyStoredClipNames, mirrorModelClips, prepareAnimationClips } from './animationBinding';
@@ -240,8 +240,11 @@ export async function loadGameContent(
         const sourceFile = await loadProjectAssetFile(item.assetId, item.name, traceAsset(assetAlias));
         assertCurrent();
         diagnostic = assetDiagnosticAttributes(sourceFile, item.category === 'Animation' ? 'animation' : 'model', assetAlias);
+        const sourceImages: ModelSourceImage[] = Array.isArray(item.sourceImages) ? item.sourceImages : [];
         const loaded = await loadFBXFile(sourceFile, {
           normalize: item.category !== 'Animation',
+          convert: convertOptionsFor(item.category === 'Animation' ? undefined : item.importSettings),
+          images: await Promise.all(sourceImages.map((image) => loadProjectAssetFile(image.assetId, image.name, traceAsset(assetAlias)))),
           manualId: item.id,
           compressTextures,
           signal,
@@ -259,6 +262,7 @@ export async function loadGameContent(
         loaded.category = item.category || 'Prop';
         loaded.isPlacedInScene = Boolean(item.isPlacedInScene);
         loaded.textureOverrides = item.textureOverrides;
+        if (sourceImages.length) loaded.sourceImages = sourceImages;
         if (typeof item.folder === 'string') loaded.folder = item.folder;
         // A missing importSettings document field means the default (old) normalization.
         applyModelImportSettings(loaded, item.importSettings);

@@ -1,10 +1,10 @@
 
 import { useState, useCallback, useRef } from 'react';
 import * as THREE from 'three';
-import { LoadedModelData, AssetCategory, AssetInfoUpdate, ModelImportSettings } from '../types';
+import { LoadedModelData, AssetCategory, AssetInfoUpdate, ModelImportSettings, ModelSourceImage } from '../types';
 import { importFailureMessage, importPhaseLabel, loadFBXFile } from '../utils/modelLoader';
 import { disposeModel, disposeObject } from '../utils/processing/ModelLifecycle';
-import { applyModelImportSettings, resolveImportSettings, stripGeometry } from '../utils/processing/ModelTransforms';
+import { applyModelImportSettings, convertOptionsFor, resolveImportSettings, stripGeometry } from '../utils/processing/ModelTransforms';
 import { applyStoredClipNames, mirrorModelClips, prepareAnimationClips, uniqueClipNames } from '../utils/animationBinding';
 import { generateThumbnail } from '../utils/thumbnailGenerator';
 import { dbOperations, normalizeAssetInfoUpdate, withoutMaterialOverrideAsset, withoutMaterialOverrideTexture } from '../utils/db';
@@ -12,7 +12,7 @@ import { projectService } from '../utils/projectService';
 import { appAlert } from '../utils/appDialogs';
 import { isAbortError, useOperationActions } from '../context/OperationContext';
 import { useNotification } from '../context/NotificationContext';
-import { assetDiagnosticAttributes, frontendDiagnostics, type DiagnosticAttributes } from '../diagnostics/runtime';
+import { assetDiagnosticAttributes, frontendDiagnostics, type DiagnosticAttributes, type DiagnosticContext } from '../diagnostics/runtime';
 import {
   applyMaterialOverrides,
   drawAsPaintedTexture,
@@ -42,6 +42,13 @@ const reimportedModelName = (current: string, source: string): string => {
   if (!next || next.toLowerCase() === previous.toLowerCase()) return current;
   return `${previous ? current.slice(0, -previous.length) : current}${next}`;
 };
+
+/** Reads the images kept with a model back as files named as its source names them. */
+const loadSourceImages = async (images: readonly ModelSourceImage[] | undefined, signal?: AbortSignal, diagnostics?: DiagnosticContext): Promise<File[]> => Promise.all((images ?? []).map(async (image) => {
+  const response = await projectService.fetchAsset(image.assetId, { signal, diagnostics });
+  if (!response.ok) throw new Error(`image download failed (${response.status})`);
+  return new File([await response.blob()], image.name, { type: response.headers.get('Content-Type') || 'application/octet-stream' });
+}));
 
 const nativeDocuments = (snapshot: Awaited<ReturnType<typeof projectService.getSnapshotAll>>, domain: string): Array<Record<string, any>> => {
   const raw = snapshot?.domains?.[domain];
@@ -128,7 +135,7 @@ export const useModelManager = (
   const { addNotification } = useNotification();
 
   /** Import a model. With `requestedSettings` the import settings are applied and stored on the model document. */
-  const importModel = useCallback(async (file: File, category: AssetCategory, requestedSettings?: ModelImportSettings) => {
+  const importModel = useCallback(async (file: File, category: AssetCategory, requestedSettings?: ModelImportSettings, images: readonly File[] = []) => {
     projectService.assertWritable();
     const importSettings = requestedSettings && category !== 'Animation' ? resolveImportSettings(requestedSettings) : undefined;
     // Prevent duplicate imports
@@ -155,6 +162,8 @@ export const useModelManager = (
       await projectService.assertStorable(file);
       newModel = await loadFBXFile(file, {
         normalize: category !== 'Animation',
+        convert: convertOptionsFor(importSettings),
+        images,
         signal: operation.signal,
         diagnostics: { operationId: operation.id, traceId: operation.traceId, spanId: operation.spanId, assetAlias },
         onProgress: (progress, phase) => operation.update({
@@ -194,10 +203,15 @@ export const useModelManager = (
       if (importSettings) {
         const assetId = await projectService.uploadAsset(modelSourceFile(file, newModel.name), transfer);
         if (operation.signal.aborted) throw new DOMException('Asset import was cancelled.', 'AbortError');
+        const sourceImages: ModelSourceImage[] = [];
+        for (const image of images) sourceImages.push({ name: image.name, assetId: await projectService.uploadAsset(image, { signal: operation.signal, diagnostics: transfer.diagnostics }) });
+        if (sourceImages.length) newModel.sourceImages = sourceImages;
+        if (operation.signal.aborted) throw new DOMException('Asset import was cancelled.', 'AbortError');
         transfer.onPhase('project_record_commit');
         await projectService.applyChanges([{ domain: 'models', operation: 'upsert', id: newModel.id, value: {
           id: newModel.id, name: newModel.name, assetId, category: newModel.category, isPlacedInScene: false, importSettings,
           ...(clipNames.length ? { clipNames } : {}),
+          ...(sourceImages.length ? { sourceImages } : {}),
         } }], transfer.diagnostics);
       } else {
         await dbOperations.addModel({
@@ -247,7 +261,7 @@ export const useModelManager = (
 
   /** Import with explicit options (normalize toggle, target size); the settings are stored on the model document. */
   const importModelWithOptions = useCallback(
-    (file: File, settings: ModelImportSettings, category: AssetCategory = 'Prop') => importModel(file, category, settings),
+    (file: File, settings: ModelImportSettings, category: AssetCategory = 'Prop', images?: readonly File[]) => importModel(file, category, settings, images),
     [importModel],
   );
 
@@ -258,7 +272,7 @@ export const useModelManager = (
    * blueprints that reference it keep working; clips from its animation documents are
    * rebound to the new skeleton. Nothing is committed unless the source loads and binds.
    */
-  const reimportModel = useCallback(async (modelId: string, file?: File | null, settings?: ModelImportSettings) => {
+  const reimportModel = useCallback(async (modelId: string, file?: File | null, settings?: ModelImportSettings, images: readonly File[] = []) => {
     projectService.assertWritable();
     const existing = models.find((model) => model.id === modelId);
     if (!existing) {
@@ -296,17 +310,24 @@ export const useModelManager = (
       if (source) await projectService.assertStorable(source);
       // Without a new file, the source the project already holds.
       let storedAssetId: string | null = null;
+      const storedModel = nativeDocuments(await projectService.getSnapshotAll('models', trace), 'models').find((model) => model.id === modelId);
       if (!source) {
-        const stored = nativeDocuments(await projectService.getSnapshotAll('models', trace), 'models').find((model) => model.id === modelId);
-        if (typeof stored?.assetId !== 'string') throw new Error('its source file is not in the project');
-        const response = await projectService.fetchAsset(stored.assetId, { signal: operation.signal, diagnostics: trace });
+        if (typeof storedModel?.assetId !== 'string') throw new Error('its source file is not in the project');
+        const response = await projectService.fetchAsset(storedModel.assetId, { signal: operation.signal, diagnostics: trace });
         if (!response.ok) throw new Error(`source download failed (${response.status})`);
         source = modelSourceFile(new File([await response.blob()], name), name);
-        storedAssetId = stored.assetId;
+        storedAssetId = storedModel.assetId;
         diagnostic = assetDiagnosticAttributes(source, kind, assetAlias);
       }
+      // Images found earlier stay with the model; one found now of the same name replaces its copy.
+      const newImageNames = new Set(images.map((image) => image.name.toLowerCase()));
+      const keptImages: ModelSourceImage[] = (Array.isArray(storedModel?.sourceImages) ? storedModel.sourceImages as ModelSourceImage[] : [])
+        .filter((image) => !newImageNames.has(image.name.toLowerCase()));
+      const readSettings = settings ?? existing.importSettings;
       replacement = await loadFBXFile(source, {
         normalize: category !== 'Animation',
+        convert: convertOptionsFor(category === 'Animation' ? undefined : readSettings),
+        images: [...await loadSourceImages(keptImages, operation.signal, trace), ...images],
         manualId: modelId,
         signal: operation.signal,
         diagnostics: trace,
@@ -373,6 +394,10 @@ export const useModelManager = (
         assetId,
       };
       if (importSettings) document.importSettings = importSettings;
+      const sourceImages = [...keptImages];
+      for (const image of images) sourceImages.push({ name: image.name, assetId: await projectService.uploadAsset(image, { signal: operation.signal, diagnostics: trace }) });
+      if (sourceImages.length) document.sourceImages = sourceImages; else delete document.sourceImages;
+      replacement.sourceImages = sourceImages.length ? sourceImages : undefined;
       // The new file keeps the stored clip names when it has as many clips; otherwise its own are stored.
       const ownClips = replacement.animations.slice(0, ownClipCount);
       if (Array.isArray(stored?.clipNames) && stored.clipNames.length === ownClips.length) {
@@ -415,6 +440,16 @@ export const useModelManager = (
       setIsLoading(false);
     }
   }, [models, setIsLoading, startOperation, addNotification]);
+
+  /** A model's source file, as the project holds it. */
+  const readModelSource = useCallback(async (modelId: string): Promise<File> => {
+    const name = modelsRef.current.find((model) => model.id === modelId)?.name ?? 'model';
+    const stored = nativeDocuments(await projectService.getSnapshotAll('models'), 'models').find((model) => model.id === modelId);
+    if (typeof stored?.assetId !== 'string') throw new Error('Its source file is not in the project.');
+    const response = await projectService.fetchAsset(stored.assetId);
+    if (!response.ok) throw new Error(`Source download failed (${response.status}).`);
+    return modelSourceFile(new File([await response.blob()], name), name);
+  }, []);
 
   /** Shows a model in the Scene viewer in place of the one shown there: the viewer shows one model. */
   const placeInScene = useCallback(async (id: string) => {
@@ -766,7 +801,13 @@ export const useModelManager = (
         const blob = await response.blob();
         const file = new File([blob], model.name, { type: 'application/octet-stream' });
         
-        const newModelData = await loadFBXFile(file, { normalize: model.category !== 'Animation', manualId: modelId });
+        const newModelData = await loadFBXFile(file, {
+          normalize: model.category !== 'Animation',
+          manualId: modelId,
+          convert: convertOptionsFor(model.importSettings),
+          images: await loadSourceImages(model.sourceImages),
+        });
+        newModelData.sourceImages = model.sourceImages;
         
         newModelData.category = model.category;
         newModelData.folder = model.folder;
@@ -807,6 +848,7 @@ export const useModelManager = (
     addModel,
     importModelWithOptions,
     reimportModel,
+    readModelSource,
     updateModel,
     removeModel,
     removeTextureReference,

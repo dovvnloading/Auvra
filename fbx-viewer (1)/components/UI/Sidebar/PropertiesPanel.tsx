@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { ChevronDown, ChevronRight, Component, Crosshair, Paperclip, RotateCcw, Palette, Shield, Skull, FileCode, Target } from 'lucide-react';
 import { useScene } from '../../../context/SceneContext';
 import { AnimationControls } from '../Properties/AnimationControls';
+import { SourceFilePanel } from '../Properties/SourceFilePanel';
 import { AttachmentPanel } from '../Properties/AttachmentPanel';
 import { SocketPanel } from '../Properties/SocketPanel';
 import { ThumbnailTooltip } from '../ThumbnailTooltip';
@@ -138,6 +139,8 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                                 )}
                             </div>
                         )}
+
+                        {selectedModel.importReport && <SourceFilePanel report={selectedModel.importReport} />}
 
                         <div className="mt-2">
                             <div className="px-4 pb-2 pt-2 text-xs font-semibold text-gray-400 flex items-center gap-2 border-t border-gray-800">

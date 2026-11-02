@@ -4,14 +4,19 @@ Assets live in the project's content store and are referenced by stable ids, so 
 
 ## Importing models
 
-The **Content Browser** imports **FBX**, **glTF (.gltf with embedded data)**, **GLB** and **OBJ**. When you import a model, the import options ask whether to **normalise** it:
+The **Content Browser** imports **FBX**, **glTF (.gltf with embedded data)**, **GLB** and **OBJ**. Importing a model opens its import options, which say what the file holds (where it came from, its size, geometry, materials, skeleton and clips) and how it will come in:
 
-- **Normalise on** scales the model so its largest dimension equals the target size in metres (5 by default). Useful for assets from mixed sources.
-- **Normalise off** keeps the authored size. An FBX file says what unit it is authored in (Blender, Maya and Mixamo write centimetres), and the model comes in at that size in metres, so a 1.8 m character authored in centimetres is 1.8 m tall. glTF and GLB are metres already.
+- **Size.** **As in the file** keeps the size and pivot the file says it has. An FBX file says what unit it is authored in (Blender, Maya and Mixamo write centimetres), so a 1.8 m character authored in centimetres is 1.8 m tall; glTF and GLB are metres already. **Fit to a size** scales the model so its largest side is the length you give, centred and resting on the floor. A person-shaped skeleton the file makes shorter than 1 m or taller than 2.6 m starts at 1.8 m, and the options say so. Some Mixamo files make their characters almost 4 m tall.
+- **Keep.** A mesh a rigged file's skeleton does not move starts left out if it is under a tenth of the file's triangles, as some exporters leave strays behind: Meshy's rigged characters come with a sphere. Blend shapes can be left out too.
+- **Animation.** Tick the clips to bring in. **Reduce keys** drops animation keys that change nothing you could see (**Light**, bones stay within 0.05 mm), keeps every key, or drops many more (**Strong**).
+- **Images not in the file.** A model naming images its file does not hold lists them. **Find images...** or **Folder...** locates them by name, and they stay with the project.
+- **More options** chooses between the file's normals and normals worked out from its faces, and whether normal-mapped parts get tangents.
+
+When importing several files, **Import all** brings in the rest the same way. A model's **Properties** keep what its file held under **Source file**, with any warnings.
 
 The world is in metres: gravity, vehicles, speeds and distances all are. A character's capsule, step height, jump height and third-person camera are sized from its height, so a character of any size moves and is framed the same way; a person is about 1.8 m tall. The third-person camera sits a little to the character's right, so the character stands beside the crosshair rather than under it.
 
-An FBX that names texture images it does not contain (they were left beside the file it came from) still imports, without those textures, and says how many it left out. Import the images as textures and assign them in the model's **Material Overrides**.
+An FBX that names texture images it does not contain still imports if they are not found, without those textures, and says how many it left out.
 
 FBX and OBJ files are read by a native importer in the background, so a large file does not stall the editor. It reads every FBX version from Maya, 3ds Max, Blender, MotionBuilder, Cinema 4D and others, in binary or text:
 
@@ -29,11 +34,11 @@ Animation files without a mesh, such as Mixamo downloads made "Without Skin", go
 
 A model's own clip can get a **mirrored** copy, with left and right swapped: hover the clip in the model's Properties and click the mirror button. A strafe left becomes a strafe right, a right-handed punch a left-handed one. The copy is called `<clip> (Mirrored)` and is rebuilt from its clip each time the project opens.
 
-## Reimport and import size
+## Reimport and import settings
 
 Choose **Reimport** on a model to replace its source file. The model keeps its id, so everything placed in levels and linked in blueprints updates to the new file.
 
-Choose **Import Size** on a model to change how big it imports after the fact: the same options as when it was imported (normalise to a target size, or keep its authored size). The model is read again from its source at the new size; it keeps its id, overrides and clips, and everything placed or linked updates. To make a 5 m character person-sized, set its target size to 1.8.
+Choose **Import Settings** on a model to change how it imports after the fact: the same options as when it was imported. The model is read again from its source; it keeps its id, overrides and clips, and everything placed or linked updates. To make a 5 m character person-sized, fit its largest side to 1.8.
 
 ## Material overrides
 

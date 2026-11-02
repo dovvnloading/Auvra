@@ -380,6 +380,23 @@ const writeGlb = (document: unknown, binary: Uint8Array, images: readonly Stored
 
 const describeMissing = (missing: ReadonlySet<string>): string[] => [...missing].filter(Boolean).sort();
 
+/** The image files a file's materials read, once each, and which of them it holds itself. */
+export const describeImages = (native: Pick<NativeImport, 'materials' | 'textures'>): { file: string; embedded: boolean }[] => {
+  const slots: (keyof SourceMaterial)[] = ['baseTexture', 'roughnessTexture', 'glossinessTexture', 'metalnessTexture', 'normalTexture', 'occlusionTexture', 'emissionTexture', 'opacityTexture'];
+  const images = new Map<string, { file: string; embedded: boolean }>();
+  for (const material of native.materials) {
+    for (const slot of slots) {
+      const texture = native.textures[material[slot] as number];
+      if (!texture) continue;
+      const file = baseName(texture.file || texture.absoluteFile || texture.name);
+      if (!file) continue;
+      const known = images.get(file.toLowerCase());
+      images.set(file.toLowerCase(), { file, embedded: (known?.embedded ?? false) || texture.size > 0 });
+    }
+  }
+  return [...images.values()];
+};
+
 export interface BuildOptions {
   decode: DecodeImage;
   decodeLegacy: DecodeLegacyImage;
@@ -403,7 +420,10 @@ export const buildImportedGlb = async (native: NativeImport, options: BuildOptio
 
   const context: MaterialContext = { table, uvSets, usedExtensions, notes };
   const materials: Record<string, unknown>[] = [];
-  for (const [index, source] of native.materials.entries()) materials.push(await writeMaterial(context, source, index));
+  // A material no mesh draws (one only a left-out mesh used) keeps its place, without its images.
+  for (const [index, source] of native.materials.entries()) {
+    materials.push(uvSets.has(index) ? await writeMaterial(context, source, index) : { name: source.name });
+  }
 
   // A primitive the file gives no material is matte grey, not glTF's default metal.
   const untextured = (primitive: GltfPrimitive): boolean => primitive.material === undefined;

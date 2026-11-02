@@ -121,9 +121,28 @@ class AssetDocumentTests(unittest.TestCase):
             {"targetSize": 5},
             {"normalize": "true", "targetSize": 5},
             {"normalize": True, "targetSize": 5, "extra": 1},
+            {"normalize": True, "targetSize": 5, "keyThreshold": -1},
+            {"normalize": True, "targetSize": 5, "smoothingAngle": 0},
+            {"normalize": True, "targetSize": 5, "looseMeshes": "no"},
+            {"normalize": True, "targetSize": 5, "excludedClips": [""]},
         ):
             with self.subTest(settings=settings), self.assertRaises(ValueError):
                 validate_domain("models", {"schemaVersion": 1, "documents": [{**model, "importSettings": settings}]})
+        full = {
+            "normalize": False, "targetSize": 2, "animation": True, "excludedClips": ["Run"], "keyThreshold": 0.001,
+            "morphTargets": False, "looseMeshes": False, "recomputeNormals": True, "smoothingAngle": 45, "tangents": False,
+        }
+        accepted = validate_domain("models", {"schemaVersion": 1, "documents": [{**model, "importSettings": full}]})
+        self.assertEqual(accepted["documents"][0]["importSettings"], full)
+
+    def test_model_source_images(self):
+        model = {"id": "m", "name": "Model", "assetId": self.asset}
+        images = [{"name": "Atlas.png", "assetId": self.asset}]
+        accepted = validate_domain("models", {"schemaVersion": 1, "documents": [{**model, "sourceImages": images}]})
+        self.assertEqual(accepted["documents"][0]["sourceImages"], images)
+        for bad in ([{"name": "Atlas.png"}], [{"assetId": self.asset}], [{"name": "Atlas.png", "assetId": "nope"}], [{"name": "", "assetId": self.asset}]):
+            with self.subTest(images=bad), self.assertRaises(ValueError):
+                validate_domain("models", {"schemaVersion": 1, "documents": [{**model, "sourceImages": bad}]})
 
 
 class HierarchyReferenceTests(unittest.TestCase):

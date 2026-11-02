@@ -24,8 +24,9 @@ interface AssetContextType {
   // Models
   models: LoadedModelData[];
   addModel: (file: File, category: AssetCategory) => Promise<void>;
-  importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory) => Promise<void>;
-  reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings) => Promise<void>;
+  importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory, images?: readonly File[]) => Promise<void>;
+  readModelSource: (modelId: string) => Promise<File>;
+  reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings, images?: readonly File[]) => Promise<void>;
   updateModel: (id: string, updates: AssetInfoUpdate) => Promise<void>;
   removeModel: (id: string) => void;
   placeInScene: (id: string) => void; 
@@ -178,6 +179,7 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     models: modelManager.models,
     addModel: modelManager.addModel,
     importModelWithOptions: modelManager.importModelWithOptions,
+    readModelSource: modelManager.readModelSource,
     reimportModel: modelManager.reimportModel,
     updateModel: modelManager.updateModel,
     removeModel: modelManager.removeModel,
