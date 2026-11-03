@@ -45,6 +45,13 @@ describe('texture set layers', () => {
         expect(stored?.layers[0].channels).toEqual({ baseColor: { mode: 'multiply', opacity: 1 } });
         expect(stored?.size).toBe(12);
         expect(stored?.udim).toBe(true);
+        expect(stored?.before).toBeUndefined();
+    });
+
+    it('keeps what the surface wore before, carried onto its own layout tile by tile', () => {
+        const stored = readPaintDocument({ modelId: 'm', materialNames: ['A'], layers: [], udim: true, before: { baseColor: { 1001: { assetId: 'a' }, 1002: { assetId: 'b' } }, emissive: { 1002: { assetId: 'c' } } } });
+        expect(stored?.before?.baseColor).toEqual({ 1001: { assetId: 'a' }, 1002: { assetId: 'b' } });
+        expect(stored?.before?.emissive?.['1002']).toEqual({ assetId: 'c' });
     });
 
     it('builds every smart material from layers whose smart masks exist', () => {
