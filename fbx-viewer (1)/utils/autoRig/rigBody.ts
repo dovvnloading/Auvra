@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import { largestPiece } from './bodyField';
 import { readBody, turnAboutY, turnSoupAboutY, type BodyExtents, type BodyMarkers, type BodyReading, type MarkerName, type Point } from './bodyMarkers';
 import { bodySkeleton, fourLegSkeleton, turnJointsAboutY, type RigJoint } from './bodySkeleton';
@@ -228,11 +229,19 @@ export const readAnyBody = (triangles: TriangleSoup): ReadBody => {
   return other.guessed ? read : other;
 };
 
-/** Hand tips and toes follow their wrists and paws when a person moves those: keeps their length and direction from the limb. */
-const followJoint = (oldJoint: Point, joint: Point, tip: Point): Point => [
-  tip[0] + joint[0] - oldJoint[0],
-  tip[1] + joint[1] - oldJoint[1],
-  tip[2] + joint[2] - oldJoint[2],
+/** A hand tip when a person moves the forearm: keeps the hand's length and its direction from the forearm. */
+const followForearm = (oldElbow: Point, oldWrist: Point, elbow: Point, wrist: Point, tip: Point): Point => {
+  const before = new THREE.Vector3(...oldWrist).sub(new THREE.Vector3(...oldElbow)).normalize();
+  const after = new THREE.Vector3(...wrist).sub(new THREE.Vector3(...elbow)).normalize();
+  const hand = new THREE.Vector3(...tip).sub(new THREE.Vector3(...oldWrist)).applyQuaternion(new THREE.Quaternion().setFromUnitVectors(before, after));
+  return [wrist[0] + hand.x, wrist[1] + hand.y, wrist[2] + hand.z];
+};
+
+/** A toe when a person moves the ankle or the paw above it. */
+const followAnkle = (oldAnkle: Point, ankle: Point, toe: Point): Point => [
+  toe[0] + ankle[0] - oldAnkle[0],
+  toe[1],
+  toe[2] + ankle[2] - oldAnkle[2],
 ];
 
 export interface RiggedBody {
@@ -252,8 +261,10 @@ const personJoints = (triangles: TriangleSoup, reading: BodyReading, up: (point:
     }
     if (original) {
       const before = original as BodyMarkers;
-      if (moved.includes('leftWrist')) extents.leftHandTip = followJoint(up(before.leftWrist), markers.leftWrist, extents.leftHandTip);
-      if (moved.includes('rightWrist')) extents.rightHandTip = followJoint(up(before.rightWrist), markers.rightWrist, extents.rightHandTip);
+      if (moved.includes('leftWrist') || moved.includes('leftElbow')) extents.leftHandTip = followForearm(up(before.leftElbow), up(before.leftWrist), markers.leftElbow, markers.leftWrist, extents.leftHandTip);
+      if (moved.includes('rightWrist') || moved.includes('rightElbow')) extents.rightHandTip = followForearm(up(before.rightElbow), up(before.rightWrist), markers.rightElbow, markers.rightWrist, extents.rightHandTip);
+      if (moved.includes('leftAnkle')) extents.leftToe = followAnkle(up(before.leftAnkle), markers.leftAnkle, extents.leftToe);
+      if (moved.includes('rightAnkle')) extents.rightToe = followAnkle(up(before.rightAnkle), markers.rightAnkle, extents.rightToe);
     }
   }
   return bodySkeleton(markers, extents, withFingers ? {
@@ -280,10 +291,10 @@ const fourLegJoints = (triangles: TriangleSoup, reading: FourLegReading, up: (po
     }
     if (original) {
       const before = original as FourLegMarkers;
-      if (moved.includes('leftFrontPaw')) extents.leftFrontToe = followJoint(up(before.leftFrontPaw), markers.leftFrontPaw, extents.leftFrontToe);
-      if (moved.includes('rightFrontPaw')) extents.rightFrontToe = followJoint(up(before.rightFrontPaw), markers.rightFrontPaw, extents.rightFrontToe);
-      if (moved.includes('leftHindPaw')) extents.leftHindToe = followJoint(up(before.leftHindPaw), markers.leftHindPaw, extents.leftHindToe);
-      if (moved.includes('rightHindPaw')) extents.rightHindToe = followJoint(up(before.rightHindPaw), markers.rightHindPaw, extents.rightHindToe);
+      if (moved.includes('leftFrontPaw')) extents.leftFrontToe = followAnkle(up(before.leftFrontPaw), markers.leftFrontPaw, extents.leftFrontToe);
+      if (moved.includes('rightFrontPaw')) extents.rightFrontToe = followAnkle(up(before.rightFrontPaw), markers.rightFrontPaw, extents.rightFrontToe);
+      if (moved.includes('leftHindPaw')) extents.leftHindToe = followAnkle(up(before.leftHindPaw), markers.leftHindPaw, extents.leftHindToe);
+      if (moved.includes('rightHindPaw')) extents.rightHindToe = followAnkle(up(before.rightHindPaw), markers.rightHindPaw, extents.rightHindToe);
     }
   }
   return fourLegSkeleton(markers, extents, withTail);

@@ -9,10 +9,12 @@ The **Content Browser** imports **FBX**, **glTF (.gltf with embedded data)**, **
 - **Size.** **As in the file** keeps the size and pivot the file says it has. An FBX file says what unit it is authored in (Blender, Maya and Mixamo write centimetres), so a 1.8 m character authored in centimetres is 1.8 m tall; glTF and GLB are metres already. **Fit to a size** scales the model so its largest side is the length you give, centred and resting on the floor. A person-shaped skeleton the file makes shorter than 1 m or taller than 2.6 m starts at 1.8 m, and the options say so. Some Mixamo files make their characters almost 4 m tall.
 - **Keep.** A mesh a rigged file's skeleton does not move starts left out if it is under a tenth of the file's triangles, as some exporters leave strays behind: Meshy's rigged characters come with a sphere. Blend shapes can be left out too.
 - **Animation.** Tick the clips to bring in. **Reduce keys** drops animation keys that change nothing you could see (**Light**, bones stay within 0.05 mm), keeps every key, or drops many more (**Strong**).
-- **Images not in the file.** A model naming images its file does not hold lists them. **Find images...** or **Folder...** locates them by name, and they stay with the project.
+- **Images not in the file.** A model naming images its file does not hold lists them. **Find images...** or **Folder...** locates them by name, and they stay with the project. An OBJ keeps its materials in a `.mtl` file beside it: the same place asks for that, then for the images it names.
 - **More options** chooses between the file's normals and normals worked out from its faces, and whether normal-mapped parts get tangents.
 
-When importing several files, **Import all** brings in the rest the same way. A model's **Properties** keep what its file held under **Source file**, with any warnings.
+**Keep**, **Animation** and **More options** are for FBX and OBJ files: a glTF or GLB comes in as it is. When importing several files, **Import all** brings in the rest the same way. The **Properties** of a model from an FBX or OBJ keep what its file held under **Source file**, with any warnings. A file that cannot be read says why and is not imported, and neither is one that holds no meshes and no animation.
+
+A project opens without a model whose file cannot be read, says which and why, and keeps it in the project.
 
 The world is in metres: gravity, vehicles, speeds and distances all are. A character's capsule, step height, jump height and third-person camera are sized from its height, so a character of any size moves and is framed the same way; a person is about 1.8 m tall. The third-person camera sits a little to the character's right, so the character stands beside the crosshair rather than under it.
 
@@ -24,7 +26,7 @@ FBX and OBJ files are read by a native importer in the background, so a large fi
 - **Materials.** Base colour, roughness, metalness, normal, emissive, opacity and ambient occlusion maps come through as physically based materials, including those Blender writes into its FBX exports. Roughness and metalness maps are packed into one image, a glossiness map is inverted into roughness, and a height (bump) map on a material with no normal map becomes a normal map. TGA and TIFF images are read too.
 - **Geometry.** Polygons are triangulated, corners are shared between triangles, and a mesh has one piece per material. A mesh with no normals gets them worked out, keeping edges sharper than 60 degrees hard. Parts with a normal map get MikkTSpace tangents, the standard the maps are baked against, unless the file has its own.
 - **Skeletons.** A character split into several meshes shares one skeleton. Each vertex keeps its four strongest bones.
-- **Animation.** Each take in a file becomes a clip, with all its animation layers merged and its curves followed exactly, then cut to the take's range and stripped of keys that change nothing. Blend shapes and their animation come through.
+- **Animation.** Each take in a file becomes a clip, with all its animation layers merged and its curves followed exactly, then cut to the take's range and stripped of keys that change nothing. A take of one frame is a pose, and lasts that frame. Blend shapes and their animation come through.
 
 Animations in FBX and glTF files are kept and can be bound to characters in the animation graph.
 
@@ -38,11 +40,11 @@ A model's own clip can get a **mirrored** copy, with left and right swapped: hov
 
 Whatever format it comes in, a model file can say more through the names of its nodes, as art tools and engines have long agreed:
 
-- **`UCX_`, `UBX_`, `USP_` and `UCP_` meshes** (hull, box, sphere, capsule) are collision shapes. They are not drawn. A **Rigid Body** with no **Collider** uses them instead of one hull around the model, and a **Collider** can use them with **From the model file** as its shape. Each counts as a convex hull of its corners, so a concave shape is built from several, as in the art tools.
-- **`SOCKET_` nodes** become sockets of the model when it is imported or reimported, at the place the node has, hanging from the bone above it if there is one. A socket of the same name already on the model is left as it is.
-- **`Name_LOD0`, `Name_LOD1`** and so on, and the children of an FBX LOD group, are simpler versions of a mesh. The finest is kept. The rest are left out, as Auvra makes the simpler levels of every mesh itself.
+- **`UCX_`, `UBX_`, `USP_` and `UCP_` meshes** (hull, box, sphere, capsule), in capitals, are collision shapes. They are not drawn, unless the file has nothing else to draw. A **Rigid Body** with no **Collider** uses them instead of one hull around the model, and a **Collider** can use them with **From the model file** as its shape. Each counts as a convex hull of its corners, so a concave shape is built from several, as in the art tools.
+- **`SOCKET_` nodes** become sockets of the model when a file is imported or a new one replaces it, at the place the node has, hanging from the bone or moving node above it if there is one. A socket of the same name already on the model is left as it is. A socket marks where a muzzle flash and shots start.
+- **`Name_LOD0`, `Name_LOD1`** and so on, or `Name` beside `Name_LOD1`, and the children of an FBX LOD group, are simpler versions of a mesh. The finest is kept. The rest are left out, as Auvra makes the simpler levels of every mesh itself.
 
-A mesh hidden in the art tool when the file was saved is left out too, unless every mesh in the file is hidden.
+A mesh hidden in the art tool when an FBX was saved is left out too, unless every mesh in the file is hidden. The size the import options give is that of what is left.
 
 ## Skeletons
 
@@ -68,7 +70,7 @@ An animal's bones are named as a person's where they stand alike: its back, neck
 
 **Give the hands fingers** adds three bones to each finger, so clips that curl the fingers, such as holding a weapon, show. Fingers that stand apart are followed where they are. A hand whose fingers are grown together into a mitten, as on many generated meshes, is shared out across its width, with each finger ending at the hand's outline. Nothing behind the wrist follows a finger. Turn it off to keep each hand as one bone.
 
-The model keeps its place in levels and blueprints and goes among the characters, its source now a GLB in metres. Clips from any humanoid rig can then be imported onto a person. An animal takes clips from rigs named as it is, and from rigs that say which end of the body a leg is at, such as `front_thigh.L` and `RearLeg_R`.
+The model keeps its place in levels and blueprints, its size, its sockets and its collision shapes, and goes among the characters, its source now a GLB. Only what it draws counts as its body: parts the import leaves out are gone from the GLB. Any clips in its old file go, with a note saying so before you start. Clips from any humanoid rig can then be imported onto a person. An animal takes clips from rigs named as it is, and from rigs that say which end of the body a leg is at, such as `front_thigh.L` and `RearLeg_R`.
 
 ## Reimport and import settings
 

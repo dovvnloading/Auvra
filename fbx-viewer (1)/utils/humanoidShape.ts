@@ -23,6 +23,8 @@ const HAND_REACH = 0.1;
 const ANKLE_ZONE = 0.14;
 /** How close to the longest pair of bones along a limb another pair must be, to count as just as long. */
 const NEAR_EQUAL = 0.8;
+/** Past this share of a figure's height, the bone above a neck's place is the head itself, with its top above it: a neck is shorter. */
+const LONGEST_NECK = 0.08;
 
 const positionsOf = (bones: readonly THREE.Object3D[], root: THREE.Object3D): Joint[] => {
   root.updateMatrixWorld(true);
@@ -132,8 +134,13 @@ export const inferHumanoidRoles = (bones: readonly THREE.Object3D[], root: THREE
   if (aboveChest.length === 1) {
     roles.set(aboveChest[0].bone, 'Head');
   } else if (aboveChest.length === 2) {
-    roles.set(aboveChest[0].bone, 'Neck');
-    roles.set(aboveChest[1].bone, 'Head');
+    // Chest, neck, head, or chest, head, the head's top.
+    if (aboveChest[0].position.distanceTo(aboveChest[1].position) > height * LONGEST_NECK) {
+      roles.set(aboveChest[0].bone, 'Head');
+    } else {
+      roles.set(aboveChest[0].bone, 'Neck');
+      roles.set(aboveChest[1].bone, 'Head');
+    }
   } else if (aboveChest.length > 2) {
     // The last bone is the head's top: the one before it is the head.
     roles.set(aboveChest[0].bone, 'Neck');

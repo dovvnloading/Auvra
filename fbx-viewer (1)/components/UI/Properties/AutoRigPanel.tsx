@@ -1,9 +1,9 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Bone, Loader2 } from 'lucide-react';
 import { useScene } from '../../../context/SceneContext';
 import type { LoadedModelData } from '../../../types';
 import type { BodyKind } from '../../../utils/autoRig/rigBody';
-import { cancelRig, failRig, finishRig, setRigBody, setRigBothSides, setRigWithFingers, setRigWithTail, startRig, turnRigAround, useRigSession } from '../../../utils/autoRig/rigSession';
+import { cancelRig, failRig, finishRig, rigNotSaved, setRigBody, setRigBothSides, setRigWithFingers, setRigWithTail, startRig, turnRigAround, useRigSession } from '../../../utils/autoRig/rigSession';
 import { convertOptionsFor } from '../../../utils/processing/ModelTransforms';
 import { Button, Segmented } from '../kit';
 
@@ -18,20 +18,25 @@ export const AutoRigPanel: React.FC<{ model: LoadedModelData }> = ({ model }) =>
   const session = useRigSession();
   const mine = session.modelId === model.id;
 
-  // A session belongs to the model it was started on.
+  // A session belongs to the model it was started on. It outlives this tab: the markers stay in the view.
   useEffect(() => {
     if (session.modelId && !mine) cancelRig();
   }, [mine, session.modelId]);
-  useEffect(() => () => cancelRig(), []);
+
+  // Placing the model in the scene can take a while, and hand it on changed.
+  const latest = useRef(model);
+  latest.current = model;
 
   const begin = async () => {
     if (!model.isPlacedInScene) await placeInScene(model.id);
     const [file, images] = await Promise.all([readModelSource(model.id), readModelSourceImages(model.id)]);
-    await startRig(model.id, file, { convert: convertOptionsFor(model.importSettings), images });
+    await startRig(model.id, latest.current.object, file, { convert: convertOptionsFor(model.importSettings), images });
   };
   const finish = async () => {
-    const file = await finishRig(model.name);
-    if (file) await reimportModel(model.id, file, undefined, [], 'Character');
+    const file = await finishRig(model.name, model.object);
+    if (!file) return;
+    if (await reimportModel(model.id, file, undefined, [], 'Character')) cancelRig();
+    else rigNotSaved();
   };
 
   const stage = mine ? session.stage : 'idle';
@@ -49,6 +54,9 @@ export const AutoRigPanel: React.FC<{ model: LoadedModelData }> = ({ model }) =>
         <p>Drag the markers onto the joints. Only their place in this view counts: each is kept in the middle of the limb it is on.</p>
         {session.guessed && (
           <p className="text-amber-400">{kind === 'fourLegs' ? 'This does not read clearly as an animal on four legs' : 'This does not read clearly as a person'}, so the markers are only a start.</p>
+        )}
+        {!!model.sourceClipNames?.length && (
+          <p className="text-amber-400">The clips in this model's file will go, as they move parts of the mesh that bones will move instead.</p>
         )}
         <label className="flex h-6 cursor-pointer items-center gap-2">
           <input type="checkbox" checked={session.bothSides} onChange={(event) => setRigBothSides(event.target.checked)} className="h-3.5 w-3.5 shrink-0 accent-blue-500" />
@@ -75,6 +83,15 @@ export const AutoRigPanel: React.FC<{ model: LoadedModelData }> = ({ model }) =>
     );
   }
 
+  if (stage === 'saving') {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center text-xs text-ink-3">
+        <Loader2 size={16} className="animate-spin" />
+        <span>Saving the model with its skeleton</span>
+      </div>
+    );
+  }
+
   if (stage === 'reading' || stage === 'binding') {
     const progress = stage === 'binding' ? session.progress : null;
     return (
@@ -96,11 +113,11 @@ export const AutoRigPanel: React.FC<{ model: LoadedModelData }> = ({ model }) =>
       <p className="w-full [overflow-wrap:anywhere]">{model.name} has no skeleton.</p>
       {!projectStatus.readOnly && (
         <>
-          <Button variant="primary" icon={<Bone size={12} />} onClick={() => { void begin().catch((error: unknown) => failRig(error, 'The model could not be read.')); }}>Make a skeleton</Button>
+          <Button variant="primary" icon={<Bone size={12} />} onClick={() => { void begin().catch((error: unknown) => failRig(error, 'The model could not be read.', model.id)); }}>Make a skeleton</Button>
           <p className="text-2xs">For a person, upright or hunched, or an animal on four legs. Clips from other rigs can then play on them.</p>
         </>
       )}
-      {session.error && <p className="text-red-400">{session.error}</p>}
+      {mine && session.error && <p className="text-red-400">{session.error}</p>}
     </div>
   );
 };

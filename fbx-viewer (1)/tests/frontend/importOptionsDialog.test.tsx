@@ -206,4 +206,51 @@ describe('the import dialog', () => {
     expect(onCancel).toHaveBeenCalled();
     expect(onConfirm).not.toHaveBeenCalled();
   });
+
+  it('closes on Escape with the focus inside it, too', async () => {
+    const { onCancel } = await open(report());
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Import' }), { key: 'Escape' });
+    expect(onCancel).toHaveBeenCalled();
+  });
+
+  it('says why a file cannot be read, and does not offer to import it', async () => {
+    const onConfirm = vi.fn();
+    render(<ImportOptionsDialog name="thing.fbx" inspect={async () => { throw new Error('The file could not be read: Truncated file.'); }} onConfirm={onConfirm} onCancel={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText(/Truncated file/)).toBeTruthy());
+    expect((screen.getByRole('button', { name: 'Import' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('does not offer to import a file that holds nothing', async () => {
+    await open(report({ meshes: 0, triangles: 0, vertices: 0, boundsMin: undefined, boundsMax: undefined, clips: [] }));
+    expect(screen.getByText(/nothing to import/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Import' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('keeps a model with no clips that way when only its size changes', async () => {
+    const { onConfirm } = await open(report({ clips: [{ name: 'Walk', duration: 1, start: 0, layers: 1 }] }), { initialSettings: resolveImportSettings({ normalize: false, targetSize: 2, animation: false }), confirmLabel: 'Apply' });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onConfirm.mock.calls[0][0].settings.animation).toBe(false);
+  });
+
+  it('counts only the takes the file has as left out', async () => {
+    await open(report({ clips: [{ name: 'Walk', duration: 1, start: 0, layers: 1 }, { name: 'Run', duration: 1, start: 0, layers: 1 }] }), { initialSettings: resolveImportSettings({ normalize: false, targetSize: 2, excludedClips: ['Walk', 'Old', 'Older'] }) });
+    expect(screen.getByText(/Animation: 1 of 2 clips/)).toBeTruthy();
+  });
+
+  it('reads an OBJ\'s material file when it is found, and asks for the images that names', async () => {
+    const inspect = vi.fn(async (beside?: readonly File[]) => (beside?.length
+      ? report({ format: 'obj', materialFile: 'parts.mtl', images: [{ file: 'paint.png', embedded: false }] })
+      : report({ format: 'obj', materialFile: 'parts.mtl', images: [{ file: 'parts.mtl', embedded: false }] })));
+    const onConfirm = vi.fn<(choice: ImportChoice) => void>();
+    const { container } = render(<ImportOptionsDialog name="thing.obj" inspect={inspect} onConfirm={onConfirm} onCancel={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText('parts.mtl')).toBeTruthy());
+    const mtl = new File(['newmtl Paint'], 'parts.mtl');
+    const image = new File(['png'], 'paint.png');
+    // A folder holds both at once: the image is found once the material file has said it is wanted.
+    const picker = container.querySelector('input[type="file"][multiple]') as HTMLInputElement;
+    fireEvent.change(picker, { target: { files: [mtl, image] } });
+    await waitFor(() => expect(screen.getByText('paint.png')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Import' }));
+    expect(onConfirm.mock.calls[0][0].images.map((file) => file.name).sort()).toEqual(['paint.png', 'parts.mtl']);
+  });
 });

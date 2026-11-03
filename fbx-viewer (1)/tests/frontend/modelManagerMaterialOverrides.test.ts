@@ -109,7 +109,7 @@ describe('useModelManager material overrides during long operations', () => {
     mocks.projectService.uploadAsset.mockReturnValue(upload.promise);
     const { result } = renderManager(existing.model);
 
-    let reimport!: Promise<void>;
+    let reimport!: Promise<unknown>;
     act(() => { reimport = result.current.reimportModel('m1', new File(['fbx'], 'Robot.fbx')); });
     await waitFor(() => expect(mocks.projectService.uploadAsset).toHaveBeenCalled());
     const { texture, disposed } = await saveDuringOperation(result, existing.model.object);

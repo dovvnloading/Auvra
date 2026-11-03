@@ -4,8 +4,9 @@ import type { PartWeights, SkinnedPart } from './skinWeights';
 
 /**
  * Writes a model and a skeleton fitted to it as one rigged GLB. The source's materials and images are
- * kept byte for byte. Its geometry is written out afresh, baked into the model's space in metres, as a
- * skinned mesh takes its place from its bones and not from the nodes above it.
+ * kept byte for byte. Its geometry is written out afresh, baked into the model's space, as a skinned
+ * mesh takes its place from its bones and not from the nodes above it. The model's units stay as they
+ * were, and with them the root's scale and all that is placed against it: sockets and attachments.
  */
 
 interface GltfNode {
@@ -89,6 +90,13 @@ export interface RigPrimitive extends SkinnedPart {
   geometry: THREE.BufferGeometry;
   /** From the geometry's own space to the model's. */
   matrix: THREE.Matrix4;
+}
+
+/** A collision shape of the source, which goes along unskinned, for the model to keep it. */
+export interface RigShape {
+  name: string;
+  positions: Float32Array;
+  indices: Uint32Array | null;
 }
 
 export interface RigSource {
@@ -221,11 +229,10 @@ export const buildRiggedGlb = (
   primitives: readonly RigPrimitive[],
   joints: readonly RigJoint[],
   weights: readonly PartWeights[],
+  shapes: readonly RigShape[] = [],
 ): ArrayBuffer => {
   const json: GltfJson = structuredClone(source.json);
   const chunk = new BinaryChunk();
-  const unit = source.metresPerUnit;
-  const inMetres = new THREE.Matrix4().makeScale(unit, unit, unit);
 
   // Images stay byte for byte.
   for (const image of json.images ?? []) {
@@ -251,15 +258,17 @@ export const buildRiggedGlb = (
         ...(sourceMesh.extras ? { extras: sourceMesh.extras } : {}),
       });
       const sourceNode = nodes[part.node];
+      // What is skinned is drawn, whatever the file said of its node.
+      const { hidden: _hidden, lodGroup: _lodGroup, ...extras } = (sourceNode.extras ?? {}) as Record<string, unknown>;
       skinnedNodes.push({
         ...(sourceNode.name ? { name: sourceNode.name } : {}),
         mesh: meshIndex,
         ...(sourceNode.weights ? { weights: sourceNode.weights } : {}),
-        ...(sourceNode.extras ? { extras: sourceNode.extras } : {}),
+        ...(Object.keys(extras).length ? { extras } : {}),
       });
     }
 
-    const matrix = new THREE.Matrix4().multiplyMatrices(inMetres, part.matrix);
+    const matrix = part.matrix;
     const normalMatrix = new THREE.Matrix3().getNormalMatrix(matrix);
     const linear = new THREE.Matrix3().setFromMatrix4(matrix);
     const mirrored = matrix.determinant() < 0;
@@ -330,6 +339,8 @@ export const buildRiggedGlb = (
     const morphNormals = geometry.morphAttributes.normal;
     if (morphPositions?.length) {
       const direction = new THREE.Vector3();
+      // Unlike a normal, these are not made unit length after: the normal matrix's inverse scale comes off here.
+      const normalScale = Math.cbrt(Math.abs(matrix.determinant()));
       primitive.targets = morphPositions.map((attribute, target) => {
         const values = floatsOf(attribute);
         for (let i = 0; i < values.length; i += 3) direction.fromArray(values, i).applyMatrix3(linear).toArray(values, i);
@@ -337,7 +348,7 @@ export const buildRiggedGlb = (
         const normals = morphNormals?.[target];
         if (normals) {
           const normalValues = floatsOf(normals);
-          for (let i = 0; i < normalValues.length; i += 3) direction.fromArray(normalValues, i).applyMatrix3(normalMatrix).toArray(normalValues, i);
+          for (let i = 0; i < normalValues.length; i += 3) direction.fromArray(normalValues, i).applyMatrix3(normalMatrix).multiplyScalar(normalScale).toArray(normalValues, i);
           out.NORMAL = chunk.accessor(normalValues, FLOAT, 3, ARRAY_BUFFER);
         }
         return out;
@@ -346,8 +357,16 @@ export const buildRiggedGlb = (
     meshes[meshIndex].primitives.push(primitive);
   });
 
-  // The source's nodes stay as empty places, and the skinned ones go on top.
+  const shapeNodes: GltfNode[] = shapes.map((shape) => {
+    const primitive: GltfPrimitive = { attributes: { POSITION: chunk.accessor(shape.positions, FLOAT, 3, ARRAY_BUFFER, boundsOf(shape.positions)) } };
+    if (shape.indices) primitive.indices = chunk.accessor(shape.indices, UNSIGNED_INT, 1, ELEMENT_ARRAY_BUFFER);
+    return { name: shape.name, mesh: meshes.push({ primitives: [primitive] }) - 1 };
+  });
+
+  // The source's nodes stay as empty places, and the skinned ones go on top. An empty keeps no name
+  // its mesh has taken with it, as loaders number a name used twice.
   for (const node of nodes) {
+    if (node.mesh !== undefined) delete node.name;
     delete node.mesh;
     delete node.skin;
     delete node.weights;
@@ -355,17 +374,22 @@ export const buildRiggedGlb = (
       delete node.extensions.EXT_mesh_gpu_instancing;
       if (!Object.keys(node.extensions).length) delete node.extensions;
     }
+    if (node.extras && typeof node.extras === 'object') {
+      const { hidden: _hidden, lodGroup: _lodGroup, ...extras } = node.extras as Record<string, unknown>;
+      if (Object.keys(extras).length) node.extras = extras; else delete node.extras;
+    }
   }
   const scene = (json.scenes ??= [{}])[json.scene ?? 0] ?? (json.scenes[0] ??= {});
+  if (source.metresPerUnit !== 1) scene.extras = { ...(scene.extras as object | undefined), sourceMetresPerUnit: source.metresPerUnit };
   const sceneNodes = (scene.nodes ??= []);
   const skinnedStart = nodes.length;
-  nodes.push(...skinnedNodes);
-  sceneNodes.push(...skinnedNodes.map((_, at) => skinnedStart + at));
+  nodes.push(...skinnedNodes, ...shapeNodes);
+  sceneNodes.push(...skinnedNodes.map((_, at) => skinnedStart + at), ...shapeNodes.map((_, at) => skinnedStart + skinnedNodes.length + at));
 
-  // The joints, in metres, each placed against its parent.
+  // The joints, each placed against its parent.
   const jointStart = nodes.length;
   const worldTurns = joints.map((joint) => new THREE.Quaternion(...joint.rotation));
-  const worldPlaces = joints.map((joint) => new THREE.Vector3(...joint.position).multiplyScalar(unit));
+  const worldPlaces = joints.map((joint) => new THREE.Vector3(...joint.position));
   joints.forEach((joint, index) => {
     const node: GltfNode = { name: joint.name };
     if (joint.parent >= 0) {
