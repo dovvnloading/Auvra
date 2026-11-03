@@ -21,7 +21,7 @@ An FBX that names texture images it does not contain still imports if they are n
 FBX and OBJ files are read by a native importer in the background, so a large file does not stall the editor. It reads every FBX version from Maya, 3ds Max, Blender, MotionBuilder, Cinema 4D and others, in binary or text:
 
 - **Orientation and units.** A file authored Z-up is stood up on import. A file's unit is read from the file.
-- **Materials.** Base colour, roughness, metalness, normal, emissive, opacity and ambient occlusion maps come through as physically based materials, including those Blender writes into its FBX exports. Roughness and metalness maps are packed into one image, and a glossiness map is inverted into roughness. TGA and TIFF images are read too.
+- **Materials.** Base colour, roughness, metalness, normal, emissive, opacity and ambient occlusion maps come through as physically based materials, including those Blender writes into its FBX exports. Roughness and metalness maps are packed into one image, a glossiness map is inverted into roughness, and a height (bump) map on a material with no normal map becomes a normal map. TGA and TIFF images are read too.
 - **Geometry.** Polygons are triangulated, corners are shared between triangles, and a mesh has one piece per material. A mesh with no normals gets them worked out, keeping edges sharper than 60 degrees hard. Parts with a normal map get MikkTSpace tangents, the standard the maps are baked against, unless the file has its own.
 - **Skeletons.** A character split into several meshes shares one skeleton. Each vertex keeps its four strongest bones.
 - **Animation.** Each take in a file becomes a clip, with all its animation layers merged and its curves followed exactly, then cut to the take's range and stripped of keys that change nothing. Blend shapes and their animation come through.
@@ -41,6 +41,8 @@ Whatever format it comes in, a model file can say more through the names of its 
 - **`UCX_`, `UBX_`, `USP_` and `UCP_` meshes** (hull, box, sphere, capsule) are collision shapes. They are not drawn. A **Rigid Body** with no **Collider** uses them instead of one hull around the model, and a **Collider** can use them with **From the model file** as its shape. Each counts as a convex hull of its corners, so a concave shape is built from several, as in the art tools.
 - **`SOCKET_` nodes** become sockets of the model when it is imported or reimported, at the place the node has, hanging from the bone above it if there is one. A socket of the same name already on the model is left as it is.
 - **`Name_LOD0`, `Name_LOD1`** and so on, and the children of an FBX LOD group, are simpler versions of a mesh. The finest is kept. The rest are left out, as Auvra makes the simpler levels of every mesh itself.
+
+A mesh hidden in the art tool when the file was saved is left out too, unless every mesh in the file is hidden.
 
 ## Skeletons
 

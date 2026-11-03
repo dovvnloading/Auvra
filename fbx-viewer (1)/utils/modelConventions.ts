@@ -8,6 +8,8 @@ import * as THREE from 'three';
  * - `SOCKET_` nodes are places to attach things: taken out and offered as sockets of the model.
  * - `Name_LOD1` and so on, or the children of an LOD group, are simpler versions of a mesh. Only the
  *   first is kept, as otherwise all would be drawn at once and the engine makes simpler levels itself.
+ *
+ * Meshes hidden in the art tool are left out too, unless that would leave nothing to draw.
  */
 
 /** On a model's root: its collision shapes, as `AuthoredHull[]`. A plain array, as model copies copy it. */
@@ -35,6 +37,8 @@ export interface ModelConventions {
   sockets: number;
   /** Simpler versions of meshes left out. */
   detailLevelsLeftOut: number;
+  /** Meshes hidden in the file left out. */
+  hiddenLeftOut: number;
 }
 
 const COLLISION_NAME = /^(UCX|UBX|USP|UCP)_/i;
@@ -82,6 +86,7 @@ export const takeModelConventions = (root: THREE.Object3D): ModelConventions => 
   const hulls: AuthoredHull[] = [];
   const sockets: AuthoredSocket[] = [];
   const out: THREE.Object3D[] = [];
+  const hidden: THREE.Object3D[] = [];
   let detailLevelsLeftOut = 0;
   // The versions of each mesh found by name: only one with a level above it says it is a chain.
   const levels = new Map<string, { level: number; node: THREE.Object3D }[]>();
@@ -129,6 +134,10 @@ export const takeModelConventions = (root: THREE.Object3D): ModelConventions => 
         visit(child.children[0]);
         continue;
       }
+      if (child.userData?.hidden === true && !holdsBone(child)) {
+        hidden.push(child);
+        continue;
+      }
       const named = child.name.match(LEVEL_NAME);
       if (named && !holdsBone(child)) {
         const stem = `${named[1]}`.toLowerCase();
@@ -153,9 +162,21 @@ export const takeModelConventions = (root: THREE.Object3D): ModelConventions => 
     node.removeFromParent();
     disposeUnder(node);
   }
+  // A file whose every mesh is marked hidden means something else by it, so they stay.
+  let meshesLeft = 0;
+  root.traverse((node) => { if ((node as THREE.Mesh).isMesh) meshesLeft += 1; });
+  let hiddenMeshes = 0;
+  for (const node of hidden) node.traverse((child) => { if ((child as THREE.Mesh).isMesh) hiddenMeshes += 1; });
+  const hiddenLeftOut = meshesLeft > hiddenMeshes ? hidden.length : 0;
+  if (hiddenLeftOut) {
+    for (const node of hidden) {
+      node.removeFromParent();
+      disposeUnder(node);
+    }
+  }
   if (hulls.length) root.userData[AUTHORED_COLLISION_KEY] = hulls;
   if (sockets.length) root.userData[AUTHORED_SOCKETS_KEY] = sockets;
-  return { hulls: hulls.length, sockets: sockets.length, detailLevelsLeftOut };
+  return { hulls: hulls.length, sockets: sockets.length, detailLevelsLeftOut, hiddenLeftOut };
 };
 
 /** The collision shapes a model's file holds, each as its corners in the space of `host`. */

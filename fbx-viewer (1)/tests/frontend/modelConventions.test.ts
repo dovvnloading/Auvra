@@ -34,7 +34,7 @@ describe('what names say in a model file', () => {
   it('leaves a name that only starts the same way alone', () => {
     const root = new THREE.Group();
     root.add(meshNamed('UCXylophone'), meshNamed('SOCKETS'), meshNamed('Boots_LODGE'));
-    expect(takeModelConventions(root)).toEqual({ hulls: 0, sockets: 0, detailLevelsLeftOut: 0 });
+    expect(takeModelConventions(root)).toEqual({ hulls: 0, sockets: 0, detailLevelsLeftOut: 0, hiddenLeftOut: 0 });
     expect(namesIn(root)).toEqual(['UCXylophone', 'SOCKETS', 'Boots_LODGE']);
   });
 
@@ -98,6 +98,32 @@ describe('what names say in a model file', () => {
     root.add(group);
     expect(takeModelConventions(root).detailLevelsLeftOut).toBe(1);
     expect(namesIn(root)).toEqual(['Chair', 'Near']);
+  });
+
+  it('leaves out a mesh hidden in the art tool', () => {
+    const root = new THREE.Group();
+    const helper = meshNamed('Helper');
+    helper.userData.hidden = true;
+    root.add(meshNamed('Body'), helper);
+    expect(takeModelConventions(root).hiddenLeftOut).toBe(1);
+    expect(namesIn(root)).toEqual(['Body']);
+  });
+
+  it('keeps hidden meshes when nothing else would be left to draw', () => {
+    const root = new THREE.Group();
+    const only = meshNamed('Body');
+    only.userData.hidden = true;
+    root.add(only);
+    expect(takeModelConventions(root).hiddenLeftOut).toBe(0);
+    expect(namesIn(root)).toEqual(['Body']);
+  });
+
+  it('reads a hidden collision shape all the same, as artists hide those', () => {
+    const root = new THREE.Group();
+    const hull = meshNamed('UCX_Body');
+    hull.userData.hidden = true;
+    root.add(meshNamed('Body'), hull);
+    expect(takeModelConventions(root)).toMatchObject({ hulls: 1, hiddenLeftOut: 0 });
   });
 
   it('gives hulls to physics in the space of the object they are under, and skips what it is told to', () => {
