@@ -29,6 +29,8 @@ const PROPORTION = {
   thighAboveGroin: 0.05,
   /** How much of the way from the middle of the body to a knee the top of the thigh is. */
   thighAcross: 0.75,
+  /** How far the spine's three joints are from the hips to the neck. */
+  spineAlongBack: [0.19, 0.41, 0.66],
   /** The neck below the chin, and the head above it. */
   neckBelowChin: 0.04,
   headAboveChin: 0.01,
@@ -51,6 +53,56 @@ const zHint = (name: string): Vector3 => {
 
 const along = (a: Point, b: Point, share: number): Point => [a[0] + (b[0] - a[0]) * share, a[1] + (b[1] - a[1]) * share, a[2] + (b[2] - a[2]) * share];
 
+const gapOf = (a: Point, b: Point): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+
+/** A line through some points: the place a distance along it, carrying on the way it goes past either end. */
+export interface Line {
+  length: number;
+  at: (distance: number) => Point;
+}
+
+export const lineThrough = (points: readonly Point[]): Line => {
+  const lengths = [0];
+  for (let i = 1; i < points.length; i += 1) lengths.push(lengths[i - 1] + gapOf(points[i], points[i - 1]));
+  const length = lengths[lengths.length - 1];
+  return {
+    length,
+    at: (distance) => {
+      for (let i = 1; i < points.length; i += 1) {
+        if (distance <= lengths[i] || i === points.length - 1) {
+          const span = lengths[i] - lengths[i - 1];
+          return along(points[i - 1], points[i], span > 0 ? (distance - lengths[i - 1]) / span : 0);
+        }
+      }
+      return points[0];
+    },
+  };
+};
+
+/**
+ * The middle of the back from `chin` down to `groin`: as it was read if it was, bent to meet the two
+ * wherever they have been moved to, and straight between them if it was not. A line of a few points
+ * is enough, and keeps the small steps of the reading from showing.
+ */
+const backLine = (chin: Point, groin: Point, read?: readonly Point[]): Line => {
+  if (!read || read.length < 2) return lineThrough([chin, groin]);
+  const line = lineThrough(read);
+  const first = read[0];
+  const last = read[read.length - 1];
+  const points: Point[] = [];
+  const steps = 8;
+  for (let step = 0; step <= steps; step += 1) {
+    const share = step / steps;
+    const point = line.at(line.length * share);
+    points.push([
+      point[0] + (chin[0] - first[0]) * (1 - share) + (groin[0] - last[0]) * share,
+      point[1] + (chin[1] - first[1]) * (1 - share) + (groin[1] - last[1]) * share,
+      point[2] + (chin[2] - first[2]) * (1 - share) + (groin[2] - last[2]) * share,
+    ]);
+  }
+  return lineThrough(points);
+};
+
 /**
  * Joints, parents before children, for a body with these markers, standing facing +Z with its left
  * at +X. A chain's first child is the next bone along it. Hands without `fingers` are one bone.
@@ -63,16 +115,21 @@ export const bodySkeleton = (markers: BodyMarkers, extents: BodyExtents, fingers
     return joints.length - 1;
   };
   const { groin, chin } = markers;
-  const hipsAt: Point = [groin[0], groin[1] + height * PROPORTION.hipsAboveGroin, groin[2]];
-  const neckAt: Point = [chin[0], chin[1] - height * PROPORTION.neckBelowChin, chin[2]];
+  // From the neck down the back to the hips.
+  const back = backLine(chin, groin, extents.spine);
+  const neckFrom = height * PROPORTION.neckBelowChin;
+  const hipsFrom = back.length - height * PROPORTION.hipsAboveGroin;
+  const neckAt = back.at(neckFrom);
+  const hipsAt = back.at(hipsFrom);
+  const backAt = (share: number): Point => back.at(hipsFrom + (neckFrom - hipsFrom) * share);
 
   const hips = add('Hips', -1, hipsAt);
-  const spine = add('Spine', hips, along(hipsAt, neckAt, 0.25));
-  const spine1 = add('Spine1', spine, along(hipsAt, neckAt, 0.5));
-  const spine2 = add('Spine2', spine1, along(hipsAt, neckAt, 0.75));
+  const spine = add('Spine', hips, backAt(PROPORTION.spineAlongBack[0]));
+  const spine1 = add('Spine1', spine, backAt(PROPORTION.spineAlongBack[1]));
+  const spine2 = add('Spine2', spine1, backAt(PROPORTION.spineAlongBack[2]));
   const neck = add('Neck', spine2, neckAt);
-  const head = add('Head', neck, [chin[0], chin[1] + height * PROPORTION.headAboveChin, chin[2]]);
-  add('HeadTop_End', head, [chin[0], extents.headTop[1], chin[2]], false);
+  const head = add('Head', neck, along(chin, extents.headTop, height * PROPORTION.headAboveChin / Math.max(1e-6, gapOf(chin, extents.headTop))));
+  add('HeadTop_End', head, [chin[0], extents.headTop[1], extents.headTop[2]], false);
 
   const arm = (side: 'Left' | 'Right', shoulder: Point, elbow: Point, wrist: Point, tip: Point, sideFingers?: readonly FingerReading[] | null): void => {
     const sign = side === 'Left' ? 1 : -1;
