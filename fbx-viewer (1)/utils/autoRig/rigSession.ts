@@ -5,8 +5,9 @@ import type { AutoRigRequest, AutoRigResponse } from '../../workers/autoRig.work
 import { readGltfSource } from '../modelLoader';
 import { fileName as nameInFile, readModelConventions } from '../modelConventions';
 import type { ModelConvertOptions } from '../../workers/fbxImport.worker';
-import type { BodyMarkers, BodyReading, MarkerName, Point } from './bodyMarkers';
+import type { Point } from './bodyMarkers';
 import { bakedPositions, buildRiggedGlb, trianglesOf, type RigPrimitive, type RigShape, type RigSource } from './riggedGlb';
+import type { BodyKind, RigMarkerName, RigMarkers, RigReading } from './rigBody';
 
 /**
  * A model being given a skeleton: shared between the panel in the sidebar and the markers in the
@@ -18,21 +19,23 @@ export type RigStage = 'idle' | 'reading' | 'placing' | 'binding' | 'saving';
 export interface RigSessionState {
   stage: RigStage;
   modelId: string | null;
-  reading: BodyReading | null;
-  /** The mesh did not read as a person, so the markers only start from a person's proportions. */
+  reading: RigReading | null;
+  /** The mesh did not read as this kind of body, so the markers only start from its usual proportions. */
   guessed: boolean;
   /** Moving a marker moves its partner on the other side, as in a mirror. */
   bothSides: boolean;
   /** Hands that have room for them get finger bones. */
   withFingers: boolean;
+  /** An animal's tail gets bones. */
+  withTail: boolean;
   /** The marker under the pointer, or being moved. */
-  activeMarker: MarkerName | null;
+  activeMarker: RigMarkerName | null;
   /** How far the skeleton is along, from 0 to 1. */
   progress: number;
   error: string | null;
 }
 
-const IDLE: RigSessionState = { stage: 'idle', modelId: null, reading: null, guessed: false, bothSides: true, withFingers: true, activeMarker: null, progress: 0, error: null };
+const IDLE: RigSessionState = { stage: 'idle', modelId: null, reading: null, guessed: false, bothSides: true, withFingers: true, withTail: true, activeMarker: null, progress: 0, error: null };
 
 let state: RigSessionState = IDLE;
 const listeners = new Set<() => void>();
@@ -61,8 +64,8 @@ interface Working {
   shapes: RigShape[];
   triangles: Float32Array;
   /** The markers as they were read, before any moved. */
-  original: BodyMarkers;
-  moved: Set<MarkerName>;
+  original: RigMarkers;
+  moved: Set<RigMarkerName>;
 }
 
 let working: Working | null = null;
@@ -78,15 +81,19 @@ const dropWorking = (): void => {
   session += 1;
 };
 
+/** What stays from one session to the next. */
+const keptChoices = (): Pick<RigSessionState, 'bothSides' | 'withFingers' | 'withTail'> => ({ bothSides: state.bothSides, withFingers: state.withFingers, withTail: state.withTail });
+
 export const cancelRig = (): void => {
   dropWorking();
-  state = { ...IDLE, bothSides: state.bothSides, withFingers: state.withFingers };
+  state = { ...IDLE, ...keptChoices() };
   for (const listener of listeners) listener();
 };
 
 export const setRigBothSides = (bothSides: boolean): void => setState({ bothSides });
 export const setRigWithFingers = (withFingers: boolean): void => setState({ withFingers });
-export const setActiveRigMarker = (activeMarker: MarkerName | null): void => setState({ activeMarker });
+export const setRigWithTail = (withTail: boolean): void => setState({ withTail });
+export const setActiveRigMarker = (activeMarker: RigMarkerName | null): void => setState({ activeMarker });
 
 /** Whether `object` is one of `nodes` or under one. */
 const isUnder = (object: THREE.Object3D, nodes: ReadonlySet<THREE.Object3D>): boolean => {
@@ -137,7 +144,7 @@ const askWorker = (worker: Worker, request: AutoRigRequest, onProgress?: (share:
 export const failRig = (error: unknown, fallback: string, modelId: string | null = state.modelId): void => {
   frontendDiagnostics.failure('auto_rig_read_failed', error);
   dropWorking();
-  state = { ...IDLE, bothSides: state.bothSides, withFingers: state.withFingers, modelId, error: error instanceof Error ? error.message : fallback };
+  state = { ...IDLE, ...keptChoices(), modelId, error: error instanceof Error ? error.message : fallback };
   for (const listener of listeners) listener();
 };
 
@@ -149,7 +156,7 @@ export const failRig = (error: unknown, fallback: string, modelId: string | null
 export const startRig = async (modelId: string, object: THREE.Object3D, file: File, options: { convert?: ModelConvertOptions; images?: readonly File[] } = {}): Promise<void> => {
   dropWorking();
   const mine = session;
-  setState({ ...IDLE, bothSides: state.bothSides, withFingers: state.withFingers, stage: 'reading', modelId });
+  setState({ ...IDLE, ...keptChoices(), stage: 'reading', modelId });
   const reading = new AbortController();
   stopReading = () => reading.abort();
   try {
@@ -173,38 +180,60 @@ export const startRig = async (modelId: string, object: THREE.Object3D, file: Fi
   }
 };
 
-const PARTNER: Record<MarkerName, MarkerName | null> = {
-  chin: null,
-  groin: null,
-  leftShoulder: 'rightShoulder',
-  rightShoulder: 'leftShoulder',
-  leftElbow: 'rightElbow',
-  rightElbow: 'leftElbow',
-  leftWrist: 'rightWrist',
-  rightWrist: 'leftWrist',
-  leftKnee: 'rightKnee',
-  rightKnee: 'leftKnee',
-  leftAnkle: 'rightAnkle',
-  rightAnkle: 'leftAnkle',
+/** A marker's partner on the other side of the body, if it has one. */
+const partnerOf = (name: RigMarkerName): RigMarkerName | null => {
+  if (name.startsWith('left')) return `right${name.slice(4)}` as RigMarkerName;
+  if (name.startsWith('right')) return `left${name.slice(5)}` as RigMarkerName;
+  return null;
+};
+
+/** Reads the model again as another kind of body, or turned the other way: anything moved so far no longer holds. */
+const readAgain = async (kind: BodyKind, facing?: [number, number]): Promise<void> => {
+  const current = working;
+  if (!current) return;
+  const mine = session;
+  setState({ stage: 'reading', activeMarker: null, error: null });
+  try {
+    const response = await askWorker(current.worker, { type: 'read', triangles: current.triangles, kind, facing });
+    if (mine !== session) return;
+    if (response.type !== 'read' || !response.reading) throw new Error('The model has no surface to read.');
+    current.original = { ...response.reading.markers };
+    current.moved = new Set();
+    setState({ stage: 'placing', reading: response.reading, guessed: response.guessed });
+  } catch (error) {
+    if (mine === session) failRig(error, 'The model could not be read.');
+  }
+};
+
+/** Reads the model as this kind of body. */
+export const setRigBody = (kind: BodyKind): void => {
+  if (state.reading?.kind !== kind) void readAgain(kind);
+};
+
+/** Reads the model again facing the other way, for a body that was read back to front. */
+export const turnRigAround = (): void => {
+  const { reading } = state;
+  if (reading) void readAgain(reading.kind, [-reading.facing[0], -reading.facing[1]]);
 };
 
 /** Moves a marker to a place in the model's space, and its partner to match when both sides move together. */
-export const moveRigMarker = (name: MarkerName, place: Point): void => {
+export const moveRigMarker = (name: RigMarkerName, place: Point): void => {
   const { reading, bothSides } = state;
   if (!reading || !working) return;
-  const markers: BodyMarkers = { ...reading.markers, [name]: place };
+  const markers = { ...reading.markers, [name]: place } as Record<string, Point>;
   working.moved.add(name);
-  const partner = PARTNER[name];
+  const partner = partnerOf(name);
   if (partner && bothSides) {
-    // The body's middle runs through the groin, square to the way it faces.
-    const middle = reading.markers.groin;
+    // The body's middle runs through the groin or the hips, square to the way it faces.
+    const middle = reading.kind === 'fourLegs' ? reading.markers.hips : reading.markers.groin;
     const [fx, fz] = reading.facing;
     const across: [number, number] = [fz, -fx];
     const away = (place[0] - middle[0]) * across[0] + (place[2] - middle[2]) * across[1];
     markers[partner] = [place[0] - 2 * away * across[0], place[1], place[2] - 2 * away * across[1]];
     working.moved.add(partner);
   }
-  setState({ reading: { ...reading, markers } });
+  // The markers are the same kind of body's, so the reading stays that kind.
+  setState({ reading: { ...reading, markers } as unknown as RigReading });
 };
 
 /**
@@ -226,7 +255,7 @@ export const finishRig = async (fileName: string, object: THREE.Object3D): Promi
     const parts = current.primitives.map((part) => ({ positions: part.positions, indices: part.indices }));
     const response = await askWorker(
       current.worker,
-      { type: 'rig', triangles: current.triangles, parts, reading, moved: [...current.moved], original: current.original, withFingers: state.withFingers },
+      { type: 'rig', triangles: current.triangles, parts, reading, moved: [...current.moved], original: current.original, withFingers: state.withFingers, withTail: state.withTail },
       (share) => { if (mine === session) setState({ progress: share }); },
     );
     if (mine !== session) return null;

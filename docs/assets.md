@@ -58,15 +58,19 @@ A clip from another skeleton is rebuilt for this one rather than copied: each bo
 
 ### Making a skeleton
 
-A model with no skeleton can be given one: select it, open the **Skeleton** tab and choose **Make a skeleton**. It is for a person standing with their arms out to the sides or lowered, facing any way.
+A model with no skeleton can be given one: select it, open the **Skeleton** tab and choose **Make a skeleton**. It is for a person, upright or hunched, with their arms anywhere clear of the body, even long enough to reach the floor, or for an animal on four legs, facing any way. Spikes, horns and blades do not get in the way, nor do legs grown together, and an arm that runs on into a blade or something held has its joints where the other arm's are.
 
-The body is read from its mesh, and markers appear on its chin, shoulders, elbows, wrists, groin, knees and ankles. Drag any that are off. Only their place in the view counts: each is kept in the middle of the limb it is on, and both sides move together unless you turn that off. A mesh that does not read as a person gets markers from a person's usual proportions to start from.
+The panel starts on the kind of body the model looks like, **Person** or **Four legs**, and you can change it. **Turn around** reads the body again the other way round, for a front and back or a head and tail it got the wrong way.
 
-**Make the skeleton** gives the model the bones most character rigs have, turned the way those rigs turn them, with each vertex following the bones nearest it through the body, in lengths of the limb's own thickness. A hand resting on a thigh does not pull the thigh along, and loose pieces such as a belt follow the bones nearest them. Materials and images stay as they were.
+The body is read from its mesh, and markers appear on the joints: on a person the chin, shoulders, elbows, wrists, groin, knees and ankles, seen from the front; on an animal the nose, head, neck, hips and tail, and each leg's shoulder or hip, elbow or knee, wrist or hock, and paw, seen from the side. Drag any that are off. Only their place in the view counts: each is kept in the middle of the limb it is on, and both sides move together unless you turn that off. An animal's far side only shows when you do. A mesh that does not read as the kind of body chosen gets markers from that kind's usual proportions to start from.
+
+**Make the skeleton** gives the model the bones most character rigs have, turned the way those rigs turn them, with each vertex following the bones nearest it through the body, in lengths of the limb's own thickness. A hand resting on a thigh does not pull the thigh along, and loose pieces such as a belt follow the bones nearest them. Materials and images stay as they were. A person's spine follows the curve of their back.
+
+An animal's bones are named as a person's where they stand alike: its back, neck and head, its hind legs as legs and its front legs as arms, each down to the paw. It also has a second neck bone and, if it has a tail, a chain of four bones along it, which **Give the tail bones** can leave out.
 
 **Give the hands fingers** adds three bones to each finger, so clips that curl the fingers, such as holding a weapon, show. Fingers that stand apart are followed where they are. A hand whose fingers are grown together into a mitten, as on many generated meshes, is shared out across its width, with each finger ending at the hand's outline. Nothing behind the wrist follows a finger. Turn it off to keep each hand as one bone.
 
-The model keeps its place in levels and blueprints, its size, its sockets and its collision shapes, and goes among the characters, its source now a GLB. Only what it draws counts as its body: parts the import leaves out are gone from the GLB. Any clips in its old file go, with a note saying so before you start. Clips from any humanoid rig can then be imported onto it.
+The model keeps its place in levels and blueprints, its size, its sockets and its collision shapes, and goes among the characters, its source now a GLB. Only what it draws counts as its body: parts the import leaves out are gone from the GLB. Any clips in its old file go, with a note saying so before you start. Clips from any humanoid rig can then be imported onto a person. An animal takes clips from rigs named as it is, and from rigs that say which end of the body a leg is at, such as `front_thigh.L` and `RearLeg_R`.
 
 ### Painting weights
 

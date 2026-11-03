@@ -80,6 +80,7 @@ const EXEMPT = new Map(Object.entries({
   'utils/autoRig/bodyField.ts': 'pure-utility',
   'utils/autoRig/bodyMarkers.ts': 'pure-utility',
   'utils/autoRig/bodySkeleton.ts': 'pure-utility',
+  'utils/autoRig/fourLegReading.ts': 'pure-utility',
   'utils/autoRig/handReading.ts': 'pure-utility',
   'utils/autoRig/rigBody.ts': 'pure-utility',
   'utils/autoRig/riggedGlb.ts': 'pure-utility',

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Plus } from 'lucide-react';
+import * as THREE from 'three';
 import { useScene } from '../../../context/SceneContext';
 import type { LoadedModelData } from '../../../types';
 import { bindPoseRig } from '../../../utils/animationBinding';
@@ -59,6 +60,17 @@ const BoneTree: React.FC<{ model: LoadedModelData; playback: ClipPlayback }> = (
   const missing = useMemo(() => {
     const found = new Set(roles.values());
     return CORE_ROLES.filter((role) => !found.has(role));
+  }, [roles]);
+
+  // A body whose back runs along the ground has four legs, whatever its bones are called.
+  const onFourLegs = useMemo(() => {
+    const placeOf = (role: string): THREE.Vector3 | null => {
+      for (const [bone, boneRole] of roles) if (boneRole === role) return bone.getWorldPosition(new THREE.Vector3());
+      return null;
+    };
+    const hips = placeOf('Hips');
+    const head = placeOf('Neck') ?? placeOf('Head');
+    return !!hips && !!head && Math.abs(head.y - hips.y) < Math.hypot(head.x - hips.x, head.z - hips.z);
   }, [roles]);
 
   const shown = useMemo(() => {
@@ -134,7 +146,9 @@ const BoneTree: React.FC<{ model: LoadedModelData; playback: ClipPlayback }> = (
         <p className={`text-2xs ${missing.length ? 'text-amber-400' : 'text-ink-3'}`}>
           {missing.length
             ? `Clips from other rigs need: ${missing.map(roleLabel).join(', ')}. Pick a bone and say what it is.`
-            : 'Reads as a humanoid, so clips from other rigs can play on it.'}
+            : onFourLegs
+              ? 'Reads as four legs, so clips from other four-legged rigs can play on it.'
+              : 'Reads as a humanoid, so clips from other rigs can play on it.'}
         </p>
         <TextInput aria-label="Search bones" placeholder="Search bones" value={filter} onChange={(event) => setFilter(event.target.value)} />
       </div>

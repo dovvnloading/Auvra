@@ -33,6 +33,22 @@ export const voxelOf = (grid: VoxelGrid, px: number, py: number, pz: number): [n
   Math.max(0, Math.min(grid.nz - 1, Math.floor((pz - grid.oz) / grid.size))),
 ];
 
+/** A voxel's x, y and z indices. */
+export const cellOf = (grid: VoxelGrid, index: number): [number, number, number] => {
+  const stride = grid.nx * grid.ny;
+  const z = Math.floor(index / stride);
+  const rest = index - z * stride;
+  const y = Math.floor(rest / grid.nx);
+  return [rest - y * grid.nx, y, z];
+};
+
+/** Places in voxel indices to places in space. */
+export const placeOf = (grid: VoxelGrid, cell: readonly number[]): [number, number, number] => [
+  grid.ox + (cell[0] + 0.5) * grid.size,
+  grid.oy + (cell[1] + 0.5) * grid.size,
+  grid.oz + (cell[2] + 0.5) * grid.size,
+];
+
 /** Largest number of voxels a grid may hold, whatever size is asked for. */
 const MAX_VOXELS = 64_000_000;
 /** Empty voxels kept around the body, so the flood can reach all of its outside. */
