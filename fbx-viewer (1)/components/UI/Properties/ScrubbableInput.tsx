@@ -178,7 +178,7 @@ export const ScrubbableInput: React.FC<ScrubbableInputProps> = ({
                 onKeyDown={handleScrubKeyDown}
                 title="Drag to scrub value"
             >
-                <span className={`text-[10px] font-bold ${labelColor} truncate`}>{label}</span>
+                <span className={`text-2xs font-bold ${labelColor} truncate`}>{label}</span>
             </button>
 
             {/* Editable Value */}
@@ -192,14 +192,14 @@ export const ScrubbableInput: React.FC<ScrubbableInputProps> = ({
                         onChange={handleChange}
                         onBlur={handleInputBlur}
                         onKeyDown={handleKeyDown}
-                        className="w-full h-full bg-transparent text-[11px] text-white px-2 focus:outline-none font-mono"
+                        className="w-full h-full bg-transparent text-2xs text-white px-2 focus:outline-none font-mono"
                     />
                 ) : (
                     <button
                         type="button"
                         onClick={() => setIsEditing(true)}
                         aria-label={`Edit ${label || 'value'}`}
-                        className="w-full h-full flex items-center px-2 text-[11px] text-gray-300 font-mono cursor-text hover:text-white truncate bg-transparent border-0 text-left"
+                        className="w-full h-full flex items-center px-2 text-2xs text-gray-300 font-mono cursor-text hover:text-white truncate bg-transparent border-0 text-left"
                         title="Click to edit"
                     >
                         {localStr}

@@ -16,13 +16,13 @@ interface SelectProps {
   disabled?: boolean;
 }
 
-export const Select: React.FC<SelectProps> = ({ 
-  value, 
-  onChange, 
-  options, 
-  placeholder = "Select...", 
-  className = "", 
-  disabled = false 
+export const Select: React.FC<SelectProps> = ({
+  value,
+  onChange,
+  options,
+  placeholder = "Select...",
+  className = "",
+  disabled = false
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const selectId = useId().replaceAll(':', '');
@@ -114,13 +114,13 @@ export const Select: React.FC<SelectProps> = ({
                 });
             }
         };
-        
+
         updatePosition();
-        
+
         // Listen to scroll (capture phase) to handle scrolling of parent containers
         window.addEventListener('scroll', updatePosition, true);
         window.addEventListener('resize', updatePosition);
-        
+
         return () => {
             window.removeEventListener('scroll', updatePosition, true);
             window.removeEventListener('resize', updatePosition);
@@ -139,7 +139,7 @@ export const Select: React.FC<SelectProps> = ({
         setIsOpen(false);
       }
     };
-    
+
     if (isOpen) {
         document.addEventListener('mousedown', handleClickOutside);
     }
@@ -162,42 +162,32 @@ export const Select: React.FC<SelectProps> = ({
         onClick={() => isOpen ? closeMenu() : openMenu()}
         onKeyDown={handleTriggerKeyDown}
         disabled={disabled}
-        className={`
-          w-full flex items-center justify-between px-3 py-2 bg-gray-900 border rounded text-xs text-left transition-all
-          ${disabled 
-            ? 'opacity-50 cursor-not-allowed border-gray-800' 
-            : 'hover:border-gray-600 border-gray-700 bg-gray-900/50 hover:bg-gray-800'
-          }
-          ${isOpen ? 'border-blue-500 ring-1 ring-blue-500/20' : ''}
-        `}
+        className={`flex h-6 w-full items-center justify-between rounded border bg-well px-2 text-left text-xs transition-colors duration-75 ${disabled ? 'cursor-not-allowed border-line opacity-50' : 'border-line hover:border-gray-700'} ${isOpen ? 'border-accent/70' : ''}`}
       >
-        <span className={`truncate mr-2 ${selectedOption ? 'text-gray-200' : 'text-gray-500'}`}>
+        <span className={`mr-2 truncate ${selectedOption ? 'text-ink' : 'text-ink-3'}`}>
           {displayLabel}
         </span>
-        <ChevronDown 
-          size={14} 
-          className={`text-gray-500 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} 
-        />
+        <ChevronDown size={12} className="shrink-0 text-ink-3" />
       </button>
 
       {isOpen && createPortal(
-        <div 
+        <div
           ref={dropdownRef}
           id={listboxId}
           role="listbox"
           aria-label={placeholder}
-          style={{ 
-              top: position.top, 
-              left: position.left, 
+          style={{
+              top: position.top,
+              left: position.left,
               width: position.width,
               position: 'absolute'
           }}
-          className="z-[9999] bg-gray-800 border border-gray-700 rounded-md shadow-xl max-h-60 overflow-y-auto custom-scrollbar animate-in fade-in zoom-in-95 duration-100"
+          className="z-[9999] max-h-60 overflow-y-auto rounded-lg border border-line bg-panel py-1 shadow-[0_12px_32px_rgb(0_0_0/0.55)]"
         >
           {options.length === 0 ? (
-             <div className="px-3 py-2 text-gray-500 text-[10px] italic text-center">No options available</div>
+             <div className="px-3 py-1.5 text-center text-2xs text-ink-3">No options available</div>
           ) : (
-             <div className="p-1 space-y-0.5">
+             <div>
                {options.map((opt, idx) => {
                  const isSelected = opt.value === value;
                  return (
@@ -210,10 +200,7 @@ export const Select: React.FC<SelectProps> = ({
                     tabIndex={-1}
                     onMouseEnter={() => setActiveIndex(idx)}
                     onClick={() => selectOption(opt)}
-                    className={`
-                      w-full flex items-center justify-between px-2 py-1.5 text-xs text-left rounded transition-colors
-                      ${isSelected ? 'bg-blue-900/30 text-blue-400' : 'text-gray-300 hover:bg-gray-700 hover:text-white'}
-                    `}
+                    className={`flex h-6 w-full items-center justify-between px-2 text-left text-xs ${isSelected ? 'text-accent' : 'text-ink'} ${idx === activeIndex ? 'bg-white/5' : ''}`}
                   >
                     <span className="truncate">{opt.label}</span>
                     {isSelected && <Check size={12} />}

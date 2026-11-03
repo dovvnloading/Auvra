@@ -280,7 +280,7 @@ class DispatcherTests(unittest.TestCase):
         listed = self.dispatcher.dispatch(self.request(revision=host_revision, method="provider.list", payload={}))
         self.assertTrue(listed["ok"])
         self.assertEqual({item["providerId"] for item in listed["result"]["providers"]},
-                         {"fal", "openai", "anthropic", "xai", "openrouter", "ollama", "llama.cpp"})
+                         {"fal", "openai", "anthropic", "xai", "openrouter", "ollama", "llama.cpp", "reframe"})
         configured = self.dispatcher.dispatch(self.request(revision=host_revision, method="provider.configureCredential",
             payload={"providerId": "ollama", "storageMode": "memoryOnly"}))
         self.assertEqual(configured["result"]["configured"], True)

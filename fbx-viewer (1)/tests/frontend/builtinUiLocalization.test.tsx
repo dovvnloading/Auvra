@@ -15,10 +15,10 @@ import { DEFAULT_GAME_SETTINGS, type RuntimeHost } from '../../runtime/types';
 import { gameState } from '../../runtime/gameState';
 import { OptionsMenu } from '../../player/OptionsMenu';
 
-const runtimeProps = vi.hoisted(() => ({ current: null as { host: RuntimeHost } | null }));
+const runtimeProps = vi.hoisted(() => ({ current: null as { host: RuntimeHost; hostMenus?: boolean } | null }));
 
 vi.mock('../../runtime/LevelRuntime', () => ({
-  LevelRuntime: (props: { host: RuntimeHost }) => {
+  LevelRuntime: (props: { host: RuntimeHost; hostMenus?: boolean }) => {
     runtimeProps.current = props;
     return <div data-testid="level-runtime" />;
   },
@@ -146,6 +146,8 @@ describe('PlayerApp built-in menus', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Jouer' }));
     expect(await screen.findByTestId('level-runtime')).toBeInTheDocument();
+    // Its own menus stand in for the built-in HUD's way out and game-over screen.
+    expect(runtimeProps.current!.hostMenus).toBe(true);
     const host = runtimeProps.current!.host;
 
     act(() => { host.requestPause(); });

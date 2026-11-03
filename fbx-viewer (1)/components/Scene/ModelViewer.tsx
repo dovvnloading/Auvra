@@ -7,9 +7,16 @@ import { useScene } from '../../context/SceneContext';
 import { GraphRuntime, GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
 import { AttachmentController } from './AttachmentController';
 import { SocketController, resolveSocketFlashTextureUrl } from './SocketController';
+import { SkeletonOverlay } from './SkeletonOverlay';
+import { clipPlace } from '../../utils/skeletonView';
+import { RigMarkers } from './RigMarkers';
 import { previewHeldWeapon, weaponMoveClips, weaponPlacements } from '../../runtime/weapons';
 import { weaponLocomotionGraph } from '../AnimationGraph/utils/clipMatching';
 import { CharacterIK, heldWeaponGrip } from '../Sandbox/CharacterIK';
+import { clipLoops } from '../../utils/clipRanges';
+
+/** How long a clip that does not loop holds its last pose before it plays again here. */
+const ONCE_HOLD_SECONDS = 1;
 
 interface ModelViewerProps {
   data: LoadedModelData;
@@ -29,6 +36,9 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
   blueprint
 }) => {
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
+  // The clip playing when it is one that does not loop, and how long it has held its last pose.
+  const playedOnce = useRef<THREE.AnimationAction | null>(null);
+  const heldFor = useRef(0);
   const runtimeApiRef = useRef<GraphRuntimeAPI | undefined>(undefined);
   const { attachments, sockets, models, characterFireTriggers, flashTriggers, textures } = useScene();
   
@@ -110,6 +120,12 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
         return;
     }
 
+    // A reimported model is a new object, and a mixer plays only the object it was made for.
+    if (mixerRef.current && mixerRef.current.getRoot() !== data.object) {
+      mixerRef.current.stopAllAction();
+      mixerRef.current = null;
+    }
+
     // Initialize mixer if needed
     if (!mixerRef.current && data.object) {
       mixerRef.current = new THREE.AnimationMixer(data.object);
@@ -118,9 +134,17 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
     const mixer = mixerRef.current;
     if (mixer) {
       mixer.stopAllAction();
-      
+      // A moment asked for in the clip before this one means nothing in it.
+      clipPlace.wanted = null;
+      playedOnce.current = null;
+      heldFor.current = 0;
+
       if (activeClip) {
         const action = mixer.clipAction(activeClip);
+        const once = clipLoops(activeClip) === false;
+        action.setLoop(once ? THREE.LoopOnce : THREE.LoopRepeat, once ? 1 : Infinity);
+        action.clampWhenFinished = once;
+        if (once) playedOnce.current = action;
         action.reset().fadeIn(0.2).play();
       }
     }
@@ -135,10 +159,29 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
 
   useFrame((_, delta) => {
     // Update Manual Mixer
-    if (!isBlueprintActive && mixerRef.current && isPlaying) {
-        mixerRef.current.timeScale = timeScale;
-        mixerRef.current.update(delta);
+    const mixer = isBlueprintActive ? null : mixerRef.current;
+    if (!mixer) return;
+    const action = activeClip && isSelected ? mixer.existingAction(activeClip) : null;
+    if (action && clipPlace.wanted !== null) {
+        action.stopFading().setEffectiveWeight(1);
+        action.time = clipPlace.wanted;
+        mixer.update(0);
+        // Held there until the clip has stopped, which reaches this view a frame after the panel says so.
+        if (!isPlaying) clipPlace.wanted = null;
+    } else if (isPlaying) {
+        mixer.timeScale = timeScale;
+        mixer.update(delta);
+        // A clip that does not loop plays through and holds, and then shows itself again.
+        const finished = playedOnce.current;
+        if (finished && !finished.isRunning()) {
+          heldFor.current += delta;
+          if (heldFor.current >= ONCE_HOLD_SECONDS) {
+            heldFor.current = 0;
+            finished.reset().play();
+          }
+        }
     }
+    if (action) clipPlace.time = action.time;
   });
 
   const finalScale = useMemo(() => {
@@ -177,6 +220,9 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
          ))}
 
          {supportGrip && <CharacterIK model={data.object} supportGrip={supportGrip} />}
+
+         {isSelected && <SkeletonOverlay root={data.object} />}
+         {isSelected && <RigMarkers modelId={data.id} root={data.object} />}
 
          {/* Blueprint Runtime Engine */}
          {isBlueprintActive && blueprint && previewGraph && (

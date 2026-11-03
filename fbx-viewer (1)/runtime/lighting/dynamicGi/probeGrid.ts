@@ -59,6 +59,24 @@ export const GI_QUALITY: Record<GiQuality, GiQualityPlan> = {
     high: { rays: 96, probes: [192, 40, 16, 8] },
 };
 
+/** Going by share of the work, probes give way down to this; past it each one sends fewer rays, as too few probes would stop the light following. */
+const PROBES_GIVE_WAY_TO = 1 / 8;
+/** Rays from a probe at the least, and the steps its rays go in: the set of directions is made again whenever the count changes. */
+const LEAST_RAYS = 16;
+const RAYS_STEP = 8;
+
+/** What a quality plan comes to when the frame can only afford a share of it (runtime/raytracing/rayBudget.ts). */
+export const budgetedPlan = (plan: GiQualityPlan, share: number): GiQualityPlan => {
+    const probeShare = Math.max(share, PROBES_GIVE_WAY_TO);
+    const rays = plan.rays * Math.min(1, share / PROBES_GIVE_WAY_TO);
+    const [fine, near, far, farthest] = plan.probes;
+    const probes = (count: number) => Math.max(1, Math.round(count * probeShare));
+    return {
+        rays: Math.max(LEAST_RAYS, Math.round(rays / RAYS_STEP) * RAYS_STEP),
+        probes: [probes(fine), probes(near), probes(far), probes(farthest)],
+    };
+};
+
 /** Positive remainder for the grid's power-of-two sizes. */
 const wrap = (value: number, size: number): number => value & (size - 1);
 
@@ -235,10 +253,12 @@ export interface DynamicGiSettings {
     bounce: number;
     /** Carries reflections on with rays past what the screen shows. */
     reflections: boolean;
+    /** Milliseconds of the GPU's time all of this may take in a frame: past it, the work is cut to fit. */
+    rayLimit: number;
     view: 'lit' | 'probes' | 'rays' | 'lighting';
 }
 
-export const DEFAULT_DYNAMIC_GI_SETTINGS: DynamicGiSettings = { quality: 'medium', spacing: 1, intensity: 1, bounce: 1, reflections: true, view: 'lit' };
+export const DEFAULT_DYNAMIC_GI_SETTINGS: DynamicGiSettings = { quality: 'medium', spacing: 1, intensity: 1, bounce: 1, reflections: true, rayLimit: 4, view: 'lit' };
 
 const QUALITIES: readonly GiQuality[] = ['low', 'medium', 'high'];
 const VIEWS: readonly DynamicGiSettings['view'][] = ['lit', 'probes', 'rays', 'lighting'];
@@ -254,6 +274,7 @@ export const resolveDynamicGiSettings = (props: Record<string, unknown> | null |
         intensity: finite(props?.intensity, defaults.intensity, 0, 8),
         bounce: finite(props?.bounce, defaults.bounce, 0, 1),
         reflections: typeof props?.reflections === 'boolean' ? props.reflections : defaults.reflections,
+        rayLimit: finite(props?.rayLimit, defaults.rayLimit, 0.5, 33),
         view: VIEWS.includes(props?.view as DynamicGiSettings['view']) ? props!.view as DynamicGiSettings['view'] : defaults.view,
     };
 };

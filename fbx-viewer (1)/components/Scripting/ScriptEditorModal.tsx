@@ -1,8 +1,11 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { BookOpen, FileCode2, Save, X } from 'lucide-react';
+import { BookOpen, FileCode2, Save, Sparkles, X } from 'lucide-react';
 import { SCRIPT_LIMITS } from '../../runtime/scripting/protocol';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
+import { ScriptAssistant } from './ScriptAssistant';
+import { ScriptChanges } from './ScriptChanges';
+import { withEndingOf } from './scriptDiff';
 
 /** One indentation step in the script editor. */
 export const SCRIPT_INDENT = '    ';
@@ -238,6 +241,9 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
     const [confirmingClose, setConfirmingClose] = useState(false);
     // The reference panel starts closed where it would squeeze the text too much.
     const [referenceOpen, setReferenceOpen] = useState(() => window.innerWidth >= REFERENCE_MIN_WINDOW_WIDTH);
+    const [assistantOpen, setAssistantOpen] = useState(false);
+    // A script the model proposes, while its changes are looked over.
+    const [proposal, setProposal] = useState<string | null>(null);
     const [tabMovesFocus, setTabMovesFocus] = useState(false);
     const [caret, setCaret] = useState({ line: 1, column: 1 });
     const [saveError, setSaveError] = useState<string | null>(null);
@@ -391,6 +397,11 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
         }
     };
 
+    const replaceScript = (text: string) => {
+        const textarea = textareaRef.current;
+        if (textarea) applyEdit({ from: 0, to: textarea.value.length, insert: text, selectionStart: 0, selectionEnd: 0 });
+    };
+
     const insertReference = (id: string) => {
         const textarea = textareaRef.current;
         if (!textarea) return;
@@ -406,7 +417,7 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
 
     return createPortal(
         <div
-            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 outline-none"
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 p-4 outline-none"
             role="dialog"
             aria-modal="true"
             aria-labelledby={titleId}
@@ -419,16 +430,24 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
                         <FileCode2 size={18} className="shrink-0 text-blue-400" />
                         <div className="min-w-0">
                             <h2 id={titleId} className="text-sm font-bold text-white">Edit Script</h2>
-                            <p className="truncate text-[10px] text-gray-500" title={title}>{title} · JavaScript or TypeScript · runs during play</p>
+                            <p className="truncate text-2xs text-gray-500" title={title}>{title} · JavaScript or TypeScript · runs during play</p>
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
                         <button
                             type="button"
+                            onClick={() => setAssistantOpen(open => !open)}
+                            aria-expanded={assistantOpen}
+                            className={`flex items-center gap-1.5 rounded px-2 py-1 text-2xs transition-colors ${assistantOpen ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}
+                        >
+                            <Sparkles size={12} /> AI
+                        </button>
+                        <button
+                            type="button"
                             onClick={() => setReferenceOpen(open => !open)}
                             aria-expanded={referenceOpen}
                             aria-controls={referenceId}
-                            className={`flex items-center gap-1.5 rounded px-2 py-1 text-[11px] transition-colors ${referenceOpen ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}
+                            className={`flex items-center gap-1.5 rounded px-2 py-1 text-2xs transition-colors ${referenceOpen ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}
                         >
                             <BookOpen size={12} /> API Reference
                         </button>
@@ -437,7 +456,9 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
                 </div>
 
                 <div className="flex min-h-0 flex-1">
-                    <div className="flex min-w-0 flex-1 bg-gray-950">
+                    <div className="flex min-w-0 flex-1 flex-col">
+                    {/* The text area stays under a proposal: its undo history is what takes an applied one back. */}
+                    <div className="relative flex min-h-0 flex-1 bg-gray-950">
                         <div className="relative shrink-0 select-none overflow-hidden border-r border-gray-800 bg-gray-950 font-mono text-gray-500" style={{ width: gutterWidth, fontSize: 12 }} aria-hidden="true">
                             <div ref={gutterRef} data-testid="script-gutter" className="absolute inset-x-0 top-0 will-change-transform">
                                 <div
@@ -466,18 +487,28 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
                             className="min-w-0 flex-1 resize-none overflow-auto whitespace-pre bg-transparent font-mono text-gray-100 caret-blue-400 outline-none"
                             style={{ ...textStyle, padding: PADDING_PX, tabSize: SCRIPT_INDENT.length }}
                         />
+                        {proposal !== null && (
+                            <ScriptChanges
+                                before={draft}
+                                after={proposal}
+                                onApply={(text) => { setProposal(null); replaceScript(text); }}
+                                onDiscard={() => { setProposal(null); textareaRef.current?.focus(); }}
+                            />
+                        )}
+                    </div>
+                    {assistantOpen && <ScriptAssistant draft={draft} reference={SCRIPT_API_REFERENCE} onProposal={(code) => setProposal(withEndingOf(draft, code))} />}
                     </div>
 
                     {referenceOpen && (
                         <aside id={referenceId} aria-label="Script API reference" className="w-80 shrink-0 space-y-4 overflow-y-auto border-l border-gray-800 bg-gray-900 p-4 custom-scrollbar">
                             {SCRIPT_API_REFERENCE.map(section => (
                                 <section key={section.title} className="space-y-1.5">
-                                    <h3 className="text-[10px] font-bold uppercase tracking-wider text-gray-500">{section.title}</h3>
+                                    <h3 className="text-2xs font-bold text-gray-500">{section.title}</h3>
                                     <dl className="space-y-1.5">
                                         {section.entries.map(entry => (
                                             <div key={entry.signature}>
-                                                <dt className="font-mono text-[11px] text-blue-300">{entry.signature}</dt>
-                                                <dd className="text-[10px] leading-snug text-gray-400">{entry.description}</dd>
+                                                <dt className="font-mono text-2xs text-blue-300">{entry.signature}</dt>
+                                                <dd className="text-2xs leading-snug text-gray-400">{entry.description}</dd>
                                             </div>
                                         ))}
                                     </dl>
@@ -485,13 +516,13 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
                             ))}
                             {references && references.length > 0 && (
                                 <section className="space-y-2 border-t border-gray-800 pt-3">
-                                    <h3 className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Insert an id</h3>
-                                    <p className="text-[10px] leading-snug text-gray-500">Click a name to insert its id at the cursor, in quotes.</p>
+                                    <h3 className="text-2xs font-bold text-gray-500">Insert an id</h3>
+                                    <p className="text-2xs leading-snug text-gray-500">Click a name to insert its id at the cursor, in quotes.</p>
                                     {references.map(group => (
                                         <div key={group.label} className="space-y-1">
-                                            <div className="text-[10px] text-gray-400">{group.label} <span className="font-mono text-gray-600">{group.usage}</span></div>
+                                            <div className="text-2xs text-gray-400">{group.label} <span className="font-mono text-gray-600">{group.usage}</span></div>
                                             {group.items.length === 0 ? (
-                                                <div className="text-[10px] italic text-gray-600">None in this project.</div>
+                                                <div className="text-2xs italic text-gray-600">None in this project.</div>
                                             ) : (
                                                 <ul className="space-y-0.5">
                                                     {group.items.map(item => (
@@ -499,7 +530,7 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
                                                             <button
                                                                 type="button"
                                                                 onClick={() => insertReference(item.id)}
-                                                                className="w-full truncate rounded px-2 py-1 text-left text-[11px] text-gray-300 hover:bg-gray-800 hover:text-white"
+                                                                className="w-full truncate rounded px-2 py-1 text-left text-2xs text-gray-300 hover:bg-gray-800 hover:text-white"
                                                                 title={item.id}
                                                                 aria-label={`Insert id of ${item.name} (${group.label})`}
                                                             >
@@ -518,7 +549,7 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-800 bg-gray-950 px-5 py-3">
-                    <div className="flex min-w-0 flex-wrap items-center gap-4 text-[10px] text-gray-500">
+                    <div className="flex min-w-0 flex-wrap items-center gap-4 text-2xs text-gray-500">
                         <span>Ln {caret.line}, Col {caret.column}</span>
                         <span>{lineCount} {lineCount === 1 ? 'line' : 'lines'}</span>
                         <span title="Ctrl+M switches Tab between indenting and moving focus">{tabMovesFocus ? 'Tab moves focus' : 'Tab indents'}</span>
@@ -535,8 +566,8 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
-                        {saveError && <span role="alert" className="max-w-xs truncate text-[10px] text-red-400" title={saveError}>Not saved: {saveError}</span>}
-                        {dirty && !saveError && <span className="text-[10px] text-amber-400">Unsaved changes</span>}
+                        {saveError && <span role="alert" className="max-w-xs truncate text-2xs text-red-400" title={saveError}>Not saved: {saveError}</span>}
+                        {dirty && !saveError && <span className="text-2xs text-amber-400">Unsaved changes</span>}
                         <button type="button" onClick={requestClose} className="rounded px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-800 hover:text-white">Cancel</button>
                         <button
                             type="button"
@@ -551,7 +582,7 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
                             type="button"
                             onClick={saveAndClose}
                             disabled={overLimit}
-                            className="rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-500 disabled:opacity-50"
+                            className="rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-accent-ink hover:bg-blue-500 disabled:opacity-50"
                         >
                             Save &amp; Close
                         </button>
@@ -569,13 +600,13 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
                             className="w-full max-w-sm space-y-3 rounded-lg border border-gray-700 bg-gray-900 p-5 shadow-2xl"
                         >
                             <h3 id={`${baseId}-confirm-title`} className="text-sm font-bold text-white">Discard unsaved changes?</h3>
-                            <p id={`${baseId}-confirm-text`} className="text-[11px] text-gray-400">
+                            <p id={`${baseId}-confirm-text`} className="text-2xs text-gray-400">
                                 Your changes to this script have not been saved.{overLimit ? ' The script is over the size limit, so it cannot be saved as it is.' : ''}
                             </p>
                             <div className="flex justify-end gap-2 pt-1">
                                 <button ref={keepEditingRef} type="button" onClick={keepEditing} className="rounded px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 hover:text-white">Keep Editing</button>
                                 <button type="button" onClick={onClose} className="rounded bg-red-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-red-500">Discard</button>
-                                <button type="button" onClick={saveAndClose} disabled={overLimit} className="rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-500 disabled:opacity-50">Save &amp; Close</button>
+                                <button type="button" onClick={saveAndClose} disabled={overLimit} className="rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-accent-ink hover:bg-blue-500 disabled:opacity-50">Save &amp; Close</button>
                             </div>
                         </div>
                     </div>

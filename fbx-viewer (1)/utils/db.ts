@@ -2,14 +2,18 @@
 import { AssetCategory, AssetInfoUpdate, Blueprint, SocketData, LevelObject, LevelData, TerrainData, PrefabData } from '../types';
 import { changeBatches } from './projectChangeBatches';
 import { AssetTransferOptions, ProjectChange, projectService } from './projectService';
+import { nativeDomainRecords } from './projectRecords';
 import { externalizeTerrainData } from './terrainHeightfieldEditor';
-import { externalizeTerrainSplat } from '../components/Environment/Terrain/terrainSplatEditor';
+import { externalizeTerrainHoles, externalizeTerrainSplat, externalizeTerrainSplat2 } from '../components/Environment/Terrain/terrainSplatEditor';
+import { externalizeFoliageData, type FoliageData } from '../runtime/foliage';
+import { externalizeEditLayers } from '../components/Environment/Terrain/terrainEditLayers';
 import { terrainLayersReferenceTexture, withoutTerrainLayerTexture } from '../components/Environment/Terrain/terrainSplatCodec';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { editorSession, type EditorSessionLease } from './editorSession';
 import { sortByHierarchy } from './sceneGraph';
 import { normalizeMaterialOverrides, setMaterialOverrideField, type MaterialOverrides } from './materialOverrides';
 import { MATERIALS_DOMAIN, materialAssetDocument, readMaterialAsset, withoutGraphTexture } from '../runtime/materials/materialLibrary';
+import { SKIN_PAINT_ENCODING, SKIN_PAINT_FILE_NAME, SKIN_PAINT_MIME, type SkinPaintFile, type SkinPaintReference } from './skinPaint/skinPaintFile';
 
 const DB_NAME = 'OmniRenderDB';
 
@@ -331,6 +335,26 @@ class DBOperations {
 
   async updateModelMirroredClips(id: string, mirroredClips: string[]): Promise<void> {
       await this.canonicalChange('models', 'upsert', { id, mirroredClips }, id);
+  }
+
+  async updateModelBoneRoles(id: string, boneRoles: { role: string; bone: string }[]): Promise<void> {
+      await this.canonicalChange('models', 'upsert', { id, boneRoles }, id);
+  }
+
+  /**
+   * Stores the weights painted on a model. `encode` runs in its turn among the document changes, so the
+   * newest paint is what gets written; null means none are left. Returns what the document now points to.
+   */
+  async updateModelSkinPaint(id: string, encode: () => SkinPaintFile | null): Promise<SkinPaintReference | undefined> {
+      let skinPaint: SkinPaintReference | undefined;
+      await this.canonicalChange('models', 'upsert', { id }, id, undefined, async (value) => {
+          const file = encode();
+          skinPaint = file
+              ? { assetId: await projectService.uploadAsset(new File([file.bytes], SKIN_PAINT_FILE_NAME, { type: SKIN_PAINT_MIME })), encoding: SKIN_PAINT_ENCODING, count: file.count }
+              : undefined;
+          return { value: { ...(value as object), skinPaint } };
+      });
+      return skinPaint;
   }
 
   /** Rename and/or move a model in the content browser; folder '' is the library root. */
@@ -892,14 +916,6 @@ frontendDiagnostics.instrumentClass(DBOperations, 'project_documents', [
 ]);
 export const dbOperations = new DBOperations();
 
-function nativeDomainRecords(snapshot: Awaited<ReturnType<typeof projectService.getSnapshotAll>>, domain: string): Array<Record<string, any>> {
-  const raw = snapshot?.domains?.[domain];
-  const values = Array.isArray(raw)
-    ? raw
-    : raw && typeof raw === 'object' && Array.isArray((raw as { documents?: unknown[] }).documents)
-      ? (raw as { documents: unknown[] }).documents : [];
-  return values.filter((value): value is Record<string, any> => Boolean(value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string'));
-}
 
 /** Prepares a document for writing; `readStored` reads the document it replaces, if any. */
 type DocumentPreparation = (value: unknown, readStored?: () => Promise<Record<string, unknown> | undefined>) => Promise<{ value: unknown; afterCommit?: () => void }>;
@@ -910,6 +926,12 @@ type DocumentPreparation = (value: unknown, readStored?: () => Promise<Record<st
  * objects domain unreadable. */
 async function prepareLevelObjectDocument(value: unknown, readStored?: () => Promise<Record<string, unknown> | undefined>): Promise<{ value: unknown; afterCommit?: () => void }> {
   if (!value || typeof value !== 'object') return { value };
+  const foliageData = (value as { foliageData?: FoliageData }).foliageData;
+  if (foliageData) {
+    const stored = await readStored?.();
+    const storedAssets = new Set(((stored?.foliageData as FoliageData | undefined)?.types ?? []).flatMap(type => (type.instancemap ? [type.instancemap.assetId] : [])));
+    return { value: { ...(value as Record<string, unknown>), foliageData: await externalizeFoliageData(foliageData, (file) => projectService.uploadAsset(file), storedAssets) } };
+  }
   const terrainData = (value as { terrainData?: unknown }).terrainData;
   if (!terrainData || typeof terrainData !== 'object') return { value };
   // Both steps compare against the document being replaced: read it once.
@@ -924,8 +946,12 @@ async function prepareLevelObjectDocument(value: unknown, readStored?: () => Pro
   const splat = await externalizeTerrainSplat(prepared.terrainData, {
     storedSplatmap: readStoredTerrain && (async () => (await readStoredTerrain())?.splatmap),
   });
+  const splat2 = await externalizeTerrainSplat2(splat.terrainData as TerrainData);
+  const holes = await externalizeTerrainHoles(splat2.terrainData as TerrainData);
+  const storedLayers = readStoredTerrain ? (await readStoredTerrain())?.editLayers : undefined;
+  const layered = await externalizeEditLayers(holes.terrainData as TerrainData, (file) => projectService.uploadAsset(file), new Set((storedLayers ?? []).flatMap(layer => (layer.heightfield ? [layer.heightfield.assetId] : []))));
   return {
-    value: { ...(value as Record<string, unknown>), terrainData: splat.terrainData },
+    value: { ...(value as Record<string, unknown>), terrainData: layered },
     afterCommit: () => { prepared.remember?.(); splat.remember?.(); },
   };
 }
@@ -966,6 +992,8 @@ export function withoutMaterialOverrideTexture(overrides: MaterialOverrides, tex
   for (const [materialName, override] of Object.entries(overrides)) {
     if (override?.mapTextureId === textureId) next = setMaterialOverrideField(next, materialName, 'mapTextureId', undefined);
     if (override?.normalTextureId === textureId) next = setMaterialOverrideField(next, materialName, 'normalTextureId', undefined);
+    if (override?.roughnessTextureId === textureId) next = setMaterialOverrideField(next, materialName, 'roughnessTextureId', undefined);
+    if (override?.metalnessTextureId === textureId) next = setMaterialOverrideField(next, materialName, 'metalnessTextureId', undefined);
   }
   return next;
 }

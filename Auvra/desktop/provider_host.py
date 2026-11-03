@@ -19,6 +19,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from Auvra.diagnostics import trace_public_class
 from typing import Any, Callable, Mapping
 
+from Auvra.desktop.dialogs import DialogUnavailableError, WinFormsProjectDialogs
 from Auvra.host.dispatcher import HostOperationError
 from Auvra.project import InvalidProjectError
 from Auvra.providers import (
@@ -28,9 +29,12 @@ from Auvra.providers import (
     RouteRequest, SQLiteJobStore, XAIAdapter, validate_command, validate_update,
 )
 from Auvra.providers.adapters import MediaJob
+from Auvra.providers.reframe import ReframeAdapter
 from Auvra.providers.credentials import MemoryCredentialStore, WindowsCredentialManager
+from Auvra.providers.fal_catalog import NEW_TEXTURE_SIZE, SKY_SIZE, media_output_url, media_outputs, rough_job_cost
 from Auvra.providers.transport import StdlibTransport
 
+from .previews import PreviewError
 from .credential_prompt import CredentialPromptUnavailableError, WinFormsCredentialPrompt
 
 
@@ -42,6 +46,7 @@ _ADAPTERS = {
     "ollama": OllamaAdapter,
     "llama.cpp": LlamaCppAdapter,
     "fal": FalAdapter,
+    "reframe": ReframeAdapter,
 }
 _PROVIDER_ERRORS = {
     "unsupported_capability": "unsupported_capability",
@@ -59,6 +64,11 @@ _PROVIDER_ERRORS = {
     "invalid_request": "invalid_request",
 }
 _SHUTDOWN_GRACE_SECONDS = 5.0
+# How often a queued media job is asked after: soon at first, as a small one is quick, then every couple of seconds.
+_POLL_FIRST_SECONDS = 0.05
+_POLL_MOST_SECONDS = 2.0
+_POLL_LIMIT_SECONDS = 15 * 60
+_MODELS_PAGE = 200
 
 
 def _assert_state_path_safe(path: Path) -> None:
@@ -92,6 +102,7 @@ class NativeProviderHost:
         preview_store: Any = None,
         registry: ProviderRegistry | None = None,
         credential_prompt: Any = None,
+        folder_dialogs: Any = None,
         transports: Mapping[str, Any] | None = None,
         adapters: Mapping[str, Any] | None = None,
         executor: ThreadPoolExecutor | None = None,
@@ -117,6 +128,10 @@ class NativeProviderHost:
         # provider's durable settings row, never in a process-global budget.
         self.route_policy = RoutePolicy(self.registry)
         self.prompt = credential_prompt or WinFormsCredentialPrompt()
+        self.folder_dialogs = folder_dialogs or WinFormsProjectDialogs()
+        self._ui_invoker: Callable[[Callable[[], Any]], Any] = lambda callback: callback()
+        self._key_window: threading.Thread | None = None
+        self._folder_window: threading.Thread | None = None
         self.transports = dict(transports or {})
         self._adapters = dict(adapters or {})
         self._executor = executor or ThreadPoolExecutor(max_workers=2, thread_name_prefix="auvra-provider")
@@ -131,12 +146,17 @@ class NativeProviderHost:
         self._lock = threading.RLock()
         self._closed = False
         self._shutdown_event = threading.Event()
+        self._price_refresh: threading.Thread | None = None
         self._stores_closed = False
         self._stores_closing = False
         self._now = now
         self._initialize_vault()
         self._restore_configured_models()
         self._recover_restart_jobs()
+
+    def set_ui_invoker(self, invoker: Callable[[Callable[[], Any]], Any]) -> None:
+        """Bind the frame's UI thread, where the key window belongs."""
+        self._ui_invoker = invoker
 
     def _initialize_vault(self) -> None:
         """Initialize and probe the OS vault before serving provider calls.
@@ -169,6 +189,7 @@ class NativeProviderHost:
             "provider.getStatus": self._provider_status,
             "provider.configureCredential": self._configure_credential,
             "provider.deleteCredential": self._delete_credential,
+            "provider.chooseFolder": self._choose_folder,
             "provider.configure": self._configure,
             "provider.listModels": self._list_models,
             "provider.health": self._health,
@@ -228,6 +249,7 @@ class NativeProviderHost:
                 "settingsHash": self._settings_hash(self.settings.get(job.provider)), "createdAt": job.created_at,
                 "promptHash": job.prompt_hash, "projectRevision": 0,
             }
+            self.registry.discover_models(job.provider, {*self.registry.models(job.provider), job.model})
             with self._lock:
                 self._queue("provider.recovery", {"providerId": job.provider, "jobId": job.job_id, "status": "recovering", "progress": None, "attempt": job.attempt, "retryable": True})
                 self._futures[job.job_id] = self._executor.submit(self._recover_fal_job, job.job_id)
@@ -238,9 +260,9 @@ class NativeProviderHost:
                 return
             job = self.jobs.get(job_id)
             adapter = self._adapter("fal")
-            remote = MediaJob("fal", job.model, job.remote_id or "")
+            remote = MediaJob("fal", job.model, job.remote_id or "", job.reconcile.get("remote_root"))
             self.jobs.transition(job_id, "running")
-            for _ in range(120):
+            for wait in self._poll_waits():
                 if self._shutdown_event.is_set():
                     return
                 state = adapter.status_state(adapter.status(remote))
@@ -255,7 +277,7 @@ class NativeProviderHost:
                     return
                 if state in {"failed", "cancelled"}:
                     raise ProviderError("remote", "durable media request failed", "fal")
-                if self._shutdown_event.wait(0.05):
+                if self._shutdown_event.wait(wait):
                     return
             raise ProviderError("timeout", "durable media request timed out", "fal")
         except Exception as exc:
@@ -375,22 +397,38 @@ class NativeProviderHost:
                 raise HostOperationError("credential_unavailable", "Operating-system credential storage is unavailable") from exc
         else:
             raise HostOperationError("invalid_request", "Credential storage mode is invalid")
+        with self._lock:
+            if self._key_window is not None:
+                raise HostOperationError("locking", "A key window is already open")
+            self._key_window = threading.Thread(target=self._ask_for_key, args=(descriptor, store), daemon=True, name="auvra-key-window")
+            self._key_window.start()
+        status = self._credential_status(descriptor.provider_id)
+        return {"kind": "provider.credential", "providerId": descriptor.provider_id, "storageMode": mode,
+                "configured": status in {"configured", "memoryOnly"}, "credentialStatus": status, "waiting": True}
+
+    def _ask_for_key(self, descriptor: Any, store: Any) -> None:
+        """Wait for the key window apart from the host's one worker: finding a key can take a person a while, and saves go on meanwhile."""
+        operation, message = "key.saved", None
         try:
-            value = self.prompt.prompt(descriptor.display_name)
-        except CredentialPromptUnavailableError as exc:
-            raise HostOperationError("credential_unavailable", "Native credential entry is unavailable") from exc
-        if value is None:
-            raise HostOperationError("cancelled", "Credential entry was cancelled")
-        try:
-            store.write(descriptor.credential_name, value)
-        except Exception as exc:
-            raise HostOperationError("credential_unavailable", "Credential storage failed") from exc
-        finally:
-            value = ""
-        if descriptor.provider_id not in self._provided_adapters:
-            self._adapters.pop(descriptor.provider_id, None)
-        return {"kind": "provider.credential", "providerId": descriptor.provider_id,
-                "storageMode": mode, "configured": True, "credentialStatus": self._credential_status(descriptor.provider_id)}
+            value = self._ui_invoker(lambda: self.prompt.prompt(descriptor.display_name))
+            if value is None:
+                operation = "key.cancelled"
+            else:
+                try:
+                    store.write(descriptor.credential_name, value)
+                finally:
+                    value = ""
+        except CredentialPromptUnavailableError:
+            operation, message = "key.failed", "The key window could not open on this computer."
+        except Exception:
+            operation, message = "key.failed", "The key could not be saved on this computer."
+        with self._lock:
+            self._key_window = None
+            if operation == "key.saved" and descriptor.provider_id not in self._provided_adapters:
+                self._adapters.pop(descriptor.provider_id, None)
+        configured = self._credential_status(descriptor.provider_id) in {"configured", "memoryOnly"}
+        self._queue("provider.status", {"providerId": descriptor.provider_id, "status": "ready" if configured else "unconfigured",
+                                        "operation": operation, **({"message": message} if message else {})})
 
     def _delete_credential(self, payload: dict[str, Any]) -> dict[str, Any]:
         descriptor = self.registry.get(payload["providerId"])
@@ -404,6 +442,37 @@ class NativeProviderHost:
         if descriptor.provider_id not in self._provided_adapters:
             self._adapters.pop(descriptor.provider_id, None)
         return self._provider_status(payload)
+
+    def _choose_folder(self, payload: dict[str, Any]) -> dict[str, Any]:
+        descriptor = self.registry.get(payload["providerId"])
+        adapter = self._adapter(descriptor.provider_id)
+        if not callable(getattr(adapter, "choose_home", None)):
+            raise HostOperationError("invalid_request", "This provider is not kept in a folder")
+        with self._lock:
+            if self._folder_window is not None:
+                raise HostOperationError("locking", "A folder window is already open")
+            self._folder_window = threading.Thread(target=self._ask_for_folder, args=(descriptor, adapter), daemon=True, name="auvra-folder-window")
+            self._folder_window.start()
+        return {"kind": "provider.folder", "providerId": descriptor.provider_id, "waiting": True}
+
+    def _ask_for_folder(self, descriptor: Any, adapter: Any) -> None:
+        """Wait for the folder window apart from the host's one worker, as with the key window. The folder itself never crosses to the page."""
+        label = descriptor.display_name
+        operation, message = "folder.saved", None
+        try:
+            selection = self._ui_invoker(lambda: self.folder_dialogs.choose_folder(f"Choose the folder {label} is kept in"))
+            if selection is None:
+                operation = "folder.cancelled"
+            elif not adapter.choose_home(selection.path):
+                operation, message = "folder.refused", f"{label} is not in that folder. Choose the one with a gi_renderer folder inside it."
+        except DialogUnavailableError:
+            operation, message = "folder.failed", "The folder window could not open on this computer."
+        except Exception:
+            operation, message = "folder.failed", "That folder could not be saved on this computer."
+        with self._lock:
+            self._folder_window = None
+        self._queue("provider.status", {"providerId": descriptor.provider_id, "status": "ready" if adapter.health() else "unconfigured",
+                                        "operation": operation, **({"message": message} if message else {})})
 
     def _configure(self, payload: dict[str, Any]) -> dict[str, Any]:
         descriptor = self.registry.get(payload["providerId"])
@@ -462,13 +531,60 @@ class NativeProviderHost:
         # provider adapter. Do not make it depend on an earlier health call or
         # an injected transport; local providers otherwise remain model-less
         # and cannot be configured on a fresh host.
-        models = self._adapter(descriptor.provider_id).list_models()
-        self.registry.discover_models(descriptor.provider_id, models)
+        adapter = self._adapter(descriptor.provider_id)
+        models = adapter.list_models()
+        # An adapter that narrows what each model does has told the registry already.
+        if not hasattr(adapter, "model_details"):
+            self.registry.discover_models(descriptor.provider_id, models)
         capability = payload.get("capability")
-        return {"kind": "provider.models", "providerId": descriptor.provider_id, "models":[
-            {"modelId": model, "displayName": model, "capabilities": sorted(cap.value for cap in descriptor.capabilities if capability is None or cap.value == capability)}
-            for model in models if capability is None or self.registry.supports(descriptor.provider_id, capability, model)
-        ]}
+        offered = [model for model in models if capability is None or self.registry.supports(descriptor.provider_id, capability, model)]
+        try:
+            start = int(payload.get("cursor", "0") or 0)
+        except (TypeError, ValueError) as exc:
+            raise HostOperationError("invalid_request", "Model cursor is invalid") from exc
+        if start < 0:
+            raise HostOperationError("invalid_request", "Model cursor is invalid")
+        page = offered[start:start + _MODELS_PAGE]
+        following = start + len(page)
+        self._refresh_prices_later(descriptor.provider_id, adapter)
+        return {"kind": "provider.models", "providerId": descriptor.provider_id,
+                "models": [self._model_value(descriptor, adapter, model, capability) for model in page],
+                "cursor": str(following) if following < len(offered) else "", "hasMore": following < len(offered)}
+
+    def _model_value(self, descriptor: Any, adapter: Any, model: str, capability: str | None) -> dict[str, Any]:
+        capabilities = sorted(item.value for item in self.registry.model_capabilities(descriptor.provider_id, model)
+                              if capability is None or item.value == capability)
+        value: dict[str, Any] = {"modelId": model, "displayName": model, "capabilities": capabilities}
+        details = adapter.model_details(model) if hasattr(adapter, "model_details") else None
+        if details is not None:
+            value["displayName"] = details.display_name
+            if details.category:
+                value["category"] = details.category
+            if details.description:
+                value["description"] = details.description
+            if details.price_micro_usd is not None:
+                value["priceMicroUsd"] = details.price_micro_usd
+                value["priceUnit"] = details.price_unit
+            if details.output_price_micro_usd is not None:
+                value["outputPriceMicroUsd"] = details.output_price_micro_usd
+        return value
+
+    def _refresh_prices_later(self, provider_id: str, adapter: Any) -> None:
+        """Prices take a while to read, so they come in behind the list; pickers hear when they are in."""
+        catalog = getattr(adapter, "catalog", None)
+        with self._lock:
+            if catalog is None or self._closed or (self._price_refresh is not None and self._price_refresh.is_alive()) or not catalog.prices_stale:
+                return
+
+            def run() -> None:
+                try:
+                    if catalog.refresh_prices(self._shutdown_event):
+                        self._queue("provider.status", {"providerId": provider_id, "status": "ready"})
+                except Exception:
+                    pass
+
+            self._price_refresh = threading.Thread(target=run, daemon=True, name="auvra-provider-prices")
+            self._price_refresh.start()
 
     def _health(self, payload: dict[str, Any]) -> dict[str, Any]:
         descriptor = self.registry.get(payload["providerId"])
@@ -479,7 +595,7 @@ class NativeProviderHost:
             # must not manufacture one; credential availability is the safe
             # host-level health signal until a real request is reconciled.
             healthy = self._credential_status(descriptor.provider_id) in {"configured", "memoryOnly"}
-        elif descriptor.kind == "local" and descriptor.provider_id not in self.transports and descriptor.provider_id not in self._adapters:
+        elif descriptor.kind == "local" and descriptor.provider_id != "reframe" and descriptor.provider_id not in self.transports and descriptor.provider_id not in self._adapters:
             healthy = False
         else:
             healthy = bool(self._adapter(descriptor.provider_id).health())
@@ -513,9 +629,8 @@ class NativeProviderHost:
         selected = None
         if capability == Capability.COMMANDS:
             hud = self.project_host.service.active.get_domain("hud")
-            main = next((item for item in hud.get("documents", []) if isinstance(item, dict) and item.get("id") == "hud-main"), None)
-            if main is None:
-                raise HostOperationError("invalid_command", "Canonical hud-main document is unavailable")
+            # A project that has never saved a HUD has an empty one, as the HUD editor shows it.
+            main = next((item for item in hud.get("documents", []) if isinstance(item, dict) and item.get("id") == "hud-main"), _empty_main_hud())
             elements = [item for item in main.get("elements", []) if isinstance(item, dict)]
             if (len({item.get("id") for item in elements}) != len(elements) or
                     len({item.get("name") for item in elements}) != len(elements)):
@@ -535,8 +650,11 @@ class NativeProviderHost:
             resolver = getattr(self.project_host.service, "resolve_reference", None)
             if callable(resolver):
                 resolver(asset_id, project_id=active.project_id)
+            retain = getattr(self.project_host, "retain_pending_asset", None)
+            if callable(retain):
+                retain(active.project_id, asset_id)
         with self._lock:
-            estimated_cost = self._check_budget(descriptor.provider_id, configured, payload.get("estimatedCostMicroUsd"))
+            estimated_cost = self._check_budget(descriptor.provider_id, configured, self._cost_estimate(descriptor.provider_id, configured, payload))
             job = self.jobs.create(provider=descriptor.provider_id, model=payload["modelId"], capability=capability.value, prompt_hash=prompt_hash,
                                    project_id=active.project_id, cost_micro_usd=estimated_cost,
                                    provenance={"route": descriptor.kind, "provider": descriptor.provider_id, "model": payload["modelId"], "capability": capability.value})
@@ -579,9 +697,9 @@ class NativeProviderHost:
         # state cancel_requested until a later remote reconciliation confirms
         # cancellation.
         job = self.jobs.request_cancel(job.job_id, project_id=active.project_id)
-        if job.remote_id and job.provider == "fal" and job.state.value in {"submitting", "running", "cancel_requested", "recovering"}:
+        if job.remote_id and job.provider in {"fal", "reframe"} and job.state.value in {"submitting", "running", "cancel_requested", "recovering"}:
             try:
-                self._adapter("fal").cancel(MediaJob("fal", job.model, job.remote_id))
+                self._adapter(job.provider).cancel(MediaJob(job.provider, job.model, job.remote_id, job.reconcile.get("remote_root")))
             except ProviderError as exc:
                 raise self._map_error(exc) from None
         self._queue_job_event(job.job_id, job.state.value, None, self.registry.get(job.provider))
@@ -618,20 +736,31 @@ class NativeProviderHost:
     def _commit_media(self, payload: dict[str, Any]) -> dict[str, Any]:
         active = self._require_project(payload, expected=True)
         job = self._require_job_project(payload)
-        if job.state.value != "succeeded" or job.capability not in {Capability.MEDIA_GENERATE.value, Capability.MEDIA_EDIT.value}:
+        if job.state.value != "succeeded" or job.capability not in {Capability.MEDIA_GENERATE.value, Capability.MEDIA_EDIT.value, Capability.MEDIA_MAPS.value, Capability.MEDIA_MESH.value, Capability.MEDIA_MATERIAL.value, Capability.MEDIA_SKY.value, Capability.MEDIA_DECAL.value, Capability.MEDIA_RENDER.value}:
             raise HostOperationError("invalid_job", "Media job is not complete")
         meta = self._meta.get(job.job_id, {})
-        preview = (self.preview_store.get(job.job_id, payload["previewAssetId"], project_id=active.project_id)
-                   if self.preview_store is not None else None)
-        if preview is None:
+        # The picture as it was finished in the editor, already uploaded, which can be kept again after the preview has gone.
+        finished = payload.get("finishedAssetId")
+        if finished is not None and not active.assets.verify(finished):
+            raise HostOperationError("invalid_job", "The finished picture is unavailable")
+        try:
+            preview = (self.preview_store.get(job.job_id, payload["previewAssetId"], project_id=active.project_id)
+                       if self.preview_store is not None else None)
+        except PreviewError:
+            if finished is None:
+                raise
+            preview = None
+        if preview is None and finished is None:
             raise HostOperationError("invalid_job", "Generated preview is unavailable")
-        artifact_id = preview.asset_id
+        artifact_id = finished or preview.asset_id
         generation = {
             "providerId": job.provider, "modelId": job.model, "jobId": job.job_id,
             "createdAt": meta.get("createdAt", self._now()),
             "routeOrigin": meta.get("route", "cloud"), "routeConsent": "explicit",
             "promptSha256": job.prompt_hash, "settingsSha256": meta.get("settingsHash", self._settings_hash(self.settings.get(job.provider))),
-            "artifactSha256": artifact_id, "inputAssetIds": meta.get("assetIds", []),
+            "artifactSha256": artifact_id,
+            # What it was made from, while the project still has it.
+            "inputAssetIds": [asset_id for asset_id in meta.get("assetIds", []) if active.assets.verify(asset_id)],
         }
         if isinstance(meta.get("modelVersion"), str):
             generation["modelVersion"] = meta["modelVersion"]
@@ -639,7 +768,15 @@ class NativeProviderHost:
             generation["seed"] = meta["seed"]
         if isinstance(meta.get("costMicroUsd"), int) and not isinstance(meta.get("costMicroUsd"), bool):
             generation["costMicroUsd"] = meta["costMicroUsd"]
-        texture = {"id": payload["textureId"], "name": payload["name"], "assetId": artifact_id, "dimensions": {"width": preview.width, "height": preview.height}, "generation": generation}
+        if finished is None:
+            width, height = preview.width, preview.height
+        else:
+            reference = self.project_host.service.resolve_reference(finished, project_id=active.project_id)
+            with self.project_host.service.resolve(finished, project_id=active.project_id) as stream:
+                width, height = _stream_image_size(stream, reference.mime) or (None, None)
+            if width is None:
+                raise HostOperationError("invalid_job", "The finished picture cannot be read")
+        texture = {"id": payload["textureId"], "name": payload["name"], "assetId": artifact_id, "dimensions": {"width": width, "height": height}, "generation": generation}
         # apply_changes expects document records, not a replacement domain
         # singleton.  Merge the generated record into the complete canonical
         # textures document, replacing only a matching texture identity.
@@ -668,25 +805,26 @@ class NativeProviderHost:
             model_documents[model_index] = model
             # Keep every model record and only update the selected model.
             changes["models"] = model_documents
-        existing = active.assets.verify(artifact_id, expected_size=preview.size)
-        try:
-            with self.preview_store.open(preview.asset_id, project_id=active.project_id) as stream:
-                reference = self.project_host.service.begin_upload(
-                    stream,
-                    project_id=active.project_id,
-                    size=preview.size,
-                    mime=preview.mime,
-                    name=payload["name"],
-                )
-            if reference.asset_id != artifact_id:
-                raise InvalidProjectError("generated asset hash changed during ingestion")
-        except Exception:
-            if not existing:
-                try:
-                    active.discard_asset_if_unreferenced(artifact_id)
-                except (OSError, ValueError):
-                    pass
-            raise
+        existing = finished is not None or active.assets.verify(artifact_id, expected_size=preview.size)
+        if finished is None:
+            try:
+                with self.preview_store.open(preview.asset_id, project_id=active.project_id) as stream:
+                    reference = self.project_host.service.begin_upload(
+                        stream,
+                        project_id=active.project_id,
+                        size=preview.size,
+                        mime=preview.mime,
+                        name=payload["name"],
+                    )
+                if reference.asset_id != artifact_id:
+                    raise InvalidProjectError("generated asset hash changed during ingestion")
+            except Exception:
+                if not existing:
+                    try:
+                        active.discard_asset_if_unreferenced(artifact_id)
+                    except (OSError, ValueError):
+                        pass
+                raise
         try:
             status = self.project_host.service.apply_changes(
                 changes,
@@ -701,12 +839,13 @@ class NativeProviderHost:
                     pass
             raise
         try:
-            self.preview_store.discard(job.job_id, preview.asset_id, project_id=active.project_id)
+            if preview is not None:
+                self.preview_store.discard(job.job_id, preview.asset_id, project_id=active.project_id)
         except Exception:
             # The project mutation is already durable.  A cleanup failure must
             # not report a false commit failure; session shutdown will retry it.
             pass
-        return {"kind": "media.commit", "projectId": active.project_id, "jobId": job.job_id, "previewAssetId": preview.asset_id, "projectRevision": status.revision, "assetId": reference.asset_id, "provenance": generation}
+        return {"kind": "media.commit", "projectId": active.project_id, "jobId": job.job_id, "previewAssetId": payload["previewAssetId"], "projectRevision": status.revision, "assetId": reference.asset_id, "provenance": generation}
 
     def _preview_command(self, payload: dict[str, Any]) -> dict[str, Any]:
         if "changes" in payload or "document" in payload:
@@ -733,7 +872,8 @@ class NativeProviderHost:
                 operation = "remove" if command["op"] == "delete" else "upsert"
             diff.append({"domain": "hud", "documentId": "hud-main", "operation": operation, "summary": summary[:256]})
         self._meta[job.job_id]["proposalId"] = proposal_id
-        return {"kind": "command.preview", "projectId": payload["projectId"], "projectRevision": active.revision, "proposalId": proposal_id, "diff": diff}
+        preview = self._proposal_preview(proposal, self._meta[job.job_id])
+        return {"kind": "command.preview", "projectId": payload["projectId"], "projectRevision": active.revision, "proposalId": proposal_id, "diff": diff, **({"preview": preview} if preview is not None else {})}
 
     def _approve_command(self, payload: dict[str, Any]) -> dict[str, Any]:
         active = self._require_project(payload, expected=True)
@@ -746,7 +886,7 @@ class NativeProviderHost:
         if source_job_id is None:
             raise HostOperationError("approval_required", "Command proposal is unavailable")
         try:
-            source_job = self.jobs.get(source_job_id, project_id=active.project_id)
+            self.jobs.get(source_job_id, project_id=active.project_id)
         except KeyError:
             raise HostOperationError("invalid_project", "Job does not belong to the open project") from None
         proposal: CommandProposal = source["proposal"]
@@ -758,17 +898,33 @@ class NativeProviderHost:
         documents = copy.deepcopy(list(hud.get("documents", [])))
         main_index = next((index for index, item in enumerate(documents)
                            if isinstance(item, dict) and item.get("id") == "hud-main"), None)
-        hud_main = documents[main_index] if main_index is not None else None
-        if hud_main is None:
-            raise HostOperationError("invalid_command", "Canonical hud-main document is unavailable")
+        if main_index is None:
+            documents.append(_empty_main_hud())
+            main_index = len(documents) - 1
+        hud_main = documents[main_index]
         elements = copy.deepcopy(list(hud_main.get("elements", [])))
         if any(not isinstance(item, dict) or not isinstance(item.get("id"), str) or not isinstance(item.get("name"), str)
                for item in elements):
             raise HostOperationError("invalid_command", "HUD element identity is invalid")
         if len({item["id"] for item in elements}) != len(elements) or len({item["name"] for item in elements}) != len(elements):
             raise HostOperationError("invalid_command", "HUD element identities collide")
+        by_name, _, _ = self._elements_with_proposal(elements, proposal, source)
+        hud_main = dict(hud_main); hud_main["elements"] = list(by_name.values())
+        documents[main_index] = hud_main
+        audit = {"id": proposal.proposal_id, "jobId": source_job_id, "providerId": source.get("providerId", "openai"), "modelId": source.get("modelId", "unknown"), "promptSha256": source.get("promptHash", "0" * 64), "operationsSha256": proposal.diff_hash, "appliedAt": self._now()}
+        hud_main["commands"] = list(hud_main.get("commands", []))[-63:] + [audit]
+        result = self.project_host.service.apply_changes({"hud": documents}, project_id=active.project_id, expected_revision=payload["expectedRevision"])
+        transaction_id = "transaction-" + uuid.uuid4().hex
+        self._last_transaction = {"projectId": active.project_id, "revision": result.revision, "hud": pre_change_hud, "transactionId": transaction_id}
+        return {"kind": "command.approve", "projectId": active.project_id, "projectRevision": result.revision, "transactionId": transaction_id}
+
+    @staticmethod
+    def _elements_with_proposal(elements: list[dict[str, Any]], proposal: CommandProposal, source: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], list[str], list[str]]:
+        """The HUD's elements by name with a proposal's commands applied, and the names it changes and the ids it removes."""
         by_name = {item["name"]: item for item in elements}
         by_id = {item["id"]: item for item in elements}
+        changed: list[str] = []
+        removed_ids: list[str] = []
         target_id = source.get("targetElementId")
         target_name = source.get("targetElementName")
         if target_id is not None:
@@ -782,6 +938,9 @@ class NativeProviderHost:
                     raise HostOperationError("invalid_command", "HUD delete target is unavailable")
                 removed = by_name.pop(name)
                 by_id.pop(removed["id"], None)
+                removed_ids.append(removed["id"])
+                if name in changed:
+                    changed.remove(name)
             elif command["op"] == "create":
                 element = dict(command["element"])
                 name = element["name"]
@@ -794,6 +953,7 @@ class NativeProviderHost:
                 element["id"] = name
                 by_name[element["name"]] = element
                 by_id[element["id"]] = element
+                changed.append(name)
             else:
                 name = command["name"]
                 existing = by_name.get(name)
@@ -805,15 +965,24 @@ class NativeProviderHost:
                     merged_props = dict(existing.get("props", {})); merged_props.update(delta["props"])
                     delta = dict(delta); delta["props"] = merged_props
                 existing.update(delta); by_name[name] = existing; by_id[existing["id"]] = existing
-        hud_main = dict(hud_main); hud_main["elements"] = list(by_name.values())
-        documents[main_index] = hud_main
-        audit = {"id": proposal.proposal_id, "jobId": source_job_id, "providerId": source.get("providerId", "openai"), "modelId": source.get("modelId", "unknown"), "promptSha256": source.get("promptHash", "0" * 64), "operationsSha256": proposal.diff_hash, "appliedAt": self._now()}
-        hud_main["commands"] = list(hud_main.get("commands", []))[-63:] + [audit]
-        hud = {"schemaVersion": hud.get("schemaVersion", 1), "documents": documents}
-        result = self.project_host.service.apply_changes({"hud": hud}, project_id=active.project_id, expected_revision=payload["expectedRevision"])
-        transaction_id = "transaction-" + uuid.uuid4().hex
-        self._last_transaction = {"projectId": active.project_id, "revision": result.revision, "hud": pre_change_hud, "transactionId": transaction_id}
-        return {"kind": "command.approve", "projectId": active.project_id, "projectRevision": result.revision, "transactionId": transaction_id}
+                if name not in changed:
+                    changed.append(name)
+        return by_name, changed, removed_ids
+
+    def _proposal_preview(self, proposal: CommandProposal, source: dict[str, Any]) -> dict[str, Any] | None:
+        """What a proposal would do to the HUD, to show before it is applied, or None when it cannot be shown."""
+        try:
+            hud = self.project_host.service.active.get_domain("hud")
+            main = next((item for item in hud.get("documents", []) if isinstance(item, dict) and item.get("id") == "hud-main"), None) or _empty_main_hud()
+            elements = copy.deepcopy(list(main.get("elements", [])))
+            if any(not isinstance(item, dict) or not isinstance(item.get("id"), str) or not isinstance(item.get("name"), str) for item in elements):
+                return None
+            by_name, changed, removed = self._elements_with_proposal(elements, proposal, source)
+        except (AttributeError, HostOperationError):
+            # Applying it will say what is wrong; a proposal without a picture can still be read.
+            return None
+        preview = {"changed": [by_name[name] for name in changed], "removed": removed}
+        return preview if len(json.dumps(preview)) <= _PROPOSAL_PREVIEW_MAX_CHARACTERS else None
 
     def _undo_command(self, payload: dict[str, Any]) -> dict[str, Any]:
         active = self._require_project(payload, expected=True)
@@ -822,7 +991,7 @@ class NativeProviderHost:
             raise HostOperationError("invalid_command", "Only the last approved transaction can be undone")
         if payload["expectedRevision"] != transaction["revision"]:
             raise HostOperationError("revision_conflict", "Project changed after the approved transaction")
-        result = self.project_host.service.apply_changes({"hud": copy.deepcopy(transaction["hud"])}, project_id=active.project_id, expected_revision=payload["expectedRevision"])
+        result = self.project_host.service.apply_changes({"hud": copy.deepcopy(transaction["hud"].get("documents", []))}, project_id=active.project_id, expected_revision=payload["expectedRevision"])
         self._last_transaction = None
         return {"kind": "command.undo", "projectId": active.project_id, "projectRevision": result.revision, "transactionId": payload["transactionId"]}
 
@@ -864,29 +1033,43 @@ class NativeProviderHost:
                     meta["proposalId"] = meta["proposal"].proposal_id
                 else:
                     meta["outputText"] = result.text[:65536]
-            elif capability in {Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT}:
-                media_payload: dict[str, Any] = {"prompt": meta["prompt"]}
-                if capability == Capability.MEDIA_EDIT:
-                    references = []
+            elif capability in {Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT, Capability.MEDIA_MAPS, Capability.MEDIA_MESH, Capability.MEDIA_MATERIAL, Capability.MEDIA_SKY, Capability.MEDIA_DECAL, Capability.MEDIA_RENDER}:
+                references: list[str] = []
+                source_size: tuple[int, int] | None = SKY_SIZE if capability == Capability.MEDIA_SKY else NEW_TEXTURE_SIZE if capability == Capability.MEDIA_GENERATE else None
+                mesh_reference: str | None = None
+                if capability == Capability.MEDIA_MESH:
+                    if not meta["assetIds"]:
+                        raise ProviderError("invalid_request", "this model needs a model to work on", provider_id)
+                    reference = self.project_host.service.resolve_reference(meta["assetIds"][0], project_id=meta["projectId"])
+                    with self.project_host.service.resolve(meta["assetIds"][0], project_id=meta["projectId"]) as source:
+                        filename = _mesh_filename(source)
+                        mesh_reference = adapter.upload_input(source=source, size=reference.size, filename=filename, content_type="application/octet-stream")
+                elif capability in {Capability.MEDIA_EDIT, Capability.MEDIA_MAPS, Capability.MEDIA_RENDER}:
                     for asset_id in meta["assetIds"]:
                         reference = self.project_host.service.resolve_reference(asset_id, project_id=meta["projectId"])
                         with self.project_host.service.resolve(asset_id, project_id=meta["projectId"]) as source:
+                            source_size = source_size or _stream_image_size(source, reference.mime)
                             references.append(adapter.upload_input(source=source, size=reference.size, filename="input.bin", content_type=reference.mime or "application/octet-stream"))
-                    if references:
-                        media_payload["image_url"] = references[0]
+                # The model says what it takes; without that, a prompt and the first image.
+                media_payload = (adapter.media_request(model=model, prompt=meta["prompt"], images=references, size=source_size, mesh=mesh_reference)
+                                 if hasattr(adapter, "media_request") else
+                                 {"prompt": meta["prompt"], **({"image_url": references[0]} if references else {})})
                 result = adapter.submit(model=model, capability=capability, payload=media_payload)
                 if self._shutdown_event.is_set():
                     return
                 request_id = getattr(result, "request_id", None)
-                self.jobs.transition(job_id, "running", remote_id=request_id, reconcile={"durable": True, "remote_request_id": request_id or "", "provider": provider_id, "model": model, "route": meta["route"]})
-                for _ in range(120):
+                self.jobs.transition(job_id, "running", remote_id=request_id, reconcile={"durable": True, "remote_request_id": request_id or "", "remote_root": getattr(result, "queue_root", None), "provider": provider_id, "model": model, "route": meta["route"]})
+                for wait in self._poll_waits(getattr(adapter, "poll_limit_seconds", _POLL_LIMIT_SECONDS)):
                     if self._shutdown_event.is_set():
                         return
                     status = adapter.status(result)
                     state = adapter.status_state(status)
+                    if state == "running" and isinstance(status.get("progress"), (int, float)):
+                        self._queue_job_event(job_id, "running", max(0.0, min(1.0, float(status["progress"]))), self.registry.get(provider_id))
                     if state == "succeeded":
                         if status.get("error") or status.get("error_type"):
-                            raise ProviderError("remote", "media provider reported a failed result", provider_id)
+                            detail = status.get("error")
+                            raise ProviderError("remote", detail[:240] if isinstance(detail, str) and detail else "media provider reported a failed result", provider_id)
                         if self.jobs.get(job_id).state.value == "cancel_requested":
                             job = self.jobs.reconcile(job_id, remote_state="succeeded", project_id=meta.get("projectId"))
                             self._queue_job_event(job_id, job.state.value, None, self.registry.get(provider_id))
@@ -897,8 +1080,9 @@ class NativeProviderHost:
                             job = self.jobs.reconcile(job_id, remote_state="cancelled", project_id=meta.get("projectId"))
                             self._queue_job_event(job_id, job.state.value, 1, self.registry.get(provider_id))
                             return
-                        raise ProviderError("remote", "media job did not complete", provider_id)
-                    if self._shutdown_event.wait(0.05):
+                        said = status.get("error") if provider_id == "reframe" else None
+                        raise ProviderError("remote", said[:240] if isinstance(said, str) and said else "media job did not complete", provider_id)
+                    if self._shutdown_event.wait(wait):
                         return
                 else:
                     raise ProviderError("timeout", "media job timed out", provider_id)
@@ -920,6 +1104,8 @@ class NativeProviderHost:
                 error = exc if isinstance(exc, ProviderError) else ProviderError("internal", "provider job failed")
                 meta = self._meta.get(job_id, {})
                 meta["errorCode"] = self._map_error(error).code
+                # Only what the provider actually said: the code says the rest better.
+                meta["errorMessage"] = error.message if error.status is None or error.message != "provider request failed" else None
                 meta["retryable"] = bool(error.retryable)
                 self.jobs.transition(job_id, "failed", message="provider job failed",
                                      reconcile={"provider": provider_id, "error_code": meta["errorCode"], "retryable": bool(error.retryable)})
@@ -930,18 +1116,18 @@ class NativeProviderHost:
     def _ingest_media(self, job_id: str, output: Mapping[str, Any], adapter: Any, meta: dict[str, Any]) -> None:
         if self.preview_store is None:
             raise ProviderError("remote", "preview storage is unavailable")
-        images = output.get("images")
-        if isinstance(images, list) and images and isinstance(images[0], Mapping):
-            image = images[0]
-            if isinstance(image.get("url"), str):
-                output = {"url": image["url"], "mime": image.get("content_type") or image.get("mime")}
-            if isinstance(image.get("width"), int) and isinstance(image.get("height"), int):
-                meta["dimensions"] = {"width": image["width"], "height": image["height"]}
         if isinstance(output.get("seed"), int) and not isinstance(output.get("seed"), bool):
             meta["seed"] = output["seed"]
-        url = output.get("url")
-        if not isinstance(url, str):
+        maps = media_outputs(output)
+        if maps:
+            self._ingest_maps(job_id, maps, adapter, meta)
+            return
+        found = media_output_url(output)
+        if found is None:
             raise ProviderError("remote", "media response contained no streamed artifact")
+        url, _mime, dimensions = found
+        if dimensions is not None:
+            meta["dimensions"] = dimensions
         import tempfile
         with tempfile.NamedTemporaryFile() as temp:
             artifact = adapter.download_output(url, sink=temp)
@@ -954,17 +1140,37 @@ class NativeProviderHost:
         meta["artifactHash"] = record.asset_id
         meta["preview"] = record
 
+    def _ingest_maps(self, job_id: str, maps: list[tuple[str, str, str | None, dict[str, int] | None]], adapter: Any, meta: dict[str, Any]) -> None:
+        """A job that makes several maps: each becomes a preview of its own, and the first stands for the job."""
+        import tempfile
+        records: list[tuple[str, Any]] = []
+        for role, url, _mime, _dimensions in maps:
+            with tempfile.NamedTemporaryFile() as temp:
+                artifact = adapter.download_output(url, sink=temp)
+                temp.flush(); temp.seek(0)
+                records.append((role, self.preview_store.ingest(
+                    job_id, temp, project_id=meta.get("projectId"),
+                    declared_mime=artifact.content_type,
+                    provenance=self._preview_provenance(job_id, meta),
+                )))
+        meta["artifactHash"] = records[0][1].asset_id
+        meta["preview"] = records[0][1]
+        meta["previewMaps"] = records
+
     def _adapter(self, provider_id: str) -> Any:
         if provider_id in self._adapters:
             return self._adapters[provider_id]
         transport = self.transports.get(provider_id)
         if transport is None:
             transport = StdlibTransport()
-        descriptor = self.registry.get(provider_id)
+        self.registry.get(provider_id)
         credential_store = self._credential_store(provider_id)
         endpoint = self.settings.get(provider_id).endpoint
         cls = _ADAPTERS[provider_id]
-        adapter = cls(transport, credential_store=credential_store, registry=self.registry, endpoint=endpoint)
+        extras: dict[str, Any] = {"catalog_path": self.state_root / "fal-catalog.json"} if provider_id == "fal" else {}
+        if provider_id == "reframe":
+            extras["jobs_root"] = self.state_root / "render-jobs"
+        adapter = cls(transport, credential_store=credential_store, registry=self.registry, endpoint=endpoint, **extras)
         self._adapters[provider_id] = adapter
         return adapter
 
@@ -982,6 +1188,18 @@ class NativeProviderHost:
                 except Exception:
                     continue
         return "absent" if self._vault is not None else "unavailable"
+
+    def _cost_estimate(self, provider_id: str, settings: Any, payload: Mapping[str, Any]) -> Any:
+        """What the request says it costs, or with budgets set, what the catalog does: a limit must see every job."""
+        estimate = payload.get("estimatedCostMicroUsd")
+        if estimate is not None or not all((settings.max_job_cost_micro_usd, settings.max_daily_cost_micro_usd, settings.max_monthly_cost_micro_usd)):
+            return estimate
+        try:
+            adapter = self._adapter(provider_id)
+        except Exception:
+            return None
+        details = adapter.model_details(payload["modelId"]) if hasattr(adapter, "model_details") else None
+        return rough_job_cost(details)
 
     def _check_budget(self, provider_id: str, settings: Any, estimate: Any) -> int:
         """Validate one reservation against durable provider-specific caps."""
@@ -1047,12 +1265,14 @@ class NativeProviderHost:
         job = self.jobs.get(job_id); meta = self._meta.get(job_id, {})
         value = {"jobId": job.job_id, "providerId": job.provider, "modelId": job.model, "capability": job.capability, "route": meta.get("route", job.route), "status": job.state.value, "progress": 1 if job.state.value == "succeeded" else None, "attempt": job.attempt}
         if job.state.value == "failed":
-            value["message"] = str(meta.get("errorCode", job.reconcile.get("error_code", "provider_error")))[:256]
+            value["message"] = str(meta.get("errorMessage") or meta.get("errorCode", job.reconcile.get("error_code", "provider_error")))[:256]
             value["retryable"] = bool(meta.get("retryable", job.reconcile.get("retryable", False)))
         if "outputText" in meta: value["outputText"] = meta["outputText"]
         if "proposal" in meta: value["proposalAvailable"] = True; value["proposalId"] = meta["proposal"].proposal_id
         if "preview" in meta:
             preview = meta["preview"]; value["preview"] = {"previewAssetId": preview.asset_id, "mime": preview.mime, "size": preview.size, "dimensions": {"width": preview.width, "height": preview.height}}
+            if meta.get("previewMaps"):
+                value["previewMaps"] = [{"role": role, "previewAssetId": record.asset_id, "mime": record.mime, "size": record.size, "dimensions": {"width": record.width, "height": record.height}} for role, record in meta["previewMaps"]]
         return value
 
     def _queue_job_event(self, job_id: str, status: str, progress: float | None, descriptor: Any, *, message: str | None = None, retryable: bool = False) -> None:
@@ -1095,9 +1315,59 @@ class NativeProviderHost:
         return active.revision
 
     @staticmethod
+    def _poll_waits(limit: float = _POLL_LIMIT_SECONDS) -> Any:
+        """Each wait between asking after a queued job, until it has been asked after for long enough."""
+        wait, spent = _POLL_FIRST_SECONDS, 0.0
+        while spent < limit:
+            yield wait
+            spent += wait
+            wait = min(wait * 1.5, _POLL_MOST_SECONDS)
+
+    @staticmethod
     def _map_error(exc: ProviderError) -> HostOperationError:
         code = _PROVIDER_ERRORS.get(str(exc.code), "internal_error")
         return HostOperationError(code, str(exc.message)[:256])
+
+
+# Most of what one host message may carry, leaving room for the rest of the answer.
+_PROPOSAL_PREVIEW_MAX_CHARACTERS = 128 * 1024
+
+
+def _empty_main_hud() -> dict[str, Any]:
+    """The main HUD of a project that has not saved one: what createDefaultMainHUD makes in the HUD editor."""
+    return {"id": "hud-main", "name": "Main HUD", "elements": [], "layout": {"width": 1920, "height": 1080}, "commands": []}
+
+
+def _mesh_filename(stream: Any) -> str:
+    """A name for a model's upload, from its first bytes, leaving the stream where it was: providers go by the extension."""
+    start = stream.tell()
+    head = stream.read(32)
+    stream.seek(start)
+    if head.startswith(b"glTF"):
+        return "model.glb"
+    if head.startswith(b"Kaydara FBX Binary") or head.lstrip().startswith(b"; FBX"):
+        return "model.fbx"
+    return "model.obj"
+
+
+def _stream_image_size(stream: Any, mime: str | None) -> tuple[int, int] | None:
+    """An image's size from its header, leaving the stream where it was. None where it cannot be told."""
+    try:
+        start = stream.tell()
+        head = stream.read(256 * 1024)
+        stream.seek(start)
+    except (AttributeError, OSError, ValueError):
+        return None
+    if head[:8] == b"\x89PNG\r\n\x1a\n" and len(head) >= 24:
+        return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+    if head[:2] == b"\xff\xd8":
+        at = 2
+        while at + 9 < len(head) and head[at] == 0xFF:
+            marker, length = head[at + 1], int.from_bytes(head[at + 2:at + 4], "big")
+            if 0xC0 <= marker <= 0xCF and marker not in {0xC4, 0xC8, 0xCC}:
+                return int.from_bytes(head[at + 7:at + 9], "big"), int.from_bytes(head[at + 5:at + 7], "big")
+            at += 2 + length
+    return None
 
 
 def _normalize_proposal_id(value: Any) -> str:

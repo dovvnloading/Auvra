@@ -30,13 +30,21 @@ _NESTED_KEYS = {
     # binary heightfield asset instead (see ``_validate_terrain_heightfields``).
     # Paint weights likewise live in a binary splat map asset (``splatmap``);
     # the editor's in-memory ``splat`` array is never persisted.
-    "terrainData": {"resolution", "width", "depth", "heights", "heightfield", "textureId", "textureLayers", "splatmap"},
+    "terrainData": {"resolution", "width", "depth", "heights", "heightfield", "textureId", "textureLayers", "splatmap", "splatmap2", "holemap", "editLayers", "activeEditLayer"},
+    "editLayers": {"id", "name", "visible", "locked", "opacity", "heightfield"},
     "heightfield": {"assetId", "encoding", "columns", "rows"},
     "splatmap": {"assetId", "encoding", "columns", "rows"},
+    "splatmap2": {"assetId", "encoding", "columns", "rows"},
+    "holemap": {"assetId", "encoding", "columns", "rows"},
+    # A level's foliage set: its types, each with its instances in a binary asset.
+    "foliageData": {"types"},
+    "types": {"id", "modelId", "active", "density", "radius", "scaleMode", "scaleX", "scaleY", "scaleZ", "zOffset", "alignToNormal", "alignMaxAngle", "randomYaw", "randomPitch", "slope", "height", "includeLayers", "excludeLayers", "minLayerWeight", "castShadow", "impostorDistance", "cullDistance", "collision", "avoidWorld", "instancemap"},
+    "instancemap": {"assetId", "encoding", "count"},
     # A level's baked lighting: bake settings and the light probe volume asset.
     "bakedLighting": {"spacing", "bounces", "intensity", "probes"},
     "probes": {"assetId", "encoding", "origin", "spacing", "counts", "bakedAt", "signature"},
-    "textureLayers": {"textureId", "tiling"},
+    "textureLayers": {"name", "textureId", "normalTextureId", "roughnessTextureId", "heightTextureId", "tiling", "tileSize", "rotation", "tint", "roughness", "normalStrength", "heightContrast", "cliffProjection", "variation", "grass"},
+    "grass": {"modelId", "density", "scale", "fadeStart", "fadeEnd", "randomRotation", "alignToSurface", "castShadow"},
     "skyConfig": {"timeOfDay", "sunIntensity", "ambienceIntensity", "sunColor", "fogColor", "fogDensity", "turbidity", "rayleigh", "mieCoefficient", "mieDirectionalG", "inclination", "azimuth", "dayLength", "weather", "fogMode", "shadowDistance", "model", "preset", "sunTilt", "sunSize", "atmosphere", "cloudLayer", "night", "skyLight", "panorama"},
     # The physically based sky: its air, its clouds, its night, the Sky Light it lights the level with and a panorama image.
     "atmosphere": {"rayleigh", "rayleighTint", "haze", "hazeGlow", "ozone", "ground", "brightness"},
@@ -47,7 +55,13 @@ _NESTED_KEYS = {
     # The weather a level's sky starts in: the preset it came from and its values.
     "weather": {"preset", "clouds", "rain", "snow", "fog", "wind", "windDirection", "lightning"},
     "dimensions": {"width", "height"},
-    "importSettings": {"normalize", "targetSize"},
+    "importSettings": {"normalize", "targetSize", "animation", "excludedClips", "clipRanges", "keyThreshold", "morphTargets", "looseMeshes", "recomputeNormals", "smoothingAngle", "tangents"},
+    # A stretch of a take that comes in as a clip of its own.
+    "clipRanges": {"take", "name", "start", "end", "loop", "recentre", "attached"},
+    "sourceImages": {"name", "assetId"},
+    "boneRoles": {"role", "bone"},
+    # The weights painted on a model, in a binary asset of their own.
+    "skinPaint": {"assetId", "encoding", "count"},
     "size": {"width", "height"},
     "generation": {"providerId", "modelId", "modelVersion", "jobId", "createdAt", "routeOrigin", "routeConsent", "promptSha256", "settingsSha256", "artifactSha256", "inputAssetIds", "seed", "costMicroUsd"},
     "flashConfig": {"enabled", "textureId", "scale", "color", "duration", "rotationSpeed", "preview"},
@@ -83,8 +97,8 @@ _NESTED_KEYS = {
 _FREEFORM_KEYS = {"settings", "overrides", "style", "payload", "data", "customData", "props", "graph"}
 # ``materialOverrides`` is keyed by authored material names, so its entries are
 # checked against the override fields instead of by their (arbitrary) key.
-_MATERIAL_OVERRIDE_KEYS = {"color", "roughness", "metalness", "emissive", "emissiveIntensity", "opacity", "mapTextureId", "normalTextureId", "materialId", "parameters"}
-_MATERIAL_TEXTURE_KEYS = ("mapTextureId", "normalTextureId")
+_MATERIAL_OVERRIDE_KEYS = {"color", "roughness", "metalness", "emissive", "emissiveIntensity", "opacity", "mapTextureId", "normalTextureId", "roughnessTextureId", "metalnessTextureId", "materialId", "parameters"}
+_MATERIAL_TEXTURE_KEYS = ("mapTextureId", "normalTextureId", "roughnessTextureId", "metalnessTextureId")
 # Material names are also the keys of ``materialOverrides`` and
 # ``textureOverrides``, but every document crosses two protocol key blocklists:
 # the host's ``_FORBIDDEN_JSON_KEY`` (Auvra/host/validation.py) and the
@@ -194,7 +208,12 @@ def validate_project_references(
         require("audio", (value.get("audioConfig") or {}).get("audioId"), "object audio", optional=True)
         require("textures", (value.get("terrainData") or {}).get("textureId"), "terrain texture", optional=True)
         for layer in ((value.get("terrainData") or {}).get("textureLayers") or []):
-            require("textures", layer.get("textureId") if isinstance(layer, dict) else None, "terrain layer texture", optional=True)
+            for field in ("textureId", "normalTextureId", "roughnessTextureId", "heightTextureId"):
+                require("textures", layer.get(field) if isinstance(layer, dict) else None, "terrain layer texture", optional=True)
+            for grass in ((layer.get("grass") or []) if isinstance(layer, dict) else []):
+                require("models", grass.get("modelId") if isinstance(grass, dict) else None, "terrain grass model", optional=True)
+        for foliage_type in ((value.get("foliageData") or {}).get("types") or []):
+            require("models", foliage_type.get("modelId") if isinstance(foliage_type, dict) else None, "foliage model", optional=True)
         require("prefabs", value.get("prefabId"), "object prefab", optional=True)
     # Transform parents live in the same level, so a hierarchy never spans
     # levels and a level can be loaded (or deleted) as one tree.
@@ -246,9 +265,6 @@ def validate_project_references(
         if generation is not None:
             if generation.get("artifactSha256") != value.get("assetId"):
                 raise ValueError("generated texture provenance does not match its asset")
-            for identity in generation.get("inputAssetIds", []):
-                if asset_exists is not None and not asset_exists(identity):
-                    raise ValueError("generated texture provenance references a missing input asset")
     for value in records["blueprints"].values():
         require("models", value.get("linkedModelId"), "blueprint model", optional=True)
         require("textures", value.get("textureId"), "blueprint texture", optional=True)
@@ -256,7 +272,7 @@ def validate_project_references(
 
     if asset_exists is not None:
         for document in domains.values():
-            for asset_id in _asset_handles(document):
+            for asset_id in _asset_handles(document, history=False):
                 if not asset_exists(asset_id):
                     raise ValueError("project references a missing asset")
 
@@ -330,7 +346,7 @@ def _validate_terrain_heightfields(value: Any) -> None:
         terrain = object_value.get("terrainData") if isinstance(object_value, dict) else None
         if not isinstance(terrain, dict):
             continue
-        for key, label in (("heightfield", "heightfield"), ("splatmap", "splat map")):
+        for key, label in (("heightfield", "heightfield"), ("splatmap", "splat map"), ("splatmap2", "second splat map"), ("holemap", "hole map")):
             reference = terrain.get(key)
             if not isinstance(reference, dict):
                 continue
@@ -340,6 +356,13 @@ def _validate_terrain_heightfields(value: Any) -> None:
             samples = int(resolution) + 1
             if reference.get("columns") != samples or reference.get("rows") != samples:
                 raise ValueError(f"objects document {index} terrain {label} does not match its resolution")
+        for layer in terrain.get("editLayers") or []:
+            reference = layer.get("heightfield") if isinstance(layer, dict) else None
+            if not isinstance(reference, dict):
+                continue
+            resolution = terrain.get("resolution")
+            if not _is_number(resolution) or not float(resolution).is_integer() or reference.get("columns") != int(resolution) + 1 or reference.get("rows") != int(resolution) + 1:
+                raise ValueError(f"objects document {index} terrain edit layer does not match its resolution")
 
 def _documents(value: Any) -> list[Any]:
     documents = value.get("documents") if isinstance(value, dict) else None
@@ -490,17 +513,18 @@ def _assert_known_nested(value: Any, parent_key: str | None = None, freeform: bo
     elif isinstance(value, list):
         for child in value: _assert_known_nested(child, parent_key, freeform)
 
-def _asset_handles(value: Any, parent_key: str | None = None):
+def _asset_handles(value: Any, parent_key: str | None = None, *, history: bool = True):
+    """The asset hashes a document names. `history` includes the source pictures of generated textures, which nothing draws with."""
     if isinstance(value, dict):
         for key, child in value.items():
             if key == "assetId" and isinstance(child, str):
                 yield child
-            elif key in {"assetIds", "animationAssetIds", "inputAssetIds"} and isinstance(child, list):
+            elif (key in {"assetIds", "animationAssetIds"} or (history and key == "inputAssetIds")) and isinstance(child, list):
                 yield from (item for item in child if isinstance(item, str))
-            yield from _asset_handles(child, key)
+            yield from _asset_handles(child, key, history=history)
     elif isinstance(value, list):
         for child in value:
-            yield from _asset_handles(child, parent_key)
+            yield from _asset_handles(child, parent_key, history=history)
 
 def _assert_asset_handles(value: Any) -> None:
     for asset_id in _asset_handles(value):

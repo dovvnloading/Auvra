@@ -1,0 +1,243 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDown, ChevronRight, Plus } from 'lucide-react';
+import * as THREE from 'three';
+import { useScene } from '../../../context/SceneContext';
+import type { LoadedModelData } from '../../../types';
+import { bindPoseRig } from '../../../utils/animationBinding';
+import { CORE_ROLES, humanoidRoles } from '../../../utils/retargeting';
+import { ALL_BONE_ROLES, boneInfluences, roleLabel, setSkeletonView, skeletonBones, useSkeletonView } from '../../../utils/skeletonView';
+import { useSkinPaintRevision } from '../../../utils/skinPaint/paintSession';
+import { AutoRigPanel } from './AutoRigPanel';
+import { SkinPaintSection, type ClipPlayback } from './SkinPaintSection';
+import { Button, TextInput } from '../kit';
+import { Select } from '../Select';
+
+const NO_ROLE = 'none';
+
+const Check: React.FC<{ label: string; checked: boolean; onChange: (checked: boolean) => void }> = ({ label, checked, onChange }) => (
+  <label className="flex h-6 cursor-pointer items-center gap-2 text-xs text-ink-2">
+    <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="h-3.5 w-3.5 shrink-0 accent-blue-500" />
+    {label}
+  </label>
+);
+
+const Empty: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div className="flex flex-1 items-center justify-center p-8 text-center text-xs text-ink-3">{children}</div>
+);
+
+const BoneTree: React.FC<{ model: LoadedModelData; playback: ClipPlayback }> = ({ model, playback }) => {
+  const { updateModelBoneRoles, reimportModel, addSocket, placeInScene, projectStatus } = useScene();
+  const [filter, setFilter] = useState('');
+  const [closed, setClosed] = useState<ReadonlySet<number>>(new Set());
+  const [rolesChanged, setRolesChanged] = useState(false);
+  const view = useSkeletonView();
+  const bones = useMemo(() => skeletonBones(model.object), [model.object]);
+  const paintRevision = useSkinPaintRevision();
+  const influences = useMemo(() => boneInfluences(model.object), [model.object, paintRevision]);
+  // Read as clips read it: at the bind pose, whatever the model is playing now, and from the bones it is bound to.
+  const roles = useMemo(() => {
+    const rig = bindPoseRig(model.object);
+    if (!rig) return humanoidRoles(bones.map((entry) => entry.bone), model.object, model.boneRoles);
+    const read = humanoidRoles(rig.bones, rig.root, model.boneRoles);
+    const byName = new Map([...read].map(([bone, role]) => [bone.name, role]));
+    const found = new Map<(typeof bones)[number]['bone'], string>();
+    for (const entry of bones) {
+      const role = byName.get(entry.name);
+      if (role) found.set(entry.bone, role);
+    }
+    return found;
+  }, [bones, model.object, model.boneRoles]);
+  /** Clips from other rigs, which were made for what its bones were then. */
+  const hasOtherClips = model.animations.length > (model.sourceClipNames?.length ?? 0);
+  const canEdit = !projectStatus.readOnly;
+
+  // A bone picked on another model means nothing on this one.
+  useEffect(() => {
+    setSkeletonView({ selectedBone: null });
+    setRolesChanged(false);
+  }, [model.id]);
+
+  const missing = useMemo(() => {
+    const found = new Set(roles.values());
+    return CORE_ROLES.filter((role) => !found.has(role));
+  }, [roles]);
+
+  // A body whose back runs along the ground has four legs, whatever its bones are called.
+  const onFourLegs = useMemo(() => {
+    const placeOf = (role: string): THREE.Vector3 | null => {
+      for (const [bone, boneRole] of roles) if (boneRole === role) return bone.getWorldPosition(new THREE.Vector3());
+      return null;
+    };
+    const hips = placeOf('Hips');
+    const head = placeOf('Neck') ?? placeOf('Head');
+    return !!hips && !!head && Math.abs(head.y - hips.y) < Math.hypot(head.x - hips.x, head.z - hips.z);
+  }, [roles]);
+
+  const shown = useMemo(() => {
+    const words = filter.trim().toLowerCase();
+    if (words) {
+      return bones.map((entry, index) => ({ entry, index })).filter(({ entry }) => {
+        const role = roles.get(entry.bone);
+        return entry.name.toLowerCase().includes(words) || (role ? roleLabel(role).toLowerCase().includes(words) : false);
+      });
+    }
+    // Without a search, a closed bone hides what hangs from it.
+    const rows: { entry: (typeof bones)[number]; index: number }[] = [];
+    const hidden = new Set<number>();
+    bones.forEach((entry, index) => {
+      if (entry.parent >= 0 && (hidden.has(entry.parent) || closed.has(entry.parent))) {
+        hidden.add(index);
+        return;
+      }
+      rows.push({ entry, index });
+    });
+    return rows;
+  }, [bones, closed, filter, roles]);
+
+  const picked = view.selectedBone ? bones.find((entry) => entry.name === view.selectedBone) : undefined;
+
+  // A bone picked in the view is shown in the tree, its parents opened if they were closed.
+  const tree = useRef<HTMLUListElement>(null);
+  useEffect(() => {
+    const at = picked ? bones.indexOf(picked) : -1;
+    if (at < 0) return;
+    setClosed((previous) => {
+      const next = new Set(previous);
+      let changed = false;
+      for (let up = bones[at].parent; up >= 0; up = bones[up].parent) changed = next.delete(up) || changed;
+      return changed ? next : previous;
+    });
+    requestAnimationFrame(() => tree.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' }));
+  }, [bones, picked]);
+  const pickedRole = picked ? roles.get(picked.bone) ?? NO_ROLE : NO_ROLE;
+
+  // The view shows a model that has been placed: these are no use on one that has not.
+  const showInView = (on: boolean): void => {
+    if (on && !model.isPlacedInScene && canEdit) void placeInScene(model.id);
+  };
+
+  const setRole = async (role: string) => {
+    if (!picked) return;
+    const others = (model.boneRoles ?? []).filter((stored) => stored.bone !== picked.name);
+    await updateModelBoneRoles(model.id, [...others, { role: role === NO_ROLE ? '' : role, bone: picked.name }]);
+    setRolesChanged(true);
+  };
+
+  return (
+    <>
+      <div className="shrink-0 space-y-1 border-b border-line px-3 py-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="min-w-0 truncate text-xs font-medium text-ink" title={model.name}>{model.name}</span>
+          <span className="shrink-0 text-2xs tabular-nums text-ink-3">{bones.length.toLocaleString()} bones</span>
+        </div>
+        <div className="flex items-center gap-4">
+          <Check label="Show bones" checked={view.showSkeleton} onChange={(showSkeleton) => { setSkeletonView({ showSkeleton }); showInView(showSkeleton); }} />
+          <Check label="Show weights" checked={view.showWeights} onChange={(showWeights) => { setSkeletonView({ showWeights }); showInView(showWeights); }} />
+        </div>
+        {view.showSkeleton && <p className="text-2xs text-ink-3">Click a joint in the view to pick its bone.</p>}
+        {view.showWeights && (
+          <div className="flex items-center gap-2 text-2xs text-ink-3">
+            <span>None</span>
+            <span className="h-1.5 flex-1 rounded-sm" style={{ background: 'linear-gradient(90deg, #333847, #0d40d9, #1ad966, #f2261a)' }} />
+            <span>All</span>
+          </div>
+        )}
+        {view.showWeights && !picked && canEdit && <p className="text-2xs text-ink-3">Pick a bone to see what it moves and paint its weights.</p>}
+        <p className={`text-2xs ${missing.length ? 'text-amber-400' : 'text-ink-3'}`}>
+          {missing.length
+            ? `Clips from other rigs need: ${missing.map(roleLabel).join(', ')}. Pick a bone and say what it is.`
+            : onFourLegs
+              ? 'Reads as four legs, so clips from other four-legged rigs can play on it.'
+              : 'Reads as a humanoid, so clips from other rigs can play on it.'}
+        </p>
+        <TextInput aria-label="Search bones" placeholder="Search bones" value={filter} onChange={(event) => setFilter(event.target.value)} />
+      </div>
+
+      <ul ref={tree} className="min-h-0 flex-1 overflow-y-auto py-0.5 custom-scrollbar" role="tree" aria-label="Bones">
+        {shown.map(({ entry, index }) => {
+          const isOpen = !closed.has(index);
+          const role = roles.get(entry.bone);
+          const isPicked = view.selectedBone === entry.name;
+          return (
+            <li key={`${entry.name}:${index}`} role="treeitem" aria-selected={isPicked} aria-expanded={entry.children ? isOpen : undefined}>
+              <div
+                className={`flex h-[22px] cursor-pointer items-center gap-1 pr-3 text-2xs ${isPicked ? 'bg-accent/20 text-ink' : 'text-ink-2 hover:bg-white/5'}`}
+                style={{ paddingLeft: filter ? 12 : 8 + entry.depth * 10 }}
+                onClick={() => setSkeletonView({ selectedBone: entry.name })}
+              >
+                {!filter && entry.children > 0 ? (
+                  <button
+                    type="button"
+                    aria-label={isOpen ? `Close ${entry.name}` : `Open ${entry.name}`}
+                    className="flex h-4 w-3 shrink-0 items-center justify-center text-ink-3 hover:text-ink"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setClosed((previous) => {
+                        const next = new Set(previous);
+                        if (next.has(index)) next.delete(index); else next.add(index);
+                        return next;
+                      });
+                    }}
+                  >
+                    {isOpen ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+                  </button>
+                ) : <span className="w-3 shrink-0" />}
+                <span className="min-w-0 flex-1 truncate" title={entry.name}>{entry.name}</span>
+                {role && <span className="shrink-0 text-ink-3">{roleLabel(role)}</span>}
+              </div>
+            </li>
+          );
+        })}
+        {shown.length === 0 && <li className="px-3 py-1 text-2xs text-ink-3">No bone has that name.</li>}
+      </ul>
+
+      {(picked || (rolesChanged && hasOtherClips)) && (
+        <div className="shrink-0 space-y-1.5 border-t border-line px-3 py-2">
+          {picked && (
+            <>
+              <div className="flex items-center justify-between gap-2 text-2xs">
+                <span className="min-w-0 truncate font-medium text-ink" title={picked.name}>{picked.name}</span>
+                <span className="shrink-0 tabular-nums text-ink-3">
+                  {(influences.get(picked.name) ?? 0) > 0 ? `moves ${influences.get(picked.name)!.toLocaleString()} vertices` : 'moves no vertices itself'}
+                </span>
+              </div>
+              {canEdit && (
+                <div className="flex items-center gap-2">
+                  <span className="shrink-0 text-2xs text-ink-3">This bone is</span>
+                  <Select
+                    value={pickedRole}
+                    onChange={(value: string) => { void setRole(value); }}
+                    options={[{ label: 'Nothing in particular', value: NO_ROLE }, ...ALL_BONE_ROLES.map((role) => ({ label: roleLabel(role), value: role }))]}
+                    className="min-w-0 flex-1"
+                  />
+                </div>
+              )}
+              {canEdit && (
+                <Button size="sm" icon={<Plus size={12} />} onClick={() => addSocket(model.id, `Socket_${picked.name}`, picked.name)}>Add a socket here</Button>
+              )}
+            </>
+          )}
+          {rolesChanged && hasOtherClips && canEdit && (
+            <div className="flex items-center justify-between gap-2">
+              <span className="min-w-0 text-2xs text-ink-3">Clips from other rigs were made before this change.</span>
+              <Button size="sm" onClick={() => { void reimportModel(model.id).then((saved) => { if (saved) setRolesChanged(false); }); }}>Make them again</Button>
+            </div>
+          )}
+        </div>
+      )}
+      {picked && view.showWeights && canEdit && <SkinPaintSection model={model} playback={playback} />}
+    </>
+  );
+};
+
+/** The selected model's skeleton: its bones as a tree, what each is for, and what each moves. */
+export const SkeletonPanel: React.FC<ClipPlayback> = (playback) => {
+  const { models, selectedModelId } = useScene();
+  // The colours mean nothing without this panel's key, and other tabs are about the model as it looks.
+  useEffect(() => () => setSkeletonView({ showWeights: false }), []);
+  const model = models.find((candidate) => candidate.id === selectedModelId);
+  const hasBones = useMemo(() => (model ? skeletonBones(model.object).length > 0 : false), [model]);
+  if (!model) return <Empty>Select a model to see its skeleton.</Empty>;
+  if (!hasBones) return <AutoRigPanel model={model} />;
+  return <BoneTree key={model.id} model={model} playback={playback} />;
+};

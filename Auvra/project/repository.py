@@ -1,8 +1,7 @@
 """Transactional native project repository."""
 from __future__ import annotations
 
-import copy, hashlib, json, os, re, shutil, tempfile, time, uuid, zipfile
-import stat
+import copy, hashlib, os, re, shutil, tempfile, time, uuid, zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -17,7 +16,7 @@ from .locking import ProjectLock
 from . import migrations as _migrations
 from .schemas import (DOMAIN_NAMES, domain_document, validate_domain,
                       validate_project_descriptor, validate_project_references)
-from .serialization import atomic_dump_json, canonical_json, dump_json, load_json
+from .serialization import atomic_dump_json, dump_json, load_json
 
 FORMAT = "auvra.project"
 VERSION = 1
@@ -251,7 +250,7 @@ class ProjectRepository:
                 for key, child in value.items():
                     if key == "assetId" and isinstance(child, str):
                         references.add(child)
-                    elif key == "assetIds" and isinstance(child, list):
+                    elif key in {"assetIds", "inputAssetIds"} and isinstance(child, list):
                         references.update(item for item in child if isinstance(item, str))
                     collect(child)
             elif isinstance(value, list):
@@ -295,6 +294,8 @@ class ProjectRepository:
         candidate_refs = self.referenced_asset_ids(candidate)
         superseded = (_superseded_terrain_assets(self.get_domain("objects"), validated["objects"])
                       if "objects" in validated else set())
+        if "models" in validated:
+            superseded |= _superseded_skin_paint(self.get_domain("models"), validated["models"])
         try:
             validate_project_references(candidate, asset_exists=self.assets.verify)
         except ValueError as exc:
@@ -308,8 +309,9 @@ class ProjectRepository:
         self._dirty = True
         if superseded:
             # Every sculpt or paint stroke, terrain undo and redo commits a new
-            # content-addressed heightfield or splat map, and the editor
-            # re-uploads any heights or weights it needs again. Drop a replaced
+            # content-addressed heightfield or splat map (and every stroke on a
+            # model, its painted weights), and the editor re-uploads any heights
+            # or weights it needs again. Drop a replaced
             # one as soon as no committed document references it, instead of
             # keeping it in Content (and copying it into every recovery point)
             # until close.
@@ -685,7 +687,7 @@ def _fsync_tree(root: Path) -> None:
         elif path.is_dir():
             _fsync_directory(path)
 
-_TERRAIN_ASSET_KEYS = ("heightfield", "splatmap")
+_TERRAIN_ASSET_KEYS = ("heightfield", "splatmap", "splatmap2", "holemap")
 
 def _terrain_assets(objects: dict[str, Any]) -> dict[tuple[Any, str], str]:
     """Map each (terrain object id, terrainData key) to its heightfield or splat map asset id."""
@@ -698,6 +700,12 @@ def _terrain_assets(objects: dict[str, Any]) -> dict[tuple[Any, str], str]:
             reference = terrain.get(key)
             if isinstance(reference, dict) and isinstance(reference.get("assetId"), str):
                 references[(document.get("id"), key)] = reference["assetId"]
+    for document in objects.get("documents", []):
+        foliage = document.get("foliageData") if isinstance(document, dict) else None
+        for foliage_type in (foliage.get("types") or []) if isinstance(foliage, dict) else []:
+            reference = foliage_type.get("instancemap") if isinstance(foliage_type, dict) else None
+            if isinstance(reference, dict) and isinstance(reference.get("assetId"), str):
+                references[(document.get("id"), f"foliage:{foliage_type.get('id')}")] = reference["assetId"]
     return references
 
 def _superseded_terrain_assets(previous: dict[str, Any], committed: dict[str, Any]) -> set[str]:
@@ -710,6 +718,19 @@ def _superseded_terrain_assets(previous: dict[str, Any], committed: dict[str, An
     kept = {document.get("id") for document in committed.get("documents", []) if isinstance(document, dict)}
     return {asset_id for (object_id, key), asset_id in _terrain_assets(previous).items()
             if object_id in kept and after.get((object_id, key)) != asset_id}
+
+def _superseded_skin_paint(previous: dict[str, Any], committed: dict[str, Any]) -> set[str]:
+    """Painted weights that a kept model document replaced or gave up."""
+    after = {document.get("id"): document for document in committed.get("documents", []) if isinstance(document, dict)}
+    superseded: set[str] = set()
+    for document in previous.get("documents", []):
+        reference = document.get("skinPaint") if isinstance(document, dict) else None
+        kept = after.get(document.get("id")) if isinstance(document, dict) else None
+        if not isinstance(reference, dict) or not isinstance(reference.get("assetId"), str) or kept is None:
+            continue
+        if (kept.get("skinPaint") or {}).get("assetId") != reference["assetId"]:
+            superseded.add(reference["assetId"])
+    return superseded
 
 def _journal_path(project_root: Path, value: Any, area: str) -> Path:
     """Resolve only the journal's approved relative path namespaces."""

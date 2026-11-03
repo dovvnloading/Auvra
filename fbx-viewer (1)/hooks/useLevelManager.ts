@@ -9,8 +9,10 @@ import { editorSession, selectObjectsForLevel, type EditorSessionLease } from '.
 import { subscribeDomainCascade, type DomainCascadeEvent } from '../utils/domainCascade';
 import { resolveTerrainHeightfield } from '../utils/terrainHeightfieldEditor';
 import { isTerrainHeightfieldPending, TerrainHeightfieldEncodingError } from '../utils/terrainHeightfieldCodec';
-import { resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplatEditor';
-import { isTerrainSplatPending, terrainLayersReferenceTexture, withoutTerrainLayerTexture } from '../components/Environment/Terrain/terrainSplatCodec';
+import { resolveTerrainHolemap, resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplatEditor';
+import { foliageAfterTerrainEdit, isFoliageTypePending, resolveFoliageInstances, type FoliageGroundTerrain, type FoliageInstanceReference, type FoliageType } from '../runtime/foliage';
+import { isEditLayerPending, resolveEditLayer } from '../components/Environment/Terrain/terrainEditLayers';
+import { isTerrainHolesPending, isTerrainSplat2Pending, isTerrainSplatPending, terrainLayersReferenceTexture, withoutTerrainLayerModel, withoutTerrainLayerTexture } from '../components/Environment/Terrain/terrainSplatCodec';
 import { collectSubtree, sortByHierarchy } from '../utils/sceneGraph';
 import type { LevelBakedLighting } from '../runtime/lighting/bakedLighting';
 
@@ -48,6 +50,84 @@ const withDescendants = (objects: readonly LevelObject[], isRoot: (object: Level
     return ids;
 };
 
+/** Terrain fields that can hold millions of numbers. They are replaced whole, never changed in place, so history can share them. */
+const SHARED_TERRAIN_FIELDS = ['heights', 'splat', 'splat2', 'holes'] as const;
+
+/** A copy of the level's objects for the undo history, sharing the terrains' largest arrays. */
+const snapshotLevelObjects = (objects: readonly LevelObject[]): LevelObject[] => objects.map((object) => {
+    if (object.foliageData) {
+        // A type's instances are replaced whole too.
+        return {
+            ...(JSON.parse(JSON.stringify({ ...object, foliageData: undefined })) as LevelObject),
+            foliageData: {
+                types: object.foliageData.types.map((type) => {
+                    const { instances, ...rest } = type;
+                    const copy = JSON.parse(JSON.stringify(rest)) as FoliageType;
+                    return instances ? { ...copy, instances } : copy;
+                }),
+            },
+        };
+    }
+    const terrain = object.terrainData;
+    if (!terrain) return JSON.parse(JSON.stringify(object)) as LevelObject;
+    const light: Record<string, unknown> = { ...terrain };
+    for (const field of SHARED_TERRAIN_FIELDS) delete light[field];
+    // Edit layers hold as many numbers again.
+    delete light.editLayers;
+    const copy = JSON.parse(JSON.stringify({ ...object, terrainData: light })) as LevelObject;
+    if (terrain.editLayers) copy.terrainData!.editLayers = terrain.editLayers.map(layer => ({ ...layer }));
+    for (const field of SHARED_TERRAIN_FIELDS) {
+        const value = terrain[field];
+        if (value) (copy.terrainData as unknown as Record<string, unknown>)[field] = value;
+    }
+    return copy;
+});
+
+const sameNumbers = (a: readonly number[] | undefined, b: readonly number[] | undefined): boolean => {
+    if (a === b) return true;
+    if (!a || !b || a.length !== b.length) return false;
+    for (let index = 0; index < a.length; index++) {
+        if (a[index] !== b[index]) return false;
+    }
+    return true;
+};
+
+const sameFoliageObject = (a: LevelObject, b: LevelObject): boolean => {
+    const left = a.foliageData?.types ?? [];
+    const right = b.foliageData?.types ?? [];
+    if (left.length !== right.length) return false;
+    for (let index = 0; index < left.length; index++) {
+        if (left[index].instances !== right[index].instances) return false;
+    }
+    const replacer = (key: string, value: unknown) => (key === 'instances' ? undefined : value);
+    return JSON.stringify(a, replacer) === JSON.stringify(b, replacer);
+};
+
+/** Whether two versions of a terrain say the same, without writing its millions of numbers out as text. */
+const sameTerrainObject = (a: LevelObject, b: LevelObject): boolean => {
+    for (const field of SHARED_TERRAIN_FIELDS) {
+        if (!a.terrainData || !b.terrainData) return false;
+        if (!sameNumbers(a.terrainData[field], b.terrainData[field])) return false;
+    }
+    const leftLayers = a.terrainData?.editLayers ?? [];
+    const rightLayers = b.terrainData?.editLayers ?? [];
+    if (leftLayers.length !== rightLayers.length) return false;
+    for (let index = 0; index < leftLayers.length; index++) {
+        if (!sameNumbers(leftLayers[index].deltas, rightLayers[index].deltas)) return false;
+    }
+    const replacer = (key: string, value: unknown) => ((SHARED_TERRAIN_FIELDS as readonly string[]).includes(key) || key === 'deltas' ? undefined : value);
+    return JSON.stringify(a, replacer) === JSON.stringify(b, replacer);
+};
+
+/** The first of Terrain, Terrain 2, Terrain 3... no terrain in the level is called. */
+const nextTerrainName = (objects: readonly LevelObject[]): string => {
+    const taken = new Set(objects.filter((object) => object.type === 'terrain').map((object) => object.name));
+    if (!taken.has('Terrain')) return 'Terrain';
+    let number = 2;
+    while (taken.has(`Terrain ${number}`)) number++;
+    return `Terrain ${number}`;
+};
+
 /** A deleted model removes its objects together with their descendants, as the host does. */
 const modelCascadeIds = (objects: readonly LevelObject[], modelId: string): Set<string> =>
     withDescendants(objects, (object) => object.modelId === modelId);
@@ -65,7 +145,18 @@ const withoutTerrainTexture = (terrain: TerrainData, textureId: string): Terrain
 const applyDomainCascade = (objects: LevelObject[], event: DomainCascadeEvent): LevelObject[] => {
     if (event.kind === 'model') {
         const removed = modelCascadeIds(objects, event.id);
-        return removed.size === 0 ? objects : objects.filter((object) => !removed.has(object.id));
+        const kept = removed.size === 0 ? objects : objects.filter((object) => !removed.has(object.id));
+        // A model goes from what grows it and paints it as well.
+        return kept.map((object) => {
+            if (object.terrainData) {
+                const terrainData = withoutTerrainLayerModel(object.terrainData, event.id);
+                return terrainData === object.terrainData ? object : { ...object, terrainData };
+            }
+            if (object.foliageData?.types.some(type => type.modelId === event.id)) {
+                return { ...object, foliageData: { types: object.foliageData.types.filter(type => type.modelId !== event.id) } };
+            }
+            return object;
+        });
     }
     return objects.map((object) => {
         if (event.kind === 'texture' && object.terrainData && terrainReferencesTexture(object.terrainData, event.id)) {
@@ -111,7 +202,12 @@ const diffLevelObjects = (currentState: LevelObject[], nextState: LevelObject[])
             // A level object is an authored document. Compare the complete
             // document so name/type/audio/spawn/terrain/sky and every
             // transform component survive undo/redo round trips.
-            if (JSON.stringify(oldItem) !== JSON.stringify(item)) {
+            const changed = oldItem.foliageData || item.foliageData
+                ? !sameFoliageObject(oldItem, item)
+                : oldItem.terrainData && item.terrainData
+                    ? !sameTerrainObject(oldItem, item)
+                    : JSON.stringify(oldItem) !== JSON.stringify(item);
+            if (changed) {
                 toUpdate.push(item);
             }
         }
@@ -254,7 +350,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
 
   // History State
   const history = useRef<{ past: LevelObject[][], future: LevelObject[][] }>({ past: [], future: [] });
-  const historyMutationRef = useRef(false);
+  const historyFailuresRef = useRef(0);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
 
@@ -265,69 +361,70 @@ export const useLevelManager = (models: LoadedModelData[]) => {
 
   const snapshotHistory = useCallback(() => {
       session.requireCurrent(session.captureReady());
-      const snapshot = JSON.parse(JSON.stringify(levelObjects));
+      const snapshot = snapshotLevelObjects(levelObjects);
       history.current.past.push(snapshot);
       if (history.current.past.length > 50) history.current.past.shift();
       history.current.future = []; 
       updateHistoryState();
   }, [levelObjects, session]);
 
-  const undo = useCallback(async () => {
-      if (historyMutationRef.current) return;
+  /**
+   * Steps through the history. The screen answers at once and the host catches
+   * up behind it, in order with every other write, so holding Ctrl+Z walks back
+   * without waiting for the disk. A step the host refuses puts back what it took.
+   */
+  const stepHistory = useCallback(async (direction: 'Undo' | 'Redo') => {
       const lease = session.requireCurrent(session.captureReady());
-      const previousState = history.current.past[history.current.past.length - 1];
-      if (!previousState) return;
-      const currentSnapshot = JSON.parse(JSON.stringify(levelObjects));
-      historyMutationRef.current = true;
+      const { past, future } = history.current;
+      const [from, to] = direction === 'Undo' ? [past, future] : [future, past];
+      const wanted = from[from.length - 1];
+      if (!wanted) return;
+      const shown = levelObjectsRef.current;
+      const stacks = { past: [...past], future: [...future] };
+      const failures = historyFailuresRef.current;
       // Rewritten documents supersede pending partial edits of the same objects.
-      const superseded = supersedePendingEdits(changedLevelObjectIds(levelObjects, previousState));
-      let applied = false;
-      try {
-          // Keep both stacks untouched until every host change succeeds.
-          if (!await syncStateToDB(levelObjects, previousState, lease) || !session.isSameSession(lease)) return;
-          applied = true;
-          if (history.current.past[history.current.past.length - 1] !== previousState) return;
-          history.current.past.pop();
-          history.current.future.push(currentSnapshot);
-          setWorkingState(prev => ({ ...prev, levelObjects: previousState }));
-          addNotification({ message: "Undo", type: 'info', duration: 800 });
-      } catch (error) {
-          frontendDiagnostics.failure('level_undo_failed', error);
-          addNotification({ message: "Undo failed; no history was consumed.", type: 'error' });
-      } finally {
-          if (!applied) restorePendingEdits(superseded);
-          historyMutationRef.current = false;
-          updateHistoryState();
-      }
-  }, [levelObjects, addNotification, restorePendingEdits, session, supersedePendingEdits]);
+      const superseded = supersedePendingEdits(changedLevelObjectIds(shown, wanted));
+      from.pop();
+      to.push(snapshotLevelObjects(shown));
+      levelObjectsRef.current = wanted;
+      setWorkingState(prev => ({ ...prev, levelObjects: wanted }));
+      updateHistoryState();
+      addNotification({ message: direction, type: 'info', duration: 800 });
 
-  const redo = useCallback(async () => {
-      if (historyMutationRef.current) return;
-      const lease = session.requireCurrent(session.captureReady());
-      const nextState = history.current.future[history.current.future.length - 1];
-      if (!nextState) return;
-      const currentSnapshot = JSON.parse(JSON.stringify(levelObjects));
-      historyMutationRef.current = true;
-      const superseded = supersedePendingEdits(changedLevelObjectIds(levelObjects, nextState));
-      let applied = false;
-      try {
-          // Keep both stacks untouched until every host change succeeds.
-          if (!await syncStateToDB(levelObjects, nextState, lease) || !session.isSameSession(lease)) return;
-          applied = true;
-          if (history.current.future[history.current.future.length - 1] !== nextState) return;
-          history.current.future.pop();
-          history.current.past.push(currentSnapshot);
-          setWorkingState(prev => ({ ...prev, levelObjects: nextState }));
-          addNotification({ message: "Redo", type: 'info', duration: 800 });
-      } catch (error) {
-          frontendDiagnostics.failure('level_redo_failed', error);
-          addNotification({ message: "Redo failed; no history was consumed.", type: 'error' });
-      } finally {
-          if (!applied) restorePendingEdits(superseded);
-          historyMutationRef.current = false;
+      const write = flushChainRef.current.then(async () => {
+          // An earlier step failed, and this one started from what it wrote.
+          if (historyFailuresRef.current !== failures) {
+              restorePendingEdits(superseded);
+              return;
+          }
+          // The write itself uses the newest revision of that same session.
+          const current = session.isSameSession(lease) ? session.captureReady() : null;
+          if (!current) return;
+          try {
+              if (await syncStateToDB(shown, wanted, current)) return;
+          } catch (error) {
+              frontendDiagnostics.failure(direction === 'Undo' ? 'level_undo_failed' : 'level_redo_failed', error);
+              addNotification({ message: `${direction} failed; no history was consumed.`, type: 'error' });
+          }
+          if (!session.isSameSession(lease)) return;
+          historyFailuresRef.current += 1;
+          history.current = stacks;
+          restorePendingEdits(superseded);
+          // What the host still has goes back on screen, under edits made since.
+          const restored = shown.map((object) => {
+              const edit = pendingUpdatesRef.current.get(object.id);
+              return edit ? { ...object, ...edit.updates } : object;
+          });
+          levelObjectsRef.current = restored;
+          setWorkingState(prev => ({ ...prev, levelObjects: restored }));
           updateHistoryState();
-      }
-  }, [levelObjects, addNotification, restorePendingEdits, session, supersedePendingEdits]);
+      });
+      flushChainRef.current = write.catch(() => undefined);
+      await write;
+  }, [addNotification, restorePendingEdits, session, supersedePendingEdits]);
+
+  const undo = useCallback(() => stepHistory('Undo'), [stepHistory]);
+  const redo = useCallback(() => stepHistory('Redo'), [stepHistory]);
 
   useEffect(() => {
       history.current = { past: [], future: [] };
@@ -596,6 +693,174 @@ export const useLevelManager = (models: LoadedModelData[]) => {
       return () => { active = false; };
   }, [addNotification, levelObjects]);
 
+  // A terrain's edit layers are resolved the same way, each into its own deltas.
+  const failedEditLayersRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+      const references = new Map<string, TerrainHeightfieldReference>();
+      for (const object of levelObjects) {
+          for (const layer of object.terrainData?.editLayers ?? []) {
+              if (layer.heightfield && isEditLayerPending(layer) && !failedEditLayersRef.current.has(layer.heightfield.assetId)) {
+                  references.set(layer.heightfield.assetId, layer.heightfield);
+              }
+          }
+      }
+      if (references.size === 0) return;
+      let active = true;
+      const resolveIn = (object: LevelObject, assetId: string, deltas: number[]): LevelObject => {
+          const layers = object.terrainData?.editLayers;
+          if (!layers?.some(layer => layer.heightfield?.assetId === assetId && isEditLayerPending(layer))) return object;
+          return { ...object, terrainData: { ...object.terrainData!, editLayers: layers.map(layer => (layer.heightfield?.assetId === assetId && isEditLayerPending(layer) ? { ...layer, deltas } : layer)) } };
+      };
+      for (const reference of references.values()) {
+          resolveEditLayer(reference, async (assetId) => {
+              const response = await fetch(await projectService.resolveAsset(assetId), { method: 'GET' });
+              if (!response.ok) throw new Error(`Terrain layer download failed (${response.status})`);
+              return response.arrayBuffer();
+          }).then((deltas) => {
+              if (!active) return;
+              for (const snapshot of [...history.current.past, ...history.current.future]) {
+                  snapshot.forEach((object, index) => { snapshot[index] = resolveIn(object, reference.assetId, deltas); });
+              }
+              setWorkingState((current) => {
+                  const nextObjects = current.levelObjects.map(object => resolveIn(object, reference.assetId, deltas));
+                  return nextObjects.some((object, index) => object !== current.levelObjects[index]) ? { ...current, levelObjects: nextObjects } : current;
+              });
+          }, (error) => {
+              if (!active) return;
+              failedEditLayersRef.current.add(reference.assetId);
+              frontendDiagnostics.failure('terrain_edit_layer_resolve_failed', error);
+              addNotification({ message: `A terrain layer could not be loaded (${describeError(error)}); it cannot be edited.`, type: 'error' });
+          });
+      }
+      return () => { active = false; };
+  }, [addNotification, levelObjects]);
+
+  // A foliage set's instances are resolved the same way, type by type, into foliageData.
+  const failedFoliageRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+      const references = new Map<string, FoliageInstanceReference>();
+      for (const object of levelObjects) {
+          for (const type of object.foliageData?.types ?? []) {
+              if (type.instancemap && isFoliageTypePending(type) && !failedFoliageRef.current.has(type.instancemap.assetId)) {
+                  references.set(type.instancemap.assetId, type.instancemap);
+              }
+          }
+      }
+      if (references.size === 0) return;
+      let active = true;
+      const resolveIn = (object: LevelObject, assetId: string, instances: Float32Array): LevelObject => {
+          const types = object.foliageData?.types;
+          if (!types?.some(type => type.instancemap?.assetId === assetId && isFoliageTypePending(type))) return object;
+          return { ...object, foliageData: { types: types.map(type => (type.instancemap?.assetId === assetId && isFoliageTypePending(type) ? { ...type, instances } : type)) } };
+      };
+      for (const reference of references.values()) {
+          resolveFoliageInstances(reference, async (assetId) => {
+              const response = await fetch(await projectService.resolveAsset(assetId), { method: 'GET' });
+              if (!response.ok) throw new Error(`Foliage download failed (${response.status})`);
+              return response.arrayBuffer();
+          }).then((instances) => {
+              if (!active) return;
+              for (const snapshot of [...history.current.past, ...history.current.future]) {
+                  snapshot.forEach((object, index) => { snapshot[index] = resolveIn(object, reference.assetId, instances); });
+              }
+              setWorkingState((current) => {
+                  const nextObjects = current.levelObjects.map(object => resolveIn(object, reference.assetId, instances));
+                  return nextObjects.some((object, index) => object !== current.levelObjects[index]) ? { ...current, levelObjects: nextObjects } : current;
+              });
+          }, (error) => {
+              if (!active) return;
+              failedFoliageRef.current.add(reference.assetId);
+              frontendDiagnostics.failure('foliage_instances_resolve_failed', error);
+              addNotification({ message: `Foliage could not be loaded (${describeError(error)}); it will not be drawn.`, type: 'error' });
+          });
+      }
+      return () => { active = false; };
+  }, [addNotification, levelObjects]);
+
+  // The weights of layers 5 to 8 are resolved the same way into terrainData.splat2.
+  const failedSplatmaps2Ref = useRef<Set<string>>(new Set());
+  useEffect(() => {
+      const references = new Map<string, TerrainSplatmapReference>();
+      for (const object of levelObjects) {
+          const reference = object.terrainData?.splatmap2;
+          if (reference && isTerrainSplat2Pending(object.terrainData) && !failedSplatmaps2Ref.current.has(reference.assetId)) {
+              references.set(reference.assetId, reference);
+          }
+      }
+      if (references.size === 0) return;
+      let active = true;
+      for (const reference of references.values()) {
+          resolveTerrainSplatmap(reference).then((splat2) => {
+              if (!active) return;
+              const resolves = (object: LevelObject): boolean => Boolean(
+                  object.terrainData?.splatmap2?.assetId === reference.assetId && isTerrainSplat2Pending(object.terrainData),
+              );
+              for (const snapshot of [...history.current.past, ...history.current.future]) {
+                  snapshot.forEach((object, index) => {
+                      if (resolves(object)) snapshot[index] = { ...object, terrainData: { ...object.terrainData!, splat2 } };
+                  });
+              }
+              setWorkingState((current) => {
+                  let changed = false;
+                  const nextObjects = current.levelObjects.map((object) => {
+                      if (!resolves(object)) return object;
+                      changed = true;
+                      return { ...object, terrainData: { ...object.terrainData!, splat2 } };
+                  });
+                  return changed ? { ...current, levelObjects: nextObjects } : current;
+              });
+          }, (error) => {
+              if (!active) return;
+              failedSplatmaps2Ref.current.add(reference.assetId);
+              frontendDiagnostics.failure('terrain_splatmap_resolve_failed', error);
+              addNotification({ message: `Terrain paint could not be loaded (${describeError(error)}); painting is disabled for that terrain.`, type: 'error' });
+          });
+      }
+      return () => { active = false; };
+  }, [addNotification, levelObjects]);
+
+  // Terrain holes are resolved the same way into terrainData.holes.
+  const failedHolemapsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+      const references = new Map<string, TerrainSplatmapReference>();
+      for (const object of levelObjects) {
+          const reference = object.terrainData?.holemap;
+          if (reference && isTerrainHolesPending(object.terrainData) && !failedHolemapsRef.current.has(reference.assetId)) {
+              references.set(reference.assetId, reference);
+          }
+      }
+      if (references.size === 0) return;
+      let active = true;
+      for (const reference of references.values()) {
+          resolveTerrainHolemap(reference).then((holes) => {
+              if (!active) return;
+              const resolves = (object: LevelObject): boolean => Boolean(
+                  object.terrainData?.holemap?.assetId === reference.assetId && isTerrainHolesPending(object.terrainData),
+              );
+              for (const snapshot of [...history.current.past, ...history.current.future]) {
+                  snapshot.forEach((object, index) => {
+                      if (resolves(object)) snapshot[index] = { ...object, terrainData: { ...object.terrainData!, holes } };
+                  });
+              }
+              setWorkingState((current) => {
+                  let changed = false;
+                  const nextObjects = current.levelObjects.map((object) => {
+                      if (!resolves(object)) return object;
+                      changed = true;
+                      return { ...object, terrainData: { ...object.terrainData!, holes } };
+                  });
+                  return changed ? { ...current, levelObjects: nextObjects } : current;
+              });
+          }, (error) => {
+              if (!active) return;
+              failedHolemapsRef.current.add(reference.assetId);
+              frontendDiagnostics.failure('terrain_holes_resolve_failed', error);
+              addNotification({ message: `Terrain holes could not be loaded (${describeError(error)}); the ground shows solid there.`, type: 'error' });
+          });
+      }
+      return () => { active = false; };
+  }, [addNotification, levelObjects]);
+
   const initLevels = useCallback(async (signal?: AbortSignal) => {
       const initialSession = session.getSnapshot();
       if (projectService.getStatus().projectId || initialSession.phase !== 'closed') return;
@@ -787,7 +1052,7 @@ export const useLevelManager = (models: LoadedModelData[]) => {
               type === 'audio_emitter' ? 'Audio Emitter' :
               type === 'sky_sphere' ? 'Sky Atmosphere' :
               type === 'player_start' ? 'Player Start' :
-              type === 'terrain' ? `Terrain_${Math.floor(Math.random()*100)}` :
+              type === 'terrain' ? nextTerrainName(levelObjects) :
               (type === 'foliage' ? `${model?.name}_Foliage` : `${model?.name}_Prop`),
         position,
         rotation,
@@ -917,15 +1182,33 @@ export const useLevelManager = (models: LoadedModelData[]) => {
           addNotification({ message: 'Terrain paint is still loading; the stroke was not applied.', type: 'error' });
           return;
       }
+      // Whatever changed the heights, what stands on the ground moves with it, in the same undo step.
+      const nextTerrain = updates.terrainData;
+      const foliageSet = nextTerrain?.heights && previous.terrainData && nextTerrain.heights !== previous.terrainData.heights
+          ? levelObjects.find((object) => object.type === 'foliage_set')
+          : undefined;
+      const ground = (data: TerrainData): FoliageGroundTerrain => ({
+          position: previous.position, scale: previous.scale, width: data.width, depth: data.depth, resolution: Math.floor(data.resolution), heights: data.heights,
+      });
+      // Two terrains in one stroke arrive one after the other: the second builds on the first.
+      const foliageNow = foliageSet && (pendingUpdatesRef.current.get(foliageSet.id)?.updates.foliageData ?? foliageSet.foliageData);
+      const followed = foliageSet && foliageNow && nextTerrain ? foliageAfterTerrainEdit(foliageNow.types, ground(previous.terrainData!), ground(nextTerrain)) : null;
       setWorkingState(prev => ({
           ...prev,
-          levelObjects: prev.levelObjects.map(o => o.id === id ? { ...o, ...updates } : o),
+          levelObjects: prev.levelObjects.map(o => {
+              if (o.id === id) return { ...o, ...updates };
+              return followed && o.id === foliageSet?.id ? { ...o, foliageData: { types: followed } } : o;
+          }),
       }));
       const existing = pendingUpdatesRef.current.get(id);
       pendingUpdatesRef.current.set(id, {
           updates: { ...(existing?.updates || {}), ...updates },
           lease,
       });
+      if (followed && foliageSet) {
+          const existingSet = pendingUpdatesRef.current.get(foliageSet.id);
+          pendingUpdatesRef.current.set(foliageSet.id, { updates: { ...(existingSet?.updates || {}), foliageData: { types: followed } }, lease });
+      }
       scheduleFlush();
   }, [addNotification, levelObjects, scheduleFlush, session]);
 

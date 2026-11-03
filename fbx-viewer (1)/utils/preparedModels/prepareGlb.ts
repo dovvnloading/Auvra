@@ -246,7 +246,7 @@ const dropUnreadImages = (json: Document): void => {
   const images = json.images;
   const kept: Image[] = [];
   const remap = new Map<number, number>();
-  const use = (holder: { source?: number } | undefined): void => {
+  const keep = (holder: { source?: number } | undefined): void => {
     if (holder?.source === undefined) return;
     let next = remap.get(holder.source);
     if (next === undefined) {
@@ -256,8 +256,8 @@ const dropUnreadImages = (json: Document): void => {
     holder.source = next;
   };
   for (const texture of json.textures ?? []) {
-    use(texture);
-    for (const name of IMAGE_EXTENSIONS) use(texture.extensions?.[name] as { source?: number } | undefined);
+    keep(texture);
+    for (const name of IMAGE_EXTENSIONS) keep(texture.extensions?.[name] as { source?: number } | undefined);
   }
   if (kept.length) json.images = kept;
   else delete json.images;
@@ -281,7 +281,7 @@ const keepClipsOnly = (json: Document): void => {
   const accessors = json.accessors ?? [];
   const kept: Accessor[] = [];
   const remap = new Map<number, number>();
-  const use = (index: number): number => {
+  const keep = (index: number): number => {
     let next = remap.get(index);
     if (next === undefined) {
       next = kept.push(accessors[index]) - 1;
@@ -289,11 +289,11 @@ const keepClipsOnly = (json: Document): void => {
     }
     return next;
   };
-  for (const skin of json.skins ?? []) if (skin.inverseBindMatrices !== undefined) skin.inverseBindMatrices = use(skin.inverseBindMatrices);
+  for (const skin of json.skins ?? []) if (skin.inverseBindMatrices !== undefined) skin.inverseBindMatrices = keep(skin.inverseBindMatrices);
   for (const animation of json.animations ?? []) {
     for (const sampler of animation.samplers) {
-      sampler.input = use(sampler.input);
-      sampler.output = use(sampler.output);
+      sampler.input = keep(sampler.input);
+      sampler.output = keep(sampler.output);
     }
   }
   json.accessors = kept;
@@ -303,7 +303,7 @@ const keepClipsOnly = (json: Document): void => {
 const packViews = (json: Document, views: View[]): Uint8Array | null => {
   const kept: View[] = [];
   const remap = new Map<number, number>();
-  const use = (index: number): number => {
+  const keep = (index: number): number => {
     let next = remap.get(index);
     if (next === undefined) {
       next = kept.push(views[index]) - 1;
@@ -312,16 +312,16 @@ const packViews = (json: Document, views: View[]): Uint8Array | null => {
     return next;
   };
   for (const accessor of json.accessors ?? []) {
-    if (accessor.bufferView !== undefined) accessor.bufferView = use(accessor.bufferView);
+    if (accessor.bufferView !== undefined) accessor.bufferView = keep(accessor.bufferView);
     if (accessor.sparse) {
-      accessor.sparse.indices.bufferView = use(accessor.sparse.indices.bufferView);
-      accessor.sparse.values.bufferView = use(accessor.sparse.values.bufferView);
+      accessor.sparse.indices.bufferView = keep(accessor.sparse.indices.bufferView);
+      accessor.sparse.values.bufferView = keep(accessor.sparse.values.bufferView);
     }
   }
-  for (const image of json.images ?? []) if (image.bufferView !== undefined) image.bufferView = use(image.bufferView);
+  for (const image of json.images ?? []) if (image.bufferView !== undefined) image.bufferView = keep(image.bufferView);
   for (const texture of json.textures ?? []) {
     const bc = texture.extensions?.[TEXTURE_BC_EXTENSION] as { levels: { bufferView: number }[] } | undefined;
-    if (bc) for (const level of bc.levels) level.bufferView = use(level.bufferView);
+    if (bc) for (const level of bc.levels) level.bufferView = keep(level.bufferView);
   }
   let length = 0;
   const offsets = kept.map((view) => {
@@ -361,6 +361,7 @@ export const prepareGlb = async (source: ArrayBuffer, format: 'glb' | 'gltf', op
     sourceFormat: options.sourceFormat,
     metresPerUnit: options.metresPerUnit,
     missingTextures: options.missingTextures,
+    ...(options.report ? { report: options.report } : {}),
   };
   json.extensions = { ...json.extensions, [PREPARED_EXTENSION]: metadata };
   const used = new Set(json.extensionsUsed ?? []);

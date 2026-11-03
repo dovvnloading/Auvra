@@ -154,12 +154,12 @@ export const HUDBindingField: React.FC<HUDBindingFieldProps> = ({ value, bindabl
 
     return (
         <div className="space-y-2">
-            <div className="text-[10px] text-gray-500 font-bold uppercase flex items-center gap-1">
+            <div className="text-2xs text-gray-500 font-bold flex items-center gap-1">
                 <Link2 size={10} /> Bind
             </div>
             <div className="grid grid-cols-2 gap-2">
                 <div className="space-y-1">
-                    <label htmlFor={`${id}-prop`} className="text-[10px] text-gray-500 font-bold uppercase">Prop</label>
+                    <label htmlFor={`${id}-prop`} className="text-2xs text-gray-500 font-bold ">Prop</label>
                     <select id={`${id}-prop`} value={prop} onChange={(event) => handlePropChange(event.target.value)} className={FIELD_CLASS}>
                         {props.map(option => (
                             <option key={option} value={option}>{isBound(option) ? `${option} (bound)` : option}</option>
@@ -167,7 +167,7 @@ export const HUDBindingField: React.FC<HUDBindingFieldProps> = ({ value, bindabl
                     </select>
                 </div>
                 <div className="space-y-1">
-                    <label htmlFor={`${id}-source`} className="text-[10px] text-gray-500 font-bold uppercase">Source</label>
+                    <label htmlFor={`${id}-source`} className="text-2xs text-gray-500 font-bold ">Source</label>
                     <div className="flex items-center gap-1">
                         <select id={`${id}-source`} value={mode} onChange={(event) => handleSourceChange(event.target.value)} className={FIELD_CLASS}>
                             <option value={NONE}>Not bound</option>
@@ -191,7 +191,7 @@ export const HUDBindingField: React.FC<HUDBindingFieldProps> = ({ value, bindabl
             </div>
             {named && (
                 <div className="space-y-1">
-                    <label htmlFor={`${id}-variable`} className="text-[10px] text-gray-500 font-bold uppercase">{named.field}</label>
+                    <label htmlFor={`${id}-variable`} className="text-2xs text-gray-500 font-bold ">{named.field}</label>
                     <div className="flex items-center rounded border border-gray-700 bg-gray-800 focus-within:border-blue-500">
                         <span className="pl-1.5 text-xs font-mono text-gray-500">{named.prefix}</span>
                         <input
@@ -208,11 +208,11 @@ export const HUDBindingField: React.FC<HUDBindingFieldProps> = ({ value, bindabl
                 </div>
             )}
             {boundEntries.length > 0 && (
-                <ul className="space-y-0.5 text-[10px] font-mono text-blue-300" aria-label="Bindings">
+                <ul className="space-y-0.5 text-2xs font-mono text-blue-300" aria-label="Bindings">
                     {boundEntries.map(([name, source]) => <li key={name}>{name} = {source}</li>)}
                 </ul>
             )}
-            <p className="text-[10px] text-gray-500 leading-snug">
+            <p className="text-2xs text-gray-500 leading-snug">
                 While the game runs the prop shows this live value; the editor preview shows the authored one.
             </p>
         </div>

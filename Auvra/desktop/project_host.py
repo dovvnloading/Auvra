@@ -40,7 +40,7 @@ from Auvra.project.game_build import (
 )
 from Auvra.project.schemas import DOMAIN_NAMES
 
-from .assets import AssetResourceRequest, AssetTransferRegistry, AssetUpload
+from .assets import AssetResourceRequest, AssetTransferRegistry, AssetTransportError, AssetUpload
 from .dialogs import DialogSelection, WinFormsProjectDialogs, _validated_name
 from .native_engine import NativeEngineState, NativeEngineUnavailableHost
 from .prepared_models import PREPARED_MODEL_MIME, PreparedModelStore
@@ -259,12 +259,15 @@ class NativeProjectHost:
 
     def asset_resource(self, request: AssetResourceRequest):
         with self._operation_lock:
-            return self.assets.handle(
-                method=request.method,
-                url=request.url,
-                headers=request.headers,
-                body=request.body,
-            )
+            try:
+                return self.assets.handle(
+                    method=request.method,
+                    url=request.url,
+                    headers=request.headers,
+                    body=request.body,
+                )
+            except Exception as exc:
+                return self.assets.failure_response(request.headers, exc)
 
     def drain_events(self) -> list[tuple[str, dict[str, Any]]]:
         with self._event_lock:
@@ -352,6 +355,10 @@ class NativeProjectHost:
 
     def _record_pending_asset(self, project_id: str, asset_id: str) -> None:
         self._pending_assets[project_id].add(asset_id)
+
+    def retain_pending_asset(self, project_id: str, asset_id: str) -> None:
+        """An upload something else now relies on: it stays until the project closes, when anything still unnamed goes."""
+        self._pending_assets[project_id].discard(asset_id)
 
     def _discard_pending_assets(self, project_id: str, active: Any | None = None) -> None:
         pending = self._pending_assets.get(project_id)
@@ -1149,7 +1156,9 @@ class NativeProjectHost:
 
         def ingest(upload: AssetUpload) -> None:
             current = self.service.active
-            if current is None or current.project_id != project_id or current.read_only:
+            if current is None or current.project_id != project_id:
+                raise AssetTransportError("asset_project_closed", 409)
+            if current.read_only:
                 raise ReadOnlyError("project upload is no longer writable")
             already_present = current.assets.verify(upload.sha256, expected_size=upload.size)
             try:

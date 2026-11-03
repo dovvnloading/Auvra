@@ -15,7 +15,7 @@ import {
   wouldCreateCycle,
   type MaterialGraph,
 } from '../../runtime/materials/materialGraph';
-import { GraphMaterial, MATERIAL_TIME, bindMaterialGraph, boundMaterialGraph, unbindMaterialGraph } from '../../runtime/materials/graphMaterial';
+import { GraphMaterial, MATERIAL_TIME, bindMaterialGraph, boundMaterialGraph, graphSurface, unbindMaterialGraph } from '../../runtime/materials/graphMaterial';
 import { graphTextures, materialAssetDocument, materialLibrary, readMaterialAsset } from '../../runtime/materials/materialLibrary';
 import { applyMaterialOverrides, materialParameterValues, normalizeMaterialOverride } from '../../utils/materialOverrides';
 
@@ -205,6 +205,33 @@ describe('material parameters', () => {
     expect(red.customProgramCacheKey()).toBe(blue.customProgramCacheKey());
     applyMaterialOverrides(root, {});
     materialLibrary.replaceAll([]);
+  });
+});
+
+describe('what a graph gives a surface', () => {
+  it('says whether a graph goes by where a surface stands or faces', () => {
+    expect(graphSurface(new GraphMaterial(tintedGraph()))!.readsPlace).toBe(false);
+    const rim = normalizeMaterialGraph({ nodes: [node('out', OUTPUT_NODE_TYPE), node('rim', 'fresnel')], links: [link('rim', 'out', 'out', 'emissive')] });
+    expect(graphSurface(new GraphMaterial(rim))!.readsPlace).toBe(true);
+  });
+
+  it('has nothing to say for a material no graph shades', () => {
+    expect(graphSurface(new THREE.MeshStandardMaterial())).toBeNull();
+  });
+
+  it('says what the graph gives its surface where nothing is wired, in linear light', () => {
+    const surface = graphSurface(new GraphMaterial(normalizeMaterialGraph({
+      nodes: [node('out', OUTPUT_NODE_TYPE, { baseColor: [0.5, 0.5, 0.5], roughness: 0.3, metalness: 0.7, opacity: 0.2 }), node('noise', 'noise')],
+      links: [link('noise', 'out', 'out', 'emissive')],
+    })))!;
+    expect(surface.baseColor[0]).toBeCloseTo(new THREE.Color().setRGB(0.5, 0.5, 0.5, THREE.SRGBColorSpace).r, 5);
+    expect(surface.roughness).toBeCloseTo(0.3);
+    expect(surface.metalness).toBeCloseTo(0.7);
+    expect([...surface.wired]).toEqual(['emissive']);
+    // An opaque graph does not draw through, whatever its opacity says.
+    expect(surface.opacity).toBe(1);
+    const clear = graphSurface(new GraphMaterial(normalizeMaterialGraph({ nodes: [node('out', OUTPUT_NODE_TYPE, { blendMode: 'translucent', opacity: 0.2 })], links: [] })))!;
+    expect(clear.opacity).toBeCloseTo(0.2);
   });
 });
 

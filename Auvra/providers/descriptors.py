@@ -15,6 +15,18 @@ class Capability(StrEnum):
     COMMANDS = "commands"
     MEDIA_GENERATE = "media.generate"
     MEDIA_EDIT = "media.edit"
+    # A picture in, the surface maps that go with it out.
+    MEDIA_MAPS = "media.maps"
+    # A whole model in, textures that fit it out.
+    MEDIA_MESH = "media.mesh"
+    # A description in, a seamless texture and its surface maps out.
+    MEDIA_MATERIAL = "media.material"
+    # A description in, a 360 degree panorama out.
+    MEDIA_SKY = "media.sky"
+    # A description in, a picture on a transparent background out.
+    MEDIA_DECAL = "media.decal"
+    # A scene in, a finished frame out.
+    MEDIA_RENDER = "media.render"
     # Compatibility spellings are aliases, not additional routable capabilities.
     STRUCTURED_COMMAND = "commands"
     MEDIA_GENERATION = "media.generate"
@@ -88,10 +100,11 @@ def _valid_origin(origin: str, kind: str) -> bool:
 
 
 _DESCRIPTORS = (
-    ProviderDescriptor("fal", "fal.ai", 1, "cloud", ("https://queue.fal.run", "https://rest.fal.ai"),
-                       frozenset({Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT}),
+    # The whole catalog is discovered (see fal_catalog.py); these two are what is known before that.
+    ProviderDescriptor("fal", "fal.ai", 1, "cloud", ("https://queue.fal.run", "https://rest.fal.ai", "https://fal.run"),
+                       frozenset({Capability.MEDIA_GENERATE, Capability.MEDIA_EDIT, Capability.MEDIA_MAPS, Capability.MEDIA_MESH, Capability.MEDIA_MATERIAL, Capability.MEDIA_SKY, Capability.MEDIA_DECAL, Capability.TEXT, Capability.CODE, Capability.COMMANDS}),
                        ("fal-ai/flux/dev", "fal-ai/flux/dev/image-to-image"), "fal_api_key",
-                       frozenset({ProviderFeature.QUEUE, ProviderFeature.CANCEL, ProviderFeature.DURABLE, ProviderFeature.UPLOAD})),
+                       frozenset({ProviderFeature.QUEUE, ProviderFeature.CANCEL, ProviderFeature.DURABLE, ProviderFeature.UPLOAD, ProviderFeature.STRUCTURED_OUTPUT})),
     ProviderDescriptor("openai", "OpenAI", 1, "cloud", ("https://api.openai.com",),
                        frozenset({Capability.TEXT, Capability.CODE, Capability.COMMANDS}),
                        (), "openai_api_key",
@@ -116,6 +129,10 @@ _DESCRIPTORS = (
                        frozenset({Capability.TEXT, Capability.CODE, Capability.COMMANDS}),
                        (), None,
                        frozenset({ProviderFeature.STREAMING, ProviderFeature.STRUCTURED_OUTPUT})),
+    # Run as a process of its own rather than reached over the network: its origin is never connected to.
+    ProviderDescriptor("reframe", "Reframe", 1, "local", ("http://127.0.0.1:0",),
+                       frozenset({Capability.MEDIA_RENDER}), ("path-tracer",), None,
+                       frozenset({ProviderFeature.CANCEL})),
 )
 
 
@@ -130,6 +147,7 @@ class ProviderRegistry:
         values = tuple(descriptors or _DESCRIPTORS)
         self._values = MappingProxyType({item.provider_id: item for item in values})
         self._discovered: dict[str, frozenset[str]] = {}
+        self._model_capabilities: dict[str, dict[str, frozenset[Capability]]] = {}
 
     def get(self, provider_id: str) -> ProviderDescriptor:
         try:
@@ -149,11 +167,19 @@ class ProviderRegistry:
     def descriptors(self) -> tuple[ProviderDescriptor, ...]:
         return self.all()
 
-    def discover_models(self, provider_id: str, models: Iterable[str]) -> tuple[str, ...]:
+    def discover_models(self, provider_id: str, models: Iterable[str],
+                        capabilities: Mapping[str, Iterable[Capability]] | None = None) -> tuple[str, ...]:
+        """`capabilities` narrows what a model does, for a provider whose models are not all alike."""
         self.get(provider_id)
         checked = frozenset(model for model in models if isinstance(model, str) and 0 < len(model) <= 200)
         self._discovered[provider_id] = checked
+        if capabilities:
+            self._model_capabilities.setdefault(provider_id, {}).update({model: frozenset(items) for model, items in capabilities.items()})
         return tuple(sorted(checked))
+
+    def model_capabilities(self, provider_id: str, model: str) -> frozenset[Capability]:
+        known = self._model_capabilities.get(provider_id, {}).get(model)
+        return known if known is not None else self.get(provider_id).capabilities
 
     def models(self, provider_id: str) -> tuple[str, ...]:
         descriptor = self.get(provider_id)
@@ -161,4 +187,5 @@ class ProviderRegistry:
 
     def supports(self, provider_id: str, capability: Capability | str, model: str) -> bool:
         descriptor = self.get(provider_id)
-        return descriptor.supports(capability) and model in self.models(provider_id)
+        return (descriptor.supports(capability) and model in self.models(provider_id) and
+                Capability(capability) in self.model_capabilities(provider_id, model))

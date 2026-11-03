@@ -5,10 +5,9 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 import contextvars
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import wraps
-import hashlib
 import inspect
 import json
 import os
@@ -981,7 +980,6 @@ class DiagnosticsSession:
         if spec is None or component != spec.component or not _EVENT_PATTERN.fullmatch(event):
             spec = EVENT_CATALOG["diagnostics.record_rejected"]
             component = spec.component
-            level = spec.default_level
             attributes = {"recordEvent": _redact_text(str(event), 96), "code": "unknown_event"}
             event = "diagnostics.record_rejected"
             deduplicate = True

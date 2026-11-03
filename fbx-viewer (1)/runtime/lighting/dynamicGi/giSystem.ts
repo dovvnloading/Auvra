@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { FramePressure, GpuSpanTimer, RayBudget } from '../../raytracing/rayBudget';
 import { RayScene, type RayFilter, type TextureMean } from '../../raytracing/rayScene';
 import { traceUniforms } from '../../raytracing/traceShader';
 import { giAtlas, holdGiAtlas, setGiGrid, stepGiNoise, DYNAMIC_GI_UNIFORMS, type RayReflectionInputs } from './giMaterials';
@@ -30,6 +31,7 @@ import {
     PROBES_PER_CASCADE,
     ProbeCascade,
     VISIBILITY_CELL,
+    budgetedPlan,
     sphericalFibonacci,
     type DynamicGiSettings,
     type ScheduledProbe,
@@ -51,7 +53,14 @@ import {
  * room takes a few of these to fill or to drain.
  */
 const SETTLE_SECONDS = 0.5;
-const ASSUMED_FRAMES_PER_SECOND = 60;
+/** The most of the frame's GPU time limit the probes may take: reflections have what they leave. */
+const GATHER_PART = 0.5;
+/** Reflection rays a frame sends at the most, whatever the clock says: a limit a very large window cannot pass, and the only one on the first frames. */
+const MAX_REFLECTION_RAYS = 1 << 20;
+/** A pixel keeps its reflection until its next turn: with turns further apart than this it trails behind a moving camera, and the screen's alone looks better. */
+const LEAST_REFLECTION_SHARE = 1 / 8;
+/** Moves each pixel's turn along each frame: the golden ratio spreads them evenly over any number of frames. */
+const GOLDEN_STEP = 0.61803399;
 /** How wide the sun looks, as the sine of its angle: rays aim anywhere on it, which softens the shadows they find. */
 const SUN_RADIUS = 0.02;
 /** Most cells a frame may clear: a jump past every cascade at once. */
@@ -162,6 +171,14 @@ export class DynamicGi {
     private meanTarget: THREE.WebGLRenderTarget | null = null;
     private meanMaterial: THREE.ShaderMaterial | null = null;
 
+    private readonly gatherBudget = new RayBudget();
+    private readonly reflectionBudget = new RayBudget(LEAST_REFLECTION_SHARE);
+    private readonly pressure = new FramePressure();
+    private readonly gatherTimer: GpuSpanTimer;
+    private readonly reflectionTimer: GpuSpanTimer;
+    private lastUpdate: number | null = null;
+    private rayLimit = 0;
+
     private readonly lights = {
         ambientLight: new THREE.Color(),
         hemiSky: new THREE.Color(),
@@ -170,6 +187,8 @@ export class DynamicGi {
     };
 
     constructor(private readonly gl: THREE.WebGLRenderer) {
+        this.gatherTimer = new GpuSpanTimer(gl.getContext() as WebGL2RenderingContext);
+        this.reflectionTimer = new GpuSpanTimer(gl.getContext() as WebGL2RenderingContext);
         this.fullscreen.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]), 3));
         this.passMesh = new THREE.Mesh(this.fullscreen);
         this.passMesh.frustumCulled = false;
@@ -212,6 +231,8 @@ export class DynamicGi {
             inverseProjection: { value: new THREE.Matrix4() },
             cameraWorld: { value: new THREE.Matrix4() },
             targetSize: { value: new THREE.Vector2(1, 1) },
+            rayShare: { value: 1 },
+            rayPhase: { value: 0 },
         });
         this.reflectionMaterial.defines.RT_SKIP_CHARACTERS = '';
         const quad = (cellSize: number, quadMode: number, width: number, height: number) => ({
@@ -244,7 +265,19 @@ export class DynamicGi {
     /** What the ray scene holds now and what is still to come in, for the inspector and for checks. */
     get status() {
         const stats = this.rayScene.stats;
-        return { ...stats, traceReady: this.traceReady, waiting: this.cascades.reduce((sum, cascade) => sum + cascade.pending, 0), frame: this.frame };
+        return {
+            ...stats,
+            traceReady: this.traceReady,
+            waiting: this.cascades.reduce((sum, cascade) => sum + cascade.pending, 0),
+            frame: this.frame,
+            budget: {
+                timed: this.gatherTimer.available,
+                limitMs: this.rayLimit * this.pressure.value,
+                pressure: this.pressure.value,
+                gather: { share: this.gatherBudget.share, ms: this.gatherBudget.spentMs },
+                reflections: { share: this.reflectionBudget.affordable ? this.reflectionBudget.share : 0, ms: this.reflectionBudget.affordable ? this.reflectionBudget.spentMs : 0 },
+            },
+        };
     }
 
     /** One frame's gathering. `scene` and `camera` are the view the probes follow. */
@@ -255,6 +288,7 @@ export class DynamicGi {
         gl.autoClear = false;
         this.meansLeft = MEANS_PER_FRAME;
         this.rayScene.update(scene, include, this.textureMean, 4);
+        this.settleBudgets(settings.rayLimit);
         this.frame++;
         stepGiNoise(this.frame);
         this.common.frame.value = this.frame;
@@ -265,6 +299,20 @@ export class DynamicGi {
         if (this.compiled()) this.gather(settings);
         gl.setRenderTarget(before);
         gl.autoClear = autoClear;
+    }
+
+    /** Takes in what the GPU's clock and the time between frames say, and sets how much of its work the coming frame does. */
+    private settleBudgets(rayLimit: number): void {
+        const now = performance.now();
+        if (this.lastUpdate !== null) this.pressure.noteFrame(now - this.lastUpdate);
+        this.lastUpdate = now;
+        this.rayLimit = rayLimit;
+        this.gatherTimer.read((ms, share) => this.gatherBudget.noteSpent(ms, share));
+        this.reflectionTimer.read((ms, share) => this.reflectionBudget.noteSpent(ms, share));
+        const limit = rayLimit * this.pressure.value;
+        const forGather = limit * GATHER_PART;
+        this.gatherBudget.settle(forGather, this.pressure.value);
+        this.reflectionBudget.settle(limit - Math.min(this.gatherBudget.spentMs, forGather), this.pressure.value);
     }
 
     /** A surface's average colour, read back from the GPU once, whatever form the texture takes. */
@@ -347,6 +395,7 @@ export class DynamicGi {
             void this.gl.compileAsync(this.passScene, this.passCamera).then(ready, ready);
             return false;
         }
+        if (!this.reflectionBudget.affordable) return false;
         const uniforms = this.reflectionMaterial.uniforms;
         uniforms.surfaceDepth.value = inputs.depth;
         uniforms.surfaceNormal.value = inputs.normalRoughness;
@@ -354,7 +403,15 @@ export class DynamicGi {
         (uniforms.inverseProjection.value as THREE.Matrix4).copy((inputs.camera as THREE.PerspectiveCamera).projectionMatrixInverse);
         (uniforms.cameraWorld.value as THREE.Matrix4).copy(inputs.camera.matrixWorld);
         (uniforms.targetSize.value as THREE.Vector2).set(target.width, target.height);
+        const share = Math.min(this.reflectionBudget.share, MAX_REFLECTION_RAYS / (target.width * target.height));
+        uniforms.rayShare.value = share;
+        uniforms.rayPhase.value = (this.frame * GOLDEN_STEP) % 1;
+        const autoClear = this.gl.autoClear;
+        this.gl.autoClear = false;
+        this.reflectionTimer.begin(this.frame, share);
         this.draw(target, this.reflectionMaterial, this.fullscreen);
+        this.reflectionTimer.end();
+        this.gl.autoClear = autoClear;
         return true;
     }
 
@@ -387,7 +444,7 @@ export class DynamicGi {
     }
 
     private gather(settings: DynamicGiSettings): void {
-        const plan = GI_QUALITY[settings.quality];
+        const plan = budgetedPlan(GI_QUALITY[settings.quality], this.gatherBudget.share);
         const rayCount = Math.min(plan.rays, MAX_RAYS_PER_PROBE);
         const scheduled = this.scheduled;
         scheduled.length = 0;
@@ -414,9 +471,10 @@ export class DynamicGi {
 
         const blend = this.irradianceMaterial.uniforms.cascadeBlend.value as number[];
         const spacing = this.irradianceMaterial.uniforms.cascadeSpacing.value as number[];
+        const framesToSettle = SETTLE_SECONDS * 1000 / this.pressure.frameMs;
         this.cascades.forEach((cascade, index) => {
             const framesBetween = PROBES_PER_CASCADE / Math.max(plan.probes[index], 1);
-            blend[index] = 1 - Math.exp(-framesBetween / (SETTLE_SECONDS * ASSUMED_FRAMES_PER_SECOND));
+            blend[index] = 1 - Math.exp(-framesBetween / framesToSettle);
             spacing[index] = cascade.spacing;
         });
         this.irradianceMaterial.uniforms.rayCount.value = rayCount;
@@ -426,6 +484,7 @@ export class DynamicGi {
         this.rays.viewport.set(0, 0, rayCount, count);
         this.rays.scissor.set(0, 0, rayCount, count);
         this.rays.scissorTest = true;
+        this.gatherTimer.begin(this.frame, this.gatherBudget.share);
         this.draw(this.rays, this.traceMaterial, this.fullscreen);
         this.quads.instanceCount = count;
         this.draw(this.scratch, this.irradianceMaterial, this.quads);
@@ -434,6 +493,7 @@ export class DynamicGi {
         this.draw(giAtlas, this.storeIrradianceMaterial, this.quads);
         this.draw(giAtlas, this.storeVisibilityMaterial, this.quads);
         this.draw(giAtlas, this.storeOffsetMaterial, this.quads);
+        this.gatherTimer.end();
     }
 
     /** The set of directions each probe turns its own way (see the probe list). */
@@ -586,6 +646,8 @@ export class DynamicGi {
 
     dispose(): void {
         this.disposed = true;
+        this.gatherTimer.dispose();
+        this.reflectionTimer.dispose();
         this.rayScene.dispose();
         this.rays.dispose();
         this.scratch.dispose();

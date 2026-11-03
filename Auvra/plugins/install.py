@@ -174,7 +174,6 @@ def _grant_appcontainer_read_execute(directory: Path, package: PluginPackage) ->
     userenv = ctypes.WinDLL("userenv", use_last_error=True)
     advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
     LPVOID = ctypes.c_void_p
-    HANDLE = wintypes.HANDLE
     HRESULT = ctypes.c_long
     userenv.CreateAppContainerProfile.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPCWSTR, LPVOID, wintypes.DWORD, ctypes.POINTER(LPVOID)]
     userenv.CreateAppContainerProfile.restype = HRESULT

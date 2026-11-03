@@ -1,3 +1,7 @@
+import { useAssets } from '../../context/AssetContext';
+import { textureService } from '../../services/TextureGenerationService';
+import { DescribeWithAI, nameFromWords } from '../Tools/DescribeWithAI';
+import { seamlessPanorama, skyInstruction, SKY_MEGAPIXELS } from '../Tools/paintedPictures';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Cloud, Moon, Pause, Play, Sparkles, Sun, SunDim, Wind } from 'lucide-react';
 import type { SkyConfig } from '../../types';
@@ -20,13 +24,13 @@ interface SkyDomeSectionProps {
     onCommit: (config: SkyConfig) => void;
 }
 
-const SECTION_TITLE = 'text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5';
+const SECTION_TITLE = 'text-2xs font-bold text-gray-500 flex items-center gap-1.5';
 const PANEL = 'space-y-2 bg-gray-800 p-2 rounded border border-gray-700';
-const SELECT = 'bg-gray-900 border border-gray-700 rounded text-[10px] text-white px-1 py-0.5';
+const SELECT = 'bg-gray-900 border border-gray-700 rounded text-2xs text-white px-1 py-0.5';
 
 const Row: React.FC<{ label: string; title?: string; children: React.ReactNode }> = ({ label, title, children }) => (
     <div className="flex items-center justify-between gap-2" title={title}>
-        <span className="text-[10px] text-gray-400">{label}</span>
+        <span className="text-2xs text-gray-400">{label}</span>
         {children}
     </div>
 );
@@ -77,10 +81,10 @@ export const DayPreviewControls: React.FC<{ hour: number; onHour: (hours: number
             >
                 {playing ? <Pause size={10} /> : <Play size={10} />}
             </button>
-            {playing && <span className="text-[9px] font-mono text-gray-300 w-8">{formatHours(shown)}</span>}
+            {playing && <span className="text-2xs font-mono text-gray-300 w-8">{formatHours(shown)}</span>}
             <div className="flex-1 flex flex-wrap justify-end gap-1">
                 {HOUR_JUMPS.map(jump => (
-                    <button key={jump.label} type="button" onClick={() => onHour(jump.hour)} className="px-1 py-0.5 rounded text-[8px] bg-gray-900 border border-gray-700 text-gray-300 hover:border-gray-500">
+                    <button key={jump.label} type="button" onClick={() => onHour(jump.hour)} className="px-1 py-0.5 rounded text-2xs bg-gray-900 border border-gray-700 text-gray-300 hover:border-gray-500">
                         {jump.label}
                     </button>
                 ))}
@@ -96,7 +100,7 @@ const PresetGallery: React.FC<{ current: string | undefined; onPick: (preset: Sk
         <div className="space-y-2">
             {SKY_PRESET_GROUPS.map(group => (
                 <div key={group} className="space-y-1">
-                    <div className="text-[9px] text-gray-500">{group}</div>
+                    <div className="text-2xs text-gray-500">{group}</div>
                     <div className="grid grid-cols-3 gap-1">
                         {SKY_PRESETS.filter(preset => preset.group === group).map(preset => (
                             <button
@@ -108,13 +112,36 @@ const PresetGallery: React.FC<{ current: string | undefined; onPick: (preset: Sk
                                 className={`rounded overflow-hidden border text-left ${current === preset.id ? 'border-cyan-400' : 'border-gray-700 hover:border-gray-500'}`}
                             >
                                 <div className="h-8" style={{ background: swatches.get(preset.id) }} />
-                                <div className="px-1 py-0.5 text-[8px] text-gray-300 truncate bg-gray-900">{preset.label}</div>
+                                <div className="px-1 py-0.5 text-2xs text-gray-300 truncate bg-gray-900">{preset.label}</div>
                             </button>
                         ))}
                     </div>
                 </div>
             ))}
         </div>
+    );
+};
+
+/** Paints a panorama from a description and keeps it in the project, its edges made to meet. */
+const SkyFromDescription: React.FC<{ onPainted: (textureId: string) => void }> = ({ onPainted }) => {
+    const { adoptHostTexture } = useAssets();
+    return (
+        <DescribeWithAI
+            capability="media.sky"
+            title="New sky from a description"
+            hint="A 360 degree panorama, its edges made to meet, kept with the project's textures."
+            placeholder="For example: a stormy sunset over a flat desert"
+            instruction={skyInstruction}
+            megapixels={SKY_MEGAPIXELS}
+            onPainted={async ({ job, preview, words }) => {
+                const name = nameFromWords(words);
+                const { picture, width, height } = await seamlessPanorama(preview.previewUrl);
+                const finishedAssetId = await textureService.ingestPicture(picture);
+                await textureService.commit(job.jobId, preview.previewAssetId, { name, finishedAssetId, textureId: finishedAssetId });
+                await adoptHostTexture(finishedAssetId, name, finishedAssetId, { width, height });
+                onPainted(finishedAssetId);
+            }}
+        />
     );
 };
 
@@ -173,6 +200,10 @@ export const SkyDomeSection: React.FC<SkyDomeSectionProps> = ({ config, onScrub,
                                         {textures.map(texture => <option key={texture.id} value={texture.id}>{texture.name}</option>)}
                                     </select>
                                 </Row>
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="text-2xs text-gray-500">Or paint one</span>
+                                    <SkyFromDescription onPainted={(textureId) => onCommit({ ...config, panorama: { ...panorama, textureId } })} />
+                                </div>
                                 <Scrub label="Rotation °" value={panorama.rotation} step={1} onChange={(v) => setPanorama({ rotation: v })} />
                                 <Scrub label="Brightness" value={panorama.brightness} step={0.05} onChange={(v) => setPanorama({ brightness: Math.max(0, v) })} />
                             </div>
@@ -184,7 +215,7 @@ export const SkyDomeSection: React.FC<SkyDomeSectionProps> = ({ config, onScrub,
                             <div className={SECTION_TITLE}><Sparkles size={12} /> Sky Presets</div>
                             <PresetGallery current={config.preset} onPick={(next) => onCommit(applySkyPreset(config, next))} />
                             {preset && !matchesSkyPreset(config) && (
-                                <div className="text-[9px] text-gray-500">Changed from {preset.label}.</div>
+                                <div className="text-2xs text-gray-500">Changed from {preset.label}.</div>
                             )}
                         </div>
                     )}
@@ -248,7 +279,7 @@ export const SkyDomeSection: React.FC<SkyDomeSectionProps> = ({ config, onScrub,
                     <div className="space-y-2">
                         <div className={SECTION_TITLE}><SunDim size={12} /> Sky Light</div>
                         <div className={PANEL}>
-                            <label className="flex items-center justify-between text-[10px] text-gray-400" title="Lights the level from the sky as it looks now: its colour, clouds and time of day. Off leaves a flat fill.">
+                            <label className="flex items-center justify-between text-2xs text-gray-400" title="Lights the level from the sky as it looks now: its colour, clouds and time of day. Off leaves a flat fill.">
                                 <span>Light From Sky</span>
                                 <input type="checkbox" aria-label="Light from sky" checked={skyLight.enabled} onChange={(e) => onCommit({ ...config, skyLight: { ...skyLight, enabled: e.target.checked } })} />
                             </label>
@@ -282,7 +313,7 @@ export const SkyDomeSection: React.FC<SkyDomeSectionProps> = ({ config, onScrub,
                                     <Scrub label="Intensity" value={skyLight.intensity} step={0.05} onChange={(v) => setSkyLight({ intensity: Math.max(0, v) })} />
                                     <Colour label="Tint" value={skyLight.tint} onChange={(v) => setSkyLight({ tint: v })} />
                                     <Scrub label="Reflections" title="How much of it shows in reflections." value={skyLight.reflections} step={0.05} onChange={(v) => setSkyLight({ reflections: Math.max(0, v) })} />
-                                    <label className="flex items-center justify-between text-[10px] text-gray-400" title="Light from below the horizon comes from this colour, in place of the sky's ground.">
+                                    <label className="flex items-center justify-between text-2xs text-gray-400" title="Light from below the horizon comes from this colour, in place of the sky's ground.">
                                         <span>Solid Lower Half</span>
                                         <input type="checkbox" aria-label="Solid lower half" checked={skyLight.lowerSolid} onChange={(e) => onCommit({ ...config, skyLight: { ...skyLight, lowerSolid: e.target.checked } })} />
                                     </label>

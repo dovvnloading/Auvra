@@ -87,7 +87,7 @@ class ProjectService:
     def import_legacy(self, source: str | Path): return ProjectRepository.import_legacy(source)
     def migrate_legacy(self, source: str | Path, destination: str | Path, *, name: str | None = None):
         """Validate and migrate a legacy archive, publishing only on success."""
-        from .legacy import LegacyArchive, LegacyMigrationReport
+        from .legacy import LegacyArchive
         legacy = LegacyArchive(source)
         raw, report = legacy.inspect()
         destination = Path(destination)

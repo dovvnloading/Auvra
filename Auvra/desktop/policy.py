@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-import ipaddress
 import re
 from urllib.parse import SplitResult, urlsplit
 

@@ -7,7 +7,7 @@ import type { LevelComponent, LevelObject } from '../../types';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { dialogueStore } from '../dialogue';
 import { useGameContent } from '../GameContentContext';
-import { objectIdFromCollider, objectIdFromRigidBody, PLAYER_PHYSICS_ID, usePhysicsAvailable, usePhysicsQueries } from '../physics';
+import { objectIdFromCollider, objectIdFromRigidBody, PLAYER_PHYSICS_ID, usePhysicsAvailable, usePhysicsQueries } from '../physicsQueries';
 import { useRuntimeServices } from '../RuntimeServicesContext';
 import { SpatialParamWriter, SpatialPositionalAudio } from '../spatialAudio';
 import { releaseSkidMarks, skidMarks } from '../skidMarks';

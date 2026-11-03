@@ -3,7 +3,6 @@ import { GameContentProvider } from '../runtime/GameContentContext';
 import { LevelAssetResidency } from '../runtime/assetResidency';
 import { createLevelAssetIndex, everyAssetIn } from '../runtime/levelAssets';
 import { objectsByLevel } from '../runtime/levelStreaming';
-import { LevelRuntime } from '../runtime/LevelRuntime';
 import { createSaveGameStore } from '../runtime/saveGame';
 import { gameState, useGameState } from '../runtime/gameState';
 import type { GameContent, LoadedGameContent, PlayerStart, RuntimeHost, RuntimeLevel, RuntimeSaveState, SaveGameData } from '../runtime/types';
@@ -37,7 +36,7 @@ interface Session {
 const contentSnapshot = (documents: ReturnType<typeof readGameDocuments>, loader: GameContentLoader, cellModels: GameContent['cellModels']): LoadedGameContent => {
     const objects = loader.objects();
     // Level Streaming volumes load other levels' objects (terrain heights resolved with their level) on demand.
-    return { ...documents, objects, content: { ...loader.content(), levelObjects: objectsByLevel(objects), cellModels } };
+    return { ...documents, objects, refusedModels: loader.refusedModels(), content: { ...loader.content(), levelObjects: objectsByLevel(objects), cellModels } };
 };
 
 interface Toast {
@@ -45,6 +44,10 @@ interface Toast {
     message: string;
     type: 'info' | 'success' | 'warning' | 'error';
 }
+
+// The game itself, its physics among it, comes once there is a game to play: the menu shows long before that.
+const loadLevelRuntime = () => import('../runtime/LevelRuntime');
+const LevelRuntime = React.lazy(() => loadLevelRuntime().then((module) => ({ default: module.LevelRuntime })));
 
 const Button: React.FC<{ onClick: () => void; children: React.ReactNode; disabled?: boolean }> = ({ onClick, children, disabled }) => (
     <button
@@ -358,19 +361,22 @@ export const PlayerApp: React.FC = () => {
         <GameContentProvider value={loaded.content}>
             <div className="relative w-screen h-screen bg-black overflow-hidden select-none">
                 {screen === 'playing' && level && session && (
-                    <LevelRuntime
-                        key={session.levelId}
-                        level={level}
-                        settings={settings}
-                        playerStart={playerStart}
-                        paused={paused || gameOver}
-                        host={host}
-                        sessionKey={session.key}
-                        overlay={hudOverlay}
-                        restore={session.restore}
-                        playerOptions={optionsStore ?? undefined}
-                        saveStateRef={saveStateRef}
-                    />
+                    <React.Suspense fallback={<Menu title={manifest.name} subtitle={text('ui.loading')}>{null}</Menu>}>
+                        <LevelRuntime
+                            key={session.levelId}
+                            level={level}
+                            settings={settings}
+                            playerStart={playerStart}
+                            paused={paused || gameOver}
+                            host={host}
+                            sessionKey={session.key}
+                            overlay={hudOverlay}
+                            hostMenus
+                            restore={session.restore}
+                            playerOptions={optionsStore ?? undefined}
+                            saveStateRef={saveStateRef}
+                        />
+                    </React.Suspense>
                 )}
 
                 {screen === 'loading' && (

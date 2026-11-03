@@ -41,12 +41,12 @@ export const AudioCard: React.FC<AudioCardProps> = ({ audio, onDelete, nameEdito
                 </div>
 
                 {/* Type Badge */}
-                <div className="absolute top-1 right-1 p-1 bg-gray-900/80 backdrop-blur rounded text-gray-400">
+                <div className="absolute top-1 right-1 p-1 bg-gray-900/80 rounded text-gray-400">
                     <Music size={10} />
                 </div>
 
                 {/* Duration Badge */}
-                <div className="absolute bottom-1 left-1 px-1.5 py-0.5 bg-black/60 backdrop-blur rounded text-[8px] text-gray-300 font-mono">
+                <div className="absolute bottom-1 left-1 px-1.5 py-0.5 bg-black/60 rounded text-2xs text-gray-300 font-mono">
                     {audio.duration ? `${audio.duration.toFixed(1)}s` : '...'}
                 </div>
 
@@ -54,7 +54,7 @@ export const AudioCard: React.FC<AudioCardProps> = ({ audio, onDelete, nameEdito
                 <div className="absolute inset-0 bg-black/60 backdrop-blur-[1px] opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-2">
                     <button 
                         onClick={togglePlay}
-                        className="p-2 bg-blue-600 hover:bg-blue-500 text-white rounded-full transition-colors"
+                        className="p-2 bg-blue-600 hover:bg-blue-500 text-accent-ink rounded-full transition-colors"
                         title={isPlaying ? "Pause" : "Play Preview"}
                     >
                         {isPlaying ? <Pause size={14} /> : <Play size={14} />}
@@ -69,7 +69,7 @@ export const AudioCard: React.FC<AudioCardProps> = ({ audio, onDelete, nameEdito
                 </div>
             </div>
             {nameEditor ?? (
-                <span onDoubleClick={onRenameRequest} title={audio.name} className="text-[11px] truncate px-0.5 text-center text-gray-400 group-hover:text-white">
+                <span onDoubleClick={onRenameRequest} title={audio.name} className="text-2xs truncate px-0.5 text-center text-gray-400 group-hover:text-white">
                     {audio.name}
                 </span>
             )}

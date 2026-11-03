@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import { chooseChunkLevel, chunkBounds, chunkIndices, chunkLayout, MAX_LOD_LEVEL, skirtGeometryData, type TerrainChunk } from './terrainChunks';
+import type { TerrainLiveEdit } from './terrainLiveEdit';
 
 interface ChunkRender {
     chunk: TerrainChunk;
@@ -20,6 +21,8 @@ interface TerrainLodMeshProps {
     segments: number;
     /** Changes whenever the heights do, so bounds and skirts are rebuilt. */
     version: unknown;
+    /** A tool's edits as they happen, so chunks it touches keep their bounds and skirts up with it. */
+    live?: TerrainLiveEdit | null;
     material: THREE.Material;
     castShadow?: boolean;
     receiveShadow?: boolean;
@@ -32,7 +35,7 @@ const _inverse = new THREE.Matrix4();
  * Draws a terrain as chunks whose vertex density drops with camera distance (terrainChunks.ts). Must
  * sit where the full-resolution mesh would (same rotation), as a sibling of it.
  */
-export const TerrainLodMesh: React.FC<TerrainLodMeshProps> = ({ source, segments, version, material, castShadow, receiveShadow }) => {
+export const TerrainLodMesh: React.FC<TerrainLodMeshProps> = ({ source, segments, version, live, material, castShadow, receiveShadow }) => {
     const groupRef = useRef<THREE.Group>(null);
     const chunks = useMemo<ChunkRender[]>(() => chunkLayout(segments).map(chunk => {
         const geometry = new THREE.BufferGeometry();
@@ -58,17 +61,44 @@ export const TerrainLodMesh: React.FC<TerrainLodMeshProps> = ({ source, segments
     const setLevel = (render: ChunkRender, level: number) => {
         if (render.level === level) return;
         render.level = level;
-        render.indices[level] ??= new THREE.BufferAttribute(chunkIndices(segments, render.chunk, level), 1);
+        render.indices[level] ??= new THREE.BufferAttribute(chunkIndices(segments, render.chunk, level, live?.holes), 1);
         render.geometry.setIndex(render.indices[level]);
+        buildSkirt(render, level);
+    };
+
+    const buildSkirt = (render: ChunkRender, level: number) => {
         const positions = source.getAttribute('position');
         const normals = source.getAttribute('normal');
         if (!positions) return;
         const depth = Math.max(0.5, nearDistance / 24);
-        const skirt = skirtGeometryData(positions.array as ArrayLike<number>, (normals?.array as ArrayLike<number>) ?? null, segments, render.chunk, level, depth);
-        render.skirt.setAttribute('position', new THREE.BufferAttribute(skirt.positions, 3));
-        render.skirt.setAttribute('normal', new THREE.BufferAttribute(skirt.normals, 3));
-        render.skirt.setIndex(new THREE.BufferAttribute(skirt.indices, 1));
+        const skirt = skirtGeometryData(positions.array as ArrayLike<number>, (normals?.array as ArrayLike<number>) ?? null, segments, render.chunk, level, depth, live?.holes);
+        const position = render.skirt.getAttribute('position') as THREE.BufferAttribute | undefined;
+        if (position && position.count * 3 === skirt.positions.length && render.skirt.index?.count === skirt.indices.length) {
+            // The same shape again: new values, not new buffers.
+            (position.array as Float32Array).set(skirt.positions);
+            position.needsUpdate = true;
+            const normal = render.skirt.getAttribute('normal') as THREE.BufferAttribute;
+            (normal.array as Float32Array).set(skirt.normals);
+            normal.needsUpdate = true;
+        } else {
+            // Replaced attributes would keep their GPU buffers until the geometry is disposed.
+            render.skirt.dispose();
+            render.skirt.setAttribute('position', new THREE.BufferAttribute(skirt.positions, 3));
+            render.skirt.setAttribute('normal', new THREE.BufferAttribute(skirt.normals, 3));
+            render.skirt.setAttribute('uv', new THREE.BufferAttribute(skirt.uvs, 2));
+            render.skirt.setIndex(new THREE.BufferAttribute(skirt.indices, 1));
+        }
         render.skirt.computeBoundingSphere();
+    };
+
+    const refreshBounds = (render: ChunkRender) => {
+        const positions = source.getAttribute('position');
+        if (!positions) return;
+        const { min, max } = chunkBounds(positions.array as ArrayLike<number>, segments, render.chunk);
+        const box = new THREE.Box3(new THREE.Vector3(...min), new THREE.Vector3(...max));
+        render.geometry.boundingBox = box;
+        render.geometry.boundingSphere = box.getBoundingSphere(new THREE.Sphere());
+        box.getCenter(render.centre);
     };
 
     // Heights changed: new bounds for culling, and skirts follow the new edges.
@@ -76,16 +106,40 @@ export const TerrainLodMesh: React.FC<TerrainLodMeshProps> = ({ source, segments
         const positions = source.getAttribute('position');
         if (!positions) return;
         for (const render of chunks) {
-            const { min, max } = chunkBounds(positions.array as ArrayLike<number>, segments, render.chunk);
-            const box = new THREE.Box3(new THREE.Vector3(...min), new THREE.Vector3(...max));
-            render.geometry.boundingBox = box;
-            render.geometry.boundingSphere = box.getBoundingSphere(new THREE.Sphere());
-            box.getCenter(render.centre);
+            refreshBounds(render);
             const level = render.level;
             render.level = null;
             setLevel(render, level ?? MAX_LOD_LEVEL);
         }
     }, [chunks, source, segments, version]);
+
+    // A stroke in progress: only the chunks under the brush change.
+    useEffect(() => {
+        if (!live) return;
+        live.onRegion = (rect) => {
+            for (const render of chunks) {
+                const { x0, y0, x1, y1 } = render.chunk;
+                if (x1 < rect.c0 || x0 > rect.c1 || y1 < rect.r0 || y0 > rect.r1) continue;
+                refreshBounds(render);
+                if (render.level !== null) buildSkirt(render, render.level);
+            }
+        };
+        // Cells cut or filled: the chunks over them draw again from the indices without those cells.
+        live.onHoles = (rect) => {
+            for (const render of chunks) {
+                const { x0, y0, x1, y1 } = render.chunk;
+                if (x1 < rect.c0 || x0 > rect.c1 || y1 < rect.r0 || y0 > rect.r1) continue;
+                render.indices.fill(null);
+                const level = render.level;
+                render.level = null;
+                setLevel(render, level ?? MAX_LOD_LEVEL);
+            }
+        };
+        return () => {
+            live.onRegion = null;
+            live.onHoles = null;
+        };
+    }, [live, chunks]);
 
     useFrame(({ camera }) => {
         const group = groupRef.current;

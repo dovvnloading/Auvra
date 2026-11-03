@@ -76,7 +76,7 @@ export const AttachmentPanel: React.FC<AttachmentPanelProps> = ({ selectedModel 
                 ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}
             `}>
                 <Upload size={16} className="text-gray-400 group-hover:text-white" />
-                <span className="text-[10px] font-medium text-gray-400 group-hover:text-white">Upload File</span>
+                <span className="text-2xs font-medium text-gray-400 group-hover:text-white">Upload File</span>
                 <input 
                     type="file" 
                     accept={MODEL_FILE_ACCEPT} 
@@ -97,7 +97,7 @@ export const AttachmentPanel: React.FC<AttachmentPanelProps> = ({ selectedModel 
                 `}
             >
                 <Swords size={16} className="text-gray-400 group-hover:text-white" />
-                <span className="text-[10px] font-medium text-gray-400 group-hover:text-white">From Assets</span>
+                <span className="text-2xs font-medium text-gray-400 group-hover:text-white">From Assets</span>
             </button>
         </div>
 
@@ -123,7 +123,7 @@ export const AttachmentPanel: React.FC<AttachmentPanelProps> = ({ selectedModel 
               <div className="p-3 space-y-4">
                 {/* Bone Selector */}
                 <div className="space-y-1.5">
-                  <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider flex items-center gap-1.5">
+                  <label className="text-2xs text-gray-500 font-bold flex items-center gap-1.5">
                      <Crosshair size={10} /> Target Bone
                   </label>
                   <Select
@@ -161,7 +161,7 @@ export const AttachmentPanel: React.FC<AttachmentPanelProps> = ({ selectedModel 
           {modelAttachments.length === 0 && (
             <div className="text-center py-8 px-4">
                <p className="text-xs text-gray-500">No attachments yet.</p>
-               <p className="text-[10px] text-gray-600 mt-1">Upload or Select an FBX (e.g., weapon, hat) to attach it to a specific bone.</p>
+               <p className="text-2xs text-gray-600 mt-1">Upload or Select an FBX (e.g., weapon, hat) to attach it to a specific bone.</p>
             </div>
           )}
         </div>
@@ -225,7 +225,7 @@ export const AttachmentPanel: React.FC<AttachmentPanelProps> = ({ selectedModel 
                                              {asset.category === 'Weapon' && <Swords size={10} className="text-gray-400" />}
                                         </div>
                                   </div>
-                                  <span className="text-[10px] text-gray-400 group-hover:text-white truncate w-full block">
+                                  <span className="text-2xs text-gray-400 group-hover:text-white truncate w-full block">
                                       {asset.name}
                                   </span>
                               </button>

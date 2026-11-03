@@ -5,7 +5,7 @@ import { useFrame } from '@react-three/fiber';
 import { Hittable } from '../../types';
 import { combat, destructibles, explosionFalloff, provideCombat } from '../../runtime/destructibles';
 import { abilityActors, damageActor } from '../../runtime/abilities';
-import { PLAYER_PHYSICS_ID, usePhysicsQueries } from '../../runtime/physics';
+import { PLAYER_PHYSICS_ID, usePhysicsQueries } from '../../runtime/physicsQueries';
 
 /** Push a round gives what it hits, N·s per point of damage. */
 const IMPULSE_PER_DAMAGE = 0.25;

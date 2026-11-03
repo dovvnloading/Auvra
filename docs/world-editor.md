@@ -8,8 +8,8 @@ The **Environment** tab is where levels are built.
 |---|---|---|
 | Select | Q | Select objects and move them with the gizmo |
 | Place | — | Click to place the chosen model on terrain or other surfaces |
-| Paint | B | Paint or erase foliage and props with a brush |
-| Terrain | — | Create, sculpt (raise, lower, flatten, smooth) and texture-paint terrain |
+| Foliage | B | Paint trees, grass, rocks and other things by the thousand with a brush (see [Foliage](#foliage)) |
+| Terrain | — | Create, sculpt and texture-paint terrain (see [Terrain](#terrain)) |
 | Mask | M | Create texture masks on objects |
 
 The left panel's **Logic Actors** add a Player Start, an Enemy Spawner, an Audio Emitter, a Sky Sphere, an **Empty Object** (an object with no model, drawn in the editor as a small marker, for components such as trigger colliders, timelines, cameras and level streaming, or as a parent to group other objects under) and a **Spline** (an empty object with a [Spline](#splines) component).
@@ -443,6 +443,7 @@ Add a **Dynamic Global Illumination** component to any object in the level (one 
 | **Intensity** | Scales all the indirect light |
 | **Later bounces** | How much light carries on past its first bounce. 0 is one bounce only; 1 lets it fade naturally |
 | **Ray-traced reflections** | Carries reflections on with rays where the screen has nothing to show. Needs the Post Process component's **Reflections** on, which play has by default. A slow machine goes without in play |
+| **GPU time limit** | Milliseconds of the GPU's time all of this may take in a frame, measured on the machine it runs on. Over it, fewer probes update and then each sends fewer rays, so the light follows more slowly, and fewer pixels send reflection rays each frame, until reflections go back to what the screen shows for as long as they will not fit. Frames running slow lower the limit, and where a GPU cannot time itself their speed alone decides |
 | **Show** | **Indirect light only** shows it on white, **Light probes** shows the probes themselves (red ones are stuck inside something), and **What rays see** shows the scene as the rays do, to check what they take in |
 
 Probes sit in nested grids around the camera, each three times the spacing of the last, so at the default spacing they reach about 200 metres out; past that the level's ordinary sky fill applies. A probe buried in a wall or a crate moves out of it by itself.
@@ -520,7 +521,7 @@ One big level can load as the camera moves, without being split up by hand. Add 
 
 Props and foliage with no components, no parent and no children belong to the cell they stand in. Only the cells near the camera exist in play, and each one is drawn as a group, so a cell out of view costs nothing to draw. Everything else stays in the game all the time: terrain, lights, characters and any object with components. The grid applies in play; while editing, every object is shown.
 
-In a built game, the models only those cells use are not loaded when the level starts. Each loads as its cell comes near, and what was used longest ago is freed once the game passes its **Asset memory** setting. If a level needs a model some other way, for example because a prefab or a script names it, it loads with the level as usual.
+In a built game, the models only those cells use are not loaded when the level starts. Each loads as its cell comes near, and what was used longest ago is freed once the game passes its **Asset memory** setting. If a level needs a model some other way, for example because a prefab or a script names it, it loads with the level as usual. Foliage painted with the **Foliage** tool and the grass a terrain grows are not split into the grid's cells: their models load with the level.
 
 Two things to know:
 
@@ -537,9 +538,69 @@ Big worlds can be split into levels that load as the player moves. Build each ar
 
 While the player is inside the box, every object of that level joins the play session: props, lights, terrain, colliders, components and scripts. Areas keep their own coordinates, so build them where they sit in the world. The area's player start and sky are not loaded; the starting level's are used. Objects loaded this way can be destroyed and moved like any others; unloading discards those changes, and the area loads fresh next time. Loading never changes the project. In the editor, play reads the other levels as they were when play started; a streamed level's sculpted terrain shows flat in play-in-editor until it is opened in the editor once.
 
-## Terrain detail in play
+## Terrain
 
-In play and in built games, a terrain with a resolution of 64 or more is drawn in chunks of 32 by 32 cells. Chunks far from the camera use a half, a quarter or an eighth of the vertices per side, and short skirts under their edges hide the seams where chunks of different detail meet. The editor always shows the full-resolution terrain, which sculpting, painting and placement work on. Collisions always use the full-resolution heights.
+The **Terrain** tool has three tabs: **Manage** makes terrains and exchanges them with other tools, **Sculpt** shapes the ground and **Paint** textures it. The brush lies on the ground itself, showing its outer edge and the ring where its strength starts to fade. It works on whichever terrain is under it, in strokes that are one undo step each.
+
+### Brush
+
+| Setting | What it does |
+|---|---|
+| Size | Across the brush, in metres. Keys: **[** and **]** |
+| Falloff | How much of the brush fades towards its edge: 0 is full strength right up to the edge, 100 fades from the very centre. Keys: **Shift+[** and **Shift+]** |
+| Falloff shape | **Smooth**, **Linear**, **Spherical** (stays strong, then drops at the edge) or **Tip** (a sharp point) |
+| Shape | **Circle**; **Stamp**, a picture from your textures stretched across the brush, whose brightness sets its strength, for stamping craters, peaks and rock shapes; or **Pattern**, a picture tiled over the ground and seen through the circle |
+| Strength | How fast a tool works. Keys: **,** and **.** |
+
+Brush tools keep working while the left button is held, even with the mouse still, and do the same work in the same time at any frame rate. With a pen, pressure scales the strength.
+
+### Sculpt tools
+
+| Tool | Use |
+|---|---|
+| Sculpt | Raises the ground; **Shift** lowers it |
+| Smooth | Evens out bumps without changing the overall height. **Reach** is how many grid cells each way it averages over |
+| Flatten | Levels to the height under the first click. **Direction** can limit it to filling up or cutting down. **Fixed height** levels to a height you set (**Ctrl-click** the ground to take its height). **Follow the slope** levels along the slope under the first click, for roads on a hillside. **Keep sampling** takes the height again all through the stroke |
+| Ramp | Click the bottom and the top, then **Build Ramp**: a straight road of ground **Width** across, whose sides blend back into the terrain |
+| Erosion | Steep ground slumps, as weathering does. **Steepest** is how much higher than its neighbour a point can stand |
+| Hydro Erosion | Rain runs downhill, cutting channels and dropping silt where it slows |
+| Noise | Roughens the ground with bumps **Scale** metres across; **Direction** can make them only rise or only cut in |
+| Terrace | Cuts the ground into steps **Step height** metres apart |
+| Holes | Cuts the ground away for cave and tunnel mouths; **Shift** fills it back in. Holes are real: you fall through them, enemies path around them and light comes through |
+| Mirror | Copies one half of the terrain onto the other about a line, or turned half way round, for symmetric maps |
+| Copy | Drag a box on the ground to copy it, then click to paste it anywhere, on this terrain or another. **Paste** can be limited to raising or lowering |
+| Region | Paints the part of the ground the brushes may change, shown in blue; **Shift** takes it away. See below |
+
+Escape cancels a ramp or a paste in progress.
+
+A stroke works on every terrain the brush reaches, so it does not stop at a seam between neighbours.
+
+With a **Region** chosen, every brush, in Sculpt and in Paint, only changes the chosen ground, fading where the region fades, and the panel says so. **Work outside it instead** protects the chosen ground and changes the rest. Turn off **Limit brushes to it** to work freely without losing it. A region lasts until you clear it or close the project; it is not saved, and a terrain resampled to another grid loses it. Ramp, Mirror and Paste ignore it.
+
+### Edit layers
+
+**Edit Layers**, under the brush, keeps sculpting apart from what is under it, so you can change your mind about it long after. **Add** makes a layer and sends the next strokes into it; **Ground** sends them straight into the terrain again.
+
+- The eye hides a layer, taking its work off the ground and putting it back as it was, however much else was done since.
+- The padlock stops strokes going into it by mistake.
+- **Strength** fades its work in or out, or past 100% to exaggerate it.
+- **Merge** keeps its work for good as part of the ground. **Remove** takes it away.
+
+Layers add together, so their order does not matter. The brush turns grey over a layer that cannot take a stroke, and the panel says why. Layers hold sculpting only: holes and paint go straight onto the terrain. A built game only carries the finished ground.
+
+### Manage
+
+**New Terrain** sets its width, depth and resolution (cells along each side) and where its middle goes; a new terrain starts beside the last, so their edges meet. A level can hold as many terrains as you like. **From File** makes one from a heightmap.
+
+For the selected terrain:
+
+- **Resolution** resamples its heights and paint to a finer or coarser grid, keeping its shape.
+- **Import** replaces its heights from a heightmap: a 16-bit (or 8-bit) grey PNG, or a square of 16-bit samples as a RAW file (`.r16`, `.raw`). **Height range** says which heights the file's darkest and brightest values stand for.
+- **Export PNG** and **Export RAW** save its heights as 16-bit files. The file's name records its height range, and importing it again restores the same heights.
+
+### Detail
+
+A terrain with a resolution of 64 or more is drawn in chunks of 32 by 32 cells, in the editor as in play. Chunks far from the camera use a half, a quarter or an eighth of the vertices per side, and short skirts under their edges hide the seams where chunks of different detail meet. Tools always work on the full-resolution heights, and collisions use them too. A stroke only updates what its brush covers, so large terrains sculpt as smoothly as small ones.
 
 ## Procedural scatter
 
@@ -562,13 +623,104 @@ Copies stand on the terrain and meshes in the area, never on other scatters. Whe
 
 ## Terrain painting
 
-A terrain can blend up to four textures. Import the textures in the Content Browser first.
+A terrain can blend up to eight texture layers, each with its own colour, normal, roughness and height maps. Import the textures in the Content Browser first, then open the **Terrain** tool's **Paint** tab.
 
-1. Select the terrain and open the **Sculpt** tab of the terrain inspector.
-2. Under **Texture Layers**, click **+ Add Layer** and choose a **Texture**. **Tiling** sets how many times the texture repeats across the terrain's width (default 16). Layer 1 is the base layer that covers the whole terrain.
-3. Click **Paint** (under Raise, Lower, Flatten and Smooth), or a layer's brush icon to paint that layer. **Radius (m)** and **Strength (%)** set the brush.
+**Add** makes a layer. Layer 1 is the base: it covers the terrain until other layers are painted over it. Click a layer to paint with it and to see its settings. Its row shows how much of the ground it covers. The arrows move a layer up or down the list, and the bin removes it, giving its paint to the base layer.
 
-To erase paint, paint layer 1 over it. Only the last layer can be removed; its paint goes back to layer 1. Removing layer 1 returns the terrain to its plain material.
+### Paint tools
+
+| Tool | Use |
+|---|---|
+| Paint | Paints the layer on, building up to **Up to** percent. **Shift** takes it away |
+| Smooth | Softens where the layer meets the others. **Reach** is how many grid cells each way it averages over |
+| Flatten | Brings the layer to the amount under the first click |
+| Noise | Breaks the layer's edge up in patches **Patch size** metres across; **Shift** works the other way |
+
+They use the same [brush](#brush) as sculpting, and a [region](#sculpt-tools) limits them too. Weights at a point always add up to one: painting one layer in takes the others down in proportion.
+
+**Show where each layer is** colours the ground by layer while the Paint tab is up, with each layer's colour beside its name, to see what is painted where when layers look alike.
+
+**Fill** paints the layer over the whole terrain and **Clear** takes it off. **Import** sets the layer's weights from a grey PNG, resampled to the terrain's grid, and **Export** saves them as one.
+
+**Paint by Slope and Height** paints the selected layer wherever the ground fits: rock on anything steeper than 35 degrees, snow above 200 metres. **Soft edge** sets how gradually it starts and stops.
+
+### Layer settings
+
+| Setting | What it does |
+|---|---|
+| Colour, Normal, Roughness, Height | Its maps. Normal is read as a green-up normal map, Roughness from its green channel and Height from its red |
+| Tile size | How many metres one repeat of its textures covers |
+| Turn | Degrees its textures are turned by, so layers do not line up |
+| Tint | A colour multiplied over it |
+| Roughness | How dull it is, or with a map how far the map goes |
+| Normal strength | How strongly its normal map shows |
+| Height blend | 0 blends the layer evenly with its neighbours. Higher lets its height map decide where it shows first, so stones stand out of the dirt before the dirt covers them. It needs a Height map, and works best with one on the neighbouring layer too |
+| Variation | Broad, soft changes of colour that hide the repeat of the texture across large areas |
+| Project onto cliffs | Also takes its textures from the sides on steep ground, so they do not stretch down cliffs. It costs more where the ground is steep |
+
+### Grass
+
+**Grass on This Layer** makes a layer grow models by itself wherever it is painted: **Grow a model** adds one. Nothing is placed or stored: copies are made in cells around the camera from the layer's weights, thicker where it is painted more strongly, and always the same in the same place. Repaint the layer and the grass follows.
+
+| Setting | What it does |
+|---|---|
+| Density | Copies per square metre |
+| Scale | A size picked between the two |
+| Thins from, Gone at | The distances from the camera where it starts to thin out and where none is left. Further costs far more: twice the distance is four times the grass |
+| Lean with the ground | Tilts with the surface |
+| Random turn | A random turn about its up axis |
+| Cast shadows | Off by default, which saves a lot for small plants |
+
+It grows again when you finish a stroke, not during one. Name a model's material `grass` or `leaf` and it sways in the wind (see [Wind](#wind-cloth-and-swaying)). Use the **Foliage** tool for what should stay where you put it, or is big enough to collide with.
+
+All of a layer's maps are scaled to 1024 by 1024 on the terrain. They are kept in two texture arrays, so eight layers take no more of the shader's texture slots than one, and a point only pays for the layers showing there.
+
+## Foliage
+
+The **Foliage** tool (**B**) paints models over a level by the hundred thousand: trees, grass, rocks, ruins. They are kept compactly, as one record per level with its instances in a binary asset, so a forest does not fill the Outliner or slow saving. A level drew 98,000 instances of a low-detail rock at full frame rate in testing.
+
+### The palette
+
+Click a model in the browser, drag one onto the palette or pick one under it to add it as a type. Tick the types the brush should paint; the row of each shows how many are placed. Click a row to see its rules.
+
+### Tools
+
+| Tool | Use |
+|---|---|
+| Select | Click an instance, Ctrl-click to add more. Move, turn and scale them with the gizmo (**W**, **E**, **R**), and **Delete** removes them. **All** selects every instance of the ticked types, **None** clears it, and **Floating** selects those with nothing under them |
+| Lasso | Drag the brush over instances to select them; **Shift** takes them off |
+| Paint | Hold to paint the ticked types, each up to its own density, so going over the same place again adds nothing. **Shift** erases |
+| Erase | Hold to erase the ticked types |
+| Reapply | Hold over painted instances to apply the types' current rules to them: size, lean, offset and spacing, removing those no longer on ground they may grow on |
+| Single | Click to place one instance. With several types ticked, each click takes the next |
+| Fill | Click a terrain or a placed object to fill the whole of it with the ticked types |
+
+**Size** (keys **[** and **]**) is across the brush. **Paint density** multiplies every type's density while painting, and **Erase density** is the share of it erasing leaves behind: 0 removes everything. **On terrain**, **On meshes**, **On foliage** and **Translucent** say what the brush can paint on.
+
+Anything that changes the ground's height (a brush, Mirror, an imported heightmap, an edit layer turned off) moves the foliage standing on it, as part of the same undo step.
+
+**Keep clear of objects** makes the brushes skip places where the model's box would overlap an object in the level, such as a rock or a wall. Terrain and other foliage do not count. Placing one with **Single** ignores it. Only its height changes, so what you turned by hand stays turned.
+
+### A type's rules
+
+| Setting | What it does |
+|---|---|
+| Density | How many per 100 square metres |
+| Spacing | Metres kept clear around each one, from others of its type |
+| Scaling, Scale | **Uniform** picks one size between the two values. **Same width** picks a width and a height. **Free** picks each axis |
+| Offset up | Metres moved along its up axis, picked between the two: negative sinks it in |
+| Lean with the ground | Tilts it with the surface, as rocks and grass do, up to **At most** degrees. Trees stand upright with this off |
+| Random turn, Random lean | A turn about its up axis, and a random tilt up to so many degrees |
+| Slope, Height | The ground slope, in degrees, and the world heights it grows on |
+| Terrain layer: Only, Never | Layers it only grows on or never grows on: grass on the Grass layer and not on the Road. **Counts from** is how much of a layer must be there to count as being on it |
+| Cast shadows | Off for small plants, which saves a lot |
+| Pictures beyond | Beyond this many metres it draws as flat pictures of the model. 0: never |
+| Hidden beyond | Beyond this many metres it is not drawn. 0: never |
+| Collision | In play: nothing, **A trunk** (a narrow column, for trees) or **Its box**. At most 4,000 instances in a level collide |
+
+Instances are drawn in cells of 32 metres, each at the detail its distance calls for, in the editor and in play. Painting only rebuilds the cells it changes.
+
+A level with copies painted before this tool existed shows them under the palette, with a button to turn them into palette instances as one undo step.
 
 ## Prefabs
 
@@ -584,4 +736,4 @@ When a prefab changes, a property an instance changed itself (an override, such 
 
 ## Placement
 
-Placement, dropping models from the Content Browser and foliage painting all land on the surface under the cursor: terrain, other meshes, or the ground plane.
+Placement and dropping models from the Content Browser land on the surface under the cursor: terrain, other meshes, or the ground plane. Foliage paints on terrain and meshes, as its brush is set.

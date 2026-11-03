@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { DEFAULT_MODEL_IMPORT_SETTINGS, type LoadedModelData, type ModelImportSettings } from '../../types';
 import { disposeMaterial } from './ModelLifecycle'; // Reuse internal helper if needed, or duplicate strictly local logic
+import { humanoidRole } from '../retargeting';
+import type { ModelFileReport } from '../fbxImport/nativeImporter';
+import { resolveClipRanges, type ModelReadOptions } from '../clipRanges';
 
 /** userData key on a loaded model's root: metres per unit its source file says it is authored in. */
 export const SOURCE_METRES_PER_UNIT = 'sourceMetresPerUnit';
@@ -18,7 +21,102 @@ export const resolveImportSettings = (settings?: Partial<ModelImportSettings> | 
   const targetSize = Number.isFinite(size) && size > 0
     ? Math.min(MAX_MODEL_TARGET_SIZE, size)
     : DEFAULT_MODEL_IMPORT_SETTINGS.targetSize;
-  return { normalize, targetSize };
+  const resolved: ModelImportSettings = { normalize, targetSize };
+  // What the rest says only goes on the model when it says something, as older models have none of it.
+  for (const key of ['animation', 'morphTargets', 'looseMeshes', 'recomputeNormals', 'tangents'] as const) {
+    if (typeof settings?.[key] === 'boolean') resolved[key] = settings[key];
+  }
+  if (Array.isArray(settings?.excludedClips) && settings.excludedClips.length) {
+    resolved.excludedClips = settings.excludedClips.filter((name) => typeof name === 'string' && name.length > 0).slice(0, 1024);
+  }
+  const clipRanges = resolveClipRanges(settings?.clipRanges);
+  if (clipRanges.length) resolved.clipRanges = clipRanges;
+  const threshold = Number(settings?.keyThreshold);
+  if (settings?.keyThreshold !== undefined && Number.isFinite(threshold) && threshold >= 0 && threshold <= 1) resolved.keyThreshold = threshold;
+  const angle = Number(settings?.smoothingAngle);
+  if (settings?.smoothingAngle !== undefined && Number.isFinite(angle) && angle > 0 && angle <= 180) resolved.smoothingAngle = angle;
+  return resolved;
+};
+
+/** How a model file is read for these settings; an option the settings do not mention keeps its default. */
+export const convertOptionsFor = (settings?: Partial<ModelImportSettings> | null): ModelReadOptions | undefined => {
+  if (!settings) return undefined;
+  const { animation, morphTargets, looseMeshes, recomputeNormals, tangents, excludedClips, clipRanges, keyThreshold, smoothingAngle } = resolveImportSettings(settings);
+  const options: ModelReadOptions = {
+    ...(animation !== undefined ? { animation } : {}),
+    ...(morphTargets !== undefined ? { morphTargets } : {}),
+    ...(looseMeshes !== undefined ? { looseMeshes } : {}),
+    ...(recomputeNormals !== undefined ? { recomputeNormals } : {}),
+    ...(tangents !== undefined ? { tangents } : {}),
+    ...(excludedClips ? { excludedClips } : {}),
+    ...(clipRanges ? { clipRanges } : {}),
+    ...(keyThreshold !== undefined ? { keyThreshold } : {}),
+    ...(smoothingAngle !== undefined ? { smoothingAngle } : {}),
+  };
+  return Object.keys(options).length ? options : undefined;
+};
+
+/** The height a person-shaped model is made when its file says something no person is, in metres. */
+export const PERSON_HEIGHT = 1.8;
+const MIN_PERSON_HEIGHT = 1;
+const MAX_PERSON_HEIGHT = 2.6;
+/** Outside these the file's unit cannot be meant: a model is fitted to a size rather than kept at it. */
+const MIN_PLAUSIBLE_SIZE = 0.02;
+const MAX_PLAUSIBLE_SIZE = 500;
+/** A rigged file's loose meshes are left out unless they are this big a share of its triangles. */
+const LOOSE_MESH_SHARE = 0.1;
+
+/** A file's size at its own unit in metres, width by height by depth; null without geometry. */
+export const reportSize = (report: ModelFileReport, keepLoose = true): [number, number, number] | null => {
+  const min = keepLoose ? report.boundsMin : report.boundsWithoutLooseMin ?? report.boundsMin;
+  const max = keepLoose ? report.boundsMax : report.boundsWithoutLooseMax ?? report.boundsMax;
+  if (!min || !max) return null;
+  const unit = report.metresPerUnit > 0 ? report.metresPerUnit : 1;
+  return [(max[0] - min[0]) * unit, (max[1] - min[1]) * unit, (max[2] - min[2]) * unit];
+};
+
+/** Whether a skeleton's names make it person-shaped: a spine with a head, two arms and two legs. */
+const isPersonShaped = (boneNames: readonly string[]): boolean => {
+  const roles = new Set(boneNames.map(humanoidRole));
+  return ['Hips', 'Head', 'LeftUpperArm', 'RightUpperArm', 'LeftUpperLeg', 'RightUpperLeg'].every((role) => roles.has(role));
+};
+
+export interface SuggestedImport {
+  settings: ModelImportSettings;
+  /** Why the settings differ from keeping the file as it is, for the dialog to say. */
+  note?: string;
+}
+
+/**
+ * The import a file should start with: the size it says it is, without the loose meshes a rigged
+ * file should not have. A person whose file makes them a giant or a child, as some Mixamo exports
+ * do, comes in at a person's height instead, and so does a model whose unit cannot be right.
+ */
+export const suggestedImportSettings = (report: ModelFileReport | null): SuggestedImport => {
+  const looseTriangles = report?.looseMeshes?.reduce((sum, mesh) => sum + mesh.triangles, 0) ?? 0;
+  const dropLoose = !!report?.looseMeshes?.length && looseTriangles <= (report.triangles || 0) * LOOSE_MESH_SHARE;
+  const base: ModelImportSettings = { normalize: false, targetSize: DEFAULT_MODEL_IMPORT_SETTINGS.targetSize, ...(report?.looseMeshes?.length ? { looseMeshes: !dropLoose } : {}) };
+  const size = report ? reportSize(report, !dropLoose) : null;
+  if (!size) return { settings: base };
+  const largest = Math.max(...size);
+  const rounded = Number(largest.toPrecision(3));
+  if (largest > 0 && (largest < MIN_PLAUSIBLE_SIZE || largest > MAX_PLAUSIBLE_SIZE)) {
+    return {
+      settings: { ...base, normalize: true, targetSize: 2 },
+      note: `The file makes this model ${rounded} m across, so it is set to fit 2 m.`,
+    };
+  }
+  base.targetSize = largest > 0 ? rounded : base.targetSize;
+  const height = size[1];
+  if (report && isPersonShaped(report.boneNames ?? []) && (height < MIN_PERSON_HEIGHT || height > MAX_PERSON_HEIGHT)) {
+    // Fitting works on the largest side: this is the size that makes the height a person's.
+    const fitted = Number((largest * PERSON_HEIGHT / height).toPrecision(4));
+    return {
+      settings: { ...base, normalize: true, targetSize: fitted },
+      note: `The file makes this character ${Number(height.toPrecision(3))} m tall, so it is set to ${PERSON_HEIGHT} m.`,
+    };
+  }
+  return { settings: base };
 };
 
 /** True when the settings produce the same result as the default import. */

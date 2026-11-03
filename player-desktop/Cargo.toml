@@ -15,3 +15,10 @@ wry = "0.57.1"
 lto = true
 codegen-units = 1
 strip = true
+
+[lints.clippy]
+# Shape, not mistakes: a math routine indexes by axis, and a GPU call takes what it takes.
+too_many_arguments = "allow"
+type_complexity = "allow"
+large_enum_variant = "allow"
+needless_range_loop = "allow"

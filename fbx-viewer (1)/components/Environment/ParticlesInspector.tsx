@@ -24,9 +24,9 @@ import {
     type Vec3,
 } from '../../runtime/particleEffect';
 
-const FIELD = 'w-full bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-[11px] text-gray-200 focus:outline-none focus:border-amber-500';
-const BUTTON = 'flex items-center justify-center gap-1 px-2 py-0.5 rounded border border-gray-700 bg-gray-800 hover:bg-gray-700 text-[10px] text-gray-200';
-const LABEL = 'text-[10px] text-gray-400';
+const FIELD = 'w-full bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-2xs text-gray-200 focus:outline-none focus:border-amber-500';
+const BUTTON = 'flex items-center justify-center gap-1 px-2 py-0.5 rounded border border-gray-700 bg-gray-800 hover:bg-gray-700 text-2xs text-gray-200';
+const LABEL = 'text-2xs text-gray-400';
 
 const SHAPE_LABELS: Record<string, string> = {
     point: 'Point', sphere: 'Sphere', hemisphere: 'Hemisphere', cone: 'Cone', box: 'Box', circle: 'Disc', edge: 'Line', mesh: "Model's surface",
@@ -68,7 +68,7 @@ const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, ch
 
 const Section: React.FC<{ title: string; open?: boolean; children: React.ReactNode }> = ({ title, open = false, children }) => (
     <details open={open} className="rounded border border-gray-800 bg-gray-900/50">
-        <summary className="cursor-pointer select-none px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">{title}</summary>
+        <summary className="cursor-pointer select-none px-2 py-1 text-2xs font-bold text-gray-400">{title}</summary>
         <div className="space-y-1 px-2 pb-2">{children}</div>
     </details>
 );
@@ -195,11 +195,11 @@ export const ParticlesInspector: React.FC<ComponentInspectorProps> = ({ object, 
                     {PARTICLE_PRESET_IDS.map(id => <option key={id} value={id}>{PARTICLE_PRESET_LABELS[id]}</option>)}
                 </select>
             </Row>
-            <p className="flex items-center gap-1 text-[10px] text-gray-500"><Sparkles size={10} /> A preset sets every module below; change any of them from there.</p>
+            <p className="flex items-center gap-1 text-2xs text-gray-500"><Sparkles size={10} /> A preset sets every module below; change any of them from there.</p>
 
             <Section title="Emission" open>
                 <Row label="Simulation"><Select label="Simulation" value={effect.simulation} options={PARTICLE_SIMULATION_MODES} labels={{ cpu: 'CPU (every feature)', gpu: 'GPU (up to a million)' }} onChange={(simulation) => update({ simulation })} /></Row>
-                {effect.simulation === 'gpu' && <p className="text-[10px] text-gray-500">On the GPU: no sub-emitters, ribbons draw as quads, particles are not sorted, and world collision is with the ground under the emitter.</p>}
+                {effect.simulation === 'gpu' && <p className="text-2xs text-gray-500">On the GPU: no sub-emitters, ribbons draw as quads, particles are not sorted, and world collision is with the ground under the emitter.</p>}
                 <Row label="Rate (per s)"><NumberInput label="Rate" value={effect.rate} step={1} onCommit={(rate) => update({ rate })} /></Row>
                 <Row label="Per metre moved"><NumberInput label="Rate over distance" value={effect.rateOverDistance} step={0.5} onCommit={(rateOverDistance) => update({ rateOverDistance })} /></Row>
                 <Row label="Cycle (s)"><NumberInput label="Duration" value={effect.duration} onCommit={(duration) => update({ duration })} /></Row>
@@ -265,7 +265,7 @@ export const ParticlesInspector: React.FC<ComponentInspectorProps> = ({ object, 
             </Section>
 
             <Section title="Sub-emitters">
-                {siblings.length === 0 && <p className="text-[10px] text-gray-500">Add another Particles component to this object to set it off where these particles die or hit.</p>}
+                {siblings.length === 0 && <p className="text-2xs text-gray-500">Add another Particles component to this object to set it off where these particles die or hit.</p>}
                 {effect.subEmitters.map((sub, index) => (
                     <div key={index} className="space-y-1 rounded border border-gray-800 p-1">
                         <Row label="When a particle">

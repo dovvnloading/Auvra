@@ -148,7 +148,7 @@ export const SocketPanel: React.FC<SocketPanelProps> = ({ selectedModel, onPrevi
                         <div className="flex gap-2">
                             <div className="flex-1 bg-gray-900/50 p-2 rounded border border-gray-800">
                                 <div className="flex items-center justify-between mb-1">
-                                    <span className="text-[9px] uppercase font-bold text-gray-500 flex items-center gap-1">
+                                    <span className="text-2xs font-bold text-gray-500 flex items-center gap-1">
                                         <Play size={8} /> Preview Anim
                                     </span>
                                 </div>
@@ -170,13 +170,13 @@ export const SocketPanel: React.FC<SocketPanelProps> = ({ selectedModel, onPrevi
                                 title="Trigger Once"
                             >
                                 <Zap size={14} className="mb-1" />
-                                <span className="text-[9px] font-bold">FIRE</span>
+                                <span className="text-2xs font-bold">Fire</span>
                             </button>
                         </div>
 
                         {/* Bone Selector */}
                         <div className="space-y-1.5">
-                            <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider flex items-center gap-1.5">
+                            <label className="text-2xs text-gray-500 font-bold flex items-center gap-1.5">
                                 <Crosshair size={10} /> Parent Bone
                             </label>
                             <Select
@@ -207,7 +207,7 @@ export const SocketPanel: React.FC<SocketPanelProps> = ({ selectedModel, onPrevi
                             <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
                                     <Flame size={10} className={flashCfg.enabled ? "text-orange-400" : "text-gray-600"} /> 
-                                    <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider">Muzzle Flash</label>
+                                    <label className="text-2xs text-gray-500 font-bold ">Muzzle Flash</label>
                                     
                                     {/* PREVIEW TOGGLE */}
                                     {flashCfg.enabled && (
@@ -217,7 +217,7 @@ export const SocketPanel: React.FC<SocketPanelProps> = ({ selectedModel, onPrevi
                                             title="Toggle Static Preview Mode (Always Visible)"
                                         >
                                             {flashCfg.preview ? <Eye size={10} /> : <EyeOff size={10} />}
-                                            <span className="text-[9px] font-bold">PREVIEW</span>
+                                            <span className="text-2xs font-bold">Preview</span>
                                         </button>
                                     )}
                                 </div>
@@ -247,7 +247,7 @@ export const SocketPanel: React.FC<SocketPanelProps> = ({ selectedModel, onPrevi
                                                 options={[{ label: 'None', value: '' }, ...textures.map(t => ({ label: t.name, value: t.id }))]}
                                                 placeholder="Select from Texture Maps..."
                                             />
-                                            <label className="flex items-center gap-1 text-[9px] text-blue-400 hover:text-blue-300 cursor-pointer w-fit">
+                                            <label className="flex items-center gap-1 text-2xs text-blue-400 hover:text-blue-300 cursor-pointer w-fit">
                                                 <Upload size={10} /> Import to Library
                                                 <input type="file" accept="image/*" className="hidden" onChange={(e) => handleTextureUpload(e, sock.id)} />
                                             </label>
@@ -257,19 +257,19 @@ export const SocketPanel: React.FC<SocketPanelProps> = ({ selectedModel, onPrevi
                                     {/* Flash Properties */}
                                     <div className="grid grid-cols-2 gap-2">
                                         <div className="flex items-center justify-between bg-gray-900 px-2 py-1 rounded border border-gray-700">
-                                            <span className="text-[9px] text-gray-500 font-bold">Scale</span>
+                                            <span className="text-2xs text-gray-500 font-bold">Scale</span>
                                             <div className="w-12">
                                                 <ScrubbableInput label="" value={flashCfg.scale} onChange={(v) => updateSocket(sock.id, { flashConfig: { ...flashCfg, scale: Math.max(0.1, v) } })} step={0.1} labelWidth="w-0" />
                                             </div>
                                         </div>
                                         <div className="flex items-center justify-between bg-gray-900 px-2 py-1 rounded border border-gray-700">
-                                            <span className="text-[9px] text-gray-500 font-bold">Duration</span>
+                                            <span className="text-2xs text-gray-500 font-bold">Duration</span>
                                             <div className="w-12">
                                                 <ScrubbableInput label="" value={flashCfg.duration} onChange={(v) => updateSocket(sock.id, { flashConfig: { ...flashCfg, duration: Math.max(0.01, v) } })} step={0.01} labelWidth="w-0" />
                                             </div>
                                         </div>
                                         <div className="col-span-2 flex items-center justify-between bg-gray-900 px-2 py-1 rounded border border-gray-700">
-                                            <span className="text-[9px] text-gray-500 font-bold">Tint</span>
+                                            <span className="text-2xs text-gray-500 font-bold">Tint</span>
                                             <input type="color" value={flashCfg.color} onChange={(e) => updateSocket(sock.id, { flashConfig: { ...flashCfg, color: e.target.value } })} className="w-6 h-4 bg-transparent border-none p-0 cursor-pointer" />
                                         </div>
                                     </div>
@@ -285,7 +285,7 @@ export const SocketPanel: React.FC<SocketPanelProps> = ({ selectedModel, onPrevi
         {modelSockets.length === 0 && (
           <div className="text-center py-4 px-4 border border-dashed border-gray-800 rounded">
              <p className="text-xs text-gray-500">No sockets defined.</p>
-             <p className="text-[10px] text-gray-600 mt-1">Add a socket to define muzzle flash points.</p>
+             <p className="text-2xs text-gray-600 mt-1">Add a socket to define muzzle flash points.</p>
           </div>
         )}
       </div>

@@ -23,7 +23,7 @@ export const TimelineInspector: React.FC<ComponentInspectorProps> = ({ object, c
     const { levelObjects, activeLevelBlueprint, models, blueprints, audioAssets } = useScene();
     const [editing, setEditing] = useState(false);
     const timeline = useMemo(() => normalizeTimeline(component.props.timeline), [component.props.timeline]);
-    const objects = useMemo(() => levelObjects.filter(candidate => candidate.levelId === object.levelId), [levelObjects, object.levelId]);
+    const objects = useMemo(() => levelObjects.filter(candidate => candidate.levelId === object.levelId && candidate.type !== 'foliage_set'), [levelObjects, object.levelId]);
     const variableNames = useMemo(
         () => [...new Set((activeLevelBlueprint?.variables ?? []).map(variable => variable.name.trim()).filter(Boolean))],
         [activeLevelBlueprint],
@@ -46,11 +46,11 @@ export const TimelineInspector: React.FC<ComponentInspectorProps> = ({ object, c
 
     return (
         <div className="space-y-2 rounded border border-gray-700/60 bg-gray-950/40 p-2">
-            <div className="flex items-center justify-between text-[10px]">
+            <div className="flex items-center justify-between text-2xs">
                 <span className="text-gray-400">Duration</span>
                 <span className="font-mono text-gray-200">{timeline.duration.toFixed(2)} s</span>
             </div>
-            <div className="flex items-center justify-between text-[10px]">
+            <div className="flex items-center justify-between text-2xs">
                 <span className="text-gray-400">Tracks</span>
                 <span className="text-gray-200">
                     {plural(timeline.tracks.length, 'track')} · {plural(keyCount, 'key')}{mutedCount > 0 ? ` · ${mutedCount} muted` : ''}

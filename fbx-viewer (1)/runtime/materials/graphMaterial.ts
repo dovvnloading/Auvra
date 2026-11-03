@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {
     MAX_RAMP_STOPS,
+    OUTPUT_NODE_TYPE,
     STATIC_PARAM_KINDS,
     compileMaterialGraph,
     getMaterialNodeDefinition,
@@ -461,6 +462,46 @@ export const unbindMaterialGraph = (material: StandardMaterial): void => {
     material.map = own.map;
     material.normalMap = own.normalMap;
     material.needsUpdate = true;
+};
+
+/** What a graph may read that differs from one place on a surface to another of the same place on its map. */
+const PLACE_BUILTINS: readonly MaterialBuiltin[] = ['worldPosition', 'localPosition', 'objectPosition', 'worldNormal', 'localNormal', 'viewDirection', 'cameraDistance'];
+
+/** What a material's graph gives its surface where nothing is wired to an input, in linear light, and which are wired. */
+export interface GraphSurface {
+    wired: ReadonlySet<string>;
+    /** Whether it goes by where a surface stands or faces, so that two surfaces at one place on a map can look different. */
+    readsPlace: boolean;
+    baseColor: [number, number, number];
+    emissive: [number, number, number];
+    roughness: number;
+    metalness: number;
+    /** 1 for a material the graph does not draw through. */
+    opacity: number;
+}
+
+/** The surface of a material a graph shades, or null for one it does not. */
+export const graphSurface = (material: THREE.Material): GraphSurface | null => {
+    const binding = bindings.get(material);
+    if (!binding) return null;
+    const output = binding.graph.nodes.find(node => node.type === OUTPUT_NODE_TYPE);
+    const definition = getMaterialNodeDefinition(OUTPUT_NODE_TYPE)!;
+    const read = (key: string) => readParam(definition.params.find(param => param.key === key)!, output?.params[key]);
+    const colour = (key: string): [number, number, number] => {
+        const [r, g, b] = read(key) as number[];
+        // Colours are picked in sRGB.
+        const linear = new THREE.Color().setRGB(r, g, b, THREE.SRGBColorSpace);
+        return [linear.r, linear.g, linear.b];
+    };
+    return {
+        wired: binding.fragment.connected,
+        readsPlace: PLACE_BUILTINS.some(builtin => binding.fragment.builtins.has(builtin)),
+        baseColor: colour('baseColor'),
+        emissive: colour('emissive'),
+        roughness: read('roughness') as number,
+        metalness: read('metalness') as number,
+        opacity: binding.settings.blendMode === 'opaque' ? 1 : read('opacity') as number,
+    };
 };
 
 /** A new standard material shaded by `graph` (material previews, and meshes that have none of their own). */

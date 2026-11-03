@@ -43,6 +43,13 @@ MESSAGE_MAX_BYTES = 256 * 1024
 RENDERER_RELOAD_LIMIT = 3
 RENDERER_RELOAD_WINDOW = 300.0
 
+# How long .NET is kept collecting after asset bytes pass through: long enough for
+# them at this rate, and no more often than this while they do.
+_SLOWEST_ASSET_BYTES_PER_SECOND = 20 * 1024 * 1024
+_ASSET_COLLECTION_INTERVAL_SECONDS = 0.1
+# Below this nothing builds up worth collecting for.
+_SMALLEST_COLLECTED_ASSET_BYTES = 1024 * 1024
+
 # CoreWebView2ProcessFailedKind by value, for runtimes that hand the enum over
 # as a number.
 _PROCESS_FAILED_KINDS = (
@@ -114,6 +121,8 @@ class WebView2Frame:
         self._renderer_reloads: deque[float] = deque()
         self._resource_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="auvra-assets")
         self._resource_slots = threading.BoundedSemaphore(4)
+        self._collect_until = 0.0
+        self._collecting = False
 
     @property
     def state(self) -> FrameState:
@@ -349,7 +358,7 @@ class WebView2Frame:
             self._fail("runtime_unavailable", "Auvra WebView2 frame is available on Windows only")
             raise FrameStartupError("Auvra WebView2 frame is available on Windows only")
         try:
-            import clr  # type: ignore[import-not-found]
+            import clr  # type: ignore[import-not-found]  # noqa: F401
             from System.Threading import ApartmentState, Thread, ThreadStart  # type: ignore[import-not-found]
             thread = Thread(ThreadStart(self._run_native))
             # SetApartmentState must happen before Start. WinForms requires an
@@ -426,7 +435,7 @@ class WebView2Frame:
                 raise FrameUnavailableError("the WebView2 native loader directory could not be secured") from exc
             clr.AddReference(str(self._sdk.core_assembly))
             clr.AddReference(str(self._sdk.winforms_assembly))
-            from System import Action  # type: ignore[import-not-found]
+            from System import Action  # type: ignore[import-not-found]  # noqa: F401
             from System.Windows.Forms import Application, DockStyle, Form  # type: ignore[import-not-found]
             from Microsoft.Web.WebView2.Core import CoreWebView2Environment  # type: ignore[import-not-found]
             from Microsoft.Web.WebView2.WinForms import (  # type: ignore[import-not-found]
@@ -653,6 +662,8 @@ class WebView2Frame:
             "Origin",
             "Content-Type",
             "Content-Length",
+            "Content-Range",
+            "Range",
             "Access-Control-Request-Method",
         ):
             try:
@@ -664,8 +675,14 @@ class WebView2Frame:
         return result
 
     class _NativeBodyReader:
+        # One array for every request: a new one per read is large enough that
+        # .NET leaves each for its slowest collection, and the host grows by the file.
+        _buffer: Any = None
+        _buffer_lock = threading.Lock()
+
         def __init__(self, stream: Any) -> None:
             self.stream = stream
+            self.native_bytes = 0
 
         def read(self, size: int) -> bytes:
             if self.stream is None:
@@ -675,11 +692,49 @@ class WebView2Frame:
                 return bytes(reader(size))
             from System import Array, Byte  # type: ignore[import-not-found]
 
-            buffer = Array.CreateInstance(Byte, size)
-            count = int(self.stream.Read(buffer, 0, size))
-            if count <= 0:
-                return b""
-            return bytes(buffer[index] for index in range(count))
+            shared = type(self)
+            with shared._buffer_lock:
+                if shared._buffer is None or shared._buffer.Length < size:
+                    shared._buffer = Array.CreateInstance(Byte, size)
+                count = int(self.stream.Read(shared._buffer, 0, size))
+                if count <= 0:
+                    return b""
+                self.native_bytes += count
+                # Copied whole: asking .NET for each byte in turn takes 0.4 s a megabyte.
+                with memoryview(shared._buffer) as view:
+                    return bytes(view[:count])
+
+    def _keep_collecting_for(self, size: int) -> None:
+        """Keep .NET collecting while this many asset bytes pass through.
+
+        Left alone it does not. A request's body sits in memory it cannot see, and
+        reading a response makes garbage arrays it sees no hurry to clear. Uploads
+        stalled once the host had grown to a few gigabytes, and reading back a 1 GB
+        file closed the editor.
+        """
+        if size < _SMALLEST_COLLECTED_ASSET_BYTES:
+            return
+        with self._lock:
+            self._collect_until = max(self._collect_until, time.monotonic()) + size / _SLOWEST_ASSET_BYTES_PER_SECOND
+            if self._collecting:
+                return
+            self._collecting = True
+        threading.Thread(target=self._collect_assets, name="auvra-asset-collection").start()
+
+    def _collect_assets(self) -> None:
+        try:
+            from System import GC  # type: ignore[import-not-found]
+        except ImportError:
+            with self._lock:
+                self._collecting = False
+            return
+        while True:
+            with self._lock:
+                if time.monotonic() >= self._collect_until or self._state in {FrameState.CLOSING, FrameState.CLOSED, FrameState.FAILED}:
+                    self._collecting = False
+                    return
+            GC.Collect()
+            time.sleep(_ASSET_COLLECTION_INTERVAL_SECONDS)
 
     def _on_asset_resource(self, args: Any, request: Any, uri: str) -> None:
         callback = self.config.on_asset_resource
@@ -713,7 +768,7 @@ class WebView2Frame:
                     args, deferral, AssetResourceResponse(503, "Closed", {"Cache-Control": "no-store"}),
                 )
                 return
-            future.add_done_callback(lambda completed: self._asset_resource_finished(args, deferral, completed))
+            future.add_done_callback(lambda completed: self._asset_resource_finished(args, deferral, completed, resource_request))
             return
         # Pure-Python adapters without WebView2 deferrals retain a synchronous
         # bounded path for unit tests only.
@@ -732,8 +787,16 @@ class WebView2Frame:
             response = AssetResourceResponse(500, "Denied", {"Cache-Control": "no-store"})
         return response
 
-    def _asset_resource_finished(self, args: Any, deferral: Any, future: Future[AssetResourceResponse]) -> None:
+    def _asset_resource_finished(
+        self,
+        args: Any,
+        deferral: Any,
+        future: Future[AssetResourceResponse],
+        resource_request: AssetResourceRequest,
+    ) -> None:
         self._resource_slots.release()
+        if resource_request.body is not None:
+            self._keep_collecting_for(resource_request.body.native_bytes)
         try:
             response = future.result()
         except Exception:
@@ -746,6 +809,7 @@ class WebView2Frame:
             state = self._state
 
         def complete() -> None:
+            nonlocal args, deferral, response, action
             try:
                 self._set_resource_response(args, response)
             finally:
@@ -755,6 +819,9 @@ class WebView2Frame:
                     with self._lock:
                         if action in self._pending_actions:
                             self._pending_actions.remove(action)
+                    # This function and its .NET delegate hold each other, which neither runtime
+                    # can see to collect, so what it holds would stay: the request with its whole body.
+                    args = deferral = response = action = None
 
         if form is None:
             try:
@@ -817,7 +884,11 @@ class WebView2Frame:
                     FileAccess.Read,
                     FileShare.Read | FileShare.Delete,
                 )
+                span = getattr(response.body, "span", None)
+                if span is not None:
+                    native_stream = self._native_piece(native_stream, *span)
                 response.body.close()
+                self._keep_collecting_for(int(native_stream.Length))
             headers = "".join(f"{name}: {value}\r\n" for name, value in response.headers.items())
             args.Response = environment.CreateWebResourceResponse(
                 native_stream,
@@ -832,6 +903,25 @@ class WebView2Frame:
                 except Exception:
                     pass
             self._fail("asset_resource_failed", "Auvra could not serve a secured asset resource")
+
+    @staticmethod
+    def _native_piece(file: Any, start: int, length: int) -> Any:
+        """A piece of a file as a stream of its own, and the file closed. The bytes stay on the .NET side."""
+        from System import Array, Byte  # type: ignore[import-not-found]
+        from System.IO import MemoryStream, SeekOrigin  # type: ignore[import-not-found]
+
+        try:
+            data = Array.CreateInstance(Byte, length)
+            file.Seek(start, SeekOrigin.Begin)
+            filled = 0
+            while filled < length:
+                count = int(file.Read(data, filled, length - filled))
+                if count <= 0:
+                    break
+                filled += count
+        finally:
+            file.Dispose()
+        return MemoryStream(data, 0, filled, False)
 
     def _deny_resource(self, args: Any) -> None:
         # Test fakes expose Cancel. WebView2's real resource event is blocked

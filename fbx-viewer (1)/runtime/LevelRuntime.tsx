@@ -12,17 +12,18 @@ import { NavMeshContext, useLevelNavMesh, type LevelNavMesh, type NavSettings } 
 import { modelTriangles } from './navGeometry';
 import { splineObjectTriangles } from './splineMesh';
 import type { HostGeometry } from './components/physicsComponents';
-import { usePhysicsQueries } from './physics';
+import { usePhysicsQueries } from './physicsQueries';
 import { GUNSHOT_NOISE_RADIUS, NoiseBus, NoiseBusContext, useNoiseBus } from './perception';
 import { LevelDynamicGi } from './lighting/dynamicGi/LevelDynamicGi';
 import { LevelLightVolume } from './lighting/LevelLightVolume';
 import { ShadowDetailContext } from './lighting/DistanceShadowLights';
-import { LevelGroundColliders } from './terrainPhysics';
+import { LevelGroundColliders, startOnTheGround } from './terrainPhysics';
 import { InstancedLevelLayer } from '../components/Environment/InstancedLevelLayer';
 import { AudioSystem } from '../components/Environment/AudioSystem';
 import { SkySystem } from '../components/Environment/SkySystem';
 import { WeatherAudio } from './WeatherAudio';
 import { Destruction } from './Destruction';
+import { FoliageLayer } from './foliageLayer';
 import { TerrainObject } from '../components/Environment/Terrain/TerrainObject';
 import { SandboxEntity, SandboxEntityHandle } from '../components/Sandbox/SandboxEntity';
 import { PlayerController } from '../components/Sandbox/PlayerController';
@@ -141,9 +142,10 @@ const resolvePlayerAssets = (content: GameContent, playerBlueprintId: string | n
 /** Load game position, then the host's start, then the level's Player Start, then the origin. */
 const resolvePlayerStart = (level: RuntimeLevel, playerStart: PlayerStart | null, restore: SaveGameData | null | undefined): PlayerStart => {
     if (restore) return { position: restore.player.position, rotation: restore.player.rotation };
-    if (playerStart) return playerStart;
+    if (playerStart) return { ...playerStart, position: startOnTheGround(playerStart.position, level.objects) };
     const authored = level.objects.find(obj => obj.type === 'player_start');
-    return authored ? { position: authored.position, rotation: authored.rotation } : ORIGIN_START;
+    const start = authored ? { position: authored.position, rotation: authored.rotation } : ORIGIN_START;
+    return { ...start, position: startOnTheGround(start.position, level.objects) };
 };
 
 // --- INTERNAL COMPONENT: SPAWNER SYSTEM ---
@@ -281,6 +283,8 @@ interface LevelRenderPlan {
     groupChildren: Map<string, LevelObject[]>;
     /** Static leaf props and foliage, in world space, drawn through the instanced layers. */
     instancedFoliage: LevelObject[];
+    /** The level's painted foliage sets. */
+    foliageSets: LevelObject[];
     instancedProps: LevelObject[];
     terrains: LevelObject[];
 }
@@ -369,7 +373,7 @@ const planLevelRender = (objects: LevelObject[]): LevelRenderPlan => {
         : objects;
 
     const playerObstacles = underBody.size ? worldObjects.filter((_, i) => !underBody.has(objects[i].id)) : worldObjects;
-    const plan: LevelRenderPlan = { worldObjects, playerObstacles, groupRoots: [], groupChildren: new Map(), instancedFoliage: [], instancedProps: [], terrains: [] };
+    const plan: LevelRenderPlan = { worldObjects, playerObstacles, groupRoots: [], groupChildren: new Map(), instancedFoliage: [], foliageSets: [], instancedProps: [], terrains: [] };
     objects.forEach((obj, i) => {
         const worldObject = worldObjects[i];
         if (obj.type === 'terrain') plan.terrains.push(worldObject);
@@ -381,7 +385,8 @@ const planLevelRender = (objects: LevelObject[]): LevelRenderPlan => {
                 if (siblings) siblings.push(obj);
                 else plan.groupChildren.set(parentId, [obj]);
             }
-        } else if (obj.type === 'foliage') plan.instancedFoliage.push(worldObject);
+        } else if (obj.type === 'foliage_set') plan.foliageSets.push(worldObject);
+        else if (obj.type === 'foliage') plan.instancedFoliage.push(worldObject);
         else if (obj.type === 'prop') plan.instancedProps.push(worldObject);
     });
     return plan;
@@ -436,14 +441,15 @@ const FallbackHud: React.FC<{
     highQuality: boolean;
     onToggleQuality: () => void;
     host: RuntimeHost;
-}> = ({ player, isGameOver, highQuality, onToggleQuality, host }) => {
+    hostMenus: boolean;
+}> = ({ player, isGameOver, highQuality, onToggleQuality, host, hostMenus }) => {
     const stats = useGameState(state => state.player);
     return (
         <SandboxUI
             isPlaying={true}
-            isGameOver={isGameOver}
+            isGameOver={isGameOver && !hostMenus}
             onStart={host.restartLevel}
-            onStop={host.endLevel}
+            onStop={hostMenus ? undefined : host.endLevel}
             playerBlueprint={player.blueprint}
             enemyBlueprint={player.blueprint}
             playerModel={player.model}
@@ -769,11 +775,12 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
                         visible={true}
                         castShadow
                         receiveShadow
-                        sculptingEnabled={false}
+
                         lod
                     />
                 ))}
 
+                {renderPlan.foliageSets.map(set => <FoliageLayer key={set.id} set={set} models={models} runtime />)}
                 {worldGrid ? (
                     <WorldGridLayer
                         settings={worldGrid}
@@ -953,7 +960,7 @@ DefaultPostProcess.displayName = 'DefaultPostProcess';
  * Plays one level. Shared by play-in-editor and the standalone player: content comes from the
  * runtime content context, flow control (restart, end, open level, save, load, pause) from the host.
  */
-export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, playerStart, paused, host, sessionKey, overlay, restore, playerOptions, stepRequest = 0, inspectRef, saveStateRef }) => {
+export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, playerStart, paused, host, sessionKey, overlay, hostMenus = false, restore, playerOptions, stepRequest = 0, inspectRef, saveStateRef }) => {
     const content = useGameContent();
     const player = useMemo(() => resolvePlayerAssets(content, settings.playerBlueprintId), [content, settings.playerBlueprintId]);
     const start = useMemo(() => resolvePlayerStart(level, playerStart, restore), [level, playerStart, restore]);
@@ -1126,6 +1133,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                         highQuality={highQuality}
                         onToggleQuality={toggleQuality}
                         host={runtimeHost}
+                        hostMenus={hostMenus}
                     />
                 )}
             </div>

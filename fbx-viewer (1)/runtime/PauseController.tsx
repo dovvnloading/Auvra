@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { useRapier } from '@react-three/rapier';
 import { frontendDiagnostics } from '../diagnostics/runtime';
-import { usePhysicsAvailable } from './physics';
+import { usePhysicsAvailable } from './physicsQueries';
 import { useRuntimeServices } from './RuntimeServicesContext';
 
 interface PauseControllerProps {

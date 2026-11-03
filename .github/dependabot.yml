@@ -1,0 +1,52 @@
+version: 2
+
+# Weekly, and grouped, so that it is one pull request to read per ecosystem. A major version of the frontend's libraries
+# changes what the engine is built on, and is taken on purpose rather than by a robot.
+updates:
+  - package-ecosystem: npm
+    directory: "/fbx-viewer (1)"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      frontend:
+        patterns: ["*"]
+
+  - package-ecosystem: uv
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      python:
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: "/native"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      native-engine:
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: "/player-desktop"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      desktop-player:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns: ["*"]

@@ -1,4 +1,4 @@
-import { cloneCharacterModel } from '../../utils/mountedParts';
+import { overrideTextureFlipY } from '../../utils/materialOverrides';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { createPortal, useFrame, useStore, useThree, type RootState } from '@react-three/fiber';
@@ -17,6 +17,9 @@ import { SocketController, resolveSocketFlashTextureUrl } from '../Scene/SocketC
 import { LocalEnvironment } from '../Scene/LocalEnvironment';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { flattenStateMachines } from './utils/stateMachines';
+import { clonePreviewResources, disposePreviewResources, restorePreviewPose, type PreviewResources } from '../../utils/previewResources';
+
+export { clonePreviewResources, restorePreviewPose };
 
 /** What the preview can show: no model, a model without clips, or a running graph (paused or live). */
 export type PreviewStatus = 'no-mesh' | 'no-clips' | 'paused' | 'live';
@@ -112,78 +115,6 @@ export const advancePreviewClock = (clock: PreviewClock, delta: number): number 
         return SETTLE_SECONDS;
     }
     return 0;
-};
-
-interface NodePose {
-    node: THREE.Object3D;
-    position: THREE.Vector3;
-    quaternion: THREE.Quaternion;
-    scale: THREE.Vector3;
-}
-
-/** A model cloned for the preview, with the materials and textures it owns and its starting pose. */
-export interface PreviewResources {
-    object: THREE.Group;
-    materials: Set<THREE.Material>;
-    textures: Set<THREE.Texture>;
-    baseMaps: Map<THREE.Material, THREE.Texture | null>;
-    /** Every node's transform as cloned, so restart and unmount can put the model back. */
-    pose: NodePose[];
-}
-
-/** Clone a model for the preview without sharing mutable material state. */
-export const clonePreviewResources = (source: THREE.Object3D): PreviewResources => {
-    const resources: PreviewResources = {
-        // Without the editor's own attachments and sockets: the preview mounts copies it controls.
-        object: cloneCharacterModel(source) as THREE.Group,
-        materials: new Set(),
-        textures: new Set(),
-        baseMaps: new Map(),
-        pose: [],
-    };
-    resources.object.traverse((child) => {
-        resources.pose.push({ node: child, position: child.position.clone(), quaternion: child.quaternion.clone(), scale: child.scale.clone() });
-        if (!(child as THREE.Mesh).isMesh) return;
-        const mesh = child as THREE.Mesh;
-        const sourceMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-        const previewMaterials = sourceMaterials.map((sourceMaterial) => {
-            const material = sourceMaterial.clone();
-            resources.materials.add(material);
-            for (const key of Object.keys(material)) {
-                const value = (material as unknown as Record<string, unknown>)[key];
-                if (!value || typeof value !== 'object' || !(value as THREE.Texture).isTexture) continue;
-                const texture = (value as THREE.Texture).clone();
-                texture.needsUpdate = true;
-                resources.textures.add(texture);
-                (material as unknown as Record<string, unknown>)[key] = texture;
-            }
-            if ('map' in material) resources.baseMaps.set(material, (material as THREE.MeshStandardMaterial).map ?? null);
-            return material;
-        });
-        mesh.material = Array.isArray(mesh.material) ? previewMaterials : previewMaterials[0];
-    });
-    return resources;
-};
-
-/**
- * Puts the preview model back the way it was cloned: the root's position and rotation and every
- * descendant's transform. The root's scale belongs to the primitive's scale prop and is kept.
- */
-export const restorePreviewPose = (resources: PreviewResources): void => {
-    for (const { node, position, quaternion, scale } of resources.pose) {
-        node.position.copy(position);
-        node.quaternion.copy(quaternion);
-        if (node !== resources.object) node.scale.copy(scale);
-    }
-};
-
-const disposePreviewResources = (resources: PreviewResources): void => {
-    for (const material of resources.materials) material.dispose();
-    for (const texture of resources.textures) texture.dispose();
-    resources.materials.clear();
-    resources.textures.clear();
-    resources.baseMaps.clear();
-    resources.pose.length = 0;
 };
 
 type FrameSubscribe = RootState['internal']['subscribe'];
@@ -371,13 +302,13 @@ export const PreviewStatusBadge: React.FC<{ status: PreviewStatus; modelName?: s
     const style = STATUS_STYLE[status];
     return (
         <div className="absolute top-4 left-4 z-10 flex flex-col items-start gap-1.5 max-w-[70%] pointer-events-none">
-            <div role="status" className={`bg-gray-900/80 backdrop-blur px-3 py-1.5 rounded-full text-[10px] font-bold border border-gray-700 flex items-center gap-2 shadow-lg ${style.text}`}>
+            <div role="status" className={`bg-gray-900/80 px-3 py-1.5 rounded-full text-2xs font-bold border border-gray-700 flex items-center gap-2 shadow-lg ${style.text}`}>
                 <span className={`w-2 h-2 rounded-full shrink-0 ${style.dot}`}></span>
-                <span className="uppercase tracking-wider">{label}</span>
+                <span className=" ">{label}</span>
                 {modelName && status !== 'no-mesh' && <span className="font-normal text-gray-400 truncate">{modelName}</span>}
             </div>
             {hint && (
-                <p className="bg-gray-900/80 backdrop-blur px-3 py-1.5 rounded-lg text-[10px] text-gray-400 border border-gray-800 shadow-lg">
+                <p className="bg-gray-900/80 px-3 py-1.5 rounded-lg text-2xs text-gray-400 border border-gray-800 shadow-lg">
                     {hint}
                 </p>
             )}
@@ -388,7 +319,7 @@ export const PreviewStatusBadge: React.FC<{ status: PreviewStatus; modelName?: s
 // Transport clicks keep keyboard focus where it was, so the preview's key bindings keep working.
 const keepFocus = (e: React.MouseEvent) => e.preventDefault();
 
-const transportButton = 'flex items-center justify-center gap-1.5 h-7 px-2 rounded-full text-[10px] font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
+const transportButton = 'flex items-center justify-center gap-1.5 h-7 px-2 rounded-full text-2xs font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
 
 interface PreviewTransportProps {
     paused: boolean;
@@ -412,7 +343,7 @@ export const PreviewTransport: React.FC<PreviewTransportProps> = ({
     onSpeedChange,
     onToggleFollow
 }) => (
-    <div className="absolute bottom-3 left-3 z-10 flex items-center gap-1 bg-gray-900/85 backdrop-blur px-1.5 py-1 rounded-full border border-gray-700 shadow-lg text-gray-300">
+    <div className="absolute bottom-3 left-3 z-10 flex items-center gap-1 bg-gray-900/85 px-1.5 py-1 rounded-full border border-gray-700 shadow-lg text-gray-300">
         <button
             type="button"
             onMouseDown={keepFocus}
@@ -471,7 +402,7 @@ export const PreviewTransport: React.FC<PreviewTransportProps> = ({
             onMouseDown={keepFocus}
             onClick={onToggleFollow}
             aria-pressed={follow}
-            className={`${transportButton} ${follow ? 'bg-blue-600 text-white hover:bg-blue-500' : 'hover:bg-gray-700 hover:text-white'}`}
+            className={`${transportButton} ${follow ? 'bg-blue-600 text-accent-ink hover:bg-blue-500' : 'hover:bg-gray-700 hover:text-accent-ink'}`}
             aria-label="Follow model"
             title={follow ? 'Camera follows the model' : 'Camera stays put; orbit freely'}
         >
@@ -726,7 +657,7 @@ export const GraphPreview: React.FC<GraphPreviewProps> = ({
                 return;
             }
             texture.colorSpace = THREE.SRGBColorSpace;
-            texture.flipY = true;
+            texture.flipY = targetModel ? overrideTextureFlipY(targetModel.object) : true;
             previewResources.textures.add(texture);
             appliedTexture = texture;
             for (const material of previewResources.materials) {

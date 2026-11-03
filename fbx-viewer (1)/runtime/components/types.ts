@@ -1,7 +1,7 @@
 import type React from 'react';
 import type { LevelComponent, LevelObject } from '../../types';
 
-export type ComponentPropType = 'number' | 'boolean' | 'string' | 'color' | 'vector3' | 'select';
+export type ComponentPropType = 'number' | 'boolean' | 'string' | 'color' | 'vector3' | 'select' | 'texture';
 
 /** Describes one editable component property; the inspector renders a field from this. */
 export interface ComponentPropSchema {

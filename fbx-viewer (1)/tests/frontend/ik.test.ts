@@ -25,7 +25,7 @@ import {
 } from '../../runtime/components/ikComponents';
 import type { FootIKOptions, FootIKRig } from '../../runtime/components/ikComponents';
 import { ComponentHostContext } from '../../runtime/components/builtins';
-import type { PhysicsQueries, PhysicsRaycastOptions } from '../../runtime/physics';
+import type { PhysicsQueries, PhysicsRaycastOptions } from '../../runtime/physicsQueries';
 import type { LevelComponent, LevelObject } from '../../types';
 
 /*
@@ -55,8 +55,8 @@ vi.mock('@react-three/fiber', async (importOriginal) => {
   };
 });
 
-vi.mock('../../runtime/physics', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../runtime/physics')>();
+vi.mock('../../runtime/physicsQueries', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../runtime/physicsQueries')>();
   return {
     ...actual,
     usePhysicsQueries: () => ({

@@ -23,7 +23,7 @@ vi.mock('@react-three/rapier', async () => {
   };
 });
 
-vi.mock('../../runtime/physics', () => ({
+vi.mock('../../runtime/physicsQueries', () => ({
   physicsUserData: (levelObjectId: string) => ({ levelObjectId }),
   usePhysicsAvailable: () => true,
 }));

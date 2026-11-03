@@ -10,9 +10,9 @@ import {
     type ScatterLayer,
 } from '../../runtime/proceduralScatter';
 
-const FIELD = 'w-full bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-[11px] text-gray-200 focus:outline-none focus:border-amber-500';
-const BUTTON = 'flex items-center justify-center gap-1 px-2 py-0.5 rounded border border-gray-700 bg-gray-800 hover:bg-gray-700 text-[10px] text-gray-200';
-const LABEL = 'text-[10px] text-gray-400';
+const FIELD = 'w-full bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-2xs text-gray-200 focus:outline-none focus:border-amber-500';
+const BUTTON = 'flex items-center justify-center gap-1 px-2 py-0.5 rounded border border-gray-700 bg-gray-800 hover:bg-gray-700 text-2xs text-gray-200';
+const LABEL = 'text-2xs text-gray-400';
 
 const NumberInput: React.FC<{ label: string; value: number; onCommit: (value: number) => void; step?: number }> = ({ label, value, onCommit, step = 0.1 }) => {
     const shown = String(Math.round(value * 1000) / 1000);
@@ -100,7 +100,7 @@ export const ScatterInspector: React.FC<ComponentInspectorProps> = ({ component,
             {settings.layers.length < MAX_SCATTER_LAYERS && (
                 <button type="button" className={BUTTON} onClick={() => commit([...settings.layers, { ...DEFAULT_SCATTER_LAYER }])}><Plus size={10} /> Layer</button>
             )}
-            <p className="text-[10px] text-gray-500">
+            <p className="text-2xs text-gray-500">
                 Copies stand on the terrain and meshes in the area, keep each layer's spacing from every copy (place big things in the first layers),
                 and are placed again when a setting or the object changes. Lean 0 stands them upright; 1 leans them with the ground.
             </p>

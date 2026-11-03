@@ -22,16 +22,16 @@ export const ThumbnailTooltip: React.FC<ThumbnailTooltipProps> = ({ model, posit
             }}
         >
             <div className="absolute top-2 left-0 right-0 text-center z-10">
-                <span className="bg-black/60 backdrop-blur-md text-[10px] text-white px-2 py-0.5 rounded-full border border-white/10 font-medium">
+                <span className="bg-black/60 text-2xs text-white px-2 py-0.5 rounded-full border border-white/10 font-medium">
                     {model.category}
                 </span>
             </div>
             
-            <div className="h-full w-full bg-[#171717] flex items-center justify-center">
+            <div className="h-full w-full bg-panel flex items-center justify-center">
                 {model.thumbnail ? (
                     <img src={model.thumbnail} alt={`${model.name} thumbnail`} className="h-full w-full object-contain" />
                 ) : (
-                    <div className="text-[10px] uppercase tracking-widest text-gray-500">No preview available</div>
+                    <div className="text-2xs text-gray-500">No preview available</div>
                 )}
             </div>
             

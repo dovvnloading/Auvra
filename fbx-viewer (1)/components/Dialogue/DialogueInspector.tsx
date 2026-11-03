@@ -24,12 +24,12 @@ export const DialogueInspector: React.FC<ComponentInspectorProps> = ({ object, c
 
     return (
         <div className="space-y-2 rounded border border-gray-700/60 bg-gray-950/40 p-2">
-            <div className="flex items-center justify-between text-[10px]">
+            <div className="flex items-center justify-between text-2xs">
                 <span className="text-gray-400">Conversation</span>
                 <span className="text-gray-200">{plural(dialogue.lines.length, 'line')} · {plural(choiceCount, 'choice')}</span>
             </div>
-            {!dialogue.lines.length && <p className="text-[10px] text-amber-400">Add lines for the player to hear.</p>}
-            {problems.length > 0 && <p className="text-[10px] text-amber-400">{problems[0]}{problems.length > 1 ? ` (+${problems.length - 1} more)` : ''}</p>}
+            {!dialogue.lines.length && <p className="text-2xs text-amber-400">Add lines for the player to hear.</p>}
+            {problems.length > 0 && <p className="text-2xs text-amber-400">{problems[0]}{problems.length > 1 ? ` (+${problems.length - 1} more)` : ''}</p>}
             <button
                 type="button"
                 onClick={() => setEditing(true)}

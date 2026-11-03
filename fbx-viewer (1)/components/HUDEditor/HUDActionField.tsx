@@ -53,7 +53,7 @@ export const HUDActionField: React.FC<HUDActionFieldProps> = ({ value, levels, o
     return (
         <div className="space-y-2">
             <div className="space-y-1">
-                <label htmlFor={`${id}-action`} className="text-[10px] text-gray-500 font-bold uppercase flex items-center gap-1">
+                <label htmlFor={`${id}-action`} className="text-2xs text-gray-500 font-bold flex items-center gap-1">
                     <MousePointerClick size={10} /> Action
                 </label>
                 <select id={`${id}-action`} value={mode} onChange={(event) => handleModeChange(event.target.value)} className={FIELD_CLASS}>
@@ -64,7 +64,7 @@ export const HUDActionField: React.FC<HUDActionFieldProps> = ({ value, levels, o
             </div>
             {isOpenLevel && (
                 <div className="space-y-1">
-                    <label htmlFor={`${id}-level`} className="text-[10px] text-gray-500 font-bold uppercase">Level</label>
+                    <label htmlFor={`${id}-level`} className="text-2xs text-gray-500 font-bold ">Level</label>
                     <select
                         id={`${id}-level`}
                         value={levelId}
@@ -77,7 +77,7 @@ export const HUDActionField: React.FC<HUDActionFieldProps> = ({ value, levels, o
                     </select>
                 </div>
             )}
-            <p className="text-[10px] text-gray-500 leading-snug">Runs when the player clicks this element on a menu screen.</p>
+            <p className="text-2xs text-gray-500 leading-snug">Runs when the player clicks this element on a menu screen.</p>
         </div>
     );
 };

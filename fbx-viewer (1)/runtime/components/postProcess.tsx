@@ -9,6 +9,7 @@ import {
     AutoExposureEffect, COLOR_LOOKS, LightShaftsEffect, lookTexture, MotionBlurEffect, SunHazeEffect, WhiteBalanceEffect, type ColorLook,
 } from '../postEffects';
 import { ScreenLightingEffect } from '../screenLighting';
+import { frameLook } from '../frameLook';
 import { OwnedComposer, TemporalPipeline } from '../temporal/TemporalPipeline';
 import { MAX_RENDER_SCALE, MIN_RENDER_SCALE } from '../temporal/temporalSettings';
 import { canDrawFloat } from '../keptDepth';
@@ -435,6 +436,10 @@ export const AutoExposure: React.FC<{ compensation: number; speed: number }> = (
     const effect = useMemo(() => new AutoExposureEffect(), []);
     useEffect(() => { effect.set({ compensation, brighten: 3 * speed, darken: 1.2 * speed }); }, [effect, compensation, speed]);
     useEffect(() => () => effect.dispose(), [effect]);
+    useEffect(() => {
+        frameLook.adaptedExposure = (renderer) => effect.exposureNow(renderer);
+        return () => { frameLook.adaptedExposure = null; };
+    }, [effect]);
     return <primitive object={effect} />;
 };
 
@@ -498,6 +503,10 @@ const PostProcessStack = React.memo<{ settings: PostProcessSettings }>(({ settin
     const antialias = useAllowedAntialias(settings.antialias);
     // Kept from render to render: a composer given new children rebuilds every pass and loses what they have gathered.
     const stack = useMemo(() => stackEffects(settings, camera.uuid, antialias), [settings, camera.uuid, antialias]);
+    useEffect(() => {
+        frameLook.settings = settings;
+        return () => { frameLook.settings = null; };
+    }, [settings]);
     return (
         <>
             {antialias === 'temporal' ? (

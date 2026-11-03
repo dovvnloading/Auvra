@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "engines": {
-    "node": "^22.12.0 || ^24.0.0",
+    "node": "^22.13.0 || ^24.0.0",
     "npm": ">=10 <12"
   },
   "scripts": {
@@ -23,10 +23,14 @@
     "provider:verify": "node scripts/providers/verify.mjs",
     "renderer:verify": "node scripts/renderer/verify.mjs",
     "diagnostics:verify": "node scripts/diagnostics/verify.mjs",
-    "player:verify": "node scripts/player/verify.mjs"
+    "player:verify": "node scripts/player/verify.mjs",
+    "rendering:verify": "node scripts/rendering/run.mjs",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@babel/standalone": "7.23.6",
+    "@fontsource-variable/inter": "5.2.5",
+    "@fontsource-variable/jetbrains-mono": "5.2.5",
     "@react-three/drei": "9.122.0",
     "@react-three/fiber": "8.16.6",
     "@react-three/postprocessing": "2.16.2",
@@ -51,10 +55,13 @@
     "ajv": "8.20.0",
     "autoprefixer": "10.4.21",
     "esbuild": "0.25.12",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "jsdom": "^29.1.1",
     "postcss": "8.5.26",
     "tailwindcss": "3.4.17",
     "typescript": "~5.8.2",
+    "typescript-eslint": "^8.72.1",
     "vite": "^6.2.0",
     "vitest": "^4.1.11"
   }

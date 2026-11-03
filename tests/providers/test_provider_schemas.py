@@ -4,7 +4,7 @@ import copy, json, unittest
 from jsonschema import Draft202012Validator
 
 from Auvra.providers.adapters import (
-    COMMAND_TOOL_NAME, AnthropicAdapter, LlamaCppAdapter, OllamaAdapter, OpenAIAdapter, OpenRouterAdapter, TextAdapter, XAIAdapter,
+    COMMAND_TOOL_NAME, AnthropicAdapter, FalAdapter, LlamaCppAdapter, OllamaAdapter, OpenAIAdapter, OpenRouterAdapter, TextAdapter, XAIAdapter,
 )
 from Auvra.providers.commands import (
     COMMAND_JSON_SCHEMA, COMMAND_SCHEMA_PROVIDERS, HUD_TYPES, PROP_FIELDS, CommandProposal, CommandValidationError,
@@ -15,9 +15,9 @@ from Auvra.providers.errors import ProviderError
 from Auvra.providers.transport import HttpResponse
 
 
-ADAPTERS = {"openai": OpenAIAdapter, "xai": XAIAdapter, "anthropic": AnthropicAdapter, "openrouter": OpenRouterAdapter, "ollama": OllamaAdapter, "llama.cpp": LlamaCppAdapter}
+ADAPTERS = {"openai": OpenAIAdapter, "xai": XAIAdapter, "anthropic": AnthropicAdapter, "openrouter": OpenRouterAdapter, "ollama": OllamaAdapter, "llama.cpp": LlamaCppAdapter, "fal": FalAdapter}
 # Providers whose structured-output mode needs every property in required and additionalProperties false.
-STRICT = frozenset({"openai", "openrouter"})
+STRICT = frozenset({"openai", "openrouter", "fal"})
 # Keywords the researched provider documentation marks unsupported (or leaves undocumented, treated as
 # unsupported). Descriptions are kept everywhere: they guide the model and no provider rejects them.
 _LLAMA_UNSUPPORTED = frozenset({"uniqueItems", "contains", "minContains", "maxContains", "not", "if", "then", "else", "dependentSchemas", "patternProperties", "$anchor", "multipleOf", "minProperties", "maxProperties", "nullable"})
@@ -28,6 +28,7 @@ UNSUPPORTED = {
     "xai": frozenset({"not", "if", "then", "else", "minContains", "maxContains", "multipleOf", "uniqueItems", "contains", "propertyNames", "patternProperties", "dependentRequired", "dependentSchemas", "unevaluatedProperties", "unevaluatedItems"}),
     "anthropic": _ANTHROPIC_UNSUPPORTED,
     "openrouter": _OPENAI_UNSUPPORTED | _ANTHROPIC_UNSUPPORTED,
+    "fal": _OPENAI_UNSUPPORTED | _ANTHROPIC_UNSUPPORTED,
     "ollama": _LLAMA_UNSUPPORTED,
     "llama.cpp": _LLAMA_UNSUPPORTED,
 }
@@ -107,7 +108,7 @@ class ProviderCommandSchemaTests(unittest.TestCase):
     def test_every_text_adapter_has_a_schema_and_others_are_refused(self):
         self.assertEqual({cls.provider_id for cls in TextAdapter.__subclasses__()}, set(COMMAND_SCHEMA_PROVIDERS))
         self.assertEqual(set(ADAPTERS), set(COMMAND_SCHEMA_PROVIDERS))
-        for provider in ("fal", "", "OpenAI"):
+        for provider in ("comfyui", "", "OpenAI"):
             with self.subTest(provider=provider), self.assertRaises(ValueError): provider_command_schema(provider)
 
     def test_projection_is_deterministic_and_never_mutates_the_canonical_schema(self):
@@ -245,6 +246,7 @@ class ProviderCommandSchemaTests(unittest.TestCase):
                         "openrouter": {"choices": [{"message": {"content": text}}]},
                         "ollama": {"message": {"content": text}},
                         "llama.cpp": {"choices": [{"message": {"content": text}}]},
+                        "fal": {"choices": [{"message": {"content": text}}]},
                     }[provider]
                     registry = ProviderRegistry(); model = provider + "-test"; registry.discover_models(provider, [model])
                     fake = FakeTransport([HttpResponse(200, {}, json.dumps(body).encode())])

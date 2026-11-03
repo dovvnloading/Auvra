@@ -1,4 +1,5 @@
 
+import { RenderPanel } from '../RenderPanel';
 import React, { useState } from 'react';
 import { 
     MousePointer2, Box, Brush, Eraser, Move, RotateCw, 
@@ -74,9 +75,9 @@ export const EnvironmentToolbar: React.FC<EnvironmentToolbarProps> = ({ state, a
 
                 {/* Modes */}
                 <div className="flex bg-gray-900 p-1 rounded-lg border border-gray-800">
-                    <button onClick={() => setInteractionMode('select')} title="Select and transform objects (Q)" className={`flex items-center gap-2 px-3 py-1.5 rounded-md transition-all text-xs font-bold ${interactionMode === 'select' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}><MousePointer2 size={14} /> Select</button>
+                    <button onClick={() => setInteractionMode('select')} title="Select and transform objects (Q)" className={`flex items-center gap-2 px-3 py-1.5 rounded-md transition-all text-xs font-bold ${interactionMode === 'select' ? 'bg-blue-600 text-accent-ink shadow-sm' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}><MousePointer2 size={14} /> Select</button>
                     <button onClick={() => setInteractionMode('place')} title="Place individual objects (Click to spawn)" disabled={!hasActiveBrush} className={`flex items-center gap-2 px-3 py-1.5 rounded-md transition-all text-xs font-bold ${interactionMode === 'place' ? 'bg-green-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800 disabled:opacity-30'}`}><Box size={14} /> Place</button>
-                    <button onClick={() => setInteractionMode('paint')} title="Paint foliage or props with a brush (B)" disabled={!hasActiveBrush} className={`flex items-center gap-2 px-3 py-1.5 rounded-md transition-all text-xs font-bold ${interactionMode === 'paint' ? 'bg-emerald-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800 disabled:opacity-30'}`}><Brush size={14} /> Paint</button>
+                    <button onClick={() => setInteractionMode('paint')} title="Paint trees, grass, rocks and other foliage with a brush (B)" className={`flex items-center gap-2 px-3 py-1.5 rounded-md transition-all text-xs font-bold ${interactionMode === 'paint' ? 'bg-emerald-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}><Brush size={14} /> Foliage</button>
                     <div className="w-px h-4 bg-gray-700 mx-1"></div>
                     <button onClick={() => setInteractionMode('sculpt')} title="Create and sculpt terrain (T)" className={`flex items-center gap-2 px-3 py-1.5 rounded-md transition-all text-xs font-bold ${interactionMode === 'sculpt' ? 'bg-amber-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}><Mountain size={14} /> Terrain</button>
                     <button onClick={() => setInteractionMode('mask')} title="Create texture masks on objects (M)" className={`flex items-center gap-2 px-3 py-1.5 rounded-md transition-all text-xs font-bold ${interactionMode === 'mask' ? 'bg-purple-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}><Eraser size={14} /> Mask</button>
@@ -92,7 +93,7 @@ export const EnvironmentToolbar: React.FC<EnvironmentToolbarProps> = ({ state, a
                                 <button onClick={() => updateTransformSettings({ tool: 'rotate' })} title="Rotate Tool (E)" className={`p-1.5 rounded ${transformSettings.tool === 'rotate' ? 'bg-gray-700 text-white' : 'text-gray-500'}`}><RotateCw size={14}/></button>
                                 <button onClick={() => updateTransformSettings({ tool: 'scale' })} title="Scale Tool (R)" className={`p-1.5 rounded ${transformSettings.tool === 'scale' ? 'bg-gray-700 text-white' : 'text-gray-500'}`}><Scaling size={14}/></button>
                             </div>
-                            <button onClick={() => updateTransformSettings({ space: transformSettings.space === 'world' ? 'local' : 'world' })} title="Toggle Global/Local Space (Z)" className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-gray-400 hover:text-white bg-gray-900 px-2 py-1.5 rounded border border-gray-800">{transformSettings.space === 'world' ? <Globe size={12} /> : <Box size={12} />} {transformSettings.space}</button>
+                            <button onClick={() => updateTransformSettings({ space: transformSettings.space === 'world' ? 'local' : 'world' })} title="Toggle Global/Local Space (Z)" className="flex items-center gap-2 text-2xs font-bold text-gray-400 hover:text-white bg-gray-900 px-2 py-1.5 rounded border border-gray-800">{transformSettings.space === 'world' ? <Globe size={12} /> : <Box size={12} />} {transformSettings.space}</button>
                         </div>
                     </>
                 )}
@@ -119,6 +120,8 @@ export const EnvironmentToolbar: React.FC<EnvironmentToolbarProps> = ({ state, a
                 >
                     {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
                 </button>
+
+                <RenderPanel />
 
                 {/* Camera Speed Control */}
                 <div className="relative">
@@ -209,7 +212,7 @@ export const EnvironmentToolbar: React.FC<EnvironmentToolbarProps> = ({ state, a
                                                             updateTransformSettings({ snapGrid: opt.value });
                                                             setShowGridMenu(false);
                                                         }}
-                                                        className={`text-[10px] py-1.5 px-3 text-left hover:bg-gray-800 transition-colors ${transformSettings.snapGrid === opt.value ? 'text-blue-400 font-bold bg-blue-900/10' : 'text-gray-300'}`}
+                                                        className={`text-2xs py-1.5 px-3 text-left hover:bg-gray-800 transition-colors ${transformSettings.snapGrid === opt.value ? 'text-blue-400 font-bold bg-blue-900/10' : 'text-gray-300'}`}
                                                     >
                                                         {opt.label}
                                                     </button>
@@ -228,10 +231,10 @@ export const EnvironmentToolbar: React.FC<EnvironmentToolbarProps> = ({ state, a
                 <div className="flex items-center rounded shadow-lg shadow-blue-900/20">
                     <button
                         onClick={() => actions.handlePlayStart()}
-                        className="flex items-center gap-2 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-l font-bold text-xs transition-colors"
+                        className="flex items-center gap-2 whitespace-nowrap px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-accent-ink rounded-l font-bold text-xs transition-colors"
                         title="Play the level from its Player Start"
                     >
-                        <Play size={14} fill="currentColor" /> PLAY LEVEL
+                        <Play size={14} fill="currentColor" /> <span>Play<span className="hidden xl:inline"> level</span></span>
                     </button>
                     <button
                         onClick={() => actions.handlePlayStart(true)}

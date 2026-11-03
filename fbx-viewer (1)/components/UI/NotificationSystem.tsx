@@ -17,11 +17,11 @@ const NOTIFICATION_ICONS: Record<NotificationType, React.ReactNode> = {
     loading: <Loader2 size={16} className="text-blue-400 animate-spin" />
 };
 
-const UEToast: React.FC<{ notification: Notification; onDismiss: (id: string) => void }> = ({ notification, onDismiss }) => {
+const Toast: React.FC<{ notification: Notification; onDismiss: (id: string) => void }> = ({ notification, onDismiss }) => {
     return (
         <div className="relative group w-80 animate-in slide-in-from-right-10 fade-in duration-300">
             {/* Main Card */}
-            <div className="flex bg-[#1b1b1b] border border-[#050505] shadow-xl overflow-hidden min-h-[50px]">
+            <div className="flex bg-panel border border-[#050505] shadow-xl overflow-hidden min-h-[50px]">
                 
                 {/* Status Strip (Left) */}
                 <div className={`w-1 shrink-0 ${NOTIFICATION_COLORS[notification.type]}`} />
@@ -33,8 +33,8 @@ const UEToast: React.FC<{ notification: Notification; onDismiss: (id: string) =>
                             {NOTIFICATION_ICONS[notification.type]}
                         </div>
                         <div className="flex-1 min-w-0">
-                            {/* Title / Type Label (UE Style) */}
-                            <div className="text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-0.5">
+                            {/* Title / Type Label */}
+                            <div className="text-2xs font-bold text-gray-500 mb-0.5 capitalize">
                                 {notification.type}
                             </div>
                             {/* Message */}
@@ -78,7 +78,7 @@ export const NotificationContainer: React.FC = () => {
         <div className="fixed bottom-0 right-0 z-[100] p-6 flex flex-col gap-2 pointer-events-none items-end max-h-screen overflow-hidden">
             <div className="flex flex-col gap-2 pointer-events-auto items-end">
                 {notifications.map(n => (
-                    <UEToast key={n.id} notification={n} onDismiss={removeNotification} />
+                    <Toast key={n.id} notification={n} onDismiss={removeNotification} />
                 ))}
             </div>
             

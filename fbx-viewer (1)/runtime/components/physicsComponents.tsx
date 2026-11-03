@@ -2,6 +2,7 @@ import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, us
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import { ConvexGeometry } from 'three-stdlib';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import {
     BallCollider,
     CapsuleCollider,
@@ -14,6 +15,7 @@ import {
 } from '@react-three/rapier';
 import type { CollisionPayload, CuboidColliderProps, RapierCollider, RapierRigidBody, RigidBodyProps } from '@react-three/rapier';
 import type { LevelComponent, LevelObject } from '../../types';
+import { authoredHullsUnder } from '../../utils/modelConventions';
 import { CARD_FRINGE_KEY } from '../../utils/processing/ModelMaterials';
 import { PhysicsFailureBoundary, objectIdFromRigidBody, physicsUserData, usePhysicsAvailable } from '../physics';
 import { useTriggerEvents } from '../triggers';
@@ -25,10 +27,10 @@ import type { ComponentDefinition, ComponentRenderProps } from './types';
 
 type Vec3 = [number, number, number];
 
-export type ColliderShape = 'box' | 'sphere' | 'capsule' | 'mesh';
+export type ColliderShape = 'box' | 'sphere' | 'capsule' | 'mesh' | 'model';
 export type PhysicsBodyType = 'fixed' | 'dynamic' | 'kinematicPosition';
 
-const COLLIDER_SHAPES: readonly ColliderShape[] = ['box', 'sphere', 'capsule', 'mesh'];
+const COLLIDER_SHAPES: readonly ColliderShape[] = ['box', 'sphere', 'capsule', 'mesh', 'model'];
 const BODY_TYPES: readonly PhysicsBodyType[] = ['fixed', 'dynamic', 'kinematicPosition'];
 
 /** Smallest collider dimension, so a zero or negative field never builds an empty shape. */
@@ -272,6 +274,8 @@ export interface HostGeometry {
     indices: Uint32Array;
     /** Each triangle's surface, from its material's name; null when no name says one. */
     surfaces?: Pick<SurfaceTag, 'triangles' | 'kinds'> | null;
+    /** The collision shapes the model's file holds, in the same space. */
+    hulls?: Float32Array[];
 }
 
 /** The materials a mesh's triangles use, in index order: one run per material group (gaps unnamed). */
@@ -343,7 +347,8 @@ export const collectHostGeometry = (host: THREE.Object3D, objectId: string, skip
         vertexOffset += position.count;
         indexOffset += triangleIndexCount;
     }
-    return { positions, indices, surfaces: triangleSurfaces(runs) };
+    const hulls = authoredHullsUnder(host, (node) => isPhysicsAnchor(node) || isNestedObject(node, objectId));
+    return { positions, indices, surfaces: triangleSurfaces(runs), ...(hulls.length ? { hulls } : {}) };
 };
 
 export type HullPlan =
@@ -579,7 +584,7 @@ const foldAt = (
             key: `${objectId}/${id}`,
             objectId,
             settings,
-            content: settings.shape === 'mesh' ? content : null,
+            content: settings.shape === 'mesh' || settings.shape === 'model' ? content : null,
             position: [centre.x, centre.y, centre.z],
             rotation: [rotation.x, rotation.y, rotation.z],
             scale: [scale.x, scale.y, scale.z]
@@ -713,10 +718,59 @@ const ObjectCollider: React.FC<ObjectColliderProps> = ({ settings, content, obje
         }
         case 'mesh':
             return content ? <TrimeshCollider ref={tag} args={[content.positions, content.indices]} {...common} /> : null;
+        case 'model':
+            return content ? <ModelFileColliders content={content} colliderRef={tag} common={common} /> : null;
     }
 };
 
-/** The automatic shape of a rigid body without colliders: a hull around its meshes, or a unit box when it draws none. */
+/** The shapes a model's file holds, or one hull around the model when it holds none. */
+const ModelFileColliders: React.FC<{ content: HostGeometry; colliderRef: (collider: RapierCollider | null) => void; common: ColliderCommonProps }> = ({ content, colliderRef, common }) => {
+    const points = content.hulls?.length ? content.hulls : [content.positions];
+    const hulls = useMemo(() => points.map(planHull), [points]);
+    const masses = useMemo(() => hullMasses(points, common.mass), [points, common.mass]);
+    const scale = (common.scale ?? [1, 1, 1]) as Vec3;
+    // A box's size is scaled as given, so a mirror must not reach it; its centre still takes the mirror.
+    const boxScale: Vec3 = [Math.abs(scale[0]), Math.abs(scale[1]), Math.abs(scale[2])];
+    return (
+        <>
+            {hulls.map((hull, index) => (hull.kind === 'box'
+                ? <CuboidCollider key={index} ref={colliderRef} args={hull.halfExtents} {...common} position={placedCenter(hull.center, common)} scale={boxScale} mass={masses[index]} />
+                : <ConvexHullCollider key={index} ref={colliderRef} args={[hull.points]} {...common} mass={masses[index]} />))}
+        </>
+    );
+};
+
+/** Where a shape's centre lands under a collider's own offset, turn and scale. */
+const placedCenter = (center: Vec3, common: ColliderCommonProps): Vec3 => {
+    const offset = (common.position ?? [0, 0, 0]) as Vec3;
+    const scale = (common.scale ?? [1, 1, 1]) as Vec3;
+    const turned = new THREE.Vector3(center[0] * scale[0], center[1] * scale[1], center[2] * scale[2]);
+    if (common.rotation) turned.applyEuler(new THREE.Euler(...(common.rotation as Vec3)));
+    return [offset[0] + turned.x, offset[1] + turned.y, offset[2] + turned.z];
+};
+
+/** A body's mass shared among its shapes by the room each takes, so a small part does not weigh as much as the rest and tip the body over. */
+export const hullMasses = (hulls: readonly Float32Array[], mass: number | undefined): (number | undefined)[] => {
+    if (mass === undefined) return hulls.map(() => undefined);
+    const point = new THREE.Vector3();
+    const volumes = hulls.map((points) => {
+        const bounds = new THREE.Box3();
+        for (let i = 0; i + 2 < points.length; i += 3) bounds.expandByPoint(point.set(points[i], points[i + 1], points[i + 2]));
+        const size = bounds.isEmpty() ? new THREE.Vector3() : bounds.getSize(new THREE.Vector3());
+        return Math.max(size.x, MIN_EXTENT) * Math.max(size.y, MIN_EXTENT) * Math.max(size.z, MIN_EXTENT);
+    });
+    const total = volumes.reduce((sum, volume) => sum + volume, 0);
+    return volumes.map((volume) => (mass * volume) / total);
+};
+
+/** The automatic shape of a rigid body without colliders: the shapes its model's file holds, or a hull around its meshes, or a unit box when it draws none. */
+const AutomaticColliders: React.FC<{ content: HostGeometry | null; mass?: number }> = ({ content, mass }) => {
+    const hulls = content?.hulls;
+    const masses = useMemo(() => hullMasses(hulls ?? [], mass), [hulls, mass]);
+    if (!hulls?.length) return <HullCollider points={content?.positions ?? null} mass={mass} />;
+    return <>{hulls.map((points, index) => <HullCollider key={index} points={points} mass={masses[index]} />)}</>;
+};
+
 const HullCollider: React.FC<{ points: Float32Array | null; mass?: number }> = ({ points, mass }) => {
     const hull = useMemo(() => (points ? planHull(points) : null), [points]);
     if (!hull) return <CuboidCollider args={[0.5, 0.5, 0.5]} mass={mass} />;
@@ -859,7 +913,7 @@ const SimulatedBody: React.FC<SimulatedBodyProps> = ({ object, plan, host, conte
                 />
             ))}
             {plan.autoHull && (
-                <HullCollider key={scaleKey} points={content?.positions ?? null} mass={colliderMass(plan, COLLIDER_DEFAULTS, foldedShapes)} />
+                <AutomaticColliders key={scaleKey} content={content} mass={colliderMass(plan, COLLIDER_DEFAULTS, foldedShapes)} />
             )}
             {folded.map(entry => {
                 const handlers = triggerHandlers(entry.objectId);
@@ -913,7 +967,7 @@ const ObjectBody: React.FC<{ object: LevelObject; plan: PhysicsBodyPlan }> = ({ 
     registry.type = plan.body.type;
     const anchorUserData = useMemo(() => ({ ...ANCHOR_USER_DATA, [COMPOUND_BODY_KEY]: registry }), [registry]);
     const folded = useMemo(() => Array.from(foldedByObject.values()).flat(), [foldedByObject]);
-    const needsContent = plan.autoHull || plan.colliders.some(entry => entry.settings.shape === 'mesh');
+    const needsContent = plan.autoHull || plan.colliders.some(entry => entry.settings.shape === 'mesh' || entry.settings.shape === 'model');
 
     useLayoutEffect(() => {
         const resolved = hostRef?.current ?? anchorRef.current?.parent ?? null;
@@ -1008,7 +1062,22 @@ const buildPreviewGeometry = (kind: 'mesh' | 'hull', content: HostGeometry): THR
         geometry.setIndex(new THREE.BufferAttribute(content.indices, 1));
         return geometry;
     }
-    const hull = planHull(content.positions);
+    if (content.hulls?.length) {
+        const shapes = content.hulls.flatMap((points) => {
+            const shape = previewHull(points);
+            if (!shape) return [];
+            // Flat shapes draw as boxes, solid ones as hulls: to merge, both must hold the same attributes.
+            const plain = shape.index ? shape.toNonIndexed() : shape;
+            plain.deleteAttribute('uv');
+            return [plain];
+        });
+        return shapes.length ? mergeGeometries(shapes) : null;
+    }
+    return previewHull(content.positions);
+};
+
+const previewHull = (positions: Float32Array): THREE.BufferGeometry | null => {
+    const hull = planHull(positions);
     if (hull.kind === 'box') {
         const [hx, hy, hz] = hull.halfExtents;
         return new THREE.BoxGeometry(hx * 2, hy * 2, hz * 2).translate(...hull.center);
@@ -1089,6 +1158,7 @@ const ColliderPreview: React.FC<{ object: LevelObject; component: LevelComponent
     const round = settings.shape === 'sphere' || settings.shape === 'capsule';
     const worldScale = usePreviewWorldScale(anchorRef, round);
     if (settings.shape === 'mesh') return <ContentPreview objectId={object.id} kind="mesh" offset={settings.offset} color={color} />;
+    if (settings.shape === 'model') return <ContentPreview objectId={object.id} kind="hull" offset={settings.offset} color={color} />;
     // Round shapes are drawn at the size play builds them (roundShapeSize), undoing the object's scale.
     const size = roundShapeSize(settings, worldScale);
     const meshScale: Vec3 = round ? [1 / worldScale[0], 1 / worldScale[1], 1 / worldScale[2]] : UNIT_SCALE;
@@ -1137,7 +1207,8 @@ export const PHYSICS_COMPONENTS: ComponentDefinition[] = [
                     { label: 'Box', value: 'box' },
                     { label: 'Sphere', value: 'sphere' },
                     { label: 'Capsule', value: 'capsule' },
-                    { label: 'Mesh (model surface)', value: 'mesh' }
+                    { label: 'Mesh (model surface)', value: 'mesh' },
+                    { label: 'From the model file', value: 'model' }
                 ]
             },
             { key: 'size', label: 'Box Size', type: 'vector3', default: COLLIDER_DEFAULTS.size, step: 0.1 },

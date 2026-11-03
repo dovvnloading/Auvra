@@ -87,12 +87,21 @@ beforeEach(() => {
   frame.callback = null;
 });
 
+describe('where a decal lands', () => {
+  it('takes an offset from the object, and defaults to none', () => {
+    expect(resolveDecalSettings({}).offset).toEqual([0, 0, 0]);
+    expect(resolveDecalSettings({ offset: [0, 1.2, -0.5] }).offset).toEqual([0, 1.2, -0.5]);
+    expect(resolveDecalSettings({ offset: [1, 2] }).offset).toEqual([0, 0, 0]);
+    expect(resolveDecalSettings({ offset: [999, 0, 0] }).offset[0]).toBe(100);
+  });
+});
+
 describe('decal settings', () => {
   it('fills in defaults and clamps every field', () => {
     expect(resolveDecalSettings({})).toEqual(DECAL_DEFAULTS);
     expect(resolveDecalSettings({
       textureId: '  Brick ', size: [-3, 0, 500], opacity: 2, color: '#FF8800', receivers: 'scene',
-    })).toEqual({ textureId: 'Brick', size: [3, MIN_DECAL_SIZE, MAX_DECAL_SIZE], opacity: 1, color: '#FF8800', receivers: 'scene' });
+    })).toEqual({ textureId: 'Brick', size: [3, MIN_DECAL_SIZE, MAX_DECAL_SIZE], offset: [0, 0, 0], opacity: 1, color: '#FF8800', receivers: 'scene' });
     expect(resolveDecalSettings({
       textureId: 42, size: [1, Number.NaN, 1], opacity: -1, color: 'red', receivers: 'everything',
     })).toEqual({ ...DECAL_DEFAULTS, opacity: 0 });
@@ -104,8 +113,8 @@ describe('decal settings', () => {
     expect(DECAL_COMPONENT.type).toBe('decal');
     expect(DECAL_COMPONENT.label).toBe('Decal');
     const props = Object.fromEntries(DECAL_COMPONENT.props.map(prop => [prop.key, prop]));
-    expect(Object.keys(props)).toEqual(['textureId', 'size', 'opacity', 'color', 'receivers']);
-    expect(props.size.default).toEqual([1, 1, 0.5]);
+    expect(Object.keys(props)).toEqual(['textureId', 'size', 'offset', 'opacity', 'color', 'receivers']);
+    expect(props.size.default).toEqual([1, 1, 3]);
     expect(props.size).toMatchObject({ type: 'vector3', min: MIN_DECAL_SIZE, max: MAX_DECAL_SIZE });
     expect(props.opacity).toMatchObject({ type: 'number', min: 0, max: 1, default: 1 });
     expect(props.receivers.options?.map(option => option.value)).toEqual(['parent', 'scene']);

@@ -159,10 +159,10 @@ export const NewProjectMenu: React.FC<NewProjectMenuProps> = ({ onCreate, disabl
         onClick={() => (open ? closeMenu(false) : openMenu(0))}
         onKeyDown={handleTriggerKeyDown}
         disabled={disabled}
-        className={`flex items-center gap-2 px-3 py-1 text-xs font-bold rounded transition-colors disabled:opacity-50 ${open ? 'bg-gray-800 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'}`}
+        className={`flex h-6 items-center gap-1.5 rounded px-2 text-xs transition-colors duration-75 disabled:opacity-40 ${open ? 'bg-white/10 text-ink' : 'text-ink-2 hover:bg-white/5 hover:text-ink'}`}
         title="Create a new project from a template"
       >
-        <FilePlus size={12} /> New <ChevronDown size={10} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+        <FilePlus size={13} className="text-ink-3" />New<ChevronDown size={11} className="text-ink-3" />
       </button>
       {open && createPortal(
         <div
@@ -172,10 +172,10 @@ export const NewProjectMenu: React.FC<NewProjectMenuProps> = ({ onCreate, disabl
           aria-labelledby={triggerId}
           onKeyDown={handleMenuKeyDown}
           style={{ position: 'fixed', top: position.top, left: position.left }}
-          className="z-[9999] w-72 rounded-md border border-gray-700 bg-gray-900 p-1 shadow-xl"
+          className="z-[9999] w-72 rounded-lg border border-line bg-panel py-1 shadow-[0_12px_32px_rgb(0_0_0/0.55)]"
         >
           {unsavedChanges && (
-            <div className="px-2 pb-1 pt-0.5 text-[10px] text-amber-400">The open project has unsaved changes.</div>
+            <div className="px-3 pb-1 pt-0.5 text-2xs text-warn">The open project has unsaved changes.</div>
           )}
           {PROJECT_TEMPLATE_OPTIONS.map((option, index) => (
             <button
@@ -188,10 +188,10 @@ export const NewProjectMenu: React.FC<NewProjectMenuProps> = ({ onCreate, disabl
               aria-describedby={`${baseId}-${option.template}-description`}
               onClick={() => choose(option.template)}
               onMouseEnter={() => setActiveIndex(index)}
-              className="flex w-full flex-col items-start gap-0.5 rounded px-2 py-1.5 text-left outline-none hover:bg-gray-800 focus:bg-gray-800 focus-visible:ring-1 focus-visible:ring-blue-500"
+              className="flex w-full flex-col items-start px-3 py-1 text-left outline-none focus:bg-white/5"
             >
-              <span id={`${baseId}-${option.template}-label`} className="text-xs font-bold text-gray-200">{option.label}</span>
-              <span id={`${baseId}-${option.template}-description`} className="whitespace-normal text-[10px] text-gray-500">{option.description}</span>
+              <span id={`${baseId}-${option.template}-label`} className="text-xs text-ink">{option.label}</span>
+              <span id={`${baseId}-${option.template}-description`} className="whitespace-normal text-2xs text-ink-3">{option.description}</span>
             </button>
           ))}
         </div>,

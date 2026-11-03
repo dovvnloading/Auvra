@@ -4,14 +4,29 @@ Assets live in the project's content store and are referenced by stable ids, so 
 
 ## Importing models
 
-The **Content Browser** imports **FBX**, **glTF (.gltf with embedded data)**, **GLB** and **OBJ**. When you import a model, the import options ask whether to **normalise** it:
+The **Content Browser** imports **FBX**, **glTF (.gltf with embedded data)**, **GLB** and **OBJ**. Importing a model opens its import options, which say what the file holds (where it came from, its size, geometry, materials, skeleton and clips) and how it will come in:
 
-- **Normalise on** scales the model so its largest dimension equals the target size in metres (5 by default). Useful for assets from mixed sources.
-- **Normalise off** keeps the authored size. An FBX file says what unit it is authored in (Blender, Maya and Mixamo write centimetres), and the model comes in at that size in metres, so a 1.8 m character authored in centimetres is 1.8 m tall. glTF and GLB are metres already.
+- **Size.** **As in the file** keeps the size and pivot the file says it has. An FBX file says what unit it is authored in (Blender, Maya and Mixamo write centimetres), so a 1.8 m character authored in centimetres is 1.8 m tall; glTF and GLB are metres already. **Fit to a size** scales the model so its largest side is the length you give, centred and resting on the floor. A person-shaped skeleton the file makes shorter than 1 m or taller than 2.6 m starts at 1.8 m, and the options say so. Some Mixamo files make their characters almost 4 m tall.
+- **Keep.** A mesh a rigged file's skeleton does not move starts left out if it is under a tenth of the file's triangles, as some exporters leave strays behind: Meshy's rigged characters come with a sphere. Blend shapes can be left out too.
+- **Animation.** Tick the clips to bring in. **Reduce keys** drops animation keys that change nothing you could see (**Light**, bones stay within 0.05 mm), keeps every key, or drops many more (**Strong**). The scissors beside a take cut it into clips: see [Cutting a take into clips](#cutting-a-take-into-clips).
+- **Images not in the file.** A model naming images its file does not hold lists them. **Find images...** or **Folder...** locates them by name, and they stay with the project. An OBJ keeps its materials in a `.mtl` file beside it: the same place asks for that, then for the images it names.
+- **More options** chooses between the file's normals and normals worked out from its faces, and whether normal-mapped parts get tangents.
+
+**Keep**, **Animation** and **More options** are for FBX and OBJ files: a glTF or GLB comes in as it is. When importing several files, **Import all** brings in the rest the same way. The **Properties** of a model from an FBX or OBJ keep what its file held under **Source file**, with any warnings. A file that cannot be read says why and is not imported, and neither is one that holds no meshes and no animation.
+
+A project opens without a model whose file cannot be read, says which and why, and keeps it in the project.
 
 The world is in metres: gravity, vehicles, speeds and distances all are. A character's capsule, step height, jump height and third-person camera are sized from its height, so a character of any size moves and is framed the same way; a person is about 1.8 m tall. The third-person camera sits a little to the character's right, so the character stands beside the crosshair rather than under it.
 
-An FBX that names texture images it does not contain (they were left beside the file it came from) still imports, without those textures, and says how many it left out. Import the images as textures and assign them in the model's **Material Overrides**.
+An FBX that names texture images it does not contain still imports if they are not found, without those textures, and says how many it left out.
+
+FBX and OBJ files are read by a native importer in the background, so a large file does not stall the editor. It reads every FBX version from Maya, 3ds Max, Blender, MotionBuilder, Cinema 4D and others, in binary or text:
+
+- **Orientation and units.** A file authored Z-up is stood up on import. A file's unit is read from the file.
+- **Materials.** Base colour, roughness, metalness, normal, emissive, opacity and ambient occlusion maps come through as physically based materials, including those Blender writes into its FBX exports. Roughness and metalness maps are packed into one image, a glossiness map is inverted into roughness, and a height (bump) map on a material with no normal map becomes a normal map. TGA and TIFF images are read too.
+- **Geometry.** Polygons are triangulated, corners are shared between triangles, and a mesh has one piece per material. A mesh with no normals gets them worked out, keeping edges sharper than 60 degrees hard. Parts with a normal map get MikkTSpace tangents, the standard the maps are baked against, unless the file has its own.
+- **Skeletons.** A character split into several meshes shares one skeleton. Each vertex keeps its four strongest bones.
+- **Animation.** Each take in a file becomes a clip, with all its animation layers merged and its curves followed exactly, then cut to the take's range and stripped of keys that change nothing. A take of one frame is a pose, and lasts that frame. Blend shapes and their animation come through.
 
 Animations in FBX and glTF files are kept and can be bound to characters in the animation graph.
 
@@ -19,13 +34,69 @@ Compressed glTF and GLB files load as they are: **Draco** and **meshopt** geomet
 
 Animation files without a mesh, such as Mixamo downloads made "Without Skin", go onto a character: select the character in the library, then choose **Import > Animation** and pick one or more files. A file with one clip names the clip after the file, so `Walk.fbx` gives a clip called `Walk`. The names are stored with the project, so renaming the model or file later does not rename its clips. A clip whose name the character already has is numbered: importing `Walk.fbx` twice gives `Walk` and `Walk 2`. Clips made for a skeleton with the same bone names (Mixamo characters share one) play as they are. Others are retargeted onto the character: bones are matched by what they are for (hips, spine, arms, legs, hands, fingers) across Mixamo, Unreal, Rigify, 3ds Max Biped and plain names, each bone is first lined up with the source's rest pose so a T-pose clip plays right on an A-pose character, and the hips' travel is scaled to the character's height. Most of the character's limbs and spine must find a match.
 
+### Cutting a take into clips
+
+Many art kits and motion capture files keep every action on one long timeline. The scissors beside a take in the import options open it on a timeline over a preview on the model, and so do the **Cut** button and the scissors on a clip in a model's **Properties**, for its own clips and for clips imported onto it. Drag along the timeline to mark a clip, or press **Add clip** to start from the whole take and trim its ends. Each clip has a name, a start and an end in frames as the file counts them or in seconds, and whether it loops. Selecting a clip plays just that stretch; **S** splits a clip at the playhead, and **[** and **]** set its ends there. Scroll over the timeline to zoom in.
+
+A take that has clips cut from it no longer comes in whole unless **Also keep the whole take** is ticked. The first clip on a take starts with the take's own clip name, so trimming a clip changes nothing for what plays it. Clips are found by name, so renaming one is up to you: a graph state that played the old name has to be pointed at the new one.
+
+**Start at the origin** moves a clip so the character starts where the take starts rather than wherever it has walked to by then. It comes on by itself where the character has moved away by more than half its hip height, and it can be set either way. A clip keeps the facing it has in the take.
+
+Clips are stored with the project and cut again from the source file each time it is read: on opening the project, in a built game, and on reimport. A new export of a file with one take keeps its clips even if the take was renamed, and a clip stops at the end of a shorter take. A clip whose take is gone from a new file is left out, with a message saying which, and comes back if the take does. A graph state given a clip that says whether it loops takes that up.
+
 A model's own clip can get a **mirrored** copy, with left and right swapped: hover the clip in the model's Properties and click the mirror button. A strafe left becomes a strafe right, a right-handed punch a left-handed one. The copy is called `<clip> (Mirrored)` and is rebuilt from its clip each time the project opens.
 
-## Reimport and import size
+## What names say in a model file
+
+Whatever format it comes in, a model file can say more through the names of its nodes, as art tools and engines have long agreed:
+
+- **`UCX_`, `UBX_`, `USP_` and `UCP_` meshes** (hull, box, sphere, capsule), in capitals, are collision shapes. They are not drawn, unless the file has nothing else to draw. A **Rigid Body** with no **Collider** uses them instead of one hull around the model, and a **Collider** can use them with **From the model file** as its shape. Each counts as a convex hull of its corners, so a concave shape is built from several, as in the art tools.
+- **`SOCKET_` nodes** become sockets of the model when a file is imported or a new one replaces it, at the place the node has, hanging from the bone or moving node above it if there is one. A socket of the same name already on the model is left as it is. A socket marks where a muzzle flash and shots start.
+- **`Name_LOD0`, `Name_LOD1`** and so on, or `Name` beside `Name_LOD1`, and the children of an FBX LOD group, are simpler versions of a mesh. The finest is kept. The rest are left out, as Auvra makes the simpler levels of every mesh itself.
+
+A mesh hidden in the art tool when an FBX was saved is left out too, unless every mesh in the file is hidden. The size the import options give is that of what is left.
+
+## Skeletons
+
+Select a model and open the **Skeleton** tab in the sidebar to see its bones as a tree you can search, each with the part of the body it stands for. **Show bones** draws them over the model, and clicking a joint in the view picks its bone in the tree. **Show weights** colours the model by how much the picked bone moves it, from dark where not at all to red where fully, and goes off when you leave the tab. **Add a socket here** puts a socket on the picked bone, for things carried or attached.
+
+A clip made for one skeleton plays on another when both read as people. Bones are recognised by the names rigs commonly use (`mixamorig:LeftArm`, `upperarm_l`, `UpperArm.L`, `LUpperLeg`, `FootL`). A skeleton whose names say nothing, such as `Bone.012`, is read from its shape at rest: the feet are the lowest leaves, the head the highest, the hands those furthest out, and hips and chest are where their paths meet. The tab warns when a part is still missing. To put a bone right, pick it and choose under **This bone is**; the choice stays with the project, and **Make them again** remakes the clips from other rigs with it.
+
+A clip plays as it is only when it fits the skeleton: the same bone names, and bones it places resting where it expects them. A clip made for other proportions or in another unit is carried over like one from any other skeleton, so feet stay on the floor even between rigs that name their bones alike.
+
+A clip from another skeleton is rebuilt for this one rather than copied: each bone takes the pose its counterpart has, then the legs bend so that the feet land where the clip's feet land, in proportion to this character's legs. Feet that hang from the skeleton's root instead of the legs, as on rigs built for inverse kinematics, are moved to the same places. Clips keep the rate they were made at, and bones a clip never moves get no keys.
+
+### Making a skeleton
+
+A model with no skeleton can be given one: select it, open the **Skeleton** tab and choose **Make a skeleton**. It is for a person, upright or hunched, with their arms anywhere clear of the body, even long enough to reach the floor, or for an animal on four legs, facing any way. Spikes, horns and blades do not get in the way, nor do legs grown together, and an arm that runs on into a blade or something held has its joints where the other arm's are.
+
+The panel starts on the kind of body the model looks like, **Person** or **Four legs**, and you can change it. **Turn around** reads the body again the other way round, for a front and back or a head and tail it got the wrong way.
+
+The body is read from its mesh, and markers appear on the joints: on a person the chin, shoulders, elbows, wrists, groin, knees and ankles, seen from the front; on an animal the nose, head, neck, hips and tail, and each leg's shoulder or hip, elbow or knee, wrist or hock, and paw, seen from the side. Drag any that are off. Only their place in the view counts: each is kept in the middle of the limb it is on, and both sides move together unless you turn that off. An animal's far side only shows when you do. A mesh that does not read as the kind of body chosen gets markers from that kind's usual proportions to start from.
+
+**Make the skeleton** gives the model the bones most character rigs have, turned the way those rigs turn them, with each vertex following the bones nearest it through the body, in lengths of the limb's own thickness. A hand resting on a thigh does not pull the thigh along, and loose pieces such as a belt follow the bones nearest them. Materials and images stay as they were. A person's spine follows the curve of their back.
+
+An animal's bones are named as a person's where they stand alike: its back, neck and head, its hind legs as legs and its front legs as arms, each down to the paw. It also has a second neck bone and, if it has a tail, a chain of four bones along it, which **Give the tail bones** can leave out.
+
+**Give the hands fingers** adds three bones to each finger, so clips that curl the fingers, such as holding a weapon, show. Fingers that stand apart are followed where they are. A hand whose fingers are grown together into a mitten, as on many generated meshes, is shared out across its width, with each finger ending at the hand's outline. Nothing behind the wrist follows a finger. Turn it off to keep each hand as one bone.
+
+The model keeps its place in levels and blueprints, its size, its sockets and its collision shapes, and goes among the characters, its source now a GLB. Only what it draws counts as its body: parts the import leaves out are gone from the GLB. Any clips in its old file go, with a note saying so before you start. Clips from any humanoid rig can then be imported onto a person. An animal takes clips from rigs named as it is, and from rigs that say which end of the body a leg is at, such as `front_thigh.L` and `RearLeg_R`.
+
+### Painting weights
+
+Any weight can be corrected by hand, on a skeleton from a file as well as one made here. With a bone picked and **Show weights** on, choose a brush under **Paint weights** and drag on the model. **Add** makes the picked bone move what the brush touches more, and **Remove** less, with the other bones there taking up the difference. **Smooth** evens out all the bones under the brush. **Size** is across the brush, as a share of the model's longest side (keys `[` and `]`), and **Strength** is how far one touch moves a vertex (keys `,` and `.`). Shift does the opposite of Add or Remove. Alt-drag, or any drag that starts off the model, still turns the view. Ctrl-click picks the bone moving that spot most, and the label beside the brush lists all the bones that do.
+
+**Pose** plays one of the model's clips, and its slider stops the clip at any moment, so a patch can be painted in the pose where it looks wrong and seen to change as it is painted.
+
+A vertex keeps at most four bones, with shares adding up to one. The brush follows the surface out from where it lands, so a hand resting on a thigh is not painted with the thigh, and takes any other piece of the mesh in reach, such as clothes over a body. Vertices at the same place move as one, across texture seams, materials and meshes, and a mesh is given any bone it did not have.
+
+Each stroke is one step of undo (Ctrl+Z and Ctrl+Y), and **Put back original** returns to the weights the model came with. Painted weights are kept with the model, apart from its source file. They go with the project into built games, and stay through **Import Settings** and **Reimport** wherever vertices still stand in the same place. The editor says so when a new file leaves some of them nowhere to go.
+
+## Reimport and import settings
 
 Choose **Reimport** on a model to replace its source file. The model keeps its id, so everything placed in levels and linked in blueprints updates to the new file.
 
-Choose **Import Size** on a model to change how big it imports after the fact: the same options as when it was imported (normalise to a target size, or keep its authored size). The model is read again from its source at the new size; it keeps its id, overrides and clips, and everything placed or linked updates. To make a 5 m character person-sized, set its target size to 1.8.
+Choose **Import Settings** on a model to change how it imports after the fact: the same options as when it was imported. The model is read again from its source; it keeps its id, overrides and clips, and everything placed or linked updates. To make a 5 m character person-sized, fit its largest side to 1.8.
 
 ## Material overrides
 

@@ -3,9 +3,18 @@ import { useState, useCallback } from 'react';
 import { AssetInfoUpdate, TextureData } from '../types';
 import { dbOperations, normalizeAssetInfoUpdate } from '../utils/db';
 import { projectService } from '../utils/projectService';
+import { materialLibrary } from '../runtime/materials/materialLibrary';
 import { useNotification } from '../context/NotificationContext';
 import { isAbortError, useOperationActions } from '../context/OperationContext';
 import { assetDiagnosticAttributes, frontendDiagnostics } from '../diagnostics/runtime';
+import { importFailureMessage } from '../utils/modelLoader';
+
+/** A PNG cut short still shows, with the rest of it blank, so the browser cannot be asked. Its last chunk says it is all there. */
+const isCutShortPng = async (file: File): Promise<boolean> => {
+  if (file.type !== 'image/png') return false;
+  const tail = new Uint8Array(await file.slice(-1024).arrayBuffer());
+  return !String.fromCharCode(...tail).includes('IEND');
+};
 
 export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
   const [textures, setTextures] = useState<TextureData[]>([]);
@@ -13,7 +22,6 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
   const { startOperation } = useOperationActions();
 
   const addTexture = useCallback(async (file: File): Promise<string | null> => {
-    projectService.assertWritable();
     const assetAlias = frontendDiagnostics.nextAssetAlias();
     const diagnostic = assetDiagnosticAttributes(file, 'texture', assetAlias);
     const operation = startOperation({
@@ -30,6 +38,9 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
     let failure: unknown;
     setIsLoading(true);
     try {
+        projectService.assertWritable();
+        await projectService.assertStorable(file);
+        if (await isCutShortPng(file)) throw new Error('The image could not be read. It may be damaged or cut short.');
         url = URL.createObjectURL(file);
         
         // Read dimensions
@@ -48,7 +59,7 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
           };
           operation.signal.addEventListener('abort', abort, { once: true });
           img.onload = () => { cleanup(); resolve(); };
-          img.onerror = () => { cleanup(); reject(new Error('Texture metadata could not be read.')); };
+          img.onerror = () => { cleanup(); reject(new Error('The image could not be read. It may be damaged, or not an image at all.')); };
         });
         const dimensions = { width: img.naturalWidth || 0, height: img.naturalHeight || 0 };
 
@@ -87,7 +98,7 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
         failure = e;
         if (url) URL.revokeObjectURL(url);
         addNotification({
-          message: isAbortError(e) ? `Cancelled import of "${file.name}".` : 'Failed to save texture to the project.',
+          message: isAbortError(e) ? `Cancelled import of "${file.name}".` : importFailureMessage(`Failed to import "${file.name}"`, e),
           type: isAbortError(e) ? 'info' : 'error',
         });
         return null;
@@ -148,10 +159,20 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
       setTextures(prev => prev.map(t => (t.id === id ? { ...t, ...info } : t)));
   }, []);
 
+  /** A texture the host has just kept in the project: into the library and material graphs without reopening it. */
+  const adoptHostTexture = useCallback(async (id: string, name: string, assetId: string, dimensions: { width: number; height: number }) => {
+    const response = await fetch(await projectService.resolveAsset(assetId));
+    if (!response.ok) throw new Error('The kept texture could not be read.');
+    const url = URL.createObjectURL(await response.blob());
+    materialLibrary.addTextureUrl(id, url);
+    setTextures((previous) => (previous.some((texture) => texture.id === id) ? previous : [...previous, { id, name, url, dimensions }]));
+  }, []);
+
   return frontendDiagnostics.traceActions('texture_manager', {
       textures,
       setTextures, // Exposed for persistence loading
       addTexture,
+      adoptHostTexture,
       saveTextureToLibrary,
       removeTexture,
       updateTexture

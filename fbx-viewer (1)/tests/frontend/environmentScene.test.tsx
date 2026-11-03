@@ -26,12 +26,13 @@ vi.mock('../../components/Environment/Terrain/TerrainObject', () => ({
     return null;
   },
 }));
-vi.mock('../../components/Environment/Terrain/TerrainSculptor', () => ({ TerrainSculptor: () => null }));
+vi.mock('../../components/Environment/Terrain/TerrainBrushTool', () => ({ TerrainBrushTool: () => null }));
 vi.mock('../../components/Environment/InstancedLevelLayer', () => ({ InstancedLevelLayer: () => null }));
 vi.mock('../../components/Environment/AudioSystem', () => ({ AudioSystem: () => null }));
 vi.mock('../../components/Environment/SkySystem', () => ({ SkySystem: () => null }));
 vi.mock('../../runtime/lighting/LevelLightVolume', () => ({ LevelLightVolume: () => null, LightBakeRunner: () => null }));
-vi.mock('../../components/Environment/FoliageBrushTool', () => ({ FoliageBrushTool: () => null }));
+vi.mock('../../components/Environment/Foliage/FoliageTool', () => ({ FoliageTool: () => null }));
+vi.mock('../../runtime/foliageLayer', () => ({ FoliageLayer: () => null }));
 
 const levelObject = (id: string, type: LevelObject['type']): LevelObject => ({
   id, levelId: 'level-1', modelId: 'model-1', name: id, position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1], type,
@@ -42,10 +43,7 @@ const noop = () => undefined;
 const sceneProps = (interactionMode: InteractionMode, viewId: string, onSelectObject: (id: string | null) => void): ComponentProps<typeof EnvironmentScene> => ({
   activeModel: null,
   interactionMode,
-  paintMode: 'add',
   onPlace: noop,
-  onPaint: noop,
-  onErase: noop,
   onSelectObject,
   models: [],
   levelObjects: [levelObject('terrain-1', 'terrain')],
@@ -73,9 +71,9 @@ beforeEach(() => {
 });
 
 describe('environment terrain selection', () => {
-  it('selects terrain from the active view in select and sculpt modes', () => {
+  it('selects terrain from the active view in select mode; in the Terrain tool a press belongs to the brush', () => {
     expect(clickTerrain('select', 'main').onSelectObject).toHaveBeenCalledWith('terrain-1');
-    expect(clickTerrain('sculpt', 'main').onSelectObject).toHaveBeenCalledWith('terrain-1');
+    expect(clickTerrain('sculpt', 'main').onSelectObject).not.toHaveBeenCalled();
   });
 
   it('leaves terrain clicks in inactive views alone, including in sculpt mode', () => {

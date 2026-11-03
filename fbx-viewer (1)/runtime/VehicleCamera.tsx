@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { cameraDirector } from './cameraDirector';
-import { PLAYER_PHYSICS_ID, usePhysicsQueries } from './physics';
+import { PLAYER_PHYSICS_ID, usePhysicsQueries } from './physicsQueries';
 import { useRuntimeServices } from './RuntimeServicesContext';
 import { SURFACES } from './surfaces';
 import { vehicleSession, type VehicleHandle } from './vehicles';

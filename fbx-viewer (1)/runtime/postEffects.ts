@@ -211,6 +211,16 @@ export class AutoExposureEffect extends Effect {
         renderer.setRenderTarget(before);
     }
 
+    /** What this has adapted to by now, as a multiplier on the picture's light. */
+    exposureNow(renderer: THREE.WebGLRenderer): number {
+        const read = new Uint16Array(4);
+        renderer.readRenderTargetPixels(this.adapted[0], 0, 0, 1, 1, read);
+        const u = this.uniforms;
+        const average = Math.max(THREE.DataUtils.fromHalfFloat(read[0]), 1e-4);
+        const adapted = (u.get('reference')!.value / average) ** u.get('response')!.value;
+        return Math.min(u.get('maxExposure')!.value, Math.max(u.get('minExposure')!.value, adapted)) * u.get('compensation')!.value;
+    }
+
     /** Snaps to the scene's brightness at once (a cut, a new level) instead of easing to it. */
     snap(): void {
         this.first = true;

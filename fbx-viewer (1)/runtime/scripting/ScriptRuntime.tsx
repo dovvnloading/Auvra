@@ -12,7 +12,7 @@ import { DEFAULT_INPUT_MAP, type InputState } from '../input';
 import { levelVariables } from '../levelVariables';
 import { gameState } from '../gameState';
 import { playerActions } from '../playerActions';
-import type { PhysicsRaycastHit, PhysicsRaycastOptions } from '../physics';
+import type { PhysicsRaycastHit, PhysicsRaycastOptions } from '../physicsQueries';
 import { useRuntimeServices, type RuntimeServices } from '../RuntimeServicesContext';
 import { useTriggerEvents } from '../triggers';
 import {

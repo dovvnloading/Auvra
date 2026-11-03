@@ -22,6 +22,7 @@ from Auvra.project.serialization import canonical_json
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 PYTHON_EXEMPTIONS = {
+    "Auvra/providers/reframe_worker.py": "standalone-child-process",
     "Auvra/Auvra.py": "entrypoint",
     "Auvra/desktop/contracts.py": "data-model",
     "Auvra/desktop/policy.py": "webview-policy-child",

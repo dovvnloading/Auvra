@@ -1,7 +1,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { AttachmentData, LoadedModelData } from '../types';
-import { importPhaseLabel, loadFBXFile } from '../utils/modelLoader';
+import { importFailureMessage, importPhaseLabel, loadFBXFile } from '../utils/modelLoader';
 import { disposeObject } from '../utils/processing/ModelLifecycle';
 import { dbOperations } from '../utils/db';
 import { projectService } from '../utils/projectService';
@@ -75,8 +75,14 @@ export const useAttachmentManager = (
   }), []);
 
   const addAttachment = useCallback(async (file: File, parentModelId: string) => {
-    projectService.assertWritable();
-    const lease = editorSession.requireWritable(editorSession.captureReady(), projectService.getStatus());
+    let lease: ReturnType<typeof editorSession.requireWritable>;
+    try {
+      projectService.assertWritable();
+      lease = editorSession.requireWritable(editorSession.captureReady(), projectService.getStatus());
+    } catch (error) {
+      addNotification({ message: importFailureMessage(`Failed to import attachment "${file.name}"`, error), type: 'error' });
+      return;
+    }
     const assetAlias = frontendDiagnostics.nextAssetAlias();
     const diagnostic = assetDiagnosticAttributes(file, 'attachment', assetAlias);
     const operation = startOperation({
@@ -93,6 +99,7 @@ export const useAttachmentManager = (
     let failure: unknown;
     setIsLoading(true);
     try {
+        await projectService.assertStorable(file);
         loaded = await loadFBXFile(file, {
           normalize: false,
           signal: operation.signal,
@@ -148,7 +155,7 @@ export const useAttachmentManager = (
           disposeObject(loaded.object);
         }
         addNotification({
-          message: isAbortError(error) ? `Cancelled import of "${file.name}".` : `Failed to import attachment "${file.name}".`,
+          message: isAbortError(error) ? `Cancelled import of "${file.name}".` : importFailureMessage(`Failed to import attachment "${file.name}"`, error),
           type: isAbortError(error) ? 'info' : 'error',
         });
     } finally {

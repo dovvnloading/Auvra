@@ -1,20 +1,28 @@
 
 import { useState, useCallback, useRef } from 'react';
 import * as THREE from 'three';
-import { LoadedModelData, AssetCategory, AssetInfoUpdate, ModelImportSettings } from '../types';
-import { importPhaseLabel, loadFBXFile } from '../utils/modelLoader';
+import { LoadedModelData, AssetCategory, AssetInfoUpdate, ModelImportSettings, ModelSourceImage } from '../types';
+import { importFailureMessage, importPhaseLabel, loadFBXFile } from '../utils/modelLoader';
 import { disposeModel, disposeObject } from '../utils/processing/ModelLifecycle';
-import { applyModelImportSettings, resolveImportSettings, stripGeometry } from '../utils/processing/ModelTransforms';
+import { applyModelImportSettings, convertOptionsFor, resolveImportSettings, stripGeometry } from '../utils/processing/ModelTransforms';
 import { applyStoredClipNames, mirrorModelClips, prepareAnimationClips, uniqueClipNames } from '../utils/animationBinding';
+import { skeletonBones } from '../utils/skeletonView';
+import { carriedClipNames, clipRange, cutAttachedClips, noteAttachedClips, wholeClips } from '../utils/clipRanges';
+import { readModelTakes, type ClipTakeSource } from '../utils/clipTakes';
+import type { StoredBoneRole } from '../utils/retargeting';
+import { loadSkinPaint } from '../utils/skinPaint/modelSkin';
+import { flushSkinPaint } from '../utils/skinPaint/paintSession';
+import type { SkinPaintFile, SkinPaintReference } from '../utils/skinPaint/skinPaintFile';
 import { generateThumbnail } from '../utils/thumbnailGenerator';
 import { dbOperations, normalizeAssetInfoUpdate, withoutMaterialOverrideAsset, withoutMaterialOverrideTexture } from '../utils/db';
 import { projectService } from '../utils/projectService';
 import { appAlert } from '../utils/appDialogs';
 import { isAbortError, useOperationActions } from '../context/OperationContext';
 import { useNotification } from '../context/NotificationContext';
-import { assetDiagnosticAttributes, frontendDiagnostics, type DiagnosticAttributes } from '../diagnostics/runtime';
+import { assetDiagnosticAttributes, frontendDiagnostics, type DiagnosticAttributes, type DiagnosticContext } from '../diagnostics/runtime';
 import {
   applyMaterialOverrides,
+  drawAsPaintedTexture,
   collectOverrideTextures,
   normalizeMaterialOverrides,
   overrideTextureCacheKey,
@@ -42,6 +50,13 @@ const reimportedModelName = (current: string, source: string): string => {
   return `${previous ? current.slice(0, -previous.length) : current}${next}`;
 };
 
+/** Reads the images kept with a model back as files named as its source names them. */
+const loadSourceImages = async (images: readonly ModelSourceImage[] | undefined, signal?: AbortSignal, diagnostics?: DiagnosticContext): Promise<File[]> => Promise.all((images ?? []).map(async (image) => {
+  const response = await projectService.fetchAsset(image.assetId, { signal, diagnostics });
+  if (!response.ok) throw new Error(`image download failed (${response.status})`);
+  return new File([await response.blob()], image.name, { type: response.headers.get('Content-Type') || 'application/octet-stream' });
+}));
+
 const nativeDocuments = (snapshot: Awaited<ReturnType<typeof projectService.getSnapshotAll>>, domain: string): Array<Record<string, any>> => {
   const raw = snapshot?.domains?.[domain];
   const values = Array.isArray(raw)
@@ -49,6 +64,13 @@ const nativeDocuments = (snapshot: Awaited<ReturnType<typeof projectService.getS
     : raw && typeof raw === 'object' && Array.isArray((raw as { documents?: unknown[] }).documents)
       ? (raw as { documents: unknown[] }).documents : [];
   return values.filter((value): value is Record<string, any> => Boolean(value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string'));
+};
+
+/** A stored model's painted weights as the project holds them. */
+const readSkinPaintBytes = async (assetId: string, signal?: AbortSignal, diagnostics?: DiagnosticContext): Promise<ArrayBuffer> => {
+  const response = await projectService.fetchAsset(assetId, { signal, diagnostics });
+  if (!response.ok) throw new Error(`painted weights download failed (${response.status})`);
+  return response.arrayBuffer();
 };
 
 /**
@@ -82,10 +104,7 @@ const adoptOverrideTextures = (from: THREE.Object3D, to: THREE.Object3D, materia
     if (material.map && material.map !== texture) material.map.dispose();
     alignOverrideTextureFlipY(texture, to);
     material.map = texture;
-    material.transparent = true;
-    material.alphaTest = 0.5;
-    material.side = THREE.DoubleSide;
-    material.needsUpdate = true;
+    drawAsPaintedTexture(material);
     adopted.add(texture);
   });
   // Adopted textures now belong to the replacement and must survive disposal of the old model.
@@ -121,6 +140,8 @@ export const useModelManager = (
   selectedModelId: string | null,
   selectModel: (id: string | null) => void,
   clearSelectedModel: (id: string) => void,
+  /** A file was read for a model by importing or reimporting it, not by opening the project. */
+  onModelFileRead?: (model: LoadedModelData) => void,
 ) => {
   const [models, setModels] = useState<LoadedModelData[]>([]);
   // Long operations read state that may change while they await (e.g. a material override save) from here.
@@ -130,7 +151,7 @@ export const useModelManager = (
   const { addNotification } = useNotification();
 
   /** Import a model. With `requestedSettings` the import settings are applied and stored on the model document. */
-  const importModel = useCallback(async (file: File, category: AssetCategory, requestedSettings?: ModelImportSettings) => {
+  const importModel = useCallback(async (file: File, category: AssetCategory, requestedSettings?: ModelImportSettings, images: readonly File[] = []) => {
     projectService.assertWritable();
     const importSettings = requestedSettings && category !== 'Animation' ? resolveImportSettings(requestedSettings) : undefined;
     // Prevent duplicate imports
@@ -154,8 +175,11 @@ export const useModelManager = (
     let failure: unknown;
     setIsLoading(true);
     try {
+      await projectService.assertStorable(file);
       newModel = await loadFBXFile(file, {
         normalize: category !== 'Animation',
+        convert: convertOptionsFor(importSettings),
+        images,
         signal: operation.signal,
         diagnostics: { operationId: operation.id, traceId: operation.traceId, spanId: operation.spanId, assetAlias },
         onProgress: (progress, phase) => operation.update({
@@ -165,9 +189,10 @@ export const useModelManager = (
       newModel.category = category;
       newModel.thumbnail = undefined;
       newModel.isPlacedInScene = false;
-      // Stored with the model, so renaming it later does not rename its clips.
-      const clipNames = uniqueClipNames(newModel.animations.map((clip) => clip.name), new Set());
-      newModel.animations.forEach((clip, index) => { clip.name = clipNames[index]; });
+      // Stored with the model, so renaming it later does not rename its clips. A clip cut from a take has its name in its range.
+      const wholeTakes = wholeClips(newModel.animations);
+      const clipNames = uniqueClipNames(wholeTakes.map((clip) => clip.name), new Set(newModel.animations.filter(clipRange).map((clip) => clip.name)));
+      wholeTakes.forEach((clip, index) => { clip.name = clipNames[index]; });
       newModel.sourceClipNames = clipNames;
       if (importSettings) applyModelImportSettings(newModel, importSettings);
 
@@ -195,10 +220,15 @@ export const useModelManager = (
       if (importSettings) {
         const assetId = await projectService.uploadAsset(modelSourceFile(file, newModel.name), transfer);
         if (operation.signal.aborted) throw new DOMException('Asset import was cancelled.', 'AbortError');
+        const sourceImages: ModelSourceImage[] = [];
+        for (const image of images) sourceImages.push({ name: image.name, assetId: await projectService.uploadAsset(image, { signal: operation.signal, diagnostics: transfer.diagnostics }) });
+        if (sourceImages.length) newModel.sourceImages = sourceImages;
+        if (operation.signal.aborted) throw new DOMException('Asset import was cancelled.', 'AbortError');
         transfer.onPhase('project_record_commit');
         await projectService.applyChanges([{ domain: 'models', operation: 'upsert', id: newModel.id, value: {
           id: newModel.id, name: newModel.name, assetId, category: newModel.category, isPlacedInScene: false, importSettings,
           ...(clipNames.length ? { clipNames } : {}),
+          ...(sourceImages.length ? { sourceImages } : {}),
         } }], transfer.diagnostics);
       } else {
         await dbOperations.addModel({
@@ -225,6 +255,7 @@ export const useModelManager = (
         }
         return [...previous, completedModel];
       });
+      onModelFileRead?.(completedModel);
       const missing = completedModel.missingTextures ?? 0;
       newModel = null;
       addNotification(missing > 0
@@ -235,20 +266,20 @@ export const useModelManager = (
       failure = error;
       if (newModel) disposeModel(newModel);
       addNotification({
-        message: isAbortError(error) ? `Cancelled import of "${file.name}".` : `Failed to import "${file.name}".`,
+        message: isAbortError(error) ? `Cancelled import of "${file.name}".` : importFailureMessage(`Failed to import "${file.name}"`, error),
         type: isAbortError(error) ? 'info' : 'error',
       });
     } finally {
       operation.finish(outcome, failure);
       setIsLoading(false);
     }
-  }, [models, setIsLoading, startOperation, addNotification]);
+  }, [models, setIsLoading, startOperation, addNotification, onModelFileRead]);
 
   const addModel = useCallback((file: File, category: AssetCategory) => importModel(file, category), [importModel]);
 
   /** Import with explicit options (normalize toggle, target size); the settings are stored on the model document. */
   const importModelWithOptions = useCallback(
-    (file: File, settings: ModelImportSettings, category: AssetCategory = 'Prop') => importModel(file, category, settings),
+    (file: File, settings: ModelImportSettings, category: AssetCategory = 'Prop', images?: readonly File[]) => importModel(file, category, settings, images),
     [importModel],
   );
 
@@ -259,19 +290,20 @@ export const useModelManager = (
    * blueprints that reference it keep working; clips from its animation documents are
    * rebound to the new skeleton. Nothing is committed unless the source loads and binds.
    */
-  const reimportModel = useCallback(async (modelId: string, file?: File | null, settings?: ModelImportSettings) => {
+  const reimportModel = useCallback(async (modelId: string, file?: File | null, settings?: ModelImportSettings, images: readonly File[] = [], newCategory?: AssetCategory) => {
     projectService.assertWritable();
-    const existing = models.find((model) => model.id === modelId);
+    // As it is now: this can be called long after it was set off, as a skeleton is made.
+    const existing = modelsRef.current.find((model) => model.id === modelId);
     if (!existing) {
       addNotification({ message: 'The model to reimport is no longer loaded.', type: 'error' });
-      return;
+      return false;
     }
     const name = file ? reimportedModelName(existing.name, file.name) : existing.name;
-    if (models.some((model) => model.id !== modelId && model.name === name)) {
+    if (modelsRef.current.some((model) => model.id !== modelId && model.name === name)) {
       void appAlert(`A model named "${name}" is already loaded in the library.`);
-      return;
+      return false;
     }
-    const category = existing.category;
+    const category = newCategory ?? existing.category;
     const kind = category === 'Animation' ? 'animation' : 'model';
     const assetAlias = frontendDiagnostics.nextAssetAlias();
     let source = file ? modelSourceFile(file, name) : null;
@@ -294,19 +326,29 @@ export const useModelManager = (
     let failure: unknown;
     setIsLoading(true);
     try {
+      if (source) await projectService.assertStorable(source);
+      // A stroke just finished is part of what the model has.
+      await flushSkinPaint(existing.object);
       // Without a new file, the source the project already holds.
       let storedAssetId: string | null = null;
+      const storedModel = nativeDocuments(await projectService.getSnapshotAll('models', trace), 'models').find((model) => model.id === modelId);
       if (!source) {
-        const stored = nativeDocuments(await projectService.getSnapshotAll('models', trace), 'models').find((model) => model.id === modelId);
-        if (typeof stored?.assetId !== 'string') throw new Error('its source file is not in the project');
-        const response = await fetch(await projectService.resolveAsset(stored.assetId, trace), { method: 'GET', signal: operation.signal });
+        if (typeof storedModel?.assetId !== 'string') throw new Error('its source file is not in the project');
+        const response = await projectService.fetchAsset(storedModel.assetId, { signal: operation.signal, diagnostics: trace });
         if (!response.ok) throw new Error(`source download failed (${response.status})`);
         source = modelSourceFile(new File([await response.blob()], name), name);
-        storedAssetId = stored.assetId;
+        storedAssetId = storedModel.assetId;
         diagnostic = assetDiagnosticAttributes(source, kind, assetAlias);
       }
+      // Images found earlier stay with the model; one found now of the same name replaces its copy.
+      const newImageNames = new Set(images.map((image) => image.name.toLowerCase()));
+      const keptImages: ModelSourceImage[] = (Array.isArray(storedModel?.sourceImages) ? storedModel.sourceImages as ModelSourceImage[] : [])
+        .filter((image) => !newImageNames.has(image.name.toLowerCase()));
+      const readSettings = settings ?? existing.importSettings;
       replacement = await loadFBXFile(source, {
         normalize: category !== 'Animation',
+        convert: convertOptionsFor(category === 'Animation' ? undefined : readSettings),
+        images: [...await loadSourceImages(keptImages, operation.signal, trace), ...images],
         manualId: modelId,
         signal: operation.signal,
         diagnostics: trace,
@@ -320,6 +362,28 @@ export const useModelManager = (
       replacement.isPlacedInScene = existing.isPlacedInScene;
       replacement.textureOverrides = existing.textureOverrides;
       replacement.folder = existing.folder;
+      const latestRoles = modelsRef.current.find((model) => model.id === modelId)?.boneRoles ?? existing.boneRoles;
+      // A new file's bones: what was said of bones it no longer has means nothing.
+      if (file && latestRoles?.length) {
+        const names = new Set(skeletonBones(replacement.object).map((entry) => entry.name));
+        replacement.boneRoles = latestRoles.filter((stored) => names.has(stored.bone));
+      } else {
+        replacement.boneRoles = latestRoles;
+      }
+      // Painted weights go on whatever file it now has, wherever its vertices still stand.
+      const skinPaint = category === 'Animation' ? undefined : storedModel?.skinPaint as SkinPaintReference | undefined;
+      let paintLost = 0;
+      if (skinPaint) {
+        replacement.skinPaint = skinPaint;
+        try {
+          const { painted, found } = await loadSkinPaint(replacement.object, skinPaint, (assetId) => readSkinPaintBytes(assetId, operation.signal, trace), { keepFileWeights: true });
+          paintLost = painted - found;
+        } catch (error) {
+          if (isAbortError(error)) throw error;
+          frontendDiagnostics.failure('skin_paint_reapply_failed', error);
+          paintLost = skinPaint.count;
+        }
+      }
       const importSettings = category === 'Animation' ? undefined : applyModelImportSettings(replacement, settings ?? existing.importSettings);
       if (category === 'Animation') {
         stripGeometry(replacement.object);
@@ -339,14 +403,15 @@ export const useModelManager = (
           detail: `Binding animation — ${animationName}`,
           diagnostic,
         });
-        const response = await fetch(await projectService.resolveAsset(animation.assetId, trace), { method: 'GET', signal: operation.signal });
+        const response = await projectService.fetchAsset(animation.assetId, { signal: operation.signal, diagnostics: trace });
         if (!response.ok) throw new Error(`Animation download failed (${response.status})`);
         const animationFile = new File([await response.blob()], animationName, { type: response.headers.get('Content-Type') || 'application/octet-stream' });
         const animationModel = await loadFBXFile(animationFile, { normalize: false, signal: operation.signal, diagnostics: trace });
         try {
-          const prepared = prepareAnimationClips(replacement.object, animationModel.object, animationModel.animations);
+          const prepared = prepareAnimationClips(replacement.object, animationModel.object, animationModel.animations, existing.boneRoles);
           applyStoredClipNames(prepared.clips, animation.clipNames);
-          replacement.animations.push(...prepared.clips);
+          noteAttachedClips(prepared.clips, animationModel.animations);
+          replacement.animations.push(...cutAttachedClips(prepared.clips, importSettings ?? {}, replacement.object));
         } finally {
           disposeModel(animationModel);
         }
@@ -367,23 +432,36 @@ export const useModelManager = (
       operation.update({ phase: 'project_record_commit', progress: 0.94, detail: 'Finalizing project record', diagnostic });
       const stored = nativeDocuments(await projectService.getSnapshotAll('models', trace), 'models').find((model) => model.id === modelId);
       const document: Record<string, unknown> = {
-        ...(stored ?? { category, isPlacedInScene: existing.isPlacedInScene }),
+        ...(stored ?? { isPlacedInScene: existing.isPlacedInScene }),
+        category,
         id: modelId,
         name,
         assetId,
       };
       if (importSettings) document.importSettings = importSettings;
-      // The new file keeps the stored clip names when it has as many clips; otherwise its own are stored.
+      const sourceImages = [...keptImages];
+      for (const image of images) sourceImages.push({ name: image.name, assetId: await projectService.uploadAsset(image, { signal: operation.signal, diagnostics: trace }) });
+      if (sourceImages.length) document.sourceImages = sourceImages; else delete document.sourceImages;
+      replacement.sourceImages = sourceImages.length ? sourceImages : undefined;
       const ownClips = replacement.animations.slice(0, ownClipCount);
-      if (Array.isArray(stored?.clipNames) && stored.clipNames.length === ownClips.length) {
-        applyStoredClipNames(ownClips, stored.clipNames);
-      } else {
-        const names = uniqueClipNames(ownClips.map((clip) => clip.name), new Set());
-        ownClips.forEach((clip, index) => { clip.name = names[index]; });
-        if (names.length) document.clipNames = names; else delete document.clipNames;
-      }
-      replacement.sourceClipNames = ownClips.map((clip) => clip.name);
+      const ownTakes = wholeClips(ownClips);
+      // Whatever else the model has keeps its name, and a take newly brought in makes way for it.
+      const otherClipNames = replacement.animations.filter((clip) => !ownTakes.includes(clip)).map((clip) => clip.name);
+      const clipNames = carriedClipNames(ownTakes, existing.animations, file ? stored?.clipNames : undefined, new Set(otherClipNames));
+      ownTakes.forEach((clip, index) => { clip.name = clipNames[index]; });
+      if (clipNames.length) document.clipNames = clipNames; else delete document.clipNames;
+      replacement.sourceClipNames = clipNames;
       await projectService.applyChanges([{ domain: 'models', operation: 'upsert', id: modelId, value: document }], trace);
+      // Mirrored copies are made again from the clips they copy, as when the project opens.
+      const { mirroredClips } = modelsRef.current.find((model) => model.id === modelId) ?? existing;
+      if (mirroredClips?.length) {
+        replacement.mirroredClips = mirroredClips;
+        try {
+          replacement.animations.push(...mirrorModelClips(replacement.object, replacement.animations, mirroredClips, replacement.boneRoles));
+        } catch (error) {
+          frontendDiagnostics.failure('clip_mirror_failed', error);
+        }
+      }
 
       operation.update({ phase: 'library_publication', progress: 0.98, detail: 'Publishing to library', diagnostic });
       // Material overrides saved while the reimport ran are the ones to keep.
@@ -399,7 +477,17 @@ export const useModelManager = (
       replacement = null;
       setModels((previous) => previous.map((model) => (model.id === modelId ? published : model)));
       disposeModel(existing);
-      addNotification({ message: `Reimported "${existing.name}".`, type: 'success' });
+      // A file's sockets come in with a new file. Reading the same one again would bring back what was deleted or renamed.
+      if (file) onModelFileRead?.(published);
+      // A range stays with the model when its take is gone, and cuts its clip again if the take comes back.
+      const uncut = (importSettings?.clipRanges ?? []).filter((range) => !published.animations.some((clip) => clip.name === range.name)).map((range) => range.name);
+      const reimported = uncut.length
+        ? `Reimported "${existing.name}" without ${uncut.join(', ')}: ${uncut.length === 1 ? 'its take is' : 'their takes are'} not in the file.`
+        : `Reimported "${existing.name}".`;
+      addNotification(paintLost > 0
+        ? { message: `${reimported} ${paintLost.toLocaleString()} painted vertices no longer match it and went back to its own weights.`, type: 'info' }
+        : { message: reimported, type: uncut.length ? 'info' : 'success' });
+      return true;
     } catch (error) {
       outcome = isAbortError(error) ? 'cancelled' : 'failure';
       failure = error;
@@ -407,14 +495,63 @@ export const useModelManager = (
       addNotification({
         message: isAbortError(error)
           ? `Cancelled reimport of "${existing.name}".`
-          : `Failed to reimport "${existing.name}"${error instanceof Error && error.message ? `: ${error.message}` : '.'}`,
+          : importFailureMessage(`Failed to reimport "${existing.name}"`, error),
         type: isAbortError(error) ? 'info' : 'error',
       });
     } finally {
       operation.finish(outcome, failure);
       setIsLoading(false);
     }
-  }, [models, setIsLoading, startOperation, addNotification]);
+  }, [models, setIsLoading, startOperation, addNotification, onModelFileRead]);
+
+  /** A model's source file, as the project holds it. */
+  const readModelSource = useCallback(async (modelId: string): Promise<File> => {
+    const name = modelsRef.current.find((model) => model.id === modelId)?.name ?? 'model';
+    const stored = nativeDocuments(await projectService.getSnapshotAll('models'), 'models').find((model) => model.id === modelId);
+    if (typeof stored?.assetId !== 'string') throw new Error('Its source file is not in the project.');
+    const response = await projectService.fetchAsset(stored.assetId);
+    if (!response.ok) throw new Error(`Source download failed (${response.status}).`);
+    return modelSourceFile(new File([await response.blob()], name), name);
+  }, []);
+
+  /**
+   * A model's takes whole, for cutting clips from, and a copy of the model to show them on. A clip
+   * imported onto it from a file of its own is read from that file only if the model no longer holds it.
+   */
+  const readClipTakes = useCallback(async (modelId: string, signal?: AbortSignal): Promise<ClipTakeSource> => {
+    const model = modelsRef.current.find((candidate) => candidate.id === modelId);
+    if (!model) throw new Error('The model is no longer loaded.');
+    const held = wholeClips(model.animations);
+    const attached: THREE.AnimationClip[] = [];
+    for (const document of nativeDocuments(await projectService.getSnapshotAll('animations'), 'animations')) {
+      if (document.modelId !== modelId || typeof document.assetId !== 'string') continue;
+      const names: unknown[] = Array.isArray(document.clipNames) ? document.clipNames : [];
+      const clips = names.map((name) => held.find((clip) => clip.name === name));
+      if (clips.length && clips.every(Boolean)) {
+        attached.push(...clips as THREE.AnimationClip[]);
+        continue;
+      }
+      const response = await projectService.fetchAsset(document.assetId, { signal });
+      if (!response.ok) throw new Error(`Animation download failed (${response.status}).`);
+      const file = new File([await response.blob()], typeof document.name === 'string' && document.name ? document.name : 'animation.fbx');
+      const loaded = await loadFBXFile(file, { normalize: false, signal });
+      try {
+        const prepared = prepareAnimationClips(model.object, loaded.object, loaded.animations, model.boneRoles);
+        applyStoredClipNames(prepared.clips, document.clipNames);
+        noteAttachedClips(prepared.clips, loaded.animations);
+        attached.push(...prepared.clips);
+      } finally {
+        disposeModel(loaded);
+      }
+    }
+    return readModelTakes(model, await readModelSource(modelId), attached, signal);
+  }, [readModelSource]);
+
+  /** The images kept with a model, as files named as its source names them. */
+  const readModelSourceImages = useCallback(async (modelId: string): Promise<File[]> => {
+    const stored = nativeDocuments(await projectService.getSnapshotAll('models'), 'models').find((model) => model.id === modelId);
+    return loadSourceImages(Array.isArray(stored?.sourceImages) ? stored.sourceImages as ModelSourceImage[] : []);
+  }, []);
 
   /** Shows a model in the Scene viewer in place of the one shown there: the viewer shows one model. */
   const placeInScene = useCallback(async (id: string) => {
@@ -505,7 +642,7 @@ export const useModelManager = (
     const model = modelsRef.current.find((candidate) => candidate.id === modelId);
     if (!model) return;
     try {
-      const [mirrored] = mirrorModelClips(model.object, model.animations, [clipName]);
+      const [mirrored] = mirrorModelClips(model.object, model.animations, [clipName], model.boneRoles);
       if (!mirrored) return;
       const mirroredClips = [...(model.mirroredClips ?? []).filter((name) => name !== clipName), clipName];
       await dbOperations.updateModelMirroredClips(modelId, mirroredClips);
@@ -516,6 +653,27 @@ export const useModelManager = (
     } catch (error) {
       frontendDiagnostics.failure('clip_mirror_failed', error);
       addNotification({ message: `Could not mirror "${clipName}"${error instanceof Error && error.message ? `: ${error.message}` : '.'}`, type: 'error' });
+    }
+  }, [addNotification]);
+
+  /** Records what the user says a model's bones are for. Clips already made keep theirs until they are made again. */
+  const updateModelBoneRoles = useCallback(async (modelId: string, boneRoles: StoredBoneRole[]): Promise<void> => {
+    projectService.assertWritable();
+    await dbOperations.updateModelBoneRoles(modelId, boneRoles);
+    setModels((previous) => previous.map((candidate) => (candidate.id === modelId ? { ...candidate, boneRoles } : candidate)));
+  }, []);
+
+  /** Stores the weights painted on a model; rejects when they cannot be saved. */
+  const saveModelSkinPaint = useCallback(async (modelId: string, encode: () => SkinPaintFile | null): Promise<void> => {
+    projectService.assertWritable();
+    // Removed since it was painted.
+    if (!modelsRef.current.some((model) => model.id === modelId)) return;
+    try {
+      const skinPaint = await dbOperations.updateModelSkinPaint(modelId, encode);
+      setModels((previous) => previous.map((candidate) => (candidate.id === modelId ? { ...candidate, skinPaint } : candidate)));
+    } catch (error) {
+      addNotification({ message: 'Painted weights could not be saved.', type: 'error' });
+      throw error;
     }
   }, [addNotification]);
 
@@ -591,9 +749,10 @@ export const useModelManager = (
         });
         try {
           operation.update({ phase: 'animation_binding', detail: `Binding animation — ${file.name}`, diagnostic });
-          const prepared = prepareAnimationClips(targetModel.object, loaded.object, loaded.animations);
+          const prepared = prepareAnimationClips(targetModel.object, loaded.object, loaded.animations, targetModel.boneRoles);
           const names = uniqueClipNames(prepared.clips.map((clip) => clip.name), takenClipNames);
           prepared.clips.forEach((clip, clipIndex) => { clip.name = names[clipIndex]; });
+          noteAttachedClips(prepared.clips, loaded.animations);
           clipNamesByFile.push(names);
           allNewClips.push(...prepared.clips);
           operation.update({ phase: 'animation_binding', diagnostic: {
@@ -708,10 +867,7 @@ export const useModelManager = (
           if (!materialNames.has(candidate.name)) continue;
           if (candidate.map) candidate.map.dispose();
           candidate.map = newTexture;
-          candidate.transparent = true;
-          candidate.alphaTest = 0.5;
-          candidate.side = THREE.DoubleSide;
-          candidate.needsUpdate = true;
+          drawAsPaintedTexture(candidate);
         }
       });
       setModels((previous) => previous.map((candidate) => candidate.id === modelId
@@ -745,11 +901,18 @@ export const useModelManager = (
         if (targetMapUUID && candidate.map?.uuid !== targetMapUUID) continue;
         if (!targetMapUUID && candidate.map) continue;
         if (candidate.map) candidate.map.dispose();
-        candidate.map = newTexture; candidate.transparent = true; candidate.alphaTest = 0.5;
-        candidate.side = THREE.DoubleSide; candidate.needsUpdate = true;
+        candidate.map = newTexture;
+        drawAsPaintedTexture(candidate);
       }
     });
+    return newTexture.uuid;
   }, [models]);
+
+  /** Records which texture each of a model's materials wears. The materials themselves are already drawing with them. */
+  const setModelTextureOverrides = useCallback(async (modelId: string, overrides: Record<string, string>) => {
+    await dbOperations.updateModelTextureOverrides(modelId, overrides);
+    setModels((previous) => previous.map((candidate) => (candidate.id === modelId ? { ...candidate, textureOverrides: overrides } : candidate)));
+  }, []);
 
   const resetModelTexture = useCallback(async (modelId: string) => {
     projectService.assertWritable();
@@ -762,12 +925,26 @@ export const useModelManager = (
         const blob = await response.blob();
         const file = new File([blob], model.name, { type: 'application/octet-stream' });
         
-        const newModelData = await loadFBXFile(file, { normalize: model.category !== 'Animation', manualId: modelId });
+        const newModelData = await loadFBXFile(file, {
+          normalize: model.category !== 'Animation',
+          manualId: modelId,
+          convert: convertOptionsFor(model.importSettings),
+          images: await loadSourceImages(model.sourceImages),
+        });
+        newModelData.sourceImages = model.sourceImages;
         
         newModelData.category = model.category;
         newModelData.folder = model.folder;
         applyModelImportSettings(newModelData, model.importSettings);
+        await flushSkinPaint(model.object);
+        const skinPaint = modelsRef.current.find((candidate) => candidate.id === modelId)?.skinPaint;
+        if (skinPaint) {
+          newModelData.skinPaint = skinPaint;
+          await loadSkinPaint(newModelData.object, skinPaint, (assetId) => readSkinPaintBytes(assetId), { keepFileWeights: true });
+        }
         newModelData.animations = model.animations;
+        newModelData.sourceClipNames = model.sourceClipNames;
+        newModelData.mirroredClips = model.mirroredClips;
         newModelData.isPlacedInScene = model.isPlacedInScene;
         newModelData.textureOverrides = {}; // Clear overrides
 
@@ -776,6 +953,7 @@ export const useModelManager = (
         // Kept: edited in the Materials panel, possibly saved while the reset ran.
         const latest = modelsRef.current.find((candidate) => candidate.id === modelId) ?? model;
         newModelData.materialOverrides = latest.materialOverrides;
+        newModelData.boneRoles = latest.boneRoles;
         attachMaterialOverrides(newModelData.object, normalizeMaterialOverrides(latest.materialOverrides), detachMaterialOverrides(latest.object));
 
         setModels(prev => prev.map(m => {
@@ -803,17 +981,23 @@ export const useModelManager = (
     addModel,
     importModelWithOptions,
     reimportModel,
+    readModelSource,
+    readModelSourceImages,
+    readClipTakes,
     updateModel,
     removeModel,
     removeTextureReference,
     removeMaterialAssetReference,
     updateModelMaterialOverrides,
     mirrorClip,
+    updateModelBoneRoles,
+    saveModelSkinPaint,
     placeInScene,
     removeFromScene,
     addAnimations,
     retextureModel,
     previewTexture,
+    setModelTextureOverrides,
     resetModelTexture
   });
 };

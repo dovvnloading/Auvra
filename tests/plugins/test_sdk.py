@@ -4,7 +4,6 @@ import hashlib
 import io
 import os
 from pathlib import Path
-import struct
 import sys
 import tempfile
 import threading

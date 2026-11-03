@@ -8,9 +8,10 @@ import { View, PerspectiveCamera, OrthographicCamera, OrbitControls } from '@rea
 import { PostProcessAllowedContext } from '../../runtime/components/postProcess';
 import { useAssets, useLevel } from '../../context/SceneContext';
 import { LevelObject } from '../../types';
-import { InteractionMode, PaintMode, PaintSettings, TransformSettings, ViewportLayout, SculptSettings } from './types';
+import { InteractionMode, TransformSettings, ViewportLayout } from './types';
+import type { FoliageToolSettings } from './Foliage/foliageSettings';
+import type { TerrainToolSettings } from './Terrain/terrainTool';
 import { EnvironmentScene } from './EnvironmentScene';
-import type { FoliagePlacement } from './FoliageBrushTool';
 import { editorSession } from '../../utils/editorSession';
 import { raycastPlacement } from '../../utils/surfacePlacement';
 import { getWorldMatrix } from '../../utils/sceneGraph';
@@ -31,10 +32,11 @@ interface EnvironmentViewportProps {
     /** The editor's full selection (includes the primary). */
     selectedObjectIds?: string[];
     interactionMode: InteractionMode;
-    paintMode?: PaintMode;
     transformSettings: TransformSettings;
-    paintSettings?: PaintSettings;
-    sculptSettings?: SculptSettings;
+    foliageSettings?: FoliageToolSettings;
+    onFoliageSettingsChange?: (settings: FoliageToolSettings) => void;
+    sculptSettings?: TerrainToolSettings;
+    onSculptSettingsChange?: (settings: TerrainToolSettings) => void;
     layout?: ViewportLayout;
     cameraSpeed?: number;
     /** Frame this object in every view; a new request (nonce) re-frames the same object. */
@@ -416,10 +418,11 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
     selectedObjectId = null,
     selectedObjectIds,
     interactionMode,
-    paintMode = 'add',
     transformSettings,
-    paintSettings,
+    foliageSettings,
+    onFoliageSettingsChange,
     sculptSettings,
+    onSculptSettingsChange,
     layout = 'single',
     cameraSpeed = 1.0,
     focusRequest = null,
@@ -473,29 +476,6 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
         addLevelObject(activeModelId, pos.toArray(), [0, rotY, 0], [1, 1, 1], 'prop');
     };
 
-    // A whole paint or erase stroke is saved at once, as one undo step.
-    const handlePaint = async (placements: FoliagePlacement[]) => {
-        const model = activeModelId ? models.find(m => m.id === activeModelId) : undefined;
-        if (!canEdit() || !model) return;
-        try {
-            await addLevelObjects(placements.map((placement): LevelObject => ({
-                id: crypto.randomUUID(),
-                levelId: '',
-                modelId: model.id,
-                name: `${model.name}_Foliage`,
-                type: 'foliage',
-                ...placement,
-            })));
-        } catch {
-            // addLevelObjects has already reported the failure.
-        }
-    };
-
-    const handleErase = async (ids: string[]) => {
-        if (!canEdit()) return;
-        await removeLevelObjects(ids);
-    };
-
     // --- Content browser drag & drop ---
     const viewUnderPointer = (clientX: number, clientY: number): { viewId: string; element: HTMLElement } | null => {
         const tracked: [string, HTMLDivElement | null][] = layout === 'single'
@@ -547,18 +527,17 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
     const baseSceneProps = {
         activeModel,
         interactionMode,
-        paintMode,
         onPlace: handlePlace,
-        onPaint: handlePaint,
-        onErase: handleErase,
         models,
         levelObjects,
         updateLevelObject: (id: string, updates: Parameters<typeof updateLevelObject>[1]) => {
             if (canEdit()) updateLevelObject(id, updates);
         },
         transformSettings,
-        paintSettings,
+        foliageSettings,
+    onFoliageSettingsChange,
         sculptSettings,
+    onSculptSettingsChange,
         onSnapshot: () => { if (canEdit()) snapshotHistory(); },
         selectedId: showsSelection ? selectedObjectId : null,
         selectedIds: showsSelection ? selectedObjectIds : undefined,
@@ -580,7 +559,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
     return (
         <div
             ref={containerRef}
-            className="relative w-full h-full bg-[#111]"
+            className="relative w-full h-full bg-well"
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
@@ -589,40 +568,40 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
             {/* HTML Layout Grid for View Tracking */}
             <div className="absolute inset-0 w-full h-full flex flex-col pointer-events-none">
                 {layout === 'single' ? (
-                    <div className="relative w-full h-full bg-[#111] pointer-events-auto border-b border-gray-800">
+                    <div className="relative w-full h-full bg-well pointer-events-auto border-b border-gray-800">
                         <div ref={viewMain} className="w-full h-full" onMouseDown={() => setActiveView('main')} />
-                        <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'main' ? 'bg-blue-600 text-white' : 'bg-black/70 text-gray-200'}`}>
-                            PERSPECTIVE
+                        <div className={`absolute top-2 left-2 text-2xs font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'main' ? 'bg-blue-600 text-accent-ink' : 'bg-black/55 text-gray-200'}`}>
+                            Perspective
                         </div>
                     </div>
                 ) : (
                     <div className="w-full h-full grid grid-cols-2 grid-rows-2 gap-0.5 bg-gray-800 pointer-events-auto">
                         {/* 1. TOP LEFT -> LEFT View */}
-                        <div className="relative bg-[#111]">
+                        <div className="relative bg-well">
                             <div ref={viewLeft} className="w-full h-full" onMouseDown={() => setActiveView('left')} />
-                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'left' ? 'bg-blue-600 text-white' : 'bg-black/70 text-gray-200'}`}>
-                                LEFT
+                            <div className={`absolute top-2 left-2 text-2xs font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'left' ? 'bg-blue-600 text-accent-ink' : 'bg-black/55 text-gray-200'}`}>
+                                Left
                             </div>
                         </div>
                         {/* 2. TOP RIGHT -> RIGHT View */}
-                        <div className="relative bg-[#111]">
+                        <div className="relative bg-well">
                             <div ref={viewRight} className="w-full h-full" onMouseDown={() => setActiveView('right')} />
-                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'right' ? 'bg-blue-600 text-white' : 'bg-black/70 text-gray-200'}`}>
-                                RIGHT
+                            <div className={`absolute top-2 left-2 text-2xs font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'right' ? 'bg-blue-600 text-accent-ink' : 'bg-black/55 text-gray-200'}`}>
+                                Right
                             </div>
                         </div>
                         {/* 3. BOTTOM LEFT -> TOP View */}
-                        <div className="relative bg-[#111]">
+                        <div className="relative bg-well">
                             <div ref={viewTop} className="w-full h-full" onMouseDown={() => setActiveView('top')} />
-                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'top' ? 'bg-blue-600 text-white' : 'bg-black/70 text-gray-200'}`}>
+                            <div className={`absolute top-2 left-2 text-2xs font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'top' ? 'bg-blue-600 text-accent-ink' : 'bg-black/55 text-gray-200'}`}>
                                 TOP
                             </div>
                         </div>
                         {/* 4. BOTTOM RIGHT -> BOTTOM View */}
-                        <div className="relative bg-[#111]">
+                        <div className="relative bg-well">
                             <div ref={viewBottom} className="w-full h-full" onMouseDown={() => setActiveView('bottom')} />
-                            <div className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'bottom' ? 'bg-blue-600 text-white' : 'bg-black/70 text-gray-200'}`}>
-                                BOTTOM
+                            <div className={`absolute top-2 left-2 text-2xs font-bold px-2 py-0.5 rounded pointer-events-none z-10 ${activeView === 'bottom' ? 'bg-blue-600 text-accent-ink' : 'bg-black/55 text-gray-200'}`}>
+                                Bottom
                             </div>
                         </div>
                     </div>

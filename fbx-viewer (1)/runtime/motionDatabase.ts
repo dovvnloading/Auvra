@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { findBone } from './ik';
 import { MotionDatabase, SAMPLE_RATE, type MotionClipSamples, type MotionSample } from './motionMatching';
+import { clipLoops } from '../utils/clipRanges';
 
 /**
  * Builds a motion matching database from a character's own clips: each clip played on a copy of the
@@ -165,7 +166,7 @@ export const motionDatabaseFor = (
 ): MotionDatabase | null => {
     const key = `${rigKey(model)}|${sources.join('|')}`;
     if (databases.has(key)) return databases.get(key) ?? null;
-    const sampled = clips.map(clip => sampleClip(model, clip)).filter((entry): entry is MotionClipSamples => entry !== null);
+    const sampled = clips.map(clip => sampleClip(model, clip, clipLoops(clip) ?? true)).filter((entry): entry is MotionClipSamples => entry !== null);
     const database = sampled.length > 0 ? new MotionDatabase(sampled) : null;
     databases.set(key, database);
     if (databases.size > MAX_DATABASES) databases.delete(databases.keys().next().value as string);

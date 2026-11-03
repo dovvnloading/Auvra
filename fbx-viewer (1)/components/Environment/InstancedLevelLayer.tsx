@@ -16,6 +16,8 @@ interface InstancedLevelLayerProps {
     levelObjects: LevelObject[];
     onSelect?: (id: string, event: ThreeEvent<MouseEvent>) => void;
     interactive?: boolean;
+    /** Tools still place things on it and against it while it takes no clicks. */
+    placementSurface?: boolean;
     /** Objects drawn somewhere else (the editor's selection proxies); their instances collapse to nothing. */
     hiddenIds?: ReadonlySet<string>;
     /** Objects drawn with the selection highlight. */
@@ -72,7 +74,8 @@ const InstancedModelGroup: React.FC<{
     instances: LevelObject[];
     onSelect?: (id: string, event: ThreeEvent<MouseEvent>) => void;
     interactive: boolean;
-} & InstanceSelectionProps> = ({ model, instances, onSelect, interactive, hiddenIds, selectedIds }) => {
+    placementSurface: boolean;
+} & InstanceSelectionProps> = ({ model, instances, onSelect, interactive, placementSurface, hiddenIds, selectedIds }) => {
     const lodReady = useMeshLodReady();
     const lodAllowed = useContext(MeshLodContext);
 
@@ -126,6 +129,7 @@ const InstancedModelGroup: React.FC<{
                     instances={instances}
                     onSelect={onSelect}
                     interactive={interactive}
+                    placementSurface={placementSurface}
                     hiddenIds={hiddenIds}
                     selectedIds={selectedIds}
                 />
@@ -260,7 +264,8 @@ const PartInstancer: React.FC<{
     instances: LevelObject[];
     onSelect?: (id: string, event: ThreeEvent<MouseEvent>) => void;
     interactive: boolean;
-} & InstanceSelectionProps> = ({ part, instances, onSelect, interactive, hiddenIds, selectedIds }) => {
+    placementSurface: boolean;
+} & InstanceSelectionProps> = ({ part, instances, onSelect, interactive, placementSurface, hiddenIds, selectedIds }) => {
     const meshRef = useRef<THREE.InstancedMesh>(null);
     const selectionRef = useRef<THREE.InstancedMesh>(null);
     const [hoveredInstanceId, setHoveredInstanceId] = useState<number | null>(null);
@@ -348,8 +353,9 @@ const PartInstancer: React.FC<{
                 onPointerOut={interactive ? (e) => { e.stopPropagation(); setHoveredInstanceId(null); } : undefined}
                 // If not interactive, skip raycasting entirely.  R3F exposes
                 // this through the Object3D raycast hook rather than a DOM
-                // pointerEvents prop.
-                raycast={interactive ? undefined : () => undefined}
+                // pointerEvents prop.  What tools place things on or against
+                // still answers their rays: R3F only casts at meshes with handlers.
+                raycast={interactive || placementSurface ? undefined : noRaycast}
             />
 
             {/* Selection Overlay (one instance per selected object of this part) */}
@@ -385,7 +391,7 @@ const PartInstancer: React.FC<{
     );
 };
 
-export const InstancedLevelLayer: React.FC<InstancedLevelLayerProps> = ({ models, levelObjects, onSelect, interactive = true, hiddenIds, selectedIds }) => {
+export const InstancedLevelLayer: React.FC<InstancedLevelLayerProps> = ({ models, levelObjects, onSelect, interactive = true, placementSurface = false, hiddenIds, selectedIds }) => {
 
     // Group LevelObjects by Model ID
     const groups = useMemo(() => {
@@ -416,6 +422,7 @@ export const InstancedLevelLayer: React.FC<InstancedLevelLayerProps> = ({ models
                         instances={instances}
                         onSelect={onSelect}
                         interactive={interactive}
+                        placementSurface={placementSurface}
                         hiddenIds={hiddenIds}
                         selectedIds={selectedIds}
                     />

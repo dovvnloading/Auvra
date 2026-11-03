@@ -43,13 +43,13 @@ export const HUDLibrary: React.FC<HUDLibraryProps> = ({
             <div className="flex border-b border-gray-800 bg-gray-950">
                 <button 
                     onClick={() => setActiveTab('components')}
-                    className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 border-b-2 transition-colors ${activeTab === 'components' ? 'border-blue-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+                    className={`flex-1 py-3 text-2xs font-bold flex items-center justify-center gap-2 border-b-2 transition-colors ${activeTab === 'components' ? 'border-blue-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
                 >
                     <Component size={12} /> Library
                 </button>
                 <button 
                     onClick={() => setActiveTab('layers')}
-                    className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 border-b-2 transition-colors ${activeTab === 'layers' ? 'border-blue-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+                    className={`flex-1 py-3 text-2xs font-bold flex items-center justify-center gap-2 border-b-2 transition-colors ${activeTab === 'layers' ? 'border-blue-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
                 >
                     <Layers size={12} /> Layers
                 </button>
@@ -79,7 +79,7 @@ export const HUDLibrary: React.FC<HUDLibraryProps> = ({
                                 <div className="text-gray-400 group-hover:text-blue-400">
                                     {comp.icon || <Layout size={20} />}
                                 </div>
-                                <span className="text-[10px] font-medium text-gray-300 text-center leading-tight">
+                                <span className="text-2xs font-medium text-gray-300 text-center leading-tight">
                                     {comp.label}
                                 </span>
                             </button>
