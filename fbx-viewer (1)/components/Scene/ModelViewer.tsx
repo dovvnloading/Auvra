@@ -8,6 +8,7 @@ import { GraphRuntime, GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
 import { AttachmentController } from './AttachmentController';
 import { SocketController, resolveSocketFlashTextureUrl } from './SocketController';
 import { SkeletonOverlay } from './SkeletonOverlay';
+import { clipPlace } from '../../utils/skeletonView';
 import { RigMarkers } from './RigMarkers';
 import { previewHeldWeapon, weaponMoveClips, weaponPlacements } from '../../runtime/weapons';
 import { weaponLocomotionGraph } from '../AnimationGraph/utils/clipMatching';
@@ -133,6 +134,8 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
     const mixer = mixerRef.current;
     if (mixer) {
       mixer.stopAllAction();
+      // A moment asked for in the clip before this one means nothing in it.
+      clipPlace.wanted = null;
       playedOnce.current = null;
       heldFor.current = 0;
 
@@ -156,9 +159,18 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
 
   useFrame((_, delta) => {
     // Update Manual Mixer
-    if (!isBlueprintActive && mixerRef.current && isPlaying) {
-        mixerRef.current.timeScale = timeScale;
-        mixerRef.current.update(delta);
+    const mixer = isBlueprintActive ? null : mixerRef.current;
+    if (!mixer) return;
+    const action = activeClip && isSelected ? mixer.existingAction(activeClip) : null;
+    if (action && clipPlace.wanted !== null) {
+        action.stopFading().setEffectiveWeight(1);
+        action.time = clipPlace.wanted;
+        mixer.update(0);
+        // Held there until the clip has stopped, which reaches this view a frame after the panel says so.
+        if (!isPlaying) clipPlace.wanted = null;
+    } else if (isPlaying) {
+        mixer.timeScale = timeScale;
+        mixer.update(delta);
         // A clip that does not loop plays through and holds, and then shows itself again.
         const finished = playedOnce.current;
         if (finished && !finished.isRunning()) {
@@ -169,6 +181,7 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
           }
         }
     }
+    if (action) clipPlace.time = action.time;
   });
 
   const finalScale = useMemo(() => {

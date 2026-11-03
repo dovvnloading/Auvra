@@ -58,7 +58,7 @@ A mesh hidden in the art tool when an FBX was saved is left out too, unless ever
 
 ## Skeletons
 
-Select a model and open the **Skeleton** tab in the sidebar to see its bones as a tree you can search, each with the part of the body it stands for. **Show bones** draws them over the model, and clicking a joint in the view picks its bone in the tree. **Show weights** colours the model by how much the picked bone moves it, from dark where not at all to red where fully. **Add a socket here** puts a socket on the picked bone, for things carried or attached.
+Select a model and open the **Skeleton** tab in the sidebar to see its bones as a tree you can search, each with the part of the body it stands for. **Show bones** draws them over the model, and clicking a joint in the view picks its bone in the tree. **Show weights** colours the model by how much the picked bone moves it, from dark where not at all to red where fully, and goes off when you leave the tab. **Add a socket here** puts a socket on the picked bone, for things carried or attached.
 
 A clip made for one skeleton plays on another when both read as people. Bones are recognised by the names rigs commonly use (`mixamorig:LeftArm`, `upperarm_l`, `UpperArm.L`, `LUpperLeg`, `FootL`). A skeleton whose names say nothing, such as `Bone.012`, is read from its shape at rest: the feet are the lowest leaves, the head the highest, the hands those furthest out, and hips and chest are where their paths meet. The tab warns when a part is still missing. To put a bone right, pick it and choose under **This bone is**; the choice stays with the project, and **Make them again** remakes the clips from other rigs with it.
 
@@ -68,15 +68,29 @@ A clip from another skeleton is rebuilt for this one rather than copied: each bo
 
 ### Making a skeleton
 
-A model with no skeleton can be given one: select it, open the **Skeleton** tab and choose **Make a skeleton**. It is for a person standing with their arms out to the sides or lowered, facing any way.
+A model with no skeleton can be given one: select it, open the **Skeleton** tab and choose **Make a skeleton**. It is for a person, upright or hunched, with their arms anywhere clear of the body, even long enough to reach the floor, or for an animal on four legs, facing any way. Spikes, horns and blades do not get in the way, nor do legs grown together, and an arm that runs on into a blade or something held has its joints where the other arm's are.
 
-The body is read from its mesh, and markers appear on its chin, shoulders, elbows, wrists, groin, knees and ankles. Drag any that are off. Only their place in the view counts: each is kept in the middle of the limb it is on, and both sides move together unless you turn that off. A mesh that does not read as a person gets markers from a person's usual proportions to start from.
+The panel starts on the kind of body the model looks like, **Person** or **Four legs**, and you can change it. **Turn around** reads the body again the other way round, for a front and back or a head and tail it got the wrong way.
 
-**Make the skeleton** gives the model the bones most character rigs have, turned the way those rigs turn them, with each vertex following the bones nearest it through the body, in lengths of the limb's own thickness. A hand resting on a thigh does not pull the thigh along, and loose pieces such as a belt follow the bones nearest them. Materials and images stay as they were.
+The body is read from its mesh, and markers appear on the joints: on a person the chin, shoulders, elbows, wrists, groin, knees and ankles, seen from the front; on an animal the nose, head, neck, hips and tail, and each leg's shoulder or hip, elbow or knee, wrist or hock, and paw, seen from the side. Drag any that are off. Only their place in the view counts: each is kept in the middle of the limb it is on, and both sides move together unless you turn that off. An animal's far side only shows when you do. A mesh that does not read as the kind of body chosen gets markers from that kind's usual proportions to start from.
+
+**Make the skeleton** gives the model the bones most character rigs have, turned the way those rigs turn them, with each vertex following the bones nearest it through the body, in lengths of the limb's own thickness. A hand resting on a thigh does not pull the thigh along, and loose pieces such as a belt follow the bones nearest them. Materials and images stay as they were. A person's spine follows the curve of their back.
+
+An animal's bones are named as a person's where they stand alike: its back, neck and head, its hind legs as legs and its front legs as arms, each down to the paw. It also has a second neck bone and, if it has a tail, a chain of four bones along it, which **Give the tail bones** can leave out.
 
 **Give the hands fingers** adds three bones to each finger, so clips that curl the fingers, such as holding a weapon, show. Fingers that stand apart are followed where they are. A hand whose fingers are grown together into a mitten, as on many generated meshes, is shared out across its width, with each finger ending at the hand's outline. Nothing behind the wrist follows a finger. Turn it off to keep each hand as one bone.
 
-The model keeps its place in levels and blueprints, its size, its sockets and its collision shapes, and goes among the characters, its source now a GLB. Only what it draws counts as its body: parts the import leaves out are gone from the GLB. Any clips in its old file go, with a note saying so before you start. Clips from any humanoid rig can then be imported onto it.
+The model keeps its place in levels and blueprints, its size, its sockets and its collision shapes, and goes among the characters, its source now a GLB. Only what it draws counts as its body: parts the import leaves out are gone from the GLB. Any clips in its old file go, with a note saying so before you start. Clips from any humanoid rig can then be imported onto a person. An animal takes clips from rigs named as it is, and from rigs that say which end of the body a leg is at, such as `front_thigh.L` and `RearLeg_R`.
+
+### Painting weights
+
+Any weight can be corrected by hand, on a skeleton from a file as well as one made here. With a bone picked and **Show weights** on, choose a brush under **Paint weights** and drag on the model. **Add** makes the picked bone move what the brush touches more, and **Remove** less, with the other bones there taking up the difference. **Smooth** evens out all the bones under the brush. **Size** is across the brush, as a share of the model's longest side (keys `[` and `]`), and **Strength** is how far one touch moves a vertex (keys `,` and `.`). Shift does the opposite of Add or Remove. Alt-drag, or any drag that starts off the model, still turns the view. Ctrl-click picks the bone moving that spot most, and the label beside the brush lists all the bones that do.
+
+**Pose** plays one of the model's clips, and its slider stops the clip at any moment, so a patch can be painted in the pose where it looks wrong and seen to change as it is painted.
+
+A vertex keeps at most four bones, with shares adding up to one. The brush follows the surface out from where it lands, so a hand resting on a thigh is not painted with the thigh, and takes any other piece of the mesh in reach, such as clothes over a body. Vertices at the same place move as one, across texture seams, materials and meshes, and a mesh is given any bone it did not have.
+
+Each stroke is one step of undo (Ctrl+Z and Ctrl+Y), and **Put back original** returns to the weights the model came with. Painted weights are kept with the model, apart from its source file. They go with the project into built games, and stay through **Import Settings** and **Reimport** wherever vertices still stand in the same place. The editor says so when a new file leaves some of them nowhere to go.
 
 ## Reimport and import settings
 

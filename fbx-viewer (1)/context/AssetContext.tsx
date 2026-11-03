@@ -1,6 +1,7 @@
 
 import { AUTHORED_SOCKETS_KEY, type AuthoredSocket } from '../utils/modelConventions';
 import type { StoredBoneRole } from '../utils/retargeting';
+import type { SkinPaintFile } from '../utils/skinPaint/skinPaintFile';
 import type { ClipTakeSource } from '../utils/clipTakes';
 import React, { createContext, useContext, ReactNode, useState, useCallback } from 'react';
 import { 
@@ -46,6 +47,7 @@ interface AssetContextType {
   updateModelMaterialOverrides: (modelId: string, overrides: MaterialOverrides) => Promise<void>;
   mirrorClip: (modelId: string, clipName: string) => Promise<void>;
   updateModelBoneRoles: (modelId: string, roles: StoredBoneRole[]) => Promise<void>;
+  saveModelSkinPaint: (modelId: string, encode: () => SkinPaintFile | null) => Promise<void>;
   setModels: (models: LoadedModelData[]) => void;
 
   // Attachments
@@ -205,6 +207,7 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     updateModelMaterialOverrides: modelManager.updateModelMaterialOverrides,
     mirrorClip: modelManager.mirrorClip,
     updateModelBoneRoles: modelManager.updateModelBoneRoles,
+    saveModelSkinPaint: modelManager.saveModelSkinPaint,
     setModels: modelManager.setModels,
 
     // Attachments

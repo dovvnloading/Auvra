@@ -149,6 +149,11 @@ export const meshLodChain = (geometry: THREE.BufferGeometry): MeshLodLevel[] => 
     return levels;
 };
 
+/** Drops `geometry`'s detail levels, as what they were made from has changed. They are made again when next asked for. */
+export const forgetMeshLodChain = (geometry: THREE.BufferGeometry): void => {
+    chains.delete(geometry);
+};
+
 /** Pixels one world unit covers at a distance of one unit for `camera` on a `viewportHeight`-pixel view; 0 for other cameras. */
 export const lodPixelsPerUnit = (camera: THREE.Camera, viewportHeight: number): number => {
     const perspective = camera as THREE.PerspectiveCamera;

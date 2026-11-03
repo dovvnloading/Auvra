@@ -117,6 +117,7 @@ _MIME_EXTENSIONS = {
     "application/vnd.auvra.splatmap": "splat",
     "application/vnd.auvra.foliage": "afo",
     "application/vnd.auvra.lightvolume": "alv",
+    "application/vnd.auvra.skinpaint": "askp",
 }
 _GENERIC_MIME = "application/octet-stream"
 _SAFE_ASSET_ID = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")

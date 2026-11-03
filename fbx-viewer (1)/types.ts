@@ -8,6 +8,7 @@ import type { MaterialOverrides } from './utils/materialOverrides';
 import type { ModelFileReport } from './utils/fbxImport/nativeImporter';
 import type { ClipTakeSource } from './utils/clipTakes';
 import type { StoredBoneRole } from './utils/retargeting';
+import type { SkinPaintFile, SkinPaintReference } from './utils/skinPaint/skinPaintFile';
 import type { LevelBakedLighting } from './runtime/lighting/bakedLighting';
 import type { WeatherSettings } from './runtime/weather';
 import type { SkyAtmosphereSettings, SkyCloudSettings, SkyImageSettings, SkyLightSettings, SkyModel, SkyNightSettings } from './runtime/sky/skySettings';
@@ -93,6 +94,8 @@ export interface LoadedModelData {
   sourceImages?: ModelSourceImage[];
   /** What the user says this model's bones are for, where the names and shape did not read right. */
   boneRoles?: StoredBoneRole[];
+  /** The weights painted on it, kept in an asset of their own. */
+  skinPaint?: SkinPaintReference;
 }
 
 /** An image a model's source file names, kept with the project. */
@@ -828,6 +831,7 @@ export interface SceneContextType {
   /** Adds a mirrored copy (left and right swapped) of one of a model's clips. */
   mirrorClip: (modelId: string, clipName: string) => Promise<void>;
   updateModelBoneRoles: (modelId: string, roles: StoredBoneRole[]) => Promise<void>;
+  saveModelSkinPaint: (modelId: string, encode: () => SkinPaintFile | null) => Promise<void>;
 
   // Texture Actions
   textures: TextureData[];

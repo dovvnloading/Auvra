@@ -1,3 +1,4 @@
+import { VertexPlaces } from '../skinPaint/vertexPlaces';
 import { distanceThrough, distanceToSkin, neighboursOf, UNREACHED } from './bodyField';
 import type { RigJoint } from './bodySkeleton';
 import { voxelIndex, voxelize, voxelOf, type TriangleSoup, type VoxelGrid } from './voxels';
@@ -287,23 +288,19 @@ const bindHand = (triangles: TriangleSoup, joints: readonly RigJoint[], moving: 
 };
 
 /** Vertices at the same place across parts and seams move as one: gives each a shared number. */
-const weldVertices = (parts: readonly SkinnedPart[], size: number): { ids: Int32Array[]; first: { part: number; vertex: number }[] } => {
-  const tolerance = size / 64;
-  const seen = new Map<number, number>();
+export const weldVertices = (parts: readonly SkinnedPart[], tolerance: number): { ids: Int32Array[]; first: { part: number; vertex: number }[] } => {
+  const places = new VertexPlaces(tolerance);
   const first: { part: number; vertex: number }[] = [];
   const ids = parts.map((part, partIndex) => {
     const count = Math.floor(part.positions.length / 3);
     const out = new Int32Array(count);
     for (let vertex = 0; vertex < count; vertex += 1) {
-      const qx = Math.round(part.positions[vertex * 3] / tolerance) & 0x1ffff;
-      const qy = Math.round(part.positions[vertex * 3 + 1] / tolerance) & 0x1ffff;
-      const qz = Math.round(part.positions[vertex * 3 + 2] / tolerance) & 0x1ffff;
-      // Three coordinates into one number that a double holds exactly.
-      const packed = qx * 17179869184 + qy * 131072 + qz;
-      let id = seen.get(packed);
-      if (id === undefined) {
-        id = first.length;
-        seen.set(packed, id);
+      const x = part.positions[vertex * 3];
+      const y = part.positions[vertex * 3 + 1];
+      const z = part.positions[vertex * 3 + 2];
+      let id = places.find(x, y, z);
+      if (id < 0) {
+        id = places.add(x, y, z);
         first.push({ part: partIndex, vertex });
       }
       out[vertex] = id;
@@ -314,7 +311,7 @@ const weldVertices = (parts: readonly SkinnedPart[], size: number): { ids: Int32
 };
 
 /** Which vertices share a triangle with each vertex: those of vertex v are `links[starts[v]]` to `links[starts[v + 1] - 1]`. */
-const edgesOf = (parts: readonly SkinnedPart[], ids: readonly Int32Array[], count: number): { starts: Uint32Array; links: Int32Array } => {
+export const edgesOf = (parts: readonly SkinnedPart[], ids: readonly Int32Array[], count: number): { starts: Uint32Array; links: Int32Array } => {
   const eachTriangle = (visit: (a: number, b: number, c: number) => void): void => {
     parts.forEach((part, partIndex) => {
       const partIds = ids[partIndex];
@@ -424,7 +421,7 @@ export const bindSkin = (
   });
   const hops = hopsBetween(joints, moving);
   const boneCount = moving.length;
-  const { ids, first } = weldVertices(parts, grid.size);
+  const { ids, first } = weldVertices(parts, grid.size / 64);
   const welded = first.length;
 
   // Every welded vertex: its strongest bones and shares.
