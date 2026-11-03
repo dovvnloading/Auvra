@@ -134,13 +134,14 @@ export const startRig = async (modelId: string, file: File, options: { convert?:
   dropWorking();
   const mine = session;
   setState({ ...IDLE, ...keptChoices(), stage: 'reading', modelId });
+  let worker: Worker | null = null;
   try {
     const source = await readGltfSource(file, options);
     if (mine !== session) return;
     const primitives = primitivesOf(source.scene, source.associations);
     if (!primitives.length) throw new Error('The model has no mesh to rig.');
     const triangles = trianglesOf(primitives);
-    const worker = new Worker(new URL('../../workers/autoRig.worker.ts', import.meta.url), { type: 'module' });
+    worker = new Worker(new URL('../../workers/autoRig.worker.ts', import.meta.url), { type: 'module' });
     const response = await askWorker(worker, { type: 'read', triangles });
     if (mine !== session) {
       worker.terminate();
@@ -150,6 +151,7 @@ export const startRig = async (modelId: string, file: File, options: { convert?:
     working = { worker, source, primitives, triangles, original: { ...response.reading.markers }, moved: new Set() };
     setState({ stage: 'placing', reading: response.reading, guessed: response.guessed });
   } catch (error) {
+    worker?.terminate();
     if (mine === session) failRig(error, 'The model could not be read.');
   }
 };

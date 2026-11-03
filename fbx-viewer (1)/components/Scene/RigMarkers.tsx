@@ -191,6 +191,9 @@ export const RigMarkers: React.FC<{ modelId: string; root: THREE.Object3D }> = (
     invalidate();
   }, [shown, reading, modelId, root, camera, canvas, controls, worldView, invalidate]);
 
+  // Markers can go while the pointer is on one.
+  useEffect(() => () => { canvas.style.cursor = ''; }, [canvas, shown]);
+
   const size = reading ? sizeOf(reading) : 1;
 
   // An animal seen side on has its other side right behind this one: it moves with it, so it is left out.

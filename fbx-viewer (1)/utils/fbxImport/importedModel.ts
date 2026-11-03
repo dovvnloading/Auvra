@@ -1,5 +1,5 @@
 import { writeOpacity } from '../processing/opacityMaps';
-import { browserImageType, encodePng, imageHasAlpha, packMetalRough, resizedTo, sniffImageKind, type ImageKind, type Pixels } from './imagePixels';
+import { browserImageType, encodePng, imageHasAlpha, normalsFromHeight, packMetalRough, resizedTo, sniffImageKind, type ImageKind, type Pixels } from './imagePixels';
 import type { GltfPrimitive, ModelFileReport, NativeImport, SourceMaterial, SourceTexture } from './nativeImporter';
 
 /**
@@ -338,7 +338,11 @@ const writeMaterial = async (context: MaterialContext, source: SourceMaterial, m
     const texture = table.texture(source.normalTexture);
     if (texture !== null) material.normalTexture = textureInfo(context, materialIndex, source.normalTexture, texture);
   } else if (source.bumpTexture !== undefined) {
-    context.notes.add('A height (bump) map was left out: this engine shades with normal maps.');
+    const heights = await table.pixels(source.bumpTexture);
+    if (heights) {
+      const image = table.store(encodePng(normalsFromHeight(heights)), 'image/png', `${source.name} normal`);
+      material.normalTexture = textureInfo(context, materialIndex, source.bumpTexture, table.textureOver(image, source.bumpTexture));
+    }
   }
   if (source.occlusionTexture !== undefined) {
     const texture = table.texture(source.occlusionTexture);

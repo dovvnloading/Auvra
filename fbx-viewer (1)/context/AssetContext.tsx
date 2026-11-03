@@ -1,4 +1,5 @@
 
+import { AUTHORED_SOCKETS_KEY, type AuthoredSocket } from '../utils/modelConventions';
 import type { StoredBoneRole } from '../utils/retargeting';
 import React, { createContext, useContext, ReactNode, useState, useCallback } from 'react';
 import { 
@@ -138,7 +139,10 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     graphManager.removeGraphData(id, false);
     blueprintManager.unlinkModelFromBlueprints(id);
     emitCascade('model', id);
-  }, selectedModelId, selectModel, clearModel);
+  }, selectedModelId, selectModel, clearModel, (model) => {
+    const fileSockets = model.object.userData[AUTHORED_SOCKETS_KEY] as AuthoredSocket[] | undefined;
+    if (fileSockets?.length) void socketManager.addFileSockets(model.id, fileSockets);
+  });
 
   const attachmentManager = useAttachmentManager(modelManager.models, setIsLoading);
   const socketManager = useSocketManager();

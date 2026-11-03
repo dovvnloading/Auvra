@@ -59,6 +59,10 @@ export const gltfReport = (json: object): ModelFileReport => {
   const report = emptyReport();
   const accessors = document.accessors ?? [];
   const nodes = document.nodes ?? [];
+  for (const { name } of nodes) {
+    if (name && /^(UCX|UBX|USP|UCP)_/i.test(name)) report.collisionMeshes += 1;
+    if (name && /^SOCKET_/i.test(name)) report.sockets += 1;
+  }
   report.creator = document.asset?.generator ?? '';
   report.version = 2;
   report.materials = document.materials?.length ?? 0;

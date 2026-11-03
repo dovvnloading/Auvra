@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Plus } from 'lucide-react';
 import * as THREE from 'three';
 import { useScene } from '../../../context/SceneContext';
@@ -74,6 +74,20 @@ const BoneTree: React.FC<{ model: LoadedModelData }> = ({ model }) => {
   }, [bones, closed, filter, roles]);
 
   const picked = view.selectedBone ? bones.find((entry) => entry.name === view.selectedBone) : undefined;
+
+  // A bone picked in the view is shown in the tree, its parents opened if they were closed.
+  const tree = useRef<HTMLUListElement>(null);
+  useEffect(() => {
+    const at = picked ? bones.indexOf(picked) : -1;
+    if (at < 0) return;
+    setClosed((previous) => {
+      const next = new Set(previous);
+      let changed = false;
+      for (let up = bones[at].parent; up >= 0; up = bones[up].parent) changed = next.delete(up) || changed;
+      return changed ? next : previous;
+    });
+    requestAnimationFrame(() => tree.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' }));
+  }, [bones, picked]);
   const pickedRole = picked ? roles.get(picked.bone) ?? NO_ROLE : NO_ROLE;
 
   const setRole = async (role: string) => {
@@ -94,6 +108,7 @@ const BoneTree: React.FC<{ model: LoadedModelData }> = ({ model }) => {
           <Check label="Show bones" checked={view.showSkeleton} onChange={(showSkeleton) => setSkeletonView({ showSkeleton })} />
           <Check label="Show weights" checked={view.showWeights} onChange={(showWeights) => setSkeletonView({ showWeights })} />
         </div>
+        {view.showSkeleton && <p className="text-2xs text-ink-3">Click a joint in the view to pick its bone.</p>}
         {view.showWeights && (
           <div className="flex items-center gap-2 text-2xs text-ink-3">
             <span>None</span>
@@ -111,7 +126,7 @@ const BoneTree: React.FC<{ model: LoadedModelData }> = ({ model }) => {
         <TextInput aria-label="Search bones" placeholder="Search bones" value={filter} onChange={(event) => setFilter(event.target.value)} />
       </div>
 
-      <ul className="min-h-0 flex-1 overflow-y-auto py-0.5 custom-scrollbar" role="tree" aria-label="Bones">
+      <ul ref={tree} className="min-h-0 flex-1 overflow-y-auto py-0.5 custom-scrollbar" role="tree" aria-label="Bones">
         {shown.map(({ entry, index }) => {
           const isOpen = !closed.has(index);
           const role = roles.get(entry.bone);

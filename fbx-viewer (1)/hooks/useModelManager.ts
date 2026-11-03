@@ -127,6 +127,8 @@ export const useModelManager = (
   selectedModelId: string | null,
   selectModel: (id: string | null) => void,
   clearSelectedModel: (id: string) => void,
+  /** A file was read for a model by importing or reimporting it, not by opening the project. */
+  onModelFileRead?: (model: LoadedModelData) => void,
 ) => {
   const [models, setModels] = useState<LoadedModelData[]>([]);
   // Long operations read state that may change while they await (e.g. a material override save) from here.
@@ -239,6 +241,7 @@ export const useModelManager = (
         }
         return [...previous, completedModel];
       });
+      onModelFileRead?.(completedModel);
       const missing = completedModel.missingTextures ?? 0;
       newModel = null;
       addNotification(missing > 0
@@ -256,7 +259,7 @@ export const useModelManager = (
       operation.finish(outcome, failure);
       setIsLoading(false);
     }
-  }, [models, setIsLoading, startOperation, addNotification]);
+  }, [models, setIsLoading, startOperation, addNotification, onModelFileRead]);
 
   const addModel = useCallback((file: File, category: AssetCategory) => importModel(file, category), [importModel]);
 
@@ -427,6 +430,7 @@ export const useModelManager = (
       replacement = null;
       setModels((previous) => previous.map((model) => (model.id === modelId ? published : model)));
       disposeModel(existing);
+      onModelFileRead?.(published);
       addNotification({ message: `Reimported "${existing.name}".`, type: 'success' });
     } catch (error) {
       outcome = isAbortError(error) ? 'cancelled' : 'failure';
@@ -442,7 +446,7 @@ export const useModelManager = (
       operation.finish(outcome, failure);
       setIsLoading(false);
     }
-  }, [models, setIsLoading, startOperation, addNotification]);
+  }, [models, setIsLoading, startOperation, addNotification, onModelFileRead]);
 
   /** A model's source file, as the project holds it. */
   const readModelSource = useCallback(async (modelId: string): Promise<File> => {
