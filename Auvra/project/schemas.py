@@ -93,8 +93,9 @@ _NESTED_KEYS = {
     "behaviorTree": {"rootId", "behaviorNodes"},
     "behaviorNodes": {"id", "type", "children", "condition", "action", "value", "text"},
 }
-# ``graph`` is a material asset's node graph, whose node params belong to each node type.
-_FREEFORM_KEYS = {"settings", "overrides", "style", "payload", "data", "customData", "props", "graph"}
+# ``graph`` is a material asset's node graph, whose node params belong to each node type;
+# ``textureGraph`` is the image graph a material is made from and ``paint`` its painted layers.
+_FREEFORM_KEYS = {"settings", "overrides", "style", "payload", "data", "customData", "props", "graph", "textureGraph", "paint"}
 # ``materialOverrides`` is keyed by authored material names, so its entries are
 # checked against the override fields instead of by their (arbitrary) key.
 _MATERIAL_OVERRIDE_KEYS = {"color", "roughness", "metalness", "emissive", "emissiveIntensity", "opacity", "mapTextureId", "normalTextureId", "roughnessTextureId", "metalnessTextureId", "materialId", "parameters"}

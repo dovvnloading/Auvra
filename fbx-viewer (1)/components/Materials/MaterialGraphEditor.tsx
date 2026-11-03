@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { AlertTriangle, MessageSquarePlus, Plus, Trash2 } from 'lucide-react';
+import { AlertTriangle, MessageSquarePlus, Network, Plus, Trash2, Workflow } from 'lucide-react';
 import { useAssets } from '../../context/AssetContext';
 import { projectService } from '../../utils/projectService';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
@@ -21,6 +21,9 @@ import { MaterialGraphCanvas } from './MaterialGraphCanvas';
 import { MaterialPreview, clearMaterialShaderError, useMaterialShaderError } from './MaterialPreview';
 import { ParamField } from './MaterialParamField';
 import { GraphHistory, createComment, nodeRect, removeNodes, showsPreview, withComments } from './materialGraphEditing';
+import { Popover } from '../UI/kit';
+import { createFunctionGraph, createTextureGraph } from '../../texturing/graph/document';
+import { TextureGraphWorkspace, newTextureGraphStored } from '../Texturing/TextureGraphWorkspace';
 
 /**
  * MATERIAL GRAPH EDITOR (the Materials tab)
@@ -30,6 +33,9 @@ import { GraphHistory, createComment, nodeRect, removeNodes, showsPreview, withC
  * as it changes. With nothing selected the inspector shows the material's own settings (blend mode,
  * alpha clip, two-sided, unlit). Models' materials take an asset in the Material Editor (Retexture
  * tab); every material using an asset follows edits to it straight away.
+ *
+ * A material can instead be made by a texture graph (components/Texturing): images drawn node by
+ * node into the pictures the material draws with.
  */
 
 // Edits made in quick succession (dragging a slider) are saved together.
@@ -189,6 +195,18 @@ export const MaterialGraphEditor: React.FC = () => {
         select([]);
     };
 
+    const createTextureGraph_ = (forOtherGraphs: boolean) => {
+        const stored = newTextureGraphStored(forOtherGraphs ? createFunctionGraph() : createTextureGraph());
+        if (forOtherGraphs) stored.library = true;
+        const next: MaterialAsset = { id: crypto.randomUUID(), name: forOtherGraphs ? `Graph ${assets.length + 1}` : `Texture ${assets.length + 1}`, graph: createMaterialGraph(), textureGraph: stored };
+        materialLibrary.upsert(next);
+        save(next, true);
+        setSelectedId(next.id);
+        select([]);
+    };
+    const newButton = useRef<HTMLButtonElement>(null);
+    const [newMenu, setNewMenu] = useState(false);
+
     const createFromDescription = (name: string, painted: MaterialGraph) => {
         const next: MaterialAsset = { id: crypto.randomUUID(), name: name.slice(0, 128) || 'Material', graph: painted };
         materialLibrary.upsert(next);
@@ -276,7 +294,21 @@ export const MaterialGraphEditor: React.FC = () => {
                     <span className="text-xs font-bold text-gray-400">Materials</span>
                     <span className="flex-1" />
                     <MaterialFromDescription onCreated={createFromDescription} />
-                    <button onClick={create} aria-label="New material" className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-700"><Plus size={12} /> New</button>
+                    <button ref={newButton} onClick={() => setNewMenu(true)} aria-label="New material" className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-700"><Plus size={12} /> New</button>
+                    <Popover anchor={newButton} open={newMenu} onClose={() => setNewMenu(false)} width={280} label="New material">
+                        <div className="p-1">
+                            {[
+                                { key: 'texture', icon: <Network size={14} />, title: 'Texture graph', text: 'Noises, patterns, blurs and filters drawn into the material\'s pictures: base colour, normal, roughness and the rest.', run: () => createTextureGraph_(false) },
+                                { key: 'shader', icon: <Workflow size={14} />, title: 'Shader graph', text: 'Maths worked out for every pixel as the model draws: moving, glowing and view-dependent looks.', run: create },
+                                { key: 'function', icon: <Network size={14} />, title: 'Graph for other graphs', text: 'A texture graph with an input, made to be used as one node inside others (a smart mask, a filter).', run: () => createTextureGraph_(true) },
+                            ].map((item) => (
+                                <button key={item.key} onClick={() => { setNewMenu(false); item.run(); }} className="flex w-full gap-2 rounded px-2 py-1.5 text-left hover:bg-gray-800">
+                                    <span className="mt-0.5 text-gray-400">{item.icon}</span>
+                                    <span><span className="block text-xs text-gray-100">{item.title}</span><span className="block text-2xs leading-snug text-gray-500">{item.text}</span></span>
+                                </button>
+                            ))}
+                        </div>
+                    </Popover>
                 </div>
                 <div className="flex-1 overflow-y-auto p-2">
                     {assets.length === 0 && <p className="px-1 text-2xs text-gray-500">No materials yet. A material is a node graph; give one to a model's material in the Retexture tab.</p>}
@@ -286,13 +318,25 @@ export const MaterialGraphEditor: React.FC = () => {
                             onClick={() => { setSelectedId(candidate.id); select([]); }}
                             className={`mb-1 w-full truncate rounded px-2 py-1.5 text-left text-xs ${candidate.id === asset?.id ? 'bg-blue-900/40 text-white' : 'text-gray-300 hover:bg-gray-800'}`}
                         >
-                            {candidate.name}
+                            <span className="flex items-center gap-1.5">{candidate.textureGraph ? <Network size={11} className="shrink-0 text-amber-400/80" /> : <Workflow size={11} className="shrink-0 text-sky-400/80" />}<span className="truncate">{candidate.name}</span></span>
                         </button>
                     ))}
                 </div>
             </aside>
 
-            {asset && graph ? (
+            {asset && asset.textureGraph ? (
+                <div className="flex min-w-0 flex-1 flex-col">
+                    <div className="flex items-center gap-2 border-b border-gray-800 px-3 py-1.5">
+                        <Network size={13} className="text-amber-400/80" />
+                        <input aria-label="Material name" value={asset.name} onChange={(event) => rename(event.target.value)} className="w-64 rounded border border-gray-700 bg-gray-950 px-2 py-0.5 text-xs text-white" />
+                        <span className="text-2xs text-gray-500">Texture graph</span>
+                        <span className="flex-1" />
+                        {error && <span className="text-2xs text-amber-400">{error}</span>}
+                        <button onClick={remove} aria-label="Delete material" className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-red-400"><Trash2 size={14} /></button>
+                    </div>
+                    <TextureGraphWorkspace key={asset.id} asset={asset} assets={assets} onSave={save} onOpenAsset={(id) => { setSelectedId(id); select([]); }} />
+                </div>
+            ) : asset && graph ? (
                 <>
                     <MaterialGraphCanvas
                         key={asset.id}

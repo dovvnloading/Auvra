@@ -12,7 +12,7 @@ import { frontendDiagnostics } from '../diagnostics/runtime';
 import { editorSession, type EditorSessionLease } from './editorSession';
 import { sortByHierarchy } from './sceneGraph';
 import { normalizeMaterialOverrides, setMaterialOverrideField, type MaterialOverrides } from './materialOverrides';
-import { MATERIALS_DOMAIN, materialAssetDocument, readMaterialAsset, withoutGraphTexture } from '../runtime/materials/materialLibrary';
+import { MATERIALS_DOMAIN, materialAssetDocument, readMaterialAsset, withoutAssetTexture } from '../runtime/materials/materialLibrary';
 import { SKIN_PAINT_ENCODING, SKIN_PAINT_FILE_NAME, SKIN_PAINT_MIME, type SkinPaintFile, type SkinPaintReference } from './skinPaint/skinPaintFile';
 
 const DB_NAME = 'OmniRenderDB';
@@ -719,10 +719,10 @@ class DBOperations {
     }
     for (const record of nativeDomainRecords(snapshot, 'materials')) {
       // A graph's texture nodes let go of it too, or the asset's next save would name it again.
-      const asset = record.graph ? readMaterialAsset(record) : null;
-      const graph = asset && withoutGraphTexture(asset.graph, id);
-      if (asset && graph && graph !== asset.graph) {
-        changes.push({ domain: 'materials', operation: 'upsert', id: record.id, value: { ...record, ...materialAssetDocument({ ...asset, graph }) } });
+      const asset = record.graph || record.textureGraph || record.paint ? readMaterialAsset(record) : null;
+      const cleared = asset && withoutAssetTexture(asset, id);
+      if (asset && cleared && cleared !== asset) {
+        changes.push({ domain: 'materials', operation: 'upsert', id: record.id, value: { ...record, ...materialAssetDocument(cleared) } });
         continue;
       }
       const textureIds = Array.isArray(record.textureIds) ? record.textureIds.filter((textureId: unknown) => textureId !== id) : [];

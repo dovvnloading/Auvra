@@ -13,7 +13,7 @@ export const fromHex = (hex: string): number[] => [1, 3, 5].map(at => parseInt(h
 const inputClass = 'rounded border border-gray-700 bg-gray-950 px-1 py-0.5 text-xs text-white';
 
 /** A label that changes a number when dragged sideways, by `step` a pixel. */
-const ScrubLabel: React.FC<{ label: string; value: number; step: number; onChange: (value: number) => void }> = ({ label, value, step, onChange }) => {
+export const ScrubLabel: React.FC<{ label: string; value: number; step: number; onChange: (value: number) => void }> = ({ label, value, step, onChange }) => {
     const start = useRef<{ x: number; value: number } | null>(null);
     useEffect(() => {
         const move = (event: MouseEvent) => {
@@ -42,7 +42,7 @@ const ScrubLabel: React.FC<{ label: string; value: number; step: number; onChang
 };
 
 /** Ramp stops edited on a gradient bar: click a stop to pick it, drag it along, double-click the bar to add one. */
-const RampEditor: React.FC<{ label: string; ramp: MaterialRamp; onChange: (ramp: MaterialRamp) => void }> = ({ label, ramp, onChange }) => {
+export const RampEditor: React.FC<{ label: string; ramp: MaterialRamp; onChange: (ramp: MaterialRamp) => void }> = ({ label, ramp, onChange }) => {
     const bar = useRef<HTMLDivElement>(null);
     const [selected, setSelected] = useState(0);
     const dragging = useRef<number | null>(null);
@@ -135,7 +135,7 @@ const RampEditor: React.FC<{ label: string; ramp: MaterialRamp; onChange: (ramp:
 };
 
 /** GLSL edited as a draft and applied on demand (Ctrl+Enter or Apply), so a half-typed line never reaches the shader. */
-const CodeField: React.FC<{ label: string; code: string; onChange: (code: string) => void }> = ({ label, code, onChange }) => {
+export const CodeField: React.FC<{ label: string; code: string; onChange: (code: string) => void }> = ({ label, code, onChange }) => {
     const [draft, setDraft] = useState(code);
     useEffect(() => setDraft(code), [code]);
     const dirty = draft !== code;
