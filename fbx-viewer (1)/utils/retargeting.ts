@@ -50,6 +50,31 @@ const GLUED_LIMB_ROLES: Record<string, string> = {
 };
 const GLUED_LIMBS = new RegExp(`^(left|right|l|r)?(${Object.keys(GLUED_LIMB_ROLES).sort((a, b) => b.length - a.length).join('|')})(left|right|l|r)?$`);
 
+/** The parts of a leg as four-legged rigs name them, top to bottom, and what each is in a front leg and in a hind one. */
+const ANIMAL_LEG_PARTS: readonly { part: RegExp; front: string; hind: string }[] = [
+  { part: /^(upper|up|thigh|hip|humerus|femur)/, front: 'UpperArm', hind: 'UpperLeg' },
+  { part: /^(lower|shin|calf|knee|elbow|radius|tibia|gaskin)/, front: 'LowerArm', hind: 'LowerLeg' },
+  { part: /^(toe|digit|phalan|pastern|hoof)/, front: 'Middle1', hind: 'Toes' },
+  { part: /^(foot|paw|hock|ankle|wrist|carpus|tarsus|cannon|hand)/, front: 'Hand', hind: 'Foot' },
+];
+
+/**
+ * The role of a bone in a four-legged rig that says which end of the body a leg is at: front legs stand
+ * where a person's arms do, and hind legs where a person's legs do. Null for any other bone.
+ */
+const animalLegRole = (words: readonly string[], side: Side): string | null => {
+  if (!side) return null;
+  // "FrontLeg" and "HindLegUpper" run the end and the limb together.
+  const parts = words.flatMap((word) => word.match(/^(front|fore|hind|rear|back)(.+)$/)?.slice(1) ?? [word]);
+  const front = parts.includes('front') || parts.includes('fore');
+  const hind = parts.includes('hind') || parts.includes('rear') || parts.includes('back');
+  // A person's forearm also starts with "fore", and it is an arm.
+  if (front === hind || parts.includes('arm')) return null;
+  const limb = ANIMAL_LEG_PARTS.find(({ part }) => parts.some((word) => part.test(word)));
+  if (limb) return `${side}${front ? limb.front : limb.hind}`;
+  return parts.some((word) => word.startsWith('leg')) ? `${side}${front ? 'UpperArm' : 'UpperLeg'}` : null;
+};
+
 /**
  * The humanoid role of a bone ('Hips', 'Spine', 'LeftUpperArm', 'RightIndex2', ...), or null for
  * bones with none (end bones, twist and helper bones, props).
@@ -58,6 +83,8 @@ export const humanoidRole = (name: string): string | null => {
   const words = nameWords(name);
   const text = words.join(' ');
   if (!text || /\b(end|nub|twist|roll|helper|ik|pole|target|weapon|prop)\b|top_end|headtop/.test(text) || /end$/.test(words[words.length - 1] ?? '')) return null;
+  const animalLeg = animalLegRole(words, sideOf(words, name));
+  if (animalLeg) return animalLeg;
   const glued = GLUED_LIMBS.exec(words.join(''));
   if (glued) {
     const limb = GLUED_LIMB_ROLES[glued[2]];

@@ -43,6 +43,7 @@ export interface BodyExtents {
 }
 
 export interface BodyReading {
+  kind: 'person';
   markers: BodyMarkers;
   extents: BodyExtents;
   /** The way the figure faces, a unit vector in the ground plane as x and z. */
@@ -54,7 +55,7 @@ const READ_RESOLUTION = 180;
 /** Shortest a part may stand out from the body to be taken for a limb or a head, as a share of height. */
 const LEAST_PART = 0.025;
 /** The share of the body's thickness at its middle that a part must hold to count as the thick of the body. */
-const TRUNK_THICKNESS = 0.6;
+export const TRUNK_THICKNESS = 0.6;
 /** How far forward of its neck the top of a head may be, against its height above it, and still stand over it. */
 const HEAD_LEAN = 0.7;
 /** How much bigger than the highest part around the middle another must be for that to be the head instead. */
@@ -263,7 +264,7 @@ interface ArmReading {
 }
 
 /** The middle of a limb, tip first, as a wave follows it to the thick of the body. */
-interface LimbLine {
+export interface LimbLine {
   bands: WaveBand[];
   /** How far it is from the tip to where it meets the thick of the body, in voxels. */
   reach: number;
@@ -274,7 +275,7 @@ interface LimbLine {
 }
 
 /** The place on a limb's line at `distance` voxels from its tip. */
-const lineAt = (bands: readonly WaveBand[], distance: number): Point => {
+export const lineAt = (bands: readonly WaveBand[], distance: number): Point => {
   for (let i = 1; i < bands.length; i += 1) {
     if (bands[i].distance >= distance) {
       const share = (distance - bands[i - 1].distance) / Math.max(1e-6, bands[i].distance - bands[i - 1].distance);
@@ -291,16 +292,25 @@ const lineAt = (bands: readonly WaveBand[], distance: number): Point => {
  * touches it, but a limb as thick as that itself counts as part of it, and it meets the body further
  * on, where the wave has spread out from its own thickness. Null for a limb too short to read.
  */
-const limbLine = (grid: VoxelGrid, mask: Uint8Array, neighbours: Neighbours, trunk: Uint8Array, trunkRadius: number, tip: number): LimbLine | null => {
+export const limbLine = (grid: VoxelGrid, mask: Uint8Array, neighbours: Neighbours, trunk: Uint8Array, trunkRadius: number, tip: number): LimbLine | null => {
   const thick = Math.PI * trunkRadius * trunkRadius;
   let touched = 0;
+  let touchedAt = -1;
   let met = false;
+  let seen = 0;
   const bands = waveFrom(grid, mask, neighbours, tip, (band) => {
-    if (band.withinShare > 0.15 && !touched) touched = band.area;
+    if (band.withinShare > 0.15 && !touched) {
+      touched = band.area;
+      touchedAt = seen;
+    }
+    seen += 1;
     met = touched > 0 && (touched < thick || band.area >= touched * THICK_LIMB_SPREAD);
     return met;
   }, trunk);
-  if (!met || bands.length < 5) return null;
+  if (!touched) return null;
+  // A limb as thick as the body may never spread that far: it meets the body where it first touched it.
+  if (!met) bands.length = touchedAt + 1;
+  if (bands.length < 6) return null;
   bands.pop();
   const reach = bands[bands.length - 1].distance;
   // Where it has spread out, it is at its joint already; where it only touches, its joint is further on.
@@ -346,7 +356,7 @@ const narrowing = (bands: readonly WaveBand[], near: number, far: number): numbe
 };
 
 /** Where a limb's line strays furthest from the straight line between two places on it, and by what share of that line. */
-const bendOf = (bands: readonly WaveBand[], from: number, to: number): { distance: number; share: number } | null => {
+export const bendOf = (bands: readonly WaveBand[], from: number, to: number): { distance: number; share: number } | null => {
   const a = lineAt(bands, from);
   const b = lineAt(bands, to);
   const length = stepLength(a, b);
@@ -620,8 +630,11 @@ const mirrored = (grid: VoxelGrid, mask: Uint8Array, cells: Int32Array, way: [nu
   return hits / count;
 };
 
-/** A body's way across, from one side to the other: the way that it mirrors itself best. */
-export const acrossBody = (grid: VoxelGrid, mask: Uint8Array): [number, number] | null => {
+/**
+ * A body's way across, from one side to the other: the way that it mirrors itself best. `long` says it
+ * is a body longer than it is wide, whose widest way runs along it and not across.
+ */
+export const acrossBody = (grid: VoxelGrid, mask: Uint8Array, long = false): [number, number] | null => {
   const widest = widestWay(grid, mask);
   if (!widest) return null;
   const cells = sampleOf(grid, mask);
@@ -643,7 +656,8 @@ export const acrossBody = (grid: VoxelGrid, mask: Uint8Array): [number, number] 
     }
   }
   // Arms held out make a body wide and flat, and it can mirror itself front to back about as well. The widest way is then across.
-  return widest.ratio >= WIDE_BODY && mirrored(grid, mask, cells, widest.way) >= bestScore - MIRROR_SLACK ? widest.way : wayAt(best);
+  const wide: [number, number] = long ? [-widest.way[1], widest.way[0]] : widest.way;
+  return widest.ratio >= WIDE_BODY && mirrored(grid, mask, cells, wide) >= bestScore - MIRROR_SLACK ? wide : wayAt(best);
 };
 
 /** A direction close to a square one becomes exactly it, so a mesh standing square is not turned for nothing. */
@@ -755,7 +769,7 @@ const SIDES_ALIKE = 0.04;
  * Makes a joint and its partner mirror images across `middleX` when they nearly are. A pose that
  * really has them apart keeps them apart.
  */
-const evenSides = (left: Point, right: Point, middleX: number, height: number): [Point, Point] => {
+export const evenSides = (left: Point, right: Point, middleX: number, height: number): [Point, Point] => {
   const reach = ((left[0] - middleX) + (middleX - right[0])) / 2;
   const alike = Math.abs((left[0] - middleX) - (middleX - right[0])) < height * SIDES_ALIKE
     && Math.abs(left[1] - right[1]) < height * SIDES_ALIKE
@@ -768,12 +782,13 @@ const evenSides = (left: Point, right: Point, middleX: number, height: number): 
 
 /**
  * Reads a person from `triangles`, in the triangles' space. Null when the mesh does not read as one.
+ * `knownFacing` says which way they face, if that is known already.
  */
-export const readBody = (triangles: TriangleSoup): BodyReading | null => {
+export const readBody = (triangles: TriangleSoup, knownFacing?: [number, number]): BodyReading | null => {
   // A first, coarse look finds which way it stands, so the body can be turned to face +Z.
   const coarse = voxelize(triangles, 96);
   if (!coarse) return null;
-  const facing = bodyFacing(coarse, largestPiece(coarse));
+  const facing = knownFacing ?? bodyFacing(coarse, largestPiece(coarse));
   if (!facing) return null;
   // The turn that brings the facing direction to +Z.
   const cos = facing[1];
@@ -1013,6 +1028,7 @@ export const readBody = (triangles: TriangleSoup): BodyReading | null => {
   const [leftKnee, rightKnee] = sides(leftLeg.knee, rightLeg.knee);
   const [leftAnkle, rightAnkle] = sides(leftLeg.ankle, rightLeg.ankle);
   return {
+    kind: 'person',
     facing,
     markers: {
       chin: back(placeOf(grid, chinCell)),
