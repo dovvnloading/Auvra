@@ -15,6 +15,13 @@ const LONG_RUNNING_METHODS = new Set<Request['method']>([
   'project.exportPack', 'project.importPack', 'project.importLegacy', 'project.buildGame',
 ]);
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+/**
+ * The host refuses a request numbered behind its session, before running any of it. Requests from different services and
+ * the host's own events cross on the way, so that is ordinary and sending it again with the current number is safe. It says
+ * nothing of a project's own revision, which has a message of its own and must reach the caller.
+ */
+const STALE_ORDER_MESSAGE = 'Host revision does not match';
+const MAX_ORDER_RETRIES = 8;
 
 export interface NativeTransportOptions {
   readonly timeoutMs?: number;
@@ -29,6 +36,8 @@ export class NativeTransportError extends Error {
 }
 
 interface PendingRequest {
+  readonly request: Request;
+  retries: number;
   readonly resolve: (response: Response) => void;
   readonly reject: (error: Error) => void;
   readonly timer: ReturnType<typeof setTimeout>;
@@ -143,7 +152,7 @@ export class NativeHostTransport implements HostTransport {
         frontendDiagnostics.transportFailure('request_timeout', request.method, undefined, requestTimeout);
         reject(new NativeTransportError("Host request timed out"));
       }, requestTimeout);
-      this.pending.set(request.id, { resolve, reject, timer, span });
+      this.pending.set(request.id, { request, retries: 0, resolve, reject, timer, span });
       try {
         span.phase('dispatching', { method: request.method });
         this.webview.postMessage(request);
@@ -249,6 +258,16 @@ export class NativeHostTransport implements HostTransport {
     if (!pending || this.completed.has(response.id)) {
       this.failClosed("Late or duplicate host response");
       return;
+    }
+    if (!response.ok && response.error?.code === 'revision_conflict' && response.error.message === STALE_ORDER_MESSAGE && pending.retries < MAX_ORDER_RETRIES) {
+      pending.retries += 1;
+      this.revision = response.revision;
+      try {
+        this.webview.postMessage({ ...pending.request, revision: this.revision });
+        return;
+      } catch {
+        // Falls through: the caller hears of the refusal.
+      }
     }
     clearTimeout(pending.timer);
     this.pending.delete(response.id);

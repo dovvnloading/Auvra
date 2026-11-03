@@ -149,14 +149,14 @@ if (!/canonicalChange\('objects', 'upsert', obj, obj\.id, lease, prepareLevelObj
   failures.push('level object writes can still persist inline terrain heights');
 }
 if (!/category === 'Animation'[\s\S]*selectAnimationTarget\(models, selectedModelId\)[\s\S]*addAnimations\(files, target\.id\)/.test(contentBrowser)) failures.push('Library animation import is not routed to the selected skeletal model');
-if (!/prepareAnimationClips\(targetModel\.object, loaded\.object, loaded\.animations\)/.test(modelManager)) failures.push('animation import bypasses target skeleton binding');
-if (!/prepareAnimationClips\(loaded\.object, animationModel\.object, animationModel\.animations\)/.test(projectHydration)) failures.push('native project hydration bypasses target skeleton binding');
+if (!/prepareAnimationClips\(targetModel\.object, loaded\.object, loaded\.animations, targetModel\.boneRoles\)/.test(modelManager)) failures.push('animation import bypasses target skeleton binding');
+if (!/prepareAnimationClips\(loaded\.object, animationModel\.object, animationModel\.animations, item\.boneRoles\)/.test(projectHydration)) failures.push('native project hydration bypasses target skeleton binding');
 if (!/setActiveClip\(selectedAnimations\[0\] \|\| null\)/.test(app)) failures.push('valid imported animation is not selected for preview');
 if (!/retargetHumanoidClip/.test(animationBinding) || !/clipBindsDirectly/.test(animationBinding)) failures.push('animation binding lacks direct and retargeted paths');
-if (/clip\.duration > 0\.1/.test(modelLoader) || !/clip\.duration > 0/.test(modelLoader)) failures.push('valid short animation clips are still discarded');
+if (/clip\.duration > 0\.1/.test(modelLoader) || !/clip\.duration <= 0\) clip\.duration = POSE_CLIP_SECONDS/.test(modelLoader)) failures.push('valid short animation clips are still discarded');
 if (!/new Worker\(new URL\(['"]\.\.\/workers\/fbxImport\.worker\.ts['"]/.test(modelLoader)) failures.push('FBX import is not isolated in a module worker');
-if (/import\s*\{\s*FBXLoader\s*\}/.test(modelLoader)) failures.push('renderer model loader still imports FBXLoader directly');
-if (!/new FBXLoader\(\)\.parse/.test(importWorker) || !/new GLTFExporter\(\)\.parseAsync/.test(importWorker)) failures.push('FBX worker does not own parse and transient runtime conversion');
+if (/runNativeImport/.test(modelLoader)) failures.push('renderer model loader runs the native importer on its own thread');
+if (!/runNativeImport\(importer, request\.buffer/.test(importWorker) || !/buildImportedGlb\(native,/.test(importWorker)) failures.push('FBX worker does not own parse and transient runtime conversion');
 if (!/signal\?\.addEventListener\(['"]abort/.test(modelLoader) || !/worker\.terminate\(\)/.test(modelLoader)
   || !/Promise\.race\(\[parsedPromise, cancelled\]\)/.test(modelLoader)
   || !/disposeObject\(loaded\.scene\)/.test(modelLoader)
@@ -212,13 +212,13 @@ if (!/emitDomainCascade/.test(assetContext)
   failures.push('host asset-delete cascades are not reconciled across live editor domains');
 }
 if (!/JSON\.stringify\(oldItem\) !== JSON\.stringify\(item\)/.test(levels)
-  || !/const previousState = history\.current\.past\[history\.current\.past\.length - 1\]/.test(levels)
-  || !/const nextState = history\.current\.future\[history\.current\.future\.length - 1\]/.test(levels)
-  || !/historyMutationRef/.test(levels)
-  || !/Keep both stacks untouched until every host change succeeds/.test(levels)
+  || !/const \[from, to\] = direction === 'Undo' \? \[past, future\] : \[future, past\]/.test(levels)
+  || !/historyFailuresRef/.test(levels)
+  || !/A step the host refuses puts back what it took/.test(levels)
+  || !/history\.current = stacks/.test(levels)
   || !/syncStateToDB\(nextState, currentState, rollbackLease, false\)/.test(levels)
   || !/level_history_rollback_failed/.test(levels)) {
-  failures.push('level undo/redo still omits authored fields or consumes history before persistence');
+  failures.push('level undo/redo still omits authored fields or loses history when the host refuses a step');
 }
 if (!/createEditorStateDocument/.test(projectManager)
   || !/persistEditorState/.test(projectManager)

@@ -5,7 +5,7 @@ import type { AttachmentData, CharacterIKSettings, WeaponSettings } from '../../
 import { resolveWeaponPoint } from '../../runtime/weapons';
 import { findBone, IKPoseGuard, reachWithHand, supportGripPoint, type SupportGrip } from '../../runtime/ik';
 import { mirrorBoneName } from '../../utils/retargeting';
-import { usePhysicsQueries } from '../../runtime/physics';
+import { usePhysicsQueries } from '../../runtime/physicsQueries';
 import { crosshairTarget } from '../../runtime/aimTarget';
 import {
     createFootIKState,

@@ -6,7 +6,7 @@ import type { LevelComponent } from '../../types';
 import { combat, destructibles, type DestructibleHandle, type Vec3 } from '../destructibles';
 import { fractureMesh, MAX_FRACTURE_PIECES, MIN_FRACTURE_PIECES, type FractureResult, type FractureSource } from '../fracture';
 import { useGameContent } from '../GameContentContext';
-import { objectIdFromCollider } from '../physics';
+import { objectIdFromCollider } from '../physicsQueries';
 import { useRuntimeServices } from '../RuntimeServicesContext';
 import { findAudioAsset } from './audioComponents';
 import { ComponentHostContext } from './builtins';

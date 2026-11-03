@@ -1,19 +1,87 @@
 from __future__ import annotations
 
+import gc
+import io
 import os
 import sys
-import tempfile
 import threading
 import time
 import types
 import unittest
+import weakref
 from unittest import mock
-from pathlib import Path
 
-from Auvra.desktop.contracts import FrameConfig, FrameMode, FrameStartupError, FrameState, FrameUnavailableError
+from Auvra.desktop.contracts import FrameConfig, FrameMode, FrameStartupError, FrameState
 from Auvra.desktop.assets import ASSET_ORIGIN, AssetResourceResponse
 from Auvra.desktop.webview2 import WebView2Frame
-from .fakes import EventArgs, download, frame_navigation, message, navigation, new_window, permission, resource
+from .fakes import EventArgs, download, message, navigation, new_window, permission, resource
+
+
+class NativeBodyReaderTests(unittest.TestCase):
+    """What the page sends comes through .NET, which only Windows has here."""
+
+    def setUp(self) -> None:
+        try:
+            import clr  # type: ignore[import-not-found]  # noqa: F401
+            from System import Array, Byte  # type: ignore[import-not-found]
+            from System.IO import MemoryStream  # type: ignore[import-not-found]
+        except Exception as exc:
+            self.skipTest(f".NET is not available: {exc}")
+        self.stream_of = lambda data: MemoryStream(Array[Byte](data))
+
+    def test_it_hands_over_exactly_what_was_sent_a_chunk_at_a_time(self) -> None:
+        sent = bytes(range(256)) * 41
+        reader = WebView2Frame._NativeBodyReader(self.stream_of(sent))
+        received = []
+        while chunk := reader.read(4096):
+            self.assertIsInstance(chunk, bytes)
+            self.assertLessEqual(len(chunk), 4096)
+            received.append(chunk)
+        self.assertEqual(b"".join(received), sent)
+
+    def test_it_counts_what_came_through_net_so_it_can_be_collected(self) -> None:
+        reader = WebView2Frame._NativeBodyReader(self.stream_of(bytes(5000)))
+        while reader.read(4096):
+            pass
+        self.assertEqual(reader.native_bytes, 5000)
+        self.assertEqual(WebView2Frame._NativeBodyReader(io.BytesIO(b"fake")).native_bytes, 0)
+
+    def test_a_request_that_was_answered_is_let_go(self) -> None:
+        # A request holds its whole body. The callback and .NET delegate that answer it hold
+        # each other, which neither runtime can collect, so the callback must not keep it.
+        class Form:
+            def BeginInvoke(self, action):
+                action()
+
+        class Args:
+            Response = None
+
+        class Deferral:
+            def Complete(self):
+                pass
+
+        frame = WebView2Frame(FrameConfig(FrameMode.DEVELOPMENT, development_origin="http://127.0.0.1:3000"))
+        frame._form = Form()
+        args = Args()
+        watched = weakref.ref(args)
+        frame._complete_deferred_resource(args, Deferral(), AssetResourceResponse(204, "No Content", {}))
+        self.assertIsNotNone(args.Response)
+        del args
+        gc.collect()
+        self.assertIsNone(watched())
+        frame._form = None
+        frame.close()
+
+    def test_a_large_file_is_not_read_a_byte_at_a_time(self) -> None:
+        sent = bytes(16 * 1024 * 1024)
+        reader = WebView2Frame._NativeBodyReader(self.stream_of(sent))
+        started = time.perf_counter()
+        total = 0
+        while chunk := reader.read(1024 * 1024):
+            total += len(chunk)
+        self.assertEqual(total, len(sent))
+        # A byte at a time this takes over 6 seconds.
+        self.assertLess(time.perf_counter() - started, 2.0)
 
 
 class WebView2HandlerTests(unittest.TestCase):
@@ -23,6 +91,21 @@ class WebView2HandlerTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.frame.close()
+
+    def test_net_is_kept_collecting_only_while_large_files_pass_through(self):
+        with mock.patch("Auvra.desktop.webview2.threading.Thread") as thread:
+            self.frame._keep_collecting_for(1024)
+            thread.assert_not_called()
+            self.frame._keep_collecting_for(64 * 1024 * 1024)
+            thread.assert_called_once()
+            thread.return_value.start.assert_called_once()
+            first = self.frame._collect_until
+            self.frame._keep_collecting_for(64 * 1024 * 1024)
+            thread.assert_called_once()
+            self.assertGreater(self.frame._collect_until, first)
+        self.frame._collect_until = time.monotonic() - 1
+        self.frame._collect_assets()
+        self.assertFalse(self.frame._collecting)
 
     def test_navigation_and_resource_handlers_cancel_external_content(self):
         allowed = navigation("http://127.0.0.1:3000/")

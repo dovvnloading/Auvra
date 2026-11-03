@@ -28,7 +28,7 @@ export const BlackboardPanel: React.FC<BlackboardPanelProps> = ({ graph, modelId
         <div className="flex-1 flex flex-col min-h-0 bg-gray-900">
             {/* Header / Selector */}
             <div className="p-3 border-b border-gray-800 bg-gray-950 shrink-0">
-                <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider mb-1.5 block">
+                <label className="text-2xs text-gray-500 font-bold mb-1.5 block">
                     Blackboard Section
                 </label>
                 <Select 

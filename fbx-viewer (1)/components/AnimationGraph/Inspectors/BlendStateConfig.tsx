@@ -49,7 +49,7 @@ const PositionInput: React.FC<PositionInputProps> = ({ label, ariaLabel, value, 
 
     return (
         <div className="flex items-center gap-2 flex-1">
-            <span className="text-[9px] text-gray-500 font-bold font-mono">{label}</span>
+            <span className="text-2xs text-gray-500 font-bold font-mono">{label}</span>
             <input
                 type="number" step="0.1"
                 aria-label={ariaLabel}
@@ -60,7 +60,7 @@ const PositionInput: React.FC<PositionInputProps> = ({ label, ariaLabel, value, 
                     if (parsed !== null && parsed !== value) onChange(parsed);
                 }}
                 onBlur={() => setText(displayNumber(value))}
-                className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-[10px] text-white focus:border-gray-500 focus:outline-none"
+                className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-2xs text-white focus:border-gray-500 focus:outline-none"
             />
         </div>
     );
@@ -174,7 +174,7 @@ export const BlendStateConfig: React.FC<BlendStateConfigProps> = ({
                 </div>
                 <div className={`p-3 grid gap-3 ${is1D ? 'grid-cols-1' : 'grid-cols-2'}`}>
                     <div className="space-y-1.5">
-                        <label className="text-[9px] uppercase text-gray-500 font-bold">X Axis</label>
+                        <label className="text-2xs text-gray-500 font-bold">X Axis</label>
                         <Select
                             value={node.blendParamX}
                             onChange={(val) => updateState({ blendParamX: val })}
@@ -183,7 +183,7 @@ export const BlendStateConfig: React.FC<BlendStateConfigProps> = ({
                     </div>
                     {!is1D && (
                         <div className="space-y-1.5">
-                            <label className="text-[9px] uppercase text-gray-500 font-bold">Y Axis</label>
+                            <label className="text-2xs text-gray-500 font-bold">Y Axis</label>
                             <Select
                                 value={node.blendParamY}
                                 onChange={(val) => updateState({ blendParamY: val })}
@@ -197,13 +197,13 @@ export const BlendStateConfig: React.FC<BlendStateConfigProps> = ({
             {/* Samples List */}
             <div className="space-y-3">
                 <div className="flex items-center justify-between px-1">
-                    <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider">Motion Samples</label>
+                    <label className="text-2xs text-gray-500 font-bold ">Motion Samples</label>
                     <button
                         onClick={() => {
                             const newSample = { id: crypto.randomUUID(), clipName: '', position: [0, 0] as [number, number] };
                             updateState({ blendSamples: [...node.blendSamples, newSample] });
                         }}
-                        className="text-[10px] px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-gray-300 hover:text-white transition-colors flex items-center gap-1"
+                        className="text-2xs px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-gray-300 hover:text-white transition-colors flex items-center gap-1"
                     >
                         <Plus size={10} /> Add
                     </button>
@@ -222,7 +222,7 @@ export const BlendStateConfig: React.FC<BlendStateConfigProps> = ({
                     {node.blendSamples.map((sample, idx) => (
                         <div key={sample.id} className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
                             <div className="flex items-center gap-2 p-2 border-b border-gray-700/50 bg-gray-800">
-                                <span className="text-[9px] text-gray-500 font-bold font-mono w-3 text-center">{idx + 1}</span>
+                                <span className="text-2xs text-gray-500 font-bold font-mono w-3 text-center">{idx + 1}</span>
                                 <div className="flex-1 min-w-0">
                                     <Select
                                         value={sample.clipName}
@@ -265,7 +265,7 @@ export const BlendStateConfig: React.FC<BlendStateConfigProps> = ({
                     ))}
                     {node.blendSamples.length === 0 && (
                         <div className="text-center py-4 border border-dashed border-gray-800 rounded bg-gray-900/50">
-                            <p className="text-[10px] text-gray-600">No motion samples added.</p>
+                            <p className="text-2xs text-gray-600">No motion samples added.</p>
                         </div>
                     )}
                 </div>

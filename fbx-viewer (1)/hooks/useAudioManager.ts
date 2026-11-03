@@ -6,6 +6,7 @@ import { projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
 import { isAbortError, useOperationActions } from '../context/OperationContext';
 import { assetDiagnosticAttributes, frontendDiagnostics } from '../diagnostics/runtime';
+import { importFailureMessage } from '../utils/modelLoader';
 
 export const useAudioManager = (setIsLoading: (loading: boolean) => void) => {
   const [audioAssets, setAudioAssets] = useState<AudioData[]>([]);
@@ -13,7 +14,6 @@ export const useAudioManager = (setIsLoading: (loading: boolean) => void) => {
   const { startOperation } = useOperationActions();
 
   const addAudio = useCallback(async (file: File): Promise<string | null> => {
-    projectService.assertWritable();
     const assetAlias = frontendDiagnostics.nextAssetAlias();
     const diagnostic = assetDiagnosticAttributes(file, 'audio', assetAlias);
     const operation = startOperation({
@@ -31,6 +31,8 @@ export const useAudioManager = (setIsLoading: (loading: boolean) => void) => {
     setIsLoading(true);
     try {
         // Basic validation
+        projectService.assertWritable();
+        await projectService.assertStorable(file);
         if (!file.type.startsWith('audio/')) {
             throw new Error("Invalid file type. Please upload an audio file.");
         }
@@ -54,7 +56,7 @@ export const useAudioManager = (setIsLoading: (loading: boolean) => void) => {
             };
             operation.signal.addEventListener('abort', abort, { once: true });
             audioEl.onloadedmetadata = () => { cleanup(); resolve(); };
-            audioEl.onerror = () => { cleanup(); reject(new Error('Audio metadata could not be read.')); };
+            audioEl.onerror = () => { cleanup(); reject(new Error('The sound could not be read. It may be damaged, or not a sound file at all.')); };
         });
         const duration = audioEl.duration;
 
@@ -95,7 +97,7 @@ export const useAudioManager = (setIsLoading: (loading: boolean) => void) => {
         failure = e;
         if (url) URL.revokeObjectURL(url);
         addNotification({
-          message: isAbortError(e) ? `Cancelled import of "${file.name}".` : `Failed to import audio: ${e.message}`,
+          message: isAbortError(e) ? `Cancelled import of "${file.name}".` : importFailureMessage(`Failed to import "${file.name}"`, e),
           type: isAbortError(e) ? 'info' : 'error',
         });
         return null;

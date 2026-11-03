@@ -226,6 +226,7 @@ struct QuadVarying {
   @location(1) uv: vec2f,
   @location(2) vertexColor: vec4f,
   @location(3) instanceColor: vec4f,
+  @location(4) @interpolate(flat) row: u32,
 }
 
 fn quadCorner(index: u32) -> vec2f {
@@ -254,6 +255,7 @@ fn quadClip(world: vec3f) -> vec4f {
   out.uv = corner * 0.5 + vec2f(0.5);
   out.vertexColor = unpack4x8unorm(v.color);
   out.instanceColor = instance.color;
+  out.row = quad.row;
   return out;
 }
 
@@ -277,6 +279,7 @@ fn quadClip(world: vec3f) -> vec4f {
   out.uv = corner + vec2f(0.5);
   out.vertexColor = vec4f(1.0);
   out.instanceColor = vec4f(1.0);
+  out.row = quad.row;
   return out;
 }
 
@@ -295,6 +298,7 @@ fn quadClip(world: vec3f) -> vec4f {
   input.viewDirection = toEye;
   input.frontFacing = true;
   input.time = view.params.x;
+  input.instanceId = in.row;
   let s = surface(input);
   if (s.opacity < s.alphaTest) { discard; }
   return finishColor(s.albedo + s.emissive, s.opacity);

@@ -3,9 +3,9 @@ import type { ErrorCode, Event, ProjectResult, Request, Response, SuccessResult 
 import type { HostTransport } from "./transport";
 
 const PROJECT_METHODS = ["project.getStatus", "project.create", "project.open", "project.openRecent", "project.close", "project.getSnapshot", "project.applyChanges", "project.save", "project.saveAs", "project.exportPack", "project.buildGame", "project.importPack", "project.importLegacy", "asset.beginUpload", "asset.resolve", "asset.queryPrepared", "asset.beginPreparedUpload"] as const;
-const PROVIDER_METHODS = ["provider.list", "provider.getStatus", "provider.configureCredential", "provider.deleteCredential", "provider.configure", "provider.listModels", "provider.health", "inference.submit", "inference.get", "inference.list", "inference.cancel", "inference.retry", "media.discard", "media.commit", "command.preview", "command.approve", "command.undo"] as const;
+const PROVIDER_METHODS = ["provider.list", "provider.getStatus", "provider.configureCredential", "provider.deleteCredential", "provider.chooseFolder", "provider.configure", "provider.listModels", "provider.health", "inference.submit", "inference.get", "inference.list", "inference.cancel", "inference.retry", "media.discard", "media.commit", "command.preview", "command.approve", "command.undo"] as const;
 const ENGINE_METHODS = ["engine.getStatus", "engine.getSnapshot", "engine.applyChanges", "engine.openViewport", "engine.closeViewport", "engine.renderReference", "engine.getMetrics", "engine.recover"] as const;
-const MEDIA_CAPABILITIES = ["media.generate", "media.edit"] as const;
+const MEDIA_CAPABILITIES = ["media.generate", "media.edit", "media.maps", "media.mesh", "media.material", "media.sky", "media.decal", "media.render"] as const;
 const ENGINE_FEATURES = ["pbr_metallic_roughness", "skeletal_animation", "frustum_culling", "deterministic_lod", "instance_batching", "directional_lights", "point_lights", "spot_lights", "shadow_maps", "image_based_lighting", "entity_picking", "editor_gizmos", "hdr_intermediate", "aces_tone_mapping", "msaa_or_fxaa", "post_processing_chain"] as const;
 type Payload = Record<string, unknown>;
 
@@ -111,7 +111,7 @@ export class FakeHost implements HostTransport {
       case "asset.queryPrepared": this.requireProject(payload); return this.result({ preparedKeys: (payload.keys as string[]).filter((key) => this.preparedModels.has(key)) });
       case "asset.beginPreparedUpload": { this.requireProject(payload); const token = "C".repeat(43); this.tickets.set(token, { method: "PUT", size: Number(payload.size), mime: "model/gltf-binary", expiresAt: this.clock + 300, consumed: false, preparedKey: String(payload.key) }); return this.result({ size: Number(payload.size), mime: "model/gltf-binary", method: "PUT", expiresAt: this.clock + 300, url: `https://assets.auvra.local/v1/put/${token}` }); }
       case "provider.list": return { kind: "provider.list", providers: [
-        ["fal", "fal.ai", "cloud", ["media.generate", "media.edit"]], ["openai", "OpenAI", "cloud", ["text", "code", "commands"]],
+        ["fal", "fal.ai", "cloud", ["media.generate", "media.edit", "media.maps", "media.mesh", "media.material", "media.sky", "media.decal", "text", "code", "commands"]], ["openai", "OpenAI", "cloud", ["text", "code", "commands"]],
         ["anthropic", "Anthropic", "cloud", ["text", "code", "commands"]], ["xai", "xAI", "cloud", ["text", "code", "commands"]],
         ["openrouter", "OpenRouter", "cloud", ["text", "code", "commands"]], ["ollama", "Ollama", "local", ["text", "code", "commands"]],
         ["llama.cpp", "llama.cpp", "local", ["text", "code", "commands"]],
@@ -119,6 +119,7 @@ export class FakeHost implements HostTransport {
       case "provider.getStatus": { const providerId = String(payload.providerId); this.assertProvider(providerId); const configured = this.providerConfigured.has(providerId); return this.providerStatus(providerId, configured); }
       case "provider.configureCredential": { const providerId = String(payload.providerId); this.assertProvider(providerId); this.providerConfigured.add(providerId); return { kind: "provider.credential", providerId, storageMode: payload.storageMode, configured: true, credentialStatus: payload.storageMode === "memoryOnly" ? "memoryOnly" : "configured" }; }
       case "provider.deleteCredential": { const providerId = String(payload.providerId); this.assertProvider(providerId); this.providerConfigured.delete(providerId); return this.providerStatus(providerId, false); }
+      case "provider.chooseFolder": { const providerId = String(payload.providerId); this.assertProvider(providerId); return { kind: "provider.folder", providerId, waiting: false }; }
       case "provider.configure": {
         const providerId = String(payload.providerId); this.assertProvider(providerId);
         const expected = Number(payload.expectedSettingsRevision); const current = this.providerSettingsRevision.get(providerId) ?? 0;
@@ -133,12 +134,12 @@ export class FakeHost implements HostTransport {
         this.providerSettings.set(providerId, settings); this.providerSettingsRevision.set(providerId, current + 1);
         return this.providerStatus(providerId, this.providerConfigured.has(providerId));
       }
-      case "provider.listModels": { const providerId = String(payload.providerId); this.assertProvider(providerId); const capabilities = providerId === "fal" ? [...MEDIA_CAPABILITIES] : ["text", "code", "commands"] as const; return { kind: "provider.models", providerId, models: [{ modelId: `${providerId}.default`, displayName: "Default", capabilities }] }; }
+      case "provider.listModels": { const providerId = String(payload.providerId); this.assertProvider(providerId); const capabilities = providerId === "fal" ? [...MEDIA_CAPABILITIES, "text", "code", "commands"] as const : ["text", "code", "commands"] as const; return { kind: "provider.models", providerId, models: [{ modelId: `${providerId}.default`, displayName: "Default", capabilities }] }; }
       case "provider.health": { const providerId = String(payload.providerId); this.assertProvider(providerId); const healthy = ["ollama", "llama.cpp"].includes(providerId) || this.providerConfigured.has(providerId); return { kind: "provider.health", providerId, healthy, latencyMs: 0, message: "deterministic fake host" }; }
       case "inference.submit": {
         this.requireProject(payload); if (payload.expectedRevision !== this.projectRevision) throw { code: "revision_conflict", message: "Project revision does not match" };
         const providerId = String(payload.providerId); this.assertProvider(providerId); const route = ["ollama", "llama.cpp"].includes(providerId) ? "local" : "cloud";
-        const supported = providerId === "fal" ? MEDIA_CAPABILITIES : ["text", "code", "commands"];
+        const supported = providerId === "fal" ? [...MEDIA_CAPABILITIES, "text", "code", "commands"] : ["text", "code", "commands"];
         if (!(supported as readonly unknown[]).includes(payload.capability)) throw { code: "unsupported_capability", message: "Provider does not support capability" };
         if (payload.targetElementId !== undefined && payload.capability !== "commands") throw { code: "unsupported_capability", message: "targetElementId is valid only for command jobs" };
         if (payload.route !== route) throw { code: "endpoint_denied", message: "Provider route does not match explicit request" };

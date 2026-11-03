@@ -1,0 +1,1 @@
+ufbx v0.23.1, commit 26a482ae66871d7de36eb722aa060bce95bce274, from https://github.com/ufbx/ufbx

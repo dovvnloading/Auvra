@@ -10,7 +10,6 @@ import Auvra.desktop.contracts as contracts
 import Auvra.desktop.controller as controller_module
 from Auvra.desktop.contracts import FrameConfig, FrameConfigurationError, FrameMode, FrameState
 from Auvra.desktop.controller import FrameController
-from Auvra.desktop.webview2 import WebView2Frame
 
 
 class FakeFrame:

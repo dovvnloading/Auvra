@@ -5,7 +5,7 @@ import type { LevelComponent } from '../../types';
 import { CLOTH_PINS, ClothSimulation, MAX_CLOTH_RESOLUTION, MIN_CLOTH_RESOLUTION, type ClothPin, type ClothSettings } from '../cloth';
 import { combat } from '../destructibles';
 import { useGameContent } from '../GameContentContext';
-import { usePhysicsQueries } from '../physics';
+import { usePhysicsQueries } from '../physicsQueries';
 import { DEFAULT_SPRING_BONES, SpringBones, springBoneMatcher } from '../springBones';
 import { windAt, windTime, windZones, type WindZoneShape } from '../wind';
 import { ComponentHostContext } from './builtins';

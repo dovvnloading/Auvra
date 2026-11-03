@@ -74,6 +74,19 @@ describe('raycastPlacement', () => {
     expectVector(side?.normal, [1, 0, 0]);
   });
 
+  it('says which instance of a mesh that draws many it landed on', () => {
+    const scene = new THREE.Scene();
+    const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshBasicMaterial(), 2);
+    mesh.setMatrixAt(0, new THREE.Matrix4().makeTranslation(-10, 0, 0));
+    mesh.setMatrixAt(1, new THREE.Matrix4().makeTranslation(10, 3, 0));
+    scene.add(mesh);
+    scene.updateMatrixWorld(true);
+    const hit = raycastPlacement(down(10, 0), scene, []);
+    expect(hit?.instanceId).toBe(1);
+    expect(hit?.point.y).toBeCloseTo(4);
+    expect(hit?.object).toBe(mesh);
+  });
+
   it('passes through ignored objects, helpers and marker level objects', () => {
     const { scene, box } = boxScene();
     expect(raycastPlacement(down(0, 0), scene, [], { ignore: [box] })?.point.y).toBeCloseTo(0);

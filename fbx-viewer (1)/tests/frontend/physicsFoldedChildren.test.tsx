@@ -11,7 +11,7 @@ import {
   tagColliderObject,
 } from '../../runtime/components/physicsComponents';
 import type { CompoundBodyRegistry } from '../../runtime/components/physicsComponents';
-import { objectIdFromRigidBody, objectIdFromUserData, physicsUserData } from '../../runtime/physics';
+import { objectIdFromRigidBody, objectIdFromUserData, physicsUserData } from '../../runtime/physicsQueries';
 import type { LevelComponent, LevelObject } from '../../types';
 import { loadRuntimeRapier } from './rapierRuntime';
 import type { RuntimeRapier } from './rapierRuntime';

@@ -57,6 +57,40 @@ export const extractTextureFromModel = (object: THREE.Object3D): string | null =
   }
 };
 
+/** The texture maps a model's materials draw with, each once, named for the first material using it. */
+export const listModelTextures = (object: THREE.Object3D): { uuid: string; name: string; texture: THREE.Texture }[] => {
+    const maps = new Map<string, { uuid: string; name: string; texture: THREE.Texture }>();
+    object.traverse((child) => {
+        if (!(child as THREE.Mesh).isMesh) return;
+        const material = (child as THREE.Mesh).material;
+        for (const candidate of Array.isArray(material) ? material : [material]) {
+            const map = (candidate as THREE.MeshStandardMaterial).map;
+            if (map && !maps.has(map.uuid) && textureSourceImage(map)) {
+                maps.set(map.uuid, { uuid: map.uuid, name: candidate.name || map.name || 'Untitled texture', texture: map });
+            }
+        }
+    });
+    return Array.from(maps.values());
+};
+
+/** A texture's picture as a data URL, or null when it cannot be read. */
+export const textureToDataUrl = (texture: THREE.Texture): string | null => {
+    const image = textureSourceImage(texture) as HTMLImageElement | HTMLCanvasElement | ImageBitmap | null;
+    if (!image) return null;
+    try {
+        const canvas = document.createElement('canvas');
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const context = canvas.getContext('2d');
+        if (!context) return null;
+        context.drawImage(image, 0, 0);
+        return canvas.toDataURL('image/png');
+    } catch (error) {
+        frontendDiagnostics.failure('texture_extract_failed', error);
+        return null;
+    }
+};
+
 /**
  * Scans the model for ALL unique textures (diffuse maps).
  * Useful for multi-material meshes.

@@ -257,16 +257,16 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
         };
     }, []);
 
-    if (error) return <div className="text-[10px] text-red-400 p-2 border border-red-900/50 bg-red-900/20 rounded">{error}</div>;
+    if (error) return <div className="text-2xs text-red-400 p-2 border border-red-900/50 bg-red-900/20 rounded">{error}</div>;
 
     return (
         <div className="space-y-2">
             <div className="flex items-center justify-between">
-                <span className="text-[10px] font-medium text-gray-400">Waveform (Loop Region)</span>
+                <span className="text-2xs font-medium text-gray-400">Waveform (Loop Region)</span>
                 <button 
                     onClick={togglePlay}
                     disabled={isLoading || !audioBuffer}
-                    className={`flex items-center gap-1 px-2 py-1 rounded border text-[10px] font-bold transition-colors ${isPlaying ? 'bg-amber-600 border-amber-500 text-white' : 'bg-gray-800 border-gray-700 text-gray-300 hover:text-white'}`}
+                    className={`flex items-center gap-1 px-2 py-1 rounded border text-2xs font-bold transition-colors ${isPlaying ? 'bg-amber-600 border-amber-500 text-white' : 'bg-gray-800 border-gray-700 text-gray-300 hover:text-white'}`}
                 >
                     {isLoading ? <Loader2 size={10} className="animate-spin" /> : (isPlaying ? <Square size={10} fill="currentColor" /> : <Play size={10} fill="currentColor" />)}
                     {isPlaying ? 'STOP' : 'TEST LOOP'}
@@ -285,7 +285,7 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
                     onPointerLeave={handlePointerUp}
                 />
             </div>
-            <div className="flex justify-between text-[9px] text-gray-500 italic">
+            <div className="flex justify-between text-2xs text-gray-500 italic">
                 <span className="text-cyan-500">Drag Start</span>
                 <span className="text-amber-500">Drag End</span>
             </div>

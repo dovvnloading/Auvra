@@ -158,13 +158,13 @@ describe('HUD editor AI Coder', () => {
         const aiTab = () => screen.getByRole('button', { name: /AI Coder/ });
         expect(aiTab()).toBeEnabled();
         fireEvent.click(aiTab());
-        expect(screen.getByText(/Describe a HUD change/)).toBeInTheDocument();
+        expect(screen.getByText(/Describe what you want on the HUD/)).toBeInTheDocument();
         expect(screen.queryByText('Select an element to edit properties.')).toBeNull();
 
         fireEvent.click(screen.getByRole('tab', { name: 'Title menu' }));
         expect(aiTab()).toBeDisabled();
         expect(aiTab()).toHaveAttribute('title', 'AI Coder edits the Game HUD only');
-        expect(screen.queryByText(/Describe a HUD change/)).toBeNull();
+        expect(screen.queryByText(/Describe what you want on the HUD/)).toBeNull();
         expect(screen.getByText('Select an element to edit properties.')).toBeInTheDocument();
         fireEvent.click(aiTab());
         expect(screen.getByText('Select an element to edit properties.')).toBeInTheDocument();

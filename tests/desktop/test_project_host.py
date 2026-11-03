@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from Auvra.desktop.assets import AssetTransferRegistry
+from Auvra.desktop.assets import AssetTransferRegistry, AssetTransportError
 from Auvra.desktop.dialogs import DialogSelection
 from Auvra.desktop.native_engine import NativeEngineHost, NativeEngineState
 from Auvra.desktop.project_host import DOCUMENT_LOAD_LIMIT, NativeProjectHost
@@ -110,6 +110,36 @@ class NativeProjectHostTests(unittest.TestCase):
         self.host.shutdown()
         self.registry.close()
         self.temp.cleanup()
+
+    def test_a_project_closed_part_way_through_an_upload_says_so(self) -> None:
+        created = self.host.handle("project.create", {"name": "Closing"})
+        ticket = self.host.handle(
+            "asset.beginUpload",
+            {
+                "projectId": created["projectId"],
+                "expectedRevision": created["revision"],
+                "size": 6,
+                "mime": "application/octet-stream",
+                "name": "closing.bin",
+            },
+        )
+        send = lambda piece, stated: self.registry.handle(
+            method="PUT",
+            url=ticket["url"],
+            headers={
+                "Origin": "http://127.0.0.1:3000",
+                "Content-Type": "application/octet-stream",
+                "Content-Range": stated,
+            },
+            body=io.BytesIO(piece),
+        )
+        self.assertEqual(send(b"abc", "bytes 0-2/6").status, 204)
+        current = self.host.handle("project.getStatus", {"projectId": created["projectId"]})
+        self.host.handle("project.close", {"projectId": created["projectId"], "expectedRevision": current["revision"]})
+        with self.assertRaises(AssetTransportError) as raised:
+            send(b"def", "bytes 3-5/6")
+        self.assertEqual(raised.exception.status, 409)
+        self.assertEqual(list(self.registry.root.glob("*.upload")), [])
 
     def test_create_from_starter_template_opens_a_playable_project(self) -> None:
         created = self.host.handle("project.create", {"name": "Starter", "template": "starter"})
@@ -848,7 +878,7 @@ class NativeProjectHostTests(unittest.TestCase):
             self._assert_native_failure("project.importPack", {"sourceHandle": "pack"}, destination)
 
         self.host._native_engine = None
-        created = self.host.handle("project.create", {"name": "LegacyFailure"})
+        self.host.handle("project.create", {"name": "LegacyFailure"})
         legacy_path = self.host.service.active.path
         native.fail_hydrate = True
         self.host._native_engine = native
@@ -898,7 +928,7 @@ class NativeProjectHostTests(unittest.TestCase):
     def test_import_pack_and_legacy_each_hydrate_once(self) -> None:
         native = _NativeRecorder()
         self.host.set_native_engine_host(native)
-        created = self.host.handle("project.create", {"name": "ImportTarget"})
+        self.host.handle("project.create", {"name": "ImportTarget"})
         native.hydrations.clear()
         source = self.root / "source.auvrapack"
         source.write_bytes(b"placeholder")

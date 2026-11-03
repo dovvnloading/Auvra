@@ -121,9 +121,47 @@ class AssetDocumentTests(unittest.TestCase):
             {"targetSize": 5},
             {"normalize": "true", "targetSize": 5},
             {"normalize": True, "targetSize": 5, "extra": 1},
+            {"normalize": True, "targetSize": 5, "keyThreshold": -1},
+            {"normalize": True, "targetSize": 5, "smoothingAngle": 0},
+            {"normalize": True, "targetSize": 5, "looseMeshes": "no"},
+            {"normalize": True, "targetSize": 5, "excludedClips": [""]},
+            {"normalize": True, "targetSize": 5, "clipRanges": [{"take": "Take 001", "name": "", "start": 0, "end": 1, "loop": True}]},
+            {"normalize": True, "targetSize": 5, "clipRanges": [{"take": "Take 001", "name": "Idle", "start": -1, "end": 1, "loop": True}]},
+            {"normalize": True, "targetSize": 5, "clipRanges": [{"take": "Take 001", "name": "Idle", "start": 0, "end": 0, "loop": True}]},
+            {"normalize": True, "targetSize": 5, "clipRanges": [{"take": "Take 001", "name": "Idle", "start": 0, "end": 1}]},
+            {"normalize": True, "targetSize": 5, "clipRanges": [{"take": "Take 001", "name": "Idle", "start": 0, "end": 1, "loop": True, "speed": 2}]},
         ):
             with self.subTest(settings=settings), self.assertRaises(ValueError):
                 validate_domain("models", {"schemaVersion": 1, "documents": [{**model, "importSettings": settings}]})
+        full = {
+            "normalize": False, "targetSize": 2, "animation": True, "excludedClips": ["Run"], "keyThreshold": 0.001,
+            "clipRanges": [
+                {"take": "Run", "name": "Run start", "start": 0, "end": 1.5, "loop": False},
+                {"take": "Run", "name": "Run loop", "start": 1.5, "end": 3, "loop": True, "recentre": True},
+                {"take": "Mocap", "name": "Wave", "start": 2, "end": 4, "loop": False, "attached": True},
+            ],
+            "morphTargets": False, "looseMeshes": False, "recomputeNormals": True, "smoothingAngle": 45, "tangents": False,
+        }
+        accepted = validate_domain("models", {"schemaVersion": 1, "documents": [{**model, "importSettings": full}]})
+        self.assertEqual(accepted["documents"][0]["importSettings"], full)
+
+    def test_model_source_images(self):
+        model = {"id": "m", "name": "Model", "assetId": self.asset}
+        images = [{"name": "Atlas.png", "assetId": self.asset}]
+        accepted = validate_domain("models", {"schemaVersion": 1, "documents": [{**model, "sourceImages": images}]})
+        self.assertEqual(accepted["documents"][0]["sourceImages"], images)
+        for bad in ([{"name": "Atlas.png"}], [{"assetId": self.asset}], [{"name": "Atlas.png", "assetId": "nope"}], [{"name": "", "assetId": self.asset}]):
+            with self.subTest(images=bad), self.assertRaises(ValueError):
+                validate_domain("models", {"schemaVersion": 1, "documents": [{**model, "sourceImages": bad}]})
+
+    def test_model_bone_roles(self):
+        model = {"id": "m", "name": "Model", "assetId": self.asset}
+        roles = [{"role": "LeftFoot", "bone": "Bone.012"}, {"role": "", "bone": "Bone.013"}]
+        accepted = validate_domain("models", {"schemaVersion": 1, "documents": [{**model, "boneRoles": roles}]})
+        self.assertEqual(accepted["documents"][0]["boneRoles"], roles)
+        for bad in ([{"role": "LeftFoot"}], [{"bone": "Bone.012"}], [{"role": "LeftFoot", "bone": ""}], [{"role": 1, "bone": "Bone.012"}], [{"role": "LeftFoot", "bone": "Bone.012", "extra": 1}]):
+            with self.subTest(roles=bad), self.assertRaises(ValueError):
+                validate_domain("models", {"schemaVersion": 1, "documents": [{**model, "boneRoles": bad}]})
 
 
 class HierarchyReferenceTests(unittest.TestCase):

@@ -98,11 +98,12 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
 
     // Hierarchy derived from parentId. Orphans (missing parent) and members of a corrupt
     // parent cycle are shown as roots so nothing ever disappears from the outliner.
+    const listedObjects = useMemo(() => levelObjects.filter(object => object.type !== 'foliage_set'), [levelObjects]);
     const hierarchy = useMemo(() => {
         const index = new Map<string, LevelObject>();
-        for (const obj of levelObjects) index.set(obj.id, obj);
+        for (const obj of listedObjects) index.set(obj.id, obj);
         const children = new Map<string | null, LevelObject[]>();
-        for (const obj of levelObjects) {
+        for (const obj of listedObjects) {
             const parentId = resolveParentId(index, obj);
             const siblings = children.get(parentId);
             if (siblings) siblings.push(obj);
@@ -116,9 +117,9 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
             reachable.add(obj.id);
             stack.push(...(children.get(obj.id) ?? []));
         }
-        const roots = [...(children.get(null) ?? []), ...levelObjects.filter(o => !reachable.has(o.id) && resolveParentId(index, o) !== null)];
+        const roots = [...(children.get(null) ?? []), ...listedObjects.filter(o => !reachable.has(o.id) && resolveParentId(index, o) !== null)];
         return { index, children, roots };
-    }, [levelObjects]);
+    }, [listedObjects]);
 
     const searchTerm = search.trim().toLowerCase();
 
@@ -139,8 +140,8 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
     }, [levelObjects, hierarchy, searchTerm]);
 
     const matchCount = useMemo(() => (
-        searchTerm ? levelObjects.filter(o => objectDisplayName(o).toLowerCase().includes(searchTerm)).length : levelObjects.length
-    ), [levelObjects, searchTerm]);
+        searchTerm ? listedObjects.filter(o => objectDisplayName(o).toLowerCase().includes(searchTerm)).length : listedObjects.length
+    ), [listedObjects, searchTerm]);
 
     // Flattened, visible rows in display order (also the order shift-range selection uses).
     const rows = useMemo(() => {
@@ -524,7 +525,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
             <div className="p-3 border-b border-gray-800 shrink-0 bg-gray-950">
                 <div className="flex items-center justify-between mb-2">
                     <h1 className="text-sm font-bold text-gray-200 tracking-wide flex items-center gap-2">
-                        <Trees size={14} className="text-green-400" /> WORLD EDITOR
+                        <Trees size={14} className="text-green-400" /> World editor
                     </h1>
                 </div>
 
@@ -587,14 +588,14 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
             <div className="flex border-b border-gray-800 bg-gray-900">
                 <button
                     onClick={() => setActiveTab('assets')}
-                    className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeTab === 'assets' ? 'border-green-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+                    className={`flex-1 py-2 text-2xs font-bold transition-colors border-b-2 ${activeTab === 'assets' ? 'border-green-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
                     title="Browse models to place"
                 >
                     Browser
                 </button>
                 <button
                     onClick={() => setActiveTab('outliner')}
-                    className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeTab === 'outliner' ? 'border-green-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+                    className={`flex-1 py-2 text-2xs font-bold transition-colors border-b-2 ${activeTab === 'outliner' ? 'border-green-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
                     title="View hierarchy of placed objects"
                 >
                     Outliner
@@ -643,7 +644,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
 
                         {/* Special Actors */}
                         <div className="mt-2">
-                            <div className="text-[9px] text-gray-500 font-bold uppercase px-1 mb-1">Logic Actors</div>
+                            <div className="text-2xs text-gray-500 font-bold px-1 mb-1">Logic Actors</div>
                             <div
                                 onClick={handleAddPlayerStart}
                                 className="flex items-center gap-3 px-3 py-2.5 rounded-md cursor-pointer transition-all border border-transparent hover:bg-gray-800 hover:text-white text-gray-400 group"
@@ -736,7 +737,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                 </div>
                                 <div className="min-w-0 flex-1">
                                     <div className={`text-xs font-bold truncate ${selectedModelId === m.id ? 'text-white' : 'text-gray-400'}`}>{m.name}</div>
-                                    <div className="text-[9px] text-gray-600 uppercase">{m.category}</div>
+                                    <div className="text-2xs text-gray-600 ">{m.category}</div>
                                 </div>
                             </div>
                         ))}
@@ -746,7 +747,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                 {/* --- OUTLINER TAB --- */}
                 {activeTab === 'outliner' && (
                     <>
-                        <div className="flex items-center gap-2 px-2 py-1 text-[10px] font-bold text-gray-500 uppercase tracking-wider">
+                        <div className="flex items-center gap-2 px-2 py-1 text-2xs font-bold text-gray-500 ">
                             <Layers size={10} />
                             <span>{searchTerm ? `${matchCount} of ${levelObjects.length}` : levelObjects.length} Objects</span>
                             {selectedIds.size > 1 && <span className="ml-auto text-blue-400 normal-case">{selectedIds.size} selected</span>}
@@ -878,7 +879,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
 
                         {/* Root drop zone: dropping here (or on empty list space) unparents the dragged objects. */}
                         {draggingIds.length > 0 && (
-                            <div className={`mt-1 flex items-center justify-center gap-1.5 rounded border border-dashed py-2 text-[10px] uppercase tracking-wider ${isRootDropActive ? 'border-green-500/60 text-green-300' : 'border-gray-700 text-gray-500'}`}>
+                            <div className={`mt-1 flex items-center justify-center gap-1.5 rounded border border-dashed py-2 text-2xs ${isRootDropActive ? 'border-green-500/60 text-green-300' : 'border-gray-700 text-gray-500'}`}>
                                 <CornerLeftUp size={10} /> Drop here to move to root
                             </div>
                         )}

@@ -1,11 +1,11 @@
 import React, { useCallback, useMemo } from 'react';
 import * as THREE from 'three';
-import { HeightfieldCollider, RigidBody } from '@react-three/rapier';
+import { HeightfieldCollider, RigidBody, TrimeshCollider } from '@react-three/rapier';
 import type { RapierCollider } from '@react-three/rapier';
 import type { LevelObject, TextureData } from '../types';
 import { MAX_TERRAIN_HEIGHTFIELD_SAMPLES_PER_SIDE, terrainSamplesPerSide } from '../utils/terrainHeightfieldCodec';
 import { useGameContent } from './GameContentContext';
-import { physicsUserData, usePhysicsAvailable } from './physics';
+import { physicsUserData, usePhysicsAvailable } from './physicsQueries';
 import { surfaceFromName, tagSurface, type SurfaceKind, type SurfaceTag } from './surfaces';
 
 /** Rapier heightfield arguments for a terrain, in the terrain object's own space. */
@@ -71,6 +71,38 @@ export const terrainHeightfieldShape = (terrain: LevelObject): TerrainHeightfiel
         }
     }
     return { rows: grid.resolution, columns: grid.resolution, heights: columnMajor, scale: grid.scale };
+};
+
+/**
+ * A heightfield as triangles in the terrain object's space (without its position or rotation), leaving
+ * out the cells cut away by `holes` (a value per cell, row by row).
+ */
+export const terrainShapeTriangles = (shape: TerrainHeightfieldShape, holes?: ArrayLike<number> | null): { positions: Float32Array; indices: Uint32Array } => {
+    const { rows, columns, heights, scale } = shape;
+    const samplesX = columns + 1;
+    const samplesZ = rows + 1;
+    const positions = new Float32Array(samplesX * samplesZ * 3);
+    // Rows run along Z and columns along X, from -half to +half; heights are column-major.
+    for (let row = 0; row < samplesZ; row++) {
+        for (let column = 0; column < samplesX; column++) {
+            const at = (row * samplesX + column) * 3;
+            positions[at] = -scale.x / 2 + (column / columns) * scale.x;
+            positions[at + 1] = heights[row + column * samplesZ] * scale.y;
+            positions[at + 2] = -scale.z / 2 + (row / rows) * scale.z;
+        }
+    }
+    const indices = new Uint32Array(rows * columns * 6);
+    let index = 0;
+    for (let row = 0; row < rows; row++) {
+        for (let column = 0; column < columns; column++) {
+            if (holes?.[row * columns + column]) continue;
+            const a = row * samplesX + column;
+            const below = a + samplesX;
+            indices.set([a, below, a + 1, a + 1, below, below + 1], index);
+            index += 6;
+        }
+    }
+    return { positions, indices: index === indices.length ? indices : indices.slice(0, index) };
 };
 
 /** Lowest and highest finite height per heights array, so the ground plan does not rescan a big grid every render. */
@@ -145,6 +177,18 @@ export const terrainSurfaceHeight = (worldX: number, worldZ: number, terrain: Le
     return terrain.position[1] + (near * (1 - ty) + far * ty) * scale.y;
 };
 
+/** A start under a terrain, as sculpting can leave one, goes up to its surface: nothing can stand under the ground. */
+export const startOnTheGround = (position: [number, number, number], objects: readonly LevelObject[]): [number, number, number] => {
+    const [x, y, z] = position;
+    let height = y;
+    for (const object of objects) {
+        if (object.type !== 'terrain') continue;
+        const surface = terrainSurfaceHeight(x, z, object);
+        if (surface !== null && surface > height) height = surface;
+    }
+    return height === y ? position : [x, height, z];
+};
+
 /**
  * The ground a terrain is made of under a world point: the painted layer with the most weight at the
  * nearest grid sample, each layer's surface named by its texture (a 'Grass' or 'gravel_01' texture);
@@ -164,9 +208,12 @@ export const terrainSurfaceAt = (
     const v = (worldZ - terrain.position[2]) / grid.scale.z + 0.5;
     if (!(u >= 0 && u <= 1 && v >= 0 && v <= 1)) return base;
     const at = (Math.round(v * grid.resolution) * grid.samples + Math.round(u * grid.resolution)) * 4;
+    const splat2 = terrain.terrainData?.splat2;
+    const second = splat2 && splat2.length === splat.length ? splat2 : null;
+    const weightOf = (channel: number) => (channel < 4 ? splat[at + channel] : (second ? second[at + channel - 4] : 0));
     let layer = 0;
-    for (let channel = 1; channel < Math.min(4, layers.length); channel++) {
-        if (splat[at + channel] > splat[at + layer]) layer = channel;
+    for (let channel = 1; channel < Math.min(8, layers.length); channel++) {
+        if (weightOf(channel) > weightOf(layer)) layer = channel;
     }
     return layers[layer] ?? base;
 };
@@ -230,6 +277,9 @@ const TerrainCollider: React.FC<{ terrain: LevelObject }> = ({ terrain }) => {
     // Keyed on what the shape reads, so a terrain object re-created with the same data keeps its collider.
     const shape = useMemo(() => terrainHeightfieldShape(terrain), [terrainData, scaleX, scaleY, scaleZ]);
     const args = useHeightfieldArgs(shape);
+    // A heightfield cannot have holes, so a terrain with holes is solid as triangles.
+    const holes = terrain.terrainData?.holes;
+    const triangles = useMemo(() => (holes?.some(cell => cell > 0) && shape ? terrainShapeTriangles(shape, holes) : null), [holes, shape]);
     // What it is made of, for tyres: tagged on the collider rather than rebuilding it.
     const { textures } = useGameContent();
     const surface = useMemo(() => terrainSurfaceTag(terrain, textures), [terrain, textures]);
@@ -246,7 +296,9 @@ const TerrainCollider: React.FC<{ terrain: LevelObject }> = ({ terrain }) => {
             rotation={terrain.rotation}
             userData={physicsUserData(terrain.id)}
         >
-            <HeightfieldCollider ref={tag} args={args} />
+            {triangles
+                ? <TrimeshCollider ref={tag} args={[triangles.positions, triangles.indices]} />
+                : <HeightfieldCollider ref={tag} args={args} />}
         </RigidBody>
     );
 };

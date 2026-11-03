@@ -808,10 +808,10 @@ fn unsafe_path(path: &Path) -> bool {
     let mut current = PathBuf::new();
     for component in path.components() {
         current.push(component.as_os_str());
-        if let Ok(metadata) = fs::symlink_metadata(&current) {
-            if metadata.file_type().is_symlink() || is_reparse(&metadata) {
-                return true;
-            }
+        if let Ok(metadata) = fs::symlink_metadata(&current)
+            && (metadata.file_type().is_symlink() || is_reparse(&metadata))
+        {
+            return true;
         }
     }
     false
@@ -917,7 +917,7 @@ fn parse_glb_file(
             .map_err(|_| CookError::new("invalid_glb", "GLB chunk header is truncated"))?;
         let length = u32::from_le_bytes(chunk_header[..4].try_into().unwrap()) as u64;
         let kind = u32::from_le_bytes(chunk_header[4..].try_into().unwrap());
-        if length % 4 != 0 || offset == 12 && kind != GLB_JSON_CHUNK {
+        if !length.is_multiple_of(4) || offset == 12 && kind != GLB_JSON_CHUNK {
             return Err(CookError::new(
                 "invalid_glb",
                 "GLB chunk alignment or ordering is invalid",
@@ -1107,13 +1107,13 @@ fn validate_gltf_structure(
                 "glTF bufferView exceeds its buffer",
             ));
         }
-        if let Some(stride) = optional_integer_field(object, "byteStride")? {
-            if !(4..=252).contains(&stride) || stride % 4 != 0 {
-                return Err(CookError::new(
-                    "gltf_stride_invalid",
-                    "glTF byteStride is outside its valid range",
-                ));
-            }
+        if let Some(stride) = optional_integer_field(object, "byteStride")?
+            && (!(4..=252).contains(&stride) || stride % 4 != 0)
+        {
+            return Err(CookError::new(
+                "gltf_stride_invalid",
+                "glTF byteStride is outside its valid range",
+            ));
         }
         view_ranges.push((
             buffer,
@@ -1358,10 +1358,10 @@ fn validate_gltf_structure(
                 samplers.len(),
                 "gltf_accessor_reference",
             )?;
-            if let Some(target) = channel.get("target") {
-                if let Some(node) = object_value(target, "animation target")?.get("node") {
-                    index_value(node, nodes.len(), "gltf_node_reference")?;
-                }
+            if let Some(target) = channel.get("target")
+                && let Some(node) = object_value(target, "animation target")?.get("node")
+            {
+                index_value(node, nodes.len(), "gltf_node_reference")?;
             }
         }
     }
@@ -2043,7 +2043,7 @@ mod tests {
     #[test]
     fn glb_validates_chunks_and_length() {
         let mut json = br#"{"asset":{"version":"2.0"}}"#.to_vec();
-        while json.len() % 4 != 0 {
+        while !json.len().is_multiple_of(4) {
             json.push(b' ');
         }
         let mut glb = Vec::new();
@@ -2158,7 +2158,7 @@ mod tests {
             .code,
             "invalid_json"
         );
-        let oversized = write_source(&root, &vec![b'x'; 9]);
+        let oversized = write_source(&root, &[b'x'; 9]);
         assert_eq!(
             cook_source(&config, &oversized, &CancellationToken::new())
                 .unwrap_err()
@@ -2223,7 +2223,7 @@ mod tests {
     #[test]
     fn glb_streams_large_bin_and_publishes_one_directory_unit() {
         let mut json = br#"{"asset":{"version":"2.0"},"buffers":[{"byteLength":2097152}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":2097152}]}"#.to_vec();
-        while json.len() % 4 != 0 {
+        while !json.len().is_multiple_of(4) {
             json.push(b' ');
         }
         let bin = vec![0x5a_u8; 2 * 1024 * 1024];

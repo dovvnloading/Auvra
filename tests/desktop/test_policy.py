@@ -1,14 +1,29 @@
 from __future__ import annotations
 
+import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import Auvra.desktop.contracts as contracts
-from Auvra.desktop.controller import _new_profile
+from Auvra.desktop.controller import _new_profile, _remove_profile, _sweep_abandoned_profiles
 from Auvra.desktop.contracts import FrameConfig, FrameConfigurationError, FrameMode
 from Auvra.desktop.policy import FramePolicy
+
+
+def _left_behind(parent: Path, name: str, age: float = 7200.0) -> Path:
+    """A profile as a killed editor leaves it."""
+    profile = parent / name
+    (profile / "EBWebView" / "Default" / "Cache").mkdir(parents=True)
+    (profile / "EBWebView" / "Default" / "Cache" / "data").write_bytes(b"x" * 16)
+    marker = profile / contracts._PROFILE_LEASE_MARKER
+    marker.write_text("A" * 43 + "\n", encoding="ascii")
+    then = time.time() - age
+    os.utime(marker, (then, then))
+    return profile
 
 
 class PolicyTests(unittest.TestCase):
@@ -81,6 +96,62 @@ class PolicyTests(unittest.TestCase):
             with self.assertRaises(FrameConfigurationError):
                 FrameConfig(FrameMode.PACKAGED, packaged_root=root)
 
+    def test_sweep_removes_what_dead_editors_left_and_nothing_else(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(contracts, "_CONTROLLED_TEST_PROFILE_PARENTS", {Path(temp)}):
+            parent = Path(temp)
+            dead = _left_behind(parent, "webview2-dead")
+            young = _left_behind(parent, "webview2-young", age=60.0)
+            sdk = parent / "webview2-sdk"
+            sdk.mkdir()
+            (sdk / "WebView2Loader.dll").write_bytes(b"x")
+            unnamed = _left_behind(parent, "provider-state")
+            self.assertEqual(_sweep_abandoned_profiles(parent), [dead])
+            self.assertFalse(dead.exists())
+            self.assertTrue(young.exists())
+            self.assertTrue((sdk / "WebView2Loader.dll").exists())
+            self.assertTrue(unnamed.exists())
+
+    def test_sweep_leaves_a_profile_whose_browser_is_running(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(contracts, "_CONTROLLED_TEST_PROFILE_PARENTS", {Path(temp)}):
+            parent = Path(temp)
+            running = _left_behind(parent, "webview2-running")
+            (running / "EBWebView" / "lockfile").write_bytes(b"")
+            with patch("pathlib.Path.unlink", side_effect=PermissionError("held by the browser")):
+                self.assertEqual(_sweep_abandoned_profiles(parent), [])
+            self.assertTrue((running / "EBWebView" / "Default" / "Cache" / "data").exists())
+
+    def test_sweep_cut_short_can_be_finished_by_the_next_one(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(contracts, "_CONTROLLED_TEST_PROFILE_PARENTS", {Path(temp)}):
+            parent = Path(temp)
+            dead = _left_behind(parent, "webview2-dead")
+            with patch("Auvra.desktop.controller.shutil.rmtree"):
+                self.assertEqual(_sweep_abandoned_profiles(parent), [])
+            self.assertTrue((dead / contracts._PROFILE_LEASE_MARKER).exists())
+            self.assertEqual(_sweep_abandoned_profiles(parent), [dead])
+            self.assertFalse(dead.exists())
+
+    def test_sweep_does_not_follow_a_linked_profile(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(contracts, "_CONTROLLED_TEST_PROFILE_PARENTS", {Path(temp)}):
+            parent = Path(temp)
+            target = _left_behind(parent, "keep-me")
+            try:
+                (parent / "webview2-alias").symlink_to(target, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("directory symlinks unavailable")
+            self.assertEqual(_sweep_abandoned_profiles(parent), [])
+            self.assertTrue((target / "EBWebView").exists())
+
+    def test_each_launch_sweeps_in_the_background(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(contracts, "_CONTROLLED_TEST_PROFILE_PARENTS", {Path(temp)}):
+            dead = _left_behind(Path(temp), "webview2-dead")
+            lease = _new_profile(Path(temp))
+            for thread in threading.enumerate():
+                if thread.name == "auvra-profile-sweep":
+                    thread.join(10)
+            self.assertFalse(dead.exists())
+            self.assertTrue(lease.path.exists())
+            _remove_profile(lease)
+
     def test_profile_must_have_launcher_owned_per_launch_name(self):
         with tempfile.TemporaryDirectory() as temp:
             with patch.object(contracts, "_CONTROLLED_TEST_PROFILE_PARENTS", {Path(temp)}):
@@ -93,7 +164,6 @@ class PolicyTests(unittest.TestCase):
                                      development_origin="http://127.0.0.1:3000",
                                      user_data_folder=lease.path)
                 self.assertEqual(config.user_data_folder, lease.path)
-                from Auvra.desktop.controller import _remove_profile
                 _remove_profile(lease)
 
     def test_profile_marker_without_lease_cannot_authorize_cleanup(self):
@@ -101,7 +171,6 @@ class PolicyTests(unittest.TestCase):
             forged = Path(temp) / "webview2-forged"
             forged.mkdir()
             (forged / contracts._PROFILE_LEASE_MARKER).write_text("A" * 43 + "\n", encoding="ascii")
-            from Auvra.desktop.controller import _remove_profile
             _remove_profile(type("ForgedLease", (), {"path": forged, "token": "A" * 43})())
             self.assertTrue(forged.exists())
 
@@ -110,7 +179,6 @@ class PolicyTests(unittest.TestCase):
             lease = _new_profile(Path(temp))
             marker = lease.path / contracts._PROFILE_LEASE_MARKER
             marker.write_text("wrong-token\n", encoding="ascii")
-            from Auvra.desktop.controller import _remove_profile
             _remove_profile(lease)
             self.assertTrue(lease.path.exists())
             marker.unlink()
@@ -143,7 +211,6 @@ class PolicyTests(unittest.TestCase):
                 self.skipTest("directory symlinks unavailable")
             original = lease.path
             lease.path = alias
-            from Auvra.desktop.controller import _remove_profile
             _remove_profile(lease)
             lease.path = original
             self.assertTrue(target.exists())

@@ -1367,20 +1367,17 @@ impl App {
         let object = params
             .as_object()
             .ok_or("invalid_request|hydration page must be an object")?;
-        if let Some(project_id) = object.get("projectId").and_then(Value::as_str) {
-            if project_id != draft.project_id {
-                return Err(
-                    "invalid_project|hydration projectId does not match beginHydration".into(),
-                );
-            }
+        if let Some(project_id) = object.get("projectId").and_then(Value::as_str)
+            && project_id != draft.project_id
+        {
+            return Err("invalid_project|hydration projectId does not match beginHydration".into());
         }
-        if let Some(revision) = object.get("projectRevision").and_then(Value::as_u64) {
-            if revision != draft.project_revision {
-                return Err(
-                    "invalid_project|hydration projectRevision does not match beginHydration"
-                        .into(),
-                );
-            }
+        if let Some(revision) = object.get("projectRevision").and_then(Value::as_u64)
+            && revision != draft.project_revision
+        {
+            return Err(
+                "invalid_project|hydration projectRevision does not match beginHydration".into(),
+            );
         }
         let mut appended = 0_usize;
         let mut has_domain_page = false;
@@ -1936,10 +1933,10 @@ impl App {
             );
         }
         let object = params.as_object();
-        if let Some(parent_handle) = object.and_then(|v| v.get("parentHandle")) {
-            if parent_handle.as_u64().is_none() || parent_handle.as_u64() == Some(0) {
-                return Err("invalid_request|viewport parent handle is invalid".into());
-            }
+        if let Some(parent_handle) = object.and_then(|v| v.get("parentHandle"))
+            && (parent_handle.as_u64().is_none() || parent_handle.as_u64() == Some(0))
+        {
+            return Err("invalid_request|viewport parent handle is invalid".into());
         }
         let width = object
             .and_then(|v| v.get("width"))
@@ -2649,11 +2646,11 @@ fn apply_render_settings(
     state: &mut ProjectRenderState,
     lights: &mut BTreeMap<u64, WorldRenderLight>,
 ) -> Result<(), String> {
-    if let Some(camera) = object.get("camera").and_then(Value::as_object) {
-        if let Some(position) = camera.get("position") {
-            state.camera_position =
-                fixed_vec3(Some(position), state.camera_position, "camera position")?;
-        }
+    if let Some(camera) = object.get("camera").and_then(Value::as_object)
+        && let Some(position) = camera.get("position")
+    {
+        state.camera_position =
+            fixed_vec3(Some(position), state.camera_position, "camera position")?;
     }
     if let Some(position) = object.get("cameraPosition") {
         state.camera_position =
@@ -2696,10 +2693,10 @@ fn apply_render_settings(
                 "fxaa" => Some(PostEffect::Fxaa),
                 _ => None,
             };
-            if let Some(effect) = parsed {
-                if !state.post_effects.contains(&effect) {
-                    state.post_effects.push(effect);
-                }
+            if let Some(effect) = parsed
+                && !state.post_effects.contains(&effect)
+            {
+                state.post_effects.push(effect);
             }
         }
     }
@@ -3128,6 +3125,7 @@ fn run_ipc_live_loop(
     }
 }
 
+#[cfg(test)]
 fn run_ipc_loop(
     app: &mut App,
     input: &mut impl Read,

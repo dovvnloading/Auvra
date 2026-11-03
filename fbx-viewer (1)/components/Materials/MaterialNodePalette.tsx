@@ -42,7 +42,7 @@ export const MaterialNodePalette: React.FC<{
             onMouseDown={(event) => event.stopPropagation()}
             onWheel={(event) => event.stopPropagation()}
         >
-            {context && <div className="mb-1 truncate px-1 text-[10px] text-blue-300">{context}</div>}
+            {context && <div className="mb-1 truncate px-1 text-2xs text-blue-300">{context}</div>}
             <div className="mb-2 flex items-center gap-1 rounded border border-gray-700 bg-gray-950 px-2">
                 <Search size={12} className="text-gray-500" />
                 <input
@@ -56,13 +56,13 @@ export const MaterialNodePalette: React.FC<{
                 />
             </div>
             <div ref={list} className="max-h-80 overflow-y-auto" role="listbox" aria-label="Nodes">
-                {results.length === 0 && <p className="px-2 py-1 text-[11px] text-gray-500">No node matches.</p>}
+                {results.length === 0 && <p className="px-2 py-1 text-2xs text-gray-500">No node matches.</p>}
                 {results.map((definition: MaterialNodeDef, index) => {
                     const header = grouped && definition.category !== lastCategory ? definition.category : null;
                     lastCategory = definition.category;
                     return (
                         <React.Fragment key={definition.type}>
-                            {header && <div className="px-2 pb-0.5 pt-2 text-[9px] font-bold uppercase tracking-wider text-gray-500">{header}</div>}
+                            {header && <div className="px-2 pb-0.5 pt-2 text-2xs font-bold text-gray-500">{header}</div>}
                             <button
                                 data-index={index}
                                 role="option"
@@ -73,13 +73,13 @@ export const MaterialNodePalette: React.FC<{
                                 className={`flex w-full items-center justify-between rounded px-2 py-1 text-left text-xs ${index === active ? 'bg-blue-700/50 text-white' : 'text-gray-200'}`}
                             >
                                 <span>{definition.label}</span>
-                                {!grouped && <span className="text-[9px] uppercase text-gray-500">{definition.category}</span>}
+                                {!grouped && <span className="text-2xs text-gray-500">{definition.category}</span>}
                             </button>
                         </React.Fragment>
                     );
                 })}
             </div>
-            {results[active] && <p className="mt-1 border-t border-gray-800 px-1 pt-1 text-[10px] leading-snug text-gray-400">{results[active].description}</p>}
+            {results[active] && <p className="mt-1 border-t border-gray-800 px-1 pt-1 text-2xs leading-snug text-gray-400">{results[active].description}</p>}
         </div>
     );
 };

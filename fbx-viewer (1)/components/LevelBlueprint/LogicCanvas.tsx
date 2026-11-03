@@ -269,7 +269,7 @@ export const LogicCanvas: React.FC<LogicCanvasProps> = ({
 
     return (
         <div 
-            className="flex-1 relative overflow-hidden bg-[#111111] cursor-grab active:cursor-grabbing"
+            className="flex-1 relative overflow-hidden bg-well cursor-grab active:cursor-grabbing"
             ref={canvasRef}
             onWheel={(e) => handleWheel(e, canvasRef.current)}
             onPointerDown={handleCanvasDown}

@@ -88,6 +88,23 @@ describe('what a level needs', () => {
         expect(createLevelAssetIndex(project).needsOf('b').models.has('villain')).toBe(true);
     });
 
+    it('brings the models of its painted foliage and of its terrain\'s grass, with a World Grid as without', () => {
+        for (const grid of [false, true]) {
+            const project = domains();
+            project.models.push({ id: 'fern', name: 'Fern.fbx', assetId: 'x', category: 'Foliage' }, { id: 'clover', name: 'Clover.fbx', assetId: 'x', category: 'Foliage' });
+            project.objects.push(
+                { id: 'set', levelId: 'b', name: 'Foliage', type: 'foliage_set', modelId: '', foliageData: { types: [{ id: 'ferns', modelId: 'fern', instancemap: { assetId: 'y', count: 10 } }] } } as never,
+                { id: 'ground', levelId: 'b', name: 'Ground', type: 'terrain', modelId: '', terrainData: { textureLayers: [{ id: 'meadow', grass: [{ modelId: 'clover', density: 1 }] }] } } as never,
+            );
+            if (grid) project.objects.push(prop('grid', 'b', '', { components: [{ id: 'g', type: 'worldGrid', enabled: true, props: {} }] }));
+            const needs = createLevelAssetIndex(project).needsOf('b');
+            expect(needs.models.has('fern')).toBe(true);
+            expect(needs.models.has('clover')).toBe(true);
+            // A tree standing on its own is the grid's to ask for, when its cell comes near.
+            expect(needs.models.has('tree')).toBe(!grid);
+        }
+    });
+
     it('uses the character the game settings name', () => {
         const project = domains();
         project.metadata.push({ id: 'game-settings', settings: { playerBlueprintId: 'second-enemy' } } as never);
@@ -172,6 +189,7 @@ const fakeLoader = (bytesOf: (id: string) => number) => {
         releaseAll: () => undefined,
         content: () => ({ models: [...models], attachments: [], textures: [], audioAssets: [], blueprints: [], sockets: [] }),
         objects: () => [],
+        refusedModels: () => [],
     } as unknown as GameContentLoader;
     return { loader, models, released, loads };
 };
@@ -279,6 +297,31 @@ describe('assets in memory', () => {
         residency.setCellsInUse(new Set(['crate']));
         await residency.requestCellModels(needing('gun'));
         expect(fake.released).toEqual(['tree']);
+    });
+
+    it('drops what a grid asked for once its level has ended, so the next level is not held up', async () => {
+        const fake = fakeLoader(() => MB);
+        const residency = new LevelAssetResidency(fake.loader, id => LEVELS[id], () => MB, 100 * MB);
+        await residency.prepare('a');
+        const first = residency.requestCellModels(needing('crate'));
+        const stale = residency.requestCellModels(needing('gun'));
+        const next = residency.prepare('b');
+        await Promise.all([first, stale, next]);
+        const loaded = fake.loads.flat();
+        expect(loaded).not.toContain('crate');
+        expect(loaded).not.toContain('gun');
+        expect(loaded).toContain('tree');
+    });
+
+    it('skips a model the camera has moved on from before its turn came', async () => {
+        const fake = fakeLoader(() => MB);
+        const residency = new LevelAssetResidency(fake.loader, id => LEVELS[id], () => MB, 100 * MB);
+        await residency.prepare('a');
+        residency.setCellsInUse(new Set(['gun']));
+        await residency.requestCellModels(needing('crate'), () => residency.cellInUse('crate'));
+        await residency.requestCellModels(needing('gun'), () => residency.cellInUse('gun'));
+        expect(fake.models.map(model => model.id)).not.toContain('crate');
+        expect(fake.models.map(model => model.id)).toContain('gun');
     });
 
     it('answers a grid with only the models it asked for and still has', async () => {

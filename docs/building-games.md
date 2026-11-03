@@ -51,13 +51,13 @@ Every build carries a `THIRD_PARTY_NOTICES.txt` covering the players it includes
 
 A build does the slow work on each model once, so the game does not repeat it on every launch. Before it asks where to put the game, Auvra prepares each model, attachment and animation file the project uses, one at a time in the background, and the game then loads those prepared files. Each is a GLB beside its source file, holding:
 
-- The geometry, with shared corners welded, and its detail levels.
+- The geometry as the model's import reads it, with its import settings and the images found beside it, and its detail levels.
 - The textures compressed the way graphics cards read them, where **Texture compression** is on.
 - The clips. An animation file keeps only its skeleton and clips, so it is much smaller.
 
-The first build of a project takes longer because of this. Later builds, of this project or another using the same files, reuse what was prepared, which is kept with your Auvra settings and never added to a project or its package. Prepared files are made again when a model's source file changes, when **Texture compression** or **Mesh detail levels** changes, or after an Auvra update changes what they hold. Renaming a model, changing its materials, or changing its import settings prepares nothing again, because those are applied as the game loads.
+The first build of a project takes longer because of this. Later builds, of this project or another using the same files, reuse what was prepared, which is kept with your Auvra settings and never added to a project or its package. Prepared files are made again when a model's source file changes, when an import setting that changes how the file is read changes (blend shapes, normals, tangents, the meshes and takes kept, key reduction), when the images beside it change, when **Texture compression** or **Mesh detail levels** changes, or after an Auvra update changes what they hold. Renaming a model, changing its materials, or cutting its takes into clips prepares nothing again, because those are applied as the game loads.
 
-The source files stay in the build. A game reads a model's source file instead when the model has no prepared file, when the prepared file cannot be read, or on a device that cannot read its compressed textures. Preparing a model never stops a build: a model that could not be prepared, or a GLB whose geometry is Draco or meshopt compressed, goes in as its source file alone, and Auvra tells you which ones when the build ends.
+The source files stay in the build. A game reads a model's source file instead when the model has no prepared file, when the prepared file cannot be read, or on a device that cannot read its compressed textures. Preparing a model never stops a build: a model that could not be prepared, a GLB whose geometry is Draco or meshopt compressed, or a file that two models read with different import settings or images goes in as its source file alone, and Auvra tells you which ones when the build ends.
 
 ## Build for the web
 
@@ -129,7 +129,7 @@ Building again into the same parent replaces the previous build. Auvra only repl
 - **Saves** are checkpoints: level, player health and stamina, the weapons the player carries and their rounds, pickups already taken for good, and level variables.They are stored per game on the player's machine: the Windows build keeps them in `%LOCALAPPDATA%\AuvraGames\<game>`, the Linux build in `~/.local/share/AuvraGames/<game>` (or under `$XDG_DATA_HOME`), and the macOS build in the system's web storage for the game.
 - **F3** toggles a performance overlay: frame rate, average and worst frame time, draw calls, triangles, geometries, textures and (where the browser reports it) memory. It also works when you play in the editor.
 
-Playing in the editor shows the Game HUD as the built game does (a built-in HUD when the Game HUD is empty). The title and pause menus and the Options screen appear only in built games; in the editor **Esc** pauses with the play toolbar (see [Getting started](getting-started.md)).
+Playing in the editor shows the Game HUD as the built game does (a built-in HUD when the Game HUD is empty: in a built game it shows the player's health, stamina, weapon and crosshair, and players leave through the pause menu). The title and pause menus and the Options screen appear only in built games; in the editor **Esc** pauses with the play toolbar (see [Getting started](getting-started.md)).
 
 ## Options
 

@@ -6,7 +6,7 @@ import type { RapierCollider, RapierContext } from '@react-three/rapier';
 import { GpuWaterSurface } from '../../renderer/gpu/effects/water';
 import { isGpuRenderer } from '../../renderer/gpu/frame';
 import type { LevelComponent } from '../../types';
-import { objectIdFromRigidBody, usePhysicsAvailable } from '../physics';
+import { objectIdFromRigidBody, usePhysicsAvailable } from '../physicsQueries';
 import { ComponentHostContext } from './builtins';
 import type { ComponentDefinition, ComponentRenderProps } from './types';
 
@@ -127,6 +127,7 @@ varying float vWaveHeight;
 
 const createWaterMaterial = (uniforms: Record<string, THREE.IUniform>): THREE.MeshStandardMaterial => {
     const material = new THREE.MeshStandardMaterial({ transparent: true, metalness: 0.1, side: THREE.DoubleSide });
+    material.userData.movesVertices = true;
     material.onBeforeCompile = (shader) => {
         Object.assign(shader.uniforms, uniforms);
         shader.vertexShader = shader.vertexShader

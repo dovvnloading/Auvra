@@ -46,7 +46,7 @@ export const BlackboardInputs: React.FC<BlackboardInputsProps> = ({ graph, model
                 </span>
                 <button 
                     onClick={addInput} 
-                    className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-[10px] text-gray-400 hover:text-white transition-colors flex items-center gap-1"
+                    className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-2xs text-gray-400 hover:text-white transition-colors flex items-center gap-1"
                 >
                     <Plus size={10} /> Add
                 </button>
@@ -56,7 +56,7 @@ export const BlackboardInputs: React.FC<BlackboardInputsProps> = ({ graph, model
                 {graph.inputs.length === 0 && (
                         <div className="text-center py-4 border border-dashed border-gray-800 rounded bg-gray-900/50">
                             <Keyboard size={20} className="mx-auto text-gray-700 mb-1" />
-                            <p className="text-[10px] text-gray-600">No input bindings defined.</p>
+                            <p className="text-2xs text-gray-600">No input bindings defined.</p>
                         </div>
                 )}
 
@@ -97,7 +97,7 @@ export const BlackboardInputs: React.FC<BlackboardInputsProps> = ({ graph, model
                                     <ArrowRight size={10} className="text-gray-600 shrink-0" />
                                     
                                     <div className="flex items-center gap-2 flex-1 min-w-0">
-                                        <span className="text-[10px] text-gray-500 font-medium">Set</span>
+                                        <span className="text-2xs text-gray-500 font-medium">Set</span>
                                         <Select
                                             value={inp.targetVariableId}
                                             onChange={(val) => {
@@ -107,7 +107,7 @@ export const BlackboardInputs: React.FC<BlackboardInputsProps> = ({ graph, model
                                             options={variableOptions}
                                             className="w-28"
                                         />
-                                        <span className="text-[10px] text-gray-500">=</span>
+                                        <span className="text-2xs text-gray-500">=</span>
                                         <input 
                                             type={targetVar?.type === 'Boolean' ? 'checkbox' : 'number'}
                                             checked={inp.targetValue === true}
@@ -117,7 +117,7 @@ export const BlackboardInputs: React.FC<BlackboardInputsProps> = ({ graph, model
                                                 const updated = graph.inputs.map(x => x.id === inp.id ? { ...x, targetValue: val } : x);
                                                 updateGraph(modelId, { inputs: updated });
                                             }}
-                                            className={targetVar?.type === 'Boolean' ? 'cursor-pointer' : "bg-gray-900 border border-gray-700 rounded w-12 px-1 text-right text-[10px] text-gray-200 focus:outline-none focus:border-gray-500"}
+                                            className={targetVar?.type === 'Boolean' ? 'cursor-pointer' : "bg-gray-900 border border-gray-700 rounded w-12 px-1 text-right text-2xs text-gray-200 focus:outline-none focus:border-gray-500"}
                                         />
                                     </div>
                             </div>

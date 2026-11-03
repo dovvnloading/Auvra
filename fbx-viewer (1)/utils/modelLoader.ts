@@ -1,15 +1,21 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { LoadedModelData } from '../types';
-import { optimizeModelMaterials, splitAlphaCards } from './processing/ModelMaterials';
+import { splitAlphaCards } from './processing/ModelMaterials';
 import { compressModelTextures } from './textureCompression/compressTextures';
 import { withGltfDecoders } from './gltfDecoders';
 import { decodeDataUri, GLB_JSON_CHUNK, GLB_MAGIC, parseGltfJson, readGlb, type GltfDocument, type GltfResource } from './gltfContainer';
 import { preparedModelPlugin, readPreparedMetadata } from './preparedModels/preparedLoader';
+import type { RigSource } from './autoRig/riggedGlb';
+import { takeModelConventions } from './modelConventions';
 import { normalizeModel, SOURCE_METRES_PER_UNIT } from './processing/ModelTransforms';
 import { disposeObject } from './processing/ModelLifecycle';
 import { UV_ORIGIN_TOP_LEFT_KEY } from './materialOverrides';
 import { frontendDiagnostics } from '../diagnostics/runtime';
+import { gltfReport } from './fbxImport/gltfReport';
+import type { ModelFileReport } from './fbxImport/nativeImporter';
+import type { ModelConvertOptions } from '../workers/fbxImport.worker';
+import { cutModelTakes, importerOptions, noteClipTake, type ModelReadOptions } from './clipRanges';
 
 // Re-export specific utilities for consumers (hooks) to maintain API compatibility
 export { disposeModel, disposeObject } from './processing/ModelLifecycle';
@@ -25,6 +31,23 @@ export type ImportPhase =
   | 'runtime_asset_transfer'
   | 'viewport_materialization'
   | 'material_optimization_normalization';
+
+/** What a parser says when it runs off the end of a broken file, in the words of the language it is written in. */
+const PARSER_TRIPPED = /unexpected eof|outside the bounds|out of (bounds|range)|cannot read propert|is not (a function|iterable|defined)|cannot find the version/i;
+/** What the browser says when the file on disk cannot be reached, by the name of its error. */
+const FILE_UNREACHABLE: Record<string, string> = {
+  NotFoundError: 'The file could not be found. It may have been moved or deleted.',
+  NotReadableError: 'The file could not be read from the disk.',
+};
+
+/** Says an import failed, and why where that is known. The name of a library's own loader means nothing to someone importing a file. */
+export const importFailureMessage = (what: string, error: unknown): string => {
+  const said = error instanceof Error ? error.message.replace(/^THREE\.\w+:\s*/, '').trim() : '';
+  const reason = FILE_UNREACHABLE[(error as { name?: string } | null)?.name ?? '']
+    ?? (PARSER_TRIPPED.test(said) ? 'The file could not be read. It may be damaged or cut short.' : said);
+  if (!reason) return `${what}.`;
+  return `${what}: ${reason}${/[.!?]$/.test(reason) ? '' : '.'}`;
+};
 
 export const importPhaseLabel = (phase: ImportPhase): string => ({
   source_read: 'Reading source file',
@@ -93,11 +116,15 @@ export interface ModelLoadOptions {
   diagnostics?: { operationId: string; traceId: string; spanId?: string; assetAlias: string };
   /** Swap colour and material maps for GPU-compressed textures (the game's Texture compression setting); on by default. */
   compressTextures?: boolean;
+  /** How the file is read: what to bring in, how, and the clips to cut from its takes. */
+  convert?: ModelReadOptions;
+  /** Image files the source names but does not hold, as `File`s named as it names them. */
+  images?: readonly File[];
   /** Compressed textures keep the image they were made from for editor tools; a game has no use for it. */
   keepTextureSources?: boolean;
   /**
    * The file is a model prepared when the game was built (utils/preparedModels), whatever its name
-   * says: its file keeps the source's name, so that name would send it to the FBX worker.
+   * says: its file keeps the source's name, so that name would send it to the import worker.
    */
   prepared?: boolean;
 }
@@ -106,18 +133,11 @@ type WorkerFormat = 'fbx' | 'obj';
 
 type WorkerResponse =
   | { type: 'progress'; progress: number; phase: ImportPhase; workerState: string }
-  | { type: 'complete'; glb: ArrayBuffer; itemCount: number; clipCount: number; missingTextures: number; metresPerUnit: number | null }
+  | { type: 'complete'; glb: ArrayBuffer; itemCount: number; clipCount: number; missingTextures: string[]; metresPerUnit: number | null; report: ModelFileReport }
+  | { type: 'inspected'; report: ModelFileReport }
   | { type: 'error'; message: string };
 
 type ParsedGltf = Awaited<ReturnType<GLTFLoader['parseAsync']>>;
-
-export interface ConvertedModel {
-  glb: ArrayBuffer;
-  itemCount: number;
-  clipCount: number;
-  missingTextures: number;
-  metresPerUnit: number | null;
-}
 
 interface ParsedModel {
   object: THREE.Group;
@@ -126,7 +146,9 @@ interface ParsedModel {
   missingTextures?: number;
   /** Metres per unit the source says it is authored in (FBX), when it says. */
   metresPerUnit?: number | null;
-  /** What a prepared model was made from, which decides how it is treated from here on. */
+  /** What the source file held and what was made of it (FBX, OBJ). */
+  report?: ModelFileReport;
+  /** What a prepared model was made from, which decides how its clips are named. */
   sourceFormat?: ModelFormat;
 }
 
@@ -167,18 +189,17 @@ const materializeGltf = async (data: ArrayBuffer | string, signal?: AbortSignal,
   return Promise.race([parsedPromise, cancelled]);
 };
 
-/**
- * Converts FBX or OBJ to a GLB in the import worker. `weld` shares its meshes' corners first, which
- * a model prepared for a build wants and a loading one leaves to its first drawn frame.
- */
+/** A file the importer reads, as the GLB and report its worker makes of it; a build prepares its models from these. */
 export const convertOffThread = async (
   source: ArrayBuffer,
   format: WorkerFormat,
   signal?: AbortSignal,
   onProgress?: (progress: number, phase: ImportPhase) => void,
   diagnostics?: { operationId: string; traceId: string; spanId?: string; assetAlias: string },
-  weld = false,
-): Promise<ConvertedModel> => {
+  fileName?: string,
+  convert?: ModelConvertOptions,
+  images?: readonly File[],
+): Promise<Extract<WorkerResponse, { type: 'complete' }>> => {
   const label = format.toUpperCase();
   const parsePhase: ImportPhase = format === 'fbx' ? 'fbx_structure_parse' : 'model_structure_parse';
   if (typeof Worker === 'undefined') throw new Error(`Background ${label} processing is unavailable in this environment.`);
@@ -189,7 +210,9 @@ export const convertOffThread = async (
     phase: 'worker_creation', workerState: 'created', queueState: 'worker_active', assetAlias: diagnostics.assetAlias, progressBucket: 0,
   }, diagnostics);
   try {
-    return await new Promise<ConvertedModel>((resolve, reject) => {
+    const imageMessages = await Promise.all((images ?? []).map(async (image) => ({ name: image.name, buffer: await image.arrayBuffer() })));
+    throwIfAborted(signal);
+    const converted = await new Promise<Extract<WorkerResponse, { type: 'complete' }>>((resolve, reject) => {
       const onAbort = () => {
         worker.terminate();
         reject(abortError());
@@ -228,8 +251,10 @@ export const convertOffThread = async (
           resolve(message);
         }
       };
-      worker.postMessage({ type: 'parse', buffer: source, format, weld }, [source]);
+      worker.postMessage({ type: 'parse', buffer: source, format, name: fileName, options: convert, images: imageMessages }, [source, ...imageMessages.map((image) => image.buffer)]);
     });
+    throwIfAborted(signal);
+    return converted;
   } finally {
     worker.terminate();
   }
@@ -241,16 +266,18 @@ const parseOffThread = async (
   signal?: AbortSignal,
   onProgress?: (progress: number, phase: ImportPhase) => void,
   diagnostics?: { operationId: string; traceId: string; spanId?: string; assetAlias: string },
+  fileName?: string,
+  convert?: ModelConvertOptions,
+  images?: readonly File[],
 ): Promise<ParsedModel> => {
-  const converted = await convertOffThread(source, format, signal, onProgress, diagnostics);
-  throwIfAborted(signal);
+  const converted = await convertOffThread(source, format, signal, onProgress, diagnostics, fileName, convert, images);
   onProgress?.(0.86, 'viewport_materialization');
   const loaded = await materializeGltf(converted.glb, signal);
   throwIfAborted(signal);
   const object = loaded.scene;
   object.animations = loaded.animations;
-  if (converted.missingTextures > 0) frontendDiagnostics.warning('model_textures_missing', converted.missingTextures);
-  return { object, animations: loaded.animations, missingTextures: converted.missingTextures, metresPerUnit: converted.metresPerUnit };
+  if (converted.missingTextures.length > 0) frontendDiagnostics.warning('model_textures_missing', converted.missingTextures.length);
+  return { object, animations: loaded.animations, missingTextures: converted.missingTextures.length, metresPerUnit: converted.metresPerUnit, report: converted.report };
 };
 
 // --- NATIVE glTF / GLB ---
@@ -345,18 +372,124 @@ const parsePreparedModel = async (
   const object = loaded.scene;
   object.animations = loaded.animations;
   if (metadata.missingTextures > 0) frontendDiagnostics.warning('model_textures_missing', metadata.missingTextures);
-  return { object, animations: loaded.animations, missingTextures: metadata.missingTextures, metresPerUnit: metadata.metresPerUnit, sourceFormat: metadata.sourceFormat };
+  return {
+    object,
+    animations: loaded.animations,
+    missingTextures: metadata.missingTextures,
+    metresPerUnit: metadata.metresPerUnit,
+    sourceFormat: metadata.sourceFormat,
+    ...(metadata.report ? { report: metadata.report } : {}),
+  };
+};
+
+/** Says what a model file holds without loading it, for the import dialog. Null when there is no way to read it here; throws saying why when it cannot be read. */
+export const inspectModelFile = async (file: File, beside: readonly File[] = []): Promise<ModelFileReport | null> => {
+  const source = await file.arrayBuffer();
+  const format = detectModelFormat(file) ?? sniffModelFormat(source) ?? 'fbx';
+  if (format === 'glb' || format === 'gltf') {
+    try {
+      return gltfReport(format === 'glb' ? readGlb(source).json : parseGltfJson(new TextDecoder().decode(source)));
+    } catch {
+      return null;
+    }
+  }
+  if (typeof Worker === 'undefined') return null;
+  const worker = new Worker(new URL('../workers/fbxImport.worker.ts', import.meta.url), { type: 'module' });
+  try {
+    return await new Promise<ModelFileReport | null>((resolve, reject) => {
+      worker.onerror = () => resolve(null);
+      worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+        if (event.data.type === 'inspected') resolve(event.data.report);
+        else if (event.data.type === 'error') reject(new Error(event.data.message));
+      };
+      void Promise.all(beside.map(async (found) => ({ name: found.name, buffer: await found.arrayBuffer() }))).then((images) => {
+        worker.postMessage({ type: 'inspect', buffer: source, format, name: file.name, images }, [source, ...images.map((image) => image.buffer)]);
+      }, () => resolve(null));
+    });
+  } finally {
+    worker.terminate();
+  }
+};
+
+/** A model file as the glTF document it reads as, for a tool that writes it out changed. */
+export interface GltfSource {
+  json: RigSource['json'];
+  viewBytes: RigSource['viewBytes'];
+  /** Metres per unit of the document's space. */
+  metresPerUnit: number;
+  /** The document's nodes, geometry only: materials and images are left out, as they would only cost time. */
+  scene: THREE.Group;
+  /** The document's clips, under their names in the file. */
+  animations: THREE.AnimationClip[];
+  /** What the file held, for what the importer reads. */
+  report?: ModelFileReport;
+  /** Which node, mesh and primitive of the document each object of `scene` is. */
+  associations: Map<unknown, { nodes?: number; meshes?: number; primitives?: number }>;
+}
+
+export const readGltfSource = async (file: File, options: { convert?: ModelConvertOptions; images?: readonly File[]; signal?: AbortSignal } = {}): Promise<GltfSource> => {
+  const original = await file.arrayBuffer();
+  const format = detectModelFormat(file) ?? sniffModelFormat(original) ?? 'fbx';
+  let bytes = original;
+  let metresPerUnit = 1;
+  let report: ModelFileReport | undefined;
+  if (format !== 'glb' && format !== 'gltf') {
+    const converted = await convertOffThread(original, format, options.signal, undefined, undefined, file.name, options.convert, options.images);
+    bytes = converted.glb;
+    metresPerUnit = converted.metresPerUnit ?? 1;
+    report = converted.report;
+  }
+  const isText = format === 'gltf';
+  const { json, jsonEnd } = isText ? { json: parseGltfJson(new TextDecoder().decode(bytes)), jsonEnd: 0 } : readGlb(bytes);
+  const document = json as GltfSource['json'];
+
+  // A buffer is the file's binary chunk, or written out in its uri.
+  const binary = (() => {
+    if (isText) return null;
+    const view = new DataView(bytes);
+    if (jsonEnd + 8 > bytes.byteLength) return null;
+    return new Uint8Array(bytes, jsonEnd + 8, view.getUint32(jsonEnd, true));
+  })();
+  const buffers = new Map<number, Uint8Array>();
+  const bufferBytes = (index: number): Uint8Array => {
+    let found = buffers.get(index);
+    if (!found) {
+      const uri = document.buffers?.[index]?.uri;
+      found = uri ? decodeDataUri(uri).bytes : binary ?? new Uint8Array(0);
+      buffers.set(index, found);
+    }
+    return found;
+  };
+  const viewBytes = (index: number): Uint8Array => {
+    const view = document.bufferViews![index];
+    const buffer = bufferBytes(view.buffer);
+    return buffer.subarray(view.byteOffset ?? 0, (view.byteOffset ?? 0) + view.byteLength);
+  };
+
+  // Geometry only, from a copy of the document without what the geometry does not need.
+  const shapes = structuredClone(document);
+  delete shapes.images;
+  delete shapes.textures;
+  delete shapes.samplers;
+  delete shapes.materials;
+  for (const mesh of shapes.meshes ?? []) for (const primitive of mesh.primitives) delete primitive.material;
+  const urls: string[] = [];
+  const release = () => { for (const url of urls.splice(0)) URL.revokeObjectURL(url); };
+  embedGltfResources(shapes as GltfDocument, urls);
+  const loaded = await materializeGltf(isText ? JSON.stringify(shapes) : rebuildGlb(bytes, jsonEnd, shapes as GltfDocument), options.signal, release);
+  throwIfAborted(options.signal);
+  loaded.scene.updateMatrixWorld(true);
+  return { json: document, viewBytes, metresPerUnit, scene: loaded.scene, animations: loaded.animations, report, associations: loaded.parser.associations as unknown as GltfSource['associations'] };
 };
 
 /**
- * Authored glTF materials are already metal/rough PBR with correct colour
- * spaces, alpha modes and sidedness; the FBX repair heuristics would force
- * blended materials opaque and strip legitimate white emissive. Only enable
- * shadows, as every other import does.
+ * Every model arrives as glTF, with metal/rough PBR materials, correct colour spaces, alpha modes
+ * and sidedness, so only shadows are left to enable.
  */
-const prepareNativeGltfMaterials = (object: THREE.Object3D): void => {
+const prepareImportedModel = (object: THREE.Object3D): void => {
   // glTF UVs start top-left, so override textures for this model load with flipY off.
   object.userData[UV_ORIGIN_TOP_LEFT_KEY] = true;
+  takeModelConventions(object, object.animations);
   object.traverse((child) => {
     if ((child as THREE.Mesh).isMesh) {
       child.castShadow = true;
@@ -365,23 +498,44 @@ const prepareNativeGltfMaterials = (object: THREE.Object3D): void => {
   });
 };
 
+const hasMeshes = (object: THREE.Object3D): boolean => {
+  let found = false;
+  object.traverse((child) => { if ((child as THREE.Mesh).isMesh) found = true; });
+  return found;
+};
+
+/** How long a clip made of one frame lasts. */
+const POSE_CLIP_SECONDS = 1 / 30;
+
 const isGenericClipName = (name: string): boolean => {
   const trimmed = name.trim();
   return !trimmed || /mixamo\.com/i.test(trimmed) || /^take\s*0*\d+$/i.test(trimmed);
 };
 
-const nameAnimations = (animations: THREE.AnimationClip[], fileName: string, format: ModelFormat): void => {
+/**
+ * Gives a file's clips the names they come in under, from the names they have in the file.
+ * `fileTakes` are all the takes it holds, when `animations` may be only some of them: what a clip is
+ * called must not depend on which other takes are kept.
+ */
+export const nameAnimations = (animations: readonly { name: string }[], fileName: string, format: ModelFormat, fileTakes: readonly string[] = animations.map((clip) => clip.name)): void => {
   if (animations.length === 0) return;
   const cleanName = fileName.replace(MODEL_EXTENSION_PATTERN, '');
+  // Each clip's place among the file's takes, which are in the same order.
+  let place = -1;
+  const places = animations.map((clip) => {
+    const found = fileTakes.indexOf(clip.name, place + 1);
+    if (found >= 0) place = found;
+    return place;
+  });
   if (format === 'fbx') {
-    if (animations.length === 1) {
+    if (fileTakes.length === 1) {
       // If strictly one animation, assume it belongs to the file and rename it to file name
       animations[0].name = cleanName;
     } else {
       // If multiple, only rename known generic names
       animations.forEach((clip, index) => {
         if (clip.name === 'Take 001' || clip.name === 'mixamo.com') {
-          clip.name = `${cleanName} ${index + 1}`;
+          clip.name = `${cleanName} ${places[index] + 1}`;
         }
       });
     }
@@ -389,7 +543,7 @@ const nameAnimations = (animations: THREE.AnimationClip[], fileName: string, for
   }
   // glTF clips carry authored names; only fill in missing or exporter-generic ones.
   animations.forEach((clip, index) => {
-    if (isGenericClipName(clip.name)) clip.name = animations.length === 1 ? cleanName : `${cleanName} ${index + 1}`;
+    if (isGenericClipName(clip.name)) clip.name = fileTakes.length === 1 ? cleanName : `${cleanName} ${places[index] + 1}`;
   });
 };
 
@@ -399,8 +553,7 @@ const nameAnimations = (animations: THREE.AnimationClip[], fileName: string, for
  *    (FBX when nothing else matches). FBX and OBJ parse in a worker and
  *    arrive as a GLB handoff; glTF/GLB materialize directly on this thread.
  * 2. Cleanses and names animations (glTF clips keep their authored names).
- * 3. Optimizes FBX/OBJ materials (Phong -> Standard, PBR fixes).
- * 4. Normalizes scale and position (optional).
+ * 3. Normalizes scale and position (optional).
  */
 export const loadModelFile = async (file: File, options: ModelLoadOptions = { normalize: true }): Promise<LoadedModelData> => {
   // Create object URL for the file
@@ -413,37 +566,44 @@ export const loadModelFile = async (file: File, options: ModelLoadOptions = { no
     throwIfAborted(options.signal);
     const fileFormat = options.prepared ? 'glb' : detectModelFormat(file) ?? sniffModelFormat(source) ?? 'fbx';
 
-    // FBXLoader.load() fetches asynchronously but invokes its CPU-heavy
-    // parse() synchronously on the calling renderer thread. FBX (and OBJ)
-    // parse and compact conversion therefore happen in an isolated worker;
-    // only the optimized GLB handoff is materialized into Three objects here.
+    // FBX and OBJ parse and convert in an isolated worker; only the GLB handoff
+    // is materialized into Three objects here. A prepared model was converted when its game was built.
     const parsed = options.prepared
       ? await parsePreparedModel(source, options.signal, options.onProgress)
       : fileFormat === 'glb' || fileFormat === 'gltf'
         ? await parseGltfNative(source, fileFormat, options.signal, options.onProgress)
-        : await parseOffThread(source, fileFormat, options.signal, options.onProgress, options.diagnostics);
+        : await parseOffThread(source, fileFormat, options.signal, options.onProgress, options.diagnostics, file.name, importerOptions(options.convert), options.images);
     object = parsed.object;
-    // A prepared FBX is an FBX from here on: as native glTF, every override texture would flip.
+    // A prepared FBX names its clips as an FBX does.
     const format = parsed.sourceFormat ?? fileFormat;
 
     // --- FILTER ANIMATIONS ---
-    // Reject only empty/invalid clips. Short authored clips are valid assets.
+    // Reject only empty/invalid clips. Short authored clips are valid assets, and a take of one frame
+    // is a pose: it lasts that frame, as a clip of no length has nothing to play.
     if (object.animations) {
-       object.animations = object.animations.filter(
-         clip => Number.isFinite(clip.duration) && clip.duration > 0 && clip.tracks.length > 0,
-       );
+       object.animations = object.animations.filter((clip) => Number.isFinite(clip.duration) && clip.tracks.length > 0);
+       for (const clip of object.animations) if (clip.duration <= 0) clip.duration = POSE_CLIP_SECONDS;
     }
 
     // --- OPTIMIZE MATERIALS ---
     options.onProgress?.(0.91, 'material_optimization_normalization');
-    if (format === 'glb' || format === 'gltf') prepareNativeGltfMaterials(object);
-    else optimizeModelMaterials(object);
+    prepareImportedModel(object);
+    if (!object.animations?.length && !hasMeshes(object)) throw new Error('The file holds no meshes and no animation to import.');
     if (options.compressTextures !== false) await compressModelTextures(object, options.keepTextureSources !== false);
     // Hair, lashes and leaf cards draw a solid body, then their soft fringe.
     splitAlphaCards(object);
 
     // --- RENAME ANIMATIONS ---
-    nameAnimations(object.animations || [], file.name, format);
+    // A clip's range and the takes it leaves out go by the take's name in the file.
+    const takes = object.animations || [];
+    for (const take of takes) {
+      const read = parsed.report?.clips.find((clip) => clip.name === take.name);
+      noteClipTake(take, take.name, read?.start, parsed.report?.framesPerSecond);
+    }
+    nameAnimations(takes, file.name, format, parsed.report?.clips.map((clip) => clip.name));
+
+    // --- CUT ANIMATIONS ---
+    object.animations = options.convert?.animation === false ? [] : cutModelTakes(takes, options.convert ?? {}, object);
 
     let initialScale: [number, number, number] = [1, 1, 1];
     // The unit the file says it is authored in, for the import setting that keeps its authored size.
@@ -492,6 +652,7 @@ export const loadModelFile = async (file: File, options: ModelLoadOptions = { no
       isPlacedInScene: false,
       initialScale,
       ...(parsed.missingTextures ? { missingTextures: parsed.missingTextures } : {}),
+      ...(parsed.report ? { importReport: parsed.report } : {}),
     };
 
   } catch (err) {

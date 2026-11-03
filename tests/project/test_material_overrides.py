@@ -32,6 +32,7 @@ class MaterialOverrideSchemaTests(unittest.TestCase):
         override = {
             "color": "#FF8800", "roughness": 0, "metalness": 1, "emissive": "#00ff00",
             "emissiveIntensity": 4.5, "opacity": 0.25, "mapTextureId": "tex-albedo", "normalTextureId": "tex-normal",
+            "roughnessTextureId": "tex-rough", "metalnessTextureId": "tex-metal",
         }
         document = validate_domain("models", _models(_model({"Body": override})))
         self.assertEqual(document["documents"][0]["materialOverrides"], {"Body": override})

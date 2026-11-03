@@ -1,10 +1,13 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import * as THREE from 'three';
-import { Play, Pause, Film, StopCircle, Plus, CornerDownRight, FlipHorizontal2 } from 'lucide-react';
-import { LoadedModelData } from '../../../types';
+import { Play, Pause, Film, StopCircle, Plus, CornerDownRight, FlipHorizontal2, Repeat, Scissors } from 'lucide-react';
+import { DEFAULT_MODEL_IMPORT_SETTINGS, LoadedModelData } from '../../../types';
 import { useScene } from '../../../context/SceneContext';
 import { MODEL_FILE_ACCEPT } from '../../../utils/modelLoader';
 import { mirroredClipName } from '../../../utils/animationBinding';
+import { clipRange, takeLabel } from '../../../utils/clipRanges';
+import { resolveImportSettings } from '../../../utils/processing/ModelTransforms';
+import { ClipRangeEditor, type ClipRangeResult } from './ClipRangeEditor';
 
 interface AnimationControlsProps {
   model: LoadedModelData | null;
@@ -16,7 +19,12 @@ interface AnimationControlsProps {
   onSpeedChange: (speed: number) => void;
 }
 
-export const AnimationControls: React.FC<AnimationControlsProps> = ({
+export const AnimationControls: React.FC<AnimationControlsProps> = ({ model, ...rest }) => {
+  if (!model) return null;
+  return <LoadedAnimationControls model={model} {...rest} />;
+};
+
+const LoadedAnimationControls: React.FC<AnimationControlsProps & { model: NonNullable<AnimationControlsProps['model']> }> = ({
   model,
   activeClip,
   isPlaying,
@@ -25,9 +33,19 @@ export const AnimationControls: React.FC<AnimationControlsProps> = ({
   onPlayPause,
   onSpeedChange
 }) => {
-  const { models, addAnimations, isLoading, mirrorClip } = useScene();
+  const { models, addAnimations, isLoading, mirrorClip, readClipTakes, reimportModel } = useScene();
+  // The clip the editor opens on; null while it is shut.
+  const [cutting, setCutting] = useState<{ clip?: string } | null>(null);
+  const canCut = model.category !== 'Animation';
 
-  if (!model) return null;
+  /** The model is read again from its source with the new ranges, as when its import settings change. */
+  const applyCut = ({ clipRanges, excludedClips }: ClipRangeResult) => {
+    setCutting(null);
+    const settings = model.importSettings ?? DEFAULT_MODEL_IMPORT_SETTINGS;
+    const next = resolveImportSettings({ ...settings, clipRanges, excludedClips });
+    if (JSON.stringify(next.clipRanges ?? []) === JSON.stringify(settings.clipRanges ?? []) && JSON.stringify(next.excludedClips ?? []) === JSON.stringify(settings.excludedClips ?? [])) return;
+    void reimportModel(model.id, null, next);
+  };
 
   // Aggregate animations from the current model and all other models in the scene
   const allClips = useMemo(() => {
@@ -69,20 +87,20 @@ export const AnimationControls: React.FC<AnimationControlsProps> = ({
         <div className="flex items-center justify-between">
            <div className="flex items-center gap-2 text-gray-400">
              <Film size={14} />
-             <span className="text-xs font-semibold tracking-wider">ANIMATION</span>
+             <span className="text-xs font-semibold tracking-wider">Animation</span>
            </div>
            
            <div className="flex items-center bg-gray-800 rounded-lg p-0.5 border border-gray-700">
              <button 
                 onClick={() => onSpeedChange(0.5)}
                 disabled={!hasAnimations}
-                className={`text-[10px] px-2 py-1 rounded transition-colors ${timeScale === 0.5 ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}
+                className={`text-2xs px-2 py-1 rounded transition-colors ${timeScale === 0.5 ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}
              >0.5x</button>
              <div className="w-px h-3 bg-gray-700 mx-0.5"></div>
              <button 
                 onClick={() => onSpeedChange(1.5)}
                 disabled={!hasAnimations}
-                className={`text-[10px] px-2 py-1 rounded transition-colors ${timeScale === 1.5 ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}
+                className={`text-2xs px-2 py-1 rounded transition-colors ${timeScale === 1.5 ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}
              >1.5x</button>
            </div>
         </div>
@@ -110,13 +128,27 @@ export const AnimationControls: React.FC<AnimationControlsProps> = ({
         {/* Animation List - Fixed Height Container */}
         <div className="space-y-2">
             <div className="flex items-center justify-between px-1">
-                <div className="text-[10px] text-gray-500 font-medium uppercase tracking-wider">
+                <div className="text-2xs text-gray-500 font-medium ">
                     Clips ({allClips.length})
                 </div>
-                
+
+                <div className="flex items-center gap-1">
+                {canCut && model.animations.length > 0 && (
+                    <button
+                        type="button"
+                        onClick={() => setCutting({})}
+                        disabled={isLoading}
+                        title="Cut a long take into named clips, or trim a clip's ends"
+                        className={`flex items-center gap-1 text-2xs px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white transition-colors border border-gray-700 ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                        <Scissors size={10} />
+                        <span>Cut</span>
+                    </button>
+                )}
+
                 {/* Import Animation Button */}
                 <label className={`
-                    flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 
+                    flex items-center gap-1 text-2xs px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 
                     text-gray-400 hover:text-white cursor-pointer transition-colors border border-gray-700
                     ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}
                 `}>
@@ -131,6 +163,7 @@ export const AnimationControls: React.FC<AnimationControlsProps> = ({
                         disabled={isLoading}
                     />
                 </label>
+                </div>
             </div>
             
             <div className="h-48 overflow-y-auto pr-1 space-y-1 custom-scrollbar bg-gray-950/50 rounded-lg p-1.5 border border-gray-800/50 inner-shadow">
@@ -164,7 +197,9 @@ export const AnimationControls: React.FC<AnimationControlsProps> = ({
                         // A model's own clip can get a mirrored copy, once; a copy is not mirrored back.
                         const canMirror = !isExternal && !item.clip.name.endsWith(mirroredClipName(''))
                             && !model.animations.some(clip => clip.name === mirroredClipName(item.clip.name));
-                        
+                        const canTrim = canCut && !isExternal && !item.clip.name.endsWith(mirroredClipName(''));
+                        const range = clipRange(item.clip);
+
                         return (
                             <div key={`${item.sourceModelId}-${idx}`} className="relative group/clip">
                             <button
@@ -179,18 +214,37 @@ export const AnimationControls: React.FC<AnimationControlsProps> = ({
                             >
                                 <div className="flex items-center justify-between w-full">
                                     <span className="truncate flex-1 font-medium" title={item.clip.name}>
-                                        {item.clip.name}
+                                        {takeLabel(item.clip.name)}
                                     </span>
                                     {isActive && <div className="w-1.5 h-1.5 rounded-full bg-white shadow-[0_0_6px_rgba(255,255,255,0.8)] shrink-0 ml-2"></div>}
                                 </div>
                                 
                                 {isExternal && (
-                                    <div className="flex items-center gap-1 text-[9px] text-gray-500 group-hover:text-gray-400">
+                                    <div className="flex items-center gap-1 text-2xs text-gray-500 group-hover:text-gray-400">
                                         <CornerDownRight size={10} />
                                         <span className="truncate">From: {item.sourceModelName}</span>
                                     </div>
                                 )}
+                                {range && (
+                                    <div className="flex items-center gap-1 text-2xs text-gray-500 group-hover:text-gray-400 tabular-nums">
+                                        <Scissors size={10} />
+                                        <span>{item.clip.duration.toFixed(2)} s</span>
+                                        {range.loop ? <><Repeat size={10} className="ml-1" /><span>Loops</span></> : <span className="ml-1">Plays once</span>}
+                                    </div>
+                                )}
                             </button>
+                            {canTrim && (
+                                <button
+                                    type="button"
+                                    onClick={() => setCutting({ clip: item.clip.name })}
+                                    disabled={isLoading}
+                                    title="Cut this clip, or trim its ends"
+                                    aria-label={`Cut ${item.clip.name}`}
+                                    className="absolute right-11 top-1/2 -translate-y-1/2 p-1 rounded text-gray-500 hover:text-white hover:bg-gray-700 opacity-0 group-hover/clip:opacity-100 focus:opacity-100 transition-opacity"
+                                >
+                                    <Scissors size={12} />
+                                </button>
+                            )}
                             {canMirror && (
                                 <button
                                     type="button"
@@ -210,6 +264,18 @@ export const AnimationControls: React.FC<AnimationControlsProps> = ({
             </div>
         </div>
       </div>
+      {cutting && (
+        <ClipRangeEditor
+          name={model.name}
+          load={(signal) => readClipTakes(model.id, signal)}
+          ranges={model.importSettings?.clipRanges ?? []}
+          excludedClips={model.importSettings?.excludedClips ?? []}
+          initialClip={cutting.clip}
+          confirmLabel="Apply"
+          onConfirm={applyCut}
+          onCancel={() => setCutting(null)}
+        />
+      )}
     </div>
   );
 };

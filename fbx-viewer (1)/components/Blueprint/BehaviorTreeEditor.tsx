@@ -97,7 +97,7 @@ export const moveBehaviorNode = (tree: BehaviorTreeData, id: string, step: -1 | 
     }),
 });
 
-const FIELD = 'bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-[11px] text-gray-200 focus:outline-none focus:border-blue-500';
+const FIELD = 'bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-2xs text-gray-200 focus:outline-none focus:border-blue-500';
 
 interface BehaviorTreeEditorProps {
     tree: BehaviorTreeData | undefined;
@@ -114,9 +114,9 @@ export const BehaviorTreeEditor: React.FC<BehaviorTreeEditorProps> = ({ tree, on
             <div className="space-y-3">
                 <p className="text-xs text-gray-400">This enemy uses the built-in AI: it attacks the player in range, chases what it sees, searches where it last saw the player and otherwise patrols.</p>
                 <div className="grid grid-cols-2 gap-2">
-                    <button type="button" onClick={() => onChange(defaultBehaviorTree())} className="py-1.5 rounded text-[11px] font-bold bg-blue-700 hover:bg-blue-600 text-white">Start from the built-in AI</button>
-                    <button type="button" onClick={() => onChange(gunnerBehaviorTree())} title="Shoots with the blueprint's first weapon from attack range" className="py-1.5 rounded text-[11px] font-bold bg-blue-900 hover:bg-blue-800 text-white">Start from a gunner</button>
-                    <button type="button" onClick={() => onChange({ rootId: 'root', behaviorNodes: [{ id: 'root', type: 'selector', children: [] }] })} className="py-1.5 rounded text-[11px] font-bold bg-gray-800 hover:bg-gray-700 text-gray-200">Start empty</button>
+                    <button type="button" onClick={() => onChange(defaultBehaviorTree())} className="py-1.5 rounded text-2xs font-bold bg-blue-700 hover:bg-blue-600 text-white">Start from the built-in AI</button>
+                    <button type="button" onClick={() => onChange(gunnerBehaviorTree())} title="Shoots with the blueprint's first weapon from attack range" className="py-1.5 rounded text-2xs font-bold bg-blue-900 hover:bg-blue-800 text-white">Start from a gunner</button>
+                    <button type="button" onClick={() => onChange({ rootId: 'root', behaviorNodes: [{ id: 'root', type: 'selector', children: [] }] })} className="py-1.5 rounded text-2xs font-bold bg-gray-800 hover:bg-gray-700 text-gray-200">Start empty</button>
                 </div>
             </div>
         );
@@ -143,7 +143,7 @@ export const BehaviorTreeEditor: React.FC<BehaviorTreeEditorProps> = ({ tree, on
                 <div className="flex items-start gap-1.5 py-1 group" style={{ paddingLeft: depth * 14 }} data-behavior-node={node.type}>
                     <div className="flex-1 min-w-0 space-y-1 rounded border border-gray-800 bg-gray-900/60 p-1.5">
                         <div className="flex items-center gap-1.5">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-sky-300 shrink-0" title={info.hint}>{info.label}</span>
+                            <span className="text-2xs font-bold text-sky-300 shrink-0" title={info.hint}>{info.label}</span>
                             {node.type === 'condition' && (
                                 <select aria-label="Condition" value={node.condition ?? ''} onChange={(e) => update(id, { condition: e.target.value as BehaviorCondition })} className={`flex-1 min-w-0 ${FIELD}`}>
                                     {(Object.keys(CONDITIONS) as BehaviorCondition[]).map(key => <option key={key} value={key}>{CONDITIONS[key].label}</option>)}
@@ -161,7 +161,7 @@ export const BehaviorTreeEditor: React.FC<BehaviorTreeEditorProps> = ({ tree, on
                                     <input aria-label={leaf.text} placeholder={leaf.text} value={node.text ?? ''} onChange={(e) => update(id, { text: e.target.value }, `bt-text-${id}`)} className={`flex-1 min-w-0 ${FIELD}`} />
                                 )}
                                 {valueLabel && (
-                                    <label className="flex items-center gap-1 text-[10px] text-gray-500">
+                                    <label className="flex items-center gap-1 text-2xs text-gray-500">
                                         {valueLabel}
                                         <input
                                             type="number"
@@ -203,7 +203,7 @@ export const BehaviorTreeEditor: React.FC<BehaviorTreeEditorProps> = ({ tree, on
                                 type="button"
                                 role="menuitem"
                                 onClick={() => { onChange(addBehaviorChild(tree, id, createBehaviorNode(type))); setAdding(null); }}
-                                className="px-1.5 py-0.5 rounded text-[10px] bg-gray-800 hover:bg-gray-700 text-gray-200"
+                                className="px-1.5 py-0.5 rounded text-2xs bg-gray-800 hover:bg-gray-700 text-gray-200"
                                 title={NODE_TYPES[type].hint}
                             >
                                 {NODE_TYPES[type].label}
@@ -218,11 +218,11 @@ export const BehaviorTreeEditor: React.FC<BehaviorTreeEditorProps> = ({ tree, on
 
     return (
         <div className="space-y-2">
-            <div className="flex items-center gap-1.5 text-[10px] text-gray-500"><Brain size={12} className="text-sky-400" /> Evaluated from the top every frame; the first branch that is not failing decides.</div>
+            <div className="flex items-center gap-1.5 text-2xs text-gray-500"><Brain size={12} className="text-sky-400" /> Evaluated from the top every frame; the first branch that is not failing decides.</div>
             {renderNode(tree.rootId, 0, [], new Set())}
             {problems.length > 0 && (
                 <div className="rounded border border-amber-700/50 bg-amber-950/30 p-2 space-y-0.5">
-                    {problems.map(problem => <div key={problem} className="flex items-center gap-1 text-[10px] text-amber-300"><AlertTriangle size={10} /> {problem}</div>)}
+                    {problems.map(problem => <div key={problem} className="flex items-center gap-1 text-2xs text-amber-300"><AlertTriangle size={10} /> {problem}</div>)}
                 </div>
             )}
         </div>

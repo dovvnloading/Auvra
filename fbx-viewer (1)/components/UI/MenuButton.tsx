@@ -5,6 +5,8 @@ import { ChevronDown } from 'lucide-react';
 export interface MenuButtonItem {
   label: string;
   description?: string;
+  /** Items of a group sit together under this heading, in the order given. */
+  group?: string;
   disabled?: boolean;
   onSelect: () => void;
 }
@@ -14,6 +16,8 @@ interface MenuButtonProps {
   icon?: React.ReactNode;
   title?: string;
   items: readonly MenuButtonItem[];
+  /** Shows only the icon, the label still naming it. */
+  hideLabel?: boolean;
   /** Disables the trigger; an open menu closes. */
   disabled?: boolean;
 }
@@ -26,7 +30,7 @@ const MENU_KEYS = new Set(['ArrowDown', 'ArrowUp', 'Home', 'End', 'Escape', 'Tab
  * A header button that opens a menu of actions (WAI-ARIA menu pattern), for actions used too
  * rarely to keep their own button. Portalled to the body so the scrolling header cannot clip it.
  */
-export const MenuButton: React.FC<MenuButtonProps> = ({ label, icon, title, items, disabled = false }) => {
+export const MenuButton: React.FC<MenuButtonProps> = ({ label, icon, title, items, hideLabel = false, disabled = false }) => {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [position, setPosition] = useState({ top: 0, left: 0 });
@@ -140,16 +144,17 @@ export const MenuButton: React.FC<MenuButtonProps> = ({ label, icon, title, item
         ref={triggerRef}
         id={triggerId}
         type="button"
+        aria-label={hideLabel ? label : undefined}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         onClick={() => (open ? closeMenu(false) : openMenu(0))}
         onKeyDown={handleTriggerKeyDown}
         disabled={disabled}
-        className={`flex items-center gap-2 px-3 py-1 text-xs font-bold rounded transition-colors disabled:opacity-50 ${open ? 'bg-gray-800 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'}`}
+        className={`flex h-6 items-center gap-1.5 rounded px-2 text-xs transition-colors duration-75 disabled:opacity-40 ${open ? 'bg-white/10 text-ink' : 'text-ink-2 hover:bg-white/5 hover:text-ink'}`}
         title={title}
       >
-        {icon} {label} <ChevronDown size={10} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+        {icon}{!hideLabel && label}<ChevronDown size={11} className="text-ink-3" />
       </button>
       {open && createPortal(
         <div
@@ -159,11 +164,14 @@ export const MenuButton: React.FC<MenuButtonProps> = ({ label, icon, title, item
           aria-labelledby={triggerId}
           onKeyDown={handleMenuKeyDown}
           style={{ position: 'fixed', top: position.top, left: position.left }}
-          className="z-[9999] w-72 rounded-md border border-gray-700 bg-gray-900 p-1 shadow-xl"
+          className="z-[9999] max-h-[80vh] w-64 overflow-y-auto rounded-lg border border-line bg-panel py-1 shadow-[0_12px_32px_rgb(0_0_0/0.55)]"
         >
           {items.map((item, index) => (
+            <React.Fragment key={`${item.group ?? ''}/${item.label}/${index}`}>
+            {item.group && item.group !== items[index - 1]?.group && (
+              <div className="mt-1 border-t border-line px-3 pb-0.5 pt-1.5 text-2xs text-ink-3">{item.group}</div>
+            )}
             <button
-              key={item.label}
               ref={(element) => { itemRefs.current[index] = element; }}
               type="button"
               role="menuitem"
@@ -171,11 +179,12 @@ export const MenuButton: React.FC<MenuButtonProps> = ({ label, icon, title, item
               aria-disabled={item.disabled || undefined}
               onClick={() => choose(item)}
               onMouseEnter={() => setActiveIndex(index)}
-              className={`flex w-full flex-col items-start gap-0.5 rounded px-2 py-1.5 text-left outline-none hover:bg-gray-800 focus:bg-gray-800 focus-visible:ring-1 focus-visible:ring-blue-500 ${item.disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
+              className={`flex w-full flex-col items-start px-3 py-1 text-left outline-none focus:bg-white/5 ${item.disabled ? 'cursor-not-allowed opacity-40' : ''}`}
             >
-              <span className="text-xs font-bold text-gray-200">{item.label}</span>
-              {item.description && <span className="whitespace-normal text-[10px] text-gray-500">{item.description}</span>}
+              <span className="w-full truncate text-xs text-ink">{item.label}</span>
+              {item.description && <span className="whitespace-normal text-2xs text-ink-3">{item.description}</span>}
             </button>
+            </React.Fragment>
           ))}
         </div>,
         document.body,

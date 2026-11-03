@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { loadGameContent, HUD_DOCUMENT_ID } from '../../utils/projectHydration';
+import { createGameContentLoader, loadGameContent, HUD_DOCUMENT_ID } from '../../utils/projectHydration';
 import { DEFAULT_GAME_SETTINGS, GAME_SETTINGS_DOCUMENT_ID } from '../../runtime/types';
 
 // No FBX here: models and attachments go through the import worker, which the
@@ -88,6 +88,42 @@ describe('loadGameContent', () => {
     }, { resolveAssetUrl, generateThumbnails: false })).rejects.toThrow('Project hydration failed for 1 asset');
     expect(created).toHaveLength(1);
     expect(revoked).toEqual(created);
+  });
+
+  it('opens without a model whose file cannot be read, and says so', async () => {
+    const loaded = await loadGameContent({
+      models: [{ id: 'm-1', name: 'Damaged.fbx', assetId: 'asset-damaged' }],
+      textures: [{ id: 'tex-1', name: 'Grass', assetId: 'asset-grass' }],
+    }, { resolveAssetUrl, generateThumbnails: false });
+    expect(loaded.content.models).toEqual([]);
+    expect(loaded.content.textures).toHaveLength(1);
+    expect(loaded.refusedModels.map((model) => model.name)).toEqual(['Damaged.fbx']);
+    expect(loaded.refusedModels[0].reason).toContain('Damaged.fbx');
+  });
+
+  it('still fails as a whole when a model cannot be fetched', async () => {
+    await expect(loadGameContent({
+      models: [{ id: 'm-1', name: 'Gone.fbx', assetId: 'asset-missing' }],
+    }, { resolveAssetUrl, generateThumbnails: false })).rejects.toThrow('Project hydration failed for 1 asset');
+  });
+
+  it('fails as a whole when an image beside a model cannot be fetched, as for the model itself', async () => {
+    await expect(loadGameContent({
+      models: [{ id: 'm-1', name: 'Hero.fbx', assetId: 'asset-hero', sourceImages: [{ name: 'skin.png', assetId: 'asset-missing' }] }],
+    }, { resolveAssetUrl, generateThumbnails: false })).rejects.toThrow('Project hydration failed for 1 asset');
+  });
+
+  it('does not read a model it could not read again when a game loads more', async () => {
+    const loader = createGameContentLoader({
+      models: [{ id: 'm-1', name: 'Damaged.fbx', assetId: 'asset-damaged' }],
+      textures: [{ id: 'tex-1', name: 'Grass', assetId: 'asset-grass' }],
+    }, { resolveAssetUrl, generateThumbnails: false });
+    await loader.load({ models: new Set(['m-1']) });
+    await loader.load({ models: new Set(['m-1']), textures: new Set(['tex-1']) });
+    expect(fetched.filter((url) => url.includes('asset-damaged'))).toHaveLength(1);
+    expect(loader.refusedModels().map((model) => model.name)).toEqual(['Damaged.fbx']);
+    expect(loader.content().textures).toHaveLength(1);
+    loader.releaseAll();
   });
 
   it('does not resolve anything once cancelled', async () => {

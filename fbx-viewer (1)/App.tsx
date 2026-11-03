@@ -9,18 +9,24 @@ import { ViewerScene } from './components/Scene/ViewerScene';
 import { ContentBrowser } from './components/UI/Browser/ContentBrowser';
 import { ViewControls } from './components/UI/Viewport/ViewControls';
 import { Header } from './components/UI/Header';
-import { RetextureEditor } from './components/Tools/RetextureEditor';
-import { MaterialGraphEditor } from './components/Materials/MaterialGraphEditor';
-import { GraphEditor } from './components/AnimationGraph/GraphEditor';
-import { BlueprintEditor } from './components/Blueprint/BlueprintEditor';
-import { SandboxScene } from './components/Sandbox/SandboxScene';
-import { HUDEditor } from './components/HUDEditor/HUDEditor';
-import { EnvironmentEditor } from './components/Environment/EnvironmentEditor';
 import { installRendererDiagnostics } from './renderer/diagnostics';
 import { OperationProvider } from './context/OperationContext';
 import { OperationCenter } from './components/UI/OperationCenter';
 import { AppDialogHost } from './components/UI/AppDialogHost';
 import { frontendDiagnostics } from './diagnostics/runtime';
+
+// Each tab's code comes when the tab is first opened, so the window comes up on what it shows first.
+const RetextureEditor = React.lazy(() => import('./components/Tools/RetextureEditor').then((module) => ({ default: module.RetextureEditor })));
+const MaterialGraphEditor = React.lazy(() => import('./components/Materials/MaterialGraphEditor').then((module) => ({ default: module.MaterialGraphEditor })));
+const GraphEditor = React.lazy(() => import('./components/AnimationGraph/GraphEditor').then((module) => ({ default: module.GraphEditor })));
+const BlueprintEditor = React.lazy(() => import('./components/Blueprint/BlueprintEditor').then((module) => ({ default: module.BlueprintEditor })));
+const SandboxScene = React.lazy(() => import('./components/Sandbox/SandboxScene').then((module) => ({ default: module.SandboxScene })));
+const HUDEditor = React.lazy(() => import('./components/HUDEditor/HUDEditor').then((module) => ({ default: module.HUDEditor })));
+const EnvironmentEditor = React.lazy(() => import('./components/Environment/EnvironmentEditor').then((module) => ({ default: module.EnvironmentEditor })));
+
+const TabLoading: React.FC = () => (
+  <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-500 bg-gray-950">Loading...</div>
+);
 
 const AppContent: React.FC = () => {
   const { models, selectedModelId } = useScene();
@@ -114,6 +120,8 @@ const AppContent: React.FC = () => {
             </div>
           )}
 
+          <React.Suspense fallback={<TabLoading />}>
+
           {/* TAB 2: ENVIRONMENT EDITOR */}
           {activeTab === 'environment' && (
             <div className="absolute inset-0 w-full h-full">
@@ -162,6 +170,8 @@ const AppContent: React.FC = () => {
                 <RetextureEditor />
             </div>
           )}
+
+          </React.Suspense>
 
       </div>
       

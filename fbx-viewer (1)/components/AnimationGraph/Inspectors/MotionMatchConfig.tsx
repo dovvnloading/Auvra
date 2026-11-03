@@ -15,7 +15,7 @@ interface MotionMatchConfigProps {
  */
 export const MotionMatchConfig: React.FC<MotionMatchConfigProps> = ({ node, updateState, clipOptions }) => (
     <div className="space-y-2">
-        <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase text-gray-500">
+        <div className="flex items-center gap-1.5 text-2xs font-bold text-gray-500">
             <Footprints size={11} /> Clips to match from
         </div>
         {node.blendSamples.map((sample, index) => (
@@ -38,11 +38,11 @@ export const MotionMatchConfig: React.FC<MotionMatchConfigProps> = ({ node, upda
         <button
             type="button"
             onClick={() => updateState({ blendSamples: [...node.blendSamples, { id: crypto.randomUUID(), clipName: '', position: [0, 0] }] })}
-            className="flex w-full items-center justify-center gap-1 rounded border border-gray-700 bg-gray-800 py-1 text-[10px] text-gray-200 hover:bg-gray-700"
+            className="flex w-full items-center justify-center gap-1 rounded border border-gray-700 bg-gray-800 py-1 text-2xs text-gray-200 hover:bg-gray-700"
         >
             <Plus size={10} /> Clip
         </button>
-        <p className="text-[10px] leading-snug text-gray-500">
+        <p className="text-2xs leading-snug text-gray-500">
             The state plays whichever moment of these clips best carries on the character's movement and pose, and crossfades when another fits better.
             Clips that travel play in place; a clip made in place has its travel read from its feet. The more ways of moving they cover, the better it follows.
         </p>

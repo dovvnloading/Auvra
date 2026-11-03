@@ -92,6 +92,8 @@ struct SurfaceIn {
   viewDirection: vec3f,
   frontFacing: bool,
   time: f32,
+  // Its row in the instance table, for a surface that reads where it is on the object.
+  instanceId: u32,
 }
 
 struct SurfaceOut {
@@ -214,6 +216,7 @@ struct SurfaceVarying {
   @location(6) motionNow: vec4f,
   @location(7) motionThen: vec4f,
   @location(8) @interpolate(flat) flags: u32,
+  @location(9) @interpolate(flat) instanceId: u32,
 }
 
 fn surfaceVarying(draw: DrawIn) -> SurfaceVarying {
@@ -239,6 +242,7 @@ fn surfaceVarying(draw: DrawIn) -> SurfaceVarying {
   out.motionNow = view.unjitteredViewProjection * vec4f(world, 1.0);
   out.motionThen = view.previousViewProjection * vec4f(previousWorldOf(instance, previousLocal), 1.0);
   out.flags = instance.flags;
+  out.instanceId = draw.instanceId;
   return out;
 }
 
@@ -259,6 +263,7 @@ fn surfaceInput(in: SurfaceVarying, frontFacing: bool) -> SurfaceIn {
   s.viewDirection = normalize(view.eye.xyz - in.worldPosition);
   s.frontFacing = frontFacing;
   s.time = view.params.x;
+  s.instanceId = in.instanceId;
   return s;
 }
 `;

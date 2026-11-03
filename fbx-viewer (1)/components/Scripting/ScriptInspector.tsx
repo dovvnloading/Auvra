@@ -64,17 +64,17 @@ export const ScriptInspector: React.FC<ComponentInspectorProps> = ({ object, com
         <div className="space-y-2">
             {hasScript ? (
                 <div className="rounded border border-gray-800 bg-gray-950">
-                    <pre className="m-0 max-h-32 overflow-hidden whitespace-pre px-2 py-1.5 font-mono text-[10px] leading-snug text-blue-300" aria-label="Script preview">{preview}</pre>
-                    <div className="flex justify-between border-t border-gray-800 px-2 py-1 text-[9px] text-gray-500">
+                    <pre className="m-0 max-h-32 overflow-hidden whitespace-pre px-2 py-1.5 font-mono text-2xs leading-snug text-blue-300" aria-label="Script preview">{preview}</pre>
+                    <div className="flex justify-between border-t border-gray-800 px-2 py-1 text-2xs text-gray-500">
                         <span>{hiddenLines > 0 ? `+${hiddenLines} more ${hiddenLines === 1 ? 'line' : 'lines'}` : `${lines.length} ${lines.length === 1 ? 'line' : 'lines'}`}</span>
                         <span>{formatScriptSize(bytes)}</span>
                     </div>
                 </div>
             ) : (
-                <div className="rounded border border-dashed border-gray-700 px-2 py-3 text-center text-[10px] italic text-gray-500">No script yet</div>
+                <div className="rounded border border-dashed border-gray-700 px-2 py-3 text-center text-2xs italic text-gray-500">No script yet</div>
             )}
             {bytes > SCRIPT_LIMITS.maxSourceBytes && (
-                <div className="text-[10px] text-amber-400">
+                <div className="text-2xs text-amber-400">
                     Over the {formatScriptSize(SCRIPT_LIMITS.maxSourceBytes)} limit, so it will not run. Shorten it in the editor.
                 </div>
             )}
@@ -92,7 +92,7 @@ export const ScriptInspector: React.FC<ComponentInspectorProps> = ({ object, com
                     <select
                         value={template.id}
                         onChange={(event) => setTemplateId(event.target.value)}
-                        className="h-7 min-w-0 flex-1 rounded border border-gray-800 bg-gray-950 px-1 text-[11px] text-white focus:border-blue-500 focus:outline-none"
+                        className="h-7 min-w-0 flex-1 rounded border border-gray-800 bg-gray-950 px-1 text-2xs text-white focus:border-blue-500 focus:outline-none"
                         aria-label="Script template"
                     >
                         {SCRIPT_TEMPLATES.map(item => (
@@ -102,13 +102,13 @@ export const ScriptInspector: React.FC<ComponentInspectorProps> = ({ object, com
                     <button
                         type="button"
                         onClick={() => setEditor({ draft: template.source })}
-                        className="flex h-7 shrink-0 items-center gap-1 rounded border border-gray-700 bg-gray-800 px-2 text-[11px] text-gray-200 transition-colors hover:bg-gray-700"
+                        className="flex h-7 shrink-0 items-center gap-1 rounded border border-gray-700 bg-gray-800 px-2 text-2xs text-gray-200 transition-colors hover:bg-gray-700"
                         title={hasScript ? 'Open this template in the editor; the current script is replaced only when you save' : 'Open this template in the editor'}
                     >
                         <FilePlus2 size={12} /> New from Template
                     </button>
                 </div>
-                <div className="text-[10px] leading-snug text-gray-500">
+                <div className="text-2xs leading-snug text-gray-500">
                     {template.description}{hasScript ? ' Replaces the current script only when you save.' : ''}
                 </div>
             </div>

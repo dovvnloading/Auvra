@@ -619,14 +619,14 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                     onAddNode={handleAddLevelVariableNode}
                 />
                 <div className="p-4 border-b border-gray-800 bg-gray-950 flex items-center justify-between">
-                    <span className="text-xs font-bold text-gray-200 tracking-wider">LOGIC PALETTE</span>
+                    <span className="text-xs font-bold text-gray-200 tracking-wider">Logic palette</span>
                 </div>
                 
                 <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-4">
                     
                     {/* Templates */}
                     <div className="space-y-1">
-                        <div className="px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1 flex items-center gap-1">
+                        <div className="px-2 text-2xs font-bold text-gray-500 mb-1 flex items-center gap-1">
                             <LayoutTemplate size={10} /> Templates
                         </div>
                         <button onClick={handleAddRestartTemplate} className="w-full text-left px-3 py-2 bg-blue-900/20 hover:bg-blue-900/40 border border-blue-900/50 rounded text-xs text-blue-300 flex items-center gap-2 group transition-colors">
@@ -638,7 +638,7 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
 
                     {/* Events */}
                     <div className="space-y-1">
-                        <div className="px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Events</div>
+                        <div className="px-2 text-2xs font-bold text-gray-500 mb-1">Events</div>
                         <button onClick={() => handleAddEvent('BeginPlay', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
                             <Activity size={12} className="text-red-400 group-hover:text-red-300" /> Event BeginPlay
                         </button>
@@ -679,7 +679,7 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
 
                     {/* Cameras */}
                     <div className="space-y-1">
-                        <div className="px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Cameras</div>
+                        <div className="px-2 text-2xs font-bold text-gray-500 mb-1">Cameras</div>
                         <button onClick={handleAddSetActiveCamera} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
                             <Video size={12} className="text-pink-400 group-hover:text-pink-300" /> Set Active Camera
                         </button>
@@ -687,7 +687,7 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
 
                     {/* Dialogue */}
                     <div className="space-y-1">
-                        <div className="px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Dialogue</div>
+                        <div className="px-2 text-2xs font-bold text-gray-500 mb-1">Dialogue</div>
                         <button onClick={handleAddStartDialogue} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
                             <MessageSquare size={12} className="text-sky-400 group-hover:text-sky-300" /> Start Dialogue
                         </button>
@@ -695,7 +695,7 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
 
                     {/* Multiplayer */}
                     <div className="space-y-1">
-                        <div className="px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Multiplayer</div>
+                        <div className="px-2 text-2xs font-bold text-gray-500 mb-1">Multiplayer</div>
                         <button onClick={handleAddSendNetworkEvent} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
                             <Send size={12} className="text-teal-400 group-hover:text-teal-300" /> Send Network Event
                         </button>
@@ -706,29 +706,29 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
 
                     {/* Values */}
                     <div className="space-y-1">
-                        <div className="px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Values</div>
+                        <div className="px-2 text-2xs font-bold text-gray-500 mb-1">Values</div>
                         <div className="grid grid-cols-2 gap-1 px-1">
-                            <button onClick={() => handleAddLiteral('Float')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-[10px] text-green-400 border border-green-900/30 flex items-center justify-center gap-1"><Hash size={10} /> Float</button>
-                            <button onClick={() => handleAddLiteral('Integer')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-[10px] text-cyan-400 border border-cyan-900/30 flex items-center justify-center gap-1"><Hash size={10} /> Int</button>
-                            <button onClick={() => handleAddLiteral('String')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-[10px] text-pink-400 border border-pink-900/30 flex items-center justify-center gap-1"><Type size={10} /> String</button>
-                            <button onClick={() => handleAddLiteral('Boolean')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-[10px] text-red-400 border border-red-900/30 flex items-center justify-center gap-1"><ToggleLeft size={10} /> Bool</button>
+                            <button onClick={() => handleAddLiteral('Float')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-green-400 border border-green-900/30 flex items-center justify-center gap-1"><Hash size={10} /> Float</button>
+                            <button onClick={() => handleAddLiteral('Integer')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-cyan-400 border border-cyan-900/30 flex items-center justify-center gap-1"><Hash size={10} /> Int</button>
+                            <button onClick={() => handleAddLiteral('String')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-pink-400 border border-pink-900/30 flex items-center justify-center gap-1"><Type size={10} /> String</button>
+                            <button onClick={() => handleAddLiteral('Boolean')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-red-400 border border-red-900/30 flex items-center justify-center gap-1"><ToggleLeft size={10} /> Bool</button>
                         </div>
                     </div>
 
                     {/* Math */}
                     <div className="space-y-1">
-                        <div className="px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Math</div>
+                        <div className="px-2 text-2xs font-bold text-gray-500 mb-1">Math</div>
                         <div className="grid grid-cols-2 gap-1 px-1">
-                            <button onClick={() => handleAddMath('Add', 'Add', 'Float')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-[10px] text-gray-300 flex items-center gap-2"><Calculator size={10} /> Add</button>
-                            <button onClick={() => handleAddMath('Subtract', 'Sub', 'Float')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-[10px] text-gray-300 flex items-center gap-2"><Calculator size={10} /> Sub</button>
-                            <button onClick={() => handleAddMath('Add', 'Add (Int)', 'Integer')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-[10px] text-gray-300 flex items-center gap-2"><Calculator size={10} /> Add (Int)</button>
-                            <button onClick={() => handleAddToString()} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-[10px] text-gray-300 flex items-center gap-2"><Type size={10} /> To Str</button>
+                            <button onClick={() => handleAddMath('Add', 'Add', 'Float')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-gray-300 flex items-center gap-2"><Calculator size={10} /> Add</button>
+                            <button onClick={() => handleAddMath('Subtract', 'Sub', 'Float')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-gray-300 flex items-center gap-2"><Calculator size={10} /> Sub</button>
+                            <button onClick={() => handleAddMath('Add', 'Add (Int)', 'Integer')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-gray-300 flex items-center gap-2"><Calculator size={10} /> Add (Int)</button>
+                            <button onClick={() => handleAddToString()} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-gray-300 flex items-center gap-2"><Type size={10} /> To Str</button>
                         </div>
                     </div>
 
                     {/* Actions */}
                     <div className="space-y-1">
-                        <div className="px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Actions</div>
+                        <div className="px-2 text-2xs font-bold text-gray-500 mb-1">Actions</div>
                         <button onClick={handleAddPrintString} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2">
                             <MessageSquare size={12} className="text-pink-400" /> Print String
                         </button>
@@ -754,7 +754,7 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
 
                     {/* Logic */}
                     <div className="space-y-1">
-                        <div className="px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Logic</div>
+                        <div className="px-2 text-2xs font-bold text-gray-500 mb-1">Logic</div>
                         <button onClick={handleAddBranch} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2">
                             <GitBranch size={12} className="text-gray-200" /> Branch (If)
                         </button>
@@ -766,7 +766,7 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                     {/* Flow control and world nodes (hooks/levelBlueprintNodes) */}
                     {REGISTRY_PALETTE.map(group => (
                         <div key={group.label} className="space-y-1">
-                            <div className="px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">{group.label}</div>
+                            <div className="px-2 text-2xs font-bold text-gray-500 mb-1">{group.label}</div>
                             {group.definitions.map(definition => (
                                 <button
                                     key={definition.type}
@@ -783,20 +783,20 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                     {/* Entity Variables */}
                     {contextVariables.length > 0 && (
                         <div className="space-y-1 pt-2 border-t border-gray-800">
-                            <div className="px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Entity Variables</div>
+                            <div className="px-2 text-2xs font-bold text-gray-500 mb-1">Entity Variables</div>
                             {contextVariables.map((v, i) => (
                                 <div key={i} className="flex bg-gray-800 rounded mx-1 mb-1 border border-gray-700 overflow-hidden">
                                     <div className="px-2 py-1 bg-gray-900 flex items-center justify-center border-r border-gray-700">
                                         {v.blueprintType === 'Player' ? <Shield size={10} className="text-blue-400" /> : <Skull size={10} className="text-red-400" />}
                                     </div>
                                     <div className="flex-1 flex flex-col justify-center px-2 py-0.5 min-w-0">
-                                        <div className="text-[10px] font-bold text-gray-300 truncate">{v.name}</div>
-                                        <div className="text-[8px] text-gray-500 uppercase">{v.type}</div>
+                                        <div className="text-2xs font-bold text-gray-300 truncate">{v.name}</div>
+                                        <div className="text-2xs text-gray-500 ">{v.type}</div>
                                     </div>
                                     <div className="flex flex-col border-l border-gray-700">
-                                        <button onClick={() => handleAddVariableGet(v)} className="flex-1 px-1.5 hover:bg-gray-700 text-[8px] text-gray-400 hover:text-white uppercase font-bold transition-colors">GET</button>
+                                        <button onClick={() => handleAddVariableGet(v)} className="flex-1 px-1.5 hover:bg-gray-700 text-2xs text-gray-400 hover:text-white font-bold transition-colors">GET</button>
                                         <div className="h-px bg-gray-700"></div>
-                                        <button onClick={() => handleAddVariableSet(v)} className="flex-1 px-1.5 hover:bg-gray-700 text-[8px] text-gray-400 hover:text-white uppercase font-bold transition-colors">SET</button>
+                                        <button onClick={() => handleAddVariableSet(v)} className="flex-1 px-1.5 hover:bg-gray-700 text-2xs text-gray-400 hover:text-white font-bold transition-colors">SET</button>
                                     </div>
                                 </div>
                             ))}
@@ -813,8 +813,8 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                             <ArrowLeft size={16} />
                         </button>
                         <div>
-                            <h1 className="text-sm font-bold text-gray-200">LEVEL BLUEPRINT</h1>
-                            <div className="text-[10px] text-gray-500">Event Graph</div>
+                            <h1 className="text-sm font-bold text-gray-200">Level blueprint</h1>
+                            <div className="text-2xs text-gray-500">Event Graph</div>
                         </div>
                     </div>
                     <div className="flex items-center gap-2">

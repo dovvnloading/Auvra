@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { useRapier, type RapierContext } from '@react-three/rapier';
 import { PlayerInputState } from './usePlayerControls';
 import { BlueprintStat, DEFAULT_MODEL_IMPORT_SETTINGS, LevelObject } from '../../../types';
-import { PLAYER_PHYSICS_ID, physicsUserData } from '../../../runtime/physics';
+import { PLAYER_PHYSICS_ID, physicsUserData } from '../../../runtime/physicsQueries';
 import { flatGroundHeight, terrainSurfaceHeight } from '../../../runtime/terrainPhysics';
 
 interface PhysicsConfig {

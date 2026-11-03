@@ -365,6 +365,73 @@ describe('terrain heightfields', () => {
     expect(result.current.levels.levelObjects[0].terrainData?.heights).toEqual(samples);
   });
 
+  describe('undo', () => {
+    const terrainWith = (heights: number[]) => ({ terrainData: { resolution: 2, width: 10, depth: 10, heights } });
+    const heightsOf = (result: { current: { levels: { levelObjects: LevelObject[] } } }) => result.current.levels.levelObjects[0].terrainData?.heights;
+    const raised = (by: number) => samples.map((value) => value + by);
+
+    // A level of one terrain with two saved strokes on it.
+    const twoStrokes = async () => {
+      const editor = renderEditor([terrain({ resolution: 2, width: 10, depth: 10, heights: samples })]);
+      for (const by of [1, 2]) {
+        act(() => editor.result.current.levels.snapshotHistory());
+        act(() => editor.result.current.levels.updateLevelObject('terrain', terrainWith(raised(by))));
+        await act(() => editor.result.current.levels.flushPendingLevelEdits());
+      }
+      vi.mocked(dbOperations.updateLevelObject).mockClear();
+      return editor;
+    };
+
+    it('answers on screen before the host has written it', async () => {
+      const { result } = await twoStrokes();
+      let release: (value?: unknown) => void = () => undefined;
+      vi.mocked(dbOperations.updateLevelObject).mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }) as never);
+      let step: Promise<void> = Promise.resolve();
+      act(() => { step = result.current.levels.undo(); });
+      expect(heightsOf(result)).toEqual(raised(1));
+      expect(result.current.levels.canRedo).toBe(true);
+      await waitFor(() => expect(dbOperations.updateLevelObject).toHaveBeenCalledTimes(1));
+      release();
+      await act(() => step);
+      expect(heightsOf(result)).toEqual(raised(1));
+    });
+
+    it('walks back press by press, writing each step in order', async () => {
+      const { result } = await twoStrokes();
+      let release: (value?: unknown) => void = () => undefined;
+      vi.mocked(dbOperations.updateLevelObject).mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }) as never);
+      let first: Promise<void> = Promise.resolve();
+      let second: Promise<void> = Promise.resolve();
+      act(() => { first = result.current.levels.undo(); });
+      act(() => { second = result.current.levels.undo(); });
+      expect(heightsOf(result)).toEqual(samples);
+      expect(result.current.levels.canUndo).toBe(false);
+      await waitFor(() => expect(dbOperations.updateLevelObject).toHaveBeenCalledTimes(1));
+      release();
+      await act(async () => { await first; await second; });
+      const written = vi.mocked(dbOperations.updateLevelObject).mock.calls.map((call) => (call[1] as LevelObject).terrainData?.heights);
+      expect(written).toEqual([raised(1), samples]);
+    });
+
+    it('puts the screen and the history back when the host refuses it, and drops the presses behind it', async () => {
+      const { result } = await twoStrokes();
+      vi.mocked(dbOperations.updateLevelObject).mockRejectedValueOnce(new Error('disk full'));
+      await act(async () => {
+        const first = result.current.levels.undo();
+        const second = result.current.levels.undo();
+        await first;
+        await second;
+      });
+      expect(heightsOf(result)).toEqual(raised(2));
+      expect(result.current.levels.canUndo).toBe(true);
+      expect(result.current.levels.canRedo).toBe(false);
+      expect(mocks.addNotification).toHaveBeenCalledWith(expect.objectContaining({ type: 'error', message: expect.stringMatching(/Undo failed; no history was consumed/) }));
+      // Nothing was lost: the same step works once the host does.
+      await act(() => result.current.levels.undo());
+      expect(heightsOf(result)).toEqual(raised(1));
+    });
+  });
+
   it('upload remembered heights again once the stored document references another heightfield', async () => {
     const { dbOperations: realDb } = await vi.importActual<typeof import('../../utils/db')>('../../utils/db');
     const resolved = await resolveTerrainHeightfield(heightfield, async () => encodeTerrainHeightfield(samples, 3, 3).buffer);

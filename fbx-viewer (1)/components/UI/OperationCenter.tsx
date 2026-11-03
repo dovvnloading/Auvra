@@ -16,15 +16,15 @@ export const OperationCenter: React.FC = () => {
       {operations.map((operation) => {
         const percent = operation.progress === null ? null : Math.round(operation.progress * 100);
         return (
-          <div key={operation.id} className="pointer-events-auto overflow-hidden rounded-md border border-blue-500/35 bg-[#15191f]/95 shadow-2xl backdrop-blur">
+          <div key={operation.id} className="pointer-events-auto overflow-hidden rounded-md border border-blue-500/35 bg-well/95 shadow-2xl">
             <div className="flex items-start gap-3 px-4 py-3">
               <Loader2 size={17} className="mt-0.5 shrink-0 animate-spin text-blue-400" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-3">
                   <div className="truncate text-xs font-semibold text-gray-100">{operation.label}</div>
-                  {percent !== null && <div className="font-mono text-[10px] text-blue-300">{percent}%</div>}
+                  {percent !== null && <div className="font-mono text-2xs text-blue-300">{percent}%</div>}
                 </div>
-                <div className="mt-1 truncate text-[10px] text-gray-400">
+                <div className="mt-1 truncate text-2xs text-gray-400">
                   {operation.cancelling ? 'Cancelling safely…' : operation.detail || 'Working…'}
                 </div>
               </div>

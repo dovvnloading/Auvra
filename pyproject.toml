@@ -11,3 +11,14 @@ dependencies = [
 [tool.uv]
 package = false
 required-version = "==0.12.5"
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+# Mistakes rather than style: what will not run, and names that are wrong or left over.
+select = ["E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# Exercises what the package exports, so it imports all of it.
+"tests/providers/test_core.py" = ["F403", "F405"]

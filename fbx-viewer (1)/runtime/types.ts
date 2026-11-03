@@ -129,6 +129,8 @@ export interface LevelRuntimeProps {
     sessionKey: number;
     /** Rendered above the canvas, e.g. the authored HUD. */
     overlay?: ReactNode;
+    /** The host draws its own pause and game-over screens, so the built-in HUD only shows the player's state. */
+    hostMenus?: boolean;
     /** Applied to the session after it starts (load game). */
     restore?: SaveGameData | null;
     /** The player's saved options (sensitivity, volumes, bindings); without one the game settings' defaults apply. */
@@ -201,8 +203,16 @@ export interface HUDDocumentData {
 }
 
 /** Result of loading a project snapshot or game pack into runtime-ready content. */
+/** A model the project holds that could not be read when it was opened, and why. */
+export interface RefusedModel {
+    name: string;
+    reason: string;
+}
+
 export interface LoadedGameContent {
     content: GameContent;
+    /** Models left out because their files could not be read. They stay in the project. */
+    refusedModels: RefusedModel[];
     levels: LevelData[];
     objects: LevelObject[];
     hud: HUDDocumentData | null;

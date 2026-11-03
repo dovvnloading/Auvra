@@ -2,14 +2,19 @@
 import React, { useRef, useState, useMemo, useEffect, useCallback, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import { useThree } from '@react-three/fiber';
+import { renderView } from './renderBundle';
 import type { ThreeEvent } from '@react-three/fiber';
 import { Grid, TransformControls } from '@react-three/drei';
 import { LoadedModelData, LevelObject } from '../../types';
-import { InteractionMode, PaintMode, PaintSettings, TransformSettings, TransformTool, SculptSettings } from './types';
+import { InteractionMode, TransformSettings, TransformTool } from './types';
+import type { FoliageToolSettings } from './Foliage/foliageSettings';
+import { FoliageTool } from './Foliage/FoliageTool';
+import { FoliageLayer } from '../../runtime/foliageLayer';
+import type { TerrainToolSettings } from './Terrain/terrainTool';
 import { LevelObjectRenderer, LevelComponentPreviews } from './LevelObjectRenderer';
-import { FoliageBrushTool, type FoliagePlacement } from './FoliageBrushTool';
 import { TerrainObject } from './Terrain/TerrainObject';
-import { TerrainSculptor } from './Terrain/TerrainSculptor';
+import { TerrainBrushTool } from './Terrain/TerrainBrushTool';
+import { withStroke } from './Terrain/terrainEditLayers';
 import { InstancedLevelLayer } from './InstancedLevelLayer';
 import { LodEditorPreviewContext, useLodEditorPreview } from '../../runtime/components/lodComponents';
 import { AudioSystem } from './AudioSystem';
@@ -210,7 +215,7 @@ const InteractionLayer: React.FC<InteractionLayerProps> = ({
     const columnRay = useMemo(() => new THREE.Raycaster(), []);
 
     const planeConfig = useMemo(() => {
-        const isPlaceMode = interactionMode === 'place' || interactionMode === 'paint';
+        const isPlaceMode = interactionMode === 'place';
         const bgOffset = 2000;
 
         switch (viewId) {
@@ -439,10 +444,7 @@ const TerrainInstance: React.FC<{ onRegister: RegisterNode } & React.ComponentPr
 interface EnvironmentSceneProps {
     activeModel: LoadedModelData | null;
     interactionMode: InteractionMode;
-    paintMode: PaintMode;
     onPlace: (pos: THREE.Vector3, rotY: number) => void;
-    onPaint: (placements: FoliagePlacement[]) => Promise<unknown> | void;
-    onErase: (ids: string[]) => Promise<unknown> | void;
     onSelectObject: (id: string | null) => void;
     /** Shift/Ctrl/Cmd-click; without it a modifier click selects like a plain click. */
     onToggleSelect?: (id: string) => void;
@@ -451,8 +453,10 @@ interface EnvironmentSceneProps {
     levelObjects: LevelObject[];
     updateLevelObject: (id: string, updates: Partial<LevelObject>) => void;
     transformSettings: TransformSettings;
-    paintSettings?: PaintSettings;
-    sculptSettings?: SculptSettings;
+    foliageSettings?: FoliageToolSettings;
+    onFoliageSettingsChange?: (settings: FoliageToolSettings) => void;
+    sculptSettings?: TerrainToolSettings;
+    onSculptSettingsChange?: (settings: TerrainToolSettings) => void;
     onSnapshot: () => void;
     /** The primary selection: it carries the gizmo. */
     selectedId: string | null;
@@ -478,21 +482,33 @@ interface DragState {
     followers: { node: THREE.Object3D; startWorld: THREE.Matrix4 }[];
 }
 
+/** Keeps what a render starts from up to date with the view. */
+const RenderViewTracker: React.FC = () => {
+    const scene = useThree(state => state.scene);
+    const camera = useThree(state => state.camera);
+    const renderer = useThree(state => state.gl);
+    useEffect(() => {
+        renderView.scene = scene;
+        renderView.camera = camera;
+        renderView.renderer = renderer as unknown as THREE.WebGLRenderer;
+    }, [scene, camera, renderer]);
+    return null;
+};
+
 export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
     activeModel,
     interactionMode,
-    paintMode,
     onPlace,
-    onPaint,
-    onErase,
     onSelectObject,
     onToggleSelect,
     models,
     levelObjects,
     updateLevelObject,
     transformSettings,
-    paintSettings,
+    foliageSettings,
+    onFoliageSettingsChange,
     sculptSettings,
+    onSculptSettingsChange,
     onSnapshot,
     selectedId,
     selectedIds,
@@ -721,18 +737,20 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
     };
 
     // Filter objects by type
-    const { foliageObjects, propObjects, markerObjects, terrainObjects } = useMemo(() => {
+    const { foliageObjects, propObjects, markerObjects, terrainObjects, foliageSet } = useMemo(() => {
         const foliage: LevelObject[] = [];
         const props: LevelObject[] = [];
         const markers: LevelObject[] = [];
         const terrains: LevelObject[] = [];
+        let set: LevelObject | null = null;
         resolvedObjects.forEach(obj => {
-            if (obj.type === 'foliage') foliage.push(obj);
+            if (obj.type === 'foliage_set') set = obj;
+            else if (obj.type === 'foliage') foliage.push(obj);
             else if (isMarkerObject(obj)) markers.push(obj);
             else if (obj.type === 'terrain') terrains.push(obj);
             else props.push(obj);
         });
-        return { foliageObjects: foliage, propObjects: props, markerObjects: markers, terrainObjects: terrains };
+        return { foliageObjects: foliage, propObjects: props, markerObjects: markers, terrainObjects: terrains, foliageSet: set as LevelObject | null };
     }, [resolvedObjects]);
 
     const promotedObjects = useMemo(
@@ -760,13 +778,11 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
 
     // Check if current view is active for interaction
     const isActiveView = viewId === activeViewId;
-    const objectsInteractive = isActiveView && interactionMode !== 'place' && interactionMode !== 'paint';
+    const objectsInteractive = isActiveView && interactionMode !== 'place' && interactionMode !== 'paint' && interactionMode !== 'sculpt';
     const highlightedIds = isActiveView ? selection : EMPTY_IDS;
-    // Objects a foliage erase stroke has taken, hidden until the stroke is saved.
-    const [erasingIds, setErasingIds] = useState<ReadonlySet<string>>(EMPTY_IDS);
     const layerHiddenIds = useMemo(
-        () => (lodHiddenIds.size || erasingIds.size ? new Set([...liftedIds, ...lodHiddenIds, ...erasingIds]) : liftedIds),
-        [liftedIds, lodHiddenIds, erasingIds]
+        () => (lodHiddenIds.size ? new Set([...liftedIds, ...lodHiddenIds]) : liftedIds),
+        [liftedIds, lodHiddenIds]
     );
 
     const handleInstancedSelect = useCallback((id: string, event: unknown) => {
@@ -777,6 +793,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
         <LodEditorPreviewContext.Provider value={lodPreview}>
             {/* Dynamic Sky System */}
             <SkySystem levelObjects={resolvedObjects} />
+            <RenderViewTracker />
             <LevelLightVolume bakedLighting={bakedLighting} />
             <LevelDynamicGi levelObjects={resolvedObjects} />
             <LightBakeRunner />
@@ -812,37 +829,46 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                     visible={!lodHiddenIds.has(terrain.id)}
                     receiveShadow
                     castShadow
+                    lod
                     onClick={(e) => {
                         // Like every other selection in this scene, only the active view selects.
-                        if (isActiveView && !gizmoPointer.owns() && (interactionMode === 'select' || interactionMode === 'sculpt')) {
+                        if (isActiveView && !gizmoPointer.owns() && interactionMode === 'select') {
                             e.stopPropagation();
-                            // Sculpt mode picks the sculpt target; it never builds a multi-selection.
-                            if (interactionMode === 'select') handleSelect(terrain.id, e);
-                            else onSelectObject(terrain.id);
+                            handleSelect(terrain.id, e);
                         }
                     }}
-                    sculptingEnabled={interactionMode === 'sculpt' && selectedId === terrain.id && isActiveView}
-                    sculptSettings={sculptSettings}
-                    onHeightUpdate={(id, heights) => {
-                        const source = objectById.get(id);
-                        if (source) updateLevelObject(id, { terrainData: { ...source.terrainData!, heights } });
-                    }}
-                    onStrokeStart={onSnapshot}
                 />
             ))}
 
-            {/* Terrain Sculptor (Global Overlay Logic) */}
-            {interactionMode === 'sculpt' && sculptSettings && (
-                <TerrainSculptor
+            {/* The Terrain tool's brush */}
+            {interactionMode === 'sculpt' && isActiveView && sculptSettings && onSculptSettingsChange && (
+                <TerrainBrushTool
                     settings={sculptSettings}
-                    onPaintStrokeEnd={(id, splat) => {
-                        const terr = objectById.get(id);
-                        if (terr) updateLevelObject(id, { terrainData: { ...terr.terrainData!, splat } });
+                    onSettingsChange={onSculptSettingsChange}
+                    enabled={sculptSettings.tab !== 'manage'}
+                    onHeightsCommit={(id, heights, before) => {
+                        const source = objectById.get(id);
+                        if (source) updateLevelObject(id, { terrainData: withStroke(source.terrainData!, before, heights) });
+                    }}
+                    onPaintCommit={(id, splat, splat2) => {
+                        const source = objectById.get(id);
+                        if (source) updateLevelObject(id, { terrainData: { ...source.terrainData!, splat, ...(splat2 ? { splat2 } : {}) } });
+                    }}
+                    onHolesCommit={(id, holes) => {
+                        const source = objectById.get(id);
+                        if (!source?.terrainData) return;
+                        const { holes: _previous, holemap: _stored, ...rest } = source.terrainData;
+                        updateLevelObject(id, { terrainData: holes ? { ...rest, holes } : rest });
                     }}
                     onStrokeStart={onSnapshot}
-                    enabled={isActiveView}
+                    onTerrainTouched={(id) => {
+                        if (selectedId !== id) onSelectObject(id);
+                    }}
                 />
             )}
+
+            {/* The level's painted foliage */}
+            {foliageSet && <FoliageLayer set={foliageSet} models={models} />}
 
             {/* Render Foliage (Instanced) */}
             <InstancedLevelLayer
@@ -860,6 +886,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                 levelObjects={propObjects}
                 onSelect={handleInstancedSelect}
                 interactive={objectsInteractive}
+                placementSurface
                 hiddenIds={layerHiddenIds}
                 selectedIds={highlightedIds}
             />
@@ -938,16 +965,18 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                         interactionMode={interactionMode}
                     />
 
-                    {interactionMode === 'paint' && paintSettings && (
-                        <FoliageBrushTool
-                            activeModel={activeModel}
-                            mode={paintMode}
-                            existingObjects={[...foliageObjects, ...propObjects]}
+                    {interactionMode === 'paint' && foliageSettings && onFoliageSettingsChange && (
+                        <FoliageTool
+                            settings={foliageSettings}
+                            onSettingsChange={onFoliageSettingsChange}
+                            set={foliageSet}
                             levelObjects={resolvedObjects}
-                            settings={paintSettings}
-                            onPaint={onPaint}
-                            onErase={onErase}
-                            onPendingEraseChange={setErasingIds}
+                            transformSettings={transformSettings}
+                            enabled={isActiveView}
+                            onSnapshot={onSnapshot}
+                            onTypesChange={(types) => {
+                                if (foliageSet) updateLevelObject(foliageSet.id, { foliageData: { types } });
+                            }}
                         />
                     )}
 

@@ -22,7 +22,7 @@ export const HierarchyPanel: React.FC = () => {
              {placedModels.length === 0 && (
                  <div className="text-center py-10 opacity-50">
                      <p className="text-xs text-gray-500">Scene is empty.</p>
-                     <p className="text-[10px] text-gray-600 mt-2">Add assets from the Library below.</p>
+                     <p className="text-2xs text-gray-600 mt-2">Add assets from the Library below.</p>
                  </div>
              )}
 
@@ -67,8 +67,8 @@ export const HierarchyPanel: React.FC = () => {
                                  {modelAttachments.map(att => (
                                      <div key={att.id} className="flex items-center gap-2 px-2 py-1 text-gray-500 hover:text-gray-300 rounded hover:bg-gray-800/50 cursor-default group">
                                          <Paperclip size={10} className="-scale-y-100" />
-                                         <span className="text-[11px] truncate flex-1">{att.name}</span>
-                                         <span className="text-[9px] text-gray-600 bg-gray-900 px-1 rounded">{att.boneName}</span>
+                                         <span className="text-2xs truncate flex-1">{att.name}</span>
+                                         <span className="text-2xs text-gray-600 bg-gray-900 px-1 rounded">{att.boneName}</span>
                                          <button 
                                             onClick={() => removeAttachment(att.id)}
                                             className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-white p-1"

@@ -4,11 +4,12 @@ import hashlib
 import math
 import os
 import re
-import shutil, uuid, stat
+import uuid, stat
 import json
 import struct
 import sys
 import threading
+from .errors import AssetContentError
 from array import array
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,24 @@ SPLATMAP_MAGIC = b"AUVRASP1"
 SPLATMAP_ENCODING = "rgba8"
 _SPLATMAP_CHANNELS = 4
 
+# Foliage instances: a 16-byte header (magic, uint32 count, uint32 floats per
+# instance) followed by count * floats little-endian Float32 values.
+FOLIAGE_MIME = "application/vnd.auvra.foliage"
+FOLIAGE_MAGIC = b"AUVRAFO1"
+FOLIAGE_ENCODING = "float32le-10"
+_FOLIAGE_FLOATS = 10
+
+# Weights painted on a skinned model: a 16-byte header (magic, uint32 places
+# painted, uint32 length of the bone names), the bone names as a JSON array in
+# UTF-8 padded with spaces to four bytes, then three float32 per place (where it
+# stands), four uint16 per place (its bones, 65535 where it has run out) and four
+# float32 per place (their shares), all little-endian.
+SKIN_PAINT_MIME = "application/vnd.auvra.skinpaint"
+SKIN_PAINT_MAGIC = b"AUVRASK1"
+SKIN_PAINT_ENCODING = "places-v1"
+_SKIN_PAINT_NO_BONE = 0xFFFF
+_SKIN_PAINT_PLACE_BYTES = 12 + 8 + 16
+
 # Baked light volumes (a level's light probes): a 20-byte header (magic, uint32
 # x, y and z probe counts) followed by 12 float32 spherical harmonics
 # coefficients per probe (four RGB bands), x fastest, all little-endian.
@@ -52,6 +71,7 @@ GLTF_JSON_MIME = "model/gltf+json"
 OBJ_MIME = "model/obj"
 FBX_MIME = "model/fbx"
 MODEL_MIMES = frozenset({GLB_MIME, GLTF_JSON_MIME, OBJ_MIME, FBX_MIME})
+GENERIC_MIME = "application/octet-stream"
 _TEXT_MODEL_MIMES = frozenset({GLTF_JSON_MIME, OBJ_MIME})
 
 # Verifying a blob is a full SHA-256 pass, and every project edit checks each
@@ -113,19 +133,23 @@ class AssetStore:
             if size is not None and total != size:
                 raise ValueError("asset size does not match declared size")
             detected = sniff_mime(bytes(prefix))
-            known_media = {"image/png", "image/jpeg", "image/webp", "audio/wav", "audio/ogg", GLB_MIME, HEIGHTFIELD_MIME, SPLATMAP_MIME, LIGHT_VOLUME_MIME}
+            known_media = {"image/png", "image/jpeg", "image/webp", "audio/wav", "audio/ogg", GLB_MIME, HEIGHTFIELD_MIME, SPLATMAP_MIME, FOLIAGE_MIME, LIGHT_VOLUME_MIME, SKIN_PAINT_MIME}
             if mime in known_media and detected != mime:
-                raise ValueError("asset MIME does not match its content")
+                raise AssetContentError("asset MIME does not match its content")
             declared = mime.lower() if isinstance(mime, str) else None
             if declared in _TEXT_MODEL_MIMES and not text_model_matches(declared, bytes(prefix)):
-                raise ValueError("asset MIME does not match its content")
-            mime = mime or detected or "application/octet-stream"
+                raise AssetContentError("asset MIME does not match its content")
+            mime = mime or detected or GENERIC_MIME
             if mime == HEIGHTFIELD_MIME:
                 validate_heightfield_file(tmp)
             elif mime == SPLATMAP_MIME:
                 validate_splatmap_file(tmp)
+            elif mime == FOLIAGE_MIME:
+                validate_foliage_file(tmp)
             elif mime == LIGHT_VOLUME_MIME:
                 validate_light_volume_file(tmp)
+            elif mime == SKIN_PAINT_MIME:
+                validate_skin_paint_file(tmp)
             asset_id = digest.hexdigest(); target = self.path_for(asset_id)
             target.parent.mkdir(parents=True, exist_ok=True)
             # Serialize same-digest ingestion with manifest publication.  An
@@ -275,8 +299,13 @@ class AssetStore:
                 except (OSError, ValueError) as exc: raise ValueError("asset manifest is corrupt") from exc
                 if not isinstance(values, dict): raise ValueError("asset manifest is corrupt")
             candidate = {"size": size, "mime": mime, "name": name}
-            if asset_id in values and values[asset_id] != candidate:
-                raise ValueError("asset metadata conflicts with existing content")
+            existing = values.get(asset_id)
+            if existing is not None:
+                # The same bytes may come again under another name, or saying what they are where they first did not.
+                known = existing.get("mime")
+                if known != mime and GENERIC_MIME not in (known, mime):
+                    raise ValueError("asset metadata conflicts with existing content")
+                candidate = {"size": size, "mime": mime if known == GENERIC_MIME else known, "name": existing.get("name") or name}
             values[asset_id] = candidate
             temp = manifest.with_name(f"manifest.json.tmp-{os.getpid()}-{uuid.uuid4().hex}")
             try:
@@ -298,7 +327,9 @@ def sniff_mime(prefix: bytes) -> str | None:
     if prefix.startswith(b"glTF"): return "model/gltf-binary"
     if prefix.startswith(HEIGHTFIELD_MAGIC): return HEIGHTFIELD_MIME
     if prefix.startswith(SPLATMAP_MAGIC): return SPLATMAP_MIME
+    if prefix.startswith(FOLIAGE_MAGIC): return FOLIAGE_MIME
     if prefix.startswith(LIGHT_VOLUME_MAGIC): return LIGHT_VOLUME_MIME
+    if prefix.startswith(SKIN_PAINT_MAGIC): return SKIN_PAINT_MIME
     return None
 
 def text_model_matches(mime: str, prefix: bytes) -> bool:
@@ -413,6 +444,26 @@ def validate_splatmap_file(path: Path) -> None:
         if os.fstat(stream.fileno()).st_size != _HEIGHTFIELD_HEADER.size + _SPLATMAP_CHANNELS * columns * rows:
             raise ValueError("terrain splat map asset size does not match its dimensions")
 
+def validate_foliage_file(path: Path, *, chunk_size: int = 1024 * 1024) -> None:
+    """Structurally validate foliage instances: header, size and finite values."""
+
+    with path.open("rb") as stream:
+        header = stream.read(_HEIGHTFIELD_HEADER.size)
+        if len(header) != _HEIGHTFIELD_HEADER.size:
+            raise ValueError("foliage asset is truncated")
+        magic, count, floats = _HEIGHTFIELD_HEADER.unpack(header)
+        if magic != FOLIAGE_MAGIC:
+            raise ValueError("foliage asset has an unknown format")
+        if floats != _FOLIAGE_FLOATS:
+            raise ValueError("foliage asset has an unknown layout")
+        if os.fstat(stream.fileno()).st_size != _HEIGHTFIELD_HEADER.size + 4 * floats * count:
+            raise ValueError("foliage asset size does not match its count")
+        step = chunk_size - chunk_size % 4
+        while block := stream.read(step):
+            for value in struct.iter_unpack("<f", block):
+                if not math.isfinite(value[0]):
+                    raise ValueError("foliage values must be finite")
+
 def validate_light_volume_file(path: Path, *, chunk_size: int = 1024 * 1024) -> None:
     """Structurally validate a baked light volume: header, dimensions, size and finite samples."""
 
@@ -434,6 +485,41 @@ def validate_light_volume_file(path: Path, *, chunk_size: int = 1024 * 1024) -> 
         for block in iter(lambda: stream.read(chunk_size), b""):
             if not all(map(math.isfinite, _float32_samples(block))):
                 raise ValueError("light volume samples must be finite")
+
+def validate_skin_paint_file(path: Path, *, chunk_size: int = 1024 * 1024) -> None:
+    """Structurally validate painted weights: header, size, bone names, bones in range and finite numbers."""
+
+    with path.open("rb") as stream:
+        header = stream.read(_HEIGHTFIELD_HEADER.size)
+        if len(header) != _HEIGHTFIELD_HEADER.size:
+            raise ValueError("painted weights asset is truncated")
+        magic, count, names_length = _HEIGHTFIELD_HEADER.unpack(header)
+        if magic != SKIN_PAINT_MAGIC:
+            raise ValueError("painted weights asset has an unknown format")
+        if names_length % 4:
+            raise ValueError("painted weights asset has a misaligned layout")
+        if os.fstat(stream.fileno()).st_size != _HEIGHTFIELD_HEADER.size + names_length + count * _SKIN_PAINT_PLACE_BYTES:
+            raise ValueError("painted weights asset size does not match its count")
+        try:
+            names = json.loads(stream.read(names_length).decode("utf-8"))
+        except ValueError as exc:
+            raise ValueError("painted weights asset has unreadable bone names") from exc
+        if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+            raise ValueError("painted weights asset has unreadable bone names")
+        chunk_size -= chunk_size % 4
+        floats_left = count * 3
+        while floats_left:
+            block = stream.read(min(chunk_size, floats_left * 4))
+            floats_left -= len(block) // 4
+            if not all(map(math.isfinite, _float32_samples(block))):
+                raise ValueError("painted weights places must be finite")
+        for _ in range(count):
+            for bone in struct.unpack("<4H", stream.read(8)):
+                if bone != _SKIN_PAINT_NO_BONE and bone >= len(names):
+                    raise ValueError("painted weights asset names a bone it does not have")
+        for block in iter(lambda: stream.read(chunk_size), b""):
+            if not all(share >= 0.0 and share <= 1.0 for share in _float32_samples(block)):
+                raise ValueError("painted weights shares must be between 0 and 1")
 
 def _is_reparse(path: Path) -> bool:
     try: return bool(getattr(path.stat(), "st_file_attributes", 0) & 0x400)

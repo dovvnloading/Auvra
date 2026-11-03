@@ -34,7 +34,7 @@ export const WorldHealthBar: React.FC<WorldHealthBarProps> = ({
             style={{ transform: `scale(${scale})` }}
         >
             {/* Main Bar */}
-            <div className="w-20 h-1 bg-gray-900/80 border border-gray-950/50 rounded-full overflow-hidden backdrop-blur-sm">
+            <div className="w-20 h-1 bg-gray-900/80 border border-gray-950/50 rounded-full overflow-hidden">
                 <div 
                     className={`h-full ${colorClass} transition-all duration-200 ease-out shadow-[0_0_4px_rgba(255,255,255,0.2)]`} 
                     style={{ width: `${percent}%` }}
@@ -43,7 +43,7 @@ export const WorldHealthBar: React.FC<WorldHealthBarProps> = ({
             
             {/* Optional Value Text - only shows if damaged to reduce clutter */}
             {percent < 100 && (
-                <span className="text-[8px] font-mono font-bold text-white drop-shadow-md bg-black/40 px-1 rounded">
+                <span className="text-2xs font-mono font-bold text-white drop-shadow-md bg-black/40 px-1 rounded">
                     {Math.ceil(current)}
                 </span>
             )}

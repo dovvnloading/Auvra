@@ -12,7 +12,7 @@ const MATCH_OPTIONS = [
     { label: 'Any', value: 'any' },
 ];
 
-const LABEL_CLASS = 'text-[10px] uppercase text-gray-500 font-bold tracking-wider flex items-center gap-1.5';
+const LABEL_CLASS = 'text-2xs text-gray-500 font-bold flex items-center gap-1.5';
 const FIELD_CLASS = 'w-full bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 p-2 focus:outline-none focus:border-gray-500';
 
 const defaultConditionValue = (variable: GraphVariable | undefined): number | boolean =>
@@ -89,7 +89,7 @@ export const TransitionInspector: React.FC<TransitionInspectorProps> = ({
                     </div>
                     <div className="min-w-0 flex-1">
                         <h3 className="text-sm font-bold text-white truncate">Transition</h3>
-                        <div className="flex items-center gap-2 mt-1 text-[10px] text-gray-400">
+                        <div className="flex items-center gap-2 mt-1 text-2xs text-gray-400">
                             <span className="truncate max-w-[60px]">{transition.anyState ? 'Any State' : fromState?.name}</span>
                             <ArrowRight size={10} />
                             <span className="truncate max-w-[60px]">{toState?.name}</span>
@@ -127,7 +127,7 @@ export const TransitionInspector: React.FC<TransitionInspectorProps> = ({
                         onValue={(value) => updateTransition({ exitTime: value === null ? undefined : Math.min(1, Math.max(0, value)) })}
                         className={FIELD_CLASS}
                     />
-                    <p className="text-[10px] text-gray-600">Fires once the source clip reaches this point. With no conditions, the state returns on its own (e.g. attack back to idle).</p>
+                    <p className="text-2xs text-gray-600">Fires once the source clip reaches this point. With no conditions, the state returns on its own (e.g. attack back to idle).</p>
                 </div>
 
                 <div className="space-y-1.5">
@@ -143,7 +143,7 @@ export const TransitionInspector: React.FC<TransitionInspectorProps> = ({
                             className="sr-only"
                         />
                     </label>
-                    <p className="text-[10px] text-gray-600">Checked from every state except its target; the source state is ignored.</p>
+                    <p className="text-2xs text-gray-600">Checked from every state except its target; the source state is ignored.</p>
                 </div>
 
                 <div className="space-y-1.5">
@@ -170,12 +170,12 @@ export const TransitionInspector: React.FC<TransitionInspectorProps> = ({
                             />
                         </div>
                     </div>
-                    <p className="text-[10px] text-gray-600">Match: whether every condition or any one must hold. Priority: the highest ready transition wins; ties go to the earlier one.</p>
+                    <p className="text-2xs text-gray-600">Match: whether every condition or any one must hold. Priority: the highest ready transition wins; ties go to the earlier one.</p>
                 </div>
 
                 <div className="space-y-3">
                      <div className="flex items-center justify-between px-1">
-                        <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider">Conditions</label>
+                        <label className="text-2xs text-gray-500 font-bold ">Conditions</label>
                         <button
                             onClick={() => {
                                 if (graph.variables.length === 0) return;
@@ -183,7 +183,7 @@ export const TransitionInspector: React.FC<TransitionInspectorProps> = ({
                                 const newCond: GraphCondition = { variableId: variable.id, operator: '==', value: defaultConditionValue(variable) };
                                 updateTransition({ conditions: [...transition.conditions, newCond] });
                             }}
-                            className="text-[10px] px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-gray-300 hover:text-white transition-colors flex items-center gap-1"
+                            className="text-2xs px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-gray-300 hover:text-white transition-colors flex items-center gap-1"
                         >
                             <Plus size={10} /> Add
                         </button>
@@ -236,7 +236,7 @@ export const TransitionInspector: React.FC<TransitionInspectorProps> = ({
                                             onValue={(value) => {
                                                 if (value !== null) updateCondition(idx, { value });
                                             }}
-                                            className="bg-gray-900 border border-gray-600 rounded text-[10px] text-gray-200 w-16 px-1.5 py-1 focus:outline-none"
+                                            className="bg-gray-900 border border-gray-600 rounded text-2xs text-gray-200 w-16 px-1.5 py-1 focus:outline-none"
                                          />
                                      )}
 
@@ -254,7 +254,7 @@ export const TransitionInspector: React.FC<TransitionInspectorProps> = ({
                          })}
                          {transition.conditions.length === 0 && (
                             <div className="text-center py-4 border border-dashed border-gray-800 rounded bg-gray-900/50">
-                                <p className="text-[10px] text-gray-600 italic">
+                                <p className="text-2xs text-gray-600 italic">
                                     {typeof transition.exitTime === 'number'
                                         ? 'No conditions: fires when the clip reaches its exit time'
                                         : 'No conditions: add a condition or an exit time, or this transition never fires'}

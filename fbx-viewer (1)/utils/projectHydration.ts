@@ -1,15 +1,17 @@
 import * as THREE from 'three';
-import type { AttachmentData, AudioData, Blueprint, LevelData, LevelObject, LoadedModelData, PrefabData, SocketData, TerrainData, TextureData } from '../types';
-import { importPhaseLabel, loadFBXFile, type ModelLoadOptions } from './modelLoader';
+import type { AttachmentData, AudioData, Blueprint, LevelData, LevelObject, LoadedModelData, ModelSourceImage, PrefabData, SocketData, TerrainData, TextureData } from '../types';
+import { importFailureMessage, importPhaseLabel, loadFBXFile, type ModelLoadOptions } from './modelLoader';
 import { resolveTerrainHeightfield } from './terrainHeightfield';
 import { isTerrainHeightfieldPending } from './terrainHeightfieldCodec';
-import { resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplat';
-import { isTerrainSplatPending } from '../components/Environment/Terrain/terrainSplatCodec';
-import { applyModelImportSettings, stripGeometry } from './processing/ModelTransforms';
+import { resolveTerrainHolemap, resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplat';
+import { isTerrainHolesPending, isTerrainSplat2Pending, isTerrainSplatPending } from '../components/Environment/Terrain/terrainSplatCodec';
+import { isFoliageTypePending, resolveFoliageInstances } from '../runtime/foliage';
+import { applyModelImportSettings, convertOptionsFor, stripGeometry } from './processing/ModelTransforms';
 import { generateThumbnail } from './thumbnailGenerator';
 import { disposeModel, disposeObject } from './processing/ModelLifecycle';
 import { applyStoredClipNames, mirrorModelClips, prepareAnimationClips } from './animationBinding';
-import { hydrateMaterialOverrides, overrideTextureFlipY } from './materialOverrides';
+import { cutAttachedClips, noteAttachedClips, wholeClips } from './clipRanges';
+import { drawAsPaintedTexture, hydrateMaterialOverrides, overrideTextureFlipY } from './materialOverrides';
 import {
   assetDiagnosticAttributes,
   diagnosticErrorType,
@@ -23,8 +25,10 @@ import {
   type GameContent,
   type HUDDocumentData,
   type LoadedGameContent,
+  type RefusedModel,
 } from '../runtime/types';
 import { MATERIALS_DOMAIN, materialLibrary, readMaterialAsset, type MaterialAsset } from '../runtime/materials/materialLibrary';
+import { loadSkinPaint } from './skinPaint/modelSkin';
 import { setLightVolumeSource } from '../runtime/lighting/lightVolumeLoader';
 
 /** The HUD document in the project 'hud' domain. */
@@ -40,6 +44,8 @@ export type GameContentProgress = (
 export interface LoadGameContentOptions {
   /** Resolves a project asset id to a fetchable URL (a host ticket or a game pack file). */
   resolveAssetUrl(assetId: string, diagnostics?: DiagnosticContext): Promise<string>;
+  /** Reads a project asset where there is more to it than fetching its URL. */
+  fetchAsset?(assetId: string, init: { signal?: AbortSignal; diagnostics?: DiagnosticContext }): Promise<Response>;
   /** Library thumbnails are only needed by the editor. */
   generateThumbnails: boolean;
   onProgress?: GameContentProgress;
@@ -83,6 +89,8 @@ export interface GameContentLoader {
   content(): GameContent;
   /** The 'objects' documents, with the terrains resolved so far. */
   objects(): LevelObject[];
+  /** Models whose files could not be read, which the game goes on without. */
+  refusedModels(): RefusedModel[];
 }
 
 interface TerrainAssetReference {
@@ -119,6 +127,11 @@ export function createGameContentLoader(
   options: LoadGameContentOptions,
 ): GameContentLoader {
   const { resolveAssetUrl, generateThumbnails, onProgress, signal, diagnostics, isCurrent, resolveTerrains = false, releaseAssetUrl, dropSourceFiles = false, preparedAssetFor } = options;
+  const fetchProjectAsset = options.fetchAsset ?? (async (assetId: string, init: { signal?: AbortSignal; diagnostics?: DiagnosticContext }) => {
+    const url = await resolveAssetUrl(assetId, init.diagnostics);
+    assertCurrent();
+    return fetch(url, { method: 'GET', signal: init.signal });
+  });
   const assertCurrent = () => {
     throwIfAborted(signal);
     if (isCurrent && !isCurrent()) throw new DOMException('Project loading was superseded.', 'AbortError');
@@ -132,9 +145,8 @@ export function createGameContentLoader(
 
   const loadProjectAssetFile = async (assetId: string, name: string, trace?: DiagnosticContext): Promise<File> => {
     throwIfAborted(signal);
-    const url = await resolveAssetUrl(assetId, trace);
+    const response = await fetchProjectAsset(assetId, { signal, diagnostics: trace });
     assertCurrent();
-    const response = await fetch(url, { method: 'GET', signal });
     if (!response.ok) throw new Error(`Asset download failed (${response.status})`);
     const blob = await response.blob();
     releaseAssetUrl?.(assetId);
@@ -144,8 +156,17 @@ export function createGameContentLoader(
   /**
    * Reads and loads a model file: its prepared copy where the game has one. A copy that cannot be
    * read or parsed is logged and the source used, so only the source failing fails the asset.
+   * `onRead` hears of each file as reading it starts, and of null when a copy failed and the source
+   * is fetched instead. `images` fetches what the source names beside it, which a copy already holds.
    */
-  const loadModelAsset = async (assetId: string, name: string, trace: DiagnosticContext | undefined, loadOptions: ModelLoadOptions, onRead: (file: File) => void): Promise<LoadedModelData> => {
+  const loadModelAsset = async (
+    assetId: string,
+    name: string,
+    trace: DiagnosticContext | undefined,
+    loadOptions: ModelLoadOptions,
+    onRead: (file: File | null) => void,
+    images?: () => Promise<File[]>,
+  ): Promise<LoadedModelData> => {
     const preparedId = preparedAssetFor?.(assetId);
     if (preparedId) {
       try {
@@ -157,12 +178,14 @@ export function createGameContentLoader(
         assertCurrent();
         if (diagnosticErrorType(error) === 'AbortError') throw error;
         recordAssetDiagnostic('prepared_model_unreadable', error, 'source_read', { fallback: 'source' });
+        onRead(null);
       }
     }
     const file = await loadProjectAssetFile(assetId, name, trace);
+    const beside = images ? await images() : undefined;
     assertCurrent();
     onRead(file);
-    return loadFBXFile(file, loadOptions);
+    return loadFBXFile(file, beside ? { ...loadOptions, images: beside } : loadOptions);
   };
   const loadProjectAssetUrl = async (assetId: string, trace?: DiagnosticContext): Promise<string> => {
     const file = await loadProjectAssetFile(assetId, assetId, trace);
@@ -173,9 +196,8 @@ export function createGameContentLoader(
   };
   const loadProjectAssetBytes = async (assetId: string, trace?: DiagnosticContext): Promise<ArrayBuffer> => {
     throwIfAborted(signal);
-    const url = await resolveAssetUrl(assetId, trace);
+    const response = await fetchProjectAsset(assetId, { signal, diagnostics: trace });
     assertCurrent();
-    const response = await fetch(url, { method: 'GET', signal });
     if (!response.ok) throw new Error(`Asset download failed (${response.status})`);
     const bytes = await response.arrayBuffer();
     releaseAssetUrl?.(assetId);
@@ -196,6 +218,8 @@ export function createGameContentLoader(
     report(detail, 0, 'library_publication', diagnostic);
   };
   let assetFailureCount = 0;
+  const refusedModels: RefusedModel[] = [];
+  const refusedIds = new Set<string>();
   const traceAsset = (assetAlias: string) => diagnostics?.operationId && diagnostics.traceId
     ? { operationId: diagnostics.operationId, traceId: diagnostics.traceId, assetAlias }
     : undefined;
@@ -235,7 +259,7 @@ export function createGameContentLoader(
       .filter((doc) => (!selection || Boolean(kind?.has(doc?.id))) && !holds(held, doc?.id));
     const wantedTextures = wantedDocuments('textures', selection?.textures, textures);
     const wantedAudio = wantedDocuments('audio', selection?.audio, audioAssets);
-    const wantedModels = wantedDocuments('models', selection?.models, models);
+    const wantedModels = wantedDocuments('models', selection?.models, models).filter((doc) => !refusedIds.has(doc?.id));
     const wantedAttachments = wantedDocuments('attachments', selection?.attachments, attachments);
     const wantedModelIds = new Set(wantedModels.map((doc) => doc?.id));
     const wantedAnimations = selection ? animationDocuments.filter((animation) => wantedModelIds.has(animation?.modelId)) : animationDocuments;
@@ -246,6 +270,9 @@ export function createGameContentLoader(
         if (!resolvesLevel(object)) continue;
         if (isTerrainHeightfieldPending(object?.terrainData)) terrainWork += 1;
         if (isTerrainSplatPending(object?.terrainData)) terrainWork += 1;
+        if (isTerrainSplat2Pending(object?.terrainData)) terrainWork += 1;
+        if (isTerrainHolesPending(object?.terrainData)) terrainWork += 1;
+        terrainWork += object?.foliageData?.types.filter(isFoliageTypePending).length ?? 0;
       }
     }
     assetWork = Math.max(1, wantedTextures.length + wantedAudio.length + wantedModels.length + wantedAnimations.length + wantedAttachments.length + terrainWork);
@@ -297,10 +324,13 @@ export function createGameContentLoader(
       let diagnostic: DiagnosticAttributes = { assetAlias, assetKind: item.category === 'Animation' ? 'animation' : 'model' };
       let activePhase: string = 'source_read';
       let loadedModel: LoadedModelData | null = null;
+      let reading = false;
       try {
         report(`Downloading model — ${item.name}`, 0.05, activePhase, diagnostic);
+        const sourceImages: ModelSourceImage[] = Array.isArray(item.sourceImages) ? item.sourceImages : [];
         const loaded = await loadModelAsset(item.assetId, item.name, traceAsset(assetAlias), {
           normalize: item.category !== 'Animation',
+          convert: convertOptionsFor(item.category === 'Animation' ? undefined : item.importSettings),
           manualId: item.id,
           // An animation model keeps only its clips, so compressing its textures would be wasted.
           compressTextures: compressTextures && item.category !== 'Animation',
@@ -311,20 +341,42 @@ export function createGameContentLoader(
             activePhase = phase;
             report(`${importPhaseLabel(phase)} — ${item.name}`, progress * 0.8 + 0.1, phase, diagnostic);
           },
-        }, (file) => { diagnostic = assetDiagnosticAttributes(file, item.category === 'Animation' ? 'animation' : 'model', assetAlias); });
+        }, (file) => {
+          if (file) diagnostic = assetDiagnosticAttributes(file, item.category === 'Animation' ? 'animation' : 'model', assetAlias);
+          // A file that is read and cannot be is refused; one that cannot be fetched fails the load.
+          reading = Boolean(file);
+        }, () => Promise.all(sourceImages.map((image) => loadProjectAssetFile(image.assetId, image.name, traceAsset(assetAlias)))));
+        reading = false;
         loadedModel = loaded;
         assertCurrent();
         dropSourceFile(loaded);
         // Clips keep the names stored at import, not the model's current name (see applyStoredClipNames).
         applyStoredClipNames(loaded.animations, item.clipNames);
-        loaded.sourceClipNames = loaded.animations.map((clip) => clip.name);
+        loaded.sourceClipNames = wholeClips(loaded.animations).map((clip) => clip.name);
         loaded.category = item.category || 'Prop';
         loaded.isPlacedInScene = Boolean(item.isPlacedInScene);
         loaded.textureOverrides = item.textureOverrides;
+        if (sourceImages.length) loaded.sourceImages = sourceImages;
+        if (Array.isArray(item.boneRoles) && item.boneRoles.length) loaded.boneRoles = item.boneRoles;
+        if (item.skinPaint?.assetId) {
+          loaded.skinPaint = item.skinPaint;
+          if (loaded.category !== 'Animation') {
+            try {
+              // Only the editor can take painting back, so only it keeps what the file said.
+              await loadSkinPaint(loaded.object, item.skinPaint, (assetId) => loadProjectAssetBytes(assetId, traceAsset(assetAlias)), { keepFileWeights: generateThumbnails });
+              assertCurrent();
+            } catch (error) {
+              assertCurrent();
+              // Painted weights are not essential to play: the model keeps those of its file.
+              recordAssetDiagnostic('skin_paint_hydration_failed', error, 'source_read', { ...diagnostic, fallback: 'file_weights' });
+            }
+          }
+        }
         if (typeof item.folder === 'string') loaded.folder = item.folder;
         // A missing importSettings document field means the default (old) normalization.
         applyModelImportSettings(loaded, item.importSettings);
-        for (const [materialName, textureId] of Object.entries(item.textureOverrides || {}) as Array<[string, string]>) {
+        for (const [savedName, textureId] of Object.entries(item.textureOverrides || {}) as Array<[string, string]>) {
+          const materialName = currentMaterialName(savedName);
           const textureUrl = textureAssetUrls.get(textureId);
           if (!textureUrl) continue;
           const texture = await new THREE.TextureLoader().loadAsync(textureUrl);
@@ -342,11 +394,10 @@ export function createGameContentLoader(
                 if (candidate.name !== materialName) continue;
                 attached = true;
                 if (candidate.map) candidate.map.dispose();
+                // A plain colour tinted nothing until now; a painted texture shows its own colours.
+                else candidate.color?.set(0xffffff);
                 candidate.map = texture;
-                candidate.transparent = true;
-                candidate.alphaTest = 0.5;
-                candidate.side = THREE.DoubleSide;
-                candidate.needsUpdate = true;
+                drawAsPaintedTexture(candidate);
               }
             });
           } finally {
@@ -357,7 +408,7 @@ export function createGameContentLoader(
         }
         // Material overrides layer on top of the texture overrides above, so a
         // material without its own map override keeps the overridden texture.
-        loaded.materialOverrides = await hydrateMaterialOverrides(loaded.object, item.materialOverrides, {
+        loaded.materialOverrides = await hydrateMaterialOverrides(loaded.object, withCurrentMaterialNames(item.materialOverrides), {
           resolveTextureUrl: (textureId) => textureAssetUrls.get(textureId),
           assertCurrent,
         });
@@ -389,14 +440,15 @@ export function createGameContentLoader(
                   animationPhase = phase;
                   report(`${importPhaseLabel(phase)} — ${animationName}`, progress * 0.85 + 0.1, phase, animationDiagnostic);
                 },
-              }, (file) => { animationDiagnostic = assetDiagnosticAttributes(file, 'animation', animationAlias); });
+              }, (file) => { if (file) animationDiagnostic = assetDiagnosticAttributes(file, 'animation', animationAlias); });
               assertCurrent();
               animationPhase = 'animation_binding';
               report(`Binding animation — ${animationName}`, 0.96, animationPhase, animationDiagnostic);
-              const prepared = prepareAnimationClips(loaded.object, animationModel.object, animationModel.animations);
+              const prepared = prepareAnimationClips(loaded.object, animationModel.object, animationModel.animations, item.boneRoles);
               applyStoredClipNames(prepared.clips, animation.clipNames);
+              noteAttachedClips(prepared.clips, animationModel.animations);
               animationDiagnostic = { ...animationDiagnostic, bindingMode: prepared.mode, clipCount: prepared.clips.length };
-              loaded.animations.push(...prepared.clips);
+              loaded.animations.push(...cutAttachedClips(prepared.clips, loaded.importSettings ?? {}, loaded.object));
             } finally {
               if (animationModel) disposeModel(animationModel);
             }
@@ -406,7 +458,7 @@ export function createGameContentLoader(
         if (Array.isArray(item.mirroredClips) && item.mirroredClips.length) {
           loaded.mirroredClips = item.mirroredClips.filter((name: unknown): name is string => typeof name === 'string');
           try {
-            loaded.animations.push(...mirrorModelClips(loaded.object, loaded.animations, loaded.mirroredClips));
+            loaded.animations.push(...mirrorModelClips(loaded.object, loaded.animations, loaded.mirroredClips, loaded.boneRoles));
           } catch (error) { recordAssetFailure('clip_mirror_failed', error, 'animation_binding', diagnostic); }
         }
         models.push(loaded);
@@ -414,7 +466,16 @@ export function createGameContentLoader(
         if (loadedModel) {
           try { disposeModel(loadedModel); } catch { /* best effort */ }
         }
-        recordAssetFailure('model_hydration_failed', error, activePhase, diagnostic);
+        // A file that cannot be read now could be when it was imported. It stays in the project, and
+        // the rest of the project opens: nothing else can be done about it from outside.
+        const cancelled = (error as { name?: string } | null)?.name === 'AbortError';
+        if (reading && !cancelled) {
+          refusedModels.push({ name: item.name, reason: importFailureMessage(item.name, error) });
+          refusedIds.add(item.id);
+          recordAssetDiagnostic('model_hydration_failed', error, activePhase, diagnostic);
+        } else {
+          recordAssetFailure('model_hydration_failed', error, activePhase, diagnostic);
+        }
         complete(`Skipped model — ${item.name}`, diagnostic);
       }
     }
@@ -438,7 +499,7 @@ export function createGameContentLoader(
             activePhase = phase;
             report(`${importPhaseLabel(phase)} — ${item.name}`, progress * 0.85 + 0.1, phase, diagnostic);
           },
-        }, (file) => { diagnostic = assetDiagnosticAttributes(file, 'attachment', assetAlias); });
+        }, (file) => { if (file) diagnostic = assetDiagnosticAttributes(file, 'attachment', assetAlias); });
         loadedAttachment = loaded;
         assertCurrent();
         dropSourceFile(loaded);
@@ -458,6 +519,29 @@ export function createGameContentLoader(
       const splatmaps = new Map<string, Promise<number[]>>();
       const resolvedObjects: LevelObject[] = [];
       for (const object of objects) {
+        if (object?.foliageData && resolvesLevel(object)) {
+          // A type whose instances cannot be read draws nothing; the rest of the level still plays.
+          const types = await Promise.all(object.foliageData.types.map(async (type) => {
+            if (!type.instancemap || !isFoliageTypePending(type)) return type;
+            const assetAlias = frontendDiagnostics.nextAssetAlias();
+            const diagnostic: DiagnosticAttributes = { assetAlias, assetKind: 'foliage_instances' };
+            try {
+              report('Loading foliage', 0.1, 'source_read', diagnostic);
+              const instances = await resolveFoliageInstances(type.instancemap, (assetId) => loadProjectAssetBytes(assetId, traceAsset(assetAlias)));
+              assertCurrent();
+              return { ...type, instances };
+            } catch (error) {
+              assertCurrent();
+              recordAssetDiagnostic('foliage_instances_hydration_failed', error, 'source_read', { ...diagnostic, fallback: 'not_drawn' });
+              return type;
+            } finally {
+              complete('Loaded foliage', diagnostic);
+            }
+          }));
+          // A level loaded again keeps the objects it resolved before.
+          resolvedObjects.push(types.every((type, index) => type === object.foliageData!.types[index]) ? object : { ...object, foliageData: { types } });
+          continue;
+        }
         const terrain = object?.terrainData;
         if (!terrain || !resolvesLevel(object)) {
           resolvedObjects.push(object);
@@ -501,6 +585,39 @@ export function createGameContentLoader(
             recordAssetDiagnostic('terrain_splatmap_hydration_failed', error, 'source_read', { ...diagnostic, fallback: 'base_layer' });
           }
           complete(`Loaded terrain paint — ${label}`, diagnostic);
+        }
+        const splatmap2 = terrain.splatmap2;
+        if (splatmap2 && isTerrainSplat2Pending(terrain)) {
+          const assetAlias = frontendDiagnostics.nextAssetAlias();
+          const diagnostic: DiagnosticAttributes = { assetAlias, assetKind: 'terrain_splatmap' };
+          try {
+            report(`Loading terrain paint — ${label}`, 0.1, 'source_read', diagnostic);
+            const splat2 = await resolveSharedTerrainAsset(splatmaps, splatmap2, () => resolveTerrainSplatmap(
+              splatmap2,
+              (assetId) => loadProjectAssetBytes(assetId, traceAsset(assetAlias)),
+            ));
+            assertCurrent();
+            resolved = { ...resolved, splat2 };
+          } catch (error) {
+            assertCurrent();
+            recordAssetDiagnostic('terrain_splatmap_hydration_failed', error, 'source_read', { ...diagnostic, fallback: 'base_layer' });
+          }
+          complete(`Loaded terrain paint — ${label}`, diagnostic);
+        }
+        const holemap = terrain.holemap;
+        if (holemap && isTerrainHolesPending(terrain)) {
+          const assetAlias = frontendDiagnostics.nextAssetAlias();
+          const diagnostic: DiagnosticAttributes = { assetAlias, assetKind: 'terrain_splatmap' };
+          try {
+            report(`Loading terrain holes — ${label}`, 0.1, 'source_read', diagnostic);
+            const holes = await resolveTerrainHolemap(holemap, (assetId) => loadProjectAssetBytes(assetId, traceAsset(assetAlias)));
+            assertCurrent();
+            resolved = { ...resolved, holes };
+          } catch (error) {
+            assertCurrent();
+            recordAssetDiagnostic('terrain_holes_hydration_failed', error, 'source_read', { ...diagnostic, fallback: 'solid_ground' });
+          }
+          complete(`Loaded terrain holes — ${label}`, diagnostic);
         }
         resolvedObjects.push(resolved === terrain ? object : { ...object, terrainData: resolved });
       }
@@ -575,11 +692,12 @@ export function createGameContentLoader(
     },
     content,
     objects: () => objects,
+    refusedModels: () => [...refusedModels],
   };
 }
 
 /** The documents of a game that are not assets: its levels, HUD and settings. */
-export const readGameDocuments = (domains: Record<string, any[]>): Omit<LoadedGameContent, 'content' | 'objects'> => {
+export const readGameDocuments = (domains: Record<string, any[]>): Omit<LoadedGameContent, 'content' | 'objects' | 'refusedModels'> => {
   const documents = (key: string): any[] => (Array.isArray(domains[key]) ? domains[key] : []);
   const settingsDocument = documents('metadata').find((doc) => doc?.id === GAME_SETTINGS_DOCUMENT_ID);
   const hudDocument = documents('hud').find((doc) => doc?.id === HUD_DOCUMENT_ID);
@@ -610,8 +728,16 @@ export async function loadGameContent(
     throw error;
   }
   options.onProgress?.(1, 'Project assets ready');
-  return { ...readGameDocuments(domains), content: loader.content(), objects: loader.objects() };
+  return { ...readGameDocuments(domains), content: loader.content(), objects: loader.objects(), refusedModels: loader.refusedModels() };
 }
+
+/** The name projects saved a mesh with no material under, before models came to call it Default. */
+const currentMaterialName = (name: string): string => (name === '__DEFAULT' ? 'Default' : name);
+
+const withCurrentMaterialNames = <T,>(overrides: T): T => {
+  if (!overrides || typeof overrides !== 'object' || !('__DEFAULT' in overrides)) return overrides;
+  return Object.fromEntries(Object.entries(overrides).map(([name, value]) => [currentMaterialName(name), value])) as T;
+};
 
 /** Dispose content that was loaded but will not be published. Best effort. */
 function releaseLoadedAssets(models: LoadedModelData[], attachments: AttachmentData[], ownedUrls: string[]): void {

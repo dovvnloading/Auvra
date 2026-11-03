@@ -5,7 +5,7 @@ import { CuboidCollider, RigidBody } from '@react-three/rapier';
 import { createPlacementQuery } from '../../utils/surfacePlacement';
 import { isGpuRenderer } from '../../renderer/gpu/frame';
 import { useGameContent } from '../GameContentContext';
-import { physicsUserData, usePhysicsAvailable } from '../physics';
+import { physicsUserData, usePhysicsAvailable } from '../physicsQueries';
 import {
     bakeImpostor, cellsOf, generateScatter, impostorMaterial, impostorQuad, readScatterSettings, scatterTier, updateImpostorLight,
     type Impostor, type ScatterCell, type ScatterGround, type ScatterSettings, type ScatterTier,
@@ -101,7 +101,8 @@ class CellView {
             matrices.forEach((matrix, i) => mesh.setMatrixAt(i, matrix));
             mesh.instanceMatrix.needsUpdate = true;
             mesh.computeBoundingSphere();
-            mesh.userData = SCATTER_USER_DATA;
+            // A card is a picture for the camera that made it. Anything that traces light wants what it stands in for.
+            mesh.userData = { ...SCATTER_USER_DATA, standsInFor: model.parts };
             this.far.add(mesh);
         });
     }

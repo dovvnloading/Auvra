@@ -48,6 +48,8 @@ interface ImagePlan {
   format: GPUTextureFormat;
   width: number;
   height: number;
+  /** Slices of a texture array; absent for a flat picture. */
+  layers?: number;
   mips: number;
   usage: GPUTextureUsageFlags;
   bytesPerTexel: number;
@@ -131,6 +133,9 @@ export class TexturePool {
   readonly white: TextureEntry;
   readonly flatNormal: TextureEntry;
   readonly black: TextureEntry;
+  /** The same as one-slice texture arrays, for kinds that read arrays. */
+  readonly whiteLayers: TextureEntry;
+  readonly flatNormalLayers: TextureEntry;
   readonly defaultSampler: GPUSampler;
   /** How many pictures are on the card, and roughly what they take. */
   count = 0;
@@ -143,12 +148,14 @@ export class TexturePool {
     this.white = this.solid("gpu white", [255, 255, 255, 255]);
     this.flatNormal = this.solid("gpu flat normal", [128, 128, 255, 255]);
     this.black = this.solid("gpu black", [0, 0, 0, 255]);
+    this.whiteLayers = this.solid("gpu white layers", [255, 255, 255, 255], true);
+    this.flatNormalLayers = this.solid("gpu flat normal layers", [128, 128, 255, 255], true);
   }
 
-  private solid(label: string, rgba: number[]): TextureEntry {
-    const texture = this.device.createTexture({ label, size: [1, 1], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+  private solid(label: string, rgba: number[], layered = false): TextureEntry {
+    const texture = this.device.createTexture({ label, size: [1, 1, 1], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     this.device.queue.writeTexture({ texture }, new Uint8Array(rgba), { bytesPerRow: 4 }, [1, 1]);
-    return { texture, view: texture.createView(), sampler: this.defaultSampler, version: 1, revision: 1 };
+    return { texture, view: texture.createView({ dimension: layered ? "2d-array" : "2d" }), sampler: this.defaultSampler, version: 1, revision: 1 };
   }
 
   /** The texture's GPU form, or null while its image has not arrived (or it has none the renderer can read). */
@@ -228,7 +235,8 @@ export class TexturePool {
       forSource = new Map();
       this.images.set(source, forSource);
     }
-    const key = `${plan.format}|${plan.mips}|${texture.flipY ? 1 : 0}|${texture.premultiplyAlpha ? 1 : 0}`;
+    const layers = plan.layers ?? 0;
+    const key = `${plan.format}|${plan.mips}|${layers}|${texture.flipY ? 1 : 0}|${texture.premultiplyAlpha ? 1 : 0}`;
     let image = forSource.get(key);
     if (image && image.width === plan.width && image.height === plan.height) {
       if (image.sourceVersion !== source.version) {
@@ -238,7 +246,7 @@ export class TexturePool {
     } else {
       const gpu = this.device.createTexture({
         label: texture.name || "gpu image",
-        size: [plan.width, plan.height],
+        size: [plan.width, plan.height, Math.max(1, layers)],
         format: plan.format,
         mipLevelCount: plan.mips,
         usage: plan.usage,
@@ -247,13 +255,13 @@ export class TexturePool {
       // A picture of the old shape stays for the textures still on it, and goes with the last of them.
       image = {
         texture: gpu,
-        view: gpu.createView(),
+        view: gpu.createView({ dimension: layers ? "2d-array" : "2d" }),
         source,
         key,
         width: plan.width,
         height: plan.height,
         mips: plan.mips,
-        bytes: Math.ceil(plan.width * plan.height * plan.bytesPerTexel * (plan.mips > 1 ? 4 / 3 : 1)),
+        bytes: Math.ceil(plan.width * plan.height * Math.max(1, layers) * plan.bytesPerTexel * (plan.mips > 1 ? 4 / 3 : 1)),
         users: 0,
         sourceVersion: source.version,
       };
@@ -364,7 +372,11 @@ export class TexturePool {
   private planData(texture: THREE.Texture): ImagePlan | null {
     const image = texture.image as { data: ArrayBufferView & ArrayLike<number>; width: number; height: number; depth?: number } | undefined;
     if (!image?.data || !image.width || !image.height) return null;
-    if ((image.depth ?? 1) > 1) throw new Error("it has layers, and a surface reads flat pictures");
+    // A texture array is read as one, whatever its count; a 3D texture is not something a surface reads.
+    const layered = !!(texture as THREE.DataArrayTexture).isDataArrayTexture;
+    const layers = layered ? Math.max(1, image.depth ?? 1) : 1;
+    if (!layered && (image.depth ?? 1) > 1) throw new Error("it is a 3D texture, and a surface reads flat pictures and arrays");
+    if (layers > this.device.limits.maxTextureArrayLayers) throw new Error(`it has ${layers} slices, past this card's ${this.device.limits.maxTextureArrayLayers}`);
     const largest = this.device.limits.maxTextureDimension2D;
     if (Math.max(image.width, image.height) > largest) throw new Error(`it is ${image.width}x${image.height}, past this card's ${largest}`);
     const layout = dataLayout(texture, image.data, this.features.float32Filterable);
@@ -378,14 +390,15 @@ export class TexturePool {
       format,
       width,
       height,
+      layers: layered ? layers : undefined,
       mips,
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | (layout.renderable ? GPUTextureUsage.RENDER_ATTACHMENT : 0),
       bytesPerTexel: layout.bytesPerTexel,
       fill: (gpu) => {
         let bytes = layout.expand ? layout.expand(image.data) : image.data as unknown as ArrayBufferView;
-        if (texture.flipY && height > 1) bytes = flipRows(bytes, width * layout.bytesPerTexel, height);
-        this.device.queue.writeTexture({ texture: gpu }, bytes as unknown as GPUAllowSharedBufferSource, { bytesPerRow: width * layout.bytesPerTexel, rowsPerImage: height }, [width, height]);
-        if (mips > 1) this.generateMips(gpu, format, mips);
+        if (texture.flipY && height > 1) bytes = flipRows(bytes, width * layout.bytesPerTexel, height, layers);
+        this.device.queue.writeTexture({ texture: gpu }, bytes as unknown as GPUAllowSharedBufferSource, { bytesPerRow: width * layout.bytesPerTexel, rowsPerImage: height }, [width, height, layers]);
+        if (mips > 1) for (let layer = 0; layer < layers; layer++) this.generateMips(gpu, format, mips, layer);
       },
     };
   }
@@ -474,11 +487,16 @@ const dataLayout = (texture: THREE.Texture, data: ArrayBufferView, floatsFilter:
   return null;
 };
 
-const flipRows = (data: ArrayBufferView, rowBytes: number, rows: number): ArrayBufferView => {
+/** Each slice upside down, on its own. */
+const flipRows = (data: ArrayBufferView, rowBytes: number, rows: number, slices = 1): ArrayBufferView => {
   const source = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
   const flipped = new Uint8Array(source.length);
-  for (let row = 0; row < rows; row++) {
-    flipped.set(source.subarray(row * rowBytes, (row + 1) * rowBytes), (rows - 1 - row) * rowBytes);
+  const sliceBytes = rowBytes * rows;
+  for (let slice = 0; slice < slices; slice++) {
+    const start = slice * sliceBytes;
+    for (let row = 0; row < rows; row++) {
+      flipped.set(source.subarray(start + row * rowBytes, start + (row + 1) * rowBytes), start + (rows - 1 - row) * rowBytes);
+    }
   }
   return flipped;
 };

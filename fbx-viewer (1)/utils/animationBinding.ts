@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { animatedSkeleton, humanoidRole, matchHumanoidBones, mirrorHumanoidClip, retargetHumanoidClip } from './retargeting';
-import { originalBone } from './partCopies';
+import { animatedSkeleton, CORE_ROLES, humanoidRoles, matchHumanoidBones, mirrorHumanoidClip, retargetHumanoidClip, type StoredBoneRole } from './retargeting';
+import { copyClipRange, wholeClips } from './clipRanges';
+
+export { uniqueClipNames } from './clipRanges';
 
 export class AnimationImportError extends Error {
   constructor(message: string) {
@@ -24,10 +26,7 @@ export interface PreparedAnimationClips {
   animatedBones: number;
 }
 
-/**
- * The skinned mesh whose skeleton has the most bones. A character split into parts (Mixamo's body,
- * shoes, hair) often gives each part a small skeleton of copied bones; only the body's is complete.
- */
+/** The skinned mesh whose skeleton has the most bones: a split character's body, over its shoes and hair. */
 const skinnedMesh = (root: THREE.Object3D): THREE.SkinnedMesh | null => {
   let result: THREE.SkinnedMesh | null = null;
   root.traverse((child) => {
@@ -38,49 +37,48 @@ const skinnedMesh = (root: THREE.Object3D): THREE.SkinnedMesh | null => {
 };
 
 /**
- * Puts every bone any part of `root` is bound to at its bind pose, parents before children, so a
- * part's copy of a bone sits on the original with no offset again whatever pose the model was in.
+ * Puts every bone any part of `root` is bound to at its bind pose, parents before children. A bind
+ * matrix says where a bone was against the mesh bound to it, so the mesh's place gives the bone's.
+ * A bone no part binds keeps its offset from its parent.
  */
 const poseAtBind = (root: THREE.Object3D): void => {
+  root.updateMatrixWorld(true);
   const bind = new Map<THREE.Object3D, THREE.Matrix4>();
   root.traverse((child) => {
     const mesh = child as THREE.SkinnedMesh;
     if (!mesh.isSkinnedMesh) return;
     mesh.skeleton.bones.forEach((bone, index) => {
       const inverse = mesh.skeleton.boneInverses[index];
-      if (inverse && !bind.has(bone)) bind.set(bone, inverse.clone().invert());
+      if (inverse && !bind.has(bone)) bind.set(bone, mesh.matrixWorld.clone().multiply(inverse.clone().invert()));
     });
   });
-  // Bind matrices are in the skeleton's own space, as Skeleton.pose() reads them: a bone under
-  // another bone is offset from that bone's bind, and any other bone's bind is its own transform.
-  // A bone no part binds keeps its offset and passes its parent's bind on to its children.
-  root.updateMatrixWorld(true);
-  const posed = new Map<THREE.Object3D, THREE.Matrix4>();
+  const inverseParent = new THREE.Matrix4();
   root.traverse((node) => {
-    const parentBind = node.parent && (node.parent as THREE.Bone).isBone ? posed.get(node.parent) ?? null : null;
     const own = bind.get(node);
-    if (own) {
-      node.matrix.copy(parentBind ? parentBind.clone().invert().multiply(own) : own);
+    if (own && node.parent) {
+      node.parent.updateWorldMatrix(false, false);
+      node.matrix.copy(inverseParent.copy(node.parent.matrixWorld).invert()).multiply(own);
       node.matrix.decompose(node.position, node.quaternion, node.scale);
-      posed.set(node, own);
-    } else if ((node as THREE.Bone).isBone) {
-      posed.set(node, parentBind ? parentBind.clone().multiply(node.matrix) : node.matrix.clone());
     }
+    node.updateMatrixWorld(true);
   });
-  root.updateMatrixWorld(true);
 };
 
 /**
- * A copy of `object` at its bind pose and the bones clips are made for: the complete skeleton's,
- * each as the original bone rather than a part's copy of it, so a clip turns the original and every
- * part bound to a copy follows. Null without a bound skeleton.
+ * A copy of `object` at its bind pose and the bones clips are made for: those of every part, as a
+ * character split into parts (body, hair, eyes) can bind each to bones the others do not use. Null
+ * without a bound skeleton.
  */
-const bindPoseRig = (object: THREE.Object3D): { root: THREE.Object3D; bones: THREE.Bone[] } | null => {
+export const bindPoseRig = (object: THREE.Object3D): { root: THREE.Object3D; bones: THREE.Bone[] } | null => {
   const root = cloneSkeleton(object);
-  const mesh = skinnedMesh(root);
-  if (!mesh) return null;
+  const bones = new Set<THREE.Bone>();
+  root.traverse((child) => {
+    const mesh = child as THREE.SkinnedMesh;
+    if (mesh.isSkinnedMesh) mesh.skeleton.bones.forEach((bone) => bones.add(bone));
+  });
+  if (!bones.size) return null;
   poseAtBind(root);
-  return { root, bones: [...new Set(mesh.skeleton.bones.map(originalBone))] };
+  return { root, bones: [...bones] };
 };
 
 const bones = (root: THREE.Object3D): THREE.Bone[] => {
@@ -93,22 +91,15 @@ const bones = (root: THREE.Object3D): THREE.Bone[] => {
   return result;
 };
 
+/**
+ * The bone a saved name means. Older projects could pick a copy of a bone that a character split
+ * into parts had ("mixamorigRightHand_1"), which is now the bone itself.
+ */
+export const savedBone = (root: THREE.Object3D, name: string): THREE.Object3D | undefined =>
+  root.getObjectByName(name) ?? root.getObjectByName(name.replace(/_\d+$/, ''));
+
 export const isSkeletalModel = (model: AnimationTargetCandidate): boolean => bones(model.object).length > 0;
 
-/** `names` made unique among themselves and against `taken` ("Idle", then "Idle 2"); `taken` gains them. */
-export const uniqueClipNames = (names: readonly string[], taken: Set<string>): string[] =>
-  names.map((name) => {
-    let candidate = name;
-    for (let suffix = 2; taken.has(candidate); suffix += 1) candidate = `${name} ${suffix}`;
-    taken.add(candidate);
-    return candidate;
-  });
-
-/**
- * Gives `clips` the names stored with their document. A clip is named after its file when it is
- * loaded, so without this a model renamed in the library would rename its clips too, and every
- * state that plays them would lose them. Ignored unless there is one stored name per clip.
- */
 /** The name a mirrored copy of a clip gets. */
 export const mirroredClipName = (name: string): string => `${name} (Mirrored)`;
 
@@ -121,18 +112,31 @@ export const mirrorModelClips = (
   object: THREE.Object3D,
   clips: readonly THREE.AnimationClip[],
   names: readonly string[],
+  storedRoles?: readonly StoredBoneRole[],
 ): THREE.AnimationClip[] => {
   const wanted = names.filter((name) => clips.some((clip) => clip.name === name) && !clips.some((clip) => clip.name === mirroredClipName(name)));
   if (!wanted.length) return [];
   const rig = bindPoseRig(object);
   if (!rig) throw new AnimationImportError('The model has no skeleton to mirror its clips on.');
-  return wanted.map((name) => mirrorHumanoidClip(rig, clips.find((clip) => clip.name === name)!, mirroredClipName(name)));
+  return wanted.map((name) => {
+    const clip = clips.find((candidate) => candidate.name === name)!;
+    const mirrored = mirrorHumanoidClip(rig, clip, mirroredClipName(name), storedRoles);
+    copyClipRange(clip, mirrored);
+    return mirrored;
+  });
 };
 
+/**
+ * Gives `clips` the names stored with their document. A clip is named after its file when it is
+ * loaded, so without this a model renamed in the library would rename its clips too, and every
+ * state that plays them would lose them. Ignored unless there is one stored name per whole take:
+ * a clip cut from a take has its name in its range.
+ */
 export const applyStoredClipNames = (clips: readonly THREE.AnimationClip[], stored: unknown): void => {
-  if (!Array.isArray(stored) || stored.length !== clips.length) return;
+  const whole = wholeClips(clips);
+  if (!Array.isArray(stored) || stored.length !== whole.length) return;
   if (!stored.every((name) => typeof name === 'string' && name.length > 0)) return;
-  clips.forEach((clip, index) => { clip.name = stored[index] as string; });
+  whole.forEach((clip, index) => { clip.name = stored[index] as string; });
 };
 
 /**
@@ -182,17 +186,48 @@ const clipBindsDirectly = (root: THREE.Object3D, clip: THREE.AnimationClip): boo
   })
 );
 
-/** Roles a humanoid's arms, legs, spine and head fill; most of the target's must pair to retarget. */
-const CORE_ROLES = [
-  'Hips', 'Spine', 'Head', 'LeftUpperArm', 'LeftLowerArm', 'RightUpperArm', 'RightLowerArm',
-  'LeftUpperLeg', 'LeftLowerLeg', 'RightUpperLeg', 'RightLowerLeg',
-];
+/** How far a bone may differ from the one a clip was made on, as a share of its offset, and in its turn. */
+const REST_PLACE_TOLERANCE = 0.05;
+const REST_TURN_TOLERANCE = THREE.MathUtils.degToRad(15);
+
+/**
+ * Whether a bone's children leave it the same way on two rigs. They do not change with the pose a
+ * file was saved in, and a rest pose can lie in them alone: T and A poses with no turn on any bone.
+ */
+const childrenLeaveAlike = (target: THREE.Object3D, source: THREE.Object3D): boolean => target.children.every((child) => {
+  if (!child.name || child.position.lengthSq() < 1e-12) return true;
+  const partner = source.children.find((candidate) => candidate.name === child.name);
+  if (!partner || partner.position.lengthSq() < 1e-12) return true;
+  return child.position.angleTo(partner.position) <= REST_TURN_TOLERANCE;
+});
+
+/**
+ * Whether a clip's values hold on `root` as they are: the bones it places rest where they rest on
+ * the rig it was made on, and those it turns rest turned alike, with their children leaving them
+ * alike. Same names do not make that so: a hip height from another character's proportions, or in
+ * another unit, puts the feet off the floor.
+ */
+const clipFitsRest = (root: THREE.Object3D, sourceRoot: THREE.Object3D, clip: THREE.AnimationClip): boolean => clip.tracks.every((track) => {
+  const nodeName = trackNodeName(track);
+  if (!nodeName) return true;
+  const target = THREE.PropertyBinding.findNode(root, nodeName) as THREE.Object3D | null;
+  const source = THREE.PropertyBinding.findNode(sourceRoot, nodeName) as THREE.Object3D | null;
+  if (!target?.position || !source?.position) return true;
+  if (track.name.endsWith('.position')) {
+    return target.position.distanceTo(source.position) <= REST_PLACE_TOLERANCE * Math.max(target.position.length(), source.position.length());
+  }
+  if (track.name.endsWith('.quaternion')) return target.quaternion.angleTo(source.quaternion) <= REST_TURN_TOLERANCE && childrenLeaveAlike(target, source);
+  return true;
+});
+
+/** Most of a humanoid's arms, legs, spine and head must pair to retarget. */
 const REQUIRED_CORE_SHARE = 0.8;
 
 const retargetAnimations = (
   targetRoot: THREE.Object3D,
   sourceRoot: THREE.Object3D,
   clips: THREE.AnimationClip[],
+  storedRoles?: readonly StoredBoneRole[],
 ): PreparedAnimationClips => {
   // A copy at its bind pose, whatever pose the library model is in now.
   const rig = bindPoseRig(targetRoot);
@@ -207,9 +242,9 @@ const retargetAnimations = (
     throw new AnimationImportError('The animation FBX does not contain a skeleton.');
   }
 
-  const pairs = matchHumanoidBones(targetBones, sourceBones, targetClone, sourceRoot);
-  const roleOf = new Map(targetBones.map((bone) => [bone, humanoidRole(bone.name)]));
-  const core = targetBones.filter((bone) => CORE_ROLES.includes(roleOf.get(bone) ?? ''));
+  const roleOf = humanoidRoles(targetBones, targetClone, storedRoles);
+  const pairs = matchHumanoidBones(targetBones, sourceBones, targetClone, sourceRoot, roleOf);
+  const core = targetBones.filter((bone) => (CORE_ROLES as readonly string[]).includes(roleOf.get(bone) ?? ''));
   // A humanoid target needs most of its limbs paired; any other rig most of its bones.
   const judged = core.length >= 5 ? core : targetBones;
   const paired = judged.filter((bone) => pairs.has(bone)).length;
@@ -223,7 +258,7 @@ const retargetAnimations = (
     ?? [...pairs.keys()].sort((a, b) => depth(a) - depth(b))[0]
     ?? null;
   const prepared = clips.map((clip) => {
-    const result = retargetHumanoidClip({ root: targetClone, bones: targetBones }, { root: sourceRoot, bones: sourceBones }, clip, pairs, hip);
+    const result = retargetHumanoidClip({ root: targetClone, bones: targetBones }, { root: sourceRoot, bones: sourceBones }, clip, pairs, hip, { roles: roleOf });
     if (!result.tracks.length) {
       throw new AnimationImportError(`Animation "${clip.name}" produced no tracks for the target skeleton.`);
     }
@@ -244,15 +279,24 @@ const depth = (node: THREE.Object3D): number => {
   return count;
 };
 
+/** A rig at its bind pose, if it has one to go to. */
+const restOf = (root: THREE.Object3D): THREE.Object3D => bindPoseRig(root)?.root ?? root;
+
 export const prepareAnimationClips = (
   targetRoot: THREE.Object3D,
   sourceRoot: THREE.Object3D,
   clips: THREE.AnimationClip[],
+  /** The target model's own say in what its bones are. */
+  storedRoles?: readonly StoredBoneRole[],
 ): PreparedAnimationClips => {
   const usable = clips.filter((clip) => clip.duration > 0 && clip.tracks.length > 0);
   if (!usable.length) throw new AnimationImportError('The FBX contains no usable animation clips.');
 
-  if (usable.every((clip) => clipBindsDirectly(targetRoot, clip))) {
+  // A file with a skin says what its rest pose is, whatever pose it was saved in.
+  const sourceRest = restOf(sourceRoot);
+  const bindsDirectly = usable.every((clip) => clipBindsDirectly(targetRoot, clip));
+  // A model with no skeleton has only its nodes to move: there is nothing to retarget onto.
+  if (bindsDirectly && (!bindPoseRig(targetRoot) || usable.every((clip) => clipFitsRest(restOf(targetRoot), sourceRest, clip)))) {
     return {
       clips: usable.map((clip) => clip.clone()),
       mode: 'direct',
@@ -260,5 +304,5 @@ export const prepareAnimationClips = (
       animatedBones: 0,
     };
   }
-  return retargetAnimations(targetRoot, sourceRoot, usable);
+  return retargetAnimations(targetRoot, sourceRest, usable, storedRoles);
 };

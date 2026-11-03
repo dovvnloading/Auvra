@@ -102,14 +102,16 @@ class SplatmapSchemaTests(unittest.TestCase):
         terrain = painted_terrain(splatmap_reference(ASSET))
         document = validate_domain("objects", objects_document(terrain_object(terrain)))
         self.assertEqual(document["documents"][0]["terrainData"], terrain)
-        # Layers alone (an unpainted terrain) and four layers are both valid.
+        # Layers alone (an unpainted terrain), eight layers and the full settings of a layer are all valid.
         validate_domain("objects", objects_document(terrain_object(painted_terrain())))
-        validate_domain("objects", objects_document(terrain_object(painted_terrain(layers=[{"tiling": 1}] * 4))))
+        validate_domain("objects", objects_document(terrain_object(painted_terrain(layers=[{"tiling": 1}] * 8))))
+        validate_domain("objects", objects_document(terrain_object(painted_terrain(layers=[{"tiling": 1, "name": "Rock", "tileSize": 4, "rotation": 15, "tint": "#ffffff", "roughness": 0.5, "normalStrength": 1, "heightContrast": 1, "cliffProjection": True, "variation": 0.3}]))))
+        validate_domain("objects", objects_document(terrain_object({**painted_terrain(splatmap_reference(ASSET)), "splatmap2": splatmap_reference(ASSET), "holemap": splatmap_reference(ASSET)})))
 
     def test_rejects_unknown_fields(self):
         cases = {
             "splatmap": painted_terrain({**splatmap_reference(ASSET), "path": "x"}),
-            "layer": painted_terrain(layers=[{"tiling": 4, "normalTextureId": "n"}]),
+            "layer": painted_terrain(layers=[{"tiling": 4, "shininess": 2}]),
             "inline weights": {**painted_terrain(splatmap_reference(ASSET)), "splat": [255, 0, 0, 0] * 9},
         }
         for label, terrain in cases.items():
@@ -118,7 +120,7 @@ class SplatmapSchemaTests(unittest.TestCase):
 
     def test_rejects_malformed_layers_and_references(self):
         cases = {
-            "five layers": painted_terrain(layers=[{"tiling": 1}] * 5),
+            "nine layers": painted_terrain(layers=[{"tiling": 1}] * 9),
             "missing tiling": painted_terrain(layers=[{"textureId": "grass"}]),
             "zero tiling": painted_terrain(layers=[{"tiling": 0}]),
             "huge tiling": painted_terrain(layers=[{"tiling": 10001}]),

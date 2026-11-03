@@ -52,27 +52,38 @@ export const WorldGridLayer: React.FC<{
         return ids;
     }, [active, cells]);
 
-    const reportedFailure = useRef(false);
+    // Asked for and not answered yet, and those that failed, which are not asked for again.
+    const asked = useRef(new Set<string>());
+    const failed = useRef(new Set<string>());
+    const mounted = useRef(true);
     useEffect(() => {
         if (!cellModels) return;
         cellModels.setInUse(wanted);
-        const present = new Set(models.map(model => model.id));
-        const missing = [...wanted].filter(id => !present.has(id));
-        if (!missing.length) return;
-        let live = true;
-        cellModels.request(missing).then((loaded) => {
-            if (live) setFetched(loaded);
-        }, (error: unknown) => {
-            if (reportedFailure.current) return;
-            reportedFailure.current = true;
-            frontendDiagnostics.failure('world_grid_models_failed', error);
-        });
-        return () => { live = false; };
-    }, [cellModels, models, wanted]);
+        const present = new Set(allModels.map(model => model.id));
+        for (const id of wanted) {
+            if (present.has(id) || asked.current.has(id) || failed.current.has(id)) continue;
+            asked.current.add(id);
+            // One at a time, so a level ending or the camera moving on can cut in between them.
+            cellModels.request([id]).then((loaded) => {
+                asked.current.delete(id);
+                if (mounted.current) setFetched(loaded);
+            }, (error: unknown) => {
+                asked.current.delete(id);
+                failed.current.add(id);
+                frontendDiagnostics.failure('world_grid_models_failed', error);
+            });
+        }
+    }, [cellModels, allModels, wanted]);
 
     // The world's models stay out of the session's list, which is fixed: changing it mid-game would restart
     // every character's animation and bake the navmesh again. Nothing is in use once the level has gone.
-    useEffect(() => () => cellModels?.setInUse(new Set()), [cellModels]);
+    useEffect(() => {
+        mounted.current = true;
+        return () => {
+            mounted.current = false;
+            cellModels?.setInUse(new Set());
+        };
+    }, [cellModels]);
 
     return (
         <>

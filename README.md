@@ -31,7 +31,7 @@ are intentionally maintained outside the public repository history.
 - Windows 11 24H2 or newer on x64 for the desktop editor
 - Microsoft Evergreen WebView2 Runtime
 - CPython 3.12, 3.13, or 3.14
-- Node.js 22.12 or newer on the Node 22 LTS line, or Node.js 24
+- Node.js 22.13 or newer on the Node 22 LTS line, or Node.js 24
 - npm 10 or 11
 
 Installed packages carry their own Python runtime, WebView2 runtime and SDK,
@@ -200,6 +200,9 @@ credentials can be stored in Windows Credential Manager or kept in memory for
 the current session. Credentials are never written to project files or browser
 storage. Routes are explicit; the host does not silently switch providers.
 
+fal.ai's whole image catalog is offered for retexturing, and its router's language
+models for coding: see [AI tools](docs/ai-tools.md).
+
 Generated media remains a preview until it is committed to the project. Local
 providers use explicitly configured loopback endpoints.
 
@@ -216,12 +219,20 @@ npm run diagnostics:verify
 npm run typecheck
 npm run typecheck:strict
 npm test
+npm run rendering:verify
 npm run build
 cd ..
 cargo +1.98.0 build --release --locked --manifest-path native/Cargo.toml
 .\native\target\release\auvra-native.exe --headless-self-test
 .\native\target\release\auvra-native.exe --self-test
 ```
+
+`npm run rendering:verify` draws the fixed scenes in `fbx-viewer (1)/tests/visual`
+(lighting, shadows, reflections, bounce light, materials and post-processing) on a
+software GPU and compares them with the pictures kept beside them. A change that is
+meant to alter a picture keeps the new one with `npm run rendering:verify -- --update`.
+What each scene costs to load and draw is recorded per commit on the
+`rendering-history` branch and shown against `main` on every pull request.
 
 Python environment metadata is locked with uv. Contributors can check the
 managed environment with `uv sync --locked --no-install-project --no-dev`;

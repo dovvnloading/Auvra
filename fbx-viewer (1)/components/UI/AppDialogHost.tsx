@@ -65,7 +65,7 @@ const AppDialog: React.FC<{ request: AppDialogRequest }> = ({ request }) => {
                     <button
                         ref={acceptRef}
                         type="submit"
-                        className={`rounded px-3 py-1.5 text-xs font-bold text-white ${request.danger ? 'bg-red-600 hover:bg-red-500' : 'bg-blue-600 hover:bg-blue-500'}`}
+                        className={`rounded px-3 py-1.5 text-xs font-bold text-accent-ink ${request.danger ? 'bg-red-600 hover:bg-red-500' : 'bg-blue-600 hover:bg-blue-500'}`}
                     >
                         {request.acceptLabel}
                     </button>

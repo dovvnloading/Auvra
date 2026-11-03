@@ -81,6 +81,8 @@ const terrainBytes = (objects: readonly LevelObject[], levelId: string): number 
 export class LevelAssetResidency {
     private readonly held = new Map<string, Held>();
     private starts = 0;
+    /** Bumps as each level is asked for. */
+    private level = 0;
     private queue: Promise<unknown> = Promise.resolve();
     /** What the running level needs and what its World Grid is drawing: never freed to make room. */
     private levelNeeds: LevelAssetNeeds | null = null;
@@ -120,9 +122,16 @@ export class LevelAssetResidency {
      * old and the new are not in memory together. Nothing may be drawing an old level by now.
      */
     prepare(levelId: string): Promise<void> {
+        // What the last level's World Grid is still waiting for no longer matters, and must not hold this one up.
+        this.level += 1;
         const run = this.queue.then(() => this.prepareNow(levelId));
         this.queue = run.catch(() => undefined);
         return run;
+    }
+
+    /** Whether a World Grid's cells in play draw this model. */
+    cellInUse(modelId: string): boolean {
+        return this.cellsInUse.has(modelId);
     }
 
     /** The World Grid's models tell it which are drawing; those are safe until it says otherwise. */
@@ -132,12 +141,17 @@ export class LevelAssetResidency {
 
     /**
      * Loads models a World Grid asks for while the game runs, after what came before, freeing what was used
-     * longest ago to stay in budget. Resolves with every model loaded this way that is still held.
+     * longest ago to stay in budget. Resolves with every model loaded this way that is still held. Ask for one
+     * model at a time: a level ending or the camera moving on can only cut in between requests.
      */
-    requestCellModels(needs: LevelAssetNeeds): Promise<LoadedModelData[]> {
+    requestCellModels(needs: LevelAssetNeeds, stillWanted: () => boolean = () => true): Promise<LoadedModelData[]> {
+        const level = this.level;
         const run = this.queue.then(async () => {
-            needs.models.forEach(id => this.cellModelIds.add(id));
-            await this.loadWithinBudget(needs, ++this.starts);
+            // Asked for a while ago: skipped if the level has ended, or the camera has moved on.
+            if (level === this.level && stillWanted()) {
+                needs.models.forEach(id => this.cellModelIds.add(id));
+                await this.loadWithinBudget(needs, ++this.starts);
+            }
             return this.loader.content().models.filter(model => this.cellModelIds.has(model.id));
         });
         this.queue = run.catch(() => undefined);

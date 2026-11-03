@@ -59,6 +59,11 @@ class FrameProcessExitedError(RuntimeError):
         super().__init__(f"frontend child exited with status {returncode}")
 
 
+# Long enough for another editor to have started its browser, which then holds the profile's lockfile.
+_ABANDONED_PROFILE_AGE_SECONDS = 3600.0
+_PROFILE_SWEEP_THREAD = "auvra-profile-sweep"
+
+
 class _ProfileLease:
     """Opaque, one-launch authority for deleting one browser profile."""
 
@@ -168,6 +173,11 @@ class FrameController:
             set_event_sink = getattr(self.project_host, "set_event_sink", None)
             if callable(set_event_sink):
                 set_event_sink(self._post_project_event)
+        if self.provider_host is not None:
+            set_ui_invoker = getattr(self.provider_host, "set_ui_invoker", None)
+            invoke_on_ui = getattr(self.frame, "invoke_on_ui", None)
+            if callable(set_ui_invoker) and callable(invoke_on_ui):
+                set_ui_invoker(invoke_on_ui)
 
     @classmethod
     def development(cls, process: Any, origin: str, *, profile_parent: Path,
@@ -758,7 +768,49 @@ def _new_profile(parent: Path) -> _ProfileLease:
     except OSError:
         shutil.rmtree(profile, ignore_errors=False)
         raise
+    # In the background: the first sweep of a long-neglected folder can take a while.
+    threading.Thread(target=_sweep_abandoned_profiles, args=(parent,), name=_PROFILE_SWEEP_THREAD, daemon=True).start()
     return _ProfileLease(profile, token)
+
+
+def _sweep_abandoned_profiles(parent: Path, now: float | None = None) -> list[Path]:
+    """Remove the profiles of editors that died without cleaning up.
+
+    Each launch makes a new profile and removes it on a clean exit, so one still here belongs to an
+    editor that was killed or crashed, and no later launch can ever open it, or to an editor still
+    running, whose browser holds its lockfile.  A profile only just made has no lockfile yet, so the
+    young are left alone too.  The lease marker goes last: a sweep cut short by the editor closing
+    leaves a profile the next one can still recognise.
+    """
+
+    removed: list[Path] = []
+    cutoff = (time.time() if now is None else now) - _ABANDONED_PROFILE_AGE_SECONDS
+    try:
+        _assert_profile_parent_is_safe(parent)
+        candidates = list(parent.iterdir())
+    except OSError:
+        return removed
+    for candidate in candidates:
+        marker = candidate / _contracts._PROFILE_LEASE_MARKER
+        browser = candidate / "EBWebView"
+        try:
+            if not candidate.name.startswith("webview2-") or _is_link_or_reparse(candidate):
+                continue
+            # The marker is what makes it a profile: the SDK cache beside them has the same prefix and none.
+            if marker.is_symlink() or not marker.is_file() or marker.stat().st_mtime > cutoff:
+                continue
+            (browser / "lockfile").unlink(missing_ok=True)
+            _assert_profile_parent_is_safe(parent)
+            if _is_link_or_reparse(browser):
+                continue
+            shutil.rmtree(browser, ignore_errors=True)
+            if browser.exists():
+                continue
+            shutil.rmtree(candidate)
+            removed.append(candidate)
+        except OSError:
+            continue
+    return removed
 
 
 def _remove_profile(lease: _ProfileLease | None) -> None:

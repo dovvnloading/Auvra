@@ -15,7 +15,7 @@ const QUIET_PROVIDER_METHODS = new Set([
  * module into browser storage.
  */
 export type ProviderRoute = 'cloud' | 'local';
-export type ProviderCapability = 'media.generate' | 'media.edit' | 'text' | 'code' | 'commands';
+export type ProviderCapability = 'media.generate' | 'media.edit' | 'media.maps' | 'media.mesh' | 'media.material' | 'media.sky' | 'media.decal' | 'media.render' | 'text' | 'code' | 'commands';
 export type CredentialStatus = 'configured' | 'memoryOnly' | 'absent' | 'notRequired' | 'unavailable';
 
 export interface ProviderSettings {
@@ -49,6 +49,12 @@ export interface ProviderModel {
   providerId?: string;
   capabilities?: ProviderCapability[];
   route?: ProviderRoute;
+  category?: string;
+  description?: string;
+  /** What one `priceUnit` costs. For a language model, its input per 1M tokens, with its output apart. */
+  priceMicroUsd?: number;
+  priceUnit?: string;
+  outputPriceMicroUsd?: number;
   [key: string]: unknown;
 }
 
@@ -109,6 +115,26 @@ type HostBridge = {
 
 const safeResult = <T>(value: unknown): T => (value ?? {}) as T;
 
+/** How long a job is waited for: images queue behind other people's. */
+const JOB_POLL_MS = 500;
+const JOB_WAIT_MS = 15 * 60 * 1000;
+
+const FAILURE_MESSAGES: Record<string, string> = {
+  provider_authentication: 'The provider rejected the key. Check it in Settings.',
+  provider_authorization: 'The provider refused this: the key may not have access, or the account may be out of credit.',
+  provider_rate_limited: 'The provider is limiting requests right now. Try again shortly.',
+  provider_timeout: 'The provider took too long to answer.',
+  provider_network: 'The provider could not be reached.',
+  provider_invalid_response: 'The provider gave an answer that could not be used.',
+  provider_not_found: 'The provider does not have this model any more.',
+  provider_failed: 'The provider could not finish this.',
+  'provider job failed': 'The provider could not finish this.',
+  budget_exceeded: 'This would go over the budget set in Settings.',
+};
+
+/** Says a failure in words: hosts report a code, or the provider's own sentence where it gave one. */
+export const describeProviderFailure = (message: string | undefined): string | undefined => (message ? FAILURE_MESSAGES[message] ?? message : message);
+
 export class HostProviderError extends Error {
   readonly code?: string;
   readonly retryable?: boolean;
@@ -130,6 +156,7 @@ export class HostProviderService {
   private readonly progressListeners = new Set<(job: InferenceJob) => void>();
   private readonly providerEventListeners = new Set<(event: { event: string; payload: unknown }) => void>();
   private readonly providerRoutes = new Map<string, ProviderRoute>();
+  private readonly modelLists = new Map<string, Promise<ProviderModel[]>>();
   private configuredModels: Partial<Record<ProviderCapability, { providerId: string; modelId: string; route: ProviderRoute }>> = {};
   private configurationHydrated = false;
   private configurationLoad: Promise<void> | null = null;
@@ -164,9 +191,40 @@ export class HostProviderService {
     return normalizeProvider(route ? { ...(result as Record<string, unknown>), route } : result);
   }
 
-  /** Opens the OS-native credential prompt. Secret text is intentionally not accepted. */
-  async configureCredential(providerId: string, options: { remember?: boolean; memoryOnly?: boolean } = {}): Promise<unknown> {
+  /**
+   * Opens the OS-native credential prompt. Secret text is intentionally not accepted.
+   * `waiting` means the window is open: a `provider.status` event with a `key.` operation says how it ended.
+   */
+  async configureCredential(providerId: string, options: { remember?: boolean; memoryOnly?: boolean } = {}): Promise<{ waiting?: boolean }> {
     return this.call('provider.configureCredential', { providerId, storageMode: options.memoryOnly ? 'memoryOnly' : 'osVault' });
+  }
+
+  /** Opens a native window through `open`, and settles once it has closed: the host says how by a `provider.status` event with an operation under `prefix`. */
+  private async untilWindowCloses(providerId: string, prefix: string, failed: readonly string[], fallback: string, open: () => Promise<{ waiting?: boolean }>): Promise<void> {
+    let stop: () => void = () => undefined;
+    const closed = new Promise<void>((resolve, reject) => {
+      stop = this.subscribeProviderEvents(({ event, payload }) => {
+        const said = (payload ?? {}) as { providerId?: string; operation?: string; message?: string };
+        if (event !== 'provider.status' || said.providerId !== providerId || !said.operation?.startsWith(prefix)) return;
+        if (failed.includes(said.operation)) reject(new Error(said.message ?? fallback));
+        else resolve();
+      });
+    });
+    closed.catch(() => undefined);
+    try {
+      const opened = await open();
+      if (opened?.waiting) await closed;
+    } finally { stop(); }
+  }
+
+  /** Asks for a key and settles once the window has closed, however long that takes. Closing it without a key is not a failure. */
+  async addKey(providerId: string, options: { remember?: boolean; memoryOnly?: boolean } = {}): Promise<void> {
+    await this.untilWindowCloses(providerId, 'key.', ['key.failed'], 'The key was not added.', () => this.configureCredential(providerId, options));
+  }
+
+  /** Asks where a local provider is kept and settles once the window has closed. A folder it is not in is a failure; closing the window is not. */
+  async chooseFolder(providerId: string): Promise<void> {
+    await this.untilWindowCloses(providerId, 'folder.', ['folder.refused', 'folder.failed'], 'That folder could not be used.', () => this.call('provider.chooseFolder', { providerId }));
   }
 
   async deleteCredential(providerId: string): Promise<unknown> {
@@ -187,14 +245,81 @@ export class HostProviderService {
     return result;
   }
 
-  async listModels(providerId: string, capability?: ProviderCapability): Promise<ProviderModel[]> {
+  /** A provider's models, read once until the host says something changed (prices coming in, say). */
+  listModels(providerId: string, capability?: ProviderCapability): Promise<ProviderModel[]> {
+    const key = `${providerId}\n${capability ?? ''}`;
+    const known = this.modelLists.get(key);
+    if (known) return known;
+    const reading = this.readModels(providerId, capability);
+    this.modelLists.set(key, reading);
+    reading.catch(() => { if (this.modelLists.get(key) === reading) this.modelLists.delete(key); });
+    return reading;
+  }
+
+  private async readModels(providerId: string, capability?: ProviderCapability): Promise<ProviderModel[]> {
     if (!providerId) throw new HostProviderError('Choose a provider before listing models.', 'provider_unavailable');
-    const result = await this.call<unknown>('provider.listModels', {
-      providerId, ...(capability ? { capability } : {}),
+    const models: ProviderModel[] = [];
+    let cursor = '';
+    // A catalog runs to more than one message's worth; the bound only stops a host that never says it is finished.
+    for (let page = 0; page < 64; page += 1) {
+      const result = await this.call<unknown>('provider.listModels', {
+        providerId, ...(capability ? { capability } : {}), ...(cursor ? { cursor } : {}),
+      });
+      const rows = Array.isArray(result) ? result : (result as { models?: unknown[] })?.models;
+      if (Array.isArray(rows)) models.push(...rows.map(normalizeModel));
+      const next = result as { hasMore?: unknown; cursor?: unknown };
+      if (next?.hasMore !== true || typeof next.cursor !== 'string' || !next.cursor) break;
+      cursor = next.cursor;
+    }
+    return models;
+  }
+
+  /** The route a capability is on now, reading the host's settings if they have not been read yet. */
+  async loadConfiguredRoute(capability: ProviderCapability): Promise<{ providerId: string; modelId: string; route: ProviderRoute } | null> {
+    await this.ensureConfiguredRoutes();
+    return this.getConfiguredRoute(capability);
+  }
+
+  /**
+   * Puts a capability on one model of one provider, enabling it. A capability goes to one provider at a time, so any
+   * other that has it gives it up, and keeps its other routes.
+   */
+  async routeCapability(providerId: string, capability: ProviderCapability, modelId: string): Promise<void> {
+    const providers = await this.listProviders();
+    const statuses = await Promise.all(providers.map((provider) => this.getProviderStatus(provider.id)));
+    const settingsOf = (status: ProviderDescriptor, routes: ProviderSettings['routes'], enabled: boolean): ProviderSettings => ({
+      enabled,
+      routes,
+      fallbackPolicy: 'none',
+      requireCostConfirmation: status.settings?.requireCostConfirmation ?? true,
+      budgets: status.settings?.budgets ?? { perJobMicroUsd: 0, dailyMicroUsd: 0, monthlyMicroUsd: 0 },
     });
-    const rows = Array.isArray(result) ? result : (result as { models?: unknown[] })?.models;
-    return Array.isArray(rows) ? rows.map(normalizeModel) :
-      [];
+    const routesOf = (status: ProviderDescriptor) => (Array.isArray(status.settings?.routes) ? status.settings.routes : []);
+    for (const status of statuses) {
+      if (status.id === providerId || !status.settings?.enabled || !routesOf(status).some((route) => route.capability === capability)) continue;
+      await this.configure(status.id, settingsOf(status, routesOf(status).filter((route) => route.capability !== capability), true), status.settingsRevision ?? 0);
+    }
+    const target = statuses.find((status) => status.id === providerId);
+    if (!target) throw new HostProviderError('The provider is not available.', 'provider_unavailable');
+    const routes = [...routesOf(target).filter((route) => route.capability !== capability), { capability, modelId }];
+    // Whatever else this provider routes stays on, as turning it on is what was asked.
+    await this.configure(providerId, settingsOf(target, routes, true), target.settingsRevision ?? 0);
+    routes.forEach((route) => { this.configuredModels[route.capability] = { providerId, modelId: route.modelId, route: target.route }; });
+    this.notifyProviderChanged(providerId);
+  }
+
+  /** Follows a job until it is finished, however long the queue. */
+  async waitForJob(initial: InferenceJob, onProgress?: (job: InferenceJob) => void, waitMs = JOB_WAIT_MS): Promise<InferenceJob> {
+    let job = initial;
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+      onProgress?.(job);
+      if (job.status === 'succeeded' || job.status === 'failed' || job.status === 'cancelled') return job;
+      if (!job.jobId) throw new HostProviderError('The host did not return a job id.', 'invalid_job');
+      if (Date.now() > deadline) throw new HostProviderError('The provider took too long. You can try again.', 'timeout', true);
+      await new Promise<void>((resolve) => setTimeout(resolve, JOB_POLL_MS));
+      job = await this.getInference(job.jobId);
+    }
   }
 
   async health(providerId: string): Promise<ProviderHealth> {
@@ -246,14 +371,18 @@ export class HostProviderService {
   async approveCommand(payload: Record<string, unknown>): Promise<unknown> { return this.call('command.approve', this.withProjectRevision(payload)); }
   async undoCommand(payload: Record<string, unknown>): Promise<unknown> { return this.call('command.undo', this.withProjectRevision(payload)); }
 
-  dispose(): void { this.unsubscribe?.(); this.unsubscribe = null; this.progressListeners.clear(); this.providerEventListeners.clear(); this.providerRoutes.clear(); this.configuredModels = {}; this.configurationHydrated = false; this.configurationLoad = null; }
+  private notifyProviderChanged(providerId: string): void {
+    this.providerEventListeners.forEach((listener) => listener({ event: 'provider.status', payload: { providerId } }));
+  }
+
+  dispose(): void { this.unsubscribe?.(); this.unsubscribe = null; this.modelLists.clear(); this.progressListeners.clear(); this.providerEventListeners.clear(); this.providerRoutes.clear(); this.configuredModels = {}; this.configurationHydrated = false; this.configurationLoad = null; }
 
   getConfiguredRoute(capability: ProviderCapability): { providerId: string; modelId: string; route: ProviderRoute } | null { return this.configuredModels[capability] || null; }
   hydrateConfiguration(providerId: string, route: ProviderRoute, settings?: ProviderSettingsResult | Record<string, unknown>): void {
     this.clearConfiguration(providerId);
     if (settings?.enabled === false) return;
     const routes = Array.isArray(settings?.routes) ? settings.routes as Array<{ capability?: string; modelId?: string }> : [];
-    routes.forEach(({ capability, modelId }) => { if (capability && modelId && ['text', 'code', 'commands', 'media.generate', 'media.edit'].includes(capability)) this.configuredModels[capability as ProviderCapability] = { providerId, modelId, route }; });
+    routes.forEach(({ capability, modelId }) => { if (capability && modelId && ['text', 'code', 'commands', 'media.generate', 'media.edit', 'media.maps', 'media.mesh', 'media.material', 'media.sky', 'media.decal', 'media.render'].includes(capability)) this.configuredModels[capability as ProviderCapability] = { providerId, modelId, route }; });
   }
   clearConfiguration(providerId: string): void { Object.keys(this.configuredModels).forEach((capability) => { if (this.configuredModels[capability as ProviderCapability]?.providerId === providerId) delete this.configuredModels[capability as ProviderCapability]; }); }
 
@@ -311,7 +440,11 @@ export class HostProviderService {
       }));
       if (typeof response.revision === 'number') this.revision = response.revision;
       const responseResult = response.result && typeof response.result === 'object' ? response.result as Record<string, unknown> : {};
-      if (typeof responseResult.projectRevision === 'number') this.projectRevision = responseResult.projectRevision;
+      if (typeof responseResult.projectRevision === 'number') {
+        this.projectRevision = responseResult.projectRevision;
+        // The host changed the project itself (a committed texture, an approved HUD change), and the next request goes by what the project service knows.
+        if (projectService.getStatus().revision !== responseResult.projectRevision) await projectService.refreshStatus().catch(() => undefined);
+      }
       if (!response.ok) throw new HostProviderError(
         response.error?.message || response.error?.code || `Provider operation failed: ${method}`,
         response.error?.code,
@@ -333,6 +466,7 @@ export class HostProviderService {
     if (typeof value.revision === 'number') this.revision = value.revision;
     if (value.event !== 'provider.progress' && value.event !== 'provider.job' && value.event !== 'provider.status' && value.event !== 'provider.recovery') return;
     const payload = value.payload && typeof value.payload === 'object' ? value.payload : {};
+    if (value.event === 'provider.status') this.modelLists.clear();
     this.providerEventListeners.forEach((listener) => listener({ event: value.event || 'provider.status', payload }));
     const job = normalizeJob(payload);
     if (job.jobId) this.progressListeners.forEach((listener) => listener(job));
@@ -379,7 +513,12 @@ function normalizeModel(value: unknown): ProviderModel {
   const row = safeResult<Record<string, unknown>>(value);
   return { id: String(row.id || row.modelId || ''), name: String(row.name || row.displayName || row.modelId || ''),
     providerId: typeof row.providerId === 'string' ? row.providerId : undefined,
-    capabilities: Array.isArray(row.capabilities) ? row.capabilities as ProviderCapability[] : undefined };
+    capabilities: Array.isArray(row.capabilities) ? row.capabilities as ProviderCapability[] : undefined,
+    ...(typeof row.category === 'string' ? { category: row.category } : {}),
+    ...(typeof row.description === 'string' ? { description: row.description } : {}),
+    ...(typeof row.priceMicroUsd === 'number' ? { priceMicroUsd: row.priceMicroUsd } : {}),
+    ...(typeof row.priceUnit === 'string' ? { priceUnit: row.priceUnit } : {}),
+    ...(typeof row.outputPriceMicroUsd === 'number' ? { outputPriceMicroUsd: row.outputPriceMicroUsd } : {}) };
 }
 function normalizeHealth(value: unknown): ProviderHealth {
   const row = safeResult<Record<string, unknown>>(value);
@@ -394,7 +533,7 @@ function normalizeJob(value: unknown): InferenceJob {
   const status = ['queued', 'submitting', 'running', 'succeeded', 'failed', 'cancel_requested', 'cancelled', 'recovering'].includes(String(job.status)) ? String(job.status) as InferenceJob['status'] : 'unknown';
   const result = job.outputText !== undefined ? { outputText: String(job.outputText).slice(0, 65536) }
     : job.preview && typeof job.preview === 'object' ? job.preview : undefined;
-  const message = typeof job.message === 'string' ? job.message : undefined;
+  const message = typeof job.message === 'string' ? describeProviderFailure(job.message) : undefined;
   const error = status === 'failed' || status === 'cancelled'
     ? { code: status === 'cancelled' ? 'cancelled' : 'provider_failed', message, retryable: Boolean(job.retryable) }
     : undefined;
@@ -410,6 +549,7 @@ function normalizeJob(value: unknown): InferenceJob {
     ...(typeof job.proposalAvailable === 'boolean' ? { proposalAvailable: job.proposalAvailable } : {}),
     ...(typeof job.proposalId === 'string' ? { proposalId: job.proposalId } : {}),
     ...(typeof job.preview === 'object' && job.preview ? { preview: job.preview } : {}),
+    ...(Array.isArray(job.previewMaps) ? { previewMaps: job.previewMaps } : {}),
     ...(typeof job.retryable === 'boolean' ? { retryable: job.retryable } : {}),
     ...(typeof job.message === 'string' ? { message: job.message.slice(0, 256) } : {}),
     ...(error ? { error } : {}),

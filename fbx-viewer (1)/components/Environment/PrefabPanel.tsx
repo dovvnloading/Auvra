@@ -72,7 +72,7 @@ export const PrefabPanel: React.FC<PrefabPanelProps> = ({
                 <button
                     onClick={handleCreate}
                     disabled={!hasSelection || isCreating}
-                    className="w-full flex items-center justify-center gap-2 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all bg-sky-700 text-white hover:bg-sky-600 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed"
+                    className="w-full flex items-center justify-center gap-2 py-1.5 rounded-md text-2xs font-bold transition-all bg-sky-700 text-white hover:bg-sky-600 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed"
                     title={hasSelection ? 'Save the selected object and its children as a prefab' : 'Select an object first'}
                 >
                     <PackagePlus size={12} /> Create from selection
@@ -81,7 +81,7 @@ export const PrefabPanel: React.FC<PrefabPanelProps> = ({
 
             <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
                 {prefabs.length === 0 && !isLoading && (
-                    <div className="text-[11px] text-gray-500 text-center py-6 px-2">
+                    <div className="text-2xs text-gray-500 text-center py-6 px-2">
                         No prefabs yet. Select an object and choose "Create from selection".
                     </div>
                 )}
@@ -93,14 +93,14 @@ export const PrefabPanel: React.FC<PrefabPanelProps> = ({
                         <Boxes size={12} className="text-sky-400 shrink-0" />
                         <div className="flex-1 min-w-0">
                             <div className="text-xs text-gray-200 truncate" title={prefab.name}>{prefab.name}</div>
-                            <div className="text-[10px] text-gray-500">
+                            <div className="text-2xs text-gray-500">
                                 {prefab.objects.length} object{prefab.objects.length === 1 ? '' : 's'}
                             </div>
                         </div>
                         <button
                             onClick={() => void handlePlace(prefab.id)}
                             disabled={isPlacing}
-                            className="flex items-center gap-1 px-1.5 py-1 rounded text-[10px] font-bold uppercase text-emerald-300 hover:text-white hover:bg-emerald-700 disabled:text-gray-600 disabled:hover:bg-transparent"
+                            className="flex items-center gap-1 px-1.5 py-1 rounded text-2xs font-bold text-emerald-300 hover:text-white hover:bg-emerald-700 disabled:text-gray-600 disabled:hover:bg-transparent"
                             title={placementTarget ? 'Place at the camera target' : 'Place at the origin'}
                         >
                             <MapPin size={11} /> Place

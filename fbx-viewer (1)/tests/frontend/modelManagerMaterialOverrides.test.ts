@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   loadFBXFile: vi.fn(),
   projectService: {
     assertWritable: vi.fn(),
+    assertStorable: vi.fn(),
+    fetchAsset: vi.fn(async () => fetch('stored-asset')),
     getSnapshotAll: vi.fn(),
     uploadAsset: vi.fn(),
     applyChanges: vi.fn(),
@@ -20,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   addNotification: vi.fn(),
 }));
 
-vi.mock('../../utils/modelLoader', () => ({ loadFBXFile: mocks.loadFBXFile, importPhaseLabel: () => 'Loading' }));
+vi.mock('../../utils/modelLoader', () => ({ loadFBXFile: mocks.loadFBXFile, importPhaseLabel: () => 'Loading', importFailureMessage: (what: string) => what }));
 vi.mock('../../utils/projectService', () => ({ projectService: mocks.projectService }));
 vi.mock('../../utils/db', () => ({
   dbOperations: mocks.dbOperations,
@@ -29,6 +31,7 @@ vi.mock('../../utils/db', () => ({
 }));
 vi.mock('../../utils/processing/ModelTransforms', () => ({
   applyModelImportSettings: () => undefined,
+  convertOptionsFor: () => ({}),
   resolveImportSettings: (value: unknown) => value,
   stripGeometry: () => undefined,
 }));
@@ -106,7 +109,7 @@ describe('useModelManager material overrides during long operations', () => {
     mocks.projectService.uploadAsset.mockReturnValue(upload.promise);
     const { result } = renderManager(existing.model);
 
-    let reimport!: Promise<void>;
+    let reimport!: Promise<unknown>;
     act(() => { reimport = result.current.reimportModel('m1', new File(['fbx'], 'Robot.fbx')); });
     await waitFor(() => expect(mocks.projectService.uploadAsset).toHaveBeenCalled());
     const { texture, disposed } = await saveDuringOperation(result, existing.model.object);

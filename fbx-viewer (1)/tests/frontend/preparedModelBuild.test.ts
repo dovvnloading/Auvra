@@ -9,7 +9,7 @@ vi.mock('../../utils/projectService', () => ({
   projectService: {
     getSnapshotAll: vi.fn(),
     queryPreparedModels: vi.fn(),
-    resolveAsset: vi.fn(),
+    fetchAsset: vi.fn(),
     uploadPreparedModel: vi.fn(),
   },
 }));
@@ -42,17 +42,20 @@ const stubWorkers = (replies: Array<{ type: string; glb?: ArrayBuffer; message?:
 
 beforeEach(() => {
   service.queryPreparedModels.mockResolvedValue([]);
-  service.resolveAsset.mockImplementation(async (assetId) => `https://assets.auvra.local/${assetId}`);
-  service.uploadPreparedModel.mockResolvedValue(undefined);
-  vi.stubGlobal('fetch', vi.fn(async () => ({
+  service.fetchAsset.mockImplementation(async () => ({
     ok: true,
     status: 200,
     headers: new Headers({ 'Content-Type': 'model/gltf-binary' }),
     arrayBuffer: async () => new ArrayBuffer(4),
-  })));
+    blob: async () => new Blob([new Uint8Array(3)]),
+  }) as unknown as Response);
+  service.uploadPreparedModel.mockResolvedValue(undefined);
 });
 
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe('which files a build prepares', () => {
   it('prepares each file once, and as a model when it is used as a model at all', () => {
@@ -70,6 +73,26 @@ describe('which files a build prepares', () => {
       { assetId: swordId, kind: 'model', name: 'Sword.glb' },
     ]);
   });
+
+  it('notes how an FBX or OBJ is read, and marks a file its documents read in different ways', () => {
+    const settings = { normalize: true, targetSize: 5, morphTargets: false };
+    const [hero, rock, crate] = preparedModelSources({
+      models: [
+        { id: 'hero', name: 'Hero.fbx', assetId: heroId, importSettings: settings, sourceImages: [{ name: 'skin.png', assetId: walkId }] },
+        { id: 'rock', name: 'Rock.obj', assetId: swordId, importSettings: settings },
+        { id: 'rock-again', name: 'Rock.obj', assetId: swordId },
+        // A glTF comes as it is, whatever its settings say.
+        { id: 'crate', name: 'Crate.glb', assetId: walkId, importSettings: settings },
+        { id: 'crate-again', name: 'Crate.glb', assetId: walkId },
+      ],
+      attachments: [],
+      animations: [],
+    });
+    expect(hero).toMatchObject({ convert: { morphTargets: false }, images: [{ name: 'skin.png', assetId: walkId }] });
+    expect(hero.readDifferently).toBeUndefined();
+    expect(rock.readDifferently).toBe(true);
+    expect(crate).toEqual({ assetId: walkId, kind: 'model', name: 'Crate.glb' });
+  });
 });
 
 describe('prepared model keys', () => {
@@ -83,8 +106,13 @@ describe('prepared model keys', () => {
       preparedModelKey({ ...model, kind: 'animation' }, true, true),
       preparedModelKey(model, false, true),
       preparedModelKey(model, true, false),
+      preparedModelKey({ ...model, convert: { morphTargets: false } }, true, true),
+      preparedModelKey({ ...model, images: [{ name: 'skin.png', assetId: walkId }] }, true, true),
     ]);
-    expect(new Set([key, ...others]).size).toBe(5);
+    expect(new Set([key, ...others]).size).toBe(7);
+    // The same reading written in another order is the same reading.
+    expect(await preparedModelKey({ ...model, convert: { morphTargets: false, tangents: true } }, true, true))
+      .toBe(await preparedModelKey({ ...model, convert: { tangents: true, morphTargets: false } }, true, true));
   });
 });
 
@@ -99,7 +127,7 @@ describe('preparing a project for a build', () => {
     const requests = stubWorkers([]);
     const result = await prepareModelsForBuild();
 
-    expect(service.resolveAsset.mock.calls.map(([assetId]) => assetId)).toEqual([heroId, walkId]);
+    expect(service.fetchAsset.mock.calls.map(([assetId]) => assetId)).toEqual([heroId, walkId]);
     const heroKey = await preparedModelKey({ assetId: heroId, kind: 'model' }, true, true);
     const clipsKey = await preparedModelKey({ assetId: walkId, kind: 'animation' }, true, true);
     expect(service.uploadPreparedModel.mock.calls.map(([key]) => key)).toEqual([heroKey, clipsKey]);
@@ -153,8 +181,45 @@ describe('preparing a project for a build', () => {
 
   it('stops when the build is cancelled', async () => {
     stubProject({ models: [{ id: 'hero', name: 'Hero.glb', assetId: heroId }] });
-    vi.stubGlobal('fetch', vi.fn(async () => { throw new DOMException('Stopped.', 'AbortError'); }));
+    service.fetchAsset.mockRejectedValue(new DOMException('Stopped.', 'AbortError'));
     await expect(prepareModelsForBuild()).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('reads an FBX as its model does, with its import settings and the images beside it', async () => {
+    const report = { clips: [{ name: 'Walk', duration: 1, start: 0, layers: 1 }], framesPerSecond: 30 };
+    stubProject({
+      models: [{
+        id: 'hero', name: 'Hero.fbx', assetId: heroId,
+        importSettings: { normalize: true, targetSize: 5, morphTargets: false, excludedClips: ['T-Pose'] },
+        sourceImages: [{ name: 'skin.png', assetId: walkId }],
+      }],
+    });
+    // jsdom's File cannot be read as an ArrayBuffer.
+    vi.spyOn(File.prototype, 'arrayBuffer').mockImplementation(async () => new ArrayBuffer(3));
+    const requests = stubWorkers([
+      { type: 'complete', glb: new ArrayBuffer(8), itemCount: 1, clipCount: 1, missingTextures: ['eyes.png'], metresPerUnit: 0.01, report } as never,
+      { type: 'complete', glb: new ArrayBuffer(4) },
+    ]);
+    const result = await prepareModelsForBuild();
+    expect(service.fetchAsset.mock.calls.map(([assetId]) => assetId)).toEqual([heroId, walkId]);
+    expect(requests[0]).toMatchObject({ type: 'parse', format: 'fbx', name: 'Hero.fbx', options: { morphTargets: false, excludedClips: ['T-Pose'] }, images: [{ name: 'skin.png' }] });
+    expect(requests[1]).toMatchObject({ format: 'glb', options: { kind: 'model', sourceFormat: 'fbx', metresPerUnit: 0.01, missingTextures: 1, report } });
+    const [source] = preparedModelSources({ models: [{ name: 'Hero.fbx', assetId: heroId, importSettings: { normalize: true, targetSize: 5, morphTargets: false, excludedClips: ['T-Pose'] }, sourceImages: [{ name: 'skin.png', assetId: walkId }] }], attachments: [], animations: [] });
+    expect(result.prepared?.models).toEqual([{ source: heroId, asset: await preparedModelKey(source, true, true) }]);
+  });
+
+  it('leaves a file its documents read in different ways to its source, and names it', async () => {
+    stubProject({
+      models: [
+        { id: 'rock', name: 'Rock.fbx', assetId: heroId, importSettings: { normalize: true, targetSize: 5, morphTargets: false } },
+        { id: 'rock-again', name: 'Rock.fbx', assetId: heroId },
+      ],
+    });
+    const requests = stubWorkers([]);
+    const result = await prepareModelsForBuild();
+    expect(requests).toHaveLength(0);
+    expect(result).toEqual({ unprepared: ['Rock.fbx'] });
+    expect(unpreparedNotice(result, undefined)).toContain('Rock.fbx');
   });
 });
 

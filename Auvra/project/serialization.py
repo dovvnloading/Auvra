@@ -5,7 +5,7 @@ import json
 import math
 import os
 from pathlib import Path
-from typing import Any, IO
+from typing import Any
 
 def _finite(value: Any) -> Any:
     if isinstance(value, float):

@@ -1,7 +1,10 @@
 import { projectService } from '../../../utils/projectService';
 import type { TerrainPaintState } from './terrainSplatCodec';
 import {
+  externalizeTerrainHoles as externalizeTerrainHolesWith,
   externalizeTerrainSplat as externalizeTerrainSplatWith,
+  externalizeTerrainSplat2 as externalizeTerrainSplat2With,
+  resolveTerrainHolemap as resolveTerrainHolemapWith,
   resolveTerrainSplatmap as resolveTerrainSplatmapWith,
   type ExternalizedTerrainSplat,
   type TerrainSplatLoader,
@@ -33,6 +36,21 @@ export function externalizeTerrainSplat<T extends TerrainPaintState>(
   } = {},
 ): Promise<{ terrainData: ExternalizedTerrainSplat<T>; remember?: () => void }> {
   return externalizeTerrainSplatWith(terrain, { storedSplatmap, upload });
+}
+
+/** externalizeTerrainSplat2 that uploads to the open project. */
+export function externalizeTerrainSplat2<T extends TerrainPaintState>(terrain: T): Promise<{ terrainData: Omit<T, 'splat2'> }> {
+  return externalizeTerrainSplat2With(terrain, uploadSplatmap);
+}
+
+/** externalizeTerrainHoles that uploads to the open project. */
+export function externalizeTerrainHoles<T extends TerrainPaintState>(terrain: T): Promise<{ terrainData: Omit<T, 'holes'> }> {
+  return externalizeTerrainHolesWith(terrain, uploadSplatmap);
+}
+
+/** resolveTerrainHolemap that reads from the open project. */
+export function resolveTerrainHolemap(reference: TerrainSplatmapReference): Promise<number[]> {
+  return resolveTerrainHolemapWith(reference, loadSplatmap);
 }
 
 /** resolveTerrainSplatmap that reads from the open project unless told otherwise. */

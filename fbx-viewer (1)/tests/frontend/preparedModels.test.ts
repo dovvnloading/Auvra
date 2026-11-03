@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
+import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { MeshoptSimplifier } from 'meshoptimizer';
 import type { LoadedModelData } from '../../types';
 import { usablePreparedModels } from '../../player/gamePack';
@@ -12,7 +13,6 @@ import { meshLodChain, meshLodReady, MIN_LOD_TRIANGLES } from '../../utils/meshL
 import { loadModelFile, type ModelLoadOptions } from '../../utils/modelLoader';
 import { PREPARED_EXTENSION, PREPARED_MODEL_VERSION, type PreparedMetadata } from '../../utils/preparedModels/format';
 import { prepareGlb, UnpreparableModelError, type CompressImage, type PrepareOptions } from '../../utils/preparedModels/prepareGlb';
-import { weldMeshes } from '../../utils/preparedModels/weldMeshes';
 import { normalizeModel } from '../../utils/processing/ModelTransforms';
 import { createGameContentLoader } from '../../utils/projectHydration';
 
@@ -65,20 +65,28 @@ const exportGlb = async (object: THREE.Object3D): Promise<ArrayBuffer> => {
   return exported as ArrayBuffer;
 };
 
+/** Shares the corners of every mesh, as the importer does when it writes a file's meshes out. */
+const weld = (root: THREE.Object3D): void => {
+  root.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    if (mesh.isMesh && !mesh.geometry.index) mesh.geometry = mergeVertices(mesh.geometry);
+  });
+};
+
 const sourceGlb = (): Promise<ArrayBuffer> => exportGlb(fbxLikeScene());
 const weldedGlb = async (): Promise<ArrayBuffer> => {
   const scene = fbxLikeScene();
-  weldMeshes(scene);
+  weld(scene);
   return exportGlb(scene);
 };
 
-/** Stands in for the import worker, which runs FBXLoader and GLTFExporter in the real thing. */
-const stubImportWorker = (glb: ArrayBuffer, metresPerUnit: number | null = 0.01): void => {
+/** Stands in for the import worker, which runs the native importer in the real thing. */
+const stubImportWorker = (glb: ArrayBuffer, metresPerUnit: number | null = 0.01, report?: PreparedMetadata['report']): void => {
   class StubWorker {
     onmessage: ((event: { data: unknown }) => void) | null = null;
     onerror: (() => void) | null = null;
     postMessage(): void {
-      queueMicrotask(() => this.onmessage?.({ data: { type: 'complete', glb: glb.slice(0), itemCount: 0, clipCount: 0, missingTextures: 0, metresPerUnit } }));
+      queueMicrotask(() => this.onmessage?.({ data: { type: 'complete', glb: glb.slice(0), itemCount: 0, clipCount: 0, missingTextures: [], metresPerUnit, report } }));
     }
     terminate(): void { /* nothing runs */ }
   }
@@ -154,7 +162,7 @@ describe('a prepared model and its source', () => {
     const scene = fbxLikeScene();
     scene.animations = scene.animations.slice(0, 1);
     stubImportWorker(await exportGlb(scene));
-    weldMeshes(scene);
+    weld(scene);
     const prepared = await prepareGlb(await exportGlb(scene), 'glb', modelOptions(), neverCompress);
     const fromSource = await load(new ArrayBuffer(4), 'Renamed.fbx', { normalize: true });
     const fromPrepared = await load(prepared, 'Renamed.fbx', { normalize: true, prepared: true });
@@ -162,12 +170,35 @@ describe('a prepared model and its source', () => {
     expect(fromPrepared.animations.map((clip) => clip.name)).toEqual(['Renamed']);
   });
 
-  it('treats a prepared FBX as an FBX and a prepared GLB as a GLB', async () => {
-    const fromFbx = await load(await prepareGlb(await weldedGlb(), 'glb', modelOptions(), neverCompress), 'Hero.fbx', { normalize: true, prepared: true });
-    const fromGlb = await load(await prepareGlb(await weldedGlb(), 'glb', modelOptions({ sourceFormat: 'glb', metresPerUnit: null }), neverCompress), 'Hero.glb', { normalize: true, prepared: true });
-    // Override textures would come out upside down otherwise.
-    expect(overrideTextureFlipY(fromFbx.object)).toBe(true);
+  it('names the clips of a prepared FBX as an FBX, and puts override textures the right way up as on any model', async () => {
+    const scene = fbxLikeScene();
+    scene.animations = scene.animations.slice(0, 1);
+    weld(scene);
+    const glb = await exportGlb(scene);
+    const fromFbx = await load(await prepareGlb(glb, 'glb', modelOptions(), neverCompress), 'Hero.fbx', { normalize: true, prepared: true });
+    const fromGlb = await load(await prepareGlb(glb, 'glb', modelOptions({ sourceFormat: 'glb', metresPerUnit: null }), neverCompress), 'Hero.glb', { normalize: true, prepared: true });
+    // An FBX's one take is named after its file; a glTF keeps the name its clip has.
+    expect(fromFbx.animations.map((clip) => clip.name)).toEqual(['Hero']);
+    expect(fromGlb.animations.map((clip) => clip.name)).toEqual(['Walk']);
+    expect(overrideTextureFlipY(fromFbx.object)).toBe(false);
     expect(overrideTextureFlipY(fromGlb.object)).toBe(false);
+  });
+
+  it('cuts clips from takes by what reading the source found, as loading the source does', async () => {
+    const scene = fbxLikeScene();
+    weld(scene);
+    const glb = await exportGlb(scene);
+    const report = { clips: [{ name: 'Walk', duration: 1, start: 0, layers: 1 }, { name: 'Take 001', duration: 2, start: 0, layers: 1 }], framesPerSecond: 30 } as unknown as NonNullable<PreparedMetadata['report']>;
+    const prepared = await prepareGlb(glb, 'glb', modelOptions({ report }), neverCompress);
+    expect(documentOf(prepared).extensions[PREPARED_EXTENSION].report).toEqual(report);
+    const convert = { clipRanges: [{ take: 'Take 001', name: 'Lean', start: 0.5, end: 1.5, loop: true }] };
+    const fromPrepared = await load(prepared, 'Hero.fbx', { normalize: true, prepared: true, convert });
+    stubImportWorker(glb, 0.01, report);
+    const fromSource = await load(new ArrayBuffer(4), 'Hero.fbx', { normalize: true, convert });
+    expect(fromPrepared.importReport).toEqual(report);
+    const cut = (model: LoadedModelData) => model.animations.map((clip) => [clip.name, clip.duration]);
+    expect(cut(fromPrepared)).toContainEqual(['Lean', 1]);
+    expect(cut(fromPrepared)).toEqual(cut(fromSource));
   });
 
   it('keeps the unit the source says it is authored in, for keeping its authored size', async () => {
@@ -210,19 +241,6 @@ describe('prepared detail levels', () => {
     // Under the threshold there are none to hold.
     expect(chains.Plastic).toHaveLength(1);
     expect(chains.Plastic[0].triangles).toBeLessThan(MIN_LOD_TRIANGLES);
-  });
-
-  it('shows why: the same mesh of many materials, not welded, has separate triangles and no levels', async () => {
-    stubImportWorker(await sourceGlb());
-    const model = await load(new ArrayBuffer(4), 'Hero.fbx', { normalize: true });
-    const levels: Record<string, number> = {};
-    model.object.traverse((node) => {
-      const mesh = node as THREE.Mesh;
-      if (mesh.isMesh) levels[(mesh.material as THREE.Material).name] = meshLodChain(mesh.geometry).length;
-    });
-    expect(levels.Metal).toBe(1);
-    expect(levels.Leather).toBe(1);
-    expect(levels.Skin).toBeGreaterThan(1);
   });
 
   it('records that a mesh could not be reduced, so loading does not try again', async () => {
@@ -466,7 +484,7 @@ describe('a game loading prepared models', () => {
     await loader.load();
     expect(fetched).toEqual([preparedId]);
     expect(loader.content().models.map((model) => model.name)).toEqual(['Hero.fbx']);
-    expect(overrideTextureFlipY(loader.content().models[0].object)).toBe(true);
+    expect(overrideTextureFlipY(loader.content().models[0].object)).toBe(false);
     loader.releaseAll();
   });
 

@@ -1,9 +1,14 @@
 
 // ... existing imports ...
+import type { FoliageData } from './runtime/foliage';
 import * as THREE from 'three';
 import React from 'react';
 import type { ProjectStatus } from './utils/projectStatus';
 import type { MaterialOverrides } from './utils/materialOverrides';
+import type { ModelFileReport } from './utils/fbxImport/nativeImporter';
+import type { ClipTakeSource } from './utils/clipTakes';
+import type { StoredBoneRole } from './utils/retargeting';
+import type { SkinPaintFile, SkinPaintReference } from './utils/skinPaint/skinPaintFile';
 import type { LevelBakedLighting } from './runtime/lighting/bakedLighting';
 import type { WeatherSettings } from './runtime/weather';
 import type { SkyAtmosphereSettings, SkyCloudSettings, SkyImageSettings, SkyLightSettings, SkyModel, SkyNightSettings } from './runtime/sky/skySettings';
@@ -83,9 +88,23 @@ export interface LoadedModelData {
   sourceClipNames?: string[];
   /** On import: textures the source file names but does not contain, which it was imported without. */
   missingTextures?: number;
+  /** What an FBX or OBJ source held and what was made of it, from its latest read. */
+  importReport?: ModelFileReport;
+  /** Image files found for this model that its source names but does not hold. */
+  sourceImages?: ModelSourceImage[];
+  /** What the user says this model's bones are for, where the names and shape did not read right. */
+  boneRoles?: StoredBoneRole[];
+  /** The weights painted on it, kept in an asset of their own. */
+  skinPaint?: SkinPaintReference;
 }
 
-export type LevelObjectType = 'prop' | 'foliage' | 'spawn_point' | 'audio_emitter' | 'terrain' | 'sky_sphere' | 'player_start';
+/** An image a model's source file names, kept with the project. */
+export interface ModelSourceImage {
+  name: string;
+  assetId: string;
+}
+
+export type LevelObjectType = 'prop' | 'foliage' | 'foliage_set' | 'spawn_point' | 'audio_emitter' | 'terrain' | 'sky_sphere' | 'player_start';
 
 export interface SpawnConfig {
     blueprintId: string; // ID of the Enemy Blueprint to spawn
@@ -127,8 +146,33 @@ export interface TerrainSplatmapReference {
 
 /** One terrain texture layer; splat channel N (R, G, B, A) weights layer N. */
 export interface TerrainTextureLayer {
+    name?: string;
     textureId?: string; // textures domain id; a layer without one renders flat grey
-    tiling: number;     // texture repeats across the terrain width
+    normalTextureId?: string;
+    roughnessTextureId?: string;
+    heightTextureId?: string;
+    tiling: number;     // texture repeats across the terrain width; tileSize wins over it
+    tileSize?: number;  // world metres one tile covers
+    rotation?: number;  // degrees the textures are turned by
+    tint?: string;      // colour the albedo is multiplied by
+    roughness?: number;
+    normalStrength?: number;
+    heightContrast?: number; // above 0: its height map decides where it shows first
+    cliffProjection?: boolean;
+    variation?: number;
+    grass?: TerrainGrassVariety[]; // what grows by itself wherever the layer is painted
+}
+
+/** A model that grows by itself where a terrain layer is painted. */
+export interface TerrainGrassVariety {
+    modelId: string;
+    density: number;   // copies per square metre
+    scale: [number, number];
+    fadeStart: number; // metres from the camera where it starts to thin out
+    fadeEnd: number;   // metres where none is left
+    randomRotation?: boolean;
+    alignToSurface?: boolean;
+    castShadow?: boolean;
 }
 
 export interface TerrainData {
@@ -141,11 +185,33 @@ export interface TerrainData {
     heights?: number[];
     heightfield?: TerrainHeightfieldReference;
     textureId?: string; // Optional texture override
-    textureLayers?: TerrainTextureLayer[]; // at most 4, blended by the splat map
+    textureLayers?: TerrainTextureLayer[]; // at most 8, blended by the splat maps
     // Flattened (resolution + 1)^2 * 4 RGBA weights (0-255, heights order). In memory these are
     // resolved from `splatmap`; persisted documents carry only the reference.
     splat?: number[];
     splatmap?: TerrainSplatmapReference;
+    // The same for layers 5 to 8, only there once a terrain has more than four.
+    splat2?: number[];
+    splatmap2?: TerrainSplatmapReference;
+    // resolution * resolution cells cut out of the terrain, row by row: non-zero is a hole. In memory
+    // these are resolved from `holemap` (red channel); persisted documents carry only the reference.
+    holes?: number[];
+    holemap?: TerrainSplatmapReference;
+    // Sculpting kept apart so it can be hidden, faded, merged or removed later (terrainEditLayers.ts).
+    // `heights` is always the finished result; only the editor reads these.
+    editLayers?: TerrainEditLayer[];
+    activeEditLayer?: string;
+}
+
+export interface TerrainEditLayer {
+    id: string;
+    name: string;
+    visible: boolean;
+    locked: boolean;
+    opacity: number;
+    // What this layer changes, sample by sample. In memory these are resolved from `heightfield`.
+    deltas?: number[];
+    heightfield?: TerrainHeightfieldReference;
 }
 
 export interface SkyConfig {
@@ -207,6 +273,7 @@ export interface LevelObject {
   spawnConfig?: SpawnConfig; // Only if type === 'spawn_point'
   audioConfig?: AudioConfig; // Only if type === 'audio_emitter'
   terrainData?: TerrainData; // Only if type === 'terrain'
+  foliageData?: FoliageData; // Only if type === 'foliage_set'
   skyConfig?: SkyConfig;     // Only if type === 'sky_sphere'
   /** Transform parent in the same level; position/rotation/scale are local to it. */
   parentId?: string | null;
@@ -234,11 +301,45 @@ export interface PrefabData {
   createdAt?: number;
 }
 
+/** A stretch of a take that comes in as a clip of its own. */
+export interface ClipRange {
+  /** The take it is cut from, by its name in the file. */
+  take: string;
+  /** The clip's name: what animation graphs and blueprints know it by. */
+  name: string;
+  /** Seconds from the take's first frame. */
+  start: number;
+  end: number;
+  /** Whether the clip loops when it is put to use. */
+  loop: boolean;
+  /** Move the clip so the character starts where the take starts, not wherever it has walked to by then. Absent: when it has gone far. */
+  recentre?: boolean;
+  /** The take is a clip imported onto the model from a file of its own, by that clip's name. */
+  attached?: boolean;
+}
+
 /** Per-model import options stored on the model document. */
 export interface ModelImportSettings {
   /** Scale the model so its largest dimension equals targetSize (the old behaviour forced 5). */
   normalize: boolean;
   targetSize: number;
+  /** Bring in the file's animation clips. Absent: yes. */
+  animation?: boolean;
+  /** Takes to leave out, by their names in the file. */
+  excludedClips?: string[];
+  /** Clips cut from the takes. A take with ranges can be left out itself, and is still read for them. */
+  clipRanges?: ClipRange[];
+  /** Largest change a dropped animation key may make to its track. Absent: the default, which shows no difference. */
+  keyThreshold?: number;
+  /** Bring in the file's blend shapes. Absent: yes. */
+  morphTargets?: boolean;
+  /** Keep meshes a rigged file's skeleton does not move. Absent: yes, as models imported before there was a choice were. */
+  looseMeshes?: boolean;
+  /** Work normals out from the faces, with edges sharper than smoothingAngle kept hard, rather than reading the file's. */
+  recomputeNormals?: boolean;
+  smoothingAngle?: number;
+  /** Generate tangents for normal maps. Absent: yes. */
+  tangents?: boolean;
 }
 
 export const DEFAULT_MODEL_IMPORT_SETTINGS: ModelImportSettings = { normalize: true, targetSize: 5 };
@@ -704,12 +805,15 @@ export interface SceneContextType {
   // Model Actions
   addModel: (file: File, category: AssetCategory) => Promise<void>;
   /** Import with explicit options; the settings are stored on the model document. */
-  importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory) => Promise<void>;
+  importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory, images?: readonly File[]) => Promise<void>;
+  readModelSource: (modelId: string) => Promise<File>;
+  readModelSourceImages: (modelId: string) => Promise<File[]>;
+  readClipTakes: (modelId: string, signal?: AbortSignal) => Promise<ClipTakeSource>;
   /**
    * Replace a model's source file in place (id, references and settings are kept), or without a
    * file read its stored source again; `settings` replaces its import settings (its size).
    */
-  reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings) => Promise<void>;
+  reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings, images?: readonly File[], category?: AssetCategory) => Promise<boolean | undefined>;
   /** Rename and/or move a model; rejects when the change cannot be saved. */
   updateModel: (id: string, updates: AssetInfoUpdate) => Promise<void>;
   removeModel: (id: string) => void;
@@ -718,12 +822,16 @@ export interface SceneContextType {
   selectModel: (id: string | null) => void;
   addAnimations: (files: File[], modelId: string) => Promise<void>;
   retextureModel: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<void>;
-  previewTexture: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<void>;
+  previewTexture: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<string>;
+  setModelTextureOverrides: (modelId: string, overrides: Record<string, string>) => Promise<void>;
+  adoptHostTexture: (id: string, name: string, assetId: string, dimensions: { width: number; height: number }) => Promise<void>;
   resetModelTexture: (modelId: string) => Promise<void>;
   /** Persist a model's material overrides and apply them to its loaded object; rejects when they cannot be saved. */
   updateModelMaterialOverrides: (modelId: string, overrides: MaterialOverrides) => Promise<void>;
   /** Adds a mirrored copy (left and right swapped) of one of a model's clips. */
   mirrorClip: (modelId: string, clipName: string) => Promise<void>;
+  updateModelBoneRoles: (modelId: string, roles: StoredBoneRole[]) => Promise<void>;
+  saveModelSkinPaint: (modelId: string, encode: () => SkinPaintFile | null) => Promise<void>;
 
   // Texture Actions
   textures: TextureData[];
@@ -745,7 +853,7 @@ export interface SceneContextType {
   removeAttachment: (id: string) => void;
 
   // Socket Actions
-  addSocket: (parentModelId: string, name: string) => void;
+  addSocket: (parentModelId: string, name: string, boneName?: string) => void;
   updateSocket: (id: string, updates: Partial<SocketData>) => void;
   removeSocket: (id: string) => void;
   triggerSocketFlash: (socketId: string) => void;

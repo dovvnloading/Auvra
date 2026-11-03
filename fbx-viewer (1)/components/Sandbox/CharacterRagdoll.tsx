@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import { useRapier } from '@react-three/rapier';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
-import { usePhysicsAvailable } from '../../runtime/physics';
+import { usePhysicsAvailable } from '../../runtime/physicsQueries';
 import { buildRagdollPlan, createRagdoll, type Ragdoll } from '../../runtime/ragdoll';
 
 const RagdollBody: React.FC<{ model: THREE.Object3D; onUnavailable?: () => void }> = ({ model, onUnavailable }) => {

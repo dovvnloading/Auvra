@@ -181,6 +181,23 @@ describe('SingleStateConfig playback settings', () => {
     fireEvent.blur(input);
   };
 
+  it('takes up whether a clip loops when given a clip that says so', () => {
+    const updateState = vi.fn();
+    render(createElement(SingleStateConfig, {
+      node: state(), updateState,
+      clipOptions: [{ label: 'run', value: 'run' }, { label: 'jump', value: 'jump' }, { label: 'walk', value: 'walk' }],
+      clipLoop: (name: string) => (name === 'jump' ? false : undefined),
+    }));
+    const pick = (name: string) => {
+      fireEvent.click(screen.getAllByRole('combobox')[0]);
+      fireEvent.click(screen.getByRole('option', { name }));
+    };
+    pick('jump');
+    expect(updateState).toHaveBeenLastCalledWith({ clipName: 'jump', loop: false });
+    pick('walk');
+    expect(updateState).toHaveBeenLastCalledWith({ clipName: 'walk' });
+  });
+
   it('shows a default play rate of 1 and commits only finite rates', () => {
     const updateState = renderConfig(state());
     expect(screen.getByRole('button', { name: 'Edit Rate' })).toHaveTextContent('1.00');

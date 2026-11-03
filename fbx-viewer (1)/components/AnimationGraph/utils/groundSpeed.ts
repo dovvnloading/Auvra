@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { humanoidRoles } from '../../../utils/retargeting';
 import { boneKey } from './boneMask';
 
 /**
@@ -21,6 +22,7 @@ export const MAX_GROUND_SPEED_RATE = 2;
 
 /** Feet read most precisely by the toes, else by the ankles. */
 const FOOT_PAIRS = [['lefttoebase', 'righttoebase'], ['lefttoe', 'righttoe'], ['leftfoot', 'rightfoot']];
+const FOOT_ROLE_PAIRS = [['LeftToes', 'RightToes'], ['LeftFoot', 'RightFoot']];
 const HIPS_KEYS = ['hips', 'pelvis', 'root'];
 
 const speedCache = new WeakMap<THREE.AnimationClip, Map<string, number>>();
@@ -36,9 +38,21 @@ const findByKey = (root: THREE.Object3D, keys: readonly string[]): THREE.Object3
     return null;
 };
 
+/** The bone in `role` on a rig whose names say nothing, read from its shape. */
+const findByRole = (root: THREE.Object3D, roles: readonly string[]): THREE.Object3D | null => {
+    const bones: THREE.Object3D[] = [];
+    root.traverse((node) => { if ((node as THREE.Bone).isBone) bones.push(node); });
+    const read = humanoidRoles(bones, root);
+    for (const role of roles) {
+        const found = bones.find((bone) => read.get(bone) === role);
+        if (found) return found;
+    }
+    return null;
+};
+
 /** The model's bones alone (no meshes or attachments), placed under a root as the model places them. */
 const boneRig = (model: THREE.Object3D): { root: THREE.Object3D; hips: THREE.Object3D } | null => {
-    const hips = findByKey(model, HIPS_KEYS);
+    const hips = findByKey(model, HIPS_KEYS) ?? findByRole(model, ['Hips']);
     if (!hips) return null;
     const copyBones = (bone: THREE.Object3D): THREE.Object3D => {
         const copy = bone.clone(false);
@@ -75,7 +89,8 @@ export const clipGroundSpeed = (model: THREE.Object3D, clip: THREE.AnimationClip
 
     let speed = 0;
     const rig = boneRig(model);
-    const feet = rig ? FOOT_PAIRS.map(pair => pair.map(key => findByKey(rig.root, [key]))).find(pair => pair.every(Boolean)) as THREE.Object3D[] | undefined : undefined;
+    const feet = rig ? (FOOT_PAIRS.map(pair => pair.map(key => findByKey(rig.root, [key]))).find(pair => pair.every(Boolean))
+        ?? FOOT_ROLE_PAIRS.map(pair => pair.map(role => findByRole(rig.root, [role]))).find(pair => pair.every(Boolean))) as THREE.Object3D[] | undefined : undefined;
     if (rig && feet && clip.duration > 0) {
         const mixer = new THREE.AnimationMixer(rig.root);
         try {

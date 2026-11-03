@@ -4,7 +4,7 @@ import { AI_CONFIG, AIState, AITuning, DEFAULT_AI_TUNING } from './AIConfig';
 import { usesPathfinding } from './AIStateMachine';
 import { advanceWaypoint, useNavMeshContext, type LevelNavMesh } from '../../../runtime/navigation';
 import type { NavAgent } from '../../../runtime/navMesh';
-import { PLAYER_PHYSICS_ID, usePhysicsQueries } from '../../../runtime/physics';
+import { PLAYER_PHYSICS_ID, usePhysicsQueries } from '../../../runtime/physicsQueries';
 
 interface LocomotionInput {
   enemyObject: THREE.Object3D;

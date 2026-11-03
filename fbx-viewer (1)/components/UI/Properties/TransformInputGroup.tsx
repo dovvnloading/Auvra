@@ -18,7 +18,7 @@ export const TransformInputGroup: React.FC<TransformInputGroupProps> = ({ label,
 
   return (
     <div className="space-y-1.5">
-      <div className="text-[9px] text-gray-500 font-bold uppercase tracking-wider pl-0.5">{label}</div>
+      <div className="text-2xs text-gray-500 font-bold pl-0.5">{label}</div>
       <div className="grid grid-cols-3 gap-2">
          <ScrubbableInput 
             label="X" 

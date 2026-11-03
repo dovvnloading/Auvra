@@ -1,4 +1,8 @@
 
+import { AUTHORED_SOCKETS_KEY, type AuthoredSocket } from '../utils/modelConventions';
+import type { StoredBoneRole } from '../utils/retargeting';
+import type { SkinPaintFile } from '../utils/skinPaint/skinPaintFile';
+import type { ClipTakeSource } from '../utils/clipTakes';
 import React, { createContext, useContext, ReactNode, useState, useCallback } from 'react';
 import { 
     LoadedModelData, AttachmentData, SocketData, TextureData, AudioData, Blueprint, 
@@ -24,18 +28,26 @@ interface AssetContextType {
   // Models
   models: LoadedModelData[];
   addModel: (file: File, category: AssetCategory) => Promise<void>;
-  importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory) => Promise<void>;
-  reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings) => Promise<void>;
+  importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory, images?: readonly File[]) => Promise<void>;
+  readModelSource: (modelId: string) => Promise<File>;
+  readModelSourceImages: (modelId: string) => Promise<File[]>;
+  readClipTakes: (modelId: string, signal?: AbortSignal) => Promise<ClipTakeSource>;
+  /** Whether the model was saved with what it was given. */
+  reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings, images?: readonly File[], category?: AssetCategory) => Promise<boolean | undefined>;
   updateModel: (id: string, updates: AssetInfoUpdate) => Promise<void>;
   removeModel: (id: string) => void;
   placeInScene: (id: string) => void; 
   removeFromScene: (id: string) => void; 
   addAnimations: (files: File[], modelId: string) => Promise<void>;
   retextureModel: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<void>;
-  previewTexture: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<void>;
+  /** Puts a picture on a model's map, or on every material without one. Gives the new map's id. */
+  previewTexture: (modelId: string, textureUrl: string, targetTextureUuid?: string) => Promise<string>;
+  setModelTextureOverrides: (modelId: string, overrides: Record<string, string>) => Promise<void>;
   resetModelTexture: (modelId: string) => Promise<void>;
   updateModelMaterialOverrides: (modelId: string, overrides: MaterialOverrides) => Promise<void>;
   mirrorClip: (modelId: string, clipName: string) => Promise<void>;
+  updateModelBoneRoles: (modelId: string, roles: StoredBoneRole[]) => Promise<void>;
+  saveModelSkinPaint: (modelId: string, encode: () => SkinPaintFile | null) => Promise<void>;
   setModels: (models: LoadedModelData[]) => void;
 
   // Attachments
@@ -48,7 +60,7 @@ interface AssetContextType {
 
   // Sockets
   sockets: SocketData[];
-  addSocket: (parentModelId: string, name: string) => void;
+  addSocket: (parentModelId: string, name: string, boneName?: string) => void;
   updateSocket: (id: string, updates: Partial<SocketData>) => void;
   removeSocket: (id: string) => void;
   setSockets: (sockets: SocketData[]) => void;
@@ -58,6 +70,7 @@ interface AssetContextType {
   // Textures
   textures: TextureData[];
   addTexture: (file: File) => Promise<string | null>;
+  adoptHostTexture: (id: string, name: string, assetId: string, dimensions: { width: number; height: number }) => Promise<void>;
   saveTextureToLibrary: (base64: string, name: string) => Promise<string | null>;
   removeTexture: (id: string) => void;
   updateTexture: (id: string, updates: AssetInfoUpdate) => Promise<void>;
@@ -131,7 +144,10 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     graphManager.removeGraphData(id, false);
     blueprintManager.unlinkModelFromBlueprints(id);
     emitCascade('model', id);
-  }, selectedModelId, selectModel, clearModel);
+  }, selectedModelId, selectModel, clearModel, (model) => {
+    const fileSockets = model.object.userData[AUTHORED_SOCKETS_KEY] as AuthoredSocket[] | undefined;
+    if (fileSockets?.length) void socketManager.addFileSockets(model.id, fileSockets);
+  });
 
   const attachmentManager = useAttachmentManager(modelManager.models, setIsLoading);
   const socketManager = useSocketManager();
@@ -175,6 +191,9 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     models: modelManager.models,
     addModel: modelManager.addModel,
     importModelWithOptions: modelManager.importModelWithOptions,
+    readModelSource: modelManager.readModelSource,
+    readModelSourceImages: modelManager.readModelSourceImages,
+    readClipTakes: modelManager.readClipTakes,
     reimportModel: modelManager.reimportModel,
     updateModel: modelManager.updateModel,
     removeModel: modelManager.removeModel,
@@ -183,9 +202,12 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     addAnimations: modelManager.addAnimations,
     retextureModel: modelManager.retextureModel,
     previewTexture: modelManager.previewTexture,
+    setModelTextureOverrides: modelManager.setModelTextureOverrides,
     resetModelTexture: modelManager.resetModelTexture,
     updateModelMaterialOverrides: modelManager.updateModelMaterialOverrides,
     mirrorClip: modelManager.mirrorClip,
+    updateModelBoneRoles: modelManager.updateModelBoneRoles,
+    saveModelSkinPaint: modelManager.saveModelSkinPaint,
     setModels: modelManager.setModels,
 
     // Attachments
@@ -208,6 +230,7 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     // Textures
     textures: textureManager.textures,
     addTexture: textureManager.addTexture,
+    adoptHostTexture: textureManager.adoptHostTexture,
     saveTextureToLibrary: textureManager.saveTextureToLibrary,
     removeTexture,
     updateTexture: textureManager.updateTexture,

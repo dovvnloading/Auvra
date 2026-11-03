@@ -9,7 +9,7 @@ import { useAIBrain } from './AI/useAIBrain';
 import { useBehaviorBrain, type EnemyFireHandler } from './AI/useBehaviorBrain';
 import type { ResolvedWeapon } from '../../runtime/weapons';
 import { useAILocomotion } from './AI/useAILocomotion';
-import { usePhysicsQueries } from '../../runtime/physics';
+import { usePhysicsQueries } from '../../runtime/physicsQueries';
 import { CHEST_HEIGHT, EYE_HEIGHT, characterHeight, lineOfSight, useNoiseBus } from '../../runtime/perception';
 import type { Perception } from './AI/AISenses';
 import { SplinePatrol } from '../../runtime/patrolPath';

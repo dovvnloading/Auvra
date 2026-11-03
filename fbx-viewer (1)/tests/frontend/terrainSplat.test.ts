@@ -22,7 +22,9 @@ import {
   bindTerrainLayers,
   createTerrainLayerMaterial,
   createTerrainSplatTexture,
+  getEmptySplat,
   getNeutralLayerTexture,
+  setTerrainSplatTextures,
   patchTerrainLayerShader,
 } from '../../components/Environment/Terrain/terrainLayerMaterial';
 
@@ -76,7 +78,7 @@ describe('terrain splat codec', () => {
 });
 
 describe('terrain layers', () => {
-  it('keeps at most four layers with a positive tiling', () => {
+  it('gives every layer a positive tiling and drops what is not a texture id', () => {
     const layers = normalizeTerrainLayers([
       { textureId: 'grass', tiling: 8 },
       { textureId: '', tiling: -1 },
@@ -89,6 +91,7 @@ describe('terrain layers', () => {
       { tiling: DEFAULT_TERRAIN_LAYER_TILING },
       { tiling: DEFAULT_TERRAIN_LAYER_TILING },
       { tiling: DEFAULT_TERRAIN_LAYER_TILING },
+      { textureId: 'snow', tiling: 2 },
     ]);
     expect(normalizeTerrainLayers(undefined)).toEqual([]);
   });
@@ -181,7 +184,7 @@ describe('terrain splat assets', () => {
 });
 
 describe('terrain layer material', () => {
-  it('patches the standard program to blend the layers by the splat map', () => {
+  it('patches the standard program to blend the layers by the splat maps', () => {
     const splat = createTerrainSplatTexture(createDefaultTerrainSplat(3, 3), 3, 3);
     const material = createTerrainLayerMaterial(splat);
     const shader = {
@@ -191,29 +194,63 @@ describe('terrain layer material', () => {
     };
     patchTerrainLayerShader(shader, material.userData.terrainUniforms);
     expect(shader.vertexShader).toContain('vTerrainSplatUv = vec2(');
-    expect(shader.fragmentShader).toContain('uniform sampler2D terrainLayer3;');
+    expect(shader.fragmentShader).toContain('uniform sampler2DArray terrainAlbedoArray;');
+    expect(shader.fragmentShader).toContain('uniform sampler2D terrainSplat2;');
     expect(shader.fragmentShader.indexOf('#include <map_fragment>'))
-      .toBeLessThan(shader.fragmentShader.indexOf('diffuseColor.rgb *= terrainColor;'));
+      .toBeLessThan(shader.fragmentShader.indexOf('diffuseColor.rgb *= terrainColor'));
+    expect(shader.fragmentShader.indexOf('#include <normal_fragment_maps>'))
+      .toBeLessThan(shader.fragmentShader.indexOf('terrainBlendedNormal );'));
     expect(shader.uniforms.terrainSplat.value).toBe(splat);
     expect(shader.uniforms.terrainSplatSize.value).toEqual(new THREE.Vector2(3, 3));
-    expect(material.customProgramCacheKey()).toBe('auvra-terrain-layers-v1');
+    expect(material.customProgramCacheKey()).toBe('auvra-terrain-layers-v2');
     material.dispose();
     splat.dispose();
   });
 
-  it('binds layer textures, tiling and the mask of existing layers', () => {
+  it('binds the arrays and each layer\'s look', () => {
     const splat = createTerrainSplatTexture(createDefaultTerrainSplat(2, 2), 2, 2);
     const material = createTerrainLayerMaterial(splat);
-    const grass = new THREE.Texture();
-    bindTerrainLayers(material, { textures: [grass, null], tilings: [8, 4], aspect: 0.5 });
+    const albedo = new THREE.DataArrayTexture();
+    const detail = new THREE.DataArrayTexture();
+    bindTerrainLayers(material, {
+      albedo,
+      detail,
+      width: 100,
+      depth: 50,
+      layers: [
+        { tileSize: 4, rotation: 90, normalStrength: 0.5 },
+        { tileSize: 8, heightContrast: 1.5, cliffProjection: true, roughness: 0.25, variation: 0.3 },
+      ],
+    });
     const uniforms = material.userData.terrainUniforms;
-    expect(uniforms.terrainLayer0.value).toBe(grass);
-    expect(uniforms.terrainLayer1.value).toBe(getNeutralLayerTexture());
-    expect(uniforms.terrainLayer2.value).toBe(getNeutralLayerTexture());
-    expect(uniforms.terrainLayerTiling.value.toArray()).toEqual([8, 4, 1, 1]);
-    expect(uniforms.terrainLayerMask.value.toArray()).toEqual([1, 1, 0, 0]);
-    expect(uniforms.terrainUvAspect.value.toArray()).toEqual([1, 0.5]);
+    expect(uniforms.terrainAlbedoArray.value).toBe(albedo);
+    expect(uniforms.terrainDetailArray.value).toBe(detail);
+    expect(uniforms.terrainLayerCount.value).toBe(2);
+    expect(uniforms.terrainLayerUv.value[0].x).toBeCloseTo(0.25);
+    expect(uniforms.terrainLayerUv.value[0].y).toBeCloseTo(0);
+    expect(uniforms.terrainLayerUv.value[0].z).toBeCloseTo(1);
+    expect(uniforms.terrainLayerLook.value[0].w).toBeCloseTo(0.5);
+    expect(uniforms.terrainLayerUv.value[1].w).toBeCloseTo(1.5);
+    expect(uniforms.terrainLayerSurface.value[1].toArray()).toEqual([0.25, 1, 0.3, 0]);
+    expect(uniforms.terrainHeightBlend.value).toBe(1);
+    expect(uniforms.terrainPlaneSize.value.toArray()).toEqual([100, 50]);
+    // Without maps, bounced light takes the flat colour.
+    expect(material.userData.rayAlbedoMaps).toEqual([getNeutralLayerTexture()]);
     material.dispose();
     splat.dispose();
+  });
+
+  it('never needs more than two samplers for its layers, and a second map only past four', () => {
+    const splat = createTerrainSplatTexture(createDefaultTerrainSplat(2, 2), 2, 2);
+    const material = createTerrainLayerMaterial(splat);
+    expect(material.userData.terrainUniforms.terrainSplat2.value).toBe(getEmptySplat());
+    const second = createTerrainSplatTexture(new Uint8Array(16), 2, 2);
+    setTerrainSplatTextures(material, splat, second);
+    expect(material.userData.terrainUniforms.terrainSplat2.value).toBe(second);
+    setTerrainSplatTextures(material, splat, null);
+    expect(material.userData.terrainUniforms.terrainSplat2.value).toBe(getEmptySplat());
+    material.dispose();
+    splat.dispose();
+    second.dispose();
   });
 });

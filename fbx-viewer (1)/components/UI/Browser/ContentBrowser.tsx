@@ -2,7 +2,7 @@ import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react'
 import { Filter, FileCode, FolderOpen } from 'lucide-react';
 import { useScene } from '../../../context/SceneContext';
 import { useNotification } from '../../../context/NotificationContext';
-import { AssetCategory, AudioData, LoadedModelData, ModelImportSettings, TextureData } from '../../../types';
+import { AssetCategory, AudioData, DEFAULT_MODEL_IMPORT_SETTINGS, LoadedModelData, ModelImportSettings, TextureData } from '../../../types';
 import { ThumbnailTooltip } from '../ThumbnailTooltip';
 import { BrowserToolbar } from './BrowserToolbar';
 import { ModelCard } from './ModelCard';
@@ -14,7 +14,8 @@ import { FolderCard } from './FolderCard';
 import { BreadcrumbBar } from './BreadcrumbBar';
 import { AssetContextMenu, type AssetMenuAction } from './AssetContextMenu';
 import { InlineNameInput, type InlineNameCommitSource } from './InlineNameInput';
-import { ImportOptionsDialog } from './ImportOptionsDialog';
+import { ImportOptionsDialog, type ImportChoice } from './ImportOptionsDialog';
+import { inspectModelFile } from '../../../utils/modelLoader';
 import {
     ASSET_DRAG_TYPE,
     MODEL_DRAG_TYPE,
@@ -35,6 +36,7 @@ import {
     type BrowserAssetKind,
 } from './browserFolders';
 import { selectAnimationTarget } from '../../../utils/animationBinding';
+import { withoutClipRanges } from '../../../utils/clipRanges';
 import { appAlert } from '../../../utils/appDialogs';
 
 type AssetInfoUpdate = { name?: string; folder?: string };
@@ -45,14 +47,16 @@ type AssetInfoUpdate = { name?: string; folder?: string };
  * rather than failing while the context does not expose it.
  */
 interface BrowserAssetActions {
-    importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory) => Promise<void>;
-    reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings) => Promise<void>;
+    importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory, images?: readonly File[]) => Promise<void>;
+    reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings, images?: readonly File[]) => Promise<void>;
+    readModelSource: (modelId: string) => Promise<File>;
+    readModelSourceImages: (modelId: string) => Promise<File[]>;
     updateModel: (id: string, updates: AssetInfoUpdate) => Promise<void> | void;
     updateTexture: (id: string, updates: AssetInfoUpdate) => Promise<void> | void;
     updateAudio: (id: string, updates: AssetInfoUpdate) => Promise<void> | void;
 }
 
-const ACTION_KEYS: readonly (keyof BrowserAssetActions)[] = ['importModelWithOptions', 'reimportModel', 'updateModel', 'updateTexture', 'updateAudio'];
+const ACTION_KEYS: readonly (keyof BrowserAssetActions)[] = ['importModelWithOptions', 'reimportModel', 'readModelSource', 'readModelSourceImages', 'updateModel', 'updateTexture', 'updateAudio'];
 
 const pickAssetActions = (scene: object): Partial<BrowserAssetActions> => {
     const source = scene as Record<string, unknown>;
@@ -376,20 +380,20 @@ export const ContentBrowser: React.FC = () => {
     const actionState = (available: boolean, unavailableReason: string): AssetMenuAction => ({ available, unavailableReason });
 
     // --- Import Handlers ---
-    const [importPromptFile, setImportPromptFile] = useState<File | null>(null);
-    const importPromptResolveRef = useRef<((settings: ModelImportSettings | null) => void) | null>(null);
+    const [importPrompt, setImportPrompt] = useState<{ file: File; remaining: number } | null>(null);
+    const importPromptResolveRef = useRef<((choice: ImportChoice | null) => void) | null>(null);
 
-    const requestImportSettings = (file: File) => new Promise<ModelImportSettings | null>((resolve) => {
+    const requestImportSettings = (file: File, remaining: number) => new Promise<ImportChoice | null>((resolve) => {
         importPromptResolveRef.current?.(null);
         importPromptResolveRef.current = resolve;
-        setImportPromptFile(file);
+        setImportPrompt({ file, remaining });
     });
 
-    const settleImportPrompt = useCallback((settings: ModelImportSettings | null) => {
+    const settleImportPrompt = useCallback((choice: ImportChoice | null) => {
         const resolve = importPromptResolveRef.current;
         importPromptResolveRef.current = null;
-        setImportPromptFile(null);
-        resolve?.(settings);
+        setImportPrompt(null);
+        resolve?.(choice);
     }, []);
     const cancelImportPrompt = useCallback(() => settleImportPrompt(null), [settleImportPrompt]);
 
@@ -407,7 +411,9 @@ export const ContentBrowser: React.FC = () => {
             return;
         }
         const importWithOptions = assetActions.importModelWithOptions;
-        for (const file of files) {
+        // Set by "Import all": the rest of a batch comes in the same way, without asking again.
+        let forTheRest: ModelImportSettings | null = null;
+        for (const [index, file] of files.entries()) {
             if (!isModelFileName(file.name)) {
                 notifyError(`${file.name} is not a supported model file (${MODEL_FILE_ACCEPT.split(',').filter((entry) => entry.startsWith('.')).join(', ')}).`);
                 continue;
@@ -416,11 +422,12 @@ export const ContentBrowser: React.FC = () => {
                 await addModel(file, category);
                 continue;
             }
-            const settings = await requestImportSettings(file);
+            const choice: ImportChoice | null = forTheRest ? { settings: forTheRest, images: [], applyToRest: true } : await requestImportSettings(file, files.length - index - 1);
             // Cancel stops the rest of the batch.
-            if (!settings) break;
+            if (!choice) break;
+            if (choice.applyToRest) forTheRest = withoutClipRanges(choice.settings);
             try {
-                await importWithOptions(file, settings, category);
+                await importWithOptions(file, choice.settings, category, choice.images);
             } catch (error) {
                 notifyError(`Could not import ${file.name}`, error);
             }
@@ -451,15 +458,15 @@ export const ContentBrowser: React.FC = () => {
     // --- Import size: an imported model read again from its source at another size ---
     const [sizeTarget, setSizeTarget] = useState<LoadedModelData | null>(null);
 
-    const applyImportSize = async (settings: ModelImportSettings) => {
+    const applyImportSize = async ({ settings, images }: ImportChoice) => {
         const model = sizeTarget;
         setSizeTarget(null);
         const reimport = assetActions.reimportModel;
         if (!model || !reimport) return;
         try {
-            await reimport(model.id, null, settings);
+            await reimport(model.id, null, settings, images);
         } catch (error) {
-            notifyError(`Could not resize ${model.name}`, error);
+            notifyError(`Could not import ${model.name} again`, error);
         }
     };
 
@@ -554,7 +561,7 @@ export const ContentBrowser: React.FC = () => {
 
     return (
         <div
-            className="h-64 bg-gray-900/95 backdrop-blur-md border-t border-white/10 flex flex-col shadow-[0_-4px_16px_rgba(0,0,0,0.5)] z-10"
+            className="h-64 bg-gray-900/95 border-t border-white/10 flex flex-col shadow-[0_-4px_16px_rgba(0,0,0,0.5)] z-10"
             onMouseMove={handleMouseMove}
         >
             <BrowserToolbar
@@ -653,14 +660,14 @@ export const ContentBrowser: React.FC = () => {
 
             {/* Status Bar */}
             <div className="h-6 bg-gray-950/80 border-t border-white/10 flex items-center px-3 justify-between shrink-0">
-                <div className="text-[10px] text-gray-500">
+                <div className="text-2xs text-gray-500">
                     {activeTab === 'models'
                         ? `${filteredLibraryItems.length} Items${visibleSubfolders.length ? `, ${visibleSubfolders.length} Folders` : ''}`
                         : `${blueprints.length} Blueprints`
                     }
                 </div>
                 {isLoading && (
-                    <div className="flex items-center gap-2 text-[10px] text-white">
+                    <div className="flex items-center gap-2 text-2xs text-white">
                         <span className="w-2 h-2 rounded-full bg-white animate-pulse"></span>
                         Processing...
                     </div>
@@ -699,16 +706,30 @@ export const ContentBrowser: React.FC = () => {
             {sizeTarget && (
                 <ImportOptionsDialog
                     name={sizeTarget.name}
-                    initialSettings={sizeTarget.importSettings}
+                    inspect={async (beside) => {
+                        if (!assetActions.readModelSource) return null;
+                        // A material file kept with the model says what its materials are.
+                        const kept = !beside && assetActions.readModelSourceImages && sizeTarget.sourceImages?.some((image) => /\.mtl$/i.test(image.name))
+                            ? (await assetActions.readModelSourceImages(sizeTarget.id)).filter((file) => /\.mtl$/i.test(file.name))
+                            : [];
+                        return inspectModelFile(await assetActions.readModelSource(sizeTarget.id), beside ?? kept);
+                    }}
+                    readFile={() => assetActions.readModelSource!(sizeTarget.id)}
+                    initialSettings={sizeTarget.importSettings ?? DEFAULT_MODEL_IMPORT_SETTINGS}
+                    knownImages={sizeTarget.sourceImages?.map((image) => image.name)}
                     confirmLabel="Apply"
-                    onConfirm={(settings) => { void applyImportSize(settings); }}
+                    onConfirm={(choice) => { void applyImportSize(choice); }}
                     onCancel={() => setSizeTarget(null)}
                 />
             )}
 
-            {importPromptFile && (
+            {importPrompt && (
                 <ImportOptionsDialog
-                    name={importPromptFile.name}
+                    key={importPrompt.file.name}
+                    name={importPrompt.file.name}
+                    inspect={(beside) => inspectModelFile(importPrompt.file, beside)}
+                    readFile={() => Promise.resolve(importPrompt.file)}
+                    remaining={importPrompt.remaining}
                     onConfirm={settleImportPrompt}
                     onCancel={cancelImportPrompt}
                 />

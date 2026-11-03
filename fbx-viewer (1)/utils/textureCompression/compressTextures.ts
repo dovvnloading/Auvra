@@ -37,6 +37,12 @@ const sourceImages = new WeakMap<THREE.Texture, unknown>();
 export const textureSourceImage = (texture: THREE.Texture): unknown =>
     sourceImages.get(texture) ?? ((texture as THREE.CompressedTexture).isCompressedTexture ? null : texture.image);
 
+/** Which way up a compressed texture's source image was to be read, as a compressed texture no longer says. */
+const sourceFlips = new WeakMap<THREE.Texture, boolean>();
+
+/** Which way up `textureSourceImage` is: whether its top row is the top of the texture's V. */
+export const textureSourceFlipY = (texture: THREE.Texture): boolean => sourceFlips.get(texture) ?? texture.flipY;
+
 let extensions: ReadonlySet<string> | null = null;
 /** The WebGL extensions this device offers, the compressed texture formats among them, probed once. */
 export const gpuExtensions = (): ReadonlySet<string> => {
@@ -232,7 +238,10 @@ export const compressModelTextures = async (root: THREE.Object3D, keepSources = 
             const result = await pool.compress(bitmap, kind === 'colour' && texture.colorSpace !== THREE.SRGBColorSpace ? 'data' : kind, texture.flipY);
             const compressed = compressedTexture(texture, result);
             // Only editor tools read these, and a 4096 image holds far more than its compressed texture.
-            if (keepSources) sourceImages.set(compressed, sourceImages.get(texture) ?? texture.image);
+            if (keepSources) {
+                sourceImages.set(compressed, sourceImages.get(texture) ?? texture.image);
+                sourceFlips.set(compressed, textureSourceFlipY(texture));
+            }
             for (const { material, key } of slots) {
                 (material as unknown as Record<string, THREE.Texture>)[key] = compressed;
                 if (result.format === 'bc5') rebuildNormalZ(material);

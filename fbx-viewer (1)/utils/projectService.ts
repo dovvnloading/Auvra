@@ -66,6 +66,39 @@ export class ProjectHostError extends Error {
   }
 }
 
+/** The most one file can be in a project, as the host protocol states it. */
+const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
+/**
+ * How much of a file passes to or from the host at a time. WebView2 holds a whole
+ * request or response body in memory several times over, so a large file moved in
+ * one go can use up the machine and take the editor down with it.
+ */
+const ASSET_PIECE_BYTES = 16 * 1024 * 1024;
+/** The longest file name the host protocol takes; Windows allows longer ones. */
+const MAX_STORED_NAME_LENGTH = 128;
+
+/** What to tell someone when the project would not take a file, by the host's answer. */
+const uploadFailure = (status: number): string => ({
+  409: 'The project was closed before the file finished sending.',
+  413: 'The file is larger than the 2 GB a project can take.',
+  415: 'The file\'s contents do not match its file type.',
+  423: 'This project is read-only.',
+  507: 'The disk is full.',
+}[status] ?? 'The project could not store this file.');
+
+/** A file's name as the host keeps it: shortened where it must be, with its extension intact. */
+export const storedFileName = (name: string): string => {
+  const clean = name.replace(/[\\/:*?"<>|\r\n]/g, '_') || 'file';
+  if (clean.length <= MAX_STORED_NAME_LENGTH) return clean;
+  const extension = /\.[^.]{1,16}$/.exec(clean)?.[0] ?? '';
+  let kept = '';
+  for (const character of clean.slice(0, clean.length - extension.length)) {
+    if (kept.length + character.length + extension.length > MAX_STORED_NAME_LENGTH) break;
+    kept += character;
+  }
+  return kept + extension;
+};
+
 /**
  * The only browser-side entry point for project persistence. It speaks the
  * versioned host boundary and deliberately has no filesystem, archive, or
@@ -77,6 +110,7 @@ export class ProjectService {
   private session: string | null = null;
   private requestCounter = 0;
   private requestQueue: Promise<unknown> = Promise.resolve();
+  private uploadQueue: Promise<unknown> = Promise.resolve();
   private listeners = new Set<(status: ProjectStatus) => void>();
   private unsubscribeHost: (() => void) | null = null;
 
@@ -93,10 +127,19 @@ export class ProjectService {
     };
   }
 
+  /** Refuse a file no project could store, before anything is read or sent. */
+  async assertStorable(file: Blob): Promise<void> {
+    if (file.size > MAX_UPLOAD_BYTES) throw new Error(uploadFailure(413));
+    if (file.size > 0) return;
+    // A file the browser cannot reach reads as empty too, until something asks for its contents.
+    await file.arrayBuffer();
+    throw new Error('The file is empty.');
+  }
+
   /** Fail before optimistic UI mutations when the host has no writable project. */
   assertWritable(): void {
     this.requireProjectId();
-    if (this.status.readOnly) throw new Error('Project is read-only');
+    if (this.status.readOnly) throw new Error('This project is read-only.');
   }
 
   subscribe(listener: (status: ProjectStatus) => void): () => void {
@@ -187,12 +230,31 @@ export class ProjectService {
     return { url: result.url, method: 'PUT', mime: result.mime };
   }
 
-  async resolveAsset(assetId: string, diagnostics?: DiagnosticContext): Promise<string> {
+  private async assetTicket(assetId: string, diagnostics?: DiagnosticContext): Promise<{ url: string; size?: number; mime?: string }> {
     if (!/^[A-Fa-f0-9]{64}$/.test(assetId)) throw new Error('Asset identity is invalid');
-    const result = await this.call<{ url?: string; method?: string }>('asset.resolve', { projectId: this.requireProjectId(), assetId }, diagnostics);
+    const result = await this.call<{ url?: string; method?: string; size?: number; mime?: string }>('asset.resolve', { projectId: this.requireProjectId(), assetId }, diagnostics);
     if (!result?.url || !/^https:\/\/assets\.auvra\.local\/v1\/get\/[A-Za-z0-9_-]{43}$/.test(result.url)) throw new Error('Host returned an invalid asset URL');
     if (result.method !== 'GET') throw new Error('Host returned an invalid asset resolve ticket');
-    return result.url;
+    return { url: result.url, size: result.size, mime: result.mime };
+  }
+
+  async resolveAsset(assetId: string, diagnostics?: DiagnosticContext): Promise<string> {
+    return (await this.assetTicket(assetId, diagnostics)).url;
+  }
+
+  /** A stored file as a response. A large one comes a piece at a time, and a piece the host refuses is the answer. */
+  async fetchAsset(assetId: string, options: { signal?: AbortSignal; diagnostics?: DiagnosticContext } = {}): Promise<globalThis.Response> {
+    const { url, size, mime } = await this.assetTicket(assetId, options.diagnostics);
+    if (!size || size <= ASSET_PIECE_BYTES) return fetch(url, { method: 'GET', signal: options.signal });
+    const pieces: Blob[] = [];
+    for (let start = 0; start < size; start += ASSET_PIECE_BYTES) {
+      const last = Math.min(start + ASSET_PIECE_BYTES, size) - 1;
+      const response = await fetch(url, { method: 'GET', headers: { Range: `bytes=${start}-${last}` }, signal: options.signal });
+      if (!response.ok) return response;
+      pieces.push(await response.blob());
+    }
+    const type = mime || 'application/octet-stream';
+    return new Response(new Blob(pieces, { type }), { headers: { 'Content-Type': type } });
   }
 
   /** Which of `keys` the host already holds a prepared model for, across all projects. */
@@ -201,46 +263,78 @@ export class ProjectService {
     return result?.preparedKeys ?? [];
   }
 
-  /** Hands the host a prepared model to keep under `key`. It is not project content, so a read-only project can do this. */
+  /**
+   * Hands the host a prepared model to keep under `key`. It is not project content, so a read-only
+   * project can do this. It goes a piece at a time, in turn with other files, as any file does.
+   */
   async uploadPreparedModel(key: string, model: ArrayBuffer, options: AssetTransferOptions = {}): Promise<void> {
     if (options.signal?.aborted) throw new DOMException('Asset upload was cancelled.', 'AbortError');
     const file = new File([model], `${key}.glb`, { type: PREPARED_MODEL_MIME });
-    const result = await this.call<{ url?: string; method?: string; mime?: string }>('asset.beginPreparedUpload', { projectId: this.requireProjectId(), key, size: file.size }, options.diagnostics);
-    if (!result?.url || !/^https:\/\/assets\.auvra\.local\/v1\/put\/[A-Za-z0-9_-]{43}$/.test(result.url)) throw new Error('Host returned an invalid asset upload URL');
-    if (result.method !== 'PUT' || result.mime !== PREPARED_MODEL_MIME) throw new Error('Host returned an invalid asset upload ticket');
-    await this.putAsset({ url: result.url, method: 'PUT', mime: result.mime }, file, options);
+    await this.assertStorable(file);
+    const run = async () => {
+      if (options.signal?.aborted) throw new DOMException('Asset upload was cancelled.', 'AbortError');
+      const result = await this.call<{ url?: string; method?: string; mime?: string }>('asset.beginPreparedUpload', { projectId: this.requireProjectId(), key, size: file.size }, options.diagnostics);
+      if (!result?.url || !/^https:\/\/assets\.auvra\.local\/v1\/put\/[A-Za-z0-9_-]{43}$/.test(result.url)) throw new Error('Host returned an invalid asset upload URL');
+      if (result.method !== 'PUT' || result.mime !== PREPARED_MODEL_MIME) throw new Error('Host returned an invalid asset upload ticket');
+      const ticket = { url: result.url, method: 'PUT' as const, mime: result.mime };
+      for (let start = 0; start < file.size; start += ASSET_PIECE_BYTES) {
+        if (options.signal?.aborted) throw new DOMException('Asset upload was cancelled.', 'AbortError');
+        await this.putPiece(ticket, file, start, Math.min(start + ASSET_PIECE_BYTES, file.size), options);
+      }
+    };
+    const sent = this.uploadQueue.then(run, run);
+    this.uploadQueue = sent.catch(() => undefined);
+    await sent;
   }
 
   async uploadAsset(file: File, options: AssetTransferOptions = {}): Promise<string> {
     if (options.signal?.aborted) throw new DOMException('Asset upload was cancelled.', 'AbortError');
+    await this.assertStorable(file);
+    // One at a time: the host stores one file at a time whatever is sent, and answers
+    // "busy" once its few request slots are taken. Each takes its ticket when its turn comes.
+    const run = () => this.sendAsset(file, options);
+    const sent = this.uploadQueue.then(run, run);
+    this.uploadQueue = sent.catch(() => undefined);
+    return sent;
+  }
+
+  private async sendAsset(file: File, options: AssetTransferOptions): Promise<string> {
+    if (options.signal?.aborted) throw new DOMException('Asset upload was cancelled.', 'AbortError');
     const mime = file.type || 'application/octet-stream';
     options.onPhase?.('project_upload');
-    const ticket = await this.beginAssetUpload(file, mime, file.name, options.diagnostics);
-    const assetId = await this.putAsset(ticket, file, options);
+    const ticket = await this.beginAssetUpload(file, mime, storedFileName(file.name), options.diagnostics);
+    let assetId: string | null = null;
+    for (let start = 0; start < file.size; start += ASSET_PIECE_BYTES) {
+      if (options.signal?.aborted) throw new DOMException('Asset upload was cancelled.', 'AbortError');
+      assetId = await this.putPiece(ticket, file, start, Math.min(start + ASSET_PIECE_BYTES, file.size), options);
+    }
     if (!assetId || !/^[A-Fa-f0-9]{64}$/.test(assetId)) throw new Error('Asset upload did not return a verified SHA-256 asset id');
+    options.onProgress?.(1);
     return assetId.toLowerCase();
   }
 
-  private putAsset(
+  private putPiece(
     ticket: { url: string; method: 'PUT'; mime: string },
     file: File,
+    start: number,
+    end: number,
     options: AssetTransferOptions,
   ): Promise<string | null> {
     // A file picked from disk is sent through a Blob that wraps it: WebView2 does not
     // pass a picked file's own body to the native asset handler, so its upload fails.
-    const body = new Blob([file], { type: ticket.mime });
+    const body = new Blob([file.slice(start, end)], { type: ticket.mime });
+    const range = `bytes ${start}-${end - 1}/${file.size}`;
     // XMLHttpRequest is deliberately used for this local, ticketed transfer:
     // Fetch has no upload-progress surface. The native WebView handler streams
     // the body on its bounded background owner.
     if (typeof XMLHttpRequest === 'undefined') {
       return fetch(ticket.url, {
         method: ticket.method,
-        headers: { 'Content-Type': ticket.mime },
+        headers: { 'Content-Type': ticket.mime, 'Content-Range': range },
         body,
         signal: options.signal,
       }).then((response) => {
-        if (!response.ok) throw new Error(`Asset upload failed (${response.status})`);
-        options.onProgress?.(1);
+        if (!response.ok) throw new Error(uploadFailure(response.status));
         return response.headers.get('X-Auvra-Asset-Sha256');
       });
     }
@@ -259,19 +353,18 @@ export class ProjectService {
       };
       request.open(ticket.method, ticket.url, true);
       request.setRequestHeader('Content-Type', ticket.mime);
+      request.setRequestHeader('Content-Range', range);
       request.upload.onprogress = (event) => {
-        const total = event.lengthComputable && event.total > 0 ? event.total : file.size;
-        if (total > 0) options.onProgress?.(Math.max(0, Math.min(1, event.loaded / total)));
+        options.onProgress?.(Math.max(0, Math.min(1, (start + event.loaded) / file.size)));
       };
       request.onload = () => finish(() => {
         if (request.status < 200 || request.status >= 300) {
-          reject(new Error(`Asset upload failed (${request.status})`));
+          reject(new Error(uploadFailure(request.status)));
           return;
         }
-        options.onProgress?.(1);
         resolve(request.getResponseHeader('X-Auvra-Asset-Sha256'));
       });
-      request.onerror = () => finish(() => reject(new Error('Asset upload failed.')));
+      request.onerror = () => finish(() => reject(new Error('The file could not be sent to the project.')));
       request.onabort = () => finish(() => reject(new DOMException('Asset upload was cancelled.', 'AbortError')));
       options.signal?.addEventListener('abort', onAbort, { once: true });
       if (options.signal?.aborted) onAbort();

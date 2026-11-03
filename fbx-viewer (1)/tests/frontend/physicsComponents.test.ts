@@ -12,7 +12,7 @@ import {
   resolveColliderSettings,
   resolveRigidBodySettings,
 } from '../../runtime/components/physicsComponents';
-import { createPhysicsQueries, objectIdFromUserData, physicsUserData, PLAYER_PHYSICS_ID } from '../../runtime/physics';
+import { createPhysicsQueries, objectIdFromUserData, physicsUserData, PLAYER_PHYSICS_ID } from '../../runtime/physicsQueries';
 import type { LevelComponent, LevelObject } from '../../types';
 import type { TriggerEvent } from '../../runtime/triggers';
 
@@ -39,7 +39,7 @@ describe('physics component definitions', () => {
     });
     expect(createComponent('rigidBody').props).toEqual({ type: 'dynamic', mass: 1, gravityScale: 1, lockRotation: false });
     expect(getComponentDefinition('collider')!.props.find(prop => prop.key === 'shape')!.options!.map(option => option.value))
-      .toEqual(['box', 'sphere', 'capsule', 'mesh']);
+      .toEqual(['box', 'sphere', 'capsule', 'mesh', 'model']);
     expect(getComponentDefinition('rigidBody')!.props.find(prop => prop.key === 'type')!.options!.map(option => option.value))
       .toEqual(['fixed', 'dynamic', 'kinematicPosition']);
   });
