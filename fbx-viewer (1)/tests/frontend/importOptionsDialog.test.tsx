@@ -22,7 +22,7 @@ const PERSON_BONES = ['mixamorig:Hips', 'mixamorig:Spine', 'mixamorig:Head', 'mi
 const open = async (read: ModelFileReport | null, props: Partial<React.ComponentProps<typeof ImportOptionsDialog>> = {}) => {
   const onConfirm = vi.fn<(choice: ImportChoice) => void>();
   const onCancel = vi.fn();
-  render(<ImportOptionsDialog readFile={async () => new File([], 'thing.fbx')} name="thing.fbx" inspect={async () => read} readFile={async () => new File([], 'thing.fbx')} onConfirm={onConfirm} onCancel={onCancel} {...props} />);
+  render(<ImportOptionsDialog name="thing.fbx" inspect={async () => read} readFile={async () => new File([], 'thing.fbx')} onConfirm={onConfirm} onCancel={onCancel} {...props} />);
   await waitFor(() => expect(screen.queryByText(/Reading the file/)).toBeNull());
   return { onConfirm, onCancel };
 };
@@ -291,7 +291,7 @@ describe('the import dialog', () => {
       ? report({ format: 'obj', materialFile: 'parts.mtl', images: [{ file: 'paint.png', embedded: false }] })
       : report({ format: 'obj', materialFile: 'parts.mtl', images: [{ file: 'parts.mtl', embedded: false }] })));
     const onConfirm = vi.fn<(choice: ImportChoice) => void>();
-    const { container } = render(<ImportOptionsDialog name="thing.obj" inspect={inspect} onConfirm={onConfirm} onCancel={vi.fn()} />);
+    const { container } = render(<ImportOptionsDialog readFile={async () => new File([], 'thing.fbx')} name="thing.obj" inspect={inspect} onConfirm={onConfirm} onCancel={vi.fn()} />);
     await waitFor(() => expect(screen.getByText('parts.mtl')).toBeTruthy());
     const mtl = new File(['newmtl Paint'], 'parts.mtl');
     const image = new File(['png'], 'paint.png');
