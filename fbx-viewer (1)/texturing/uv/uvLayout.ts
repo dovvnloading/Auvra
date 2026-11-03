@@ -158,16 +158,24 @@ const relaid = (geometry: THREE.BufferGeometry, layout: MeshLayout): THREE.Buffe
     const next = new THREE.BufferGeometry();
     const gather = (attribute: THREE.BufferAttribute | THREE.InterleavedBufferAttribute): THREE.BufferAttribute => {
         const size = attribute.itemSize;
-        const Ctor = (attribute.array as unknown as { constructor: new (length: number) => THREE.TypedArray }).constructor;
+        // The stored numbers are copied as they are: getComponent would turn normalized integers (glTF
+        // colours, skin weights, packed normals) into 0..1, which an integer array cannot hold.
+        const interleaved = (attribute as THREE.InterleavedBufferAttribute).isInterleavedBufferAttribute ? attribute as THREE.InterleavedBufferAttribute : null;
+        const stored = interleaved ? interleaved.data.array : attribute.array;
+        const stride = interleaved ? interleaved.data.stride : size;
+        const offset = interleaved ? interleaved.offset : 0;
+        const Ctor = (stored as unknown as { constructor: new (length: number) => THREE.TypedArray }).constructor;
         const array = new Ctor(layout.sourceOf.length * size);
         for (let i = 0; i < layout.sourceOf.length; i++) {
             const s = layout.sourceOf[i];
-            for (let c = 0; c < size; c++) array[i * size + c] = attribute.getComponent(s, c);
+            for (let c = 0; c < size; c++) array[i * size + c] = stored[s * stride + offset + c];
         }
         return new THREE.BufferAttribute(array, size, attribute.normalized);
     };
     for (const [name, attribute] of Object.entries(geometry.attributes)) {
-        if (name === 'uv') continue;
+        // The file's tangents follow its own coordinates, not the new ones: without them the renderer
+        // works the frame out from the new coordinates, as painting and carrying pictures over assume.
+        if (name === 'uv' || name === 'tangent') continue;
         next.setAttribute(name, gather(attribute));
     }
     next.setAttribute('uv', new THREE.BufferAttribute(layout.uv, 2));

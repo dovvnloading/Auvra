@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
+import { encodePng } from '../png';
 import { GLSL_LIBRARY } from './glslLibrary';
 
 /**
@@ -383,6 +384,11 @@ export class TextureGpu {
     /** Fills a target with one value. */
     clear(target: GpuImage | THREE.WebGLRenderTarget, value: [number, number, number, number] = [0, 0, 0, 0]): void {
         const renderTarget = isImage(target as PassInput) ? (target as GpuImage).target : target as THREE.WebGLRenderTarget;
+        // three multiplies a clear colour by its alpha: values that must survive see-through are written by a pass.
+        if (value[3] < 1 && (value[0] !== 0 || value[1] !== 0 || value[2] !== 0)) {
+            this.passNow(renderTarget, { fragment: 'uniform vec4 uValue;\nvoid main() { outColor = uValue; }', uniforms: { uValue: new THREE.Vector4(...value) } });
+            return;
+        }
         const renderer = this.renderer;
         const previous = renderer.getRenderTarget();
         const color = renderer.getClearColor(new THREE.Color());
@@ -498,14 +504,13 @@ void main() {
 
     /** A PNG of the image (top row first), 8 bits a channel. */
     async toPng(source: PassInput, width: number, height: number, encode: 'color' | 'gray' | 'raw' = 'raw', flipRows = true): Promise<Blob> {
+        // Written byte for byte: a canvas would multiply colour by alpha and lose it where alpha is low.
         const pixels = this.readRgba8(source, width, height, encode, flipRows);
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        canvas.getContext('2d')!.putImageData(new ImageData(pixels, width, height), 0, 0);
-        const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
-        if (!blob) throw new Error('The picture could not be made.');
-        return blob;
+        if (encode !== 'gray') return encodePng(pixels, width, height);
+        // Grey maps keep one value per pixel: a third or so of the file.
+        const grey = new Uint8Array(width * height);
+        for (let i = 0; i < grey.length; i++) grey[i] = pixels[i * 4];
+        return encodePng(grey, width, height, 1);
     }
 }
 

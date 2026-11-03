@@ -227,6 +227,29 @@ export class PaintSession {
         await this.saving;
     }
 
+    /**
+     * Changes the set's picture size (a power of two). The work is kept first; the set must then be
+     * opened again, which scales painted pictures and baked maps to the new size.
+     */
+    async resize(size: number): Promise<boolean> {
+        if (this.busy || size === this.stack.document.size) return false;
+        this.busy = 'Changing the picture size';
+        this.emit();
+        try {
+            await this.save();
+            this.stack.document = { ...this.stack.document, size };
+            await this.save();
+            // Undo steps hold pixels at the old size.
+            this.past = [];
+            this.future = [];
+            this.changedSinceApply = true;
+            return true;
+        } finally {
+            this.busy = null;
+            this.emit();
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Baking
     // -----------------------------------------------------------------------

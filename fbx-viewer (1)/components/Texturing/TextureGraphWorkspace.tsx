@@ -42,6 +42,8 @@ type InspectorTab = 'node' | 'graph' | 'material';
 
 const field = 'rounded border border-zinc-700 bg-zinc-950 px-1.5 py-0.5 text-xs text-zinc-100 outline-none focus:border-sky-600';
 
+const sameGraph = (a: TextureGraph, b: TextureGraph): boolean => a === b || JSON.stringify(a) === JSON.stringify(b);
+
 /** A graph parameter's value control, by its kind. */
 const parameterDef = (parameter: GraphParameter): TexParamDef => ({
     key: parameter.name,
@@ -80,7 +82,11 @@ export const TextureGraphWorkspace: React.FC<{
     useEffect(() => {
         const made = new TextureGraphSession(latest.current.graph, (id) => latest.current.resolve(id), (id) => latest.current.lookup(id));
         setSession(made);
-        return () => made.dispose();
+        return () => {
+            made.dispose();
+            // Spare pictures kept for reuse are given back to the GPU once the graph is closed.
+            made.gpu.trimPool(0);
+        };
     }, [asset.id]);
     useEffect(() => { session?.setGraph(graph, stored.values); }, [graph, session, stored.values]);
     // A picture finishing loading, or a used graph changing, redraws what depends on it.
@@ -146,10 +152,14 @@ const Workspace: React.FC<{
         }
         const base = dragBase.current ?? current.graph;
         dragBase.current = null;
-        if (base !== nextGraph) {
-            history.record(base, coalesce);
-            setHistoryVersion((value) => value + 1);
+        if (sameGraph(base, nextGraph)) {
+            // Nothing really changed (a box confirmed its old value, a node was dropped where it started):
+            // no undo step, and no save unless a drag left the stored graph elsewhere.
+            if (!sameGraph(current.graph, nextGraph)) commitStored({ ...current, graph: nextGraph });
+            return;
         }
+        history.record(base, coalesce);
+        setHistoryVersion((value) => value + 1);
         commitStored({ ...current, graph: nextGraph });
     }, [asset, commitStored, history]);
 

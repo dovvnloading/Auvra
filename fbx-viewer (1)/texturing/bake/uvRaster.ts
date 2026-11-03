@@ -64,10 +64,14 @@ uniform int uHasTangent;
 // The tangent frame the renderer will use for a normal map on this surface: the mesh's own tangents
 // when it has them, else the one worked out from texture coordinate slopes, as the standard shader does.
 mat3 surfaceFrame(vec3 n) {
-    if (uHasTangent == 1) {
-        vec3 t = normalize(vTangent.xyz - n * dot(n, vTangent.xyz));
-        vec3 b = normalize(cross(n, t) * vTangent.w);
-        return mat3(t, b, n);
+    // A w of 0 marks a mesh of the set that has no tangents of its own.
+    if (uHasTangent == 1 && abs(vTangent.w) > 0.5) {
+        vec3 along = vTangent.xyz - n * dot(n, vTangent.xyz);
+        if (dot(along, along) > 1e-12) {
+            vec3 t = normalize(along);
+            vec3 b = normalize(cross(n, t) * vTangent.w);
+            return mat3(t, b, n);
+        }
     }
     vec3 q1perp = cross(vE2, n);
     vec3 q0perp = cross(n, vE1);

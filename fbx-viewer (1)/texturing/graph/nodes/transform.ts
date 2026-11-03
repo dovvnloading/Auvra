@@ -244,6 +244,7 @@ export const TRANSFORM_NODES: TexNodeDef[] = [
     vec4 sum = c_in(p);
     vec4 lo = sum;
     vec4 hi = sum;
+    float taken = 1.0;
     float stepLength = p_intensity / float(p_samples);
     for (int i = 0; i < 48; i++) {
         if (i >= p_samples) break;
@@ -253,10 +254,12 @@ export const TRANSFORM_NODES: TexNodeDef[] = [
         p -= g / len * stepLength;
         vec4 v = c_in(p);
         sum += v;
+        taken += 1.0;
         lo = min(lo, v);
         hi = max(hi, v);
     }
-    outColor = p_mode == 0 ? sum / float(p_samples + 1) : p_mode == 1 ? lo : hi;
+    // Flat ground stops the walk early: average what was gathered.
+    outColor = p_mode == 0 ? sum / taken : p_mode == 1 ? lo : hi;
 }`,
     }),
 

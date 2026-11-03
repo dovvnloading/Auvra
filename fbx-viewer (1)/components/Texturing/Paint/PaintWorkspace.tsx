@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Brush, Eraser, Maximize, PaintBucket, Pipette, Redo2, Scissors, Undo2 } from 'lucide-react';
+import { AlertTriangle, Brush, Eraser, Maximize, PaintBucket, Pipette, Redo2, Scissors, Undo2 } from 'lucide-react';
 import { useAssets } from '../../../context/AssetContext';
 import { useScene } from '../../../context/SceneContext';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
@@ -9,7 +9,7 @@ import { MESH_MAP_LABELS, MESH_MAPS } from '../../../texturing/graph/nodes/io';
 import { readStoredGraph } from '../../../texturing/graph/stored';
 import { CHANNEL_LABELS, allLayers, readPaintDocument } from '../../../texturing/paint/paintTypes';
 import { DEFAULT_BRUSH, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
-import { listModelParts } from '../../Tools/Retexture/parts';
+import { listModelParts, type ModelPart } from '../../Tools/Retexture/parts';
 import { IconButton, Segmented, Spinner } from '../../UI/kit';
 import { Select } from '../../UI/Select';
 import { useTextureStore } from '../useTextureStore';
@@ -32,6 +32,9 @@ import { UvView2D } from './UvView2D';
  */
 
 let rememberedModel: string | null = null;
+
+/** What a texture set is known by while it is open: its material names (its pictures change). */
+const partKeyOf = (part: ModelPart): string => (part.materialNames.length ? part.materialNames.join('|') : part.rawName || part.id);
 let rememberedBrush: BrushSettings = DEFAULT_BRUSH;
 
 export const PaintWorkspace: React.FC = () => {
@@ -43,9 +46,12 @@ export const PaintWorkspace: React.FC = () => {
     const model = paintable.find((item) => item.id === modelId) ?? paintable[0] ?? null;
     useEffect(() => { rememberedModel = model?.id ?? null; }, [model?.id]);
     const parts = useMemo(() => (model ? listModelParts(model.object) : []), [model]);
-    const [partId, setPartId] = useState<string | null>(null);
-    const part = parts.find((item) => item.id === partId) ?? null;
-    useEffect(() => { setPartId(null); }, [model?.id]);
+    // A set is known by its material names: its pictures (and their ids) change as it is painted,
+    // laid out again or put on the model, and the set must stay open through all of that.
+    const [partKey, setPartKey] = useState<string | null>(null);
+    const part = parts.find((item) => partKeyOf(item) === partKey) ?? null;
+    // A model with one texture set opens straight onto it.
+    useEffect(() => { setPartKey(parts.length === 1 ? partKeyOf(parts[0]) : null); }, [model?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const libraryVersion = useSyncExternalStore((listener) => materialLibrary.subscribe(listener), () => materialLibrary.version);
     const graphs = useMemo(() => materialLibrary.list().filter((asset) => asset.textureGraph && !readStoredGraph(asset.textureGraph).library).map((asset) => ({ id: asset.id, name: asset.name })), [libraryVersion]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -56,10 +62,14 @@ export const PaintWorkspace: React.FC = () => {
     const [reopen, setReopen] = useState(0);
     const [opening, setOpening] = useState(false);
     const [message, setMessage] = useState<string | null>(null);
-    const latest = useRef({ models, updateModelMaterialOverrides, textureStore, saveModelUvLayout });
-    latest.current = { models, updateModelMaterialOverrides, textureStore, saveModelUvLayout };
+    const latest = useRef({ models, updateModelMaterialOverrides, textureStore, saveModelUvLayout, model, part });
+    latest.current = { models, updateModelMaterialOverrides, textureStore, saveModelUvLayout, model, part };
 
+    // Opened when the model or set picked changes (or is asked to open again), not whenever the model's
+    // entry is renewed (its materials changing as the painting is put on it).
+    const partFound = Boolean(part);
     useEffect(() => {
+        const { model, part } = latest.current;
         if (!model || !part) { setSession(null); setOpening(false); return undefined; }
         let disposed = false;
         let made: PaintSession | null = null;
@@ -90,10 +100,12 @@ export const PaintWorkspace: React.FC = () => {
         return () => {
             disposed = true;
             made?.dispose();
+            // Spare pictures kept for reuse are given back to the GPU once the set is closed.
+            made?.gpu.trimPool(0);
             setSession(null);
             setUv(null);
         };
-    }, [model, part, reopen]);
+    }, [model?.id, model?.object, partKey, partFound, reopen]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // A picture finishing loading reaches fills that use it.
     useEffect(() => { session?.stack.invalidate(); }, [libraryVersion, session]);
@@ -174,8 +186,8 @@ export const PaintWorkspace: React.FC = () => {
                         const painted = model ? findPaintAsset({ modelId: model.id, materialNames: item.materialNames }) : undefined;
                         const doc = painted?.paint ? readPaintDocument(painted.paint) : null;
                         return (
-                            <button key={item.id} onClick={() => setPartId(item.id)}
-                                className={`mb-1 flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs ${item.id === part?.id ? 'bg-sky-900/40 text-white' : 'text-zinc-300 hover:bg-zinc-900'}`}>
+                            <button key={item.id} onClick={() => setPartKey(partKeyOf(item))}
+                                className={`mb-1 flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs ${part && partKeyOf(item) === partKeyOf(part) ? 'bg-sky-900/40 text-white' : 'text-zinc-300 hover:bg-zinc-900'}`}>
                                 <span className="min-w-0 flex-1 truncate">{item.name}</span>
                                 {doc && <span className="shrink-0 rounded bg-zinc-800 px-1 text-[10px] text-zinc-400">{doc.layers.length} layer{doc.layers.length === 1 ? '' : 's'}</span>}
                             </button>
@@ -223,6 +235,11 @@ export const PaintWorkspace: React.FC = () => {
                             <button className="ml-3 text-zinc-500 hover:text-white" onClick={() => { setMessage(null); session.status = null; session.emit(); }}>Close</button>
                         </div>
                     )}
+                    {session?.stack.problem && (
+                        <div className="pointer-events-none absolute left-3 top-3 flex max-w-[60%] items-start gap-2 rounded border border-amber-800 bg-amber-950/90 px-2 py-1 text-2xs text-amber-200">
+                            <AlertTriangle size={12} className="mt-px shrink-0" /> {session.stack.problem}
+                        </div>
+                    )}
                     {session?.busy && !session.progress && (
                         <div className="pointer-events-none absolute right-3 top-3 flex items-center gap-2 rounded bg-zinc-900/90 px-2 py-1 text-2xs text-zinc-300"><Spinner /> {session.busy}</div>
                     )}
@@ -237,7 +254,7 @@ export const PaintWorkspace: React.FC = () => {
                     panel === 'layers' ? <LayerPanel session={session} selection={selection} onSelect={setSelection} resolve={resolve} graphs={graphs} textures={textures} />
                         : panel === 'brush' ? <div className="min-h-0 flex-1 overflow-y-auto"><BrushPanel brush={brush} onChange={setBrush} channels={session.document.channels} paintingMask={target?.kind === 'mask'} textures={textures} /></div>
                             : panel === 'uvs' && uv ? <div className="min-h-0 flex-1 overflow-y-auto"><UvPanel uv={uv} onSeamTool={() => setTool('seam')} onApplied={() => { if (!uv.proposal) setReopen((value) => value + 1); }} /></div>
-                                : <div className="min-h-0 flex-1 overflow-y-auto"><SetPanel session={session} models={paintable} /></div>
+                                : <div className="min-h-0 flex-1 overflow-y-auto"><SetPanel session={session} models={paintable} onReopen={() => setReopen((value) => value + 1)} /></div>
                 ) : (
                     <p className="p-3 text-2xs text-zinc-500">Pick a texture set to see its layers.</p>
                 )}

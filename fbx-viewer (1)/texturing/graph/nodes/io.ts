@@ -34,8 +34,11 @@ const imageFrom = async (context: NodeRunContext, source: GpuImage | THREE.Textu
     if (asImage.target && asImage.kind === kind && asImage.width === context.width && asImage.height === context.height) return context.gpu.retain(asImage);
     const image = context.image(kind);
     const gray = asImage.target ? asImage.kind === 'gray' : false;
+    // Colour into grey keeps its brightness, not just its red.
     await context.gpu.pass(image, {
-        fragment: gray ? 'void main() { float v = texture(source, vUv).r; outColor = vec4(v, v, v, 1.0); }' : 'void main() { outColor = texture(source, vUv); }',
+        fragment: gray ? 'void main() { float v = texture(source, vUv).r; outColor = vec4(v, v, v, 1.0); }'
+            : kind === 'gray' ? 'void main() { vec4 c = texture(source, vUv); outColor = vec4(vec3(luma(c.rgb)), c.a); }'
+                : 'void main() { outColor = texture(source, vUv); }',
         inputs: { source },
     });
     return image;

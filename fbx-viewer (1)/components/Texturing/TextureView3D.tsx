@@ -81,9 +81,10 @@ export const TextureView3D: React.FC<{
     const [shape, setShape] = useState<PreviewShape>('sphere');
     const [tiling, setTiling] = useState(1);
     const [displace, setDisplace] = useState(0.04);
+    const [light, setLight] = useState(1.25);
     const [spin, setSpin] = useState(false);
     const [size, setSize] = useState({ width: 0, height: 0 });
-    const orbit = useRef({ yaw: 0.6, pitch: 0.35, distance: 3.4 });
+    const orbit = useRef({ yaw: 0.6, pitch: 0.35, distance: 4, lightTurn: 0 });
     const [orbitVersion, setOrbitVersion] = useState(0);
 
     const world = useMemo(() => {
@@ -182,13 +183,20 @@ export const TextureView3D: React.FC<{
         material.alphaTest = preview.opacity ? 0.5 : 0;
         if (rebuild) material.needsUpdate = true;
 
-        const { yaw, pitch, distance } = orbit.current;
-        camera.position.set(Math.cos(pitch) * Math.sin(yaw), Math.sin(pitch), Math.cos(pitch) * Math.cos(yaw)).multiplyScalar(distance);
-        camera.lookAt(0, 0, 0);
+        // The light: as bright as asked, turned round the shape by Shift-dragging.
+        const { yaw, pitch, distance, lightTurn } = orbit.current;
+        scene.environmentIntensity = light;
+        scene.environmentRotation.set(0, lightTurn, 0);
+        world.sun.intensity = 1.4 * light;
+        world.sun.position.set(3, 4, 2).applyAxisAngle(new THREE.Vector3(0, 1, 0), lightTurn);
         camera.aspect = size.width / size.height;
+        // Fitted both ways: a view taller than wide moves back so the shape's sides stay in.
+        const fit = camera.aspect < 1 ? 1 / camera.aspect : 1;
+        camera.position.set(Math.cos(pitch) * Math.sin(yaw), Math.sin(pitch), Math.cos(pitch) * Math.cos(yaw)).multiplyScalar(distance * fit);
+        camera.lookAt(0, 0, 0);
         camera.updateProjectionMatrix();
         gpu.present(element, () => gpu.renderer.render(scene, camera));
-    }, [displace, gpu, orbitVersion, preview, shape, size, tiling, version, world]);
+    }, [displace, gpu, light, orbitVersion, preview, shape, size, tiling, version, world]);
 
     useEffect(() => {
         const element = host.current;
@@ -216,11 +224,15 @@ export const TextureView3D: React.FC<{
             <div
                 ref={host}
                 className="relative min-h-0 flex-1 cursor-grab"
+                title="Drag to turn round it, wheel to come closer, Shift-drag to turn the light"
                 onPointerDown={(event) => { drag.current = { x: event.clientX, y: event.clientY }; (event.target as HTMLElement).setPointerCapture(event.pointerId); }}
                 onPointerMove={(event) => {
                     if (!drag.current) return;
-                    orbit.current.yaw -= (event.clientX - drag.current.x) * 0.01;
-                    orbit.current.pitch = Math.min(1.45, Math.max(-1.45, orbit.current.pitch + (event.clientY - drag.current.y) * 0.01));
+                    if (event.shiftKey) orbit.current.lightTurn += (event.clientX - drag.current.x) * 0.01;
+                    else {
+                        orbit.current.yaw -= (event.clientX - drag.current.x) * 0.01;
+                        orbit.current.pitch = Math.min(1.45, Math.max(-1.45, orbit.current.pitch + (event.clientY - drag.current.y) * 0.01));
+                    }
                     drag.current = { x: event.clientX, y: event.clientY };
                     setOrbitVersion((value) => value + 1);
                 }}
@@ -235,6 +247,9 @@ export const TextureView3D: React.FC<{
                 </label>
                 <label className="flex items-center gap-1" title="How far height pushes the surface out (shapes only)">Height
                     <input type="range" min={0} max={0.2} step={0.005} value={displace} onChange={(event) => setDisplace(Number(event.target.value))} className="w-16 accent-sky-500" aria-label="Height on the shape" />
+                </label>
+                <label className="flex items-center gap-1" title="How bright the light is; Shift-drag the view to turn it">Light
+                    <input type="range" min={0.25} max={3} step={0.05} value={light} onChange={(event) => setLight(Number(event.target.value))} className="w-16 accent-sky-500" aria-label="Light brightness" />
                 </label>
             </div>
         </div>

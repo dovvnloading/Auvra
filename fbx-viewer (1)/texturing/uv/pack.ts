@@ -114,16 +114,21 @@ class MaxRects {
 
     place(x: number, y: number, w: number, h: number): void {
         const used = { x, y, w, h };
-        const next: Rect[] = [];
+        const kept: Rect[] = [];
+        const pieces: Rect[] = [];
         for (const rect of this.free) {
-            if (used.x >= rect.x + rect.w || used.x + used.w <= rect.x || used.y >= rect.y + rect.h || used.y + used.h <= rect.y) { next.push(rect); continue; }
-            if (used.x > rect.x) next.push({ x: rect.x, y: rect.y, w: used.x - rect.x, h: rect.h });
-            if (used.x + used.w < rect.x + rect.w) next.push({ x: used.x + used.w, y: rect.y, w: rect.x + rect.w - used.x - used.w, h: rect.h });
-            if (used.y > rect.y) next.push({ x: rect.x, y: rect.y, w: rect.w, h: used.y - rect.y });
-            if (used.y + used.h < rect.y + rect.h) next.push({ x: rect.x, y: used.y + used.h, w: rect.w, h: rect.y + rect.h - used.y - used.h });
+            if (used.x >= rect.x + rect.w || used.x + used.w <= rect.x || used.y >= rect.y + rect.h || used.y + used.h <= rect.y) { kept.push(rect); continue; }
+            if (used.x > rect.x) pieces.push({ x: rect.x, y: rect.y, w: used.x - rect.x, h: rect.h });
+            if (used.x + used.w < rect.x + rect.w) pieces.push({ x: used.x + used.w, y: rect.y, w: rect.x + rect.w - used.x - used.w, h: rect.h });
+            if (used.y > rect.y) pieces.push({ x: rect.x, y: rect.y, w: rect.w, h: used.y - rect.y });
+            if (used.y + used.h < rect.y + rect.h) pieces.push({ x: rect.x, y: used.y + used.h, w: rect.w, h: rect.y + rect.h - used.y - used.h });
         }
-        // Drop rectangles inside others.
-        this.free = next.filter((a, i) => !next.some((b, j) => j !== i && a.x >= b.x && a.y >= b.y && a.x + a.w <= b.x + b.w && a.y + a.h <= b.y + b.h && (j < i || a.w !== b.w || a.h !== b.h || a.x !== b.x || a.y !== b.y)));
+        // New pieces inside other rectangles add nothing. Only the new pieces are checked (checking every
+        // pair each time grows with the cube of the islands); an old rectangle left inside a newer one is
+        // still free space, merely one more to look through.
+        const inside = (a: Rect, b: Rect) => a.x >= b.x && a.y >= b.y && a.x + a.w <= b.x + b.w && a.y + a.h <= b.y + b.h;
+        const fresh = pieces.filter((a, i) => !kept.some((b) => inside(a, b)) && !pieces.some((b, j) => j !== i && inside(a, b) && (j < i || a.w !== b.w || a.h !== b.h || a.x !== b.x || a.y !== b.y)));
+        this.free = kept.concat(fresh);
     }
 }
 
@@ -219,10 +224,16 @@ const profileOf = (item: Prepared, scale: number, turn: number, pad: number): Pr
     return { width, height, bottom, top, turn };
 };
 
+/**
+ * Each island's share of the padding in grid cells: rounded up, and never under one cell, as islands in
+ * neighbouring cells can otherwise touch once the grid is finer than the picture's texels.
+ */
+const gridPadding = (settings: PackSettings): number => Math.max(1, Math.ceil(((settings.padding / settings.resolution) * GRID) / 2));
+
 /** Drops every island onto per-tile skylines at `scale`; null when they do not all fit. */
 const tryShapes = (items: Prepared[], scale: number, settings: PackSettings): Array<{ x: number; y: number; profile: Profile; tile: number }> | null => {
     const tiles = settings.tilesX * settings.tilesY;
-    const pad = Math.max(0, Math.round(((settings.padding / settings.resolution) * GRID) / 2));
+    const pad = gridPadding(settings);
     const skies = Array.from({ length: tiles }, () => new Int32Array(GRID).fill(pad));
     const order = items.map((_, i) => i).sort((a, b) => items[b].width * items[b].height - items[a].width * items[a].height);
     const result: Array<{ x: number; y: number; profile: Profile; tile: number }> = new Array(items.length);
@@ -270,7 +281,7 @@ const packShapes = (islands: readonly Island[], settings: PackSettings): { place
         if (attempt) { best = attempt; bestScale = middle; low = middle; } else high = middle;
     }
     if (!best) return null;
-    const pad = Math.max(0, Math.round(((settings.padding / settings.resolution) * GRID) / 2));
+    const pad = gridPadding(settings);
     const placements = items.map((item, i) => {
         const spot = best![i];
         const s = bestScale * GRID;

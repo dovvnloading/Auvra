@@ -29,24 +29,37 @@ export const exposedKind = (param: TexParamDef): GraphParameterKind | null => {
     }
 };
 
+/**
+ * A number typed as text and applied on Enter or on leaving the box, so half-typed values ("-", "0.")
+ * never reach the graph. An unchanged value is not applied again, which would make an empty undo step.
+ */
+const DraftNumber: React.FC<{ label: string; value: number; integer?: boolean; className?: string; onCommit: (value: number) => void }> = ({ label, value, integer, className, onCommit }) => {
+    const shown = String(Number(value.toFixed(4)));
+    const [draft, setDraft] = useState(shown);
+    useEffect(() => setDraft(shown), [shown]);
+    const commit = (text: string) => {
+        const number = Number(text.trim());
+        if (!text.trim() || !Number.isFinite(number)) { setDraft(shown); return; }
+        const next = integer ? Math.round(number) : number;
+        if (next !== value) onCommit(next);
+        else setDraft(shown);
+    };
+    return (
+        <input aria-label={label} value={draft} onChange={(event) => setDraft(event.target.value)} onBlur={(event) => commit(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter') commit((event.target as HTMLInputElement).value); }} className={`text-right tabular-nums ${field} ${className ?? ''}`} />
+    );
+};
+
 const NumberRow: React.FC<{ param: TexParamDef; value: number; onChange: (value: number) => void }> = ({ param, value, onChange }) => {
     const step = param.step ?? (param.kind === 'int' ? 1 : 0.01);
     const max = param.softMax ?? param.max;
-    const [draft, setDraft] = useState(String(value));
-    useEffect(() => setDraft(String(Number(value.toFixed(4)))), [value]);
-    const commit = (text: string) => {
-        const number = Number(text);
-        if (Number.isFinite(number)) onChange(param.kind === 'int' ? Math.round(number) : number);
-        else setDraft(String(value));
-    };
     return (
         <div className="flex items-center gap-2">
             {param.min !== undefined && max !== undefined && (
                 <input type="range" aria-label={`${param.label} slider`} min={param.min} max={max} step={step} value={Math.min(max, value)}
                     onChange={(event) => onChange(Number(event.target.value))} className="h-1 min-w-0 flex-1 accent-sky-500" />
             )}
-            <input aria-label={param.label} value={draft} onChange={(event) => setDraft(event.target.value)} onBlur={(event) => commit(event.target.value)}
-                onKeyDown={(event) => { if (event.key === 'Enter') commit((event.target as HTMLInputElement).value); }} className={`w-16 text-right tabular-nums ${field}`} />
+            <DraftNumber label={param.label} value={value} integer={param.kind === 'int'} className="w-16" onCommit={onChange} />
         </div>
     );
 };
@@ -83,8 +96,8 @@ export const ParamControl: React.FC<{
             return (
                 <div className="flex gap-1">
                     {[0, 1].map((index) => (
-                        <input key={index} type="number" aria-label={`${param.label} ${'XY'[index]}`} step={param.step ?? 0.01} value={v[index] ?? 0}
-                            onChange={(event) => onChange(v.map((old, at) => (at === index ? Number(event.target.value) : old)))} className={`w-full ${field}`} />
+                        <DraftNumber key={index} label={`${param.label} ${'XY'[index]}`} value={Number(v[index]) || 0} className="w-full min-w-0"
+                            onCommit={(next) => onChange([0, 1].map((at) => (at === index ? next : Number(v[at]) || 0)))} />
                     ))}
                 </div>
             );

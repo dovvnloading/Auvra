@@ -129,7 +129,13 @@ export const PaintViewport: React.FC<{
         layoutMesh.visible = false;
         layoutMesh.frustumCulled = false;
         root.add(layoutMesh);
-        const seamLines = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xff7a1a, depthTest: true, toneMapped: false }));
+        // Seams lie on the surface itself, so they are drawn a hair nearer the eye: unbroken, yet still hidden behind the model.
+        const seamLines = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.ShaderMaterial({
+            vertexShader: 'void main() { gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_Position.z -= 0.0015 * gl_Position.w; }',
+            fragmentShader: 'void main() { gl_FragColor = vec4(1.0, 0.478, 0.102, 1.0); }',
+            depthTest: true,
+            toneMapped: false,
+        }));
         seamLines.frustumCulled = false;
         seamLines.renderOrder = 2;
         scene.add(seamLines);
@@ -146,6 +152,9 @@ export const PaintViewport: React.FC<{
             for (const image of Object.values(entry.preview)) gpu.release(image);
         }
         world.hidden.dispose();
+        world.seamLines.geometry.dispose();
+        (world.seamLines.material as THREE.Material).dispose();
+        world.layoutMesh.geometry.dispose();
     }, [gpu, world]);
 
     const frame = useCallback(() => {
@@ -297,6 +306,8 @@ export const PaintViewport: React.FC<{
         const stroke = new Stroke(stack, target, tool === 'erase' ? 'erase' : 'paint', brush, {
             viewProjection: new THREE.Matrix4().multiplyMatrices(world.camera.projectionMatrix, world.camera.matrixWorldInverse),
             cameraPosition: world.camera.position.clone(),
+            cameraRight: new THREE.Vector3().setFromMatrixColumn(world.camera.matrixWorld, 0).normalize(),
+            cameraUp: new THREE.Vector3().setFromMatrixColumn(world.camera.matrixWorld, 1).normalize(),
             width: size.width,
             height: size.height,
             depth,

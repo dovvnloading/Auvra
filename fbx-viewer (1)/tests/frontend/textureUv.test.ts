@@ -147,4 +147,37 @@ describe('layouts on models', () => {
         expect(applyLayout(root, layout)).toBe(1);
         expect(mesh.geometry.attributes.position.count).toBe(after.attributes.position.count);
     });
+
+    it('keeps packed vertex data exactly and leaves the old tangents behind', () => {
+        const geometry = new THREE.SphereGeometry(1, 16, 8);
+        const count = geometry.attributes.position.count;
+        // Colours stored as bytes read as 0..1, as glTF keeps them; and tangents for the old coordinates.
+        const bytes = new Uint8Array(count * 4).map((_, i) => (i * 37) % 256);
+        geometry.setAttribute('color', new THREE.BufferAttribute(bytes, 4, true));
+        geometry.setAttribute('tangent', new THREE.BufferAttribute(new Float32Array(count * 4).fill(1), 4));
+        const { root, part } = meshOf(geometry);
+        const mesh = root.children[0] as THREE.Mesh;
+        const result = unwrap(buildTopology(part.positions, part.indices));
+        const placements = packIslands(islandsOf(result));
+        const cornerUv = new Float32Array(part.indices.length * 2);
+        const cornerKey = new Uint32Array(part.indices.length);
+        result.charts.forEach((chart, c) => chart.faces.forEach((face, i) => {
+            for (let k = 0; k < 3; k++) {
+                const corner = chart.corners[i * 3 + k];
+                cornerUv.set([placements[c].uv[corner * 2], placements[c].uv[corner * 2 + 1]], (face * 3 + k) * 2);
+                cornerKey[face * 3 + k] = c * 1_000_000 + corner;
+            }
+        }));
+        const layout = decodeLayout(encodeLayout(buildLayout(root, part, cornerUv, cornerKey, null)).buffer as ArrayBuffer);
+        expect(applyLayout(root, layout)).toBe(1);
+        const after = mesh.geometry;
+        expect(after.attributes.tangent).toBeUndefined();
+        const color = after.attributes.color as THREE.BufferAttribute;
+        expect(color.normalized).toBe(true);
+        expect(color.array).toBeInstanceOf(Uint8Array);
+        const source = layout.meshes[0].sourceOf;
+        for (let i = 0; i < source.length; i++) {
+            for (let c = 0; c < 4; c++) expect(color.array[i * 4 + c]).toBe(bytes[source[i] * 4 + c]);
+        }
+    });
 });

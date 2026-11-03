@@ -16,6 +16,7 @@ import {
     newFolder,
     newPaintLayer,
     paintId,
+    type FillProjection,
     type FillSource,
     type MaskBlend,
     type MaskEffect,
@@ -60,6 +61,17 @@ const ValueField: React.FC<{ channel: PaintChannel; value: [number, number, numb
             </label>
         )
         : <Slider label="Value" value={value[0]} onChange={(v) => onChange([v, v, v])} />
+);
+
+/** How a fill's picture is laid on: along the UVs or from three sides, its repeats, turn and side blending. */
+const ProjectionFields: React.FC<{ value: FillProjection; onChange: (value: FillProjection) => void }> = ({ value, onChange }) => (
+    <>
+        <Select value={value.projection} options={[{ value: 'triplanar', label: 'From three sides (no seams)' }, { value: 'uv', label: 'Along the UVs' }]}
+            onChange={(projection) => onChange({ ...value, projection: projection as FillProjection['projection'], scale: projection === 'triplanar' ? 4 : 1 })} className="w-full" />
+        <Slider label={value.projection === 'triplanar' ? 'Repeats' : 'Scale'} value={value.scale} min={0.1} max={40} step={0.1} onChange={(scale) => onChange({ ...value, scale })} />
+        <Slider label="Turn" value={value.rotation} min={-180} max={180} step={1} onChange={(rotation) => onChange({ ...value, rotation })} />
+        {value.projection === 'triplanar' && <Slider label="Sharpness" value={value.sharpness} min={1} max={16} step={0.5} onChange={(sharpness) => onChange({ ...value, sharpness })} />}
+    </>
 );
 
 /** The graphs a fill or smart mask can draw from, with their outputs. */
@@ -281,6 +293,18 @@ const LayerSettings: React.FC<{
     const update = (patch: Partial<PaintLayer>, label: string) => changeLayer(layer.id, (current) => ({ ...current, ...patch }), label);
     const graphChoices = [...SMART_MASKS.map((mask) => ({ value: mask.id, label: mask.name })), { value: 'builtin:leatherGrain', label: 'Leather grain' }, ...graphs.map((graph) => ({ value: graph.id, label: graph.name }))];
 
+    // A fill drawing two or more channels from one graph is a material: its settings and how it is laid
+    // on are shown once, above the channels.
+    const graphSources = layer.kind === 'fill' ? Object.entries(layer.fill ?? {}).filter(([channel]) => layer.channels[channel as PaintChannel]).map(([, source]) => source) : [];
+    const materialSource = graphSources.length >= 2 && graphSources.every((source) => source?.kind === 'graph' && source.graphId === (graphSources[0] as { graphId?: string }).graphId)
+        ? graphSources[0] as Extract<FillSource, { kind: 'graph' }> : null;
+    const materialGraph = materialSource?.graphId ?? null;
+
+    /** Changes every channel of this layer drawn from `graphId` at once. */
+    const setSameGraph = (graphId: string, patch: Partial<Extract<FillSource, { kind: 'graph' }>>, label: string) => update({
+        fill: Object.fromEntries(Object.entries(layer.fill ?? {}).map(([key, other]) => [key, other?.kind === 'graph' && other.graphId === graphId ? { ...other, ...patch } : other])),
+    }, label);
+
     const fillEditor = (channel: PaintChannel, source: FillSource) => {
         const set = (next: FillSource) => update({ fill: { ...(layer.fill ?? {}), [channel]: next } }, `Change ${CHANNEL_LABELS[channel].toLowerCase()} fill`);
         return (
@@ -292,16 +316,20 @@ const LayerSettings: React.FC<{
                 {source.kind === 'texture' && (
                     <>
                         <Select value={source.textureId} options={textures.map((texture) => ({ value: texture.id, label: texture.name }))} placeholder="Pick a picture" onChange={(textureId) => set({ ...source, textureId: String(textureId) })} className="w-full" />
-                        <Select value={source.projection} options={[{ value: 'triplanar', label: 'From three sides (no seams)' }, { value: 'uv', label: 'Along the UVs' }]} onChange={(projection) => set({ ...source, projection: projection as 'uv' | 'triplanar' })} className="w-full" />
-                        <Slider label="Scale" value={source.scale} min={0.1} max={40} step={0.1} onChange={(scale) => set({ ...source, scale })} />
-                        <Slider label="Turn" value={source.rotation} min={-180} max={180} step={1} onChange={(rotation) => set({ ...source, rotation })} />
+                        <ProjectionFields value={source} onChange={(projection) => set({ ...source, ...projection })} />
                     </>
                 )}
-                {source.kind === 'graph' && (
+                {source.kind === 'graph' && source.graphId === materialGraph && (
+                    <Select value={source.output} options={graphOutputs(resolve, source.graphId)} onChange={(output) => set({ ...source, output: String(output) })} className="w-full" />
+                )}
+                {source.kind === 'graph' && source.graphId !== materialGraph && (
                     <>
                         <Select value={source.graphId} options={graphChoices} onChange={(graphId) => set({ ...source, graphId: String(graphId), output: graphOutputs(resolve, String(graphId))[0]?.value ?? 'custom', values: {} })} className="w-full" />
                         <Select value={source.output} options={graphOutputs(resolve, source.graphId)} onChange={(output) => set({ ...source, output: String(output) })} className="w-full" />
-                        <GraphValues resolve={resolve} graphId={source.graphId} values={source.values} textures={textures} onChange={(values) => set({ ...source, values })} />
+                        {/* A material's channels move together: its settings and how it is laid on change every channel drawn from the same graph. */}
+                        <GraphValues resolve={resolve} graphId={source.graphId} values={source.values} textures={textures} onChange={(values) => setSameGraph(source.graphId, { values }, 'Change graph settings')} />
+                        <ProjectionFields value={{ projection: source.projection ?? 'uv', scale: source.scale ?? 1, rotation: source.rotation ?? 0, sharpness: source.sharpness ?? 4 }}
+                            onChange={(projection) => setSameGraph(source.graphId, projection, 'Change how the graph is laid on')} />
                     </>
                 )}
             </div>
@@ -347,6 +375,14 @@ const LayerSettings: React.FC<{
                 <Slider label="Opacity" value={layer.opacity ?? 1} onChange={(opacity) => update({ opacity }, 'Change folder opacity')} />
             ) : (
                 <div className="space-y-2">
+                    {materialSource && (
+                        <div className="space-y-1.5 rounded border border-zinc-800 bg-zinc-900/40 p-1.5">
+                            <div className="truncate text-xs text-zinc-200">Material: <span className="font-semibold">{resolve(materialSource.graphId)?.name ?? 'A texture graph'}</span></div>
+                            <GraphValues resolve={resolve} graphId={materialSource.graphId} values={materialSource.values} textures={textures} onChange={(values) => setSameGraph(materialSource.graphId, { values }, 'Change graph settings')} />
+                            <ProjectionFields value={{ projection: materialSource.projection ?? 'uv', scale: materialSource.scale ?? 1, rotation: materialSource.rotation ?? 0, sharpness: materialSource.sharpness ?? 4 }}
+                                onChange={(projection) => setSameGraph(materialSource.graphId, projection, 'Change how the graph is laid on')} />
+                        </div>
+                    )}
                     <div className="text-2xs font-semibold text-zinc-400">Channels</div>
                     {document.channels.map((channel) => {
                         const blend = layer.channels[channel];
