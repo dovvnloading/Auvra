@@ -24,7 +24,7 @@ METHODS = (
     "project.open", "project.openRecent", "project.close", "project.getSnapshot",
     "project.applyChanges", "project.save", "project.saveAs", "project.exportPack",
     "project.buildGame", "project.importPack", "project.importLegacy", "asset.beginUpload",
-    "asset.resolve",
+    "asset.resolve", "asset.queryPrepared", "asset.beginPreparedUpload",
     "provider.list", "provider.getStatus", "provider.configureCredential",
     "provider.deleteCredential", "provider.chooseFolder", "provider.configure", "provider.listModels",
     "provider.health", "inference.submit", "inference.get", "inference.list",
@@ -34,9 +34,9 @@ METHODS = (
     "engine.openViewport", "engine.closeViewport", "engine.renderReference",
     "engine.getMetrics", "engine.recover",
 )
-PROJECT_METHODS = METHODS[2:17]
-PROVIDER_METHODS = METHODS[17:35]
-ENGINE_METHODS = METHODS[35:]
+PROJECT_METHODS = METHODS[2:19]
+PROVIDER_METHODS = METHODS[19:37]
+ENGINE_METHODS = METHODS[37:]
 MUTATING_METHODS = frozenset({
     "project.create", "project.open", "project.openRecent", "project.close",
     "project.applyChanges", "project.save", "project.saveAs", "project.exportPack",
@@ -88,6 +88,7 @@ class HostDispatcher:
         self._documents: dict[str, dict[str, Any]] = {}
         self._asset_tickets: dict[str, dict[str, Any]] = {}
         self._asset_ids: set[str] = set()
+        self._prepared_keys: set[str] = set()
         self._provider_configured: set[str] = set()
         self._provider_settings: dict[str, dict[str, Any]] = {}
         self._provider_settings_revision: dict[str, int] = {}
@@ -122,6 +123,8 @@ class HostDispatcher:
                 "project.importLegacy": self._import_legacy,
                 "asset.beginUpload": self._begin_upload,
                 "asset.resolve": self._resolve_asset,
+                "asset.queryPrepared": self._query_prepared,
+                "asset.beginPreparedUpload": self._begin_prepared_upload,
                 "provider.list": self._provider_list,
                 "provider.getStatus": self._provider_status,
                 "provider.configureCredential": self._configure_credential,
@@ -539,6 +542,18 @@ class HostDispatcher:
         token = "B" * 43
         self._asset_tickets[token] = {"projectId": self._project_id, "size": 0, "mime": "application/octet-stream", "name": "", "expiresAt": 300, "method": "GET", "consumed": False, "sha256": payload["assetId"]}
         return self._result(assetId=payload["assetId"], method="GET", expiresAt=300, url=f"https://assets.auvra.local/v1/get/{token}")
+
+    def _query_prepared(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_project(payload)
+        return self._result(preparedKeys=[key for key in payload["keys"] if key in self._prepared_keys])
+
+    def _begin_prepared_upload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        # Prepared models live outside the project, so this neither needs a writable project nor changes its revision.
+        self._require_project(payload)
+        token = "C" * 43
+        self._asset_tickets[token] = {"projectId": self._project_id, "size": payload["size"], "mime": "model/gltf-binary", "name": "", "expiresAt": 300, "method": "PUT", "consumed": False}
+        self._prepared_keys.add(payload["key"])
+        return self._result(size=payload["size"], mime="model/gltf-binary", method="PUT", expiresAt=300, url=f"https://assets.auvra.local/v1/put/{token}")
 
     # Provider handlers are intentionally deterministic and provider-neutral.
     # Production adapters bind through ``provider_service``; these handlers

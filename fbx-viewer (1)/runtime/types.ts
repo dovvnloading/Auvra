@@ -22,6 +22,13 @@ export interface GameContent {
     prefabs?: PrefabData[];
     /** Every level's objects by level id, for Level Streaming volumes. */
     levelObjects?: Readonly<Record<string, LevelObject[]>>;
+    /** Models the level left to its World Grid, loaded as their cells come near. A host that loads everything up front has none. */
+    cellModels?: {
+        /** Loads these models and what they need, and resolves with every model loaded this way that is still held. */
+        request(modelIds: readonly string[]): Promise<LoadedModelData[]>;
+        /** The models the cells in play draw, which must not be freed to make room. */
+        setInUse(modelIds: ReadonlySet<string>): void;
+    };
 }
 
 /** One playable level: its objects (already filtered to this level) and its level blueprint. */
@@ -47,13 +54,16 @@ export interface GameSettings {
     window: { fullscreen: boolean };
     /**
      * meshLod: meshes draw simpler levels of themselves as they get smaller on the screen (utils/meshLod.ts).
+     * occlusionCulling: placed props and foliage that nearer surfaces hide skip the camera's draw (runtime/occlusionCulling.ts).
      * textureCompression: colour and material maps load GPU-compressed (utils/textureCompression).
      * antiAliasing: the most a level's Post Process may use, and what the default stack uses (runtime/temporal).
      * renderScale: the share of the display's size the lit scene is drawn at, with temporal anti-aliasing.
+     * loadLevelsOnDemand: a built game loads each level's assets when it starts (runtime/levelAssets.ts); off, all of them at once.
+     * assetMemoryMb: how much a built game holds before freeing what earlier levels used (runtime/assetResidency.ts).
      */
     quality: {
-        shadows: boolean; postProcessing: boolean; maxDpr: number; fov: number; meshLod: boolean; textureCompression: boolean;
-        antiAliasing: 'temporal' | 'smaa' | 'none'; renderScale: number;
+        shadows: boolean; postProcessing: boolean; maxDpr: number; fov: number; meshLod: boolean; occlusionCulling: boolean; textureCompression: boolean;
+        antiAliasing: 'temporal' | 'smaa' | 'none'; renderScale: number; loadLevelsOnDemand: boolean; assetMemoryMb: number;
     };
     input: { mouseSensitivity: number; invertY: boolean };
     audio: { masterVolume: number };
@@ -71,7 +81,7 @@ export const DEFAULT_GAME_SETTINGS: GameSettings = {
     startupLevelId: null,
     playerBlueprintId: null,
     window: { fullscreen: false },
-    quality: { shadows: true, postProcessing: true, maxDpr: 2, fov: 60, meshLod: true, textureCompression: true, antiAliasing: 'temporal', renderScale: 1 },
+    quality: { shadows: true, postProcessing: true, maxDpr: 2, fov: 60, meshLod: true, occlusionCulling: true, textureCompression: true, antiAliasing: 'temporal', renderScale: 1, loadLevelsOnDemand: true, assetMemoryMb: 2048 },
     input: { mouseSensitivity: 0.002, invertY: false },
     audio: { masterVolume: 1 },
     network: DEFAULT_NETWORK_SETTINGS,
@@ -174,6 +184,11 @@ export interface GamePackManifest {
     domains: string[];
     /** Every shipped asset: id is the project asset id, file is relative to game/assets/. */
     assets: { id: string; file: string; mime: string; size: number }[];
+    /**
+     * Models prepared when the game was built (utils/preparedModels), each an ordinary entry of
+     * `assets` standing in for its source. Left out of a pack that has none.
+     */
+    prepared?: { version: number; textures: 'bc' | 'none'; models: { source: string; asset: string }[] };
 }
 
 /** A document in the project 'hud' domain: the game HUD ('hud-main') or an authored menu ('menu-title', 'menu-pause'). */

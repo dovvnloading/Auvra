@@ -278,6 +278,30 @@ describe('decal projection', () => {
     expect(worldBounds(projector).max.y).toBeCloseTo(0);
   });
 
+  it('lands on a culled layer through its whole set, never its drawn meshes, and stays put as those change places', () => {
+    const scene = new THREE.Scene();
+    const plane = new THREE.PlaneGeometry(2, 2).rotateX(-Math.PI / 2);
+    const place = (mesh: THREE.InstancedMesh, ...xs: number[]) => {
+      xs.forEach((x, index) => mesh.setMatrixAt(index, new THREE.Matrix4().makeTranslation(x, 0, 0)));
+      mesh.instanceMatrix.needsUpdate = true;
+    };
+    const whole = new THREE.InstancedMesh(plane, lit(), 2);
+    place(whole, 0, 50);
+    // Never drawn: decals land on it all the same.
+    whole.layers.set(31);
+    const drawn = new THREE.InstancedMesh(plane, lit(), 2);
+    drawn.userData.shuffledInstances = true;
+    place(drawn, 0, 50);
+    scene.add(whole, drawn);
+    const projector = mount(ownerAbove(scene, 0, 0.1, 0));
+
+    const receivers = collectDecalReceivers(projector.root, projectorOf(projector), [1, 1, 0.5], { mode: 'scene', objectId: 'decal' });
+    expect(receivers.map(receiver => receiver.mesh)).toEqual([whole]);
+    expect(projector.update(request())).toBe(true);
+    place(drawn, 50, 0);
+    for (let frame = 1; frame < DECAL_RESCAN_FRAMES * 2; frame++) expect(projector.update(request())).toBe(false);
+  });
+
   it('keeps front faces on meshes without normals and under mirrored transforms', () => {
     const cases: [string, (receiver: THREE.Mesh, owner: THREE.Object3D) => void][] = [
       ['no normals', receiver => { receiver.geometry.deleteAttribute('normal'); }],

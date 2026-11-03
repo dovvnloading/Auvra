@@ -140,6 +140,15 @@ class MaterialLibrary {
         this.emit();
     }
 
+    /** Lets go of a texture that has left memory, or just arrived after graphs asked for it in vain. Graphs keep naming it. */
+    releaseTexture(textureId: string): void {
+        for (const [key, texture] of [...this.textures]) {
+            if (!key.endsWith(`:${textureId}`)) continue;
+            texture?.dispose();
+            this.textures.delete(key);
+        }
+    }
+
     /** Clears a deleted texture from every graph sampling it (the project has already). */
     forgetTexture(textureId: string): void {
         for (const [key, texture] of [...this.textures]) {

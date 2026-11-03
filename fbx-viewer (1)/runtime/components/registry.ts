@@ -19,6 +19,7 @@ import { LIGHTING_COMPONENTS } from './lightingComponents';
 import { NET_SYNC_COMPONENT } from './netSyncComponent';
 import { LOD_COMPONENTS } from './lodComponents';
 import { LEVEL_STREAMING_COMPONENT } from './levelStreamingComponent';
+import { WORLD_GRID_COMPONENT } from './worldGridComponent';
 import { PHYSICS_COMPONENTS } from './physicsComponents';
 import { POST_PROCESS_COMPONENT } from './postProcess';
 import { PROCEDURAL_RIG_COMPONENT } from './proceduralRigComponent';
@@ -53,6 +54,7 @@ export const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
     ...LIGHTING_COMPONENTS,
     ...LOD_COMPONENTS,
     LEVEL_STREAMING_COMPONENT,
+    WORLD_GRID_COMPONENT,
     ANIMATION_COMPONENT,
     ...IK_COMPONENTS,
     PROCEDURAL_RIG_COMPONENT,

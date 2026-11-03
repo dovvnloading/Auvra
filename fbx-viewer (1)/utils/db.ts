@@ -1,6 +1,7 @@
 
 import { AssetCategory, AssetInfoUpdate, Blueprint, SocketData, LevelObject, LevelData, TerrainData, PrefabData } from '../types';
-import { AssetTransferOptions, projectService } from './projectService';
+import { changeBatches } from './projectChangeBatches';
+import { AssetTransferOptions, ProjectChange, projectService } from './projectService';
 import { nativeDomainRecords } from './projectRecords';
 import { externalizeTerrainData } from './terrainHeightfieldEditor';
 import { externalizeTerrainHoles, externalizeTerrainSplat, externalizeTerrainSplat2 } from '../components/Environment/Terrain/terrainSplatEditor';
@@ -169,18 +170,23 @@ class DBOperations {
     return result;
   }
 
+  /** A domain's documents as the project holds them now. */
+  private async storedRecords(domain: string): Promise<unknown[]> {
+    const snapshot = await projectService.getSnapshotAll(domain);
+    const rawDomain = snapshot?.domains?.[domain];
+    return Array.isArray(rawDomain)
+      ? rawDomain
+      : rawDomain && typeof rawDomain === 'object' && Array.isArray((rawDomain as { documents?: unknown[] }).documents)
+        ? (rawDomain as { documents: unknown[] }).documents : snapshot?.documents || [];
+  }
+
   private async performCanonicalChange(domain: string, operation: 'upsert' | 'remove', value: unknown, id?: string, lease?: EditorSessionLease, prepare?: DocumentPreparation): Promise<boolean> {
     this.requireEditorLease(lease);
     if (!projectService.getStatus().projectId) throw new Error('Open a native project before editing');
     if (projectService.getStatus().readOnly) throw new Error('Project is read-only');
     const upsertsDocument = operation === 'upsert' && Boolean(value && typeof value === 'object' && id);
     const readStored = async (): Promise<Record<string, unknown> | undefined> => {
-      const snapshot = await projectService.getSnapshotAll(domain);
-      const rawDomain = snapshot?.domains?.[domain];
-      const records = Array.isArray(rawDomain)
-        ? rawDomain
-        : rawDomain && typeof rawDomain === 'object' && Array.isArray((rawDomain as { documents?: unknown[] }).documents)
-          ? (rawDomain as { documents: unknown[] }).documents : snapshot?.documents || [];
+      const records = await this.storedRecords(domain);
       const current = records.find((record) => record && typeof record === 'object' && (record as { id?: unknown }).id === id);
       this.requireEditorLease(lease);
       return current && typeof current === 'object' ? current as Record<string, unknown> : undefined;
@@ -557,6 +563,44 @@ class DBOperations {
 
   async deleteLevelObject(id: string, lease?: EditorSessionLease): Promise<void> {
     await this.canonicalChange('objects', 'remove', undefined, id, lease);
+  }
+
+  /**
+   * Commits many objects together, changed ones first and removed ones last. One at a time, each would read
+   * the whole level back and be validated against the whole project, so placing hundreds took minutes.
+   */
+  async commitLevelObjects(changed: DBLevelObject[], removed: string[], lease?: EditorSessionLease): Promise<void> {
+    await this.enqueueMutation(async () => {
+      this.requireEditorLease(lease);
+      if (!projectService.getStatus().projectId) throw new Error('Open a native project before editing');
+      if (projectService.getStatus().readOnly) throw new Error('Project is read-only');
+      const stored = new Map<unknown, Record<string, unknown>>();
+      for (const record of await this.storedRecords('objects')) {
+        if (record && typeof record === 'object') stored.set((record as { id?: unknown }).id, record as Record<string, unknown>);
+      }
+      this.requireEditorLease(lease);
+      const afterCommits: (() => void)[] = [];
+      const changes: ProjectChange[] = [];
+      for (const object of changed) {
+        const current = stored.get(object.id);
+        const prepared = await prepareLevelObjectDocument(object, async () => current);
+        this.requireEditorLease(lease);
+        if (prepared.afterCommit) afterCommits.push(prepared.afterCommit);
+        changes.push({ domain: 'objects', operation: 'upsert', id: object.id, value: current ? { ...current, ...(prepared.value as Record<string, unknown>) } : prepared.value });
+      }
+      for (const id of removed) changes.push({ domain: 'objects', operation: 'remove', id });
+      let activeLease = lease;
+      for (const batch of changeBatches(changes)) {
+        this.requireEditorLease(activeLease);
+        await projectService.applyChanges(batch);
+        // A commit moves the project to a new revision, which a lease is tied to.
+        if (lease) {
+          if (!editorSession.isSameSession(lease)) return;
+          activeLease = editorSession.captureReady() || undefined;
+        }
+      }
+      afterCommits.forEach((run) => run());
+    });
   }
 
   // --- PREFABS ---

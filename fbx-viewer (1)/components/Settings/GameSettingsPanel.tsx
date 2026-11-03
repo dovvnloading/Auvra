@@ -72,6 +72,7 @@ const LIMITS = {
   maxDpr: { min: 0.5, max: 4, step: 0.25 },
   fov: { min: 30, max: 120, step: 1 },
   renderScale: { min: MIN_RENDER_SCALE, max: MAX_RENDER_SCALE, step: 0.05 },
+  assetMemoryMb: { min: 64, max: 65536, step: 64 },
   mouseSensitivity: { min: 0.0001, max: 0.02, step: 0.0001 },
   masterVolume: { min: 0, max: 1, step: 0.05 },
 } as const;
@@ -90,7 +91,10 @@ const sanitizeGameSettings = (value: GameSettings): GameSettings => {
       shadows: Boolean(settings.quality.shadows),
       postProcessing: Boolean(settings.quality.postProcessing),
       meshLod: settings.quality.meshLod !== false,
+      occlusionCulling: settings.quality.occlusionCulling !== false,
       textureCompression: settings.quality.textureCompression !== false,
+      loadLevelsOnDemand: settings.quality.loadLevelsOnDemand !== false,
+      assetMemoryMb: clamp(settings.quality.assetMemoryMb, LIMITS.assetMemoryMb.min, LIMITS.assetMemoryMb.max, defaults.quality.assetMemoryMb),
       maxDpr: clamp(settings.quality.maxDpr, LIMITS.maxDpr.min, LIMITS.maxDpr.max, defaults.quality.maxDpr),
       fov: clamp(settings.quality.fov, LIMITS.fov.min, LIMITS.fov.max, defaults.quality.fov),
       antiAliasing: settings.quality.antiAliasing === 'smaa' || settings.quality.antiAliasing === 'none' ? settings.quality.antiAliasing : 'temporal',
@@ -276,6 +280,9 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
             <Toggle label="Shadows" checked={draft.quality.shadows} disabled={disabled} onChange={(shadows) => update((current) => ({ ...current, quality: { ...current.quality, shadows } }))} />
             <Toggle label="Post-processing" checked={draft.quality.postProcessing} disabled={disabled} onChange={(postProcessing) => update((current) => ({ ...current, quality: { ...current.quality, postProcessing } }))} />
             <Toggle label="Mesh detail levels" checked={draft.quality.meshLod} disabled={disabled} onChange={(meshLod) => update((current) => ({ ...current, quality: { ...current.quality, meshLod } }))} />
+            <Toggle label="Occlusion culling" checked={draft.quality.occlusionCulling} disabled={disabled} onChange={(occlusionCulling) => update((current) => ({ ...current, quality: { ...current.quality, occlusionCulling } }))} />
+            <Toggle label="Load assets by level" checked={draft.quality.loadLevelsOnDemand} disabled={disabled} onChange={(loadLevelsOnDemand) => update((current) => ({ ...current, quality: { ...current.quality, loadLevelsOnDemand } }))} />
+            <NumberField label="Asset memory (MB)" value={draft.quality.assetMemoryMb} limits={LIMITS.assetMemoryMb} disabled={disabled} onChange={(assetMemoryMb) => update((current) => ({ ...current, quality: { ...current.quality, assetMemoryMb } }))} />
             <Toggle label="Texture compression" checked={draft.quality.textureCompression} disabled={disabled} onChange={(textureCompression) => update((current) => ({ ...current, quality: { ...current.quality, textureCompression } }))} />
             <label className="block text-2xs text-gray-500">Anti-aliasing
               <select aria-label="Anti-aliasing" value={draft.quality.antiAliasing} disabled={disabled} onChange={(event) => { const antiAliasing = event.target.value as GameSettings['quality']['antiAliasing']; update((current) => ({ ...current, quality: { ...current.quality, antiAliasing } })); }} className={`mt-1 ${inputClass}`}>

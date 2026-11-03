@@ -482,7 +482,8 @@ export class RayScene {
             const mesh = node as THREE.Mesh;
             // A terrain's whole mesh stays hidden beside the pieces it draws: rays want it all the same.
             if (!node.visible && !(mesh.isMesh && node.userData?.isTerrain)) return;
-            if (mesh.isMesh && include(mesh)) {
+            // Instances that change places as the view turns: the whole set stands beside them, holding still, for rays.
+            if (mesh.isMesh && !mesh.userData?.shuffledInstances && include(mesh)) {
                 const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
                 if (materials.some(raysSeeMaterial)) {
                     const skinned = mesh as THREE.SkinnedMesh;

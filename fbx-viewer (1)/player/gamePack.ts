@@ -1,4 +1,5 @@
 import { GAME_PACK_FORMAT, type GamePackManifest } from '../runtime/types';
+import { PREPARED_MODEL_VERSION } from '../utils/preparedModels/format';
 
 /** A game pack served next to the player: game/game.json, game/content/<domain>.json, game/assets/<file>. */
 export interface GamePackSource {
@@ -6,6 +7,8 @@ export interface GamePackSource {
     domains: Record<string, unknown[]>;
     /** Returns a blob URL typed with the manifest MIME, so static hosts that send octet-stream still work. */
     resolveAssetUrl(assetId: string): Promise<string>;
+    /** Lets go of an asset's copy once it has been read, so it does not stay in memory for the rest of the game. */
+    releaseAssetUrl(assetId: string): void;
     dispose(): void;
 }
 
@@ -20,6 +23,21 @@ const isManifest = (value: unknown): value is GamePackManifest => {
     return !!manifest && manifest.format === GAME_PACK_FORMAT && manifest.schema === 1
         && typeof manifest.gameId === 'string' && typeof manifest.startupLevelId === 'string'
         && Array.isArray(manifest.domains) && Array.isArray(manifest.assets);
+};
+
+/**
+ * The prepared asset of each source asset, for a game this device can use them in. A pack of an
+ * unknown version, or with BC textures on a GPU that cannot sample them, loads its sources.
+ */
+export const usablePreparedModels = (manifest: GamePackManifest, blockCompression: { colour: boolean; normal: boolean }): ReadonlyMap<string, string> => {
+    const prepared = manifest.prepared;
+    const usable = new Map<string, string>();
+    if (prepared?.version !== PREPARED_MODEL_VERSION || !Array.isArray(prepared.models)) return usable;
+    const textures = prepared.textures === 'none' || (prepared.textures === 'bc' && blockCompression.colour && blockCompression.normal);
+    if (!textures) return usable;
+    const held = new Set(manifest.assets.map(asset => asset.id));
+    for (const model of prepared.models) if (held.has(model?.asset)) usable.set(model.source, model.asset);
+    return usable;
 };
 
 export const loadGamePack = async (baseUrl: string, signal?: AbortSignal): Promise<GamePackSource> => {
@@ -54,10 +72,21 @@ export const loadGamePack = async (baseUrl: string, signal?: AbortSignal): Promi
         return pending;
     };
 
+    const releaseAssetUrl = (assetId: string): void => {
+        const pending = urls.get(assetId);
+        if (!pending) return;
+        urls.delete(assetId);
+        void pending.then(url => {
+            URL.revokeObjectURL(url);
+            created.splice(created.indexOf(url), 1);
+        }, () => undefined);
+    };
+
     return {
         manifest,
         domains,
         resolveAssetUrl,
+        releaseAssetUrl,
         dispose: () => created.splice(0).forEach(url => URL.revokeObjectURL(url)),
     };
 };

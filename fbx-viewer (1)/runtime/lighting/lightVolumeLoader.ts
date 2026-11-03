@@ -10,13 +10,15 @@ import { decodeLightVolume, type BakedProbeVolume } from './bakedLighting';
 type UrlResolver = (assetId: string) => Promise<string>;
 
 let resolveUrl: UrlResolver | null = null;
+let releaseUrl: ((assetId: string) => void) | null = null;
 const cache = new Map<string, Promise<Float32Array>>();
 /** Volumes kept after their level is left. */
 const CACHE_LIMIT = 6;
 
 /** Where volume assets are read from; set when a project or game pack loads. */
-export const setLightVolumeSource = (resolve: UrlResolver | null): void => {
+export const setLightVolumeSource = (resolve: UrlResolver | null, release?: (assetId: string) => void): void => {
     resolveUrl = resolve;
+    releaseUrl = release ?? null;
     cache.clear();
 };
 
@@ -39,6 +41,7 @@ export const loadLightVolume = async (probes: BakedProbeVolume): Promise<Float32
             const response = await fetch(await resolve(probes.assetId), { method: 'GET' });
             if (!response.ok) throw new Error(`Light volume download failed (${response.status})`);
             const { counts, sh } = decodeLightVolume(await response.arrayBuffer());
+            releaseUrl?.(probes.assetId);
             if (counts.some((count, axis) => count !== probes.counts[axis])) throw new Error('Light volume does not match its level');
             return sh;
         })();

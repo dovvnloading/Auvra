@@ -106,6 +106,8 @@ const isReceiverMaterial = (material: THREE.Material): boolean =>
  */
 export const canReceiveDecal = (mesh: THREE.Mesh): boolean => {
     if (!mesh.isMesh || (mesh as THREE.SkinnedMesh).isSkinnedMesh || (mesh as THREE.BatchedMesh).isBatchedMesh) return false;
+    // Instances that change places as the view turns: a decal lands on the whole set beside them, which holds still.
+    if (mesh.userData?.shuffledInstances) return false;
     const position = mesh.geometry?.hasAttribute('position') ? mesh.geometry.getAttribute('position') : null;
     if (!position || position.count < 3) return false;
     const material = mesh.material;

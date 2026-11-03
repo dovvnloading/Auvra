@@ -71,6 +71,7 @@ Objects can carry components that add behaviour. Select an object and use **Add 
 | Dynamic Global Illumination | Light that bounces around the level as it plays, gathered by rays, with no bake: see [Dynamic global illumination](#dynamic-global-illumination) |
 | Post Process | The level's screen effects: global illumination, screen reflections, bloom, ambient occlusion, tone mapping, exposure and auto exposure, light shafts, sunlit haze, motion blur, vignette, depth of field, white balance, colour grading looks, film grain and antialiasing (see [Screen effects](#screen-effects)) |
 | LOD Group | Shows one of the object's children by camera distance (LOD 0, 1, 2) and hides all of them past the last distance |
+| World Grid | Splits this level into square cells and keeps only those near the camera in the game. See [World grid](#world-grid) |
 | Level Streaming | Loads another level's objects while the player is inside its box and unloads them after the player leaves (see [Level streaming](#level-streaming)) |
 | Distance Cull | Hides the object and its children beyond a distance |
 | Animation | Plays one of a placed character's clips during play, looping or once, at a speed and from a point in the clip: an NPC idling, waving or working. Clip names match with or without an FBX take prefix such as `Armature|` |
@@ -509,6 +510,23 @@ Add an **Audio Source** component to play a sound from an object during play. In
 A 3D sound the level hides from the listener is muffled: when something solid (anything with a collider, or the terrain's hills) stands between the camera and an Audio Source or 3D Audio Emitter, its high frequencies drop and it plays at half volume, easing back as the way opens. Rays go to the sound and to points around it, so a sound partly hidden (just around a corner, or past the edge of a wall) is only partly muffled, opening up gradually as you step out. The object a sound plays from does not hide it. 2D sounds are never muffled.
 
 All game sound plays through four mixer buses (Master, Music, Effects and Interface), and players set each one's volume in the game's Options screen. Weapon sounds use Effects. **Audio Emitter** objects use Music when they are 2D and looping, and Effects otherwise. The **Play Sound** blueprint node chooses its bus.
+
+## World grid
+
+One big level can load as the camera moves, without being split up by hand. Add a **World Grid** component to any object in the level (an **Empty Object** will do):
+
+- **Cell size** is the side of each square cell (64 m by default).
+- **Load distance** is how close the camera must come to a cell's nearest edge for it to load (150 m by default).
+- **Unload distance** is how far away it must then get for the cell to go (190 m by default), so walking along an edge does not load and unload it over and over.
+
+Props and foliage with no components, no parent and no children belong to the cell they stand in. Only the cells near the camera exist in play, and each one is drawn as a group, so a cell out of view costs nothing to draw. Everything else stays in the game all the time: terrain, lights, characters and any object with components. The grid applies in play; while editing, every object is shown.
+
+In a built game, the models only those cells use are not loaded when the level starts. Each loads as its cell comes near, and what was used longest ago is freed once the game passes its **Asset memory** setting. If a level needs a model some other way, for example because a prefab or a script names it, it loads with the level as usual. Foliage painted with the **Foliage** tool and the grass a terrain grows are not split into the grid's cells: their models load with the level.
+
+Two things to know:
+
+- A plain prop keeps blocking the player while its cell is not loaded.
+- Enemy navigation is worked out when the level starts. In a built game a prop whose model has not loaded yet counts as a circle around it, not its exact shape. Give a prop that shapes where enemies walk a component so that it loads with the level.
 
 ## Level streaming
 

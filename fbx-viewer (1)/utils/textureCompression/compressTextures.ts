@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { BlockFormat } from './bcEncoder';
 import type { CompressResponse, TextureKind } from '../../workers/textureCompress.worker';
+import { isCompressibleSize } from './textureEncoding';
 
 /**
  * GPU TEXTURE COMPRESSION
@@ -25,8 +26,6 @@ const COMPRESSED_SLOTS: readonly { key: string; kind: TextureKind }[] = [
     { key: 'metalnessMap', kind: 'data' },
     { key: 'normalMap', kind: 'normal' },
 ];
-/** Textures smaller than this on a side are left as they are. */
-const MIN_COMPRESSED_SIZE = 64;
 
 /** Each compressed texture's source image, for editor tools that read a texture's pixels. */
 const sourceImages = new WeakMap<THREE.Texture, unknown>();
@@ -79,8 +78,10 @@ const rebuildsNormals = new WeakSet<THREE.Material>();
 /**
  * Makes `material` rebuild its normal map's third component from the first two, as a BC5 normal map
  * keeps only those. It gives the same result for a full normal map, so it stays if the map changes.
+ * A copy of the material needs it too: copying leaves a compile hook behind, and the copy would read
+ * a third component the map does not have.
  */
-const rebuildNormalZ = (material: THREE.Material): void => {
+export const rebuildNormalZ = (material: THREE.Material): void => {
     if (rebuildsNormals.has(material)) return;
     rebuildsNormals.add(material);
     const previous = material.onBeforeCompile;
@@ -90,10 +91,14 @@ const rebuildNormalZ = (material: THREE.Material): void => {
     };
     const previousKey = material.customProgramCacheKey.bind(material);
     material.customProgramCacheKey = () => `${previousKey()}|normal-rg`;
+    const previousClone = material.clone.bind(material);
+    material.clone = () => {
+        const copy = previousClone();
+        rebuildNormalZ(copy);
+        return copy;
+    };
     material.needsUpdate = true;
 };
-
-const isPowerOfTwo = (value: number): boolean => value > 0 && (value & (value - 1)) === 0;
 
 type CompressResult = { format: BlockFormat; levels: { data: ArrayBuffer; width: number; height: number }[]; cached: boolean };
 
@@ -143,7 +148,7 @@ const pool = (() => {
 })();
 
 /** The compressed texture standing in for `texture`, keeping how it is sampled and placed. */
-const compressedTexture = (texture: THREE.Texture, result: CompressResult): THREE.CompressedTexture => {
+export const compressedTexture = (texture: THREE.Texture, result: Pick<CompressResult, 'format' | 'levels'>): THREE.CompressedTexture => {
     const levels = result.levels.map(level => ({ data: new Uint8Array(level.data), width: level.width, height: level.height }));
     const format = result.format === 'bc5' ? THREE.RED_GREEN_RGTC2_Format : result.format === 'bc3' ? THREE.RGBA_S3TC_DXT5_Format : THREE.RGB_S3TC_DXT1_Format;
     const compressed = new THREE.CompressedTexture(levels as unknown as ImageData[], levels[0].width, levels[0].height, format, THREE.UnsignedByteType);
@@ -179,7 +184,25 @@ export interface TextureCompressionReport {
  * Swaps the colour and material maps of every material under `root` for BC-compressed textures,
  * shared textures once. Does nothing where the GPU cannot sample BC textures.
  */
-export const compressModelTextures = async (root: THREE.Object3D): Promise<TextureCompressionReport> => {
+/**
+ * Lets go of decoded images the model no longer draws. A closed image frees at once; left to the
+ * collector, which does not see their size coming, a few levels of 4096 images at 64 MB each run a
+ * game out of memory. Textures share a decoded image, so one any texture still draws stays.
+ */
+export const closeReplacedImages = (root: THREE.Object3D, replaced: Set<unknown>): void => {
+    root.traverse((node) => {
+        const material = (node as THREE.Mesh).material;
+        if (!material) return;
+        for (const candidate of Array.isArray(material) ? material : [material]) {
+            for (const value of Object.values(candidate)) {
+                if ((value as THREE.Texture | null)?.isTexture) replaced.delete((value as THREE.Texture).image);
+            }
+        }
+    });
+    for (const image of replaced) (image as Partial<ImageBitmap>).close?.();
+};
+
+export const compressModelTextures = async (root: THREE.Object3D, keepSources = true): Promise<TextureCompressionReport> => {
     const report: TextureCompressionReport = { compressed: 0, cached: 0, skipped: 0, bytesBefore: 0, bytesAfter: 0 };
     const supported = typeof Worker !== 'undefined' && typeof createImageBitmap !== 'undefined' ? blockCompressionSupport() : { colour: false, normal: false };
     if (!supported.colour && !supported.normal) return report;
@@ -201,11 +224,12 @@ export const compressModelTextures = async (root: THREE.Object3D): Promise<Textu
             }
         }
     });
+    const replaced = new Set<unknown>();
     await Promise.all([...uses].map(async ([texture, { kind, slots }]) => {
         const image = texture.image as { width?: number; height?: number } | null;
         const width = image?.width ?? 0;
         const height = image?.height ?? 0;
-        if (!image || !isPowerOfTwo(width) || !isPowerOfTwo(height) || Math.min(width, height) < MIN_COMPRESSED_SIZE) {
+        if (!image || !isCompressibleSize(width, height)) {
             report.skipped++;
             return;
         }
@@ -213,8 +237,11 @@ export const compressModelTextures = async (root: THREE.Object3D): Promise<Textu
             const bitmap = await createImageBitmap(image as ImageBitmapSource);
             const result = await pool.compress(bitmap, kind === 'colour' && texture.colorSpace !== THREE.SRGBColorSpace ? 'data' : kind, texture.flipY);
             const compressed = compressedTexture(texture, result);
-            sourceImages.set(compressed, sourceImages.get(texture) ?? texture.image);
-            sourceFlips.set(compressed, textureSourceFlipY(texture));
+            // Only editor tools read these, and a 4096 image holds far more than its compressed texture.
+            if (keepSources) {
+                sourceImages.set(compressed, sourceImages.get(texture) ?? texture.image);
+                sourceFlips.set(compressed, textureSourceFlipY(texture));
+            }
             for (const { material, key } of slots) {
                 (material as unknown as Record<string, THREE.Texture>)[key] = compressed;
                 if (result.format === 'bc5') rebuildNormalZ(material);
@@ -224,9 +251,11 @@ export const compressModelTextures = async (root: THREE.Object3D): Promise<Textu
             report.compressed++;
             if (result.cached) report.cached++;
             texture.dispose();
+            replaced.add(image);
         } catch {
             report.skipped++;
         }
     }));
+    if (!keepSources) closeReplacedImages(root, replaced);
     return report;
 };

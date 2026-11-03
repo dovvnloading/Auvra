@@ -3,6 +3,7 @@ import type { ProjectStatus } from './projectStatus';
 import type { ProjectTemplate } from '../types';
 import type { Event, Response } from '../host/generated/protocolV1';
 import { frontendDiagnostics, type DiagnosticContext } from '../diagnostics/runtime';
+import type { PreparedModels } from './preparedModels/format';
 
 /** Host-owned project state. Paths and binary data intentionally never enter this type. */
 export type { ProjectStatus } from './projectStatus';
@@ -52,6 +53,7 @@ const EMPTY_STATUS: ProjectStatus = {
   recentProjects: [],
 };
 const QUIET_PROJECT_METHODS = new Set(['project.getStatus', 'project.getSnapshot', 'asset.resolve']);
+const PREPARED_MODEL_MIME = 'model/gltf-binary';
 
 /** A host error response. `code` is the protocol error code, so callers can tell a rejected change from a retryable failure. */
 export class ProjectHostError extends Error {
@@ -212,8 +214,8 @@ export class ProjectService {
   async save(diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> { return this.call<ProjectSnapshot>('project.save', { projectId: this.requireProjectId(), expectedRevision: this.status.revision }, diagnostics); }
   async saveAs(name = this.status.name || 'Untitled', diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> { return this.call<ProjectSnapshot>('project.saveAs', { projectId: this.requireProjectId(), expectedRevision: this.status.revision, name }, diagnostics); }
   async exportPack(diagnostics?: DiagnosticContext): Promise<void> { await this.call('project.exportPack', { projectId: this.requireProjectId(), expectedRevision: this.status.revision, destinationHandle: 'dialog' }, diagnostics); }
-  async buildGame(target: 'web' | 'windows', destinationHandle: string = 'dialog', diagnostics?: DiagnosticContext): Promise<{ handle?: string; report?: Record<string, unknown> } | null> {
-    return this.call<{ handle?: string; report?: Record<string, unknown> }>('project.buildGame', { projectId: this.requireProjectId(), expectedRevision: this.status.revision, target, destinationHandle }, diagnostics);
+  async buildGame(target: 'web' | 'windows', destinationHandle: string = 'dialog', diagnostics?: DiagnosticContext, prepared?: PreparedModels): Promise<{ handle?: string; report?: Record<string, unknown> } | null> {
+    return this.call<{ handle?: string; report?: Record<string, unknown> }>('project.buildGame', { projectId: this.requireProjectId(), expectedRevision: this.status.revision, target, destinationHandle, ...(prepared ? { prepared } : {}) }, diagnostics);
   }
   async importPack(diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> { return this.call<ProjectSnapshot>('project.importPack', { sourceHandle: 'dialog' }, diagnostics); }
   async importLegacy(diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> { return this.call<ProjectSnapshot>('project.importLegacy', { sourceHandle: 'dialog' }, diagnostics); }
@@ -253,6 +255,36 @@ export class ProjectService {
     }
     const type = mime || 'application/octet-stream';
     return new Response(new Blob(pieces, { type }), { headers: { 'Content-Type': type } });
+  }
+
+  /** Which of `keys` the host already holds a prepared model for, across all projects. */
+  async queryPreparedModels(keys: string[], diagnostics?: DiagnosticContext): Promise<string[]> {
+    const result = await this.call<{ preparedKeys?: string[] }>('asset.queryPrepared', { projectId: this.requireProjectId(), keys }, diagnostics);
+    return result?.preparedKeys ?? [];
+  }
+
+  /**
+   * Hands the host a prepared model to keep under `key`. It is not project content, so a read-only
+   * project can do this. It goes a piece at a time, in turn with other files, as any file does.
+   */
+  async uploadPreparedModel(key: string, model: ArrayBuffer, options: AssetTransferOptions = {}): Promise<void> {
+    if (options.signal?.aborted) throw new DOMException('Asset upload was cancelled.', 'AbortError');
+    const file = new File([model], `${key}.glb`, { type: PREPARED_MODEL_MIME });
+    await this.assertStorable(file);
+    const run = async () => {
+      if (options.signal?.aborted) throw new DOMException('Asset upload was cancelled.', 'AbortError');
+      const result = await this.call<{ url?: string; method?: string; mime?: string }>('asset.beginPreparedUpload', { projectId: this.requireProjectId(), key, size: file.size }, options.diagnostics);
+      if (!result?.url || !/^https:\/\/assets\.auvra\.local\/v1\/put\/[A-Za-z0-9_-]{43}$/.test(result.url)) throw new Error('Host returned an invalid asset upload URL');
+      if (result.method !== 'PUT' || result.mime !== PREPARED_MODEL_MIME) throw new Error('Host returned an invalid asset upload ticket');
+      const ticket = { url: result.url, method: 'PUT' as const, mime: result.mime };
+      for (let start = 0; start < file.size; start += ASSET_PIECE_BYTES) {
+        if (options.signal?.aborted) throw new DOMException('Asset upload was cancelled.', 'AbortError');
+        await this.putPiece(ticket, file, start, Math.min(start + ASSET_PIECE_BYTES, file.size), options);
+      }
+    };
+    const sent = this.uploadQueue.then(run, run);
+    this.uploadQueue = sent.catch(() => undefined);
+    await sent;
   }
 
   async uploadAsset(file: File, options: AssetTransferOptions = {}): Promise<string> {

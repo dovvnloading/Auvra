@@ -53,6 +53,8 @@ import { RuntimeServicesProvider, RuntimeSpawnerProvider, type SpawnPosition, to
 import { ComponentHostContext } from './components/builtins';
 import { getComponentDefinition } from './components/registry';
 import { IKPlayerTargetContext } from './components/ikComponents';
+import { worldGridSettingsOf } from './worldGrid';
+import { WorldGridLayer } from './WorldGridLayer';
 import { CameraDirectorDriver } from './components/cameraComponent';
 import { DialogueDriver } from './components/dialogueComponent';
 import { VehicleDriver, VehicleSkidMarks } from './components/vehicleComponent';
@@ -66,6 +68,7 @@ import { OwnedComposer, TemporalPipeline } from './temporal/TemporalPipeline';
 import { MIN_RENDER_SCALE } from './temporal/temporalSettings';
 import { AutoExposure, LightShafts, PostProcessAllowedContext, PostProcessQualityContext, ScreenLighting, SunHaze, useAllowedAntialias, usePostProcessClaimed } from './components/postProcess';
 import { MeshLodContext } from '../components/Scene/useMeshLod';
+import { OcclusionCullingLayer } from './OcclusionCullingLayer';
 import type { InputState } from './input';
 import { collectTimelineTargets } from './timeline/evaluate';
 import { CinematicOverlay } from './CinematicOverlay';
@@ -717,6 +720,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
     // Hierarchy and components render as transform groups; gameplay systems read world-space copies.
     const renderPlan = useMemo(() => planLevelRender(runtimeLevelObjects), [runtimeLevelObjects]);
     const worldLevelObjects = renderPlan.worldObjects;
+    const worldGrid = useMemo(() => worldGridSettingsOf(runtimeLevelObjects), [runtimeLevelObjects]);
     // Enemies walk the level's navmesh; the hierarchy stays intact so moving parents are detected.
     // Mesh colliders and auto hulls bake from the model's own triangles; memoized, since a new function re-bakes the navmesh.
     const navShapeGeometry = useCallback((object: LevelObject) => {
@@ -777,8 +781,21 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
                 ))}
 
                 {renderPlan.foliageSets.map(set => <FoliageLayer key={set.id} set={set} models={models} runtime />)}
-                <InstancedLevelLayer models={models} levelObjects={renderPlan.instancedFoliage} interactive={false} />
-                <InstancedLevelLayer models={models} levelObjects={renderPlan.instancedProps} interactive={false} />
+                {worldGrid ? (
+                    <WorldGridLayer
+                        settings={worldGrid}
+                        foliage={renderPlan.instancedFoliage}
+                        props={renderPlan.instancedProps}
+                        models={models}
+                        cellModels={content.cellModels}
+                        start={sessionStart.position}
+                    />
+                ) : (
+                    <>
+                        <InstancedLevelLayer models={models} levelObjects={renderPlan.instancedFoliage} interactive={false} />
+                        <InstancedLevelLayer models={models} levelObjects={renderPlan.instancedProps} interactive={false} />
+                    </>
+                )}
 
                 {renderPlan.groupRoots.map(obj => (
                     <LevelObjectNode key={obj.id} object={obj} plan={renderPlan} models={models} />
@@ -1067,6 +1084,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                 <PostProcessAllowedContext.Provider value={postProcessAllowed}>
                 <ShadowDetailContext.Provider value={highQuality ? 'high' : 'low'}>
                 <MeshLodContext.Provider value={settings.quality.meshLod !== false}>
+                <OcclusionCullingLayer enabled={settings.quality.occlusionCulling !== false}>
                 {postProcessAllowed && <DefaultPostProcess />}
 
                 {/* Input, audio buses and player options live for the whole run; the session adds its prefab spawner. */}
@@ -1096,6 +1114,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                         </PhysicsWorld>
                     </TriggerEventsProvider>
                 </RuntimeServicesProvider>
+                </OcclusionCullingLayer>
                 </MeshLodContext.Provider>
                 </ShadowDetailContext.Provider>
                 </PostProcessAllowedContext.Provider>

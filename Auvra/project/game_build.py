@@ -66,7 +66,7 @@ DEFAULT_GAME_SETTINGS: dict[str, Any] = {
     "startupLevelId": None,
     "playerBlueprintId": None,
     "window": {"fullscreen": False},
-    "quality": {"shadows": True, "postProcessing": True, "maxDpr": 2, "fov": 60, "meshLod": True, "textureCompression": True, "antiAliasing": "temporal", "renderScale": 1},
+    "quality": {"shadows": True, "postProcessing": True, "maxDpr": 2, "fov": 60, "meshLod": True, "occlusionCulling": True, "textureCompression": True, "antiAliasing": "temporal", "renderScale": 1, "loadLevelsOnDemand": True, "assetMemoryMb": 2048},
     "input": {"mouseSensitivity": 0.002, "invertY": False},
     "audio": {"masterVolume": 1},
     "network": {"enabled": False, "serverUrl": "ws://127.0.0.1:7777", "room": "main", "maxPlayers": 8},
@@ -169,6 +169,7 @@ class BuildReport:
     assets: int
     levels: int
     warnings: tuple[str, ...]
+    prepared_models: int = 0
 
 
 def build_game(
@@ -181,6 +182,8 @@ def build_game(
     build_id: str,
     game_id: str,
     player_executable: Path | None = None,
+    prepared: Mapping[str, Any] | None = None,
+    read_prepared: Callable[[str], bytes | None] | None = None,
 ) -> BuildReport:
     """Write a playable build into ``destination`` and publish it atomically.
 
@@ -195,6 +198,11 @@ def build_game(
     ``Contents/Resources/game`` on macOS.  The player's Rust crate notices
     (``THIRD_PARTY_NOTICES.txt`` beside the binary) are appended to the build's
     ``THIRD_PARTY_NOTICES.txt``.
+    ``prepared`` lists models the editor prepared ahead of the build
+    ({version, textures, models: [{source, asset}]}) and ``read_prepared`` returns
+    one's bytes, or None if it cannot be used.  They go in beside their sources as
+    ordinary assets, the sources stay as the fallback, and none of it can fail a
+    build; without them the pack is the sources alone.
     """
 
     if target not in BUILD_TARGETS:
@@ -278,6 +286,7 @@ def build_game(
             file_name = f"{asset_id}.{extension}"
             _write(staging, f"{web}game/assets/{file_name}", data, records)
             shipped.append({"id": asset_id, "file": file_name, "mime": mime or _GENERIC_MIME, "size": len(data)})
+        prepared_manifest = _write_prepared(staging, web, prepared, read_prepared, asset_ids, shipped, records, warnings)
         manifest = {
             "format": GAME_PACK_FORMAT,
             "schema": GAME_PACK_SCHEMA,
@@ -290,6 +299,8 @@ def build_game(
             "domains": list(DOMAIN_NAMES),
             "assets": shipped,
         }
+        if prepared_manifest is not None:
+            manifest["prepared"] = prepared_manifest
         _write(staging, f"{web}game/game.json", canonical_json(manifest).encode("utf-8"), records)
         if executable is not None and layout.executable is not None:
             _write(staging, layout.executable, executable, records, mode=layout.executable_mode)
@@ -325,6 +336,7 @@ def build_game(
         assets=len(shipped),
         levels=len(levels),
         warnings=tuple(warnings),
+        prepared_models=len(prepared_manifest["models"]) if prepared_manifest is not None else 0,
     )
 
 
@@ -588,6 +600,45 @@ def _load_asset(read_asset: Callable[[str], tuple[bytes, str]], asset_id: str) -
         raise GameBuildError("invalid_project", f"asset {asset_id} could not be read")
     essence = mime.split(";", 1)[0].strip().lower() if isinstance(mime, str) else ""
     return bytes(data), essence
+
+
+def _write_prepared(
+    staging: Path,
+    web: str,
+    prepared: Mapping[str, Any] | None,
+    read_prepared: Callable[[str], bytes | None] | None,
+    sources: Sequence[str],
+    assets: list[dict[str, Any]],
+    records: list[dict[str, Any]],
+    warnings: list[str],
+) -> dict[str, Any] | None:
+    """Writes the prepared models of sources this pack holds; returns the manifest's ``prepared``, if any."""
+
+    if not isinstance(prepared, Mapping) or read_prepared is None:
+        return None
+    models: list[dict[str, str]] = []
+    usable: dict[str, bool] = {}
+    for entry in prepared.get("models") or ():
+        source, asset = entry.get("source"), entry.get("asset")
+        if source not in sources or not isinstance(asset, str) or not asset or len(asset) > 128 or not set(asset) <= _SAFE_ASSET_ID or asset in sources:
+            continue
+        if asset not in usable:
+            try:
+                data = read_prepared(asset)
+            except (OSError, ValueError):
+                data = None
+            usable[asset] = data is not None
+            if data is None:
+                warnings.append(f"the prepared copy of asset {source} could not be used; the game loads its source")
+            else:
+                file_name = f"{asset}.glb"
+                _write(staging, f"{web}game/assets/{file_name}", data, records)
+                assets.append({"id": asset, "file": file_name, "mime": "model/gltf-binary", "size": len(data)})
+        if usable[asset]:
+            models.append({"source": source, "asset": asset})
+    if not models:
+        return None
+    return {"version": prepared.get("version"), "textures": prepared.get("textures"), "models": models}
 
 
 def _prepare_domains(domains: Any) -> dict[str, list[dict[str, Any]]]:
