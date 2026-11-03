@@ -13,6 +13,7 @@ import { frontendDiagnostics } from '../diagnostics/runtime';
 import { gltfReport } from './fbxImport/gltfReport';
 import type { ModelFileReport } from './fbxImport/nativeImporter';
 import type { ModelConvertOptions } from '../workers/fbxImport.worker';
+import { cutModelTakes, importerOptions, noteClipTake, type ModelReadOptions } from './clipRanges';
 
 // Re-export specific utilities for consumers (hooks) to maintain API compatibility
 export { disposeModel, disposeObject } from './processing/ModelLifecycle';
@@ -113,8 +114,8 @@ export interface ModelLoadOptions {
   diagnostics?: { operationId: string; traceId: string; spanId?: string; assetAlias: string };
   /** Swap colour and material maps for GPU-compressed textures (the game's Texture compression setting); on by default. */
   compressTextures?: boolean;
-  /** How an FBX or OBJ is read: what to bring in, and how. */
-  convert?: ModelConvertOptions;
+  /** How the file is read: what to bring in, how, and the clips to cut from its takes. */
+  convert?: ModelReadOptions;
   /** Image files the source names but does not hold, as `File`s named as it names them. */
   images?: readonly File[];
 }
@@ -436,6 +437,10 @@ export interface GltfSource {
   metresPerUnit: number;
   /** The document's nodes, geometry only: materials and images are left out, as they would only cost time. */
   scene: THREE.Group;
+  /** The document's clips, under their names in the file. */
+  animations: THREE.AnimationClip[];
+  /** What the file held, for what the importer reads. */
+  report?: ModelFileReport;
   /** Which node, mesh and primitive of the document each object of `scene` is. */
   associations: Map<unknown, { nodes?: number; meshes?: number; primitives?: number }>;
 }
@@ -445,10 +450,12 @@ export const readGltfSource = async (file: File, options: { convert?: ModelConve
   const format = detectModelFormat(file) ?? sniffModelFormat(original) ?? 'fbx';
   let bytes = original;
   let metresPerUnit = 1;
+  let report: ModelFileReport | undefined;
   if (format !== 'glb' && format !== 'gltf') {
     const converted = await convertOffThread(original, format, options.signal, undefined, undefined, file.name, options.convert, options.images);
     bytes = converted.glb;
     metresPerUnit = converted.metresPerUnit ?? 1;
+    report = converted.report;
   }
   const isText = format === 'gltf';
   const { json, jsonEnd } = isText ? { json: parseGltfJson(new TextDecoder().decode(bytes)), jsonEnd: 0 } : readGlb(bytes);
@@ -490,7 +497,7 @@ export const readGltfSource = async (file: File, options: { convert?: ModelConve
   const loaded = await materializeGltf(isText ? JSON.stringify(shapes) : rebuildGlb(bytes, jsonEnd, shapes as GltfDocument), options.signal, release);
   throwIfAborted(options.signal);
   loaded.scene.updateMatrixWorld(true);
-  return { json: document, viewBytes, metresPerUnit, scene: loaded.scene, associations: loaded.parser.associations as unknown as GltfSource['associations'] };
+  return { json: document, viewBytes, metresPerUnit, scene: loaded.scene, animations: loaded.animations, report, associations: loaded.parser.associations as unknown as GltfSource['associations'] };
 };
 
 /**
@@ -523,18 +530,30 @@ const isGenericClipName = (name: string): boolean => {
   return !trimmed || /mixamo\.com/i.test(trimmed) || /^take\s*0*\d+$/i.test(trimmed);
 };
 
-const nameAnimations = (animations: THREE.AnimationClip[], fileName: string, format: ModelFormat): void => {
+/**
+ * Gives a file's clips the names they come in under, from the names they have in the file.
+ * `fileTakes` are all the takes it holds, when `animations` may be only some of them: what a clip is
+ * called must not depend on which other takes are kept.
+ */
+export const nameAnimations = (animations: readonly { name: string }[], fileName: string, format: ModelFormat, fileTakes: readonly string[] = animations.map((clip) => clip.name)): void => {
   if (animations.length === 0) return;
   const cleanName = fileName.replace(MODEL_EXTENSION_PATTERN, '');
+  // Each clip's place among the file's takes, which are in the same order.
+  let place = -1;
+  const places = animations.map((clip) => {
+    const found = fileTakes.indexOf(clip.name, place + 1);
+    if (found >= 0) place = found;
+    return place;
+  });
   if (format === 'fbx') {
-    if (animations.length === 1) {
+    if (fileTakes.length === 1) {
       // If strictly one animation, assume it belongs to the file and rename it to file name
       animations[0].name = cleanName;
     } else {
       // If multiple, only rename known generic names
       animations.forEach((clip, index) => {
         if (clip.name === 'Take 001' || clip.name === 'mixamo.com') {
-          clip.name = `${cleanName} ${index + 1}`;
+          clip.name = `${cleanName} ${places[index] + 1}`;
         }
       });
     }
@@ -542,7 +561,7 @@ const nameAnimations = (animations: THREE.AnimationClip[], fileName: string, for
   }
   // glTF clips carry authored names; only fill in missing or exporter-generic ones.
   animations.forEach((clip, index) => {
-    if (isGenericClipName(clip.name)) clip.name = animations.length === 1 ? cleanName : `${cleanName} ${index + 1}`;
+    if (isGenericClipName(clip.name)) clip.name = fileTakes.length === 1 ? cleanName : `${cleanName} ${places[index] + 1}`;
   });
 };
 
@@ -569,7 +588,7 @@ export const loadModelFile = async (file: File, options: ModelLoadOptions = { no
     // is materialized into Three objects here.
     const parsed = format === 'glb' || format === 'gltf'
       ? await parseGltfNative(source, format, options.signal, options.onProgress)
-      : await parseOffThread(source, format, options.signal, options.onProgress, options.diagnostics, file.name, options.convert, options.images);
+      : await parseOffThread(source, format, options.signal, options.onProgress, options.diagnostics, file.name, importerOptions(options.convert), options.images);
     object = parsed.object;
 
     // --- FILTER ANIMATIONS ---
@@ -589,7 +608,16 @@ export const loadModelFile = async (file: File, options: ModelLoadOptions = { no
     splitAlphaCards(object);
 
     // --- RENAME ANIMATIONS ---
-    nameAnimations(object.animations || [], file.name, format);
+    // A clip's range and the takes it leaves out go by the take's name in the file.
+    const takes = object.animations || [];
+    for (const take of takes) {
+      const read = parsed.report?.clips.find((clip) => clip.name === take.name);
+      noteClipTake(take, take.name, read?.start, parsed.report?.framesPerSecond);
+    }
+    nameAnimations(takes, file.name, format, parsed.report?.clips.map((clip) => clip.name));
+
+    // --- CUT ANIMATIONS ---
+    object.animations = options.convert?.animation === false ? [] : cutModelTakes(takes, options.convert ?? {}, object);
 
     let initialScale: [number, number, number] = [1, 1, 1];
     // The unit the file says it is authored in, for the import setting that keeps its authored size.

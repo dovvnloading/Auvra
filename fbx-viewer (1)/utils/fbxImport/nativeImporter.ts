@@ -189,6 +189,20 @@ const FLAG_NO_SKIN = 64;
 const FLAG_NO_MESHES = 128;
 const FLAG_NO_LOOSE_MESHES = 512;
 
+/**
+ * Gives a take the file leaves unnamed a name of its own: takes are ticked, left out and cut by name,
+ * and an empty one can be none of those. Named in order, so it is the same one each time the file is read.
+ */
+const nameUnnamedTakes = (takes: { name?: string }[]): void => {
+  const used = new Set(takes.map((take) => take.name));
+  let number = 0;
+  for (const take of takes) {
+    if (take.name) continue;
+    do number += 1; while (used.has(`Take ${number}`));
+    take.name = `Take ${number}`;
+  }
+};
+
 interface ImporterExports {
   memory: WebAssembly.Memory;
   _initialize?: () => void;
@@ -273,6 +287,8 @@ export const runNativeImport = (importer: ImporterExports, source: ArrayBuffer |
     result.report.clips = inTakeOrder(result.report.clips, order);
     if (result.document.animations) result.document.animations = inTakeOrder(result.document.animations, order);
   }
+  nameUnnamedTakes(result.report.clips);
+  if (result.document.animations) nameUnnamedTakes(result.document.animations);
   // The report keeps every take, so the dialog can offer them again.
   if (options.excludedClips?.length && result.document.animations) {
     const excluded = new Set(options.excludedClips);

@@ -17,6 +17,8 @@ interface SingleStateConfigProps {
     curveVariableOptions?: { label: string; value: string }[];
     /** Length of the state's clip in seconds, when it is loaded. */
     clipDuration?: number;
+    /** Whether a clip says it loops, when it does: a state takes that up when it is given the clip. */
+    clipLoop?: (name: string) => boolean | undefined;
 }
 
 const ToggleRow: React.FC<{ label: string; checked: boolean; onChange: (checked: boolean) => void }> = ({ label, checked, onChange }) => (
@@ -41,7 +43,8 @@ export const SingleStateConfig: React.FC<SingleStateConfigProps> = ({
     clipOptions,
     playRateParamOptions = NO_PLAY_RATE_PARAM_OPTIONS,
     curveVariableOptions = NO_PLAY_RATE_PARAM_OPTIONS,
-    clipDuration
+    clipDuration,
+    clipLoop
 }) => {
     const playRate = typeof node.playRate === 'number' && Number.isFinite(node.playRate) ? node.playRate : 1;
     const notifies = node.notifies ?? [];
@@ -64,7 +67,10 @@ export const SingleStateConfig: React.FC<SingleStateConfigProps> = ({
                         <label className="text-2xs text-gray-500 font-bold ">Clip</label>
                         <Select
                             value={node.clipName || ''}
-                            onChange={(val) => updateState({ clipName: val })}
+                            onChange={(val) => {
+                                const loop = clipLoop?.(val);
+                                updateState({ clipName: val, ...(loop !== undefined ? { loop } : {}) });
+                            }}
                             options={clipOptions}
                             placeholder="-- Select Animation --"
                         />

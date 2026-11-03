@@ -10,6 +10,7 @@ import { applyModelImportSettings, convertOptionsFor, stripGeometry } from './pr
 import { generateThumbnail } from './thumbnailGenerator';
 import { disposeModel, disposeObject } from './processing/ModelLifecycle';
 import { applyStoredClipNames, mirrorModelClips, prepareAnimationClips } from './animationBinding';
+import { cutAttachedClips, noteAttachedClips, wholeClips } from './clipRanges';
 import { drawAsPaintedTexture, hydrateMaterialOverrides, overrideTextureFlipY } from './materialOverrides';
 import {
   assetDiagnosticAttributes,
@@ -264,7 +265,7 @@ export async function loadGameContent(
         assertCurrent();
         // Clips keep the names stored at import, not the model's current name (see applyStoredClipNames).
         applyStoredClipNames(loaded.animations, item.clipNames);
-        loaded.sourceClipNames = loaded.animations.map((clip) => clip.name);
+        loaded.sourceClipNames = wholeClips(loaded.animations).map((clip) => clip.name);
         loaded.category = item.category || 'Prop';
         loaded.isPlacedInScene = Boolean(item.isPlacedInScene);
         loaded.textureOverrides = item.textureOverrides;
@@ -359,8 +360,9 @@ export async function loadGameContent(
               report(`Binding animation — ${animationName}`, 0.96, animationPhase, animationDiagnostic);
               const prepared = prepareAnimationClips(loaded.object, animationModel.object, animationModel.animations, item.boneRoles);
               applyStoredClipNames(prepared.clips, animation.clipNames);
+              noteAttachedClips(prepared.clips, animationModel.animations);
               animationDiagnostic = { ...animationDiagnostic, bindingMode: prepared.mode, clipCount: prepared.clips.length };
-              loaded.animations.push(...prepared.clips);
+              loaded.animations.push(...cutAttachedClips(prepared.clips, loaded.importSettings ?? {}, loaded.object));
             } finally {
               if (animationModel) disposeModel(animationModel);
             }

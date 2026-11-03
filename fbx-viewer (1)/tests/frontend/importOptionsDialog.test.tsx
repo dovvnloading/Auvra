@@ -5,6 +5,8 @@ import { ImportOptionsDialog, type ImportChoice } from '../../components/UI/Brow
 import type { ModelFileReport } from '../../utils/fbxImport/nativeImporter';
 import { convertOptionsFor, resolveImportSettings, suggestedImportSettings } from '../../utils/processing/ModelTransforms';
 
+vi.mock('../../components/UI/Properties/ClipRangeEditor', () => ({ ClipRangeEditor: () => <div data-testid="cutting" /> }));
+
 const report = (fields: Partial<ModelFileReport> = {}): ModelFileReport => ({
   format: 'fbx', version: 7700, ascii: false, creator: '', application: 'Maker', upAxis: '+Y', frontAxis: '+Z', metresPerUnit: 0.01, framesPerSecond: 30,
   meshes: 1, triangles: 1000, vertices: 600, skinnedMeshes: 0, blendShapes: 0, meshesWithPolygons: 0, meshesWithoutUvs: 0, meshesWithoutNormals: 0,
@@ -20,7 +22,7 @@ const PERSON_BONES = ['mixamorig:Hips', 'mixamorig:Spine', 'mixamorig:Head', 'mi
 const open = async (read: ModelFileReport | null, props: Partial<React.ComponentProps<typeof ImportOptionsDialog>> = {}) => {
   const onConfirm = vi.fn<(choice: ImportChoice) => void>();
   const onCancel = vi.fn();
-  render(<ImportOptionsDialog name="thing.fbx" inspect={async () => read} onConfirm={onConfirm} onCancel={onCancel} {...props} />);
+  render(<ImportOptionsDialog name="thing.fbx" inspect={async () => read} readFile={async () => new File([], 'thing.fbx')} onConfirm={onConfirm} onCancel={onCancel} {...props} />);
   await waitFor(() => expect(screen.queryByText(/Reading the file/)).toBeNull());
   return { onConfirm, onCancel };
 };
@@ -153,6 +155,53 @@ describe('the import dialog', () => {
     expect(settings.excludedClips).toBeUndefined();
   });
 
+  it('keeps the clips cut from a take, and animation with them when no take is ticked', async () => {
+    const clips = [{ name: 'Take 001', duration: 60, start: 0, layers: 1 }];
+    const clipRanges = [{ take: 'Take 001', name: 'Idle', start: 0, end: 2, loop: true }, { take: 'Take 001', name: 'Attack', start: 2, end: 3, loop: false }];
+    const { onConfirm } = await open(report({ clips }), { initialSettings: { normalize: false, targetSize: 2, excludedClips: ['Take 001'], clipRanges } });
+    expect(screen.getByText('Animation: 2 clips from 1 take')).toBeTruthy();
+    expect(screen.getByText('Idle')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Import' }));
+    const { settings } = onConfirm.mock.calls[0][0];
+    expect(settings.clipRanges).toEqual(clipRanges);
+    expect(settings.excludedClips).toEqual(['Take 001']);
+    expect(settings.animation).toBeUndefined();
+  });
+
+  it('keeps the clips cut from what is not in this file, and says so', async () => {
+    const clips = [{ name: 'Walk', duration: 1, start: 0, layers: 1 }, { name: 'Run', duration: 1, start: 0, layers: 1 }];
+    const clipRanges = [{ take: 'Mocap', name: 'Wave', start: 0, end: 2, loop: false, attached: true }];
+    const { onConfirm } = await open(report({ clips }), { initialSettings: { normalize: false, targetSize: 2, clipRanges } });
+    expect(screen.getByText(/1 clip cut from takes not in this file: Wave/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Import' }));
+    expect(onConfirm.mock.calls[0][0].settings.clipRanges).toEqual(clipRanges);
+  });
+
+  it('shows ranges saved under a take of another name on a file with one take', async () => {
+    const clips = [{ name: 'New name', duration: 60, start: 0, layers: 1 }];
+    await open(report({ clips }), { initialSettings: { normalize: false, targetSize: 2, clipRanges: [{ take: 'Old name', name: 'Idle', start: 0, end: 2, loop: true }] } });
+    expect(screen.getByRole('button', { name: /Idle/ })).toBeTruthy();
+    expect(screen.queryByText(/not in this file/)).toBeNull();
+  });
+
+  it('offers the clips of a glTF too, without the key reduction of the importer', async () => {
+    const clips = [{ name: 'Walk', duration: 1, start: 0, layers: 1 }, { name: 'Run', duration: 0.5, start: 0, layers: 1 }];
+    const { onConfirm } = await open(report({ format: 'gltf', clips }));
+    expect(screen.queryByText('Reduce keys')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Import Run'));
+    fireEvent.click(screen.getByRole('button', { name: 'Import' }));
+    expect(onConfirm.mock.calls[0][0].settings.excludedClips).toEqual(['Run']);
+  });
+
+  it('leaves Escape to the cutting window while it is open', async () => {
+    const clips = [{ name: 'Take 001', duration: 60, start: 0, layers: 1 }];
+    const { onCancel } = await open(report({ clips }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cut Take 001 into clips' }));
+    expect(screen.getByTestId('cutting')).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
   it('chooses how many animation keys to keep', async () => {
     const { onConfirm } = await open(report({ clips: [{ name: 'Walk', duration: 1, start: 0, layers: 1 }] }));
     fireEvent.click(screen.getByRole('radio', { name: 'Every key' }));
@@ -215,7 +264,7 @@ describe('the import dialog', () => {
 
   it('says why a file cannot be read, and does not offer to import it', async () => {
     const onConfirm = vi.fn();
-    render(<ImportOptionsDialog name="thing.fbx" inspect={async () => { throw new Error('The file could not be read: Truncated file.'); }} onConfirm={onConfirm} onCancel={vi.fn()} />);
+    render(<ImportOptionsDialog readFile={async () => new File([], 'thing.fbx')} name="thing.fbx" inspect={async () => { throw new Error('The file could not be read: Truncated file.'); }} onConfirm={onConfirm} onCancel={vi.fn()} />);
     await waitFor(() => expect(screen.getByText(/Truncated file/)).toBeTruthy());
     expect((screen.getByRole('button', { name: 'Import' }) as HTMLButtonElement).disabled).toBe(true);
   });
@@ -242,7 +291,7 @@ describe('the import dialog', () => {
       ? report({ format: 'obj', materialFile: 'parts.mtl', images: [{ file: 'paint.png', embedded: false }] })
       : report({ format: 'obj', materialFile: 'parts.mtl', images: [{ file: 'parts.mtl', embedded: false }] })));
     const onConfirm = vi.fn<(choice: ImportChoice) => void>();
-    const { container } = render(<ImportOptionsDialog name="thing.obj" inspect={inspect} onConfirm={onConfirm} onCancel={vi.fn()} />);
+    const { container } = render(<ImportOptionsDialog readFile={async () => new File([], 'thing.fbx')} name="thing.obj" inspect={inspect} onConfirm={onConfirm} onCancel={vi.fn()} />);
     await waitFor(() => expect(screen.getByText('parts.mtl')).toBeTruthy());
     const mtl = new File(['newmtl Paint'], 'parts.mtl');
     const image = new File(['png'], 'paint.png');

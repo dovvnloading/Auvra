@@ -2,6 +2,7 @@
 import { AUTHORED_SOCKETS_KEY, type AuthoredSocket } from '../utils/modelConventions';
 import type { StoredBoneRole } from '../utils/retargeting';
 import type { SkinPaintFile } from '../utils/skinPaint/skinPaintFile';
+import type { ClipTakeSource } from '../utils/clipTakes';
 import React, { createContext, useContext, ReactNode, useState, useCallback } from 'react';
 import { 
     LoadedModelData, AttachmentData, SocketData, TextureData, AudioData, Blueprint, 
@@ -30,6 +31,7 @@ interface AssetContextType {
   importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory, images?: readonly File[]) => Promise<void>;
   readModelSource: (modelId: string) => Promise<File>;
   readModelSourceImages: (modelId: string) => Promise<File[]>;
+  readClipTakes: (modelId: string, signal?: AbortSignal) => Promise<ClipTakeSource>;
   /** Whether the model was saved with what it was given. */
   reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings, images?: readonly File[], category?: AssetCategory) => Promise<boolean | undefined>;
   updateModel: (id: string, updates: AssetInfoUpdate) => Promise<void>;
@@ -191,6 +193,7 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     importModelWithOptions: modelManager.importModelWithOptions,
     readModelSource: modelManager.readModelSource,
     readModelSourceImages: modelManager.readModelSourceImages,
+    readClipTakes: modelManager.readClipTakes,
     reimportModel: modelManager.reimportModel,
     updateModel: modelManager.updateModel,
     removeModel: modelManager.removeModel,

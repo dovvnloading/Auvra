@@ -36,6 +36,7 @@ import {
     type BrowserAssetKind,
 } from './browserFolders';
 import { selectAnimationTarget } from '../../../utils/animationBinding';
+import { withoutClipRanges } from '../../../utils/clipRanges';
 import { appAlert } from '../../../utils/appDialogs';
 
 type AssetInfoUpdate = { name?: string; folder?: string };
@@ -424,7 +425,7 @@ export const ContentBrowser: React.FC = () => {
             const choice: ImportChoice | null = forTheRest ? { settings: forTheRest, images: [], applyToRest: true } : await requestImportSettings(file, files.length - index - 1);
             // Cancel stops the rest of the batch.
             if (!choice) break;
-            if (choice.applyToRest) forTheRest = choice.settings;
+            if (choice.applyToRest) forTheRest = withoutClipRanges(choice.settings);
             try {
                 await importWithOptions(file, choice.settings, category, choice.images);
             } catch (error) {
@@ -713,6 +714,7 @@ export const ContentBrowser: React.FC = () => {
                             : [];
                         return inspectModelFile(await assetActions.readModelSource(sizeTarget.id), beside ?? kept);
                     }}
+                    readFile={() => assetActions.readModelSource!(sizeTarget.id)}
                     initialSettings={sizeTarget.importSettings ?? DEFAULT_MODEL_IMPORT_SETTINGS}
                     knownImages={sizeTarget.sourceImages?.map((image) => image.name)}
                     confirmLabel="Apply"
@@ -726,6 +728,7 @@ export const ContentBrowser: React.FC = () => {
                     key={importPrompt.file.name}
                     name={importPrompt.file.name}
                     inspect={(beside) => inspectModelFile(importPrompt.file, beside)}
+                    readFile={() => Promise.resolve(importPrompt.file)}
                     remaining={importPrompt.remaining}
                     onConfirm={settleImportPrompt}
                     onCancel={cancelImportPrompt}

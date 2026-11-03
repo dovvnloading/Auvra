@@ -6,6 +6,7 @@ import React from 'react';
 import type { ProjectStatus } from './utils/projectStatus';
 import type { MaterialOverrides } from './utils/materialOverrides';
 import type { ModelFileReport } from './utils/fbxImport/nativeImporter';
+import type { ClipTakeSource } from './utils/clipTakes';
 import type { StoredBoneRole } from './utils/retargeting';
 import type { SkinPaintFile, SkinPaintReference } from './utils/skinPaint/skinPaintFile';
 import type { LevelBakedLighting } from './runtime/lighting/bakedLighting';
@@ -300,6 +301,23 @@ export interface PrefabData {
   createdAt?: number;
 }
 
+/** A stretch of a take that comes in as a clip of its own. */
+export interface ClipRange {
+  /** The take it is cut from, by its name in the file. */
+  take: string;
+  /** The clip's name: what animation graphs and blueprints know it by. */
+  name: string;
+  /** Seconds from the take's first frame. */
+  start: number;
+  end: number;
+  /** Whether the clip loops when it is put to use. */
+  loop: boolean;
+  /** Move the clip so the character starts where the take starts, not wherever it has walked to by then. Absent: when it has gone far. */
+  recentre?: boolean;
+  /** The take is a clip imported onto the model from a file of its own, by that clip's name. */
+  attached?: boolean;
+}
+
 /** Per-model import options stored on the model document. */
 export interface ModelImportSettings {
   /** Scale the model so its largest dimension equals targetSize (the old behaviour forced 5). */
@@ -309,6 +327,8 @@ export interface ModelImportSettings {
   animation?: boolean;
   /** Takes to leave out, by their names in the file. */
   excludedClips?: string[];
+  /** Clips cut from the takes. A take with ranges can be left out itself, and is still read for them. */
+  clipRanges?: ClipRange[];
   /** Largest change a dropped animation key may make to its track. Absent: the default, which shows no difference. */
   keyThreshold?: number;
   /** Bring in the file's blend shapes. Absent: yes. */
@@ -788,6 +808,7 @@ export interface SceneContextType {
   importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory, images?: readonly File[]) => Promise<void>;
   readModelSource: (modelId: string) => Promise<File>;
   readModelSourceImages: (modelId: string) => Promise<File[]>;
+  readClipTakes: (modelId: string, signal?: AbortSignal) => Promise<ClipTakeSource>;
   /**
    * Replace a model's source file in place (id, references and settings are kept), or without a
    * file read its stored source again; `settings` replaces its import settings (its size).

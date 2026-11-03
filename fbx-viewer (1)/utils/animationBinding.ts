@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { animatedSkeleton, CORE_ROLES, humanoidRoles, matchHumanoidBones, mirrorHumanoidClip, retargetHumanoidClip, type StoredBoneRole } from './retargeting';
+import { copyClipRange, wholeClips } from './clipRanges';
+
+export { uniqueClipNames } from './clipRanges';
 
 export class AnimationImportError extends Error {
   constructor(message: string) {
@@ -97,20 +100,6 @@ export const savedBone = (root: THREE.Object3D, name: string): THREE.Object3D | 
 
 export const isSkeletalModel = (model: AnimationTargetCandidate): boolean => bones(model.object).length > 0;
 
-/** `names` made unique among themselves and against `taken` ("Idle", then "Idle 2"); `taken` gains them. */
-export const uniqueClipNames = (names: readonly string[], taken: Set<string>): string[] =>
-  names.map((name) => {
-    let candidate = name;
-    for (let suffix = 2; taken.has(candidate); suffix += 1) candidate = `${name} ${suffix}`;
-    taken.add(candidate);
-    return candidate;
-  });
-
-/**
- * Gives `clips` the names stored with their document. A clip is named after its file when it is
- * loaded, so without this a model renamed in the library would rename its clips too, and every
- * state that plays them would lose them. Ignored unless there is one stored name per clip.
- */
 /** The name a mirrored copy of a clip gets. */
 export const mirroredClipName = (name: string): string => `${name} (Mirrored)`;
 
@@ -129,13 +118,25 @@ export const mirrorModelClips = (
   if (!wanted.length) return [];
   const rig = bindPoseRig(object);
   if (!rig) throw new AnimationImportError('The model has no skeleton to mirror its clips on.');
-  return wanted.map((name) => mirrorHumanoidClip(rig, clips.find((clip) => clip.name === name)!, mirroredClipName(name), storedRoles));
+  return wanted.map((name) => {
+    const clip = clips.find((candidate) => candidate.name === name)!;
+    const mirrored = mirrorHumanoidClip(rig, clip, mirroredClipName(name), storedRoles);
+    copyClipRange(clip, mirrored);
+    return mirrored;
+  });
 };
 
+/**
+ * Gives `clips` the names stored with their document. A clip is named after its file when it is
+ * loaded, so without this a model renamed in the library would rename its clips too, and every
+ * state that plays them would lose them. Ignored unless there is one stored name per whole take:
+ * a clip cut from a take has its name in its range.
+ */
 export const applyStoredClipNames = (clips: readonly THREE.AnimationClip[], stored: unknown): void => {
-  if (!Array.isArray(stored) || stored.length !== clips.length) return;
+  const whole = wholeClips(clips);
+  if (!Array.isArray(stored) || stored.length !== whole.length) return;
   if (!stored.every((name) => typeof name === 'string' && name.length > 0)) return;
-  clips.forEach((clip, index) => { clip.name = stored[index] as string; });
+  whole.forEach((clip, index) => { clip.name = stored[index] as string; });
 };
 
 /**

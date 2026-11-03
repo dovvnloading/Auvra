@@ -3,7 +3,7 @@ import { DEFAULT_MODEL_IMPORT_SETTINGS, type LoadedModelData, type ModelImportSe
 import { disposeMaterial } from './ModelLifecycle'; // Reuse internal helper if needed, or duplicate strictly local logic
 import { humanoidRole } from '../retargeting';
 import type { ModelFileReport } from '../fbxImport/nativeImporter';
-import type { ModelConvertOptions } from '../../workers/fbxImport.worker';
+import { resolveClipRanges, type ModelReadOptions } from '../clipRanges';
 
 /** userData key on a loaded model's root: metres per unit its source file says it is authored in. */
 export const SOURCE_METRES_PER_UNIT = 'sourceMetresPerUnit';
@@ -29,6 +29,8 @@ export const resolveImportSettings = (settings?: Partial<ModelImportSettings> | 
   if (Array.isArray(settings?.excludedClips) && settings.excludedClips.length) {
     resolved.excludedClips = settings.excludedClips.filter((name) => typeof name === 'string' && name.length > 0).slice(0, 1024);
   }
+  const clipRanges = resolveClipRanges(settings?.clipRanges);
+  if (clipRanges.length) resolved.clipRanges = clipRanges;
   const threshold = Number(settings?.keyThreshold);
   if (settings?.keyThreshold !== undefined && Number.isFinite(threshold) && threshold >= 0 && threshold <= 1) resolved.keyThreshold = threshold;
   const angle = Number(settings?.smoothingAngle);
@@ -36,17 +38,18 @@ export const resolveImportSettings = (settings?: Partial<ModelImportSettings> | 
   return resolved;
 };
 
-/** How an FBX or OBJ is read for these settings; an option the settings do not mention keeps its default. */
-export const convertOptionsFor = (settings?: Partial<ModelImportSettings> | null): ModelConvertOptions | undefined => {
+/** How a model file is read for these settings; an option the settings do not mention keeps its default. */
+export const convertOptionsFor = (settings?: Partial<ModelImportSettings> | null): ModelReadOptions | undefined => {
   if (!settings) return undefined;
-  const { animation, morphTargets, looseMeshes, recomputeNormals, tangents, excludedClips, keyThreshold, smoothingAngle } = resolveImportSettings(settings);
-  const options: ModelConvertOptions = {
+  const { animation, morphTargets, looseMeshes, recomputeNormals, tangents, excludedClips, clipRanges, keyThreshold, smoothingAngle } = resolveImportSettings(settings);
+  const options: ModelReadOptions = {
     ...(animation !== undefined ? { animation } : {}),
     ...(morphTargets !== undefined ? { morphTargets } : {}),
     ...(looseMeshes !== undefined ? { looseMeshes } : {}),
     ...(recomputeNormals !== undefined ? { recomputeNormals } : {}),
     ...(tangents !== undefined ? { tangents } : {}),
     ...(excludedClips ? { excludedClips } : {}),
+    ...(clipRanges ? { clipRanges } : {}),
     ...(keyThreshold !== undefined ? { keyThreshold } : {}),
     ...(smoothingAngle !== undefined ? { smoothingAngle } : {}),
   };

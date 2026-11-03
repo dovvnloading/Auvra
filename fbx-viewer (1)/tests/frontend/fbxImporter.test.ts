@@ -425,6 +425,22 @@ describe('FBX importer: skins and animation', () => {
     native.close();
   });
 
+  it('gives a take with no name one to be ticked and cut by, the same when inspecting as when reading', async () => {
+    const file = fbxDocument(`${skinned}\n${take(500, '')}\n${take(600, 'Take 1')}\n${take(700, '')}`, `${skinConnections}\n${takeConnections(500)}\n${takeConnections(600)}\n${takeConnections(700)}`);
+    const names = ['Take 2', 'Take 3', 'Take 1'];
+    const inspected = await load(file, { inspect: true });
+    expect(inspected.report.clips.map((clip) => clip.name)).toEqual(names);
+    inspected.close();
+    const read = await load(file);
+    expect(read.report.clips.map((clip) => clip.name)).toEqual(names);
+    expect(read.document.animations?.map((clip) => clip.name)).toEqual(names);
+    read.close();
+    const left = await load(file, { excludedClips: ['Take 2'] });
+    expect(left.report.clips.map((clip) => clip.name)).toEqual(names);
+    expect(left.document.animations?.map((clip) => clip.name)).toEqual(['Take 3', 'Take 1']);
+    left.close();
+  });
+
   it('keeps clips in the order projects stored their names by', async () => {
     const file = fbxDocument(`${skinned}\n${take(5000, 'First in file')}\n${take(500, 'Lower id')}`, `${skinConnections}\n${takeConnections(5000)}\n${takeConnections(500)}`);
     const native = await load(file);

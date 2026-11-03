@@ -1,10 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, X } from 'lucide-react';
-import type { ModelImportSettings } from '../../../types';
+import { Check, Repeat, Scissors, X } from 'lucide-react';
+import type { ClipRange, ModelImportSettings } from '../../../types';
 import { importFailureMessage } from '../../../utils/modelLoader';
 import { MAX_MODEL_TARGET_SIZE, reportSize, resolveImportSettings, suggestedImportSettings } from '../../../utils/processing/ModelTransforms';
+import { frameOfTime, takeLabel } from '../../../utils/clipRanges';
+import { readFileTakes } from '../../../utils/clipTakes';
 import type { ModelFileReport } from '../../../utils/fbxImport/nativeImporter';
 import { Button, IconButton, Section, Segmented, Spinner, TextInput } from '../kit';
+import { ClipRangeEditor } from '../Properties/ClipRangeEditor';
 
 export interface ImportChoice {
   settings: ModelImportSettings;
@@ -19,6 +22,8 @@ interface ImportOptionsDialogProps {
   name: string;
   /** Reads what the file holds, with any files found beside it that say more of it. */
   inspect: (beside?: readonly File[]) => Promise<ModelFileReport | null>;
+  /** The file itself, to cut clips from its takes. */
+  readFile: () => Promise<File>;
   /** A model's stored settings; a new file starts from what suits it. */
   initialSettings?: ModelImportSettings;
   /** Images already kept for the model, by file name. */
@@ -60,9 +65,6 @@ const describeSource = (report: ModelFileReport): string => {
   return parts.join(' · ');
 };
 
-/** The take's own name: exporters often stack its object's name in front ("Armature|Armature|Walk"). */
-const clipLabel = (name: string): string => name.split('|').pop() || name;
-
 const clipTime = (seconds: number): string => (seconds < 10 ? `${seconds.toFixed(2)} s` : `${seconds.toFixed(1)} s`);
 
 /** What dropping animation keys is allowed to cost. */
@@ -96,7 +98,7 @@ const Check_: React.FC<{ label: string; checked: boolean; onChange: (checked: bo
 );
 
 /** What a model file holds and how to bring it in: its size, what to keep of it, and the images it needs. */
-export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, inspect, initialSettings, knownImages, confirmLabel = 'Import', remaining = 0, onConfirm, onCancel }) => {
+export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, inspect, readFile, initialSettings, knownImages, confirmLabel = 'Import', remaining = 0, onConfirm, onCancel }) => {
   const [report, setReport] = useState<ModelFileReport | null>(null);
   const [reading, setReading] = useState(true);
   const [readError, setReadError] = useState<string | null>(null);
@@ -109,6 +111,8 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
   const [smoothingAngle, setSmoothingAngle] = useState(String(initialSettings?.smoothingAngle ?? DEFAULT_SMOOTHING_ANGLE));
   const [tangents, setTangents] = useState(initialSettings?.tangents ?? true);
   const [excludedClips, setExcludedClips] = useState<ReadonlySet<string>>(() => new Set(initialSettings?.excludedClips ?? []));
+  const [clipRanges, setClipRanges] = useState<readonly ClipRange[]>(initialSettings?.clipRanges ?? []);
+  const [cutting, setCutting] = useState<{ take?: string; clip?: string } | null>(null);
   const [keyChoice, setKeyChoice] = useState<KeyChoice>(keyChoiceOf(initialSettings?.keyThreshold));
   const [animationOff] = useState(initialSettings?.animation === false);
   const [showMore, setShowMore] = useState(false);
@@ -141,13 +145,15 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
   }, []);
 
   useEffect(() => {
+    // The cutting window answers Escape for itself while it is open.
+    if (cutting) return undefined;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onCancel();
     };
     // In the capture phase: the dialog keeps keys typed in it from reaching the editor's shortcuts.
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [onCancel]);
+  }, [cutting, onCancel]);
 
   const size = Number(targetSize);
   const sizeValid = Number.isFinite(size) && size > 0 && size <= MAX_MODEL_TARGET_SIZE;
@@ -157,6 +163,9 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
   const clips = report?.clips ?? [];
   const holdsNothing = !!report && report.triangles === 0 && clips.length === 0;
   const canConfirm = !reading && !readError && !holdsNothing && (!normalize || sizeValid) && (!recomputeNormals || angleValid);
+  // A file with one take can have been saved with it under another name; ranges go with it.
+  const rangesFor = (take: string): readonly ClipRange[] => clipRanges.filter((range) => !range.attached && (range.take === take || (clips.length === 1 && !clips.some((clip) => clip.name === range.take))));
+  const otherRanges = clipRanges.filter((range) => !clips.some((clip) => rangesFor(clip.name).includes(range)));
   const missingImages = useMemo(() => (report?.images ?? []).filter((image) => !image.embedded), [report]);
   /** Of what was picked, what the file asks for. A folder can hold much else, and more can be asked for once a material file is read. */
   const found = useMemo(() => {
@@ -203,7 +212,7 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
 
   const choose = (applyToRest: boolean) => {
     if (!canConfirm) return;
-    const keptClips = clips.length - clips.filter((clip) => excludedClips.has(clip.name)).length;
+    const keptClips = clips.length - clips.filter((clip) => excludedClips.has(clip.name)).length + clipRanges.length;
     const threshold = KEY_CHOICES.find((choice) => choice.value === keyChoice)?.threshold;
     onConfirm({
       settings: resolveImportSettings({
@@ -214,9 +223,10 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
         ...(canTune && recomputeNormals ? { recomputeNormals: true, smoothingAngle: angle } : {}),
         ...(canTune && !tangents ? { tangents: false } : {}),
         // Left as it was when the clips were not offered.
-        ...(canTune && animationOff ? { animation: false } : {}),
-        ...(canTune && clips.length > 0 && keptClips === 0 ? { animation: false } : {}),
-        ...(canTune && excludedClips.size && keptClips > 0 ? { excludedClips: [...excludedClips] } : {}),
+        ...(animationOff ? { animation: false } : {}),
+        ...(clips.length > 0 && keptClips === 0 ? { animation: false } : {}),
+        ...(excludedClips.size && keptClips > 0 ? { excludedClips: [...excludedClips] } : {}),
+        ...(clipRanges.length ? { clipRanges: [...clipRanges] } : {}),
         ...(canTune && threshold !== undefined ? { keyThreshold: threshold } : {}),
       }),
       images: [...(materialsRead ? [materialsRead] : []), ...found.values()],
@@ -226,6 +236,8 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
 
   const missingNames = missingImages.filter((image) => !knownImages?.some((known) => known.toLowerCase() === image.file.toLowerCase()));
   const stillMissing = missingNames.filter((image) => !found.has(image.file.toLowerCase())).length;
+  const wholeCount = clips.length - clips.filter((clip) => excludedClips.has(clip.name)).length;
+  const framesPerSecond = report?.framesPerSecond || 30;
 
   return (
     <div
@@ -333,38 +345,65 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
             </Section>
           )}
 
-          {canTune && clips.length > 0 && !animationOff && (
+          {clips.length > 0 && !animationOff && (
             <Section
-              title={`Animation: ${clips.filter((clip) => !excludedClips.has(clip.name)).length} of ${count(clips.length, 'clip')}`}
+              title={clipRanges.length ? `Animation: ${count(wholeCount + clipRanges.length, 'clip')} from ${count(clips.length, 'take')}` : `Animation: ${wholeCount} of ${count(clips.length, 'clip')}`}
               actions={clips.length > 1 ? (
                 <span className="flex items-center gap-0.5">
-                  <Button size="sm" variant="ghost" onClick={() => setExcludedClips(new Set())}>All</Button>
-                  <Button size="sm" variant="ghost" onClick={() => setExcludedClips(new Set(clips.map((clip) => clip.name)))}>None</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setExcludedClips((previous) => new Set([...previous].filter((name) => !clips.some((clip) => clip.name === name))))}>All</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setExcludedClips((previous) => new Set([...previous, ...clips.map((clip) => clip.name)]))}>None</Button>
                 </span>
               ) : undefined}
             >
-              <div className="max-h-28 overflow-y-auto">
+              <div className="max-h-44 overflow-y-auto">
                 {clips.map((clip) => (
-                  <label key={clip.name} className="flex h-6 items-center gap-2 text-xs text-ink-2" title={clip.name}>
-                    <Check_
-                      label={`Import ${clipLabel(clip.name)}`}
-                      checked={!excludedClips.has(clip.name)}
-                      onChange={(checked) => setExcludedClips((previous) => {
-                        const next = new Set(previous);
-                        if (checked) next.delete(clip.name); else next.add(clip.name);
-                        return next;
-                      })}
-                    />
-                    <span className="min-w-0 flex-1 truncate">{clipLabel(clip.name)}</span>
-                    <span className="shrink-0 text-2xs text-ink-3 tabular-nums">{clipTime(clip.duration)}</span>
-                  </label>
+                  <React.Fragment key={clip.name}>
+                    <div className="flex h-6 items-center gap-1 text-xs text-ink-2">
+                      <label className="flex min-w-0 flex-1 items-center gap-2" title={clip.name}>
+                        <Check_
+                          label={`Import ${takeLabel(clip.name)}`}
+                          checked={!excludedClips.has(clip.name)}
+                          onChange={(checked) => setExcludedClips((previous) => {
+                            const next = new Set(previous);
+                            if (checked) next.delete(clip.name); else next.add(clip.name);
+                            return next;
+                          })}
+                        />
+                        <span className="min-w-0 flex-1 truncate">{takeLabel(clip.name)}</span>
+                        <span className="shrink-0 text-2xs text-ink-3 tabular-nums">{clipTime(clip.duration)}</span>
+                      </label>
+                      {clip.duration > 0
+                        ? <IconButton label={`Cut ${takeLabel(clip.name)} into clips`} onClick={() => setCutting({ take: clip.name })}><Scissors size={12} /></IconButton>
+                        : <span className="w-6 shrink-0" />}
+                    </div>
+                    {rangesFor(clip.name).map((range) => (
+                      <button
+                        key={range.name}
+                        type="button"
+                        title={range.loop ? `${range.name}: loops` : `${range.name}: plays once`}
+                        onClick={() => setCutting({ take: clip.name, clip: range.name })}
+                        className="flex h-5 w-full items-center gap-2 rounded pl-[22px] pr-7 text-left text-2xs text-ink-2 hover:bg-white/5"
+                      >
+                        <span className="min-w-0 flex-1 truncate">{takeLabel(range.name)}</span>
+                        {range.loop && <Repeat size={10} className="shrink-0 text-ink-3" />}
+                        <span className="shrink-0 text-ink-3 tabular-nums">
+                          {frameOfTime(range.start, clip.start, framesPerSecond)}–{frameOfTime(range.end, clip.start, framesPerSecond)}
+                        </span>
+                      </button>
+                    ))}
+                  </React.Fragment>
                 ))}
               </div>
-              <div className="mt-1">
-                <Row label="Reduce keys">
-                  <Segmented label="Reduce animation keys" value={keyChoice} onChange={setKeyChoice} options={KEY_CHOICES} />
-                </Row>
-              </div>
+              {otherRanges.length > 0 && (
+                <p className="mt-1 text-2xs text-ink-3">{count(otherRanges.length, 'clip')} cut from takes not in this file: {otherRanges.map((range) => range.name).join(', ')}.</p>
+              )}
+              {canTune && (
+                <div className="mt-1">
+                  <Row label="Reduce keys">
+                    <Segmented label="Reduce animation keys" value={keyChoice} onChange={setKeyChoice} options={KEY_CHOICES} />
+                  </Row>
+                </div>
+              )}
             </Section>
           )}
 
@@ -443,6 +482,27 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
           <Button type="submit" variant="primary" disabled={!canConfirm}>{confirmLabel}</Button>
         </div>
       </form>
+      {cutting && (
+        <ClipRangeEditor
+          name={name}
+          load={async (signal) => readFileTakes(await readFile(), {
+            ...(hasLoose ? { looseMeshes } : {}),
+            ...(!morphTargets ? { morphTargets: false } : {}),
+            keyThreshold: KEY_CHOICES.find((choice) => choice.value === keyChoice)?.threshold,
+          }, signal)}
+          ranges={clipRanges}
+          excludedClips={[...excludedClips]}
+          initialTake={cutting.take}
+          initialClip={cutting.clip}
+          confirmLabel="Done"
+          onConfirm={(result) => {
+            setClipRanges(result.clipRanges);
+            setExcludedClips(new Set(result.excludedClips));
+            setCutting(null);
+          }}
+          onCancel={() => setCutting(null)}
+        />
+      )}
     </div>
   );
 };
