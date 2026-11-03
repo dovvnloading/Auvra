@@ -23,6 +23,7 @@ import {
   type ModelMaterialInfo,
   type MaterialParameterSetting,
 } from '../../utils/materialOverrides';
+import { ColourField } from '../UI/ColourPicker';
 
 export interface MaterialEditorProps {
   /** The model whose materials are edited; changes preview live on `model.object`. */
@@ -90,13 +91,7 @@ const ColorField: React.FC<{
   const id = useId();
   return (
     <FieldRow label={label} htmlFor={id} overridden={overridden} onReset={onReset}>
-      <input
-        id={id}
-        type="color"
-        value={value}
-        onChange={(event) => onChange(event.target.value.toLowerCase())}
-        className="w-8 h-6 rounded border border-gray-700 bg-gray-950 cursor-pointer p-0"
-      />
+      <ColourField id={id} value={value} onChange={onChange} label={label} className="h-6 w-8" />
       <span className="text-2xs font-mono text-gray-400">{value}</span>
     </FieldRow>
   );

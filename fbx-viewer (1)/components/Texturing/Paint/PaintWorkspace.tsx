@@ -230,7 +230,7 @@ export const PaintWorkspace: React.FC = () => {
                     ) : session ? (
                         <PaintViewport session={session} tool={tool} brush={brush} target={target} view={view === 'uv2d' ? 'material' : view} maskImage={maskImage}
                             onBrushSize={(size) => setBrush({ ...brush, size })}
-                            onPick={(color) => setBrush({ ...brush, values: { ...brush.values, baseColor: color } })}
+                            onPick={(color) => { setBrush({ ...brush, values: { ...brush.values, baseColor: color } }); setTool('paint'); }}
                             onMessage={setMessage} frameSignal={frameSignal} uv={uv} />
                     ) : (
                         <div className="flex flex-1 items-center justify-center text-xs text-zinc-500">
@@ -260,7 +260,7 @@ export const PaintWorkspace: React.FC = () => {
                 </div>
                 {session ? (
                     panel === 'layers' ? <LayerPanel session={session} selection={selection} onSelect={setSelection} resolve={resolve} graphs={graphs} textures={textures} />
-                        : panel === 'brush' ? <div className="min-h-0 flex-1 overflow-y-auto"><BrushPanel brush={brush} onChange={setBrush} channels={session.document.channels} paintingMask={target?.kind === 'mask'} textures={textures} /></div>
+                        : panel === 'brush' ? <div className="min-h-0 flex-1 overflow-y-auto"><BrushPanel brush={brush} onChange={setBrush} channels={session.document.channels} paintingMask={target?.kind === 'mask'} textures={textures} onPick={() => setTool('pick')} /></div>
                             : panel === 'uvs' && uv ? <div className="min-h-0 flex-1 overflow-y-auto"><UvPanel uv={uv} onSeamTool={() => setTool('seam')} onApplied={() => { if (!uv.proposal) { putOnAfterOpen.current = uv.putOnWhenOpen; setReopen((value) => value + 1); } }} /></div>
                                 : <div className="min-h-0 flex-1 overflow-y-auto"><SetPanel session={session} models={paintable} onReopen={() => setReopen((value) => value + 1)} /></div>
                 ) : (

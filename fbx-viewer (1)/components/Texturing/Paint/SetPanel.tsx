@@ -34,7 +34,7 @@ export const SetPanel: React.FC<{
     const [convention, setConvention] = useState<'bottom' | 'top'>('bottom');
     const controller = useRef<AbortController | null>(null);
     const busy = Boolean(session.busy);
-    const changeDocument = (patch: Partial<typeof document>, label: string) => session.change({ ...document, ...patch }, label);
+    const changeDocument = (patch: Partial<typeof document>, label: string, coalesce?: string) => session.change({ ...document, ...patch }, label, coalesce);
 
     return (
         <div className="space-y-5 p-3">
@@ -55,7 +55,7 @@ export const SetPanel: React.FC<{
                         </label>
                     ))}
                 </div>
-                <Row label="Height strength" value={document.heightStrength} min={0} max={8} step={0.05} onChange={(heightStrength) => changeDocument({ heightStrength }, 'Change height strength')} />
+                <Row label="Height strength" value={document.heightStrength} min={0} max={8} step={0.05} onChange={(heightStrength) => changeDocument({ heightStrength }, 'Change height strength', 'heightStrength')} />
             </section>
 
             <section className="space-y-2">

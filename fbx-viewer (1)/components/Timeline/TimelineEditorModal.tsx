@@ -14,6 +14,7 @@ import {
     type TimelineTrack,
     type TimelineVec3,
 } from '../../runtime/timeline/types';
+import { ColourField } from '../UI/ColourPicker';
 
 /**
  * TIMELINE EDITOR
@@ -1056,16 +1057,8 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                                 {track.kind === 'fade' && (
                                                     <label className="flex items-center gap-1 px-1 text-2xs text-gray-400">
                                                         Colour
-                                                        <input
-                                                            type="color"
-                                                            aria-label="Fade colour"
-                                                            value={track.color}
-                                                            onChange={(event) => {
-                                                                const color = event.target.value;
-                                                                changeTrack(track.id, current => (current.kind === 'fade' ? { ...current, color } : current));
-                                                            }}
-                                                            className="h-5 w-8 cursor-pointer rounded border border-gray-700 bg-transparent"
-                                                        />
+                                                        <ColourField label="Fade colour" value={track.color} className="h-5 w-8"
+                                                            onChange={(color) => changeTrack(track.id, current => (current.kind === 'fade' ? { ...current, color } : current))} />
                                                     </label>
                                                 )}
                                                 {track.kind === 'subtitle' && (

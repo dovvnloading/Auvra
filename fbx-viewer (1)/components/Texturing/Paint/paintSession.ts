@@ -47,6 +47,8 @@ export interface PaintSessionHost {
 
 const HISTORY_LIMIT = 80;
 const SAVE_DELAY_MS = 2500;
+/** Changes to one thing this close together make one undo step. */
+const COALESCE_MS = 1000;
 
 /** Graphs a painted set can use: the project's texture graph materials and the built-in smart graphs. */
 export const paintGraphResolver = (): GraphResolver => (id) => {
@@ -75,6 +77,8 @@ export class PaintSession {
     private readonly listeners = new Set<() => void>();
     private saveTimer: ReturnType<typeof setTimeout> | null = null;
     private saving: Promise<void> | null = null;
+    private coalesceKey: string | null = null;
+    private coalesceAt = 0;
     version = 0;
     status: string | null = null;
     busy: string | null = null;
@@ -158,11 +162,22 @@ export class PaintSession {
     // Edits and history
     // -----------------------------------------------------------------------
 
-    /** Changes the document (an undoable step), puts the set together again and saves soon. */
-    change(next: PaintDocument, label: string): void {
+    /**
+     * Changes the document (an undoable step), puts the set together again and saves soon. Quick changes
+     * with the same `coalesce` key (a slider or a colour being dragged, a name being typed) make one step.
+     */
+    change(next: PaintDocument, label: string, coalesce?: string): void {
         const before = this.stack.document;
         if (next === before) return;
-        this.record({ label, document: { before, after: next } });
+        const now = performance.now();
+        const last = this.past[this.past.length - 1];
+        if (coalesce && coalesce === this.coalesceKey && now - this.coalesceAt < COALESCE_MS && last?.document && !last.pixels) {
+            last.document = { before: last.document.before, after: next };
+            this.future = [];
+            this.emit();
+        } else this.record({ label, document: { before, after: next } });
+        this.coalesceKey = coalesce ?? null;
+        this.coalesceAt = now;
         this.stack.setDocument(next);
         this.dirty();
     }
@@ -183,6 +198,7 @@ export class PaintSession {
     undo(): void {
         const entry = this.past.pop();
         if (!entry) return;
+        this.coalesceKey = null;
         if (entry.pixels) applyPixelHistory(this.stack, entry.pixels, 'undo');
         if (entry.document) this.stack.setDocument(entry.document.before);
         this.future.push(entry);
@@ -193,6 +209,7 @@ export class PaintSession {
     redo(): void {
         const entry = this.future.pop();
         if (!entry) return;
+        this.coalesceKey = null;
         if (entry.pixels) applyPixelHistory(this.stack, entry.pixels, 'redo');
         if (entry.document) this.stack.setDocument(entry.document.after);
         this.past.push(entry);

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { MAX_RAMP_STOPS, readParam, type MaterialParamDef, type MaterialRamp } from '../../runtime/materials/materialGraph';
+import { ColourFieldRgb } from '../UI/ColourPicker';
 
 /**
  * The inspector's field for one node param, by its kind: a number (slider, or drag the label to
@@ -114,8 +115,8 @@ export const RampEditor: React.FC<{ label: string; ramp: MaterialRamp; onChange:
                 ))}
             </div>
             <div className="flex items-center gap-2">
-                <input type="color" aria-label={`${label} stop colour`} value={toHex(stop.color)} className="h-6 w-10 rounded border border-gray-700 bg-transparent"
-                    onChange={(event) => onChange({ stops: stops.map((candidate, at) => (at === index ? { ...candidate, color: fromHex(event.target.value) } : candidate)) })} />
+                <ColourFieldRgb label={`${label} stop colour`} value={stop.color} className="h-6 w-10"
+                    onChange={(color) => onChange({ stops: stops.map((candidate, at) => (at === index ? { ...candidate, color: color as typeof candidate.color } : candidate)) })} />
                 <input type="number" aria-label={`${label} stop position`} min={0} max={1} step={0.01} value={stop.position} className={`w-16 ${inputClass}`}
                     onChange={(event) => {
                         const position = Math.min(1, Math.max(0, Number(event.target.value) || 0));
@@ -203,7 +204,7 @@ export const ParamField: React.FC<{
         case 'color':
             return (
                 <label className="flex items-center justify-between gap-2">{label}
-                    <input type="color" aria-label={param.label} value={toHex(current as number[])} onChange={(event) => onChange(fromHex(event.target.value))} className="h-6 w-12 rounded border border-gray-700 bg-transparent" />
+                    <ColourFieldRgb label={param.label} value={current as number[]} onChange={onChange} className="h-6 w-12" />
                 </label>
             );
         case 'ramp':

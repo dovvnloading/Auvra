@@ -3,10 +3,11 @@ import { Link2, Link2Off, Sigma, Upload } from 'lucide-react';
 import { expressionError } from '../../texturing/graph/expressions';
 import { readRamp } from '../../texturing/graph/nodeKit';
 import { isParamLink, type GraphParameter, type GraphParameterKind, type RampStop, type TexParamDef } from '../../texturing/graph/types';
-import { CodeField, RampEditor, ScrubLabel, fromHex, toHex } from '../Materials/MaterialParamField';
+import { CodeField, RampEditor, ScrubLabel } from '../Materials/MaterialParamField';
 import { Popover } from '../UI/kit';
 import { Select } from '../UI/Select';
 import { CurveEditor } from './CurveEditor';
+import { ColourFieldRgb } from '../UI/ColourPicker';
 
 /**
  * One node setting in the inspector, by its kind. A setting can instead follow one of the graph's
@@ -85,9 +86,7 @@ export const ParamControl: React.FC<{
             const c = (Array.isArray(value) ? value : param.default) as number[];
             return (
                 <div className="flex items-center gap-2">
-                    <input type="color" aria-label={param.label} value={toHex(c.slice(0, 3))} onChange={(event) => onChange([...fromHex(event.target.value), c[3] ?? 1])}
-                        className="h-5 w-9 cursor-pointer rounded border border-zinc-700 bg-transparent" />
-                    <span className="font-mono text-2xs text-zinc-500">{toHex(c.slice(0, 3))}</span>
+                    <ColourFieldRgb label={param.label} value={[c[0] ?? 0, c[1] ?? 0, c[2] ?? 0, c[3] ?? 1]} alpha onChange={onChange} className="h-5 w-9" showHex />
                 </div>
             );
         }

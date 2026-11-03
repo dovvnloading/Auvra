@@ -4,6 +4,7 @@ import { Pipette, Check, RefreshCw, AlertTriangle, Layers, Image as ImageIcon, B
 import { useScene } from '../../context/SceneContext';
 import { extractAllTexturesFromModel, ExtractedTexture } from '../../utils/textureUtils';
 import { Select } from '../UI/Select';
+import { ColourField } from '../UI/ColourPicker';
 
 interface EnvironmentMaskToolProps {
     modelId: string | null;
@@ -283,13 +284,7 @@ export const EnvironmentMaskTool: React.FC<EnvironmentMaskToolProps> = ({ modelI
                                             >
                                                 <Pipette size={12} />
                                             </button>
-                                            <input 
-                                                type="color" 
-                                                value={keyColor}
-                                                onChange={(e) => setKeyColor(e.target.value)}
-                                                className="w-8 h-6 bg-transparent border-0 rounded cursor-pointer"
-                                                title="Select Key Color manually"
-                                            />
+                                            <ColourField value={keyColor} onChange={setKeyColor} label="Key colour" className="h-6 w-8" />
                                         </div>
                                     </div>
 

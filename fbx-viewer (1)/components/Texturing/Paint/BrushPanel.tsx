@@ -1,9 +1,9 @@
 import React from 'react';
 import { CHANNEL_IS_COLOR, CHANNEL_LABELS, type PaintChannel } from '../../../texturing/paint/paintTypes';
 import type { BrushSettings } from '../../../texturing/paint/strokes';
-import { fromHex, toHex } from '../../Materials/MaterialParamField';
 import { Segmented } from '../../UI/kit';
 import { Select } from '../../UI/Select';
+import { ColourFieldRgb } from '../../UI/ColourPicker';
 
 /** The brush: its size and feel, how it is cast onto the model, and what it lays down on each channel. */
 
@@ -27,7 +27,9 @@ export const BrushPanel: React.FC<{
     channels: readonly PaintChannel[];
     paintingMask: boolean;
     textures: ReadonlyArray<{ id: string; name: string }>;
-}> = ({ brush, onChange, channels, paintingMask, textures }) => {
+    /** Picks the base colour off the model (the paint tab's pick tool). */
+    onPick?: () => void;
+}> = ({ brush, onChange, channels, paintingMask, textures, onPick }) => {
     const set = (patch: Partial<BrushSettings>) => onChange({ ...brush, ...patch });
     return (
         <div className="space-y-4 p-3">
@@ -44,9 +46,8 @@ export const BrushPanel: React.FC<{
                                 onChange={(event) => set({ channels: event.target.checked ? [...brush.channels, channel] : brush.channels.filter((item) => item !== channel) })} />
                             <span className={`w-20 text-2xs ${on ? 'text-zinc-200' : 'text-zinc-500'}`}>{CHANNEL_LABELS[channel]}</span>
                             {CHANNEL_IS_COLOR[channel] && channel !== 'normal' ? (
-                                <input type="color" value={toHex(value)} aria-label={`${CHANNEL_LABELS[channel]} colour`} disabled={!on}
-                                    onChange={(event) => set({ values: { ...brush.values, [channel]: fromHex(event.target.value) as [number, number, number] } })}
-                                    className="h-5 w-10 cursor-pointer rounded border border-zinc-700 bg-transparent disabled:opacity-30" />
+                                <ColourFieldRgb value={value} label={/colour/i.test(CHANNEL_LABELS[channel]) ? CHANNEL_LABELS[channel] : `${CHANNEL_LABELS[channel]} colour`} disabled={!on} className="h-5 w-10" onPick={channel === 'baseColor' ? onPick : undefined}
+                                    onChange={(next) => set({ values: { ...brush.values, [channel]: next as [number, number, number] } })} />
                             ) : channel === 'normal' ? (
                                 <span className="text-2xs text-zinc-500">Flat (smooths detail)</span>
                             ) : (
