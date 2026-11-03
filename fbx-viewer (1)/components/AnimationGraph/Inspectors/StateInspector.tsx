@@ -27,6 +27,8 @@ interface StateInspectorProps {
     onOpenStateMachine?: (id: string) => void;
     /** Length in seconds of the clip a Single state plays, when it is loaded. */
     clipDuration?: number;
+    /** Whether a clip says it loops, when it does. */
+    clipLoop?: (name: string) => boolean | undefined;
 }
 
 export const StateInspector: React.FC<StateInspectorProps> = ({
@@ -37,7 +39,8 @@ export const StateInspector: React.FC<StateInspectorProps> = ({
     clipOptions,
     blendParamOptions,
     onOpenStateMachine,
-    clipDuration
+    clipDuration,
+    clipLoop
 }) => {
     const machine = node.stateType === 'StateMachine';
     const conduit = node.stateType === 'Conduit';
@@ -175,6 +178,7 @@ const curveVariableOptions = [
                         playRateParamOptions={blendParamOptions}
                         curveVariableOptions={curveVariableOptions}
                         clipDuration={clipDuration}
+                        clipLoop={clipLoop}
                     />
                 ) : (
                     <BlendStateConfig 

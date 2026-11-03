@@ -12,6 +12,10 @@ import { RigMarkers } from './RigMarkers';
 import { previewHeldWeapon, weaponMoveClips, weaponPlacements } from '../../runtime/weapons';
 import { weaponLocomotionGraph } from '../AnimationGraph/utils/clipMatching';
 import { CharacterIK, heldWeaponGrip } from '../Sandbox/CharacterIK';
+import { clipLoops } from '../../utils/clipRanges';
+
+/** How long a clip that does not loop holds its last pose before it plays again here. */
+const ONCE_HOLD_SECONDS = 1;
 
 interface ModelViewerProps {
   data: LoadedModelData;
@@ -31,6 +35,9 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
   blueprint
 }) => {
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
+  // The clip playing when it is one that does not loop, and how long it has held its last pose.
+  const playedOnce = useRef<THREE.AnimationAction | null>(null);
+  const heldFor = useRef(0);
   const runtimeApiRef = useRef<GraphRuntimeAPI | undefined>(undefined);
   const { attachments, sockets, models, characterFireTriggers, flashTriggers, textures } = useScene();
   
@@ -126,9 +133,15 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
     const mixer = mixerRef.current;
     if (mixer) {
       mixer.stopAllAction();
-      
+      playedOnce.current = null;
+      heldFor.current = 0;
+
       if (activeClip) {
         const action = mixer.clipAction(activeClip);
+        const once = clipLoops(activeClip) === false;
+        action.setLoop(once ? THREE.LoopOnce : THREE.LoopRepeat, once ? 1 : Infinity);
+        action.clampWhenFinished = once;
+        if (once) playedOnce.current = action;
         action.reset().fadeIn(0.2).play();
       }
     }
@@ -146,6 +159,15 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
     if (!isBlueprintActive && mixerRef.current && isPlaying) {
         mixerRef.current.timeScale = timeScale;
         mixerRef.current.update(delta);
+        // A clip that does not loop plays through and holds, and then shows itself again.
+        const finished = playedOnce.current;
+        if (finished && !finished.isRunning()) {
+          heldFor.current += delta;
+          if (heldFor.current >= ONCE_HOLD_SECONDS) {
+            heldFor.current = 0;
+            finished.reset().play();
+          }
+        }
     }
   });
 

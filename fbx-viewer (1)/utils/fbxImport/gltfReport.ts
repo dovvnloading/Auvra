@@ -113,7 +113,8 @@ export const gltfReport = (json: object): ModelFileReport => {
   report.boneNames = [...joints].map((joint) => nodes[joint]?.name ?? '').filter(Boolean);
   for (const [index, animation] of (document.animations ?? []).entries()) {
     const duration = (animation.samplers ?? []).reduce((longest, sampler) => Math.max(longest, accessors[sampler.input ?? -1]?.max?.[0] ?? 0), 0);
-    report.clips.push({ name: animation.name || `Clip ${index + 1}`, duration, start: 0, layers: 1 });
+    // Under the name it comes in with when it has none, as ticks and ranges go by the clip's name.
+    report.clips.push({ name: animation.name || `animation_${index}`, duration, start: 0, layers: 1 });
   }
   report.images = (document.images ?? []).map((image, index) => ({ file: image.name || `image ${index + 1}`, embedded: true }));
   return report;

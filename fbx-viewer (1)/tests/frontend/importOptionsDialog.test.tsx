@@ -20,7 +20,7 @@ const PERSON_BONES = ['mixamorig:Hips', 'mixamorig:Spine', 'mixamorig:Head', 'mi
 const open = async (read: ModelFileReport | null, props: Partial<React.ComponentProps<typeof ImportOptionsDialog>> = {}) => {
   const onConfirm = vi.fn<(choice: ImportChoice) => void>();
   const onCancel = vi.fn();
-  render(<ImportOptionsDialog name="thing.fbx" inspect={async () => read} onConfirm={onConfirm} onCancel={onCancel} {...props} />);
+  render(<ImportOptionsDialog name="thing.fbx" inspect={async () => read} readFile={async () => new File([], 'thing.fbx')} onConfirm={onConfirm} onCancel={onCancel} {...props} />);
   await waitFor(() => expect(screen.queryByText(/Reading the file/)).toBeNull());
   return { onConfirm, onCancel };
 };
@@ -151,6 +151,44 @@ describe('the import dialog', () => {
     const { settings } = onConfirm.mock.calls[0][0];
     expect(settings.animation).toBe(false);
     expect(settings.excludedClips).toBeUndefined();
+  });
+
+  it('keeps the clips cut from a take, and animation with them when no take is ticked', async () => {
+    const clips = [{ name: 'Take 001', duration: 60, start: 0, layers: 1 }];
+    const clipRanges = [{ take: 'Take 001', name: 'Idle', start: 0, end: 2, loop: true }, { take: 'Take 001', name: 'Attack', start: 2, end: 3, loop: false }];
+    const { onConfirm } = await open(report({ clips }), { initialSettings: { normalize: false, targetSize: 2, excludedClips: ['Take 001'], clipRanges } });
+    expect(screen.getByText('Animation: 2 clips from 1 take')).toBeTruthy();
+    expect(screen.getByText('Idle')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Import' }));
+    const { settings } = onConfirm.mock.calls[0][0];
+    expect(settings.clipRanges).toEqual(clipRanges);
+    expect(settings.excludedClips).toEqual(['Take 001']);
+    expect(settings.animation).toBeUndefined();
+  });
+
+  it('keeps the clips cut from what is not in this file, and says so', async () => {
+    const clips = [{ name: 'Walk', duration: 1, start: 0, layers: 1 }, { name: 'Run', duration: 1, start: 0, layers: 1 }];
+    const clipRanges = [{ take: 'Mocap', name: 'Wave', start: 0, end: 2, loop: false, attached: true }];
+    const { onConfirm } = await open(report({ clips }), { initialSettings: { normalize: false, targetSize: 2, clipRanges } });
+    expect(screen.getByText(/1 clip cut from takes not in this file: Wave/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Import' }));
+    expect(onConfirm.mock.calls[0][0].settings.clipRanges).toEqual(clipRanges);
+  });
+
+  it('shows ranges saved under a take of another name on a file with one take', async () => {
+    const clips = [{ name: 'New name', duration: 60, start: 0, layers: 1 }];
+    await open(report({ clips }), { initialSettings: { normalize: false, targetSize: 2, clipRanges: [{ take: 'Old name', name: 'Idle', start: 0, end: 2, loop: true }] } });
+    expect(screen.getByRole('button', { name: /Idle/ })).toBeTruthy();
+    expect(screen.queryByText(/not in this file/)).toBeNull();
+  });
+
+  it('offers the clips of a glTF too, without the key reduction of the importer', async () => {
+    const clips = [{ name: 'Walk', duration: 1, start: 0, layers: 1 }, { name: 'Run', duration: 0.5, start: 0, layers: 1 }];
+    const { onConfirm } = await open(report({ format: 'gltf', clips }));
+    expect(screen.queryByText('Reduce keys')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Import Run'));
+    fireEvent.click(screen.getByRole('button', { name: 'Import' }));
+    expect(onConfirm.mock.calls[0][0].settings.excludedClips).toEqual(['Run']);
   });
 
   it('chooses how many animation keys to keep', async () => {

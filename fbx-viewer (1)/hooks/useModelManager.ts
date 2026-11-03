@@ -6,6 +6,8 @@ import { importFailureMessage, importPhaseLabel, loadFBXFile } from '../utils/mo
 import { disposeModel, disposeObject } from '../utils/processing/ModelLifecycle';
 import { applyModelImportSettings, convertOptionsFor, resolveImportSettings, stripGeometry } from '../utils/processing/ModelTransforms';
 import { applyStoredClipNames, mirrorModelClips, prepareAnimationClips, uniqueClipNames } from '../utils/animationBinding';
+import { carriedClipNames, clipRange, cutAttachedClips, noteAttachedClips, wholeClips } from '../utils/clipRanges';
+import { readModelTakes, type ClipTakeSource } from '../utils/clipTakes';
 import type { StoredBoneRole } from '../utils/retargeting';
 import { generateThumbnail } from '../utils/thumbnailGenerator';
 import { dbOperations, normalizeAssetInfoUpdate, withoutMaterialOverrideAsset, withoutMaterialOverrideTexture } from '../utils/db';
@@ -174,9 +176,10 @@ export const useModelManager = (
       newModel.category = category;
       newModel.thumbnail = undefined;
       newModel.isPlacedInScene = false;
-      // Stored with the model, so renaming it later does not rename its clips.
-      const clipNames = uniqueClipNames(newModel.animations.map((clip) => clip.name), new Set());
-      newModel.animations.forEach((clip, index) => { clip.name = clipNames[index]; });
+      // Stored with the model, so renaming it later does not rename its clips. A clip cut from a take has its name in its range.
+      const wholeTakes = wholeClips(newModel.animations);
+      const clipNames = uniqueClipNames(wholeTakes.map((clip) => clip.name), new Set(newModel.animations.filter(clipRange).map((clip) => clip.name)));
+      wholeTakes.forEach((clip, index) => { clip.name = clipNames[index]; });
       newModel.sourceClipNames = clipNames;
       if (importSettings) applyModelImportSettings(newModel, importSettings);
 
@@ -369,7 +372,8 @@ export const useModelManager = (
         try {
           const prepared = prepareAnimationClips(replacement.object, animationModel.object, animationModel.animations, existing.boneRoles);
           applyStoredClipNames(prepared.clips, animation.clipNames);
-          replacement.animations.push(...prepared.clips);
+          noteAttachedClips(prepared.clips, animationModel.animations);
+          replacement.animations.push(...cutAttachedClips(prepared.clips, importSettings ?? {}, replacement.object));
         } finally {
           disposeModel(animationModel);
         }
@@ -401,17 +405,23 @@ export const useModelManager = (
       for (const image of images) sourceImages.push({ name: image.name, assetId: await projectService.uploadAsset(image, { signal: operation.signal, diagnostics: trace }) });
       if (sourceImages.length) document.sourceImages = sourceImages; else delete document.sourceImages;
       replacement.sourceImages = sourceImages.length ? sourceImages : undefined;
-      // The new file keeps the stored clip names when it has as many clips; otherwise its own are stored.
       const ownClips = replacement.animations.slice(0, ownClipCount);
-      if (Array.isArray(stored?.clipNames) && stored.clipNames.length === ownClips.length) {
-        applyStoredClipNames(ownClips, stored.clipNames);
-      } else {
-        const names = uniqueClipNames(ownClips.map((clip) => clip.name), new Set());
-        ownClips.forEach((clip, index) => { clip.name = names[index]; });
-        if (names.length) document.clipNames = names; else delete document.clipNames;
-      }
-      replacement.sourceClipNames = ownClips.map((clip) => clip.name);
+      const ownTakes = wholeClips(ownClips);
+      const clipNames = carriedClipNames(ownTakes, existing.animations, file ? stored?.clipNames : undefined, new Set(ownClips.filter(clipRange).map((clip) => clip.name)));
+      ownTakes.forEach((clip, index) => { clip.name = clipNames[index]; });
+      if (clipNames.length) document.clipNames = clipNames; else delete document.clipNames;
+      replacement.sourceClipNames = clipNames;
       await projectService.applyChanges([{ domain: 'models', operation: 'upsert', id: modelId, value: document }], trace);
+      // Mirrored copies are made again from the clips they copy, as when the project opens.
+      const { mirroredClips } = modelsRef.current.find((model) => model.id === modelId) ?? existing;
+      if (mirroredClips?.length) {
+        replacement.mirroredClips = mirroredClips;
+        try {
+          replacement.animations.push(...mirrorModelClips(replacement.object, replacement.animations, mirroredClips));
+        } catch (error) {
+          frontendDiagnostics.failure('clip_mirror_failed', error);
+        }
+      }
 
       operation.update({ phase: 'library_publication', progress: 0.98, detail: 'Publishing to library', diagnostic });
       // Material overrides saved while the reimport ran are the ones to keep.
@@ -427,7 +437,11 @@ export const useModelManager = (
       replacement = null;
       setModels((previous) => previous.map((model) => (model.id === modelId ? published : model)));
       disposeModel(existing);
-      addNotification({ message: `Reimported "${existing.name}".`, type: 'success' });
+      // A range stays with the model when its take is gone, and cuts its clip again if the take comes back.
+      const uncut = (importSettings?.clipRanges ?? []).filter((range) => !published.animations.some((clip) => clip.name === range.name)).map((range) => range.name);
+      addNotification(uncut.length
+        ? { message: `Reimported "${existing.name}" without ${uncut.join(', ')}: ${uncut.length === 1 ? 'its take is' : 'their takes are'} not in the file.`, type: 'info' }
+        : { message: `Reimported "${existing.name}".`, type: 'success' });
     } catch (error) {
       outcome = isAbortError(error) ? 'cancelled' : 'failure';
       failure = error;
@@ -453,6 +467,39 @@ export const useModelManager = (
     if (!response.ok) throw new Error(`Source download failed (${response.status}).`);
     return modelSourceFile(new File([await response.blob()], name), name);
   }, []);
+
+  /**
+   * A model's takes whole, for cutting clips from, and a copy of the model to show them on. A clip
+   * imported onto it from a file of its own is read from that file only if the model no longer holds it.
+   */
+  const readClipTakes = useCallback(async (modelId: string, signal?: AbortSignal): Promise<ClipTakeSource> => {
+    const model = modelsRef.current.find((candidate) => candidate.id === modelId);
+    if (!model) throw new Error('The model is no longer loaded.');
+    const held = wholeClips(model.animations);
+    const attached: THREE.AnimationClip[] = [];
+    for (const document of nativeDocuments(await projectService.getSnapshotAll('animations'), 'animations')) {
+      if (document.modelId !== modelId || typeof document.assetId !== 'string') continue;
+      const names: unknown[] = Array.isArray(document.clipNames) ? document.clipNames : [];
+      const clips = names.map((name) => held.find((clip) => clip.name === name));
+      if (clips.length && clips.every(Boolean)) {
+        attached.push(...clips as THREE.AnimationClip[]);
+        continue;
+      }
+      const response = await projectService.fetchAsset(document.assetId, { signal });
+      if (!response.ok) throw new Error(`Animation download failed (${response.status}).`);
+      const file = new File([await response.blob()], typeof document.name === 'string' && document.name ? document.name : 'animation.fbx');
+      const loaded = await loadFBXFile(file, { normalize: false, signal });
+      try {
+        const prepared = prepareAnimationClips(model.object, loaded.object, loaded.animations, model.boneRoles);
+        applyStoredClipNames(prepared.clips, document.clipNames);
+        noteAttachedClips(prepared.clips, loaded.animations);
+        attached.push(...prepared.clips);
+      } finally {
+        disposeModel(loaded);
+      }
+    }
+    return readModelTakes(model, await readModelSource(modelId), attached, signal);
+  }, [readModelSource]);
 
   /** The images kept with a model, as files named as its source names them. */
   const readModelSourceImages = useCallback(async (modelId: string): Promise<File[]> => {
@@ -645,6 +692,7 @@ export const useModelManager = (
           const prepared = prepareAnimationClips(targetModel.object, loaded.object, loaded.animations, targetModel.boneRoles);
           const names = uniqueClipNames(prepared.clips.map((clip) => clip.name), takenClipNames);
           prepared.clips.forEach((clip, clipIndex) => { clip.name = names[clipIndex]; });
+          noteAttachedClips(prepared.clips, loaded.animations);
           clipNamesByFile.push(names);
           allNewClips.push(...prepared.clips);
           operation.update({ phase: 'animation_binding', diagnostic: {
@@ -866,6 +914,7 @@ export const useModelManager = (
     reimportModel,
     readModelSource,
     readModelSourceImages,
+    readClipTakes,
     updateModel,
     removeModel,
     removeTextureReference,

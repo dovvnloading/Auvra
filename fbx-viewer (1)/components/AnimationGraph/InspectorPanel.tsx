@@ -4,6 +4,7 @@ import { MousePointer2 } from 'lucide-react';
 import { AnimationGraphData } from '../../types';
 import { StateInspector } from './Inspectors/StateInspector';
 import { TransitionInspector } from './Inspectors/TransitionInspector';
+import { clipLoops } from '../../utils/clipRanges';
 
 interface AvailableClipInfo {
     name: string;
@@ -74,6 +75,10 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     blendParamOptions={blendParamOptions}
                     onOpenStateMachine={onOpenStateMachine}
                     clipDuration={availableClips.find(item => item.name === selectedNode.clipName)?.clip?.duration}
+                    clipLoop={(name) => {
+                        const clip = availableClips.find(item => item.name === name)?.clip;
+                        return clip ? clipLoops(clip) : undefined;
+                    }}
                 />
              ) : selectedTransition ? (
                 <TransitionInspector 

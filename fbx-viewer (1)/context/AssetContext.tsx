@@ -1,5 +1,6 @@
 
 import type { StoredBoneRole } from '../utils/retargeting';
+import type { ClipTakeSource } from '../utils/clipTakes';
 import React, { createContext, useContext, ReactNode, useState, useCallback } from 'react';
 import { 
     LoadedModelData, AttachmentData, SocketData, TextureData, AudioData, Blueprint, 
@@ -28,6 +29,7 @@ interface AssetContextType {
   importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory, images?: readonly File[]) => Promise<void>;
   readModelSource: (modelId: string) => Promise<File>;
   readModelSourceImages: (modelId: string) => Promise<File[]>;
+  readClipTakes: (modelId: string, signal?: AbortSignal) => Promise<ClipTakeSource>;
   reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings, images?: readonly File[], category?: AssetCategory) => Promise<void>;
   updateModel: (id: string, updates: AssetInfoUpdate) => Promise<void>;
   removeModel: (id: string) => void;
@@ -184,6 +186,7 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     importModelWithOptions: modelManager.importModelWithOptions,
     readModelSource: modelManager.readModelSource,
     readModelSourceImages: modelManager.readModelSourceImages,
+    readClipTakes: modelManager.readClipTakes,
     reimportModel: modelManager.reimportModel,
     updateModel: modelManager.updateModel,
     removeModel: modelManager.removeModel,

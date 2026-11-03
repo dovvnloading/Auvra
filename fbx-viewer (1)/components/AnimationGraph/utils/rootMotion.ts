@@ -49,7 +49,7 @@ const rootNameRank = (name: string): number => {
 };
 
 /** Node a position track animates, or null for any other property or an unparseable name. */
-const positionTrackNode = (track: THREE.KeyframeTrack): string | null => {
+export const positionTrackNode = (track: THREE.KeyframeTrack): string | null => {
     try {
         const parsed = THREE.PropertyBinding.parseTrackName(track.name);
         if (parsed.propertyName !== 'position') return null;

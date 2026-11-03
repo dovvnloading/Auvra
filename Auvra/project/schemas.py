@@ -55,7 +55,9 @@ _NESTED_KEYS = {
     # The weather a level's sky starts in: the preset it came from and its values.
     "weather": {"preset", "clouds", "rain", "snow", "fog", "wind", "windDirection", "lightning"},
     "dimensions": {"width", "height"},
-    "importSettings": {"normalize", "targetSize", "animation", "excludedClips", "keyThreshold", "morphTargets", "looseMeshes", "recomputeNormals", "smoothingAngle", "tangents"},
+    "importSettings": {"normalize", "targetSize", "animation", "excludedClips", "clipRanges", "keyThreshold", "morphTargets", "looseMeshes", "recomputeNormals", "smoothingAngle", "tangents"},
+    # A stretch of a take that comes in as a clip of its own.
+    "clipRanges": {"take", "name", "start", "end", "loop", "recentre", "attached"},
     "sourceImages": {"name", "assetId"},
     "boneRoles": {"role", "bone"},
     "size": {"width", "height"},
