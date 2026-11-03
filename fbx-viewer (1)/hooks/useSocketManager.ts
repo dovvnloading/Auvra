@@ -4,9 +4,12 @@ import { dbOperations } from '../utils/db';
 import { projectService } from '../utils/projectService';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { editorSession, type EditorSessionLease } from '../utils/editorSession';
+import type { AuthoredSocket } from '../utils/modelConventions';
 
 export const useSocketManager = () => {
   const [sockets, setSockets] = useState<SocketData[]>([]);
+  const socketsRef = useRef(sockets);
+  socketsRef.current = sockets;
   
   // Refs for debouncing DB updates
   const pendingUpdatesRef = useRef<Map<string, { updates: Partial<SocketData>; lease: EditorSessionLease; previous: SocketData }>>(new Map());
@@ -80,6 +83,25 @@ export const useSocketManager = () => {
     }
   }, []);
 
+  /** Adds the sockets a model's file holds, but for those it has by name already. */
+  const addFileSockets = useCallback(async (parentModelId: string, fileSockets: readonly AuthoredSocket[]) => {
+    const taken = new Set(socketsRef.current.filter((socket) => socket.parentModelId === parentModelId).map((socket) => socket.name));
+    const fresh = fileSockets.filter((socket) => !taken.has(socket.name));
+    if (!fresh.length) return;
+    projectService.assertWritable();
+    const lease = editorSession.requireWritable(editorSession.captureReady(), projectService.getStatus());
+    for (const socket of fresh) {
+      const newSocket: SocketData = { id: crypto.randomUUID(), parentModelId, ...socket };
+      try {
+        await dbOperations.addSocket(newSocket, lease);
+        if (!editorSession.isSameSession(lease)) return;
+        setSockets((previous) => [...previous, newSocket]);
+      } catch (e) {
+        frontendDiagnostics.failure('socket_add_failed', e);
+      }
+    }
+  }, []);
+
   const updateSocket = useCallback((id: string, updates: Partial<SocketData>) => {
       projectService.assertWritable();
       const lease = editorSession.requireWritable(editorSession.captureReady(), projectService.getStatus());
@@ -150,6 +172,7 @@ export const useSocketManager = () => {
       sockets,
       setSockets, // Exposed for persistence loading
       addSocket,
+      addFileSockets,
       updateSocket,
       removeSocket,
       removeSocketsByParentId,
