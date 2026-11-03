@@ -177,6 +177,28 @@ const clipBindsDirectly = (root: THREE.Object3D, clip: THREE.AnimationClip): boo
   })
 );
 
+/** How far a bone may differ from the one a clip was made on, as a share of its offset, and in its turn. */
+const REST_PLACE_TOLERANCE = 0.05;
+const REST_TURN_TOLERANCE = THREE.MathUtils.degToRad(15);
+
+/**
+ * Whether a clip's values hold on `root` as they are: the bones it places rest where they rest on
+ * the rig it was made on, and those it turns rest turned alike. Same names do not make that so: a
+ * hip height from another character's proportions, or in another unit, puts the feet off the floor.
+ */
+const clipFitsRest = (root: THREE.Object3D, sourceRoot: THREE.Object3D, clip: THREE.AnimationClip): boolean => clip.tracks.every((track) => {
+  const nodeName = trackNodeName(track);
+  if (!nodeName) return true;
+  const target = THREE.PropertyBinding.findNode(root, nodeName) as THREE.Object3D | null;
+  const source = THREE.PropertyBinding.findNode(sourceRoot, nodeName) as THREE.Object3D | null;
+  if (!target?.position || !source?.position) return true;
+  if (track.name.endsWith('.position')) {
+    return target.position.distanceTo(source.position) <= REST_PLACE_TOLERANCE * Math.max(target.position.length(), source.position.length());
+  }
+  if (track.name.endsWith('.quaternion')) return target.quaternion.angleTo(source.quaternion) <= REST_TURN_TOLERANCE;
+  return true;
+});
+
 /** Most of a humanoid's arms, legs, spine and head must pair to retarget. */
 const REQUIRED_CORE_SHARE = 0.8;
 
@@ -236,6 +258,9 @@ const depth = (node: THREE.Object3D): number => {
   return count;
 };
 
+/** A rig at its bind pose, if it has one to go to. */
+const restOf = (root: THREE.Object3D): THREE.Object3D => bindPoseRig(root)?.root ?? root;
+
 export const prepareAnimationClips = (
   targetRoot: THREE.Object3D,
   sourceRoot: THREE.Object3D,
@@ -246,7 +271,7 @@ export const prepareAnimationClips = (
   const usable = clips.filter((clip) => clip.duration > 0 && clip.tracks.length > 0);
   if (!usable.length) throw new AnimationImportError('The FBX contains no usable animation clips.');
 
-  if (usable.every((clip) => clipBindsDirectly(targetRoot, clip))) {
+  if (usable.every((clip) => clipBindsDirectly(targetRoot, clip) && clipFitsRest(restOf(targetRoot), sourceRoot, clip))) {
     return {
       clips: usable.map((clip) => clip.clone()),
       mode: 'direct',

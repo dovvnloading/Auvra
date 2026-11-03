@@ -75,10 +75,10 @@ const SkeletonLines: React.FC<{ root: THREE.Object3D; selectedBone: string | nul
   return (
     <>
       <lineSegments ref={placeInWorld} geometry={lines} renderOrder={1000} frustumCulled={false} raycast={NOTHING}>
-        <lineBasicMaterial vertexColors depthTest={false} transparent opacity={0.85} toneMapped={false} />
+        <lineBasicMaterial vertexColors depthTest={false} transparent opacity={0.85} toneMapped={false} fog={false} />
       </lineSegments>
       <points ref={placeInWorld} geometry={joints} renderOrder={1001} frustumCulled={false} raycast={NOTHING}>
-        <pointsMaterial vertexColors size={5} sizeAttenuation={false} depthTest={false} transparent toneMapped={false} />
+        <pointsMaterial vertexColors size={5} sizeAttenuation={false} depthTest={false} transparent toneMapped={false} fog={false} />
       </points>
     </>
   );

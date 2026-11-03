@@ -4,6 +4,7 @@ import { useScene } from '../../../context/SceneContext';
 import type { LoadedModelData } from '../../../types';
 import { CORE_ROLES, humanoidRoles } from '../../../utils/retargeting';
 import { ALL_BONE_ROLES, boneInfluences, roleLabel, setSkeletonView, skeletonBones, useSkeletonView } from '../../../utils/skeletonView';
+import { AutoRigPanel } from './AutoRigPanel';
 import { Button, TextInput } from '../kit';
 import { Select } from '../Select';
 
@@ -178,6 +179,6 @@ export const SkeletonPanel: React.FC = () => {
   const model = models.find((candidate) => candidate.id === selectedModelId);
   const hasBones = useMemo(() => (model ? skeletonBones(model.object).length > 0 : false), [model]);
   if (!model) return <Empty>Select a model to see its skeleton.</Empty>;
-  if (!hasBones) return <Empty>{model.name} has no skeleton.</Empty>;
+  if (!hasBones) return <AutoRigPanel model={model} />;
   return <BoneTree key={model.id} model={model} />;
 };

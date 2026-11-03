@@ -784,11 +784,12 @@ export interface SceneContextType {
   /** Import with explicit options; the settings are stored on the model document. */
   importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory, images?: readonly File[]) => Promise<void>;
   readModelSource: (modelId: string) => Promise<File>;
+  readModelSourceImages: (modelId: string) => Promise<File[]>;
   /**
    * Replace a model's source file in place (id, references and settings are kept), or without a
    * file read its stored source again; `settings` replaces its import settings (its size).
    */
-  reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings, images?: readonly File[]) => Promise<void>;
+  reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings, images?: readonly File[], category?: AssetCategory) => Promise<void>;
   /** Rename and/or move a model; rejects when the change cannot be saved. */
   updateModel: (id: string, updates: AssetInfoUpdate) => Promise<void>;
   removeModel: (id: string) => void;
