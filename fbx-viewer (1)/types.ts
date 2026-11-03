@@ -9,6 +9,9 @@ import type { ModelFileReport } from './utils/fbxImport/nativeImporter';
 import type { ClipTakeSource } from './utils/clipTakes';
 import type { StoredBoneRole } from './utils/retargeting';
 import type { SkinPaintFile, SkinPaintReference } from './utils/skinPaint/skinPaintFile';
+
+/** Where a model's UV layout is kept. */
+export interface UvLayoutReference { assetId: string; encoding: 'uv-layout-v1'; count: number }
 import type { LevelBakedLighting } from './runtime/lighting/bakedLighting';
 import type { WeatherSettings } from './runtime/weather';
 import type { SkyAtmosphereSettings, SkyCloudSettings, SkyImageSettings, SkyLightSettings, SkyModel, SkyNightSettings } from './runtime/sky/skySettings';
@@ -96,6 +99,8 @@ export interface LoadedModelData {
   boneRoles?: StoredBoneRole[];
   /** The weights painted on it, kept in an asset of their own. */
   skinPaint?: SkinPaintReference;
+  /** A new UV unwrap of some of its meshes, kept in an asset of its own (texturing/uv/uvLayout). */
+  uvLayout?: UvLayoutReference;
 }
 
 /** An image a model's source file names, kept with the project. */
@@ -832,6 +837,8 @@ export interface SceneContextType {
   mirrorClip: (modelId: string, clipName: string) => Promise<void>;
   updateModelBoneRoles: (modelId: string, roles: StoredBoneRole[]) => Promise<void>;
   saveModelSkinPaint: (modelId: string, encode: () => SkinPaintFile | null) => Promise<void>;
+  /** Stores a model's UV layout (null takes it away); rejects when it cannot be saved. */
+  saveModelUvLayout: (modelId: string, bytes: Uint8Array | null, meshes: number) => Promise<void>;
 
   // Texture Actions
   textures: TextureData[];

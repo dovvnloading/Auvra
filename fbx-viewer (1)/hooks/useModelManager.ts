@@ -677,6 +677,19 @@ export const useModelManager = (
     }
   }, [addNotification]);
 
+  /** Stores a model's UV layout; rejects when it cannot be saved. */
+  const saveModelUvLayout = useCallback(async (modelId: string, bytes: Uint8Array | null, meshes: number): Promise<void> => {
+    projectService.assertWritable();
+    if (!modelsRef.current.some((model) => model.id === modelId)) return;
+    try {
+      const uvLayout = await dbOperations.updateModelUvLayout(modelId, bytes, meshes);
+      setModels((previous) => previous.map((candidate) => (candidate.id === modelId ? { ...candidate, uvLayout } : candidate)));
+    } catch (error) {
+      addNotification({ message: 'The new UV layout could not be saved.', type: 'error' });
+      throw error;
+    }
+  }, [addNotification]);
+
   const removeTextureReference = useCallback((textureId: string) => {
     setModels((previous) => previous.map((model) => {
       const overrides = model.textureOverrides;
@@ -992,6 +1005,7 @@ export const useModelManager = (
     mirrorClip,
     updateModelBoneRoles,
     saveModelSkinPaint,
+    saveModelUvLayout,
     placeInScene,
     removeFromScene,
     addAnimations,

@@ -48,5 +48,19 @@ class AuthoredMaterialTests(unittest.TestCase):
         validate_project_references({"materials": materials, "textures": _textures("missing")})
 
 
+class UvLayoutTests(unittest.TestCase):
+    def test_a_model_keeps_its_uv_layout_reference(self):
+        model = {"id": "m", "name": "Helmet.glb", "assetId": ASSET, "uvLayout": {"assetId": OTHER, "encoding": "uv-layout-v1", "count": 1}}
+        document = validate_domain("models", domain_document("models", [model]))
+        self.assertEqual(document["documents"][0]["uvLayout"]["assetId"], OTHER)
+        with self.assertRaises(ValueError):
+            validate_project_references({"models": domain_document("models", [model])}, asset_exists=lambda asset: asset == ASSET)
+
+    def test_unknown_layout_fields_are_refused(self):
+        model = {"id": "m", "name": "Helmet.glb", "assetId": ASSET, "uvLayout": {"assetId": OTHER, "encoding": "uv-layout-v1", "count": 1, "extra": 1}}
+        with self.assertRaises(ValueError):
+            validate_domain("models", domain_document("models", [model]))
+
+
 if __name__ == "__main__":
     unittest.main()

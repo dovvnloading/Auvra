@@ -36,6 +36,12 @@ export interface PartMesh {
     triangleShift: Int16Array;
     /** Whether the set's tiles are UDIM tiles of their own, or one picture repeated (coordinates past 0..1 wrap). */
     udim: boolean;
+    /** The source meshes, and for each part vertex its mesh (index into `meshes`) and vertex there. */
+    meshes: THREE.Mesh[];
+    vertexMesh: Uint16Array;
+    vertexSource: Uint32Array;
+    /** For each triangle, where its first corner sits in its mesh's index list (or vertex list, unindexed). */
+    triangleSource: Uint32Array;
 }
 
 export const tileOf = (u: number, v: number): number => 1001 + Math.max(0, Math.min(9, Math.floor(u))) + 10 * Math.max(0, Math.floor(v));
@@ -89,6 +95,10 @@ export const buildPartMesh = (root: THREE.Object3D, materials: ReadonlySet<THREE
     const colors: number[] = [];
     const indices: number[] = [];
     const triangleMesh: number[] = [];
+    const triangleSource: number[] = [];
+    const vertexMesh: number[] = [];
+    const vertexSource: number[] = [];
+    const sourceMeshes: THREE.Mesh[] = [];
     const meshNames: string[] = [];
     let anyTangents = false;
     let anyColors = false;
@@ -111,6 +121,7 @@ export const buildPartMesh = (root: THREE.Object3D, materials: ReadonlySet<THREE
         const normalMatrix = new THREE.Matrix3().getNormalMatrix(matrix);
         const meshIndex = meshNames.length;
         meshNames.push(mesh.name || `Mesh ${meshIndex + 1}`);
+        sourceMeshes.push(mesh);
         // Each source vertex once, then its triangles.
         const remap = new Map<number, number>();
         const p = new THREE.Vector3();
@@ -136,6 +147,8 @@ export const buildPartMesh = (root: THREE.Object3D, materials: ReadonlySet<THREE
                 if (color) colors.push(color.getX(source), color.getY(source), color.getZ(source));
                 else colors.push(1, 1, 1);
             }
+            vertexMesh.push(meshIndex);
+            vertexSource.push(source);
             remap.set(source, at);
             return at;
         };
@@ -147,6 +160,7 @@ export const buildPartMesh = (root: THREE.Object3D, materials: ReadonlySet<THREE
                 const c = index ? index.getX(corner + 2) : corner + 2;
                 indices.push(vertex(a), vertex(b), vertex(c));
                 triangleMesh.push(meshIndex);
+                triangleSource.push(corner);
             }
         }
     });
@@ -249,6 +263,10 @@ export const buildPartMesh = (root: THREE.Object3D, materials: ReadonlySet<THREE
         triangleTile,
         triangleShift,
         udim,
+        meshes: sourceMeshes,
+        vertexMesh: new Uint16Array(vertexMesh),
+        vertexSource: new Uint32Array(vertexSource),
+        triangleSource: new Uint32Array(triangleSource),
     };
 };
 

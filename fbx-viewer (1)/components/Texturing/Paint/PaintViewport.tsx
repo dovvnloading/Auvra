@@ -7,6 +7,7 @@ import type { MeshMapName } from '../../../texturing/graph/nodes/io';
 import { renderDepth, Stroke, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
 import type { PaintChannel } from '../../../texturing/paint/paintTypes';
 import type { PaintSession } from './paintSession';
+import type { UvSession } from './uvSession';
 
 /**
  * The painting view: the model in its rest pose, the texture set being painted drawn with its live
@@ -15,8 +16,8 @@ import type { PaintSession } from './paintSession';
  * closer. [ and ] change the brush size.
  */
 
-export type PaintTool = 'paint' | 'erase' | 'island' | 'pick';
-export type ViewMode = 'material' | PaintChannel | 'ambientOcclusion' | `mesh:${MeshMapName}` | 'mask';
+export type PaintTool = 'paint' | 'erase' | 'island' | 'pick' | 'seam';
+export type ViewMode = 'material' | PaintChannel | 'ambientOcclusion' | `mesh:${MeshMapName}` | 'mask' | 'uvChecker' | 'uvStretch';
 
 interface Preview { base: GpuImage | null; orm: GpuImage | null; emissive: GpuImage | null; single: GpuImage | null }
 
@@ -31,6 +32,32 @@ const environmentOf = (gpu: TextureGpu): THREE.Texture => {
     }
     return texture;
 };
+
+const NO_SUBSCRIBE = () => () => undefined;
+const ZERO = () => 0;
+
+/** A checker laid on by texture coordinates (to judge a layout), or each triangle coloured by its stretch. */
+const LAYOUT_VIEW = new THREE.ShaderMaterial({
+    uniforms: { stretchView: { value: 0 } },
+    vertexShader: 'attribute float stretch; varying vec2 vUv; varying float vStretch; varying vec3 vNormal; void main() { vUv = uv; vStretch = stretch; vNormal = normalize(normalMatrix * normal); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `uniform int stretchView; varying vec2 vUv; varying float vStretch; varying vec3 vNormal;
+void main() {
+    float light = 0.55 + 0.45 * max(0.0, dot(normalize(vNormal), normalize(vec3(0.4, 0.8, 0.6))));
+    if (stretchView == 1) {
+        vec3 c = vStretch < 0.0 ? vec3(0.9, 0.1, 0.6) : mix(vec3(0.2, 0.45, 0.95), mix(vec3(0.25, 0.85, 0.35), vec3(0.95, 0.25, 0.15), smoothstep(0.15, 1.0, vStretch)), smoothstep(0.0, 0.15, vStretch));
+        gl_FragColor = vec4(c * light, 1.0);
+        return;
+    }
+    vec2 cell = floor(vUv * 32.0);
+    float checker = mod(cell.x + cell.y, 2.0);
+    vec3 c = mix(vec3(0.85), vec3(0.25), checker);
+    vec2 big = floor(vUv * 4.0);
+    c *= mix(vec3(1.0, 0.85, 0.8), vec3(0.8, 0.9, 1.0), mod(big.x + big.y, 2.0));
+    gl_FragColor = vec4(c * light, 1.0);
+}`,
+    side: THREE.DoubleSide,
+});
+LAYOUT_VIEW.toneMapped = false;
 
 const SINGLE_VIEW = new THREE.ShaderMaterial({
     uniforms: { map: { value: null }, gray: { value: 0 }, encodeNormal: { value: 0 } },
@@ -50,7 +77,10 @@ export const PaintViewport: React.FC<{
     onPick: (color: [number, number, number]) => void;
     onMessage: (message: string | null) => void;
     frameSignal: number;
-}> = ({ session, tool, brush, target, view, maskImage, onBrushSize, onPick, onMessage, frameSignal }) => {
+    /** The UV editing session, for seams and the layout views. */
+    uv: UvSession | null;
+}> = ({ session, tool, brush, target, view, maskImage, onBrushSize, onPick, onMessage, frameSignal, uv }) => {
+    const uvVersion = useSyncExternalStore(uv?.subscribe ?? NO_SUBSCRIBE, uv?.getVersion ?? ZERO);
     const host = useRef<HTMLDivElement>(null);
     const canvas = useRef<HTMLCanvasElement>(null);
     const version = useSyncExternalStore(session.subscribe, session.getVersion);
@@ -95,9 +125,17 @@ export const PaintViewport: React.FC<{
             root.add(mesh);
             tiles.set(tile, { mesh, lit, single, preview: { base: null, orm: null, emissive: null, single: null } });
         }
+        const layoutMesh = new THREE.Mesh(new THREE.BufferGeometry(), LAYOUT_VIEW);
+        layoutMesh.visible = false;
+        layoutMesh.frustumCulled = false;
+        root.add(layoutMesh);
+        const seamLines = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xff7a1a, depthTest: true, toneMapped: false }));
+        seamLines.frustumCulled = false;
+        seamLines.renderOrder = 2;
+        scene.add(seamLines);
         const box = new THREE.Box3().setFromObject(root);
         const orbit = { target: box.getCenter(new THREE.Vector3()), yaw: 0.5, pitch: 0.2, distance: box.getSize(new THREE.Vector3()).length() * 1.4 || 2, radius: box.getSize(new THREE.Vector3()).length() || 1 };
-        return { scene, root, camera, tiles, orbit, box, hidden };
+        return { scene, root, camera, tiles, orbit, box, hidden, layoutMesh, seamLines };
     }, [session, stack]);
 
     useEffect(() => () => {
@@ -183,7 +221,36 @@ export const PaintViewport: React.FC<{
                 entry.mesh.material = entry.single;
             }
         }
-    }, [gpu, maskImage, stack, view, world]);
+        // The layout views: the proposed coordinates (or the current ones) on the model.
+        const layoutView = view === 'uvChecker' || view === 'uvStretch';
+        world.layoutMesh.visible = layoutView;
+        for (const entry of world.tiles.values()) entry.mesh.visible = !layoutView;
+        if (layoutView) {
+            const part = session.part;
+            const corners = part.indices.length;
+            const position = new Float32Array(corners * 3);
+            const normal = new Float32Array(corners * 3);
+            const uvs = new Float32Array(corners * 2);
+            const stretch = new Float32Array(corners);
+            for (let i = 0; i < corners; i++) {
+                const v = part.indices[i];
+                position.set(part.positions.subarray(v * 3, v * 3 + 3), i * 3);
+                normal.set(part.normals.subarray(v * 3, v * 3 + 3), i * 3);
+                if (uv?.proposal) uvs.set(uv.proposal.cornerUv.subarray(i * 2, i * 2 + 2), i * 2);
+                else uvs.set([part.uvs[v * 2], part.uvs[v * 2 + 1]], i * 2);
+                stretch[i] = uv?.proposal ? uv.proposal.triangleStretch[Math.floor(i / 3)] : 0;
+            }
+            const geometry = world.layoutMesh.geometry;
+            geometry.setAttribute('position', new THREE.BufferAttribute(position, 3));
+            geometry.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
+            geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+            geometry.setAttribute('stretch', new THREE.BufferAttribute(stretch, 1));
+            LAYOUT_VIEW.uniforms.stretchView.value = view === 'uvStretch' ? 1 : 0;
+        }
+        const lines = uv && (tool === 'seam' || layoutView) ? uv.seamLines() : new Float32Array(0);
+        world.seamLines.geometry.setAttribute('position', new THREE.BufferAttribute(lines, 3));
+        world.seamLines.geometry.computeBoundingSphere();
+    }, [gpu, maskImage, session.part, stack, tool, uv, view, world]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const draw = useCallback(() => {
         const element = canvas.current;
@@ -198,7 +265,7 @@ export const PaintViewport: React.FC<{
     useEffect(() => {
         updateMaterials();
         draw();
-    }, [draw, updateMaterials, version]);
+    }, [draw, updateMaterials, version, uvVersion]);
 
     // ---- pointer ----
     const gesture = useRef<{ kind: 'orbit' | 'pan'; x: number; y: number } | { kind: 'stroke'; stroke: Stroke; depth: GpuImage } | null>(null);
@@ -269,6 +336,12 @@ export const PaintViewport: React.FC<{
         }
         if (event.button !== 0) return;
         if (tool === 'pick') { pickColour(x, y); return; }
+        if (tool === 'seam') {
+            const hit = hitAt(x, y);
+            if (hit && uv) uv.toggleSeam(hit.triangle, hit.point, event.shiftKey);
+            else if (!uv) onMessage('Open the UVs panel to edit seams.');
+            return;
+        }
         startStroke(x, y, event.pointerType === 'pen' ? event.pressure : 1);
     };
 

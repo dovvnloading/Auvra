@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Brush, Eraser, Maximize, PaintBucket, Pipette, Redo2, Undo2 } from 'lucide-react';
+import { Brush, Eraser, Maximize, PaintBucket, Pipette, Redo2, Scissors, Undo2 } from 'lucide-react';
 import { useAssets } from '../../../context/AssetContext';
 import { useScene } from '../../../context/SceneContext';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
@@ -18,6 +18,9 @@ import { LayerPanel, type LayerSelection } from './LayerPanel';
 import { PaintSession, findPaintAsset, paintGraphResolver, type PaintTarget } from './paintSession';
 import { PaintViewport, type PaintTool, type ViewMode } from './PaintViewport';
 import { SetPanel } from './SetPanel';
+import { UvPanel } from './UvPanel';
+import { UvSession } from './uvSession';
+import { UvView2D } from './UvView2D';
 
 /**
  * THE PAINT TAB
@@ -32,7 +35,7 @@ let rememberedModel: string | null = null;
 let rememberedBrush: BrushSettings = DEFAULT_BRUSH;
 
 export const PaintWorkspace: React.FC = () => {
-    const { models, updateModelMaterialOverrides, selectedModelId } = useScene();
+    const { models, updateModelMaterialOverrides, selectedModelId, saveModelUvLayout } = useScene();
     const { textures } = useAssets();
     const textureStore = useTextureStore();
     const paintable = useMemo(() => models.filter((model) => model.category !== 'Animation'), [models]);
@@ -49,10 +52,12 @@ export const PaintWorkspace: React.FC = () => {
     const resolve = useMemo(() => paintGraphResolver(), []);
 
     const [session, setSession] = useState<PaintSession | null>(null);
+    const [uv, setUv] = useState<UvSession | null>(null);
+    const [reopen, setReopen] = useState(0);
     const [opening, setOpening] = useState(false);
     const [message, setMessage] = useState<string | null>(null);
-    const latest = useRef({ models, updateModelMaterialOverrides, textureStore });
-    latest.current = { models, updateModelMaterialOverrides, textureStore };
+    const latest = useRef({ models, updateModelMaterialOverrides, textureStore, saveModelUvLayout });
+    latest.current = { models, updateModelMaterialOverrides, textureStore, saveModelUvLayout };
 
     useEffect(() => {
         if (!model || !part) { setSession(null); setOpening(false); return undefined; }
@@ -72,6 +77,12 @@ export const PaintWorkspace: React.FC = () => {
             if (disposed) { opened.dispose(); return; }
             made = opened;
             setSession(opened);
+            setUv(new UvSession(opened, {
+                saveLayout: (id, bytes, meshes) => latest.current.saveModelUvLayout(id, bytes, meshes),
+                layoutReference: () => latest.current.models.find((item) => item.id === model.id)?.uvLayout,
+                setMaterialOverrides: (id, overrides) => latest.current.updateModelMaterialOverrides(id, overrides),
+                materialOverrides: () => latest.current.models.find((item) => item.id === model.id)?.materialOverrides,
+            }));
         }, (error: unknown) => {
             frontendDiagnostics.failure('paint_open_failed', error);
             if (!disposed) setMessage(error instanceof Error ? error.message : 'This surface could not be opened for painting.');
@@ -80,8 +91,9 @@ export const PaintWorkspace: React.FC = () => {
             disposed = true;
             made?.dispose();
             setSession(null);
+            setUv(null);
         };
-    }, [model, part]);
+    }, [model, part, reopen]);
 
     // A picture finishing loading reaches fills that use it.
     useEffect(() => { session?.stack.invalidate(); }, [libraryVersion, session]);
@@ -93,8 +105,8 @@ export const PaintWorkspace: React.FC = () => {
     const [brush, setBrushState] = useState<BrushSettings>(rememberedBrush);
     const setBrush = useCallback((next: BrushSettings) => { rememberedBrush = next; setBrushState(next); }, []);
     const [selection, setSelection] = useState<LayerSelection>({ layerId: null, effectId: null });
-    const [panel, setPanel] = useState<'layers' | 'brush' | 'set'>('layers');
-    const [view, setView] = useState<ViewMode>('material');
+    const [panel, setPanel] = useState<'layers' | 'brush' | 'set' | 'uvs'>('layers');
+    const [view, setView] = useState<ViewMode | 'uv2d'>('material');
     const [frameSignal, setFrameSignal] = useState(0);
 
     // Select the top layer when a set opens.
@@ -131,6 +143,7 @@ export const PaintWorkspace: React.FC = () => {
             else if (key === 'e') setTool('erase');
             else if (key === 'g') setTool('island');
             else if (key === 'p') setTool('pick');
+            else if (key === 's') setTool('seam');
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
@@ -142,6 +155,9 @@ export const PaintWorkspace: React.FC = () => {
         { value: 'ambientOcclusion', label: 'Ambient occlusion' },
         ...(document?.bake ? MESH_MAPS.map((name) => ({ value: `mesh:${name}`, label: `Mesh map: ${MESH_MAP_LABELS[name]}` })) : []),
         ...(layer?.mask?.length ? [{ value: 'mask', label: 'Selected layer\'s mask' }] : []),
+        { value: 'uvChecker', label: 'UV checker' },
+        { value: 'uvStretch', label: 'UV stretch' },
+        { value: 'uv2d', label: 'UV layout (2D)' },
     ], [document, layer]);
 
     return (
@@ -174,6 +190,7 @@ export const PaintWorkspace: React.FC = () => {
                     <IconButton label="Erase" shortcut="E" active={tool === 'erase'} onClick={() => setTool('erase')}><Eraser size={14} /></IconButton>
                     <IconButton label="Fill a UV island" shortcut="G" active={tool === 'island'} onClick={() => setTool('island')}><PaintBucket size={14} /></IconButton>
                     <IconButton label="Pick a colour" shortcut="P" active={tool === 'pick'} onClick={() => setTool('pick')}><Pipette size={14} /></IconButton>
+                    <IconButton label="Mark or clear seams (Shift clears)" shortcut="S" active={tool === 'seam'} onClick={() => setTool('seam')}><Scissors size={14} /></IconButton>
                     <span className="mx-1 h-4 w-px bg-zinc-800" />
                     <IconButton label={session?.undoLabel ? `Undo ${session.undoLabel.toLowerCase()}` : 'Undo'} shortcut="Ctrl+Z" disabled={!session?.canUndo} onClick={() => session?.undo()}><Undo2 size={14} /></IconButton>
                     <IconButton label="Redo" shortcut="Ctrl+Y" disabled={!session?.canRedo} onClick={() => session?.redo()}><Redo2 size={14} /></IconButton>
@@ -188,11 +205,13 @@ export const PaintWorkspace: React.FC = () => {
                     <Select value={view} options={viewOptions} onChange={(value) => setView(value as ViewMode)} className="w-48" />
                 </div>
                 <div className="relative flex min-h-0 flex-1">
-                    {session ? (
-                        <PaintViewport session={session} tool={tool} brush={brush} target={target} view={view} maskImage={maskImage}
+                    {session && view === 'uv2d' && uv ? (
+                        <UvView2D uv={uv} />
+                    ) : session ? (
+                        <PaintViewport session={session} tool={tool} brush={brush} target={target} view={view === 'uv2d' ? 'material' : view} maskImage={maskImage}
                             onBrushSize={(size) => setBrush({ ...brush, size })}
                             onPick={(color) => setBrush({ ...brush, values: { ...brush.values, baseColor: color } })}
-                            onMessage={setMessage} frameSignal={frameSignal} />
+                            onMessage={setMessage} frameSignal={frameSignal} uv={uv} />
                     ) : (
                         <div className="flex flex-1 items-center justify-center text-xs text-zinc-500">
                             {opening ? <span className="flex items-center gap-2"><Spinner /> Laying out the surface…</span> : message ?? (part ? '' : 'Pick a texture set on the left to paint it.')}
@@ -212,12 +231,13 @@ export const PaintWorkspace: React.FC = () => {
 
             <aside className="flex w-[320px] shrink-0 flex-col border-l border-zinc-800">
                 <div className="border-b border-zinc-800 p-2">
-                    <Segmented value={panel} options={[{ value: 'layers', label: 'Layers' }, { value: 'brush', label: 'Brush' }, { value: 'set', label: 'Texture set' }]} onChange={setPanel} label="Panel" />
+                    <Segmented value={panel} options={[{ value: 'layers', label: 'Layers' }, { value: 'brush', label: 'Brush' }, { value: 'set', label: 'Texture set' }, { value: 'uvs', label: 'UVs' }]} onChange={setPanel} label="Panel" />
                 </div>
                 {session ? (
                     panel === 'layers' ? <LayerPanel session={session} selection={selection} onSelect={setSelection} resolve={resolve} graphs={graphs} textures={textures} />
                         : panel === 'brush' ? <div className="min-h-0 flex-1 overflow-y-auto"><BrushPanel brush={brush} onChange={setBrush} channels={session.document.channels} paintingMask={target?.kind === 'mask'} textures={textures} /></div>
-                            : <div className="min-h-0 flex-1 overflow-y-auto"><SetPanel session={session} models={paintable} /></div>
+                            : panel === 'uvs' && uv ? <div className="min-h-0 flex-1 overflow-y-auto"><UvPanel uv={uv} onSeamTool={() => setTool('seam')} onApplied={() => { if (!uv.proposal) setReopen((value) => value + 1); }} /></div>
+                                : <div className="min-h-0 flex-1 overflow-y-auto"><SetPanel session={session} models={paintable} /></div>
                 ) : (
                     <p className="p-3 text-2xs text-zinc-500">Pick a texture set to see its layers.</p>
                 )}

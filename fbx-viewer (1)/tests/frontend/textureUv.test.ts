@@ -1,0 +1,150 @@
+import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
+import { buildPartMesh } from '../../texturing/mesh/partMesh';
+import { coverage, packIslands, smallestBoxAngle, type Island } from '../../texturing/uv/pack';
+import { DEFAULT_UNWRAP, unwrap } from '../../texturing/uv/unwrap';
+import { applyLayout, buildLayout, decodeLayout, encodeLayout } from '../../texturing/uv/uvLayout';
+import { buildTopology, existingSeams } from '../../texturing/uv/uvTopology';
+
+const meshOf = (geometry: THREE.BufferGeometry) => {
+    const material = new THREE.MeshStandardMaterial();
+    const root = new THREE.Group();
+    root.add(new THREE.Mesh(geometry, material));
+    return { root, material, part: buildPartMesh(root, new Set([material]), { udim: false }) };
+};
+
+/** Islands from an unwrap, ready to pack. */
+const islandsOf = (result: ReturnType<typeof unwrap>): Island[] => result.charts.map((chart, i) => ({
+    uv: result.flat[i].uv,
+    triangles: chart.corners,
+    area3d: 0,
+}));
+
+/** True when two islands cover the same texel of a 512 grid (texel centres inside triangles). */
+const overlaps = (placements: ReturnType<typeof packIslands>, islands: Island[]): boolean => {
+    const size = 512;
+    const owner = new Int32Array(size * size).fill(-1);
+    for (let i = 0; i < placements.length; i++) {
+        const uv = placements[i].uv;
+        const t = islands[i].triangles;
+        for (let k = 0; k < t.length; k += 3) {
+            const p = [t[k], t[k + 1], t[k + 2]].map((c) => [(uv[c * 2] % 1) * size, (uv[c * 2 + 1] % 1) * size]);
+            const x0 = Math.max(0, Math.floor(Math.min(p[0][0], p[1][0], p[2][0]))), x1 = Math.min(size - 1, Math.ceil(Math.max(p[0][0], p[1][0], p[2][0])));
+            const y0 = Math.max(0, Math.floor(Math.min(p[0][1], p[1][1], p[2][1]))), y1 = Math.min(size - 1, Math.ceil(Math.max(p[0][1], p[1][1], p[2][1])));
+            const edge = (a: number[], b: number[], x: number, y: number) => (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]);
+            const area = edge(p[0], p[1], p[2][0], p[2][1]);
+            if (area === 0) continue;
+            for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+                const cx = x + 0.5, cy = y + 0.5;
+                const w = [edge(p[1], p[2], cx, cy), edge(p[2], p[0], cx, cy), edge(p[0], p[1], cx, cy)];
+                if (!(area > 0 ? w.every((v) => v > 0) : w.every((v) => v < 0))) continue;
+                const at = y * size + x;
+                if (owner[at] >= 0 && owner[at] !== i) return true;
+                owner[at] = i;
+            }
+        }
+    }
+    return false;
+};
+
+describe('unwrapping', () => {
+    it('cuts a closed sphere into flat pieces with nothing turned over and little stretch', () => {
+        const { part } = meshOf(new THREE.SphereGeometry(1, 32, 16));
+        const topology = buildTopology(part.positions, part.indices);
+        const result = unwrap(topology);
+        expect(result.charts.length).toBeGreaterThan(1);
+        for (const flat of result.flat) {
+            expect(flat.flipped).toBe(0);
+            expect(flat.meanStretch).toBeLessThan(DEFAULT_UNWRAP.stretchLimit);
+        }
+    });
+
+    it('cuts a torus (which has a hole through it) until every piece lies flat', () => {
+        const { part } = meshOf(new THREE.TorusGeometry(1, 0.35, 24, 48));
+        const result = unwrap(buildTopology(part.positions, part.indices));
+        for (const flat of result.flat) expect(flat.flipped).toBe(0);
+        const faces = result.charts.reduce((sum, chart) => sum + chart.faces.length, 0);
+        expect(faces).toBe(part.indices.length / 3);
+    });
+
+    it('puts seams on a cube\'s hard edges and keeps its faces unstretched', () => {
+        const geometry = new THREE.BoxGeometry(1, 1, 1, 3, 3, 3);
+        const { part } = meshOf(geometry);
+        const topology = buildTopology(part.positions, part.indices);
+        const result = unwrap(topology);
+        for (const flat of result.flat) expect(flat.worstStretch).toBeLessThan(1.05);
+    });
+
+    it('reads the seams a mesh already has from its texture coordinates', () => {
+        const { part } = meshOf(new THREE.BoxGeometry(1, 1, 1));
+        const topology = buildTopology(part.positions, part.indices);
+        // A box's faces each have their own 0..1 square, so every hard edge is already a seam.
+        expect(existingSeams(topology, part.indices, part.uvs).size).toBe(12);
+    });
+});
+
+describe('packing', () => {
+    it('turns a slanted rectangle to sit square', () => {
+        const angle = 0.4;
+        const points = [[0, 0], [2, 0], [2, 1], [0, 1]].map(([x, y]) => [x * Math.cos(angle) - y * Math.sin(angle), x * Math.sin(angle) + y * Math.cos(angle)]);
+        const turn = smallestBoxAngle(points);
+        expect(Math.abs(Math.sin(turn + angle) * Math.cos(turn + angle))).toBeLessThan(1e-6);
+    });
+
+    it('lays islands out without overlaps, inside the square, with their padding', () => {
+        const { part } = meshOf(new THREE.SphereGeometry(1, 32, 16));
+        const result = unwrap(buildTopology(part.positions, part.indices));
+        const islands = islandsOf(result);
+        const placements = packIslands(islands, { padding: 8, resolution: 1024, rotate: true, tilesX: 1, tilesY: 1 });
+        expect(overlaps(placements, islands)).toBe(false);
+        for (const placement of placements) for (const value of placement.uv) { expect(value).toBeGreaterThanOrEqual(8 / 1024 - 1e-9); expect(value).toBeLessThanOrEqual(1); }
+        expect(coverage(placements, islands)).toBeGreaterThan(0.35);
+    });
+
+    it('spreads islands over several UDIM tiles when asked', () => {
+        const { part } = meshOf(new THREE.TorusGeometry(1, 0.35, 24, 48));
+        const islands = islandsOf(unwrap(buildTopology(part.positions, part.indices)));
+        const placements = packIslands(islands, { padding: 4, resolution: 1024, rotate: true, tilesX: 2, tilesY: 1 });
+        expect(new Set(placements.map((placement) => placement.tile)).size).toBeGreaterThan(1);
+        for (const placement of placements) {
+            const u = placement.uv[0];
+            expect(Math.floor(u)).toBe(placement.tile - 1001);
+        }
+    });
+});
+
+describe('layouts on models', () => {
+    it('splits vertices along new seams, keeps every corner where it was, and survives saving', () => {
+        const { root, part } = meshOf(new THREE.SphereGeometry(1, 24, 12));
+        const mesh = root.children[0] as THREE.Mesh;
+        const before = mesh.geometry;
+        const topology = buildTopology(part.positions, part.indices);
+        const result = unwrap(topology);
+        const placements = packIslands(islandsOf(result));
+        const cornerUv = new Float32Array(part.indices.length * 2);
+        const cornerKey = new Uint32Array(part.indices.length);
+        result.charts.forEach((chart, c) => chart.faces.forEach((face, i) => {
+            for (let k = 0; k < 3; k++) {
+                const corner = chart.corners[i * 3 + k];
+                cornerUv[(face * 3 + k) * 2] = placements[c].uv[corner * 2];
+                cornerUv[(face * 3 + k) * 2 + 1] = placements[c].uv[corner * 2 + 1];
+                cornerKey[face * 3 + k] = c * 1_000_000 + corner;
+            }
+        }));
+        const layout = decodeLayout(encodeLayout(buildLayout(root, part, cornerUv, cornerKey, null)).buffer as ArrayBuffer);
+        expect(applyLayout(root, layout)).toBe(1);
+        const after = mesh.geometry;
+        expect(after).not.toBe(before);
+        expect(after.index!.count).toBe(before.index!.count);
+        // Each corner of each triangle sits where it did.
+        for (let i = 0; i < after.index!.count; i++) {
+            const a = after.index!.getX(i);
+            const b = before.index!.getX(i);
+            expect(after.attributes.position.getX(a)).toBeCloseTo(before.attributes.position.getX(b));
+            expect(after.attributes.position.getY(a)).toBeCloseTo(before.attributes.position.getY(b));
+        }
+        // Laid out again from the file's own vertices, not from the first layout's.
+        expect(applyLayout(root, layout)).toBe(1);
+        expect(mesh.geometry.attributes.position.count).toBe(after.attributes.position.count);
+    });
+});

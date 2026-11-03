@@ -1,4 +1,6 @@
 
+import { UV_LAYOUT_FILE_NAME, UV_LAYOUT_MIME } from '../texturing/uv/uvLayout';
+import type { UvLayoutReference } from '../types';
 import { AssetCategory, AssetInfoUpdate, Blueprint, SocketData, LevelObject, LevelData, TerrainData, PrefabData } from '../types';
 import { changeBatches } from './projectChangeBatches';
 import { AssetTransferOptions, ProjectChange, projectService } from './projectService';
@@ -355,6 +357,17 @@ class DBOperations {
           return { value: { ...(value as object), skinPaint } };
       });
       return skinPaint;
+  }
+
+  async updateModelUvLayout(id: string, bytes: Uint8Array | null, meshes: number): Promise<UvLayoutReference | undefined> {
+      let uvLayout: UvLayoutReference | undefined;
+      await this.canonicalChange('models', 'upsert', { id }, id, undefined, async (value) => {
+          uvLayout = bytes
+              ? { assetId: await projectService.uploadAsset(new File([bytes as BlobPart], UV_LAYOUT_FILE_NAME, { type: UV_LAYOUT_MIME })), encoding: 'uv-layout-v1', count: Math.max(1, meshes) }
+              : undefined;
+          return { value: { ...(value as object), uvLayout } };
+      });
+      return uvLayout;
   }
 
   /** Rename and/or move a model in the content browser; folder '' is the library root. */
