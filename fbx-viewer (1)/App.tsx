@@ -17,6 +17,7 @@ import { frontendDiagnostics } from './diagnostics/runtime';
 
 // Each tab's code comes when the tab is first opened, so the window comes up on what it shows first.
 const RetextureEditor = React.lazy(() => import('./components/Tools/RetextureEditor').then((module) => ({ default: module.RetextureEditor })));
+const PaintWorkspace = React.lazy(() => import('./components/Texturing/Paint/PaintWorkspace').then((module) => ({ default: module.PaintWorkspace })));
 const MaterialGraphEditor = React.lazy(() => import('./components/Materials/MaterialGraphEditor').then((module) => ({ default: module.MaterialGraphEditor })));
 const GraphEditor = React.lazy(() => import('./components/AnimationGraph/GraphEditor').then((module) => ({ default: module.GraphEditor })));
 const BlueprintEditor = React.lazy(() => import('./components/Blueprint/BlueprintEditor').then((module) => ({ default: module.BlueprintEditor })));
@@ -32,7 +33,7 @@ const AppContent: React.FC = () => {
   const { models, selectedModelId } = useScene();
   
   // App Mode
-  const [activeTab, setActiveTab] = useState<'scene' | 'graph' | 'blueprint' | 'sandbox' | 'hud' | 'retexture' | 'materials' | 'environment'>('scene');
+  const [activeTab, setActiveTab] = useState<'scene' | 'graph' | 'blueprint' | 'sandbox' | 'hud' | 'retexture' | 'paint' | 'materials' | 'environment'>('scene');
   const changeActiveTab = React.useMemo(
     () => frontendDiagnostics.wrap('editor_mode', 'change', setActiveTab, { category: 'action' }),
     [],
@@ -168,6 +169,11 @@ const AppContent: React.FC = () => {
           {activeTab === 'retexture' && (
             <div className="absolute inset-0 w-full h-full">
                 <RetextureEditor />
+            </div>
+          )}
+          {activeTab === 'paint' && (
+            <div className="absolute inset-0 w-full h-full">
+                <PaintWorkspace />
             </div>
           )}
 

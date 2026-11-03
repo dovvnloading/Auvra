@@ -67,6 +67,23 @@ const poolKey = (width: number, height: number, kind: ImageKind, precision: Imag
 
 const isImage = (value: PassInput): value is GpuImage => (value as GpuImage).target !== undefined;
 
+/**
+ * The next frame; while the window is hidden (no frames, and timers held back to one a second) the
+ * next turn of the event loop, through a message, which nothing holds back.
+ */
+const nextTurn = (): Promise<void> => new Promise<void>((resolve) => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden' && typeof MessageChannel !== 'undefined') {
+        const channel = new MessageChannel();
+        channel.port1.onmessage = () => { channel.port1.close(); resolve(); };
+        channel.port2.postMessage(0);
+        return;
+    }
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(finish);
+    setTimeout(finish, 34);
+});
+
 /** Pending work, so callers can step it frame by frame. */
 export class FrameBudget {
     private spent = 0;
@@ -85,10 +102,7 @@ export class FrameBudget {
         const now = performance.now();
         if (!this.frameStart) this.frameStart = now;
         if (this.spent < this.samples && now - this.frameStart < 12) return;
-        await new Promise<void>((resolve) => {
-            if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => resolve());
-            else setTimeout(resolve, 0);
-        });
+        await nextTurn();
         this.spent = 0;
         this.frameStart = performance.now();
     }

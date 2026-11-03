@@ -223,6 +223,9 @@ export const nodeBindings = (
                 inputs[name] = texture ?? gpuConstant('black');
                 lines.push(`uniform int ${name}_ok;`);
                 uniforms[`${name}_ok`] = texture ? 1 : 0;
+                // Pictures kept as sRGB read back linear: the _srgb flag says to turn them back.
+                lines.push(`uniform int ${name}_srgb;`);
+                uniforms[`${name}_srgb`] = texture?.colorSpace === THREE.SRGBColorSpace ? 1 : 0;
                 break;
             }
             default:

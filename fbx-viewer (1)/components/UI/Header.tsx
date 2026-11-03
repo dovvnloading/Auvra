@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Brush, Grid, Network, FileCode, Gamepad2, LayoutTemplate, Trees, Save, Settings2, SlidersHorizontal, Languages, Palette, History } from 'lucide-react';
+import { Brush, Paintbrush2, Grid, Network, FileCode, Gamepad2, LayoutTemplate, Trees, Save, Settings2, SlidersHorizontal, Languages, Palette, History } from 'lucide-react';
 import { useScene } from '../../context/SceneContext';
 import type { ProjectTemplate } from '../../types';
 import { NewProjectMenu } from './NewProjectMenu';
@@ -10,7 +10,7 @@ import { SettingsModal } from '../Settings/SettingsModal';
 import { GameSettingsPanel } from '../Settings/GameSettingsPanel';
 import { LocalizationPanel } from '../Settings/LocalizationPanel';
 
-type EditorTab = 'scene' | 'graph' | 'blueprint' | 'sandbox' | 'hud' | 'retexture' | 'materials' | 'environment';
+type EditorTab = 'scene' | 'graph' | 'blueprint' | 'sandbox' | 'hud' | 'retexture' | 'paint' | 'materials' | 'environment';
 
 interface HeaderProps {
   activeTab?: EditorTab;
@@ -25,6 +25,7 @@ const TABS: readonly { id: EditorTab; label: string; icon: React.ReactNode }[] =
   { id: 'sandbox', label: 'Sandbox', icon: <Gamepad2 size={13} /> },
   { id: 'hud', label: 'HUD/UI', icon: <LayoutTemplate size={13} /> },
   { id: 'retexture', label: 'Retexture', icon: <Brush size={13} /> },
+  { id: 'paint', label: 'Paint', icon: <Paintbrush2 size={13} /> },
   { id: 'materials', label: 'Materials', icon: <Palette size={13} /> },
 ];
 

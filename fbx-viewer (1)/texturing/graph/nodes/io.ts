@@ -132,7 +132,7 @@ export const IO_NODES: TexNodeDef[] = [
         sizeFrom: 'graph',
         async run(context) {
             const image = context.image('color');
-            await context.pass(image, 'void main() { outColor = p_texture_ok == 1 ? texture(p_texture, vUv) : vec4(0.0, 0.0, 0.0, 1.0); }');
+            await context.pass(image, 'void main() { vec4 c = p_texture_ok == 1 ? texture(p_texture, vUv) : vec4(0.0, 0.0, 0.0, 1.0); if (p_texture_srgb == 1) c.rgb = linearToSrgb(c.rgb); outColor = c; }');
             return { out: image };
         },
     },
