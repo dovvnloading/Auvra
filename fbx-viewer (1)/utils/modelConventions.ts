@@ -28,6 +28,7 @@ export interface AuthoredSocket {
   /** The bone it hangs from, or empty for the model itself. */
   boneName: string;
   position: [number, number, number];
+  /** In degrees, as sockets keep it. */
   rotation: [number, number, number];
   scale: [number, number, number];
 }
@@ -118,7 +119,7 @@ export const takeModelConventions = (root: THREE.Object3D): ModelConventions => 
           name: child.name.replace(SOCKET_NAME, ''),
           boneName: above === root ? '' : above.name,
           position: position.toArray(),
-          rotation: [euler.x, euler.y, euler.z],
+          rotation: [THREE.MathUtils.radToDeg(euler.x), THREE.MathUtils.radToDeg(euler.y), THREE.MathUtils.radToDeg(euler.z)],
           scale: scale.toArray(),
         });
         out.push(child);
@@ -135,6 +136,8 @@ export const takeModelConventions = (root: THREE.Object3D): ModelConventions => 
         continue;
       }
       if (child.userData?.hidden === true && !holdsBone(child)) {
+        // Artists often keep collision shapes and sockets in a hidden group: those still count.
+        visit(child);
         hidden.push(child);
         continue;
       }
@@ -179,7 +182,7 @@ export const takeModelConventions = (root: THREE.Object3D): ModelConventions => 
   return { hulls: hulls.length, sockets: sockets.length, detailLevelsLeftOut, hiddenLeftOut };
 };
 
-/** The collision shapes a model's file holds, each as its corners in the space of `host`. */
+/** The collision shapes a model's file holds, on `host` or under it, each as its corners in the space of `host`. */
 export const authoredHullsUnder = (
   host: THREE.Object3D,
   skip: (node: THREE.Object3D) => boolean,
@@ -189,21 +192,18 @@ export const authoredHullsUnder = (
   const relative = new THREE.Matrix4();
   const corner = new THREE.Vector3();
   const visit = (node: THREE.Object3D): void => {
-    for (const child of node.children) {
-      if (skip(child)) continue;
-      const shapes = child.userData?.[AUTHORED_COLLISION_KEY] as AuthoredHull[] | undefined;
-      if (Array.isArray(shapes)) {
-        relative.multiplyMatrices(toHost, child.matrixWorld);
-        for (const { points } of shapes) {
-          const hull = new Float32Array(points.length);
-          for (let at = 0; at + 2 < points.length; at += 3) {
-            corner.set(points[at], points[at + 1], points[at + 2]).applyMatrix4(relative).toArray(hull, at);
-          }
-          hulls.push(hull);
+    const shapes = node.userData?.[AUTHORED_COLLISION_KEY] as AuthoredHull[] | undefined;
+    if (Array.isArray(shapes)) {
+      relative.multiplyMatrices(toHost, node.matrixWorld);
+      for (const { points } of shapes) {
+        const hull = new Float32Array(points.length);
+        for (let at = 0; at + 2 < points.length; at += 3) {
+          corner.set(points[at], points[at + 1], points[at + 2]).applyMatrix4(relative).toArray(hull, at);
         }
+        hulls.push(hull);
       }
-      visit(child);
     }
+    for (const child of node.children) if (!skip(child)) visit(child);
   };
   visit(host);
   return hulls;

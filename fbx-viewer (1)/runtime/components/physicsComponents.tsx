@@ -727,10 +727,11 @@ const ObjectCollider: React.FC<ObjectColliderProps> = ({ settings, content, obje
 const ModelFileColliders: React.FC<{ content: HostGeometry; colliderRef: (collider: RapierCollider | null) => void; common: ColliderCommonProps }> = ({ content, colliderRef, common }) => {
     const hulls = useMemo(() => (content.hulls?.length ? content.hulls : [content.positions]).map(planHull), [content]);
     const mass = common.mass === undefined ? undefined : common.mass / hulls.length;
+    const offset = (common.position ?? [0, 0, 0]) as Vec3;
     return (
         <>
             {hulls.map((hull, index) => (hull.kind === 'box'
-                ? <CuboidCollider key={index} ref={colliderRef} args={hull.halfExtents} {...common} position={hull.center} mass={mass} />
+                ? <CuboidCollider key={index} ref={colliderRef} args={hull.halfExtents} {...common} position={[offset[0] + hull.center[0], offset[1] + hull.center[1], offset[2] + hull.center[2]]} mass={mass} />
                 : <ConvexHullCollider key={index} ref={colliderRef} args={[hull.points]} {...common} mass={mass} />))}
         </>
     );

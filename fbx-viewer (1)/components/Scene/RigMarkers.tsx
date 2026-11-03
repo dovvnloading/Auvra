@@ -113,6 +113,9 @@ export const RigMarkers: React.FC<{ modelId: string; root: THREE.Object3D }> = (
     invalidate();
   }, [shown, reading, modelId, root, camera, controls, worldFacing, invalidate]);
 
+  // Markers can go while the pointer is on one.
+  useEffect(() => () => { canvas.style.cursor = ''; }, [canvas, shown]);
+
   const height = reading ? reading.extents.headTop[1] - reading.extents.floor : 1;
 
   const lines = useMemo(() => {

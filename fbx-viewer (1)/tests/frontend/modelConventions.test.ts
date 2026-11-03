@@ -66,7 +66,8 @@ describe('what names say in a model file', () => {
     expect(socket.name).toBe('Muzzle');
     expect(socket.boneName).toBe('Hand');
     expect(socket.position[1]).toBeCloseTo(0.5);
-    expect(socket.rotation[0]).toBeCloseTo(0.25);
+    // In degrees, as sockets keep their rotation.
+    expect(socket.rotation[0]).toBeCloseTo(THREE.MathUtils.radToDeg(0.25));
     expect(socket.scale[0]).toBeCloseTo(2);
   });
 
@@ -126,6 +127,17 @@ describe('what names say in a model file', () => {
     expect(takeModelConventions(root)).toMatchObject({ hulls: 1, hiddenLeftOut: 0 });
   });
 
+  it('reads collision shapes kept in a hidden group', () => {
+    const root = new THREE.Group();
+    const group = new THREE.Group();
+    group.name = 'Collision';
+    group.userData.hidden = true;
+    group.add(meshNamed('UCX_Body'));
+    root.add(meshNamed('Body'), group);
+    expect(takeModelConventions(root)).toMatchObject({ hulls: 1, hiddenLeftOut: 1 });
+    expect(namesIn(root)).toEqual(['Body']);
+  });
+
   it('gives hulls to physics in the space of the object they are under, and skips what it is told to', () => {
     const model = new THREE.Group();
     model.scale.setScalar(0.01);
@@ -142,6 +154,8 @@ describe('what names say in a model file', () => {
     const [hull] = authoredHullsUnder(host, () => false);
     expect(Math.max(...Array.from(hull).filter((_, index) => index % 3 === 0))).toBeCloseTo(1.5);
     expect(authoredHullsUnder(host, () => true)).toEqual([]);
+    // The model itself can be asked, as well as what holds it.
+    expect(authoredHullsUnder(copy, () => false)).toHaveLength(1);
   });
 });
 
