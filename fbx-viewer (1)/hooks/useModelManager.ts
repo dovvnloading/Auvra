@@ -410,7 +410,9 @@ export const useModelManager = (
       replacement.sourceImages = sourceImages.length ? sourceImages : undefined;
       const ownClips = replacement.animations.slice(0, ownClipCount);
       const ownTakes = wholeClips(ownClips);
-      const clipNames = carriedClipNames(ownTakes, existing.animations, file ? stored?.clipNames : undefined, new Set(ownClips.filter(clipRange).map((clip) => clip.name)));
+      // Whatever else the model has keeps its name, and a take newly brought in makes way for it.
+      const otherClipNames = replacement.animations.filter((clip) => !ownTakes.includes(clip)).map((clip) => clip.name);
+      const clipNames = carriedClipNames(ownTakes, existing.animations, file ? stored?.clipNames : undefined, new Set(otherClipNames));
       ownTakes.forEach((clip, index) => { clip.name = clipNames[index]; });
       if (clipNames.length) document.clipNames = clipNames; else delete document.clipNames;
       replacement.sourceClipNames = clipNames;
