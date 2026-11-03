@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Html } from '@react-three/drei';
 import { useFrame, useThree } from '@react-three/fiber';
 import { boneAtScreen, setSkeletonView, skeletonBones, useSkeletonView } from '../../utils/skeletonView';
+import { SkinPaintBrush } from './SkinPaintBrush';
 
 const BONE_COLOR = new THREE.Color('#c7ccd6');
 const SELECTED_COLOR = new THREE.Color('#ff9a3d');
@@ -13,7 +14,7 @@ const NOTHING = (): void => undefined;
 const CLICK_SLOP = 4;
 
 /** Bones drawn over the model as lines from each joint to its parent, the picked bone in the accent colour. */
-const SkeletonLines: React.FC<{ root: THREE.Object3D; selectedBone: string | null }> = ({ root, selectedBone }) => {
+const SkeletonLines: React.FC<{ root: THREE.Object3D; selectedBone: string | null; pickable: boolean }> = ({ root, selectedBone, pickable }) => {
   const bones = useMemo(() => skeletonBones(root), [root]);
   const linked = useMemo(() => bones.filter((entry) => entry.parent >= 0), [bones]);
   const lines = useMemo(() => {
@@ -54,6 +55,7 @@ const SkeletonLines: React.FC<{ root: THREE.Object3D; selectedBone: string | nul
   const camera = useThree((three) => three.camera);
   const canvas = useThree((three) => three.gl.domElement);
   useEffect(() => {
+    if (!pickable) return undefined;
     let pressedAt: { x: number; y: number } | null = null;
     const onDown = (event: PointerEvent): void => {
       pressedAt = event.button === 0 ? { x: event.clientX, y: event.clientY } : null;
@@ -70,7 +72,7 @@ const SkeletonLines: React.FC<{ root: THREE.Object3D; selectedBone: string | nul
       canvas.removeEventListener('pointerdown', onDown);
       canvas.removeEventListener('pointerup', onUp);
     };
-  }, [bones, camera, canvas]);
+  }, [bones, camera, canvas, pickable]);
 
   // The picked bone's name goes by its joint, and follows it.
   const pickedBone = bones.find((entry) => entry.name === selectedBone)?.bone ?? null;
@@ -122,13 +124,18 @@ const SkeletonLines: React.FC<{ root: THREE.Object3D; selectedBone: string | nul
   );
 };
 
-/** A mesh shaded by how much the picked bone moves it: blue where not at all, through green, to red where fully. */
-const weightMaterial = (boneIndex: number): THREE.MeshBasicMaterial => {
-  const material = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, toneMapped: false });
+/**
+ * A mesh coloured by how much the picked bone moves it: slate where not at all, then from blue through
+ * green to red where fully, in the same colours as the panel's key. It is lit from the view, so the
+ * shape of what is being painted can be seen.
+ */
+const weightMaterial = (pickedBone: { value: number }): THREE.MeshBasicMaterial => {
+  const material = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, toneMapped: false, fog: false });
   material.onBeforeCompile = (shader) => {
-    shader.uniforms.pickedBone = { value: boneIndex };
+    shader.uniforms.pickedBone = pickedBone;
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float pickedBone;\nvarying float vBoneWeight;')
+      .replace('#include <common>', '#include <common>\nuniform float pickedBone;\nvarying float vBoneWeight;\nvarying vec3 vSurface;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\nvSurface = mvPosition.xyz;')
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         vBoneWeight = 0.0;
         #ifdef USE_SKINNING
@@ -138,10 +145,12 @@ const weightMaterial = (boneIndex: number): THREE.MeshBasicMaterial => {
           if (abs(skinIndex.w - pickedBone) < 0.5) vBoneWeight += skinWeight.w;
         #endif`);
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying float vBoneWeight;')
+      .replace('#include <common>', '#include <common>\nvarying float vBoneWeight;\nvarying vec3 vSurface;')
+      .replace('#include <colorspace_fragment>', '')
       .replace('#include <opaque_fragment>', `
-        vec3 heat = vBoneWeight < 0.004 ? vec3(0.05, 0.07, 0.16)
+        vec3 heat = vBoneWeight < 0.004 ? vec3(0.2, 0.22, 0.28)
           : mix(mix(vec3(0.05, 0.25, 0.85), vec3(0.1, 0.85, 0.4), smoothstep(0.0, 0.5, vBoneWeight)), vec3(0.95, 0.15, 0.1), smoothstep(0.5, 1.0, vBoneWeight));
+        heat *= 0.5 + 0.5 * abs(normalize(cross(dFdx(vSurface), dFdy(vSurface))).z);
         gl_FragColor = vec4(heat, 1.0);`);
   };
   material.customProgramCacheKey = () => 'bone-weight';
@@ -150,32 +159,43 @@ const weightMaterial = (boneIndex: number): THREE.MeshBasicMaterial => {
 
 /** While on, draws each skinned mesh by the picked bone's weights, and puts its own materials back afterwards. */
 const WeightView: React.FC<{ root: THREE.Object3D; selectedBone: string | null }> = ({ root, selectedBone }) => {
+  const shaded = useRef<{ mesh: THREE.SkinnedMesh; pickedBone: { value: number } }[]>([]);
   useEffect(() => {
     const restore: (() => void)[] = [];
+    shaded.current = [];
     root.traverse((node) => {
       const mesh = node as THREE.SkinnedMesh;
       if (!mesh.isSkinnedMesh) return;
       const original = mesh.material;
-      const index = selectedBone ? mesh.skeleton.bones.findIndex((bone) => bone.name === selectedBone) : -1;
-      const material = weightMaterial(index);
+      const pickedBone = { value: -1 };
+      const material = weightMaterial(pickedBone);
       mesh.material = material;
+      shaded.current.push({ mesh, pickedBone });
       restore.push(() => {
         mesh.material = original;
         material.dispose();
       });
     });
     return () => { for (const undo of restore) undo(); };
-  }, [root, selectedBone]);
+  }, [root]);
+  // Looked up each frame: painting can give a mesh a bone it did not have.
+  useFrame(() => {
+    for (const { mesh, pickedBone } of shaded.current) {
+      pickedBone.value = selectedBone ? mesh.skeleton.bones.findIndex((bone) => bone.name === selectedBone) : -1;
+    }
+  });
   return null;
 };
 
 /** The Skeleton panel's view of the selected model in the viewport: its bones, and what the picked one moves. */
 export const SkeletonOverlay: React.FC<{ root: THREE.Object3D }> = ({ root }) => {
   const view = useSkeletonView();
+  const brush = view.showWeights && view.selectedBone !== null && view.brush !== 'off' ? view.brush : null;
   return (
     <>
-      {view.showSkeleton && <SkeletonLines root={root} selectedBone={view.selectedBone} />}
+      {view.showSkeleton && <SkeletonLines root={root} selectedBone={view.selectedBone} pickable={!brush} />}
       {view.showWeights && <WeightView root={root} selectedBone={view.selectedBone} />}
+      {brush && <SkinPaintBrush root={root} boneName={view.selectedBone!} mode={brush} size={view.brushSize} strength={view.brushStrength} />}
     </>
   );
 };

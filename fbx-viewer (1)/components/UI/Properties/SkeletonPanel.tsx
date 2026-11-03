@@ -4,7 +4,9 @@ import { useScene } from '../../../context/SceneContext';
 import type { LoadedModelData } from '../../../types';
 import { CORE_ROLES, humanoidRoles } from '../../../utils/retargeting';
 import { ALL_BONE_ROLES, boneInfluences, roleLabel, setSkeletonView, skeletonBones, useSkeletonView } from '../../../utils/skeletonView';
+import { useSkinPaintRevision } from '../../../utils/skinPaint/paintSession';
 import { AutoRigPanel } from './AutoRigPanel';
+import { SkinPaintSection, type ClipPlayback } from './SkinPaintSection';
 import { Button, TextInput } from '../kit';
 import { Select } from '../Select';
 
@@ -21,14 +23,15 @@ const Empty: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <div className="flex flex-1 items-center justify-center p-8 text-center text-xs text-ink-3">{children}</div>
 );
 
-const BoneTree: React.FC<{ model: LoadedModelData }> = ({ model }) => {
+const BoneTree: React.FC<{ model: LoadedModelData; playback: ClipPlayback }> = ({ model, playback }) => {
   const { updateModelBoneRoles, reimportModel, addSocket, projectStatus } = useScene();
   const [filter, setFilter] = useState('');
   const [closed, setClosed] = useState<ReadonlySet<number>>(new Set());
   const [rolesChanged, setRolesChanged] = useState(false);
   const view = useSkeletonView();
   const bones = useMemo(() => skeletonBones(model.object), [model.object]);
-  const influences = useMemo(() => boneInfluences(model.object), [model.object]);
+  const paintRevision = useSkinPaintRevision();
+  const influences = useMemo(() => boneInfluences(model.object), [model.object, paintRevision]);
   const roles = useMemo(() => humanoidRoles(bones.map((entry) => entry.bone), model.object, model.boneRoles), [bones, model.object, model.boneRoles]);
   const canEdit = !projectStatus.readOnly;
 
@@ -100,10 +103,11 @@ const BoneTree: React.FC<{ model: LoadedModelData }> = ({ model }) => {
         {view.showWeights && (
           <div className="flex items-center gap-2 text-2xs text-ink-3">
             <span>None</span>
-            <span className="h-1.5 flex-1 rounded-sm" style={{ background: 'linear-gradient(90deg, #0d1229, #0d40d9, #1ad966, #f2261a)' }} />
+            <span className="h-1.5 flex-1 rounded-sm" style={{ background: 'linear-gradient(90deg, #333847, #0d40d9, #1ad966, #f2261a)' }} />
             <span>All</span>
           </div>
         )}
+        {view.showWeights && !picked && canEdit && <p className="text-2xs text-ink-3">Pick a bone to see what it moves and paint its weights.</p>}
         <p className={`text-2xs ${missing.length ? 'text-amber-400' : 'text-ink-3'}`}>
           {missing.length
             ? `Clips from other rigs need: ${missing.map(roleLabel).join(', ')}. Pick a bone and say what it is.`
@@ -184,16 +188,17 @@ const BoneTree: React.FC<{ model: LoadedModelData }> = ({ model }) => {
           )}
         </div>
       )}
+      {picked && view.showWeights && canEdit && <SkinPaintSection model={model} playback={playback} />}
     </>
   );
 };
 
 /** The selected model's skeleton: its bones as a tree, what each is for, and what each moves. */
-export const SkeletonPanel: React.FC = () => {
+export const SkeletonPanel: React.FC<ClipPlayback> = (playback) => {
   const { models, selectedModelId } = useScene();
   const model = models.find((candidate) => candidate.id === selectedModelId);
   const hasBones = useMemo(() => (model ? skeletonBones(model.object).length > 0 : false), [model]);
   if (!model) return <Empty>Select a model to see its skeleton.</Empty>;
   if (!hasBones) return <AutoRigPanel model={model} />;
-  return <BoneTree key={model.id} model={model} />;
+  return <BoneTree key={model.id} model={model} playback={playback} />;
 };

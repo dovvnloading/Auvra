@@ -66,6 +66,16 @@ The body is read from its mesh, and markers appear on its chin, shoulders, elbow
 
 The model keeps its place in levels and blueprints and goes among the characters, its source now a GLB in metres. Clips from any humanoid rig can then be imported onto it.
 
+### Painting weights
+
+Any weight can be corrected by hand, on a skeleton from a file as well as one made here. With a bone picked and **Show weights** on, choose a brush under **Paint weights** and drag on the model. **Add** makes the picked bone move what the brush touches more, and **Remove** less, with the other bones there taking up the difference. **Smooth** evens out all the bones under the brush. **Size** is across the brush, as a share of the model's longest side (keys `[` and `]`), and **Strength** is how far one touch moves a vertex (keys `,` and `.`). Shift does the opposite of Add or Remove. Alt-drag, or any drag that starts off the model, still turns the view. Ctrl-click picks the bone moving that spot most, and the label beside the brush lists all the bones that do.
+
+**Pose** plays one of the model's clips, and its slider stops the clip at any moment, so a patch can be painted in the pose where it looks wrong and seen to change as it is painted.
+
+A vertex keeps at most four bones, with shares adding up to one. The brush follows the surface out from where it lands, so a hand resting on a thigh is not painted with the thigh, and takes any other piece of the mesh in reach, such as clothes over a body. Vertices at the same place move as one, across texture seams, materials and meshes, and a mesh is given any bone it did not have.
+
+Each stroke is one step of undo (Ctrl+Z and Ctrl+Y), and **Put back original** returns to the weights the model came with. Painted weights are kept with the model, apart from its source file. They go with the project into built games, and stay through **Import Settings** and **Reimport** wherever vertices still stand in the same place. The editor says so when a new file leaves some of them nowhere to go.
+
 ## Reimport and import settings
 
 Choose **Reimport** on a model to replace its source file. The model keeps its id, so everything placed in levels and linked in blueprints updates to the new file.

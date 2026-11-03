@@ -6,14 +6,22 @@ import * as THREE from 'three';
  * overlay drawn with the model, which sit in different React roots.
  */
 
+export type SkinBrushMode = 'off' | 'add' | 'remove' | 'smooth';
+
 export interface SkeletonViewState {
   showSkeleton: boolean;
   showWeights: boolean;
   /** Name of the bone picked in the panel. */
   selectedBone: string | null;
+  /** What dragging on the model does to the picked bone's weights. */
+  brush: SkinBrushMode;
+  /** Across the brush, as a percentage of the model's longest side. */
+  brushSize: number;
+  /** How far one touch moves a vertex, as a percentage of the way. */
+  brushStrength: number;
 }
 
-let state: SkeletonViewState = { showSkeleton: false, showWeights: false, selectedBone: null };
+let state: SkeletonViewState = { showSkeleton: false, showWeights: false, selectedBone: null, brush: 'off', brushSize: 12, brushStrength: 50 };
 const listeners = new Set<() => void>();
 
 export const setSkeletonView = (next: Partial<SkeletonViewState>): void => {
@@ -28,6 +36,12 @@ export const useSkeletonView = (): SkeletonViewState => useSyncExternalStore(
   },
   () => state,
 );
+
+/**
+ * Where the clip in the view has got to, in seconds, which changes too often to be state: the view
+ * writes `time`, and the panel sets `wanted` to send it somewhere.
+ */
+export const clipPlace: { time: number; wanted: number | null } = { time: 0, wanted: null };
 
 export interface SkeletonBone {
   name: string;

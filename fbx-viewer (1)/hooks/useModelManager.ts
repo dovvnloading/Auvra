@@ -7,6 +7,9 @@ import { disposeModel, disposeObject } from '../utils/processing/ModelLifecycle'
 import { applyModelImportSettings, convertOptionsFor, resolveImportSettings, stripGeometry } from '../utils/processing/ModelTransforms';
 import { applyStoredClipNames, mirrorModelClips, prepareAnimationClips, uniqueClipNames } from '../utils/animationBinding';
 import type { StoredBoneRole } from '../utils/retargeting';
+import { loadSkinPaint } from '../utils/skinPaint/modelSkin';
+import { flushSkinPaint } from '../utils/skinPaint/paintSession';
+import type { SkinPaintFile, SkinPaintReference } from '../utils/skinPaint/skinPaintFile';
 import { generateThumbnail } from '../utils/thumbnailGenerator';
 import { dbOperations, normalizeAssetInfoUpdate, withoutMaterialOverrideAsset, withoutMaterialOverrideTexture } from '../utils/db';
 import { projectService } from '../utils/projectService';
@@ -58,6 +61,13 @@ const nativeDocuments = (snapshot: Awaited<ReturnType<typeof projectService.getS
     : raw && typeof raw === 'object' && Array.isArray((raw as { documents?: unknown[] }).documents)
       ? (raw as { documents: unknown[] }).documents : [];
   return values.filter((value): value is Record<string, any> => Boolean(value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string'));
+};
+
+/** A stored model's painted weights as the project holds them. */
+const readSkinPaintBytes = async (assetId: string, signal?: AbortSignal, diagnostics?: DiagnosticContext): Promise<ArrayBuffer> => {
+  const response = await projectService.fetchAsset(assetId, { signal, diagnostics });
+  if (!response.ok) throw new Error(`painted weights download failed (${response.status})`);
+  return response.arrayBuffer();
 };
 
 /**
@@ -312,6 +322,8 @@ export const useModelManager = (
     setIsLoading(true);
     try {
       if (source) await projectService.assertStorable(source);
+      // A stroke just finished is part of what the model has.
+      await flushSkinPaint(existing.object);
       // Without a new file, the source the project already holds.
       let storedAssetId: string | null = null;
       const storedModel = nativeDocuments(await projectService.getSnapshotAll('models', trace), 'models').find((model) => model.id === modelId);
@@ -346,6 +358,20 @@ export const useModelManager = (
       replacement.textureOverrides = existing.textureOverrides;
       replacement.folder = existing.folder;
       replacement.boneRoles = modelsRef.current.find((model) => model.id === modelId)?.boneRoles ?? existing.boneRoles;
+      // Painted weights go on whatever file it now has, wherever its vertices still stand.
+      const skinPaint = category === 'Animation' ? undefined : storedModel?.skinPaint as SkinPaintReference | undefined;
+      let paintLost = 0;
+      if (skinPaint) {
+        replacement.skinPaint = skinPaint;
+        try {
+          const { painted, found } = await loadSkinPaint(replacement.object, skinPaint, (assetId) => readSkinPaintBytes(assetId, operation.signal, trace), { keepFileWeights: true });
+          paintLost = painted - found;
+        } catch (error) {
+          if (isAbortError(error)) throw error;
+          frontendDiagnostics.failure('skin_paint_reapply_failed', error);
+          paintLost = skinPaint.count;
+        }
+      }
       const importSettings = category === 'Animation' ? undefined : applyModelImportSettings(replacement, settings ?? existing.importSettings);
       if (category === 'Animation') {
         stripGeometry(replacement.object);
@@ -431,7 +457,9 @@ export const useModelManager = (
       setModels((previous) => previous.map((model) => (model.id === modelId ? published : model)));
       disposeModel(existing);
       onModelFileRead?.(published);
-      addNotification({ message: `Reimported "${existing.name}".`, type: 'success' });
+      addNotification(paintLost > 0
+        ? { message: `Reimported "${existing.name}". ${paintLost.toLocaleString()} painted vertices no longer match it and went back to its own weights.`, type: 'info' }
+        : { message: `Reimported "${existing.name}".`, type: 'success' });
     } catch (error) {
       outcome = isAbortError(error) ? 'cancelled' : 'failure';
       failure = error;
@@ -573,6 +601,20 @@ export const useModelManager = (
     await dbOperations.updateModelBoneRoles(modelId, boneRoles);
     setModels((previous) => previous.map((candidate) => (candidate.id === modelId ? { ...candidate, boneRoles } : candidate)));
   }, []);
+
+  /** Stores the weights painted on a model; rejects when they cannot be saved. */
+  const saveModelSkinPaint = useCallback(async (modelId: string, encode: () => SkinPaintFile | null): Promise<void> => {
+    projectService.assertWritable();
+    // Removed since it was painted.
+    if (!modelsRef.current.some((model) => model.id === modelId)) return;
+    try {
+      const skinPaint = await dbOperations.updateModelSkinPaint(modelId, encode);
+      setModels((previous) => previous.map((candidate) => (candidate.id === modelId ? { ...candidate, skinPaint } : candidate)));
+    } catch (error) {
+      addNotification({ message: 'Painted weights could not be saved.', type: 'error' });
+      throw error;
+    }
+  }, [addNotification]);
 
   const removeTextureReference = useCallback((textureId: string) => {
     setModels((previous) => previous.map((model) => {
@@ -832,6 +874,12 @@ export const useModelManager = (
         newModelData.category = model.category;
         newModelData.folder = model.folder;
         applyModelImportSettings(newModelData, model.importSettings);
+        await flushSkinPaint(model.object);
+        const skinPaint = modelsRef.current.find((candidate) => candidate.id === modelId)?.skinPaint;
+        if (skinPaint) {
+          newModelData.skinPaint = skinPaint;
+          await loadSkinPaint(newModelData.object, skinPaint, (assetId) => readSkinPaintBytes(assetId), { keepFileWeights: true });
+        }
         newModelData.animations = model.animations;
         newModelData.isPlacedInScene = model.isPlacedInScene;
         newModelData.textureOverrides = {}; // Clear overrides
@@ -877,6 +925,7 @@ export const useModelManager = (
     updateModelMaterialOverrides,
     mirrorClip,
     updateModelBoneRoles,
+    saveModelSkinPaint,
     placeInScene,
     removeFromScene,
     addAnimations,

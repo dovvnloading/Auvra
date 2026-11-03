@@ -25,6 +25,7 @@ import {
   type LoadedGameContent,
 } from '../runtime/types';
 import { MATERIALS_DOMAIN, materialLibrary, readMaterialAsset, type MaterialAsset } from '../runtime/materials/materialLibrary';
+import { loadSkinPaint } from './skinPaint/modelSkin';
 import { setLightVolumeSource } from '../runtime/lighting/lightVolumeLoader';
 
 /** The HUD document in the project 'hud' domain. */
@@ -264,6 +265,20 @@ export async function loadGameContent(
         loaded.textureOverrides = item.textureOverrides;
         if (sourceImages.length) loaded.sourceImages = sourceImages;
         if (Array.isArray(item.boneRoles) && item.boneRoles.length) loaded.boneRoles = item.boneRoles;
+        if (item.skinPaint?.assetId) {
+          loaded.skinPaint = item.skinPaint;
+          if (loaded.category !== 'Animation') {
+            try {
+              // Only the editor can take painting back, so only it keeps what the file said.
+              await loadSkinPaint(loaded.object, item.skinPaint, (assetId) => loadProjectAssetBytes(assetId, traceAsset(assetAlias)), { keepFileWeights: generateThumbnails });
+              assertCurrent();
+            } catch (error) {
+              assertCurrent();
+              // Painted weights are not essential to play: the model keeps those of its file.
+              recordAssetDiagnostic('skin_paint_hydration_failed', error, 'source_read', { ...diagnostic, fallback: 'file_weights' });
+            }
+          }
+        }
         if (typeof item.folder === 'string') loaded.folder = item.folder;
         // A missing importSettings document field means the default (old) normalization.
         applyModelImportSettings(loaded, item.importSettings);

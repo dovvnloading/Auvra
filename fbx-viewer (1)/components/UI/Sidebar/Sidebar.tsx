@@ -49,7 +49,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
       <div className={`flex-1 flex flex-col min-h-0 ${activeTab === 'hierarchy' ? 'overflow-y-auto custom-scrollbar' : 'overflow-hidden'}`}>
         {activeTab === 'hierarchy' && <HierarchyPanel />}
         {activeTab === 'properties' && <PropertiesPanel {...props} />}
-        {activeTab === 'skeleton' && <SkeletonPanel />}
+        {activeTab === 'skeleton' && <SkeletonPanel {...props} />}
       </div>
     </div>
   );
