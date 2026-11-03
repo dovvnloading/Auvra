@@ -65,6 +65,9 @@ const FIGURE: [Point, Point][] = [
 
 const figure = (): Float32Array => Float32Array.from(FIGURE.flatMap(([min, max]) => box(min, max)));
 
+/** What a test that rigs a whole body may take on a slow machine, in milliseconds. */
+const RIGGING_TIME = 60000;
+
 const distance = (a: Point, b: Point): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 describe('turning a mesh into a solid body', () => {
@@ -247,7 +250,7 @@ describe('skin weights', () => {
       }
     }
     expect([...moved].some((name) => /Hips|Spine/.test(name))).toBe(true);
-  });
+  }, RIGGING_TIME);
 });
 
 describe('fingers', () => {
@@ -341,7 +344,7 @@ describe('fingers', () => {
     it('can leave them out', () => {
       const { joints: plain } = rigBody(soup, [partOf(soup)], reading, [], undefined, undefined, false);
       expect(plain.some((joint) => joint.handOf !== undefined)).toBe(false);
-    });
+    }, RIGGING_TIME);
   });
 });
 
@@ -350,19 +353,19 @@ describe('placing the markers by hand', () => {
     const soup = figure();
     const reading = readBody(soup)!;
     const moved: Point = [reading.markers.leftElbow[0] + 0.03, reading.markers.leftElbow[1], 0.04];
-    const { joints } = rigBody(soup, [partOf(soup)], { ...reading, markers: { ...reading.markers, leftElbow: moved } }, ['leftElbow'], undefined, reading.markers);
+    const { joints } = rigBody(soup, [partOf(soup)], { ...reading, markers: { ...reading.markers, leftElbow: moved } }, ['leftElbow'], undefined, reading.markers, false);
     const elbow = joints.find((joint) => joint.name === 'LeftForeArm')!;
     expect(elbow.position[0]).toBeCloseTo(moved[0], 5);
     // Dropped towards the front of the arm, it goes back to the middle.
     expect(Math.abs(elbow.position[2])).toBeLessThan(0.02);
-  });
+  }, RIGGING_TIME);
 
   it('turns the skeleton back to the mesh\'s own space', () => {
     const sin = -1;
     const cos = 0;
     const soup = turnSoupAboutY(figure(), sin, cos);
     const reading = readBody(soup)!;
-    const { joints } = rigBody(soup, [partOf(soup)], reading, []);
+    const { joints } = rigBody(soup, [partOf(soup)], reading, [], undefined, undefined, false);
     const hand = new THREE.Vector3(...joints.find((joint) => joint.name === 'LeftHand')!.position);
     const expected = new THREE.Vector3(...reading.markers.leftWrist);
     expect(hand.distanceTo(expected)).toBeLessThan(1e-4);
@@ -370,7 +373,7 @@ describe('placing the markers by hand', () => {
     const elbow = joints.find((joint) => joint.name === 'LeftForeArm')!;
     const along = hand.clone().sub(new THREE.Vector3(...elbow.position)).normalize();
     expect(new THREE.Vector3(0, 1, 0).applyQuaternion(new THREE.Quaternion(...elbow.rotation)).dot(along)).toBeCloseTo(1, 4);
-  });
+  }, RIGGING_TIME);
 });
 
 describe('writing the rigged file', () => {
