@@ -232,7 +232,8 @@ export const moveRigMarker = (name: RigMarkerName, place: Point): void => {
     markers[partner] = [place[0] - 2 * away * across[0], place[1], place[2] - 2 * away * across[1]];
     working.moved.add(partner);
   }
-  setState({ reading: { ...reading, markers } as RigReading });
+  // The markers are the same kind of body's, so the reading stays that kind.
+  setState({ reading: { ...reading, markers } as unknown as RigReading });
 };
 
 /**
