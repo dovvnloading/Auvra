@@ -48,6 +48,7 @@ interface AssetContextType {
   mirrorClip: (modelId: string, clipName: string) => Promise<void>;
   updateModelBoneRoles: (modelId: string, roles: StoredBoneRole[]) => Promise<void>;
   saveModelSkinPaint: (modelId: string, encode: () => SkinPaintFile | null) => Promise<void>;
+  saveModelUvLayout: (modelId: string, bytes: Uint8Array | null, meshes: number) => Promise<void>;
   setModels: (models: LoadedModelData[]) => void;
 
   // Attachments
@@ -208,6 +209,7 @@ export const AssetProvider: React.FC<AssetProviderProps> = ({ children, setIsLoa
     mirrorClip: modelManager.mirrorClip,
     updateModelBoneRoles: modelManager.updateModelBoneRoles,
     saveModelSkinPaint: modelManager.saveModelSkinPaint,
+    saveModelUvLayout: modelManager.saveModelUvLayout,
     setModels: modelManager.setModels,
 
     // Attachments

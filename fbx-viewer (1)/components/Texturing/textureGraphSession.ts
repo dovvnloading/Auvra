@@ -90,10 +90,16 @@ export class TextureGraphSession {
         this.controller?.abort();
         if (this.scheduled) return;
         this.scheduled = true;
-        requestAnimationFrame(() => {
+        let started = false;
+        const start = () => {
+            if (started) return;
+            started = true;
             this.scheduled = false;
             void this.run();
-        });
+        };
+        // Soon after the edit; frames stop while the window is hidden, so a timer stands in.
+        requestAnimationFrame(start);
+        setTimeout(start, 50);
     }
 
     private async run(): Promise<void> {

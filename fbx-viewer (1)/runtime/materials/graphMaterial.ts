@@ -442,6 +442,12 @@ export const bindMaterialGraph = (
     material.needsUpdate = true;
 };
 
+/** The material's own colour and normal maps, as they are while no graph is bound (painting starts from them). */
+export const ownMaps = (material: StandardMaterial): { map: THREE.Texture | null; normalMap: THREE.Texture | null } => {
+    const binding = bindings.get(material);
+    return binding ? { map: binding.own.map, normalMap: binding.own.normalMap } : { map: material.map, normalMap: material.normalMap };
+};
+
 /** Gives `material` back its own shading: its maps, blending, sides and transparency as they were. */
 export const unbindMaterialGraph = (material: StandardMaterial): void => {
     const binding = bindings.get(material);

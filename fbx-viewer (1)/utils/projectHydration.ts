@@ -29,6 +29,7 @@ import {
 } from '../runtime/types';
 import { MATERIALS_DOMAIN, materialLibrary, readMaterialAsset, type MaterialAsset } from '../runtime/materials/materialLibrary';
 import { loadSkinPaint } from './skinPaint/modelSkin';
+import { applyLayout, decodeLayout } from '../texturing/uv/uvLayout';
 import { setLightVolumeSource } from '../runtime/lighting/lightVolumeLoader';
 
 /** The HUD document in the project 'hud' domain. */
@@ -358,6 +359,18 @@ export function createGameContentLoader(
         loaded.textureOverrides = item.textureOverrides;
         if (sourceImages.length) loaded.sourceImages = sourceImages;
         if (Array.isArray(item.boneRoles) && item.boneRoles.length) loaded.boneRoles = item.boneRoles;
+        if (item.uvLayout?.assetId) {
+          loaded.uvLayout = item.uvLayout;
+          try {
+            const bytes = await loadProjectAssetBytes(item.uvLayout.assetId, traceAsset(assetAlias));
+            applyLayout(loaded.object, decodeLayout(bytes));
+            assertCurrent();
+          } catch (error) {
+            assertCurrent();
+            // A model keeps its file's own coordinates when its layout cannot be read.
+            recordAssetDiagnostic('uv_layout_hydration_failed', error, 'source_read', { ...diagnostic, fallback: 'file_uvs' });
+          }
+        }
         if (item.skinPaint?.assetId) {
           loaded.skinPaint = item.skinPaint;
           if (loaded.category !== 'Animation') {

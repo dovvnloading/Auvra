@@ -209,6 +209,7 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
         mirrorClip: assets.mirrorClip,
         updateModelBoneRoles: assets.updateModelBoneRoles,
         saveModelSkinPaint: assets.saveModelSkinPaint,
+        saveModelUvLayout: assets.saveModelUvLayout,
 
         attachments: assets.attachments,
         addAttachment: assets.addAttachment,

@@ -11,7 +11,7 @@ export const BLEND_MODES = [
 export type BlendMode = typeof BLEND_MODES[number];
 
 export const BLEND_MODE_LABELS: Record<BlendMode, string> = {
-    normal: 'Normal (copy)', add: 'Add', subtract: 'Subtract', multiply: 'Multiply', screen: 'Screen', overlay: 'Overlay',
+    normal: 'Normal', add: 'Add', subtract: 'Subtract', multiply: 'Multiply', screen: 'Screen', overlay: 'Overlay',
     softLight: 'Soft light', hardLight: 'Hard light', divide: 'Divide', difference: 'Difference', darken: 'Darken (min)',
     lighten: 'Lighten (max)', linearBurn: 'Linear burn', colorBurn: 'Colour burn', colorDodge: 'Colour dodge',
     linearLight: 'Linear light', addSub: 'Add / subtract', hue: 'Hue', saturation: 'Saturation', color: 'Colour', luminosity: 'Luminosity',
