@@ -414,8 +414,8 @@ void main() { float d = texture(distanceMap, vUv).r; outColor = vec4(1.0 - smoot
     float ml = g_in(vUv - vec2(t.x, 0.0)), mr = g_in(vUv + vec2(t.x, 0.0));
     float bl = g_in(vUv - t), bc = g_in(vUv - vec2(0.0, t.y)), br = g_in(vUv + vec2(t.x, -t.y));
     // Sobel, as slope per unit of the image so the strength reads the same at any size.
-    float dx = ((tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl)) / 8.0 * uSize.x / 256.0;
-    float dy = ((tl + 2.0 * tc + tr) - (bl + 2.0 * bc + br)) / 8.0 * uSize.y / 256.0;
+    float dx = ((tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl)) / 8.0 * uSize.x / 64.0;
+    float dy = ((tl + 2.0 * tc + tr) - (bl + 2.0 * bc + br)) / 8.0 * uSize.y / 64.0;
     vec3 n = normalize(vec3(-dx * p_intensity, -dy * p_intensity, 1.0));
     if (p_format == 1) n.y = -n.y;
     outColor = vec4(n * 0.5 + 0.5, 1.0);

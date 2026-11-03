@@ -250,7 +250,11 @@ export class TextureGpu {
         const key = `${blend ?? 'none'}\n${inputNames.join(',')}\n${fragment}`;
         let material = this.programs.get(key);
         if (material) return material;
-        const declarations = inputNames.map((name) => `uniform highp sampler2D ${name};`).join('\n');
+        // Samplers a shader declares itself are left as it wrote them.
+        const declarations = inputNames
+            .filter((name) => !new RegExp(`uniform\\s+(?:\\w+\\s+)?sampler2D\\s+${name}\\b`).test(fragment))
+            .map((name) => `uniform highp sampler2D ${name};`)
+            .join('\n');
         material = new THREE.RawShaderMaterial({
             glslVersion: THREE.GLSL3,
             vertexShader: `precision highp float;\n${VERTEX}`,
@@ -298,7 +302,12 @@ export class TextureGpu {
         }
         for (const [name, value] of Object.entries(options.uniforms ?? {})) uniforms[name] = { value };
         return () => {
-            material.uniforms = uniforms;
+            // three keeps the uniforms object a program was first drawn with: change its values, never the object.
+            const kept = material.uniforms;
+            for (const [name, uniform] of Object.entries(uniforms)) {
+                if (kept[name]) kept[name].value = uniform.value;
+                else kept[name] = { value: uniform.value };
+            }
             material.uniformsNeedUpdate = true;
             this.quad.material = material;
             this.shaderError = null;

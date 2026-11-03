@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import type * as THREE from 'three';
 import { AlertTriangle, CheckCircle2, Dices, Download, ExternalLink, RefreshCw, Trash2 } from 'lucide-react';
 import { useAssets } from '../../context/AssetContext';
 import { useScene } from '../../context/SceneContext';
@@ -59,9 +60,6 @@ export const TextureGraphWorkspace: React.FC<{
     onSave: (next: MaterialAsset, immediately?: boolean) => void;
     onOpenAsset: (id: string) => void;
 }> = ({ asset, assets, onSave, onOpenAsset }) => {
-    const { textures } = useAssets();
-    const { models } = useScene();
-    const textureStore = useTextureStore();
     const stored = useMemo(() => readStoredGraph(asset.textureGraph), [asset.textureGraph]);
     const graph = stored.graph;
 
@@ -75,14 +73,38 @@ export const TextureGraphWorkspace: React.FC<{
     const textureLookup = useMemo(() => materialLibrary.textureLookup(false), []);
     const lookup = useCallback((id: string) => textureLookup(id, 'map'), [textureLookup]);
 
-    const session = useMemo(() => new TextureGraphSession(graph, resolve, lookup),
-        // One session per material; edits reach it through setGraph.
-        [asset.id]); // eslint-disable-line react-hooks/exhaustive-deps
-    useEffect(() => () => session.dispose(), [session]);
-    useEffect(() => { session.setGraph(graph, stored.values); }, [graph, session, stored.values]);
+    // One session per material, made and let go with the workspace; edits reach it through setGraph.
+    const [session, setSession] = useState<TextureGraphSession | null>(null);
+    const latest = useRef({ graph, resolve, lookup });
+    latest.current = { graph, resolve, lookup };
+    useEffect(() => {
+        const made = new TextureGraphSession(latest.current.graph, (id) => latest.current.resolve(id), (id) => latest.current.lookup(id));
+        setSession(made);
+        return () => made.dispose();
+    }, [asset.id]);
+    useEffect(() => { session?.setGraph(graph, stored.values); }, [graph, session, stored.values]);
     // A picture finishing loading, or a used graph changing, redraws what depends on it.
     const libraryVersion = useSyncExternalStore((listener) => materialLibrary.subscribe(listener), () => materialLibrary.version);
-    useEffect(() => { session.refresh(); }, [libraryVersion, entries, session]);
+    useEffect(() => { session?.refresh(); }, [libraryVersion, entries, session]);
+    if (!session) return <div className="flex-1 bg-[#121214]" />;
+    return <Workspace asset={asset} assets={assets} onSave={onSave} onOpenAsset={onOpenAsset} session={session} stored={stored} entries={entries} resolve={resolve} lookup={lookup} />;
+};
+
+const Workspace: React.FC<{
+    asset: MaterialAsset;
+    assets: readonly MaterialAsset[];
+    onSave: (next: MaterialAsset, immediately?: boolean) => void;
+    onOpenAsset: (id: string) => void;
+    session: TextureGraphSession;
+    stored: StoredTextureGraph;
+    entries: Map<string, GraphEntry>;
+    resolve: GraphResolver;
+    lookup: (id: string) => THREE.Texture | null;
+}> = ({ asset, onSave, onOpenAsset, session, stored, entries, resolve, lookup }) => {
+    const { textures } = useAssets();
+    const { models } = useScene();
+    const textureStore = useTextureStore();
+    const graph = stored.graph;
     const sessionVersion = useSyncExternalStore(session.subscribe, session.getVersion);
 
     const [selection, setSelection] = useState<string[]>([]);
