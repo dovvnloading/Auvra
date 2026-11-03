@@ -58,6 +58,10 @@ void main() {
     vec3 c = mix(vec3(0.85), vec3(0.25), checker);
     vec2 big = floor(vUv * 4.0);
     c *= mix(vec3(1.0, 0.85, 0.8), vec3(0.8, 0.9, 1.0), mod(big.x + big.y, 2.0));
+    // Each UDIM tile past the first (1001) has a tint of its own, to see which tile an island is on.
+    vec2 tile = floor(vUv);
+    float id = tile.x + tile.y * 10.0;
+    if (id > 0.5) c *= 0.55 + 0.45 * cos(6.28318 * (id * 0.618 + vec3(0.0, 0.33, 0.67)));
     gl_FragColor = vec4(c * light, 1.0);
 }`,
     side: THREE.DoubleSide,

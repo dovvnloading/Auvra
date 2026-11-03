@@ -118,6 +118,12 @@ export interface PaintDocument {
     bake: { settings: BakeSettings; maps: Partial<Record<MeshMapName, TilePictures>>; at: number } | null;
     /** The pictures the model last got from this set. */
     applied?: { textures: ChannelTextureIds; at: number };
+    /**
+     * What the surface wore before painting began, carried onto the set's own layout (a picture per tile)
+     * once it was laid out afresh. "What it wore before" fills read these over the model's own pictures,
+     * which only fit the layout it came with.
+     */
+    before?: Partial<Record<PaintChannel, TilePictures>>;
 }
 
 export const BLEND_FOR: Record<PaintChannel, ChannelBlend['mode']> = {
@@ -261,5 +267,6 @@ export const readPaintDocument = (value: unknown): PaintDocument | null => {
         heightStrength: finite(raw.heightStrength, 1),
         bake: raw.bake && typeof raw.bake === 'object' ? raw.bake as PaintDocument['bake'] : null,
         ...(raw.applied ? { applied: raw.applied } : {}),
+        ...(raw.before && typeof raw.before === 'object' ? { before: raw.before } : {}),
     };
 };

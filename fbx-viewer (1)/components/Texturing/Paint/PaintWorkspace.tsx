@@ -60,10 +60,12 @@ export const PaintWorkspace: React.FC = () => {
     const [session, setSession] = useState<PaintSession | null>(null);
     const [uv, setUv] = useState<UvSession | null>(null);
     const [reopen, setReopen] = useState(0);
+    // A new layout is put on the model once the set reopens on it.
+    const putOnAfterOpen = useRef(false);
     const [opening, setOpening] = useState(false);
     const [message, setMessage] = useState<string | null>(null);
-    const latest = useRef({ models, updateModelMaterialOverrides, textureStore, saveModelUvLayout, model, part });
-    latest.current = { models, updateModelMaterialOverrides, textureStore, saveModelUvLayout, model, part };
+    const latest = useRef({ models, updateModelMaterialOverrides, textureStore, saveModelUvLayout, model, part, textures });
+    latest.current = { models, updateModelMaterialOverrides, textureStore, saveModelUvLayout, model, part, textures };
 
     // Opened when the model or set picked changes (or is asked to open again), not whenever the model's
     // entry is renewed (its materials changing as the painting is put on it).
@@ -81,17 +83,23 @@ export const PaintWorkspace: React.FC = () => {
             storeTexture: (blob, name, size, folder) => latest.current.textureStore.store(blob, name, size, folder),
             discardTextures: (ids) => latest.current.textureStore.discard(ids),
             texture: (id) => lookup(id, 'map'),
+            textureEntry: (id) => {
+                const entry = latest.current.textures.find((item) => item.id === id);
+                return entry ? { name: entry.name, folder: entry.folder ?? '' } : null;
+            },
             setMaterialOverrides: (id, overrides) => latest.current.updateModelMaterialOverrides(id, overrides),
             materialOverrides: (id) => latest.current.models.find((item) => item.id === id)?.materialOverrides,
         }).then((opened) => {
             if (disposed) { opened.dispose(); return; }
             made = opened;
             setSession(opened);
+            if (putOnAfterOpen.current) {
+                putOnAfterOpen.current = false;
+                void opened.apply();
+            }
             setUv(new UvSession(opened, {
                 saveLayout: (id, bytes, meshes) => latest.current.saveModelUvLayout(id, bytes, meshes),
                 layoutReference: () => latest.current.models.find((item) => item.id === model.id)?.uvLayout,
-                setMaterialOverrides: (id, overrides) => latest.current.updateModelMaterialOverrides(id, overrides),
-                materialOverrides: () => latest.current.models.find((item) => item.id === model.id)?.materialOverrides,
             }));
         }, (error: unknown) => {
             frontendDiagnostics.failure('paint_open_failed', error);
@@ -253,7 +261,7 @@ export const PaintWorkspace: React.FC = () => {
                 {session ? (
                     panel === 'layers' ? <LayerPanel session={session} selection={selection} onSelect={setSelection} resolve={resolve} graphs={graphs} textures={textures} />
                         : panel === 'brush' ? <div className="min-h-0 flex-1 overflow-y-auto"><BrushPanel brush={brush} onChange={setBrush} channels={session.document.channels} paintingMask={target?.kind === 'mask'} textures={textures} /></div>
-                            : panel === 'uvs' && uv ? <div className="min-h-0 flex-1 overflow-y-auto"><UvPanel uv={uv} onSeamTool={() => setTool('seam')} onApplied={() => { if (!uv.proposal) setReopen((value) => value + 1); }} /></div>
+                            : panel === 'uvs' && uv ? <div className="min-h-0 flex-1 overflow-y-auto"><UvPanel uv={uv} onSeamTool={() => setTool('seam')} onApplied={() => { if (!uv.proposal) { putOnAfterOpen.current = uv.putOnWhenOpen; setReopen((value) => value + 1); } }} /></div>
                                 : <div className="min-h-0 flex-1 overflow-y-auto"><SetPanel session={session} models={paintable} onReopen={() => setReopen((value) => value + 1)} /></div>
                 ) : (
                     <p className="p-3 text-2xs text-zinc-500">Pick a texture set to see its layers.</p>

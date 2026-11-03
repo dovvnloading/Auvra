@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import { createMaterialGraph, defaultParams, type MaterialGraph } from '../runtime/materials/materialGraph';
 import { OUTPUT_NODE_TYPE as MATERIAL_OUTPUT } from '../runtime/materials/materialNodes';
 import type { GpuImage, TextureGpu } from './gpu/textureGpu';
@@ -67,14 +68,88 @@ void main() { outColor = vec4(hasAo == 1 ? texture(ao, vUv).r : 1.0, hasRough ==
     return pictures;
 };
 
-/** A material graph drawing with kept pictures, each wired into the input it is for. */
-export const materialGraphForTextures = (textures: ChannelTextureIds, options: { opacityMode?: 'masked' | 'translucent' } = {}): MaterialGraph => {
+/** Where UDIM tile `tile` lies on the UV grid: across, then up (1001 is the first, 1011 the one above it). */
+const cellOf = (tile: number): [number, number] => [(tile - 1001) % 10, Math.floor((tile - 1001) / 10)];
+
+/** One tile drawn into its cell of an atlas: as it is, or averaged over each new pixel when shrunk. */
+const ATLAS_CELL = `uniform vec2 uGrid;
+uniform float uCell;
+uniform int uTaps;
+void main() {
+    vec2 at = fract(vUv * uGrid);
+    if (uTaps <= 1) { outColor = texture(source, at); return; }
+    vec2 stride = vec2(1.0 / (uCell * float(uTaps)));
+    vec2 first = at - vec2(0.5 / uCell) + 0.5 * stride;
+    vec4 sum = vec4(0.0);
+    for (int y = 0; y < uTaps; y++) for (int x = 0; x < uTaps; x++) sum += texture(source, first + vec2(float(x), float(y)) * stride);
+    outColor = sum / float(uTaps * uTaps);
+}`;
+
+/** A set over several UDIM tiles laid out on one picture per channel. */
+export interface TileAtlas {
+    images: ChannelImages;
+    columns: number;
+    rows: number;
+    /** Pixels a tile has on the picture. */
+    cell: number;
+    width: number;
+    height: number;
+}
+
+/**
+ * The channels of a set spread over several UDIM tiles, each laid on one picture with every tile where it
+ * lies on the UV grid (1001 at the bottom left), so a material reads it with the coordinates scaled down by
+ * the grid. A tile keeps its own pixels unless the whole would pass what the GPU holds, then each is shrunk
+ * to fit. The images are the caller's to release.
+ */
+export const tileAtlas = (gpu: TextureGpu, tiles: readonly number[], channelImages: (tile: number) => ChannelImages, size: number, maxSize = gpu.maxSize): TileAtlas => {
+    const columns = Math.max(...tiles.map((tile) => cellOf(tile)[0])) + 1;
+    const rows = Math.max(...tiles.map((tile) => cellOf(tile)[1])) + 1;
+    const cell = Math.min(size, Math.floor(Math.min(maxSize, 16384) / Math.max(columns, rows)));
+    const width = columns * cell;
+    const height = rows * cell;
+    const perTile = new Map(tiles.map((tile) => [tile, channelImages(tile)]));
+    // A shrunk tile averages every pixel of its own that each of its new pixels covers.
+    const taps = Math.ceil(size / cell);
+    const channels = new Set<MaterialChannel>();
+    for (const images of perTile.values()) for (const channel of Object.keys(images)) channels.add(channel as MaterialChannel);
+    const images: ChannelImages = {};
+    for (const channel of channels) {
+        const sample = [...perTile.values()].find((set) => set[channel])![channel]!;
+        // Kept as the 8-bit pictures it is written to, so a large grid holds a quarter of the memory.
+        const atlas = gpu.image(width, height, sample.kind, 8);
+        // Cells with no tile are never read: flat normal, else black.
+        gpu.clear(atlas, channel === 'normal' ? [0.5, 0.5, 1, 1] : [0, 0, 0, 1]);
+        for (const [tile, set] of perTile) {
+            const image = set[channel];
+            if (!image) continue;
+            const [x, y] = cellOf(tile);
+            gpu.passNow(atlas, {
+                fragment: ATLAS_CELL,
+                inputs: { source: image },
+                uniforms: { uGrid: new THREE.Vector2(columns, rows), uCell: cell, uTaps: taps },
+                scissor: { x: x * cell, y: y * cell, width: cell, height: cell },
+            });
+        }
+        images[channel] = atlas;
+    }
+    return { images, columns, rows, cell, width, height };
+};
+
+/**
+ * A material graph drawing with kept pictures, each wired into the input it is for. With `tiles`, the
+ * pictures are a tile atlas: they are read with the coordinates scaled down by its grid.
+ */
+export const materialGraphForTextures = (textures: ChannelTextureIds, options: { opacityMode?: 'masked' | 'translucent'; tiles?: { columns: number; rows: number } } = {}): MaterialGraph => {
     const graph = createMaterialGraph();
     const output = graph.nodes.find((node) => node.type === MATERIAL_OUTPUT)!;
     output.x = 520;
+    const grid = options.tiles && (options.tiles.columns > 1 || options.tiles.rows > 1) ? options.tiles : null;
+    if (grid) graph.nodes.push({ id: 'udimTiles', type: 'tilingOffset', x: -200, y: 0, params: { ...defaultParams('tilingOffset'), tiling: [1 / grid.columns, 1 / grid.rows], offset: [0, 0] } });
     let row = 0;
     const add = (id: string, type: string, params: Record<string, unknown>) => {
         graph.nodes.push({ id, type, x: 80, y: -60 + row++ * 230, params: { ...defaultParams(type), ...params } });
+        if (grid) graph.links.push({ fromNode: 'udimTiles', fromOutput: 'out', toNode: id, toInput: 'uv' });
     };
     const wire = (fromNode: string, fromOutput: string, toInput: string) => graph.links.push({ fromNode, fromOutput, toNode: output.id, toInput });
     if (textures.baseColor) {

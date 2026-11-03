@@ -2,15 +2,15 @@ import * as THREE from 'three';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { ownMaps } from '../../../runtime/materials/graphMaterial';
 import { projectService } from '../../../utils/projectService';
-import { overrideTextureFlipY, type MaterialOverrides } from '../../../utils/materialOverrides';
 import type { GpuImage } from '../../../texturing/gpu/textureGpu';
 import { triangleStretch } from '../../../texturing/uv/lscm';
 import { DEFAULT_PACK, packIslands, type Island, type PackSettings, type Placement } from '../../../texturing/uv/pack';
-import { transferPicture } from '../../../texturing/uv/transfer';
+import { newTriangleTiles, transferPicture } from '../../../texturing/uv/transfer';
 import { DEFAULT_UNWRAP, unwrap, type UnwrapSettings } from '../../../texturing/uv/unwrap';
 import { applyLayout, buildLayout, decodeLayout, encodeLayout, type UvLayoutFile } from '../../../texturing/uv/uvLayout';
 import { buildCharts, buildTopology, edgeKey, existingSeams, type Chart, type UvTopology } from '../../../texturing/uv/uvTopology';
-import type { PaintChannel, PaintDocument, PaintLayer } from '../../../texturing/paint/paintTypes';
+import { BEFORE, pictureKey } from '../../../texturing/paint/paintStack';
+import { BLEND_FOR, type FillSource, type PaintChannel, type PaintDocument, type PaintLayer } from '../../../texturing/paint/paintTypes';
 import type { PaintSession } from './paintSession';
 
 /**
@@ -26,8 +26,10 @@ import type { PaintSession } from './paintSession';
 
 export interface UvStats {
     islands: number;
-    /** Share of the square the islands cover. */
+    /** Share of the pictures (one per UDIM tile) the islands cover. */
     coverage: number;
+    /** UDIM tiles the layout uses, a picture each. */
+    tiles: number;
     /** Pixels per model unit at the set's picture size: lowest, mean, highest over islands. */
     density: { low: number; mean: number; high: number };
     stretch: { mean: number; worst: number };
@@ -49,8 +51,6 @@ export interface UvProposal {
 export interface UvSessionHost {
     saveLayout: (modelId: string, bytes: Uint8Array | null, meshes: number) => Promise<void>;
     layoutReference: () => { assetId: string } | undefined;
-    setMaterialOverrides: (modelId: string, overrides: MaterialOverrides) => Promise<void>;
-    materialOverrides: () => MaterialOverrides | undefined;
 }
 
 const islandsOf = (charts: Chart[], flat: Array<{ uv: Float64Array }>): Island[] => charts.map((chart, i) => ({ uv: flat[i].uv, triangles: chart.corners, area3d: 0 }));
@@ -64,6 +64,11 @@ export class UvSession {
     selected = new Set<number>();
     busy: string | null = null;
     status: string | null = null;
+    /**
+     * True once a new layout is used: the model's own pictures no longer fit it, so the set (which carried
+     * them over) goes on the model as it reopens.
+     */
+    putOnWhenOpen = false;
     version = 0;
     private flat: Array<{ uv: Float64Array }> = [];
     private readonly listeners = new Set<() => void>();
@@ -74,7 +79,10 @@ export class UvSession {
         this.topology = buildTopology(part.positions, part.indices);
         this.seams = existingSeams(this.topology, part.indices, part.uvs);
         this.packSettings.resolution = paint.stack.size;
-        this.current = this.measure(Float32Array.from({ length: part.indices.length * 2 }, (_, i) => part.uvs[part.indices[i >> 1] * 2 + (i & 1)]), buildCharts(this.topology, this.seams)).stats;
+        // Packing again keeps the grid of UDIM tiles the surface is laid over now.
+        this.packSettings.tilesX = Math.max(...part.tiles.map((tile) => (tile - 1001) % 10)) + 1;
+        this.packSettings.tilesY = Math.max(...part.tiles.map((tile) => Math.floor((tile - 1001) / 10))) + 1;
+        this.current = this.measure(Float32Array.from({ length: part.indices.length * 2 }, (_, i) => part.uvs[part.indices[i >> 1] * 2 + (i & 1)]), buildCharts(this.topology, this.seams), part.tiles.length).stats;
     }
 
     subscribe = (listener: () => void): (() => void) => {
@@ -188,13 +196,13 @@ export class UvSession {
                 cornerKey[face * 3 + k] = (c * 65536 + corner) >>> 0;
             }
         }));
-        const measured = this.measure(cornerUv, charts);
+        const measured = this.measure(cornerUv, charts, new Set(newTriangleTiles(cornerUv)).size);
         this.proposal = { charts, placements, cornerUv, cornerKey, triangleStretch: measured.triangleStretch, stats: measured.stats };
         this.selected.clear();
     }
 
-    /** Stretch per triangle and the layout's figures. */
-    private measure(cornerUv: Float32Array, charts: Chart[]): { triangleStretch: Float32Array; stats: UvStats } {
+    /** Stretch per triangle and the layout's figures; `tiles` is how many UDIM tiles (pictures) it uses. */
+    private measure(cornerUv: Float32Array, charts: Chart[], tiles: number): { triangleStretch: Float32Array; stats: UvStats } {
         const { positions, faces, areas, faceCount } = this.topology;
         const stretch = new Float32Array(faceCount);
         const local = new Float64Array(6);
@@ -240,7 +248,8 @@ export class UvSession {
             triangleStretch: stretch,
             stats: {
                 islands: charts.length,
-                coverage: Math.min(1, flat / (this.packSettings.tilesX * this.packSettings.tilesY)),
+                coverage: Math.min(1, flat / Math.max(1, tiles)),
+                tiles,
                 density: { low: densities.length ? Math.min(...densities) : 0, mean, high: densities.length ? Math.max(...densities) : 0 },
                 stretch: { mean: surface > 0 ? weighted / surface : 1, worst },
                 flipped,
@@ -320,59 +329,94 @@ export class UvSession {
         this.busy = 'Carrying the pictures over';
         this.emit();
         try {
-            // Corners that must stay within the one picture (a single-tile set): wrap into 0..1 per triangle.
             const corner = proposal.cornerUv;
-            // 1. Painted layers and masks.
-            for (const [key, byTile] of stack.pictures) {
-                const image = byTile.get(stack.tiles[0]);
-                if (!image) continue;
-                const moved = await transferPicture(gpu, part, corner, image, size, key.endsWith(':normal'));
-                const target = stack.picture(key, stack.tiles[0]);
-                gpu.copy(moved, target);
-                gpu.release(moved);
-                stack.touch(key, stack.tiles[0]);
+            // The UDIM tiles the new layout uses (one for an ordinary layout): a picture each.
+            const newTiles = [...new Set(newTriangleTiles(corner))].sort((a, b) => a - b);
+            const spread = newTiles.length > 1;
+            // 1. Every picture of the set (painted layers, masks, what it wore before once carried): each tile
+            // of the new layout drawn from the current tiles' pictures.
+            for (const [key, byTile] of [...stack.pictures]) {
+                const moved: Array<[number, GpuImage]> = [];
+                for (const tile of newTiles) moved.push([tile, await transferPicture(gpu, part, corner, (from) => byTile.get(from) ?? null, size, key.endsWith(':normal'), tile)]);
+                for (const [tile, image] of moved) {
+                    gpu.copy(image, stack.picture(key, tile));
+                    gpu.release(image);
+                    stack.touch(key, tile);
+                }
             }
-            // 2. The surface's own pictures, which the "what it wears now" fills read: kept as new library pictures.
+            // 2. The model's own pictures, which "what it wore before" fills read, fit only the layout it came
+            // with: the first new layout carries them into the set, a picture per tile, and later ones carry
+            // those along with the rest (above).
             const material = paint.target.materials[0] as THREE.MeshStandardMaterial | undefined;
             const own = material ? ownMaps(material) : { map: null, normalMap: null };
-            const sources: Partial<Record<PaintChannel, { texture: THREE.Texture; normal: boolean; channel: number }>> = {};
-            if (own.map) sources.baseColor = { texture: own.map, normal: false, channel: -1 };
-            if (own.normalMap) sources.normal = { texture: own.normalMap, normal: true, channel: -1 };
-            if (material?.roughnessMap) sources.roughness = { texture: material.roughnessMap, normal: false, channel: 1 };
-            if (material?.metalnessMap) sources.metallic = { texture: material.metalnessMap, normal: false, channel: 2 };
-            const flipRows = overrideTextureFlipY(object);
-            const moved: Partial<Record<PaintChannel, string>> = {};
-            for (const [channel, source] of Object.entries(sources) as Array<[PaintChannel, { texture: THREE.Texture; normal: boolean; channel: number }]>) {
-                let image: GpuImage = await transferPicture(gpu, part, corner, source.texture, size, source.normal);
-                if (source.channel >= 0) {
-                    const single = gpu.image(size, size, 'color', 8);
-                    gpu.passNow(single, { fragment: `void main() { float v = texelFetch(src, ivec2(gl_FragCoord.xy), 0)[${source.channel}]; outColor = vec4(v, v, v, 1.0); }`, inputs: { src: image } });
-                    gpu.release(image);
-                    image = single;
-                }
-                const blob = await gpu.toPng(image, size, size, 'raw', flipRows);
-                gpu.release(image);
-                moved[channel] = await paint.host.storeTexture(blob, `${paint.target.partName} ${channel} (relaid)`, { width: size, height: size }, `Painted/${paint.target.modelName.replace(/\.[^.]+$/, '')}`);
-            }
-            // The fills that showed what it wore now show the carried-over pictures.
-            const swap = (layers: readonly PaintLayer[]): PaintLayer[] => layers.map((layer) => {
-                const fill = layer.fill ? Object.fromEntries(Object.entries(layer.fill).map(([channel, source]) => [channel, source?.kind === 'current' && moved[channel as PaintChannel]
-                    ? { kind: 'texture' as const, textureId: moved[channel as PaintChannel]!, projection: 'uv' as const, scale: 1, rotation: 0, sharpness: 4 }
-                    : source])) : undefined;
-                return { ...layer, ...(fill ? { fill } : {}), ...(layer.layers ? { layers: swap(layer.layers) } : {}) };
-            });
-            let document: PaintDocument = { ...stack.document, layers: swap(stack.document.layers), bake: null };
-            // 3. The engine draws the surface with the carried-over pictures until the painting is put on it again.
-            const overrides: MaterialOverrides = { ...(this.host.materialOverrides() ?? {}) };
+            // A layout made here before sets carried these put the pictures it carried on the model in place of
+            // its own: those are the model's pictures that fit the layout it wears now.
+            const overrides = paint.host.materialOverrides(paint.target.modelId) ?? {};
+            const ownIds: Partial<Record<PaintChannel, Set<string>>> = { baseColor: new Set(), normal: new Set(), roughness: new Set(), metallic: new Set() };
             for (const name of paint.target.materialNames) {
-                const entry = { ...(overrides[name] ?? {}) };
-                if (moved.baseColor) entry.mapTextureId = moved.baseColor;
-                if (moved.normal) entry.normalTextureId = moved.normal;
-                if (moved.roughness) entry.roughnessTextureId = moved.roughness;
-                if (moved.metallic) entry.metalnessTextureId = moved.metallic;
-                overrides[name] = entry;
+                const entry = overrides[name];
+                if (entry?.mapTextureId) ownIds.baseColor!.add(entry.mapTextureId);
+                if (entry?.normalTextureId) ownIds.normal!.add(entry.normalTextureId);
+                if (entry?.roughnessTextureId) ownIds.roughness!.add(entry.roughnessTextureId);
+                if (entry?.metalnessTextureId) ownIds.metallic!.add(entry.metalnessTextureId);
             }
-            // 4. The meshes themselves.
+            const laidOutHere = Boolean(this.host.layoutReference());
+            // Roughness and metallic share a picture (green, blue): each keeps its own value.
+            const sources: Array<[PaintChannel, THREE.Texture | null, number]> = [
+                ['baseColor', own.map, -1],
+                ['normal', own.normalMap, -1],
+                ['roughness', material?.roughnessMap ?? null, 1],
+                ['metallic', material?.metalnessMap ?? null, 2],
+                ['emissive', material?.emissiveMap ?? null, -1],
+            ];
+            for (const [channel, texture, read] of sources) {
+                const key = pictureKey(BEFORE, channel);
+                if (!texture || stack.pictures.has(key)) continue;
+                // A picture of the model's own that an earlier layout here left in place no longer fits.
+                if (laidOutHere && !ownIds[channel]?.size) continue;
+                for (const tile of newTiles) {
+                    let image = await transferPicture(gpu, part, corner, texture, size, channel === 'normal', tile);
+                    if (read >= 0) {
+                        const single = gpu.image(size, size, 'color', 8);
+                        gpu.passNow(single, { fragment: `void main() { float v = texelFetch(src, ivec2(gl_FragCoord.xy), 0)[${read}]; outColor = vec4(v, v, v, 1.0); }`, inputs: { src: image } });
+                        gpu.release(image);
+                        image = single;
+                    }
+                    gpu.copy(image, stack.picture(key, tile));
+                    gpu.release(image);
+                    stack.touch(key, tile);
+                }
+            }
+            // Such a layout also kept those pictures as textures of the set's own (named "<part> <channel> (relaid)"
+            // in the model's Painted folder), read by fills along the UVs: those fills read what it wore before
+            // again, now carried with the set.
+            const keptFolder = `Painted/${paint.target.modelName.replace(/\.[^.]+$/, '')}`;
+            const keptBefore = (channel: PaintChannel, id: string): boolean => {
+                const entry = paint.host.textureEntry(id);
+                return Boolean(entry && entry.folder === keptFolder && entry.name === `${paint.target.partName} ${channel} (relaid)`);
+            };
+            const readsOwn = (channel: PaintChannel, source: FillSource | undefined): boolean => source?.kind === 'texture'
+                && source.projection === 'uv' && source.scale === 1 && source.rotation === 0 && Boolean(ownIds[channel]?.has(source.textureId) || keptBefore(channel, source.textureId));
+            const restore = (list: readonly PaintLayer[]): PaintLayer[] => list.map((layer) => ({
+                ...layer,
+                ...(layer.fill ? { fill: Object.fromEntries(Object.entries(layer.fill).map(([channel, source]) => [channel, readsOwn(channel as PaintChannel, source) ? { kind: 'current' as const } : source])) } : {}),
+                ...(layer.layers ? { layers: restore(layer.layers) } : {}),
+            }));
+            let layers = restore(stack.document.layers);
+            let channels = stack.document.channels;
+            // The set goes on the model in place of its own material, glow and all: a glow it carried is drawn by
+            // the layer that shows what the surface wore before.
+            if (stack.pictures.has(pictureKey(BEFORE, 'emissive')) && !channels.includes('emissive')) {
+                const at = layers.findIndex((layer) => Object.values(layer.fill ?? {}).some((source) => source?.kind === 'current'));
+                if (at >= 0) {
+                    channels = [...channels, 'emissive'];
+                    layers = layers.map((layer, index) => (index === at
+                        ? { ...layer, fill: { ...layer.fill, emissive: { kind: 'current' as const } }, channels: { ...layer.channels, emissive: { mode: BLEND_FOR.emissive, opacity: 1 } } }
+                        : layer));
+                }
+            }
+            let document: PaintDocument = { ...stack.document, layers, channels, bake: null, udim: spread || stack.document.udim };
+            // 3. The meshes themselves.
             this.busy = 'Saving the layout';
             this.emit();
             let previous: UvLayoutFile | null = null;
@@ -388,13 +432,27 @@ export class UvSession {
             const layout = buildLayout(object, part, corner, proposal.cornerKey, previous);
             applyLayout(object, layout);
             await this.host.saveLayout(paint.target.modelId, encodeLayout(layout), layout.meshes.length);
-            await this.host.setMaterialOverrides(paint.target.modelId, overrides);
             stack.setDocument(document);
             document = await stack.keepPictures();
+            // Pictures of tiles the layout no longer uses are let go.
+            const keep = <T>(byTile: Record<string, T> | undefined): Record<string, T> => Object.fromEntries(Object.entries(byTile ?? {}).filter(([tile]) => newTiles.includes(Number(tile))));
+            const prune = (list: readonly PaintLayer[]): PaintLayer[] => list.map((layer) => ({
+                ...layer,
+                ...(layer.pictures ? { pictures: Object.fromEntries(Object.entries(layer.pictures).map(([channel, byTile]) => [channel, keep(byTile)])) } : {}),
+                ...(layer.mask ? { mask: layer.mask.map((effect) => (effect.kind === 'paint' && effect.pictures ? { ...effect, pictures: keep(effect.pictures) } : effect)) } : {}),
+                ...(layer.layers ? { layers: prune(layer.layers) } : {}),
+            }));
+            const before = document.before;
+            document = {
+                ...document,
+                layers: prune(document.layers),
+                ...(before ? { before: Object.fromEntries(Object.entries(before).map(([channel, byTile]) => [channel, keep(byTile)])) } : {}),
+            };
             stack.setDocument(document);
             await paint.save();
             this.proposal = null;
-            this.status = 'The surface has its new layout. Its pictures came with it; bake its mesh maps again for smart masks.';
+            this.putOnWhenOpen = true;
+            this.status = `The surface has its new layout${spread ? ` over ${newTiles.length} UDIM tiles` : ''}. Its pictures came with it and it goes on the model as it reopens; bake its mesh maps again for smart masks.`;
         } catch (error) {
             frontendDiagnostics.failure('uv_apply_failed', error);
             this.status = error instanceof Error ? error.message : 'The new layout could not be used.';

@@ -24,7 +24,7 @@ const Figures: React.FC<{ title: string; stats: UvStats; size: number }> = ({ ti
             <span>Texel density</span><span className="text-right tabular-nums text-zinc-200">{Math.round(stats.density.mean)} px/unit</span>
             <span>Density spread</span><span className="text-right tabular-nums text-zinc-200">{Math.round(stats.density.low)}–{Math.round(stats.density.high)}</span>
         </div>
-        <div className="text-zinc-600">at {size} × {size}</div>
+        <div className="text-zinc-600">at {size} × {size}{stats.tiles > 1 ? `, on each of ${stats.tiles} UDIM tiles` : ''}</div>
     </div>
 );
 

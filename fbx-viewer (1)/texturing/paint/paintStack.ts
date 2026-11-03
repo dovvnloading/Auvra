@@ -219,6 +219,9 @@ const FINE_MAPS: ReadonlySet<MeshMapName> = new Set(['position', 'height', 'curv
 /** Picture keys: a layer's channel, or a mask effect. */
 export const pictureKey = (owner: string, channel?: PaintChannel): string => (channel ? `${owner}:${channel}` : owner);
 
+/** The owner of the pictures of what the surface wore before painting began, carried onto a new layout. */
+export const BEFORE = 'before';
+
 interface Cached { signature: string; image: GpuImage }
 
 export class PaintStack {
@@ -329,6 +332,7 @@ export class PaintStack {
             for (const [channel, pictures] of Object.entries(layer.pictures ?? {})) await load(pictureKey(layer.id, channel as PaintChannel), pictures);
             for (const effect of layer.mask ?? []) if (effect.kind === 'paint') await load(pictureKey(effect.id), effect.pictures);
         }
+        for (const [channel, pictures] of Object.entries(this.document.before ?? {})) await load(pictureKey(BEFORE, channel as PaintChannel), pictures);
         if (this.document.bake?.maps) {
             const bake = new Map<number, TileBake>();
             for (const tile of this.tiles) {
@@ -427,12 +431,14 @@ export class PaintStack {
         }
         if (!stored.size) return this.document;
         const name = (key: string, tile: number) => stored.get(`${key}|${tile}`);
+        // The set's tiles, and any a new layout carried pictures onto.
+        const tiles = [...new Set([...this.tiles, ...[...stored.keys()].map((entry) => Number(entry.split('|')[1]))])];
         const update = (layers: PaintLayer[]): PaintLayer[] => layers.map((layer) => {
             let next = layer;
             if (layer.kind === 'paint') {
                 const pictures = { ...(layer.pictures ?? {}) };
                 for (const channel of PAINT_CHANNELS) {
-                    for (const tile of this.tiles) {
+                    for (const tile of tiles) {
                         const assetId = name(pictureKey(layer.id, channel), tile);
                         if (assetId) pictures[channel] = { ...(pictures[channel] ?? {}), [String(tile)]: { assetId } };
                     }
@@ -445,7 +451,7 @@ export class PaintStack {
                     mask: layer.mask.map((effect) => {
                         if (effect.kind !== 'paint') return effect;
                         let pictures = effect.pictures ?? {};
-                        for (const tile of this.tiles) {
+                        for (const tile of tiles) {
                             const assetId = name(pictureKey(effect.id), tile);
                             if (assetId) pictures = { ...pictures, [String(tile)]: { assetId } };
                         }
@@ -456,7 +462,14 @@ export class PaintStack {
             if (layer.layers) next = { ...next, layers: update(layer.layers) };
             return next;
         });
-        this.document = { ...this.document, layers: update(this.document.layers) };
+        let before = this.document.before;
+        for (const channel of PAINT_CHANNELS) {
+            for (const tile of tiles) {
+                const assetId = name(pictureKey(BEFORE, channel), tile);
+                if (assetId) before = { ...before, [channel]: { ...before?.[channel], [String(tile)]: { assetId } } };
+            }
+        }
+        this.document = { ...this.document, layers: update(this.document.layers), ...(before ? { before } : {}) };
         return this.document;
     }
 
@@ -779,6 +792,15 @@ void main() {
             }
             const image = this.cast(key, [drawn.signature], copy.target.texture, channel, tile, projection, { gray: drawn.image.kind === 'gray', srgb: false, rebuildNormal: false, channelRead: 0 });
             return { image, kind: 1, value: [0, 0, 0] };
+        }
+        if (fill.kind === 'current') {
+            // Carried onto this layout when the surface was laid out afresh: read as it is.
+            const carried = this.pictures.get(pictureKey(BEFORE, channel))?.get(tile);
+            if (carried) {
+                const stale = this.fills.get(key);
+                if (stale) { this.gpu.release(stale.image); this.fills.delete(key); }
+                return { image: carried, kind: 1, value: [0, 0, 0] };
+            }
         }
         const current = fill.kind === 'current' ? this.host.current[channel] : null;
         if (fill.kind === 'current' && Array.isArray(current)) return { image: null, kind: 3, value: current };

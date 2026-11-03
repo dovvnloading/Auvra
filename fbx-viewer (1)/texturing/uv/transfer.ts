@@ -3,7 +3,7 @@ import { GLSL_LIBRARY } from '../gpu/glslLibrary';
 import type { GpuImage, TextureGpu } from '../gpu/textureGpu';
 import { jumpFlood } from '../graph/nodes/distance';
 import { padImage } from '../bake/meshBaker';
-import type { PartMesh } from '../mesh/partMesh';
+import { tileOf, tileOffset, type PartMesh } from '../mesh/partMesh';
 
 /**
  * CARRYING PICTURES OVER TO A NEW LAYOUT
@@ -66,77 +66,59 @@ void main() {
         vec3 t = vec3(xy, sqrt(saturate(1.0 - dot(xy, xy))));
         vec3 world = normalize(frameOf(n, vOld) * t);
         vec3 back = normalize(inverse(frameOf(n, vNew)) * world);
-        c = vec4(back * 0.5 + 0.5, 1.0);
+        // A painted picture's coverage stays as it was.
+        c = vec4(back * 0.5 + 0.5, c.a);
     }
     outColor = c;
 }`;
 
-/**
- * Draws `source` (laid out by the part's current coordinates) onto a new picture laid out by
- * `cornerUv` (two per corner, triangle order, within 0..1). `normalMap` re-frames tangent normals.
- */
-export const transferPicture = async (gpu: TextureGpu, part: PartMesh, cornerUv: Float32Array | Float64Array, source: THREE.Texture | GpuImage, size: number, normalMap = false): Promise<GpuImage> => {
-    const triangles = part.indices.length / 3;
-    const count = triangles * 3;
-    const position = new Float32Array(count * 3);
-    const normal = new Float32Array(count * 3);
-    const oldUv = new Float32Array(count * 2);
-    const edge1 = new Float32Array(count * 3);
-    const edge2 = new Float32Array(count * 3);
-    const oldEdges = new Float32Array(count * 4);
-    const newEdges = new Float32Array(count * 4);
-    for (let t = 0; t < triangles; t++) {
-        const [a, b, c] = [part.indices[t * 3], part.indices[t * 3 + 1], part.indices[t * 3 + 2]];
-        const e1 = [0, 1, 2].map((axis) => part.positions[b * 3 + axis] - part.positions[a * 3 + axis]);
-        const e2 = [0, 1, 2].map((axis) => part.positions[c * 3 + axis] - part.positions[a * 3 + axis]);
-        const od = [part.uvs[b * 2] - part.uvs[a * 2], part.uvs[b * 2 + 1] - part.uvs[a * 2 + 1], part.uvs[c * 2] - part.uvs[a * 2], part.uvs[c * 2 + 1] - part.uvs[a * 2 + 1]];
-        const nu = (k: number) => [cornerUv[(t * 3 + k) * 2], cornerUv[(t * 3 + k) * 2 + 1]];
-        const n0 = nu(0), n1 = nu(1), n2 = nu(2);
-        const nd = [n1[0] - n0[0], n1[1] - n0[1], n2[0] - n0[0], n2[1] - n0[1]];
-        [a, b, c].forEach((vertex, k) => {
-            const at = t * 3 + k;
-            const uv = nu(k);
-            position.set([uv[0] - Math.floor(n0[0]), uv[1] - Math.floor(n0[1]), 0], at * 3);
-            normal.set(part.normals.subarray(vertex * 3, vertex * 3 + 3), at * 3);
-            oldUv.set([part.uvs[vertex * 2], part.uvs[vertex * 2 + 1]], at * 2);
-            edge1.set(e1, at * 3);
-            edge2.set(e2, at * 3);
-            oldEdges.set(od, at * 4);
-            newEdges.set(nd, at * 4);
-        });
+/** The UDIM tile each triangle of a new layout lands in (by its middle). */
+export const newTriangleTiles = (cornerUv: Float32Array | Float64Array): Uint16Array => {
+    const tiles = new Uint16Array(cornerUv.length / 6);
+    for (let t = 0; t < tiles.length; t++) {
+        const u = (cornerUv[t * 6] + cornerUv[t * 6 + 2] + cornerUv[t * 6 + 4]) / 3;
+        const v = (cornerUv[t * 6 + 1] + cornerUv[t * 6 + 3] + cornerUv[t * 6 + 5]) / 3;
+        tiles[t] = tileOf(u, v);
     }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(position, 3));
-    geometry.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
-    geometry.setAttribute('oldUv', new THREE.BufferAttribute(oldUv, 2));
-    geometry.setAttribute('edge1', new THREE.BufferAttribute(edge1, 3));
-    geometry.setAttribute('edge2', new THREE.BufferAttribute(edge2, 3));
-    geometry.setAttribute('oldEdges', new THREE.BufferAttribute(oldEdges, 4));
-    geometry.setAttribute('newEdges', new THREE.BufferAttribute(newEdges, 4));
-    const texture = (source as GpuImage).target ? (source as GpuImage).target.texture : source as THREE.Texture;
+    return tiles;
+};
+
+/**
+ * Draws pictures laid out by the part's current coordinates onto a new picture laid out by `cornerUv`
+ * (two per corner, triangle order). `source` is one picture, or the picture of each of the part's current
+ * tiles (UDIM). With `tile`, only the triangles landing in that tile of the new layout are drawn, at their
+ * place in it; without, every triangle is drawn within 0..1. `normalMap` re-frames tangent normals.
+ */
+export const transferPicture = async (
+    gpu: TextureGpu,
+    part: PartMesh,
+    cornerUv: Float32Array | Float64Array,
+    source: THREE.Texture | GpuImage | ((tile: number) => THREE.Texture | GpuImage | null),
+    size: number,
+    normalMap = false,
+    tile?: number,
+): Promise<GpuImage> => {
+    const sourceOf = typeof source === 'function' ? source : () => source;
+    const landing = tile === undefined ? null : newTriangleTiles(cornerUv);
+    // Drawn a current tile at a time: each reads that tile's picture.
+    const groups = new Map<number, number[]>();
+    for (let t = 0; t < part.indices.length / 3; t++) {
+        if (landing && landing[t] !== tile) continue;
+        const from = part.triangleTile[t];
+        let list = groups.get(from);
+        if (!list) groups.set(from, list = []);
+        list.push(t);
+    }
+    const [tileU, tileV] = tile === undefined ? [0, 0] : tileOffset(tile);
     const material = new THREE.RawShaderMaterial({
         glslVersion: THREE.GLSL3,
         vertexShader: `precision highp float;\n${VERTEX}`,
         fragmentShader: `precision highp float;\nprecision highp int;\n${GLSL_LIBRARY}\n${FRAGMENT}`,
-        uniforms: { source: { value: texture }, uMode: { value: normalMap ? 1 : 0 }, uSrgb: { value: texture.colorSpace === THREE.SRGBColorSpace ? 1 : 0 } },
+        uniforms: { source: { value: null }, uMode: { value: normalMap ? 1 : 0 }, uSrgb: { value: 0 } },
         side: THREE.DoubleSide,
         depthTest: false,
         depthWrite: false,
     });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.frustumCulled = false;
-    const scene = new THREE.Scene();
-    scene.add(mesh);
-    const drawn = gpu.image(size, size, 'color', 8);
-    const coverage = gpu.image(size, size, 'gray', 8);
-    gpu.clear(drawn, [0, 0, 0, 0]);
-    const renderer = gpu.renderer;
-    const previous = renderer.getRenderTarget();
-    renderer.setRenderTarget(drawn.target);
-    renderer.render(scene, new THREE.Camera());
-    renderer.setRenderTarget(previous);
-    // Where the surface is, drawn on its own: a painted layer's clear texels are still surface.
-    gpu.clear(coverage, [0, 0, 0, 1]);
     const covering = new THREE.RawShaderMaterial({
         glslVersion: THREE.GLSL3,
         vertexShader: 'precision highp float;\nin vec3 position;\nvoid main() { gl_Position = vec4(position.xy * 2.0 - 1.0, 0.0, 1.0); }',
@@ -145,17 +127,78 @@ export const transferPicture = async (gpu: TextureGpu, part: PartMesh, cornerUv:
         depthTest: false,
         depthWrite: false,
     });
-    mesh.material = covering;
-    renderer.setRenderTarget(coverage.target);
-    renderer.render(scene, new THREE.Camera());
-    renderer.setRenderTarget(previous);
+    const drawn = gpu.image(size, size, 'color', 8);
+    const coverage = gpu.image(size, size, 'gray', 8);
+    gpu.clear(drawn, [0, 0, 0, 0]);
+    // Where the surface is, drawn on its own: a painted layer's clear texels are still surface.
+    gpu.clear(coverage, [0, 0, 0, 1]);
+    const renderer = gpu.renderer;
+    const previous = renderer.getRenderTarget();
+    for (const [from, list] of groups) {
+        const picture = sourceOf(from);
+        if (!picture) continue;
+        const count = list.length * 3;
+        const position = new Float32Array(count * 3);
+        const normal = new Float32Array(count * 3);
+        const oldUv = new Float32Array(count * 2);
+        const edge1 = new Float32Array(count * 3);
+        const edge2 = new Float32Array(count * 3);
+        const oldEdges = new Float32Array(count * 4);
+        const newEdges = new Float32Array(count * 4);
+        list.forEach((t, index) => {
+            const [a, b, c] = [part.indices[t * 3], part.indices[t * 3 + 1], part.indices[t * 3 + 2]];
+            const e1 = [0, 1, 2].map((axis) => part.positions[b * 3 + axis] - part.positions[a * 3 + axis]);
+            const e2 = [0, 1, 2].map((axis) => part.positions[c * 3 + axis] - part.positions[a * 3 + axis]);
+            const od = [part.uvs[b * 2] - part.uvs[a * 2], part.uvs[b * 2 + 1] - part.uvs[a * 2 + 1], part.uvs[c * 2] - part.uvs[a * 2], part.uvs[c * 2 + 1] - part.uvs[a * 2 + 1]];
+            const nu = (k: number) => [cornerUv[(t * 3 + k) * 2], cornerUv[(t * 3 + k) * 2 + 1]];
+            const n0 = nu(0), n1 = nu(1), n2 = nu(2);
+            const nd = [n1[0] - n0[0], n1[1] - n0[1], n2[0] - n0[0], n2[1] - n0[1]];
+            // Into the picture: by the tile asked for, or by the tile the triangle starts in.
+            const shiftU = tile === undefined ? Math.floor(n0[0]) : tileU;
+            const shiftV = tile === undefined ? Math.floor(n0[1]) : tileV;
+            [a, b, c].forEach((vertex, k) => {
+                const at = index * 3 + k;
+                const uv = nu(k);
+                position.set([uv[0] - shiftU, uv[1] - shiftV, 0], at * 3);
+                normal.set(part.normals.subarray(vertex * 3, vertex * 3 + 3), at * 3);
+                // Read within the current tile's own picture.
+                oldUv.set([part.uvs[vertex * 2] - part.triangleShift[t * 2], part.uvs[vertex * 2 + 1] - part.triangleShift[t * 2 + 1]], at * 2);
+                edge1.set(e1, at * 3);
+                edge2.set(e2, at * 3);
+                oldEdges.set(od, at * 4);
+                newEdges.set(nd, at * 4);
+            });
+        });
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(position, 3));
+        geometry.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
+        geometry.setAttribute('oldUv', new THREE.BufferAttribute(oldUv, 2));
+        geometry.setAttribute('edge1', new THREE.BufferAttribute(edge1, 3));
+        geometry.setAttribute('edge2', new THREE.BufferAttribute(edge2, 3));
+        geometry.setAttribute('oldEdges', new THREE.BufferAttribute(oldEdges, 4));
+        geometry.setAttribute('newEdges', new THREE.BufferAttribute(newEdges, 4));
+        const texture = (picture as GpuImage).target ? (picture as GpuImage).target.texture : picture as THREE.Texture;
+        material.uniforms.source.value = texture;
+        material.uniforms.uSrgb.value = texture.colorSpace === THREE.SRGBColorSpace ? 1 : 0;
+        material.uniformsNeedUpdate = true;
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.frustumCulled = false;
+        const scene = new THREE.Scene();
+        scene.add(mesh);
+        renderer.setRenderTarget(drawn.target);
+        renderer.render(scene, new THREE.Camera());
+        mesh.material = covering;
+        renderer.setRenderTarget(coverage.target);
+        renderer.render(scene, new THREE.Camera());
+        renderer.setRenderTarget(previous);
+        geometry.dispose();
+    }
     covering.dispose();
+    material.dispose();
     const nearest = await jumpFlood(gpu, coverage, size, size, 'm.r >= 0.5');
     const padded = padImage(gpu, drawn, coverage, nearest);
     gpu.release(drawn);
     gpu.release(coverage);
     gpu.release(nearest);
-    geometry.dispose();
-    material.dispose();
     return padded;
 };
