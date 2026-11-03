@@ -90,6 +90,23 @@ describe('loadGameContent', () => {
     expect(revoked).toEqual(created);
   });
 
+  it('opens without a model whose file cannot be read, and says so', async () => {
+    const loaded = await loadGameContent({
+      models: [{ id: 'm-1', name: 'Damaged.fbx', assetId: 'asset-damaged' }],
+      textures: [{ id: 'tex-1', name: 'Grass', assetId: 'asset-grass' }],
+    }, { resolveAssetUrl, generateThumbnails: false });
+    expect(loaded.content.models).toEqual([]);
+    expect(loaded.content.textures).toHaveLength(1);
+    expect(loaded.refusedModels.map((model) => model.name)).toEqual(['Damaged.fbx']);
+    expect(loaded.refusedModels[0].reason).toContain('Damaged.fbx');
+  });
+
+  it('still fails as a whole when a model cannot be fetched', async () => {
+    await expect(loadGameContent({
+      models: [{ id: 'm-1', name: 'Gone.fbx', assetId: 'asset-missing' }],
+    }, { resolveAssetUrl, generateThumbnails: false })).rejects.toThrow('Project hydration failed for 1 asset');
+  });
+
   it('does not resolve anything once cancelled', async () => {
     const controller = new AbortController();
     controller.abort();

@@ -400,8 +400,8 @@ const parseGltfNative = async (
   return { object, animations: loaded.animations };
 };
 
-/** Says what a model file holds without loading it, for the import dialog. Null when it cannot be read. */
-export const inspectModelFile = async (file: File): Promise<ModelFileReport | null> => {
+/** Says what a model file holds without loading it, for the import dialog. Null when there is no way to read it here; throws saying why when it cannot be read. */
+export const inspectModelFile = async (file: File, beside: readonly File[] = []): Promise<ModelFileReport | null> => {
   const source = await file.arrayBuffer();
   const format = detectModelFormat(file) ?? sniffModelFormat(source) ?? 'fbx';
   if (format === 'glb' || format === 'gltf') {
@@ -414,13 +414,15 @@ export const inspectModelFile = async (file: File): Promise<ModelFileReport | nu
   if (typeof Worker === 'undefined') return null;
   const worker = new Worker(new URL('../workers/fbxImport.worker.ts', import.meta.url), { type: 'module' });
   try {
-    return await new Promise<ModelFileReport | null>((resolve) => {
+    return await new Promise<ModelFileReport | null>((resolve, reject) => {
       worker.onerror = () => resolve(null);
       worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
         if (event.data.type === 'inspected') resolve(event.data.report);
-        else if (event.data.type === 'error') resolve(null);
+        else if (event.data.type === 'error') reject(new Error(event.data.message));
       };
-      worker.postMessage({ type: 'inspect', buffer: source, format, name: file.name }, [source]);
+      void Promise.all(beside.map(async (found) => ({ name: found.name, buffer: await found.arrayBuffer() }))).then((images) => {
+        worker.postMessage({ type: 'inspect', buffer: source, format, name: file.name, images }, [source, ...images.map((image) => image.buffer)]);
+      }, () => resolve(null));
     });
   } finally {
     worker.terminate();
@@ -505,7 +507,7 @@ export const readGltfSource = async (file: File, options: { convert?: ModelConve
 const prepareImportedModel = (object: THREE.Object3D): void => {
   // glTF UVs start top-left, so override textures for this model load with flipY off.
   object.userData[UV_ORIGIN_TOP_LEFT_KEY] = true;
-  takeModelConventions(object);
+  takeModelConventions(object, object.animations);
   object.traverse((child) => {
     if ((child as THREE.Mesh).isMesh) {
       child.castShadow = true;
@@ -513,6 +515,15 @@ const prepareImportedModel = (object: THREE.Object3D): void => {
     }
   });
 };
+
+const hasMeshes = (object: THREE.Object3D): boolean => {
+  let found = false;
+  object.traverse((child) => { if ((child as THREE.Mesh).isMesh) found = true; });
+  return found;
+};
+
+/** How long a clip made of one frame lasts. */
+const POSE_CLIP_SECONDS = 1 / 30;
 
 const isGenericClipName = (name: string): boolean => {
   const trimmed = name.trim();
@@ -581,16 +592,17 @@ export const loadModelFile = async (file: File, options: ModelLoadOptions = { no
     object = parsed.object;
 
     // --- FILTER ANIMATIONS ---
-    // Reject only empty/invalid clips. Short authored clips are valid assets.
+    // Reject only empty/invalid clips. Short authored clips are valid assets, and a take of one frame
+    // is a pose: it lasts that frame, as a clip of no length has nothing to play.
     if (object.animations) {
-       object.animations = object.animations.filter(
-         clip => Number.isFinite(clip.duration) && clip.duration > 0 && clip.tracks.length > 0,
-       );
+       object.animations = object.animations.filter((clip) => Number.isFinite(clip.duration) && clip.tracks.length > 0);
+       for (const clip of object.animations) if (clip.duration <= 0) clip.duration = POSE_CLIP_SECONDS;
     }
 
     // --- OPTIMIZE MATERIALS ---
     options.onProgress?.(0.91, 'material_optimization_normalization');
     prepareImportedModel(object);
+    if (!object.animations?.length && !hasMeshes(object)) throw new Error('The file holds no meshes and no animation to import.');
     if (options.compressTextures !== false) await compressModelTextures(object);
     // Hair, lashes and leaf cards draw a solid body, then their soft fringe.
     splitAlphaCards(object);

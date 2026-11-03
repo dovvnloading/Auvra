@@ -50,12 +50,13 @@ interface BrowserAssetActions {
     importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory, images?: readonly File[]) => Promise<void>;
     reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings, images?: readonly File[]) => Promise<void>;
     readModelSource: (modelId: string) => Promise<File>;
+    readModelSourceImages: (modelId: string) => Promise<File[]>;
     updateModel: (id: string, updates: AssetInfoUpdate) => Promise<void> | void;
     updateTexture: (id: string, updates: AssetInfoUpdate) => Promise<void> | void;
     updateAudio: (id: string, updates: AssetInfoUpdate) => Promise<void> | void;
 }
 
-const ACTION_KEYS: readonly (keyof BrowserAssetActions)[] = ['importModelWithOptions', 'reimportModel', 'readModelSource', 'updateModel', 'updateTexture', 'updateAudio'];
+const ACTION_KEYS: readonly (keyof BrowserAssetActions)[] = ['importModelWithOptions', 'reimportModel', 'readModelSource', 'readModelSourceImages', 'updateModel', 'updateTexture', 'updateAudio'];
 
 const pickAssetActions = (scene: object): Partial<BrowserAssetActions> => {
     const source = scene as Record<string, unknown>;
@@ -705,7 +706,14 @@ export const ContentBrowser: React.FC = () => {
             {sizeTarget && (
                 <ImportOptionsDialog
                     name={sizeTarget.name}
-                    inspect={async () => (assetActions.readModelSource ? inspectModelFile(await assetActions.readModelSource(sizeTarget.id)) : null)}
+                    inspect={async (beside) => {
+                        if (!assetActions.readModelSource) return null;
+                        // A material file kept with the model says what its materials are.
+                        const kept = !beside && assetActions.readModelSourceImages && sizeTarget.sourceImages?.some((image) => /\.mtl$/i.test(image.name))
+                            ? (await assetActions.readModelSourceImages(sizeTarget.id)).filter((file) => /\.mtl$/i.test(file.name))
+                            : [];
+                        return inspectModelFile(await assetActions.readModelSource(sizeTarget.id), beside ?? kept);
+                    }}
                     readFile={() => assetActions.readModelSource!(sizeTarget.id)}
                     initialSettings={sizeTarget.importSettings ?? DEFAULT_MODEL_IMPORT_SETTINGS}
                     knownImages={sizeTarget.sourceImages?.map((image) => image.name)}
@@ -719,7 +727,7 @@ export const ContentBrowser: React.FC = () => {
                 <ImportOptionsDialog
                     key={importPrompt.file.name}
                     name={importPrompt.file.name}
-                    inspect={() => inspectModelFile(importPrompt.file)}
+                    inspect={(beside) => inspectModelFile(importPrompt.file, beside)}
                     readFile={() => Promise.resolve(importPrompt.file)}
                     remaining={importPrompt.remaining}
                     onConfirm={settleImportPrompt}

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Plus } from 'lucide-react';
 import { useScene } from '../../../context/SceneContext';
 import type { LoadedModelData } from '../../../types';
+import { bindPoseRig } from '../../../utils/animationBinding';
 import { CORE_ROLES, humanoidRoles } from '../../../utils/retargeting';
 import { ALL_BONE_ROLES, boneInfluences, roleLabel, setSkeletonView, skeletonBones, useSkeletonView } from '../../../utils/skeletonView';
 import { AutoRigPanel } from './AutoRigPanel';
@@ -22,14 +23,28 @@ const Empty: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 );
 
 const BoneTree: React.FC<{ model: LoadedModelData }> = ({ model }) => {
-  const { updateModelBoneRoles, reimportModel, addSocket, projectStatus } = useScene();
+  const { updateModelBoneRoles, reimportModel, addSocket, placeInScene, projectStatus } = useScene();
   const [filter, setFilter] = useState('');
   const [closed, setClosed] = useState<ReadonlySet<number>>(new Set());
   const [rolesChanged, setRolesChanged] = useState(false);
   const view = useSkeletonView();
   const bones = useMemo(() => skeletonBones(model.object), [model.object]);
   const influences = useMemo(() => boneInfluences(model.object), [model.object]);
-  const roles = useMemo(() => humanoidRoles(bones.map((entry) => entry.bone), model.object, model.boneRoles), [bones, model.object, model.boneRoles]);
+  // Read as clips read it: at the bind pose, whatever the model is playing now, and from the bones it is bound to.
+  const roles = useMemo(() => {
+    const rig = bindPoseRig(model.object);
+    if (!rig) return humanoidRoles(bones.map((entry) => entry.bone), model.object, model.boneRoles);
+    const read = humanoidRoles(rig.bones, rig.root, model.boneRoles);
+    const byName = new Map([...read].map(([bone, role]) => [bone.name, role]));
+    const found = new Map<(typeof bones)[number]['bone'], string>();
+    for (const entry of bones) {
+      const role = byName.get(entry.name);
+      if (role) found.set(entry.bone, role);
+    }
+    return found;
+  }, [bones, model.object, model.boneRoles]);
+  /** Clips from other rigs, which were made for what its bones were then. */
+  const hasOtherClips = model.animations.length > (model.sourceClipNames?.length ?? 0);
   const canEdit = !projectStatus.readOnly;
 
   // A bone picked on another model means nothing on this one.
@@ -46,7 +61,10 @@ const BoneTree: React.FC<{ model: LoadedModelData }> = ({ model }) => {
   const shown = useMemo(() => {
     const words = filter.trim().toLowerCase();
     if (words) {
-      return bones.map((entry, index) => ({ entry, index })).filter(({ entry }) => entry.name.toLowerCase().includes(words) || (roles.get(entry.bone) ?? '').toLowerCase().includes(words));
+      return bones.map((entry, index) => ({ entry, index })).filter(({ entry }) => {
+        const role = roles.get(entry.bone);
+        return entry.name.toLowerCase().includes(words) || (role ? roleLabel(role).toLowerCase().includes(words) : false);
+      });
     }
     // Without a search, a closed bone hides what hangs from it.
     const rows: { entry: (typeof bones)[number]; index: number }[] = [];
@@ -78,6 +96,11 @@ const BoneTree: React.FC<{ model: LoadedModelData }> = ({ model }) => {
   }, [bones, picked]);
   const pickedRole = picked ? roles.get(picked.bone) ?? NO_ROLE : NO_ROLE;
 
+  // The view shows a model that has been placed: these are no use on one that has not.
+  const showInView = (on: boolean): void => {
+    if (on && !model.isPlacedInScene && canEdit) void placeInScene(model.id);
+  };
+
   const setRole = async (role: string) => {
     if (!picked) return;
     const others = (model.boneRoles ?? []).filter((stored) => stored.bone !== picked.name);
@@ -93,8 +116,8 @@ const BoneTree: React.FC<{ model: LoadedModelData }> = ({ model }) => {
           <span className="shrink-0 text-2xs tabular-nums text-ink-3">{bones.length.toLocaleString()} bones</span>
         </div>
         <div className="flex items-center gap-4">
-          <Check label="Show bones" checked={view.showSkeleton} onChange={(showSkeleton) => setSkeletonView({ showSkeleton })} />
-          <Check label="Show weights" checked={view.showWeights} onChange={(showWeights) => setSkeletonView({ showWeights })} />
+          <Check label="Show bones" checked={view.showSkeleton} onChange={(showSkeleton) => { setSkeletonView({ showSkeleton }); showInView(showSkeleton); }} />
+          <Check label="Show weights" checked={view.showWeights} onChange={(showWeights) => { setSkeletonView({ showWeights }); showInView(showWeights); }} />
         </div>
         {view.showSkeleton && <p className="text-2xs text-ink-3">Click a joint in the view to pick its bone.</p>}
         {view.showWeights && (
@@ -150,7 +173,7 @@ const BoneTree: React.FC<{ model: LoadedModelData }> = ({ model }) => {
         {shown.length === 0 && <li className="px-3 py-1 text-2xs text-ink-3">No bone has that name.</li>}
       </ul>
 
-      {(picked || rolesChanged) && (
+      {(picked || (rolesChanged && hasOtherClips)) && (
         <div className="shrink-0 space-y-1.5 border-t border-line px-3 py-2">
           {picked && (
             <>
@@ -176,10 +199,10 @@ const BoneTree: React.FC<{ model: LoadedModelData }> = ({ model }) => {
               )}
             </>
           )}
-          {rolesChanged && canEdit && (
+          {rolesChanged && hasOtherClips && canEdit && (
             <div className="flex items-center justify-between gap-2">
               <span className="min-w-0 text-2xs text-ink-3">Clips from other rigs were made before this change.</span>
-              <Button size="sm" onClick={() => { setRolesChanged(false); void reimportModel(model.id); }}>Make them again</Button>
+              <Button size="sm" onClick={() => { void reimportModel(model.id).then((saved) => { if (saved) setRolesChanged(false); }); }}>Make them again</Button>
             </div>
           )}
         </div>

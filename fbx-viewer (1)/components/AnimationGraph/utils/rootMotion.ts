@@ -97,20 +97,27 @@ export const findRootMotionTrack = (
     let best: THREE.VectorKeyframeTrack | null = null;
     let bestDepth = Infinity;
     let bestRank = Infinity;
+    // A rig whose names say nothing: what carries the body is the moving bone nearest its root.
+    let highest: THREE.VectorKeyframeTrack | null = null;
+    let highestDepth = Infinity;
     for (const track of clip.tracks) {
         if (!keyLayout(track)) continue;
         const nodeName = positionTrackNode(track);
         if (!nodeName) continue;
         const rank = rootNameRank(nodeName);
-        if (rank < 0) continue;
         const depth = root ? hierarchyDepth(root, nodeName) : 0;
+        if (root && depth < highestDepth) {
+            highest = track as THREE.VectorKeyframeTrack;
+            highestDepth = depth;
+        }
+        if (rank < 0) continue;
         if (depth < bestDepth || (depth === bestDepth && rank < bestRank)) {
             best = track as THREE.VectorKeyframeTrack;
             bestDepth = depth;
             bestRank = rank;
         }
     }
-    return best;
+    return best ?? highest;
 };
 
 /** Copy of the root track with the given axes held at the first key's value (and their spline tangents flattened). */

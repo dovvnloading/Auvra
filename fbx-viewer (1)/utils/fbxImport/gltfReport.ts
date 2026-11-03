@@ -34,7 +34,7 @@ const fromTransform = (node: { matrix?: number[]; translation?: number[]; rotati
 interface Document {
   asset?: { generator?: string };
   scene?: number;
-  scenes?: { nodes?: number[] }[];
+  scenes?: { nodes?: number[]; extras?: { sourceMetresPerUnit?: number } }[];
   nodes?: { name?: string; mesh?: number; skin?: number; children?: number[]; matrix?: number[]; translation?: number[]; rotation?: number[]; scale?: number[] }[];
   meshes?: { primitives?: { attributes?: Record<string, number>; indices?: number; material?: number; targets?: unknown[]; mode?: number }[] }[];
   accessors?: { count?: number; min?: number[]; max?: number[] }[];
@@ -54,14 +54,30 @@ const emptyReport = (): ModelFileReport => ({
 
 const TRIANGLES = 4;
 
+const LEVEL_NAME = /^(.+)_LOD(\d+)(\.\d+)?$/i;
+
+/** Whether a name says the node is taken out of what is drawn, among the names beside it: see utils/modelConventions.ts. */
+const nameLeavesOut = (name: string, besides: readonly (string | undefined)[]): boolean => {
+  if (/^(UCX|UBX|USP|UCP|SOCKET)_/.test(name)) return true;
+  const own = LEVEL_NAME.exec(name);
+  if (!own) return false;
+  const plain = `${own[1]}${own[3] ?? ''}`.toLowerCase();
+  return besides.some((other) => {
+    if (!other || other === name) return false;
+    if (other.toLowerCase() === plain) return true;
+    const theirs = LEVEL_NAME.exec(other);
+    return !!theirs && `${theirs[1]}${theirs[3] ?? ''}`.toLowerCase() === plain && Number(theirs[2]) < Number(own[2]);
+  });
+};
+
 export const gltfReport = (json: object): ModelFileReport => {
   const document = json as Document;
   const report = emptyReport();
   const accessors = document.accessors ?? [];
   const nodes = document.nodes ?? [];
   for (const { name } of nodes) {
-    if (name && /^(UCX|UBX|USP|UCP)_/i.test(name)) report.collisionMeshes += 1;
-    if (name && /^SOCKET_/i.test(name)) report.sockets += 1;
+    if (name && /^(UCX|UBX|USP|UCP)_/.test(name)) report.collisionMeshes += 1;
+    if (name && /^SOCKET_/.test(name)) report.sockets += 1;
   }
   report.creator = document.asset?.generator ?? '';
   report.version = 2;
@@ -69,7 +85,10 @@ export const gltfReport = (json: object): ModelFileReport => {
 
   const min = [Infinity, Infinity, Infinity];
   const max = [-Infinity, -Infinity, -Infinity];
-  const expand = (world: Matrix, low: number[], high: number[]): void => {
+  // The same, of what stays once what names say is taken out; when nothing would stay, it all does.
+  const keptMin = [Infinity, Infinity, Infinity];
+  const keptMax = [-Infinity, -Infinity, -Infinity];
+  const expand = (world: Matrix, low: number[], high: number[], leftOut: boolean): void => {
     for (let corner = 0; corner < 8; corner += 1) {
       const x = corner & 1 ? high[0] : low[0];
       const y = corner & 2 ? high[1] : low[1];
@@ -78,14 +97,18 @@ export const gltfReport = (json: object): ModelFileReport => {
         const value = world[axis] * x + world[axis + 4] * y + world[axis + 8] * z + world[axis + 12];
         if (value < min[axis]) min[axis] = value;
         if (value > max[axis]) max[axis] = value;
+        if (leftOut) continue;
+        if (value < keptMin[axis]) keptMin[axis] = value;
+        if (value > keptMax[axis]) keptMax[axis] = value;
       }
     }
   };
-  const visit = (index: number, parent: Matrix, seen: Set<number>): void => {
+  const visit = (index: number, parent: Matrix, seen: Set<number>, besides: readonly number[], outAbove: boolean): void => {
     const node = nodes[index];
     if (!node || seen.has(index)) return;
     seen.add(index);
     const world = multiply(parent, fromTransform(node));
+    const leftOut = outAbove || (!!node.name && nameLeavesOut(node.name, besides.map((other) => nodes[other]?.name)));
     if (node.mesh !== undefined) {
       if (node.skin !== undefined) report.skinnedMeshes += 1;
       report.meshes += 1;
@@ -96,18 +119,21 @@ export const gltfReport = (json: object): ModelFileReport => {
           report.triangles += Math.floor(corners / 3);
         }
         report.vertices += position?.count ?? 0;
-        if (position?.min && position.max) expand(world, position.min, position.max);
+        if (position?.min && position.max) expand(world, position.min, position.max, leftOut);
       }
     }
-    for (const child of node.children ?? []) visit(child, world, seen);
+    for (const child of node.children ?? []) visit(child, world, seen, node.children ?? [], leftOut);
   };
   const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
   const scene = document.scenes?.[document.scene ?? 0];
+  // A rigged model keeps the unit of the file it came from.
+  report.metresPerUnit = scene?.extras?.sourceMetresPerUnit ?? 1;
   const seen = new Set<number>();
-  for (const root of scene?.nodes ?? []) visit(root, identity, seen);
+  for (const root of scene?.nodes ?? []) visit(root, identity, seen, scene?.nodes ?? [], false);
   if (min[0] <= max[0]) {
-    report.boundsMin = min as [number, number, number];
-    report.boundsMax = max as [number, number, number];
+    const anyKept = keptMin[0] <= keptMax[0];
+    report.boundsMin = (anyKept ? keptMin : min) as [number, number, number];
+    report.boundsMax = (anyKept ? keptMax : max) as [number, number, number];
   }
 
   report.blendShapes = (document.meshes ?? []).reduce((most, mesh) => Math.max(most, mesh.primitives?.[0]?.targets?.length ?? 0), 0);

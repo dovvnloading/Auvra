@@ -1,3 +1,4 @@
+import { overrideTextureFlipY } from '../../utils/materialOverrides';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { createPortal, useFrame, useStore, useThree, type RootState } from '@react-three/fiber';
@@ -656,7 +657,7 @@ export const GraphPreview: React.FC<GraphPreviewProps> = ({
                 return;
             }
             texture.colorSpace = THREE.SRGBColorSpace;
-            texture.flipY = true;
+            texture.flipY = targetModel ? overrideTextureFlipY(targetModel.object) : true;
             previewResources.textures.add(texture);
             appliedTexture = texture;
             for (const material of previewResources.materials) {

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Repeat, Scissors, X } from 'lucide-react';
 import type { ClipRange, ModelImportSettings } from '../../../types';
+import { importFailureMessage } from '../../../utils/modelLoader';
 import { MAX_MODEL_TARGET_SIZE, reportSize, resolveImportSettings, suggestedImportSettings } from '../../../utils/processing/ModelTransforms';
 import { frameOfTime, takeLabel } from '../../../utils/clipRanges';
 import { readFileTakes } from '../../../utils/clipTakes';
@@ -19,8 +20,8 @@ export interface ImportChoice {
 interface ImportOptionsDialogProps {
   /** The file being imported, or the model being changed. */
   name: string;
-  /** Reads what the file holds. */
-  inspect: () => Promise<ModelFileReport | null>;
+  /** Reads what the file holds, with any files found beside it that say more of it. */
+  inspect: (beside?: readonly File[]) => Promise<ModelFileReport | null>;
   /** The file itself, to cut clips from its takes. */
   readFile: () => Promise<File>;
   /** A model's stored settings; a new file starts from what suits it. */
@@ -100,6 +101,7 @@ const Check_: React.FC<{ label: string; checked: boolean; onChange: (checked: bo
 export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, inspect, readFile, initialSettings, knownImages, confirmLabel = 'Import', remaining = 0, onConfirm, onCancel }) => {
   const [report, setReport] = useState<ModelFileReport | null>(null);
   const [reading, setReading] = useState(true);
+  const [readError, setReadError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [normalize, setNormalize] = useState(initialSettings?.normalize ?? false);
   const [targetSize, setTargetSize] = useState(String(initialSettings?.targetSize ?? 2));
@@ -114,7 +116,8 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
   const [keyChoice, setKeyChoice] = useState<KeyChoice>(keyChoiceOf(initialSettings?.keyThreshold));
   const [animationOff] = useState(initialSettings?.animation === false);
   const [showMore, setShowMore] = useState(false);
-  const [found, setFound] = useState<ReadonlyMap<string, File>>(new Map());
+  const [offered, setOffered] = useState<readonly File[]>([]);
+  const [materialsRead, setMaterialsRead] = useState<File | null>(null);
   const filesRef = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
 
@@ -122,7 +125,10 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
   useEffect(() => {
     let current = true;
     setReading(true);
-    inspect().catch(() => null).then((read) => {
+    inspect().catch((error: unknown) => {
+      if (current) setReadError(importFailureMessage('This file cannot be imported', error));
+      return null;
+    }).then((read) => {
       if (!current) return;
       setReport(read);
       setReading(false);
@@ -139,25 +145,53 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
   }, []);
 
   useEffect(() => {
+    // The cutting window answers Escape for itself while it is open.
+    if (cutting) return undefined;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onCancel();
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onCancel]);
+    // In the capture phase: the dialog keeps keys typed in it from reaching the editor's shortcuts.
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [cutting, onCancel]);
 
   const size = Number(targetSize);
   const sizeValid = Number.isFinite(size) && size > 0 && size <= MAX_MODEL_TARGET_SIZE;
   const angle = Number(smoothingAngle);
   const angleValid = Number.isFinite(angle) && angle > 0 && angle <= 180;
-  const canConfirm = !reading && (!normalize || sizeValid) && (!recomputeNormals || angleValid);
-
   const hasLoose = (report?.looseMeshes?.length ?? 0) > 0;
   const clips = report?.clips ?? [];
+  const holdsNothing = !!report && report.triangles === 0 && clips.length === 0;
+  const canConfirm = !reading && !readError && !holdsNothing && (!normalize || sizeValid) && (!recomputeNormals || angleValid);
   // A file with one take can have been saved with it under another name; ranges go with it.
   const rangesFor = (take: string): readonly ClipRange[] => clipRanges.filter((range) => !range.attached && (range.take === take || (clips.length === 1 && !clips.some((clip) => clip.name === range.take))));
   const otherRanges = clipRanges.filter((range) => !clips.some((clip) => rangesFor(clip.name).includes(range)));
   const missingImages = useMemo(() => (report?.images ?? []).filter((image) => !image.embedded), [report]);
+  /** Of what was picked, what the file asks for. A folder can hold much else, and more can be asked for once a material file is read. */
+  const found = useMemo(() => {
+    const byName = new Map(offered.map((file) => [file.name.toLowerCase(), file]));
+    const wanted = new Map<string, File>();
+    for (const image of missingImages) {
+      const file = byName.get(image.file.toLowerCase());
+      if (file) wanted.set(image.file.toLowerCase(), file);
+    }
+    return wanted;
+  }, [offered, missingImages]);
+
+  // An OBJ's material file holds its materials and names their images: with it found, there is more to say.
+  const materialFile = report?.materialFile ? found.get(report.materialFile.toLowerCase()) : undefined;
+  useEffect(() => {
+    if (!materialFile) return;
+    let current = true;
+    inspect([materialFile]).then((read) => {
+      if (!current || !read) return;
+      setMaterialsRead(materialFile);
+      setReport(read);
+    }).catch(() => undefined);
+    return () => { current = false; };
+    // Read once for each material file found.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [materialFile]);
   const canTune = report?.format === 'fbx' || report?.format === 'obj';
 
   /** The model's size as it will come in. */
@@ -173,14 +207,7 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
     if (!list?.length || !report) return;
     // Copied now: clearing the input to let the same file be picked again empties its list.
     const files = Array.from(list);
-    const wanted = new Set(missingImages.map((image) => image.file.toLowerCase()));
-    setFound((previous) => {
-      const next = new Map(previous);
-      for (const file of files) {
-        if (wanted.has(file.name.toLowerCase())) next.set(file.name.toLowerCase(), file);
-      }
-      return next;
-    });
+    setOffered((previous) => [...previous, ...files]);
   };
 
   const choose = (applyToRest: boolean) => {
@@ -195,12 +222,14 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
         ...(canTune && (report?.blendShapes ?? 0) > 0 && !morphTargets ? { morphTargets: false } : {}),
         ...(canTune && recomputeNormals ? { recomputeNormals: true, smoothingAngle: angle } : {}),
         ...(canTune && !tangents ? { tangents: false } : {}),
+        // Left as it was when the clips were not offered.
+        ...(animationOff ? { animation: false } : {}),
         ...(clips.length > 0 && keptClips === 0 ? { animation: false } : {}),
         ...(excludedClips.size && keptClips > 0 ? { excludedClips: [...excludedClips] } : {}),
         ...(clipRanges.length ? { clipRanges: [...clipRanges] } : {}),
         ...(canTune && threshold !== undefined ? { keyThreshold: threshold } : {}),
       }),
-      images: [...found.values()],
+      images: [...(materialsRead ? [materialsRead] : []), ...found.values()],
       applyToRest,
     });
   };
@@ -237,7 +266,7 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
               <div className="flex h-6 items-center gap-2 text-xs text-ink-3"><Spinner /> Reading the file…</div>
             )}
             {!reading && !report && (
-              <p className="text-xs text-ink-3">This file could not be read ahead of importing. Importing it will say why.</p>
+              <p className={`text-xs ${readError ? 'text-amber-400' : 'text-ink-3'}`}>{readError ?? 'This file could not be read ahead of importing. Importing it will say why.'}</p>
             )}
             {!reading && report && (
               <dl className="grid grid-cols-[72px_1fr] gap-x-3 gap-y-0.5 text-2xs">
@@ -245,7 +274,7 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
                 {report.upAxis && report.upAxis !== '+Y' && <Fact label="Upright">Made {report.upAxis[1]} up, stood up on import</Fact>}
                 {fileSize && normalize && <Fact label="In the file">{sizeText(fileSize)}</Fact>}
                 <Fact label="Geometry">
-                  {report.triangles > 0 ? `${count(report.meshes, 'mesh', 'meshes')}, ${count(report.triangles, 'triangle')}` : 'None: animation only'}
+                  {report.triangles > 0 ? `${count(report.meshes, 'mesh', 'meshes')}, ${count(report.triangles, 'triangle')}` : clips.length > 0 ? 'None: animation only' : 'None'}
                 </Fact>
                 {report.materials > 0 && <Fact label="Materials">{count(report.materials, 'material')}{report.images?.length ? `, ${count(report.images.length, 'image')}` : ''}</Fact>}
                 {report.collisionMeshes > 0 && <Fact label="Collision">{count(report.collisionMeshes, 'shape')}, for colliders and rigid bodies</Fact>}
@@ -258,6 +287,7 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
                 )}
               </dl>
             )}
+            {holdsNothing && <p className="mt-1 text-xs text-amber-400">This file holds no meshes and no animation, so there is nothing to import.</p>}
             {report?.warnings?.slice(0, 4).map((warning) => (
               <p key={warning} className="mt-1 text-2xs text-amber-400">{warning}</p>
             ))}
@@ -292,7 +322,7 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
                 </span>
               </Row>
             )}
-            {normalize && !sizeValid && <p className="mt-1 text-2xs text-amber-400">Enter a size greater than 0.</p>}
+            {normalize && !sizeValid && <p className="mt-1 text-2xs text-amber-400">Enter a size above 0 and up to {MAX_MODEL_TARGET_SIZE.toLocaleString()} m.</p>}
             {note && <p className="mt-1 text-2xs text-ink-2">{note}</p>}
             {resultSize && <p className="mt-1 text-2xs text-ink-3 tabular-nums">Comes in at {sizeText(resultSize)}</p>}
           </Section>
@@ -379,10 +409,12 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
 
           {missingNames.length > 0 && (
             <Section
-              title={stillMissing ? `Images not in the file: ${stillMissing}` : 'Images found'}
+              title={report?.format === 'obj'
+                ? (stillMissing ? `Files beside the model: ${stillMissing}` : 'Files found')
+                : (stillMissing ? `Images not in the file: ${stillMissing}` : 'Images found')}
               actions={(
                 <span className="flex items-center gap-0.5">
-                  <Button size="sm" onClick={() => filesRef.current?.click()}>Find images…</Button>
+                  <Button size="sm" onClick={() => filesRef.current?.click()}>{report?.format === 'obj' ? 'Find files…' : 'Find images…'}</Button>
                   <Button size="sm" variant="ghost" onClick={() => folderRef.current?.click()}>Folder…</Button>
                 </span>
               )}
@@ -399,7 +431,7 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
                 })}
               </ul>
               {stillMissing > 0 && <p className="mt-1 text-2xs text-ink-3">The model imports without them if they are not found.</p>}
-              <input ref={filesRef} type="file" multiple accept="image/*,.tga,.tif,.tiff" className="hidden" aria-hidden="true" tabIndex={-1} onChange={(event) => { takeImages(event.target.files); event.target.value = ''; }} />
+              <input ref={filesRef} type="file" multiple accept="image/*,.tga,.tif,.tiff,.mtl" className="hidden" aria-hidden="true" tabIndex={-1} onChange={(event) => { takeImages(event.target.files); event.target.value = ''; }} />
               <input
                 ref={folderRef}
                 type="file"

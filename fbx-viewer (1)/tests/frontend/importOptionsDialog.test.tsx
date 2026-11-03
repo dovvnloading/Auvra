@@ -5,6 +5,8 @@ import { ImportOptionsDialog, type ImportChoice } from '../../components/UI/Brow
 import type { ModelFileReport } from '../../utils/fbxImport/nativeImporter';
 import { convertOptionsFor, resolveImportSettings, suggestedImportSettings } from '../../utils/processing/ModelTransforms';
 
+vi.mock('../../components/UI/Properties/ClipRangeEditor', () => ({ ClipRangeEditor: () => <div data-testid="cutting" /> }));
+
 const report = (fields: Partial<ModelFileReport> = {}): ModelFileReport => ({
   format: 'fbx', version: 7700, ascii: false, creator: '', application: 'Maker', upAxis: '+Y', frontAxis: '+Z', metresPerUnit: 0.01, framesPerSecond: 30,
   meshes: 1, triangles: 1000, vertices: 600, skinnedMeshes: 0, blendShapes: 0, meshesWithPolygons: 0, meshesWithoutUvs: 0, meshesWithoutNormals: 0,
@@ -20,7 +22,7 @@ const PERSON_BONES = ['mixamorig:Hips', 'mixamorig:Spine', 'mixamorig:Head', 'mi
 const open = async (read: ModelFileReport | null, props: Partial<React.ComponentProps<typeof ImportOptionsDialog>> = {}) => {
   const onConfirm = vi.fn<(choice: ImportChoice) => void>();
   const onCancel = vi.fn();
-  render(<ImportOptionsDialog name="thing.fbx" inspect={async () => read} readFile={async () => new File([], 'thing.fbx')} onConfirm={onConfirm} onCancel={onCancel} {...props} />);
+  render(<ImportOptionsDialog readFile={async () => new File([], 'thing.fbx')} name="thing.fbx" inspect={async () => read} readFile={async () => new File([], 'thing.fbx')} onConfirm={onConfirm} onCancel={onCancel} {...props} />);
   await waitFor(() => expect(screen.queryByText(/Reading the file/)).toBeNull());
   return { onConfirm, onCancel };
 };
@@ -191,6 +193,15 @@ describe('the import dialog', () => {
     expect(onConfirm.mock.calls[0][0].settings.excludedClips).toEqual(['Run']);
   });
 
+  it('leaves Escape to the cutting window while it is open', async () => {
+    const clips = [{ name: 'Take 001', duration: 60, start: 0, layers: 1 }];
+    const { onCancel } = await open(report({ clips }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cut Take 001 into clips' }));
+    expect(screen.getByTestId('cutting')).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
   it('chooses how many animation keys to keep', async () => {
     const { onConfirm } = await open(report({ clips: [{ name: 'Walk', duration: 1, start: 0, layers: 1 }] }));
     fireEvent.click(screen.getByRole('radio', { name: 'Every key' }));
@@ -243,5 +254,52 @@ describe('the import dialog', () => {
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(onCancel).toHaveBeenCalled();
     expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it('closes on Escape with the focus inside it, too', async () => {
+    const { onCancel } = await open(report());
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Import' }), { key: 'Escape' });
+    expect(onCancel).toHaveBeenCalled();
+  });
+
+  it('says why a file cannot be read, and does not offer to import it', async () => {
+    const onConfirm = vi.fn();
+    render(<ImportOptionsDialog readFile={async () => new File([], 'thing.fbx')} name="thing.fbx" inspect={async () => { throw new Error('The file could not be read: Truncated file.'); }} onConfirm={onConfirm} onCancel={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText(/Truncated file/)).toBeTruthy());
+    expect((screen.getByRole('button', { name: 'Import' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('does not offer to import a file that holds nothing', async () => {
+    await open(report({ meshes: 0, triangles: 0, vertices: 0, boundsMin: undefined, boundsMax: undefined, clips: [] }));
+    expect(screen.getByText(/nothing to import/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Import' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('keeps a model with no clips that way when only its size changes', async () => {
+    const { onConfirm } = await open(report({ clips: [{ name: 'Walk', duration: 1, start: 0, layers: 1 }] }), { initialSettings: resolveImportSettings({ normalize: false, targetSize: 2, animation: false }), confirmLabel: 'Apply' });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onConfirm.mock.calls[0][0].settings.animation).toBe(false);
+  });
+
+  it('counts only the takes the file has as left out', async () => {
+    await open(report({ clips: [{ name: 'Walk', duration: 1, start: 0, layers: 1 }, { name: 'Run', duration: 1, start: 0, layers: 1 }] }), { initialSettings: resolveImportSettings({ normalize: false, targetSize: 2, excludedClips: ['Walk', 'Old', 'Older'] }) });
+    expect(screen.getByText(/Animation: 1 of 2 clips/)).toBeTruthy();
+  });
+
+  it('reads an OBJ\'s material file when it is found, and asks for the images that names', async () => {
+    const inspect = vi.fn(async (beside?: readonly File[]) => (beside?.length
+      ? report({ format: 'obj', materialFile: 'parts.mtl', images: [{ file: 'paint.png', embedded: false }] })
+      : report({ format: 'obj', materialFile: 'parts.mtl', images: [{ file: 'parts.mtl', embedded: false }] })));
+    const onConfirm = vi.fn<(choice: ImportChoice) => void>();
+    const { container } = render(<ImportOptionsDialog name="thing.obj" inspect={inspect} onConfirm={onConfirm} onCancel={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText('parts.mtl')).toBeTruthy());
+    const mtl = new File(['newmtl Paint'], 'parts.mtl');
+    const image = new File(['png'], 'paint.png');
+    // A folder holds both at once: the image is found once the material file has said it is wanted.
+    const picker = container.querySelector('input[type="file"][multiple]') as HTMLInputElement;
+    fireEvent.change(picker, { target: { files: [mtl, image] } });
+    await waitFor(() => expect(screen.getByText('paint.png')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Import' }));
+    expect(onConfirm.mock.calls[0][0].images.map((file) => file.name).sort()).toEqual(['paint.png', 'parts.mtl']);
   });
 });
