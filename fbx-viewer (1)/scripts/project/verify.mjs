@@ -153,7 +153,7 @@ if (!/prepareAnimationClips\(targetModel\.object, loaded\.object, loaded\.animat
 if (!/prepareAnimationClips\(loaded\.object, animationModel\.object, animationModel\.animations, item\.boneRoles\)/.test(projectHydration)) failures.push('native project hydration bypasses target skeleton binding');
 if (!/setActiveClip\(selectedAnimations\[0\] \|\| null\)/.test(app)) failures.push('valid imported animation is not selected for preview');
 if (!/retargetHumanoidClip/.test(animationBinding) || !/clipBindsDirectly/.test(animationBinding)) failures.push('animation binding lacks direct and retargeted paths');
-if (/clip\.duration > 0\.1/.test(modelLoader) || !/clip\.duration > 0/.test(modelLoader)) failures.push('valid short animation clips are still discarded');
+if (/clip\.duration > 0\.1/.test(modelLoader) || !/clip\.duration <= 0\) clip\.duration = POSE_CLIP_SECONDS/.test(modelLoader)) failures.push('valid short animation clips are still discarded');
 if (!/new Worker\(new URL\(['"]\.\.\/workers\/fbxImport\.worker\.ts['"]/.test(modelLoader)) failures.push('FBX import is not isolated in a module worker');
 if (/runNativeImport/.test(modelLoader)) failures.push('renderer model loader runs the native importer on its own thread');
 if (!/runNativeImport\(importer, request\.buffer/.test(importWorker) || !/buildImportedGlb\(native,/.test(importWorker)) failures.push('FBX worker does not own parse and transient runtime conversion');

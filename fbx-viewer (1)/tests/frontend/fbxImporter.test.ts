@@ -112,6 +112,71 @@ describe('FBX importer: reading a file', () => {
     native.close();
   });
 
+  it('measures what comes in, not what names and flags leave out', async () => {
+    const native = await load(fbxDocument(`${QUAD_GEOMETRY}
+  Model: 201, "Model::UCX_Quad", "Mesh" {
+    Properties70:  {
+      P: "Lcl Translation", "Lcl Translation", "", "A",100,100,100
+    }
+  }
+  Model: 202, "Model::Helper", "Mesh" {
+    Properties70:  {
+      P: "Lcl Translation", "Lcl Translation", "", "A",-100,0,0
+      P: "Visibility", "Visibility", "", "A",0
+    }
+  }
+  Model: 203, "Model::Quad_LOD1", "Mesh" {
+    Properties70:  {
+      P: "Lcl Translation", "Lcl Translation", "", "A",50,0,0
+    }
+  }`, `${QUAD_CONNECTIONS}
+  C: "OO",201,0
+  C: "OO",100,201
+  C: "OO",202,0
+  C: "OO",100,202
+  C: "OO",203,0
+  C: "OO",100,203`));
+    expect(native.report.boundsMin).toEqual([2, 3, 4]);
+    expect(native.report.boundsMax).toEqual([3, 4, 4]);
+    expect(native.report.collisionMeshes).toBe(1);
+    native.close();
+  });
+
+  it('takes the name of a shape exactly', async () => {
+    const native = await load(fbxDocument(`${QUAD_GEOMETRY}
+  Model: 201, "Model::ucx_lower", "Mesh" {
+  }`, `${QUAD_CONNECTIONS}
+  C: "OO",201,0
+  C: "OO",100,201`));
+    expect(native.report.collisionMeshes).toBe(0);
+    native.close();
+  });
+
+  it('reads an OBJ\'s materials from its material file, and says which it is', async () => {
+    const obj = `mtllib parts.mtl
+v 0 0 0
+v 1 0 0
+v 0 1 0
+vt 0 0
+vt 1 0
+vt 0 1
+usemtl Paint
+f 1/1 2/2 3/3
+`;
+    const without = await load(obj, { obj: true }, 'thing.obj');
+    expect(without.report.materialFile).toBe('parts.mtl');
+    without.close();
+    const mtl = `newmtl Paint
+Kd 1 0 0
+map_Kd paint.png
+`;
+    const native = await load(obj, { obj: true, materials: new TextEncoder().encode(mtl) }, 'thing.obj');
+    expect(native.materials[0].name).toBe('Paint');
+    expect(native.materials[0].baseColor?.slice(0, 3)).toEqual([1, 0, 0]);
+    expect(native.textures.map((texture) => texture.file)).toContain('paint.png');
+    native.close();
+  });
+
   it('refuses a file that is not a model, saying so', async () => {
     await expect(load('this is not a model')).rejects.toThrow(/could not be read/);
   });
@@ -256,6 +321,39 @@ describe('FBX importer: skins and animation', () => {
   C: "OO",402,400
   C: "OO",201,401
   C: "OO",202,402`;
+
+  it('keeps a collision shape beside a rig, and does not offer it as a stray mesh', async () => {
+    const withShape = `${skinned}
+  Geometry: 101, "Geometry::Box", "Mesh" {
+    Vertices: *12 { a: 0,0,0, 1,0,0, 0,1,0, 0,0,1 }
+    PolygonVertexIndex: *12 { a: 0,2,-2, 0,1,-4, 0,3,-3, 1,2,-4 }
+  }
+  Model: 203, "Model::UCX_Box", "Mesh" {
+  }
+  Geometry: 102, "Geometry::Stray", "Mesh" {
+    Vertices: *9 { a: 0,0,0, 1,0,0, 0,1,0 }
+    PolygonVertexIndex: *3 { a: 0,1,-3 }
+  }
+  Model: 204, "Model::Stray", "Mesh" {
+  }`;
+    const connections = `${skinConnections}
+  C: "OO",203,0
+  C: "OO",101,203
+  C: "OO",204,0
+  C: "OO",102,204`;
+    const native = await load(fbxDocument(withShape, connections), { looseMeshes: false });
+    expect(native.report.looseMeshes.map((mesh) => mesh.name)).toEqual(['Stray']);
+    const node = (name: string) => native.document.nodes.find((candidate) => candidate.name === name);
+    expect(node('UCX_Box')?.mesh).toBeDefined();
+    expect(node('Stray')?.mesh).toBeUndefined();
+    native.close();
+  });
+
+  it('says how many bones can move a vertex, when only describing the file', async () => {
+    const native = await load(fbxDocument(skinned, skinConnections), { inspect: true });
+    expect(native.report.maxInfluences).toBeGreaterThan(0);
+    native.close();
+  });
 
   /** A take rotating `Spine` about X from 0 to 90 degrees over a second. */
   const take = (id: number, name: string, start = 0): string => {
@@ -485,6 +583,85 @@ describe('imported materials', () => {
     const { json } = await finished(QUAD_GEOMETRY, QUAD_CONNECTIONS);
     const used = json.materials[json.meshes[0].primitives[0].material];
     expect(used.pbrMetallicRoughness.metallicFactor).toBe(0);
+  });
+
+  it('reads a texture\'s Scaling as how many times it repeats', async () => {
+    const tiled = `  Texture: 400, "Texture::tiled.png", "" {
+    Type: "TextureVideoClip"
+    Properties70:  {
+      P: "Scaling", "Vector", "", "A",4,2,1
+      P: "Translation", "Vector", "", "A",0.25,0.5,0
+    }
+    FileName: "C:/art/tiled.png"
+    RelativeFilename: "tiled.png"
+  }`;
+    const { json } = await finished(painted('', tiled), `${onPaint}\n  C: "OP",400,300, "DiffuseColor"`, { 'tiled.png': namedPng('tiled') });
+    const transform = json.materials[0].pbrMetallicRoughness.baseColorTexture.extensions.KHR_texture_transform;
+    expect(transform.scale).toEqual([4, 2]);
+    expect(transform.offset[0]).toBeCloseTo(0.25);
+    // The file's V grows up from the bottom of the image, glTF's down from the top.
+    expect(transform.offset[1]).toBeCloseTo(1 - 2 - 0.5);
+  });
+
+  it('keeps a material\'s colour under a mask with no colour map', async () => {
+    const mask = { data: new Uint8Array([128, 128, 128, 255]), width: 1, height: 1 };
+    const { json } = await finished(
+      painted('', texture(401, 'mask.png')),
+      `${onPaint}\n  C: "OP",401,300, "TransparentColor"`,
+      { 'mask.png': namedPng('mask') },
+      { mask },
+    );
+    expect(json.materials[0].alphaMode).toBe('BLEND');
+    expect(json.materials[0].pbrMetallicRoughness.baseColorFactor[0]).toBeCloseTo(0.214, 2);
+  });
+
+  it('keeps an emission strength below one as well as above', async () => {
+    const { json } = await finished(painted(`      P: "EmissiveColor", "Color", "", "A",1,0,0
+      P: "EmissiveFactor", "Number", "", "A",0.2`), onPaint);
+    expect(json.materials[0].extensions.KHR_materials_emissive_strength.emissiveStrength).toBeCloseTo(0.2);
+  });
+
+  it('turns a constant glossiness into roughness', async () => {
+    const native = {
+      document: { scenes: [{}], nodes: [], accessors: [], bufferViews: [], meshes: [{ primitives: [{ attributes: {}, material: 0 }] }] },
+      materials: [{ name: 'Gloss', shader: 0, baseColor: [1, 1, 1], opacityProperty: -1, roughness: null, glossiness: 0.9, metalness: 0 }],
+      textures: [],
+      meshUvSets: [[]],
+      report: { warnings: [] },
+      binary: () => new Uint8Array(0),
+      textureBytes: () => null,
+    } as unknown as NativeImport;
+    const built = await buildImportedGlb(native, { decode: fakeDecode({}), decodeLegacy: () => null });
+    const json = JSON.parse(new TextDecoder().decode(new Uint8Array(built.glb, 20, new DataView(built.glb).getUint32(12, true))));
+    expect(json.materials[0].pbrMetallicRoughness.roughnessFactor).toBeCloseTo(0.1);
+  });
+
+  it('gives nodes that share a mesh their own materials, and shares the mesh where they agree', async () => {
+    const { json } = await finished(
+      `${QUAD_GEOMETRY}
+  Model: 201, "Model::Other", "Mesh" {
+  }
+  Model: 202, "Model::Third", "Mesh" {
+  }
+${material(300, 'Oak')}
+${material(301, 'Pine')}`,
+      `${QUAD_CONNECTIONS}
+  C: "OO",201,0
+  C: "OO",100,201
+  C: "OO",202,0
+  C: "OO",100,202
+  C: "OO",300,200
+  C: "OO",301,201
+  C: "OO",300,202`,
+    );
+    const materialOf = (name: string) => {
+      const node = json.nodes.find((candidate: { name: string }) => candidate.name === name);
+      return json.materials[json.meshes[node.mesh].primitives[0].material].name;
+    };
+    expect(materialOf('Quad')).toBe('Oak');
+    expect(materialOf('Other')).toBe('Pine');
+    expect(materialOf('Third')).toBe('Oak');
+    expect(json.meshes).toHaveLength(2);
   });
 
   it('stores the same image once, however many materials embed it', async () => {

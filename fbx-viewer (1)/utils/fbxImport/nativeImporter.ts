@@ -54,6 +54,8 @@ export interface ModelFileReport {
   clips: ModelFileClip[];
   warnings: string[];
   /** The image files its materials read, and which of them the file holds itself. */
+  /** The material file an OBJ names, which sits beside it. */
+  materialFile?: string;
   images?: { file: string; embedded: boolean }[];
 }
 
@@ -164,6 +166,8 @@ export interface NativeImportOptions {
   looseMeshes?: boolean;
   /** Takes to leave out, by their names in the file. */
   excludedClips?: readonly string[];
+  /** An OBJ's material file, which holds its materials and names their images. */
+  materials?: Uint8Array;
   /** Keys per second animation is resampled at where it must be; defaults to the file's rate, at least 30. */
   sampleRate?: number;
   /** Largest change a dropped key may make to a track's value; 0 keeps every key. */
@@ -190,7 +194,7 @@ interface ImporterExports {
   _initialize?: () => void;
   fbx_malloc: (size: number) => number;
   fbx_close: () => void;
-  fbx_import: (data: number, size: number, name: number, nameLength: number, flags: number, sampleRate: number, keyThreshold: number, smoothingAngle: number) => number;
+  fbx_import: (data: number, size: number, name: number, nameLength: number, flags: number, sampleRate: number, keyThreshold: number, smoothingAngle: number, materials: number, materialsSize: number) => number;
   fbx_error_pointer: () => number;
   fbx_error_length: () => number;
   fbx_json_pointer: () => number;
@@ -232,17 +236,23 @@ export const runNativeImport = (importer: ImporterExports, source: ArrayBuffer |
   const bytes = source instanceof Uint8Array ? source : new Uint8Array(source);
   try {
     const nameBytes = new TextEncoder().encode(fileName);
-    const namePointer = importer.fbx_malloc(nameBytes.length + 1);
+    // Pointers and sizes past two gigabytes reach JavaScript as negative numbers.
+    const namePointer = importer.fbx_malloc(nameBytes.length + 1) >>> 0;
     new Uint8Array(memory(), namePointer, nameBytes.length).set(nameBytes);
-    const dataPointer = importer.fbx_malloc(bytes.length);
+    const dataPointer = importer.fbx_malloc(bytes.length) >>> 0;
     if (!dataPointer) throw new RangeError('out of memory');
     new Uint8Array(memory(), dataPointer, bytes.length).set(bytes);
+    const materials = options.materials;
+    const materialsPointer = materials ? importer.fbx_malloc(materials.length) >>> 0 : 0;
+    if (materials && !materialsPointer) throw new RangeError('out of memory');
+    if (materials) new Uint8Array(memory(), materialsPointer, materials.length).set(materials);
     const ok = importer.fbx_import(
       dataPointer, bytes.length, namePointer, nameBytes.length, toFlags(options),
       options.sampleRate ?? 0, options.keyThreshold ?? DEFAULT_KEY_THRESHOLD, options.smoothingAngle ?? 0,
+      materialsPointer, materials?.length ?? 0,
     );
     if (!ok) {
-      const reason = new TextDecoder().decode(new Uint8Array(memory(), importer.fbx_error_pointer(), importer.fbx_error_length()));
+      const reason = new TextDecoder().decode(new Uint8Array(memory(), importer.fbx_error_pointer() >>> 0, importer.fbx_error_length() >>> 0));
       throw new Error(`The file could not be read: ${reason || 'it is not a valid model file'}.`);
     }
   } catch (error) {
@@ -251,8 +261,13 @@ export const runNativeImport = (importer: ImporterExports, source: ArrayBuffer |
     }
     throw error;
   }
-  const text = new TextDecoder().decode(new Uint8Array(memory(), importer.fbx_json_pointer(), importer.fbx_json_length()));
+  const text = new TextDecoder().decode(new Uint8Array(memory(), importer.fbx_json_pointer() >>> 0, importer.fbx_json_length() >>> 0));
   const result = JSON.parse(text) as NativeImportResult;
+  // An OBJ keeps its materials in a file beside it, named near its top.
+  if (options.obj) {
+    const named = /^[ \t]*mtllib[ \t]+(.+?)[ \t]*$/m.exec(new TextDecoder().decode(bytes.subarray(0, 65536)).replace(/\r/g, ''));
+    if (named) result.report.materialFile = named[1].split(/[\\/]/).pop();
+  }
   if (!options.obj && result.report.clips.length > 1) {
     const order = fbxTakeOrder(bytes);
     result.report.clips = inTakeOrder(result.report.clips, order);
@@ -266,7 +281,7 @@ export const runNativeImport = (importer: ImporterExports, source: ArrayBuffer |
   }
   return {
     ...result,
-    binary: () => new Uint8Array(memory(), importer.fbx_binary_pointer(), importer.fbx_binary_length()),
+    binary: () => new Uint8Array(memory(), importer.fbx_binary_pointer() >>> 0, importer.fbx_binary_length() >>> 0),
     textureBytes: (index) => {
       const texture = result.textures[index];
       return texture && texture.size > 0 ? new Uint8Array(memory(), texture.pointer, texture.size) : null;

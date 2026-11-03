@@ -167,6 +167,11 @@ typedef struct {
 	int *node_index;
 	// Per ufbx mesh: its glTF mesh, or -1 for one with no triangles.
 	int *mesh_index;
+	// A node's glTF mesh, when its materials differ from the first of the mesh's other nodes.
+	int *node_mesh;
+	// The ufbx mesh each glTF mesh came from.
+	int *mesh_source;
+	int mesh_source_count;
 	// Per ufbx skin deformer: its glTF skin, or -1.
 	int *skin_index;
 	// Counts for the report.
@@ -199,6 +204,8 @@ static void import_free(void) {
 	buffer_free(&g.clip_report);
 	free(g.node_index);
 	free(g.mesh_index);
+	free(g.node_mesh);
+	free(g.mesh_source);
 	free(g.skin_index);
 	memset(&g, 0, sizeof(g));
 }
@@ -719,7 +726,100 @@ static ufbx_blend_shape *channel_shape(const ufbx_blend_channel *channel) {
 	return NULL;
 }
 
+// --- What names say. utils/modelConventions.ts takes these out of the model; here they are only counted and measured. ---
+
+static bool name_has_prefix(ufbx_string name, const char *prefix) {
+	size_t length = strlen(prefix);
+	return name.length >= length && !memcmp(name.data, prefix, length);
+}
+
+static bool name_is_shape(ufbx_string name) {
+	return name_has_prefix(name, "UCX_") || name_has_prefix(name, "UBX_") || name_has_prefix(name, "USP_") || name_has_prefix(name, "UCP_");
+}
+
+/** Whether a node is a collision shape or part of one. */
+static bool node_is_shape(const ufbx_node *node) {
+	for (const ufbx_node *at = node; at; at = at->parent) if (name_is_shape(at->name)) return true;
+	return false;
+}
+
+typedef struct {
+	bool found;
+	size_t stem;       // Length of what comes before _LOD.
+	unsigned level;
+	const char *copy;  // A ".001" after it, as Blender numbers copies.
+	size_t copy_length;
+} LevelName;
+
+/** Reads a name of the form Name_LOD1 or Name_LOD1.001, in either case. */
+static LevelName level_name(ufbx_string name) {
+	LevelName out;
+	memset(&out, 0, sizeof(out));
+	size_t end = name.length;
+	size_t dot = end;
+	while (dot > 0 && name.data[dot - 1] >= '0' && name.data[dot - 1] <= '9') dot--;
+	if (dot > 0 && dot < end && name.data[dot - 1] == '.') {
+		out.copy = name.data + dot - 1;
+		out.copy_length = end - dot + 1;
+		end = dot - 1;
+	}
+	size_t digits = end;
+	while (digits > 0 && name.data[digits - 1] >= '0' && name.data[digits - 1] <= '9') digits--;
+	if (digits == end || digits < 5) return out;
+	const char *mark = name.data + digits - 4;
+	if (mark[0] != '_' || (mark[1] | 32) != 'l' || (mark[2] | 32) != 'o' || (mark[3] | 32) != 'd') return out;
+	for (size_t i = digits; i < end; i++) out.level = out.level * 10 + (unsigned)(name.data[i] - '0');
+	out.stem = digits - 4;
+	out.found = true;
+	return out;
+}
+
+static bool same_text(const char *a, const char *b, size_t length) {
+	for (size_t i = 0; i < length; i++) {
+		char x = a[i], y = b[i];
+		if (x >= 'A' && x <= 'Z') x += 32;
+		if (y >= 'A' && y <= 'Z') y += 32;
+		if (x != y) return false;
+	}
+	return true;
+}
+
+/** Whether a mesh is a simpler version of one beside it: of the plain name, or of a lower level. */
+static bool node_is_coarser_level(const ufbx_node *node) {
+	LevelName own = level_name(node->name);
+	if (!own.found || !node->parent) return false;
+	for (size_t i = 0; i < node->parent->children.count; i++) {
+		const ufbx_node *other = node->parent->children.data[i];
+		if (other == node) continue;
+		if (other->mesh && other->name.length == own.stem + own.copy_length && same_text(other->name.data, node->name.data, own.stem)
+			&& (!own.copy_length || same_text(other->name.data + own.stem, own.copy, own.copy_length))) return true;
+		LevelName theirs = level_name(other->name);
+		if (theirs.found && theirs.level < own.level && theirs.stem == own.stem && same_text(other->name.data, node->name.data, own.stem)
+			&& theirs.copy_length == own.copy_length && (!own.copy_length || same_text(theirs.copy, own.copy, own.copy_length))) return true;
+	}
+	return false;
+}
+
+/** Whether the import leaves a node's mesh out of what is drawn, unless that would leave nothing. */
+static bool node_is_left_out(const ufbx_node *node) {
+	for (const ufbx_node *at = node; at; at = at->parent) {
+		if (!at->visible || name_is_shape(at->name) || name_has_prefix(at->name, "SOCKET_")) return true;
+		const ufbx_node *parent = at->parent;
+		if (parent && parent->attrib_type == UFBX_ELEMENT_LOD_GROUP && parent->children.count > 1 && parent->children.data[0] != at) return true;
+	}
+	return node_is_coarser_level(node);
+}
+
 static bool node_is_loose(const ufbx_node *node);
+
+/** Whether two nodes of a mesh give it the same materials. */
+static bool same_materials(const ufbx_mesh *mesh, const ufbx_node *a, const ufbx_node *b) {
+	const ufbx_material_list *first = a->materials.count ? &a->materials : &mesh->materials;
+	const ufbx_material_list *second = b->materials.count ? &b->materials : &mesh->materials;
+	if (first->count != second->count) return false;
+	for (size_t i = 0; i < first->count; i++) if (first->data[i] != second->data[i]) return false;
+	return true;
+}
 
 static void write_meshes(void) {
 	ufbx_scene *scene = g.scene;
@@ -741,7 +841,13 @@ static void write_meshes(void) {
 			}
 		}
 
-		// Blend shapes, spread out per file vertex.
+		// Blend shapes, spread out per file vertex. A mesh's own turn and scale in its node (a 3ds Max
+		// object offset) are baked into its vertices by now, but not into these offsets.
+		const ufbx_node *first_node = mesh->instances.data[0];
+		ufbx_vec3 no_turn = { 0.0, 0.0, 0.0 };
+		ufbx_vec3 no_scale = { 1.0, 1.0, 1.0 };
+		ufbx_quat own_turn = ufbx_euler_to_quat(ufbx_find_vec3(&first_node->props, "GeometricRotation", no_turn), UFBX_ROTATION_ORDER_XYZ);
+		ufbx_vec3 own_scale = ufbx_find_vec3(&first_node->props, "GeometricScaling", no_scale);
 		int shape_count = 0;
 		DenseShape *shapes = NULL;
 		if (!(g.flags & FLAG_NO_MORPHS)) {
@@ -768,11 +874,15 @@ static void write_meshes(void) {
 							uint32_t vertex = shape->offset_vertices.data[o];
 							if (vertex >= mesh->num_vertices) continue;
 							ufbx_vec3 offset = shape->position_offsets.data[o];
+							offset.x *= own_scale.x;
+							offset.y *= own_scale.y;
+							offset.z *= own_scale.z;
+							offset = ufbx_quat_rotate_vec3(own_turn, offset);
 							positions[(size_t)vertex * 3] = (float)offset.x;
 							positions[(size_t)vertex * 3 + 1] = (float)offset.y;
 							positions[(size_t)vertex * 3 + 2] = (float)offset.z;
 							if (normals) {
-								ufbx_vec3 normal = shape->normal_offsets.data[o];
+								ufbx_vec3 normal = ufbx_quat_rotate_vec3(own_turn, shape->normal_offsets.data[o]);
 								normals[(size_t)vertex * 3] = (float)normal.x;
 								normals[(size_t)vertex * 3 + 1] = (float)normal.y;
 								normals[(size_t)vertex * 3 + 2] = (float)normal.z;
@@ -792,49 +902,69 @@ static void write_meshes(void) {
 			compute_smoothed_normals(mesh, corner_normals, g.smoothing_angle);
 		}
 
-		// A node's materials are the file's real assignment; the mesh's come from its first node.
-		const ufbx_node *owner = mesh->instances.data[0];
-		const ufbx_material_list *materials = owner->materials.count ? &owner->materials : &mesh->materials;
-
-		size_t mark = g.meshes.length;
-		if (!first_mesh) json_raw(&g.meshes, ",");
-		json_raw(&g.meshes, "{\"name\":");
-		json_string(&g.meshes, owner->name);
-		json_raw(&g.meshes, ",\"primitives\":[");
-		bool wrote_any = false;
-		for (size_t p = 0; p < mesh->material_parts.count; p++) {
-			const ufbx_mesh_part *part = &mesh->material_parts.data[p];
-			const ufbx_material *material = part->index < materials->count ? materials->data[part->index] : NULL;
-			write_primitive(mesh, part, material, material ? (int)material->typed_id : -1, skin, shapes, shape_count, corner_normals, &wrote_any);
-		}
-		free(corner_normals);
-		json_raw(&g.meshes, "]");
-		if (shape_count) {
-			json_raw(&g.meshes, ",\"extras\":{\"targetNames\":[");
-			int at = 0;
-			for (size_t b = 0; b < mesh->blend_deformers.count; b++) {
-				const ufbx_blend_deformer *deformer = mesh->blend_deformers.data[b];
-				for (size_t c = 0; c < deformer->channels.count; c++) {
-					const ufbx_blend_channel *channel = deformer->channels.data[c];
-					if (!channel_shape(channel)) continue;
-					if (at++) json_raw(&g.meshes, ",");
-					json_string(&g.meshes, channel->name);
+		// A node's materials are the file's real assignment: nodes that share a mesh can differ in them,
+		// and each list gets a glTF mesh of its own.
+		for (size_t i = 0; i < mesh->instances.count; i++) {
+			const ufbx_node *owner = mesh->instances.data[i];
+			bool shared = false;
+			for (size_t j = 0; j < i && !shared; j++) {
+				const ufbx_node *earlier = mesh->instances.data[j];
+				if (same_materials(mesh, earlier, owner)) {
+					g.node_mesh[owner->typed_id] = g.node_mesh[earlier->typed_id];
+					shared = true;
 				}
 			}
-			json_raw(&g.meshes, "]}");
+			if (shared) continue;
+			const ufbx_material_list *materials = owner->materials.count ? &owner->materials : &mesh->materials;
+
+			size_t mark = g.meshes.length;
+			if (!first_mesh) json_raw(&g.meshes, ",");
+			json_raw(&g.meshes, "{\"name\":");
+			json_string(&g.meshes, owner->name);
+			json_raw(&g.meshes, ",\"primitives\":[");
+			bool wrote_any = false;
+			for (size_t p = 0; p < mesh->material_parts.count; p++) {
+				const ufbx_mesh_part *part = &mesh->material_parts.data[p];
+				const ufbx_material *material = part->index < materials->count ? materials->data[part->index] : NULL;
+				write_primitive(mesh, part, material, material ? (int)material->typed_id : -1, skin, shapes, shape_count, corner_normals, &wrote_any);
+			}
+			json_raw(&g.meshes, "]");
+			if (shape_count) {
+				json_raw(&g.meshes, ",\"extras\":{\"targetNames\":[");
+				int at = 0;
+				for (size_t b = 0; b < mesh->blend_deformers.count; b++) {
+					const ufbx_blend_deformer *deformer = mesh->blend_deformers.data[b];
+					for (size_t c = 0; c < deformer->channels.count; c++) {
+						const ufbx_blend_channel *channel = deformer->channels.data[c];
+						if (!channel_shape(channel)) continue;
+						if (at++) json_raw(&g.meshes, ",");
+						json_string(&g.meshes, channel->name);
+					}
+				}
+				json_raw(&g.meshes, "]}");
+			}
+			json_raw(&g.meshes, "}");
+			if (!wrote_any) {
+				g.meshes.length = mark;
+				continue;
+			}
+			first_mesh = false;
+			g.node_mesh[owner->typed_id] = next_mesh;
+			if (g.mesh_index[m] < 0) g.mesh_index[m] = next_mesh;
+			g.mesh_source = realloc(g.mesh_source, ((size_t)next_mesh + 1) * sizeof(int));
+			if (!g.mesh_source) abort();
+			g.mesh_source[next_mesh] = (int)m;
+			g.mesh_source_count = next_mesh + 1;
+			next_mesh++;
+		}
+		free(corner_normals);
+		if (shape_count) {
 			for (int s = 0; s < shape_count; s++) {
 				free(shapes[s].positions);
 				free(shapes[s].normals);
 			}
 			free(shapes);
 		}
-		json_raw(&g.meshes, "}");
-		if (!wrote_any) {
-			g.meshes.length = mark;
-			continue;
-		}
-		first_mesh = false;
-		g.mesh_index[m] = next_mesh++;
 	}
 }
 
@@ -845,7 +975,7 @@ static void write_meshes(void) {
  * exporters leave such things behind (Meshy's rigged characters come with a stray sphere).
  */
 static bool node_is_loose(const ufbx_node *node) {
-	if (!g.has_skin || !node->mesh || node->mesh->skin_deformers.count) return false;
+	if (!g.has_skin || !node->mesh || node->mesh->skin_deformers.count || node_is_shape(node)) return false;
 	for (const ufbx_node *at = node->parent; at; at = at->parent) if (at->bone) return false;
 	return true;
 }
@@ -929,8 +1059,8 @@ static void write_nodes(void) {
 			double value[3] = { t.scale.x, t.scale.y, t.scale.z };
 			json_key_floats(out, "scale", value, 3);
 		}
-		if (node->mesh && !(g.flags & FLAG_NO_MESHES) && g.mesh_index[node->mesh->typed_id] >= 0 && !((g.flags & FLAG_NO_LOOSE_MESHES) && node_is_loose(node))) {
-			json_key_integer(out, "mesh", g.mesh_index[node->mesh->typed_id]);
+		if (node->mesh && !(g.flags & FLAG_NO_MESHES) && g.node_mesh[node->typed_id] >= 0 && !((g.flags & FLAG_NO_LOOSE_MESHES) && node_is_loose(node))) {
+			json_key_integer(out, "mesh", g.node_mesh[node->typed_id]);
 			int skin = node_skin(node);
 			if (skin >= 0) json_key_integer(out, "skin", skin);
 		}
@@ -1190,7 +1320,7 @@ static size_t write_clip_tracks(ClipWriter *clip, const ufbx_baked_anim *baked, 
 
 	// A clip lasts as long as its take even if its last keys were reduced away, or every track only
 	// held the rest pose: a clip's length is its latest key time, so one held track reaches the end.
-	if (latest_key + 1e-4 < duration) {
+	if (latest_key + 1e-4 < duration && baked->key_time_max > baked->key_time_min) {
 		for (size_t n = 0; n < baked->nodes.count; n++) {
 			const ufbx_baked_node *baked_node = &baked->nodes.data[n];
 			int index = g.node_index[baked_node->typed_id];
@@ -1300,19 +1430,6 @@ static const char *axis_name(ufbx_coordinate_axis axis) {
 	}
 }
 
-/** Whether a name starts with `prefix`, ignoring case. */
-static bool name_has_prefix(ufbx_string name, const char *prefix) {
-	size_t length = strlen(prefix);
-	if (name.length < length) return false;
-	for (size_t i = 0; i < length; i++) {
-		char a = name.data[i], b = prefix[i];
-		if (a >= 'a' && a <= 'z') a -= 32;
-		if (b >= 'a' && b <= 'z') b -= 32;
-		if (a != b) return false;
-	}
-	return true;
-}
-
 static void write_report(Buffer *out) {
 	ufbx_scene *scene = g.scene;
 	const ufbx_metadata *meta = &scene->metadata;
@@ -1336,6 +1453,15 @@ static void write_report(Buffer *out) {
 	double box_max[3] = { -INFINITY, -INFINITY, -INFINITY };
 	double rig_min[3] = { INFINITY, INFINITY, INFINITY };
 	double rig_max[3] = { -INFINITY, -INFINITY, -INFINITY };
+	// The same, of what stays once what the file's names and flags say is taken out.
+	double kept_min[3] = { INFINITY, INFINITY, INFINITY };
+	double kept_max[3] = { -INFINITY, -INFINITY, -INFINITY };
+	double kept_rig_min[3] = { INFINITY, INFINITY, INFINITY };
+	double kept_rig_max[3] = { -INFINITY, -INFINITY, -INFINITY };
+	for (size_t s = 0; s < scene->skin_deformers.count; s++) {
+		int most = (int)scene->skin_deformers.data[s]->max_weights_per_vertex;
+		if (most > g.max_influences_in_file) g.max_influences_in_file = most;
+	}
 	for (size_t m = 0; m < scene->meshes.count; m++) {
 		const ufbx_mesh *mesh = scene->meshes.data[m];
 		size_t instances = mesh->instances.count ? mesh->instances.count : 1;
@@ -1350,6 +1476,7 @@ static void write_report(Buffer *out) {
 		for (size_t i = 0; i < mesh->instances.count; i++) {
 			const ufbx_matrix *to_world = &mesh->instances.data[i]->geometry_to_world;
 			bool loose = node_is_loose(mesh->instances.data[i]);
+			bool left_out = node_is_left_out(mesh->instances.data[i]);
 			for (size_t v = 0; v < mesh->num_vertices; v++) {
 				// A skinned vertex is where its strongest bone puts it, whatever the mesh node's own transform says.
 				const ufbx_matrix *matrix = to_world;
@@ -1364,6 +1491,11 @@ static void write_report(Buffer *out) {
 					if (p[axis] > box_max[axis]) box_max[axis] = p[axis];
 					if (!loose && p[axis] < rig_min[axis]) rig_min[axis] = p[axis];
 					if (!loose && p[axis] > rig_max[axis]) rig_max[axis] = p[axis];
+					if (left_out) continue;
+					if (p[axis] < kept_min[axis]) kept_min[axis] = p[axis];
+					if (p[axis] > kept_max[axis]) kept_max[axis] = p[axis];
+					if (!loose && p[axis] < kept_rig_min[axis]) kept_rig_min[axis] = p[axis];
+					if (!loose && p[axis] > kept_rig_max[axis]) kept_rig_max[axis] = p[axis];
 				}
 			}
 		}
@@ -1376,13 +1508,16 @@ static void write_report(Buffer *out) {
 	json_key_integer(out, "meshesWithPolygons", (long long)ngons);
 	json_key_integer(out, "meshesWithoutUvs", (long long)withoutUv);
 	json_key_integer(out, "meshesWithoutNormals", (long long)withoutNormals);
+	// When nothing would stay, it all does.
+	bool any_kept = kept_min[0] <= kept_max[0];
+	bool any_kept_rig = kept_rig_min[0] <= kept_rig_max[0];
 	if (box_min[0] <= box_max[0]) {
-		json_key_floats(out, "boundsMin", box_min, 3);
-		json_key_floats(out, "boundsMax", box_max, 3);
+		json_key_floats(out, "boundsMin", any_kept ? kept_min : box_min, 3);
+		json_key_floats(out, "boundsMax", any_kept ? kept_max : box_max, 3);
 	}
 	if (rig_min[0] <= rig_max[0]) {
-		json_key_floats(out, "boundsWithoutLooseMin", rig_min, 3);
-		json_key_floats(out, "boundsWithoutLooseMax", rig_max, 3);
+		json_key_floats(out, "boundsWithoutLooseMin", any_kept_rig ? kept_rig_min : rig_min, 3);
+		json_key_floats(out, "boundsWithoutLooseMax", any_kept_rig ? kept_rig_max : rig_max, 3);
 	}
 	json_key(out, "looseMeshes");
 	json_raw(out, "[");
@@ -1405,7 +1540,7 @@ static void write_report(Buffer *out) {
 	for (size_t i = 0; i < scene->nodes.count; i++) {
 		const ufbx_node *node = scene->nodes.data[i];
 		if (node->bone) bones++;
-		if (name_has_prefix(node->name, "UCX_") || name_has_prefix(node->name, "UBX_") || name_has_prefix(node->name, "USP_") || name_has_prefix(node->name, "UCP_")) collision++;
+		if (name_is_shape(node->name)) collision++;
 		if (name_has_prefix(node->name, "SOCKET_")) sockets++;
 	}
 	json_key_integer(out, "bones", (long long)bones);
@@ -1557,10 +1692,10 @@ static void write_textures(Buffer *out) {
 		json_key_integer(out, "wrapU", texture->wrap_u);
 		json_key_integer(out, "wrapV", texture->wrap_v);
 		if (texture->has_uv_transform) {
-			// As texture coordinate = uv * scale + offset; rotation has no use in any file seen.
-			const ufbx_matrix *m = &texture->uv_to_texture;
-			double offset[2] = { m->m03, m->m13 };
-			double scale[2] = { m->m00, m->m11 };
+			// Scaling is how many times the image repeats, as art tools and engines read it: texture
+			// coordinate = uv * scale + offset. ufbx's own uv_to_texture is the inverse of that.
+			double offset[2] = { texture->uv_transform.translation.x, texture->uv_transform.translation.y };
+			double scale[2] = { texture->uv_transform.scale.x, texture->uv_transform.scale.y };
 			json_key_floats(out, "uvOffset", offset, 2);
 			json_key_floats(out, "uvScale", scale, 2);
 		}
@@ -1574,12 +1709,11 @@ static void write_uv_sets(Buffer *out) {
 	ufbx_scene *scene = g.scene;
 	json_raw(out, "[");
 	bool first = true;
-	for (size_t m = 0; m < scene->meshes.count; m++) {
-		if (g.mesh_index[m] < 0) continue;
+	for (int at = 0; at < g.mesh_source_count; at++) {
 		if (!first) json_raw(out, ",");
 		first = false;
 		json_raw(out, "[");
-		const ufbx_mesh *mesh = scene->meshes.data[m];
+		const ufbx_mesh *mesh = scene->meshes.data[g.mesh_source[at]];
 		for (size_t u = 0; u < mesh->uv_sets.count && u < MAX_UV_SETS; u++) {
 			if (u) json_raw(out, ",");
 			json_string(out, mesh->uv_sets.data[u].name);
@@ -1649,9 +1783,10 @@ EXPORT("fbx_close") void fbx_close(void) { import_free(); }
 /**
  * Reads a file and builds the import. Returns 1, or 0 with fbx_error_* set. `data` comes from
  * fbx_malloc and is taken over: it is freed as soon as the file is read, as a big file needs the
- * room. Everything else stays readable until fbx_close.
+ * room. So is `materials`, an OBJ's .mtl file, if there is one. Everything else stays readable until
+ * fbx_close.
  */
-EXPORT("fbx_import") int fbx_import(void *data, size_t size, const char *name, size_t name_length, int flags, double sample_rate, double key_threshold, double smoothing_angle) {
+EXPORT("fbx_import") int fbx_import(void *data, size_t size, const char *name, size_t name_length, int flags, double sample_rate, double key_threshold, double smoothing_angle, void *materials, size_t materials_size) {
 	import_free();
 	g.flags = flags;
 	g.smoothing_angle = smoothing_angle > 0 ? smoothing_angle : 60.0;
@@ -1673,10 +1808,15 @@ EXPORT("fbx_import") int fbx_import(void *data, size_t size, const char *name, s
 	options.path_separator = '/';
 	if (flags & FLAG_OBJ) options.file_format = UFBX_FILE_FORMAT_OBJ;
 	if (flags & FLAG_NO_ANIMATION) options.ignore_animation = true;
+	if (materials) {
+		options.obj_mtl_data.data = materials;
+		options.obj_mtl_data.size = materials_size;
+	}
 
 	ufbx_error error;
 	g.scene = ufbx_load_memory(data, size, &options, &error);
 	free(data);
+	free(materials);
 	if (!g.scene) {
 		size_t written = ufbx_format_error(g.error, sizeof(g.error), &error);
 		char *first_line = memchr(g.error, '\n', written);
@@ -1697,6 +1837,8 @@ EXPORT("fbx_import") int fbx_import(void *data, size_t size, const char *name, s
 	g.mesh_index = checked_malloc((scene->meshes.count + 1) * sizeof(int));
 	g.skin_index = checked_malloc((scene->skin_deformers.count + 1) * sizeof(int));
 	memset(g.mesh_index, 0xff, (scene->meshes.count + 1) * sizeof(int));
+	g.node_mesh = checked_malloc((scene->nodes.count + 1) * sizeof(int));
+	memset(g.node_mesh, 0xff, (scene->nodes.count + 1) * sizeof(int));
 	memset(g.skin_index, 0xff, (scene->skin_deformers.count + 1) * sizeof(int));
 
 	number_nodes();
