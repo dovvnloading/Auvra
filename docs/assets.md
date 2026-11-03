@@ -34,6 +34,14 @@ Animation files without a mesh, such as Mixamo downloads made "Without Skin", go
 
 A model's own clip can get a **mirrored** copy, with left and right swapped: hover the clip in the model's Properties and click the mirror button. A strafe left becomes a strafe right, a right-handed punch a left-handed one. The copy is called `<clip> (Mirrored)` and is rebuilt from its clip each time the project opens.
 
+## What names say in a model file
+
+Whatever format it comes in, a model file can say more through the names of its nodes, as art tools and engines have long agreed:
+
+- **`UCX_`, `UBX_`, `USP_` and `UCP_` meshes** (hull, box, sphere, capsule) are collision shapes. They are not drawn. A **Rigid Body** with no **Collider** uses them instead of one hull around the model, and a **Collider** can use them with **From the model file** as its shape. Each counts as a convex hull of its corners, so a concave shape is built from several, as in the art tools.
+- **`SOCKET_` nodes** become sockets of the model when it is imported or reimported, at the place the node has, hanging from the bone above it if there is one. A socket of the same name already on the model is left as it is.
+- **`Name_LOD0`, `Name_LOD1`** and so on, and the children of an FBX LOD group, are simpler versions of a mesh. The finest is kept. The rest are left out, as Auvra makes the simpler levels of every mesh itself.
+
 ## Skeletons
 
 Select a model and open the **Skeleton** tab in the sidebar to see its bones as a tree you can search, each with the part of the body it stands for. **Show bones** draws them over the model. **Show weights** colours the model by how much the picked bone moves it, from dark where not at all to red where fully. **Add a socket here** puts a socket on the picked bone, for things carried or attached.

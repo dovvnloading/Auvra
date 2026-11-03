@@ -369,6 +369,7 @@ const addCollider = (soup: TriangleSoup, component: LevelComponent, object: Leve
         soup.addSolid(capsuleGeometry(a, b, radius * largest), null);
         return true;
     }
+    if (shape === 'model') return addHull(soup, object, new THREE.Matrix4().makeTranslation(offset.x, offset.y, offset.z).premultiply(matrix), shapeGeometry);
     if (shape === 'mesh') {
         // A triangle mesh may be hollow (a building with rooms), so it is baked as its surface alone.
         const content = shapeGeometry?.(object);
@@ -384,20 +385,26 @@ const addCollider = (soup: TriangleSoup, component: LevelComponent, object: Leve
 const addHull = (soup: TriangleSoup, object: LevelObject, matrix: THREE.Matrix4, shapeGeometry: NavGeometryOptions['shapeGeometry']): boolean => {
     const content = shapeGeometry?.(object);
     if (!content) return false;
-    const hull = planHull(content.positions);
-    if (hull.kind === 'box') {
-        const [hx, hy, hz] = hull.halfExtents;
-        soup.addSolid(new THREE.BoxGeometry(hx * 2, hy * 2, hz * 2).translate(...hull.center), matrix);
-        return true;
+    let added = false;
+    // The shapes the model's file holds, when it holds any.
+    for (const positions of content.hulls?.length ? content.hulls : [content.positions]) {
+        const hull = planHull(positions);
+        if (hull.kind === 'box') {
+            const [hx, hy, hz] = hull.halfExtents;
+            soup.addSolid(new THREE.BoxGeometry(hx * 2, hy * 2, hz * 2).translate(...hull.center), matrix);
+            added = true;
+            continue;
+        }
+        const points: THREE.Vector3[] = [];
+        for (let i = 0; i + 2 < hull.points.length; i += 3) points.push(new THREE.Vector3(hull.points[i], hull.points[i + 1], hull.points[i + 2]));
+        try {
+            soup.addSolid(new ConvexGeometry(points), matrix);
+            added = true;
+        } catch {
+            // A flat hull has no solid to bake.
+        }
     }
-    const points: THREE.Vector3[] = [];
-    for (let i = 0; i + 2 < hull.points.length; i += 3) points.push(new THREE.Vector3(hull.points[i], hull.points[i + 1], hull.points[i + 2]));
-    try {
-        soup.addSolid(new ConvexGeometry(points), matrix);
-        return true;
-    } catch {
-        return false;
-    }
+    return added;
 };
 
 /**
