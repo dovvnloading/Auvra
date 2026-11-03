@@ -16,6 +16,7 @@ import {
     CLOUD_QUALITIES, CLOUD_QUALITY_LABELS, DEFAULT_SKY_LIGHT, resolveAtmosphere, resolveClouds, resolveNight, resolveSkyImage, resolveSkyLight, SKY_MODEL_LABELS, SKY_MODELS, skyModel, sunSize, sunTilt,
     type CloudQuality, type SkyAtmosphereSettings, type SkyCloudSettings, type SkyImageSettings, type SkyLightSettings, type SkyModel, type SkyNightSettings,
 } from '../../runtime/sky/skySettings';
+import { ColourField } from '../UI/ColourPicker';
 
 interface SkyDomeSectionProps {
     config: SkyConfig;
@@ -45,7 +46,7 @@ const Scrub: React.FC<{ label: string; title?: string; value: number; step: numb
 
 const Colour: React.FC<{ label: string; title?: string; value: string; onChange: (value: string) => void }> = ({ label, title, value, onChange }) => (
     <Row label={label} title={title}>
-        <input type="color" value={value} onChange={(e) => onChange(e.target.value)} className="w-6 h-4 bg-transparent border-none p-0 cursor-pointer" aria-label={label} />
+        <ColourField value={value} onChange={onChange} label={label} className="h-5 w-8" />
     </Row>
 );
 

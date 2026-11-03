@@ -27,6 +27,7 @@ import {
 import type { PaintToolName, TerrainToolSettings } from './terrainTool';
 import { TERRAIN_LAYER_USAGE_COLOURS } from './terrainLayerMaterial';
 import { TerrainRegionNote } from './TerrainRegionNote';
+import { ColourField } from '../../UI/ColourPicker';
 
 interface TerrainLayerPanelProps {
     terrain: LevelObject;
@@ -327,12 +328,7 @@ export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, s
                         />
                         <NumberRow label="Turn" unit="°" step={5} value={layer.rotation ?? 0} onChange={(rotation) => scrubLayer({ rotation })} />
                         <Row label="Tint">
-                            <input
-                                type="color"
-                                value={layer.tint ?? '#ffffff'}
-                                onChange={(event) => scrubLayer({ tint: event.target.value })}
-                                className="h-6 w-full cursor-pointer rounded border border-line bg-well"
-                            />
+                            <ColourField value={layer.tint ?? '#ffffff'} onChange={(tint) => scrubLayer({ tint })} label="Tint" className="h-6 w-full" />
                         </Row>
                         <NumberRow label="Roughness" unit="%" min={0} max={100} value={Math.round((layer.roughness ?? 0.9) * 100)} hint="How dull it is; with a roughness map, how far that map goes" onChange={(value) => scrubLayer({ roughness: value / 100 })} />
                         <NumberRow label="Normal strength" unit="%" min={0} max={300} step={5} value={Math.round((layer.normalStrength ?? 1) * 100)} onChange={(value) => scrubLayer({ normalStrength: value / 100 })} />

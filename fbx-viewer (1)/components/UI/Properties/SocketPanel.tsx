@@ -7,6 +7,7 @@ import { LoadedModelData } from '../../../types';
 import { Select } from '../Select';
 import { TransformInputGroup } from './TransformInputGroup';
 import { ScrubbableInput } from './ScrubbableInput';
+import { ColourField } from '../ColourPicker';
 
 interface SocketPanelProps {
   selectedModel: LoadedModelData | null;
@@ -270,7 +271,7 @@ export const SocketPanel: React.FC<SocketPanelProps> = ({ selectedModel, onPrevi
                                         </div>
                                         <div className="col-span-2 flex items-center justify-between bg-gray-900 px-2 py-1 rounded border border-gray-700">
                                             <span className="text-2xs text-gray-500 font-bold">Tint</span>
-                                            <input type="color" value={flashCfg.color} onChange={(e) => updateSocket(sock.id, { flashConfig: { ...flashCfg, color: e.target.value } })} className="w-6 h-4 bg-transparent border-none p-0 cursor-pointer" />
+                                            <ColourField value={flashCfg.color} onChange={(color) => updateSocket(sock.id, { flashConfig: { ...flashCfg, color } })} label="Flash tint" className="h-5 w-8" />
                                         </div>
                                     </div>
                                 </div>

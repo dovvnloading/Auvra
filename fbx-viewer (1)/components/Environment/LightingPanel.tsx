@@ -8,6 +8,7 @@ import { editorSession } from '../../utils/editorSession';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
 import { BakedLightingSection } from './BakedLightingSection';
+import { ColourField } from '../UI/ColourPicker';
 
 type Vec3 = [number, number, number];
 
@@ -296,18 +297,8 @@ export const LightingPanel: React.FC<LightingPanelProps> = ({ levelId, onSelect,
                                 </button>
                             </div>
                             <div className="flex items-center gap-2">
-                                <input
-                                    type="color"
-                                    value={color}
-                                    disabled={!isOpenLevel}
-                                    onChange={(e) => {
-                                        const next = e.target.value;
-                                        if (HEX_COLOR.test(next) && next.toLowerCase() !== color.toLowerCase()) setProp(light, 'color', next);
-                                    }}
-                                    className="w-8 h-5 bg-transparent border-none p-0 cursor-pointer shrink-0 disabled:cursor-not-allowed"
-                                    title="Light colour"
-                                    aria-label={`${name} colour`}
-                                />
+                                <ColourField value={color} disabled={!isOpenLevel} label={`${name} colour`} className="h-5 w-8"
+                                    onChange={(next) => { if (HEX_COLOR.test(next) && next.toLowerCase() !== color.toLowerCase()) setProp(light, 'color', next); }} />
                                 <div className="flex-1 min-w-0">
                                     <ScrubbableInput
                                         label="Int"

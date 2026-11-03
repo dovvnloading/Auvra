@@ -25,11 +25,11 @@ import {
     type PaintLayer,
 } from '../../../texturing/paint/paintTypes';
 import { SMART_MASKS, SMART_MATERIALS, graphMaterialLayer, generatorEffect } from '../../../texturing/paint/smartLibrary';
-import { fromHex, toHex } from '../../Materials/MaterialParamField';
 import { IconButton, Popover } from '../../UI/kit';
 import { Select } from '../../UI/Select';
 import { ParamControl } from '../TextureParamField';
 import type { PaintSession } from './paintSession';
+import { ColourFieldRgb } from '../../UI/ColourPicker';
 
 /** The layer stack of a painted texture set, and the selected layer's settings. */
 
@@ -56,8 +56,7 @@ const ValueField: React.FC<{ channel: PaintChannel; value: [number, number, numb
         ? (
             <label className="flex items-center gap-2 text-2xs text-zinc-400">
                 <span className="w-20 shrink-0">Colour</span>
-                <input type="color" value={toHex(value)} onChange={(event) => onChange(fromHex(event.target.value) as [number, number, number])} className="h-5 w-9 cursor-pointer rounded border border-zinc-700 bg-transparent" aria-label={`${CHANNEL_LABELS[channel]} colour`} />
-                <span className="font-mono text-zinc-500">{toHex(value)}</span>
+                <ColourFieldRgb value={value} onChange={(next) => onChange(next as [number, number, number])} label={/colour/i.test(CHANNEL_LABELS[channel]) ? CHANNEL_LABELS[channel] : `${CHANNEL_LABELS[channel]} colour`} className="h-5 w-9" showHex />
             </label>
         )
         : <Slider label="Value" value={value[0]} onChange={(v) => onChange([v, v, v])} />
@@ -118,8 +117,10 @@ export const LayerPanel: React.FC<{
     const [dragging, setDragging] = useState<string | null>(null);
     const layer = allLayers(document.layers).find((candidate) => candidate.id === selection.layerId) ?? null;
 
-    const change = (layers: PaintLayer[], label: string, extra: Partial<PaintDocument> = {}) => session.change({ ...document, ...extra, layers }, label);
-    const changeLayer = (id: string, update: (layer: PaintLayer) => PaintLayer | null, label: string) => change(mapLayer(document.layers, id, update), label);
+    const change = (layers: PaintLayer[], label: string, extra: Partial<PaintDocument> = {}, coalesce?: string) => session.change({ ...document, ...extra, layers }, label, coalesce);
+    // Dragged and typed changes of one layer make one undo step; switches stay a step each.
+    const changeLayer = (id: string, update: (layer: PaintLayer) => PaintLayer | null, label: string) =>
+        change(mapLayer(document.layers, id, update), label, {}, label.startsWith('Change') || label === 'Rename layer' ? `${id}:${label}` : undefined);
 
     const add = (created: PaintLayer, label: string) => {
         change(insertLayer(document.layers, created, selection.layerId), label);

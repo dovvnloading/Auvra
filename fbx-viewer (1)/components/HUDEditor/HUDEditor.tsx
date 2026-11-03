@@ -28,6 +28,7 @@ import {
     TITLE_MENU_REQUIRED_ACTIONS,
     type MenuActionKind,
 } from '../../player/menus';
+import { ColourField } from '../UI/ColourPicker';
 
 /** One authored HUD screen, stored as its own document in the project 'hud' domain. */
 export interface HUDDocument {
@@ -223,12 +224,7 @@ const PropertyInput: React.FC<{
                 <span className="text-2xs text-gray-400 font-medium truncate mr-2">{label}</span>
                 <div className="flex items-center gap-2">
                     <span className="text-2xs font-mono text-gray-500 ">{value}</span>
-                    <input 
-                        type="color" 
-                        value={value} 
-                        onChange={(e) => onChange(e.target.value)}
-                        className="w-6 h-6 rounded cursor-pointer bg-transparent border-0 p-0"
-                    />
+                    <ColourField value={String(value)} onChange={onChange} label={label} className="h-6 w-6" />
                 </div>
             </div>
         );
