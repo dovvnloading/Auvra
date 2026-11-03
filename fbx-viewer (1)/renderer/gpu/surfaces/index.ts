@@ -44,17 +44,17 @@ const followKinds = (pool: MaterialPool): void => {
   if (followed.has(pool)) return;
   followed.add(pool);
   const acquire = pool.acquire.bind(pool);
-  pool.acquire = (material: THREE.Material, frame: number): MaterialEntry | null => {
+  pool.acquire = (material: THREE.Material): MaterialEntry | null => {
     // Asked first: this is what makes a new graph's kind known to the pool.
     const wanted = surfaceKindFor(material);
-    const entry = acquire(material, frame);
+    const entry = acquire(material);
     if (!entry || !wanted || entry.kind === wanted) return entry;
     entry.kind = wanted;
     entry.bindGroup = null as unknown as GPUBindGroup;
     entry.textures = [];
     entry.textureRevisions = [];
     entry.packedFrame = -1;
-    return acquire(material, frame);
+    return acquire(material);
   };
 };
 

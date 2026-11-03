@@ -809,7 +809,7 @@ class ForwardDrawList {
     const { material } = sprite;
     if (!material?.visible) return;
     if (sprite.frustumCulled && !_frustum.intersectsSprite(sprite)) return;
-    const entry = frame.materials.acquire(material, frame.frameNumber);
+    const entry = frame.materials.acquire(material);
     if (!entry) return;
     const list = this.listFor(entry, false);
     if (!list) return;

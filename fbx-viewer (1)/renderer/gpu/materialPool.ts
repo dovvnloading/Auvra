@@ -13,6 +13,11 @@ import type { TextureEntry, TexturePool } from "./texturePool";
  * it is its surface kind: a piece of WGSL (surfaces.ts) saying what a pixel of that material looks like, compiled
  * into every pass that draws surfaces. Materials change their numbers freely, so a material's slice is packed again
  * every frame it is used and only sent when it differs.
+ *
+ * One pool serves every renderer on a device, one after another or side by side, so it keeps its own count of frames
+ * and its own count of who draws each material. A renderer starts each frame with `beginFrame`; a scene's draw groups
+ * `hold` the materials they draw and `drop` them when they go, as they all do when the scene's renderer closes. What
+ * nothing holds is given back after a few frames, so a closed renderer's materials do not sit in the buffer for good.
  */
 
 /** What a material asks of the fixed-function state, which is what splits one kind into several pipelines. */
@@ -43,11 +48,14 @@ export interface MaterialEntry {
   textures: (TextureEntry | null)[];
   textureRevisions: number[];
   bufferGeneration: number;
+  /** The pool's frame it was last packed in (see `MaterialPool.beginFrame`). */
   packedFrame: number;
   /** Which `rebindAll` its bind group dates from. */
   bindEpoch: number;
   /** What its bind group holds has been destroyed. Nothing may draw it until it has been looked up again. */
   gone: boolean;
+  /** How many draw groups, in any scene of any renderer, draw with it (`hold` and `drop`). */
+  users: number;
 }
 
 /** The uniform slice of one material, far enough apart for any device's offset alignment. */
@@ -55,10 +63,18 @@ const SLICE_BYTES = 768;
 const SLICE_WORDS = SLICE_BYTES / 4;
 const PACK_WORDS = 96;
 const INITIAL_SLICES = 512;
-/** Frames a material may go undrawn before its slice is given back. Every editor view on screen is a frame of its own. */
+/**
+ * Frames a material may go undrawn before its slice is given back, even while a draw group still holds it (a scene kept
+ * but not drawn). Frames are the pool's own, so every editor view on screen, and every renderer on the device, adds to them.
+ */
 const UNUSED_FOR = 7200;
 /** Frames between looks for materials gone unused. */
 const LOOK_EVERY = 256;
+/**
+ * Frames a material no draw group holds may go without being looked up before its slice is given back. Its scene was
+ * forgotten or its renderer closed; what still draws it without a group, such as a sprite, looks it up every frame.
+ */
+const UNHELD_FOR = 30;
 
 const blendFactor = (factor: number, fallback: GPUBlendFactor): GPUBlendFactor => {
   switch (factor) {
@@ -167,10 +183,39 @@ export class MaterialPool {
   private bindEpoch = 0;
   /** A material dropped without being disposed would otherwise hold its slice for good: nothing else tells this pool. */
   private readonly live = new Set<MaterialEntry>();
+  /** Live entries no draw group holds, looked at every frame. */
+  private readonly unheld = new Set<MaterialEntry>();
+  /**
+   * The pool's own count of frames. The pool is shared by every renderer on the device, and each renderer counts its
+   * frames from one, so a renderer's number says nothing to the pool: a new renderer would find materials already
+   * "packed this frame" by an old one, and nothing old would ever look unused to it.
+   */
+  private frame = 0;
   private nextLook = 0;
 
   constructor(private readonly device: GPUDevice, private readonly textures: TexturePool) {
     this.buffer = new GrowableBuffer(device, "gpu materials", GPUBufferUsage.UNIFORM, INITIAL_SLICES * SLICE_BYTES);
+  }
+
+  /** Starts a frame of whichever renderer is drawing, before it looks anything up, and gives back what nothing draws. */
+  beginFrame(): void {
+    const frame = ++this.frame;
+    for (const entry of this.unheld) {
+      if (frame - entry.packedFrame > UNHELD_FOR) this.release(entry.material);
+    }
+    if (frame >= this.nextLook) this.letGoOfUnused(frame);
+  }
+
+  /** Says a draw group draws with `entry`, until it says otherwise with `drop`. */
+  hold(entry: MaterialEntry): void {
+    entry.users++;
+    this.unheld.delete(entry);
+  }
+
+  /** A draw group no longer draws with `entry`: it was given back, or its scene was. */
+  drop(entry: MaterialEntry): void {
+    entry.users = Math.max(0, entry.users - 1);
+    if (!entry.users && this.live.has(entry)) this.unheld.add(entry);
   }
 
   layoutFor(kind: SurfaceKind): GPUBindGroupLayout {
@@ -182,9 +227,12 @@ export class MaterialPool {
     return layout;
   }
 
-  /** The material as drawn, or null if nothing can draw it yet (it is named in `unsupported`). */
-  acquire(material: THREE.Material, frame: number): MaterialEntry | null {
-    if (frame >= this.nextLook) this.letGoOfUnused(frame);
+  /**
+   * The material as drawn in this frame of the pool, or null if nothing can draw it yet (it is named in `unsupported`).
+   * Whatever keeps the entry from frame to frame says so with `hold`.
+   */
+  acquire(material: THREE.Material): MaterialEntry | null {
+    const { frame } = this;
     let entry = this.entries.get(material) ?? null;
     if (!entry) {
       const kind = kindOf(material);
@@ -196,6 +244,7 @@ export class MaterialPool {
       entry = this.create(material, kind);
       this.entries.set(material, entry);
       this.live.add(entry);
+      this.unheld.add(entry);
       material.addEventListener("dispose", this.onDispose);
     }
     if (entry.packedFrame !== frame) {
@@ -238,6 +287,7 @@ export class MaterialPool {
       packedFrame: -1,
       bindEpoch: this.bindEpoch,
       gone: false,
+      users: 0,
       bindGroup: null as unknown as GPUBindGroup,
     };
     return entry;
@@ -306,6 +356,7 @@ export class MaterialPool {
     if (!entry) return;
     this.entries.delete(material);
     this.live.delete(entry);
+    this.unheld.delete(entry);
     this.lastPacks.delete(entry.slot);
     this.slices.release(entry.slot, 1);
     this.seal(entry);

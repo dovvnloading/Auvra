@@ -459,8 +459,13 @@ export class GpuScene {
   private syncGroup(group: DrawGroup, frame: number): void {
     group.seenFrame = frame;
     // A material may come in late or change its mind about being transparent, so it is looked at every frame.
-    const material = this.materials.acquire(group.material.material, frame);
+    const material = this.materials.acquire(group.material.material);
     if (material) {
+      if (material !== group.material) {
+        // The old entry was given back (its material disposed, say) and this is the material's new one.
+        this.materials.drop(group.material);
+        this.materials.hold(material);
+      }
       group.material = material;
       if (material.revision !== group.materialRevision) {
         group.materialRevision = material.revision;
@@ -534,7 +539,7 @@ export class GpuScene {
     const count = instanced.isInstancedMesh ? instanced.instanceMatrix.count : 1;
     const pose = wantsPose(mesh, entry);
     const add = (material: THREE.Material, partStart: number, partCount: number, partIndex: number, arrayed: boolean) => {
-      const materialEntry = this.materials.acquire(material, frame);
+      const materialEntry = this.materials.acquire(material);
       if (!materialEntry) return;
       if (pose && !record.posed) {
         const { vertexBase, previousBase } = this.geometries.allocatePosed(entry.vertexCount);
@@ -631,6 +636,7 @@ export class GpuScene {
       levelEdits: entry.vertexEdits,
       seenFrame: -1,
     };
+    this.materials.hold(materialEntry);
     this.placeGroup(group);
     return group;
   }
@@ -910,8 +916,9 @@ export class GpuScene {
       if (part.firstInstance + part.count <= this.instances.capacity) this.hideRows(part);
       this.allocator.release(part.firstInstance, part.count);
       part.group.instances -= part.count;
-      if (part.group.instances <= 0) {
+      if (part.group.instances <= 0 && this.groups.get(part.group.key) === part.group) {
         this.groups.delete(part.group.key);
+        this.materials.drop(part.group.material);
         this.layoutDirty = true;
       }
     }
@@ -1036,6 +1043,9 @@ export class GpuScene {
       const { posed } = this.recordList[index];
       if (posed) this.geometries.releasePosed(posed.vertexBase, posed.previousBase, posed.vertexCount);
     }
+    // The material pool outlives this scene and its renderer: what only this scene drew goes back to it.
+    for (const group of this.groups.values()) this.materials.drop(group.material);
+    this.groups.clear();
     this.instanceBuffer.destroy();
     this.groupFirst.destroy();
     this.drawTemplate.destroy();

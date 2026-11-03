@@ -549,6 +549,8 @@ export class GpuRenderer implements GpuRendererApi {
     const { device } = core;
 
     const frameNumber = ++this.info.render.frame;
+    // The pool counts frames of every renderer on the device; this renderer's own count starts again at one.
+    this.materials.beginFrame();
     let kept = this.gpuScenes.get(scene);
     if (!kept) {
       kept = { gpu: new GpuScene(device, this.geometries, this.materials), lastDrawn: frameNumber };
