@@ -41,6 +41,17 @@ FOLIAGE_MAGIC = b"AUVRAFO1"
 FOLIAGE_ENCODING = "float32le-10"
 _FOLIAGE_FLOATS = 10
 
+# Weights painted on a skinned model: a 16-byte header (magic, uint32 places
+# painted, uint32 length of the bone names), the bone names as a JSON array in
+# UTF-8 padded with spaces to four bytes, then three float32 per place (where it
+# stands), four uint16 per place (its bones, 65535 where it has run out) and four
+# float32 per place (their shares), all little-endian.
+SKIN_PAINT_MIME = "application/vnd.auvra.skinpaint"
+SKIN_PAINT_MAGIC = b"AUVRASK1"
+SKIN_PAINT_ENCODING = "places-v1"
+_SKIN_PAINT_NO_BONE = 0xFFFF
+_SKIN_PAINT_PLACE_BYTES = 12 + 8 + 16
+
 # Baked light volumes (a level's light probes): a 20-byte header (magic, uint32
 # x, y and z probe counts) followed by 12 float32 spherical harmonics
 # coefficients per probe (four RGB bands), x fastest, all little-endian.
@@ -122,7 +133,7 @@ class AssetStore:
             if size is not None and total != size:
                 raise ValueError("asset size does not match declared size")
             detected = sniff_mime(bytes(prefix))
-            known_media = {"image/png", "image/jpeg", "image/webp", "audio/wav", "audio/ogg", GLB_MIME, HEIGHTFIELD_MIME, SPLATMAP_MIME, FOLIAGE_MIME, LIGHT_VOLUME_MIME}
+            known_media = {"image/png", "image/jpeg", "image/webp", "audio/wav", "audio/ogg", GLB_MIME, HEIGHTFIELD_MIME, SPLATMAP_MIME, FOLIAGE_MIME, LIGHT_VOLUME_MIME, SKIN_PAINT_MIME}
             if mime in known_media and detected != mime:
                 raise AssetContentError("asset MIME does not match its content")
             declared = mime.lower() if isinstance(mime, str) else None
@@ -137,6 +148,8 @@ class AssetStore:
                 validate_foliage_file(tmp)
             elif mime == LIGHT_VOLUME_MIME:
                 validate_light_volume_file(tmp)
+            elif mime == SKIN_PAINT_MIME:
+                validate_skin_paint_file(tmp)
             asset_id = digest.hexdigest(); target = self.path_for(asset_id)
             target.parent.mkdir(parents=True, exist_ok=True)
             # Serialize same-digest ingestion with manifest publication.  An
@@ -316,6 +329,7 @@ def sniff_mime(prefix: bytes) -> str | None:
     if prefix.startswith(SPLATMAP_MAGIC): return SPLATMAP_MIME
     if prefix.startswith(FOLIAGE_MAGIC): return FOLIAGE_MIME
     if prefix.startswith(LIGHT_VOLUME_MAGIC): return LIGHT_VOLUME_MIME
+    if prefix.startswith(SKIN_PAINT_MAGIC): return SKIN_PAINT_MIME
     return None
 
 def text_model_matches(mime: str, prefix: bytes) -> bool:
@@ -471,6 +485,41 @@ def validate_light_volume_file(path: Path, *, chunk_size: int = 1024 * 1024) -> 
         for block in iter(lambda: stream.read(chunk_size), b""):
             if not all(map(math.isfinite, _float32_samples(block))):
                 raise ValueError("light volume samples must be finite")
+
+def validate_skin_paint_file(path: Path, *, chunk_size: int = 1024 * 1024) -> None:
+    """Structurally validate painted weights: header, size, bone names, bones in range and finite numbers."""
+
+    with path.open("rb") as stream:
+        header = stream.read(_HEIGHTFIELD_HEADER.size)
+        if len(header) != _HEIGHTFIELD_HEADER.size:
+            raise ValueError("painted weights asset is truncated")
+        magic, count, names_length = _HEIGHTFIELD_HEADER.unpack(header)
+        if magic != SKIN_PAINT_MAGIC:
+            raise ValueError("painted weights asset has an unknown format")
+        if names_length % 4:
+            raise ValueError("painted weights asset has a misaligned layout")
+        if os.fstat(stream.fileno()).st_size != _HEIGHTFIELD_HEADER.size + names_length + count * _SKIN_PAINT_PLACE_BYTES:
+            raise ValueError("painted weights asset size does not match its count")
+        try:
+            names = json.loads(stream.read(names_length).decode("utf-8"))
+        except ValueError as exc:
+            raise ValueError("painted weights asset has unreadable bone names") from exc
+        if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+            raise ValueError("painted weights asset has unreadable bone names")
+        chunk_size -= chunk_size % 4
+        floats_left = count * 3
+        while floats_left:
+            block = stream.read(min(chunk_size, floats_left * 4))
+            floats_left -= len(block) // 4
+            if not all(map(math.isfinite, _float32_samples(block))):
+                raise ValueError("painted weights places must be finite")
+        for _ in range(count):
+            for bone in struct.unpack("<4H", stream.read(8)):
+                if bone != _SKIN_PAINT_NO_BONE and bone >= len(names):
+                    raise ValueError("painted weights asset names a bone it does not have")
+        for block in iter(lambda: stream.read(chunk_size), b""):
+            if not all(share >= 0.0 and share <= 1.0 for share in _float32_samples(block)):
+                raise ValueError("painted weights shares must be between 0 and 1")
 
 def _is_reparse(path: Path) -> bool:
     try: return bool(getattr(path.stat(), "st_file_attributes", 0) & 0x400)

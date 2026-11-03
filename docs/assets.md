@@ -48,7 +48,7 @@ A mesh hidden in the art tool when an FBX was saved is left out too, unless ever
 
 ## Skeletons
 
-Select a model and open the **Skeleton** tab in the sidebar to see its bones as a tree you can search, each with the part of the body it stands for. **Show bones** draws them over the model, and clicking a joint in the view picks its bone in the tree. **Show weights** colours the model by how much the picked bone moves it, from dark where not at all to red where fully. **Add a socket here** puts a socket on the picked bone, for things carried or attached.
+Select a model and open the **Skeleton** tab in the sidebar to see its bones as a tree you can search, each with the part of the body it stands for. **Show bones** draws them over the model, and clicking a joint in the view picks its bone in the tree. **Show weights** colours the model by how much the picked bone moves it, from dark where not at all to red where fully, and goes off when you leave the tab. **Add a socket here** puts a socket on the picked bone, for things carried or attached.
 
 A clip made for one skeleton plays on another when both read as people. Bones are recognised by the names rigs commonly use (`mixamorig:LeftArm`, `upperarm_l`, `UpperArm.L`, `LUpperLeg`, `FootL`). A skeleton whose names say nothing, such as `Bone.012`, is read from its shape at rest: the feet are the lowest leaves, the head the highest, the hands those furthest out, and hips and chest are where their paths meet. The tab warns when a part is still missing. To put a bone right, pick it and choose under **This bone is**; the choice stays with the project, and **Make them again** remakes the clips from other rigs with it.
 
@@ -67,6 +67,16 @@ The body is read from its mesh, and markers appear on its chin, shoulders, elbow
 **Give the hands fingers** adds three bones to each finger, so clips that curl the fingers, such as holding a weapon, show. Fingers that stand apart are followed where they are. A hand whose fingers are grown together into a mitten, as on many generated meshes, is shared out across its width, with each finger ending at the hand's outline. Nothing behind the wrist follows a finger. Turn it off to keep each hand as one bone.
 
 The model keeps its place in levels and blueprints, its size, its sockets and its collision shapes, and goes among the characters, its source now a GLB. Only what it draws counts as its body: parts the import leaves out are gone from the GLB. Any clips in its old file go, with a note saying so before you start. Clips from any humanoid rig can then be imported onto it.
+
+### Painting weights
+
+Any weight can be corrected by hand, on a skeleton from a file as well as one made here. With a bone picked and **Show weights** on, choose a brush under **Paint weights** and drag on the model. **Add** makes the picked bone move what the brush touches more, and **Remove** less, with the other bones there taking up the difference. **Smooth** evens out all the bones under the brush. **Size** is across the brush, as a share of the model's longest side (keys `[` and `]`), and **Strength** is how far one touch moves a vertex (keys `,` and `.`). Shift does the opposite of Add or Remove. Alt-drag, or any drag that starts off the model, still turns the view. Ctrl-click picks the bone moving that spot most, and the label beside the brush lists all the bones that do.
+
+**Pose** plays one of the model's clips, and its slider stops the clip at any moment, so a patch can be painted in the pose where it looks wrong and seen to change as it is painted.
+
+A vertex keeps at most four bones, with shares adding up to one. The brush follows the surface out from where it lands, so a hand resting on a thigh is not painted with the thigh, and takes any other piece of the mesh in reach, such as clothes over a body. Vertices at the same place move as one, across texture seams, materials and meshes, and a mesh is given any bone it did not have.
+
+Each stroke is one step of undo (Ctrl+Z and Ctrl+Y), and **Put back original** returns to the weights the model came with. Painted weights are kept with the model, apart from its source file. They go with the project into built games, and stay through **Import Settings** and **Reimport** wherever vertices still stand in the same place. The editor says so when a new file leaves some of them nowhere to go.
 
 ## Reimport and import settings
 

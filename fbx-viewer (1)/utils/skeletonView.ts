@@ -6,14 +6,22 @@ import * as THREE from 'three';
  * overlay drawn with the model, which sit in different React roots.
  */
 
+export type SkinBrushMode = 'off' | 'add' | 'remove' | 'smooth';
+
 export interface SkeletonViewState {
   showSkeleton: boolean;
   showWeights: boolean;
   /** Name of the bone picked in the panel. */
   selectedBone: string | null;
+  /** What dragging on the model does to the picked bone's weights. */
+  brush: SkinBrushMode;
+  /** Across the brush, as a percentage of the model's longest side. */
+  brushSize: number;
+  /** How far one touch moves a vertex, as a percentage of the way. */
+  brushStrength: number;
 }
 
-let state: SkeletonViewState = { showSkeleton: false, showWeights: false, selectedBone: null };
+let state: SkeletonViewState = { showSkeleton: false, showWeights: false, selectedBone: null, brush: 'off', brushSize: 12, brushStrength: 50 };
 const listeners = new Set<() => void>();
 
 export const setSkeletonView = (next: Partial<SkeletonViewState>): void => {
@@ -28,6 +36,12 @@ export const useSkeletonView = (): SkeletonViewState => useSyncExternalStore(
   },
   () => state,
 );
+
+/**
+ * Where the clip in the view has got to, in seconds, which changes too often to be state: the view
+ * writes `time`, and the panel sets `wanted` to send it somewhere.
+ */
+export const clipPlace: { time: number; wanted: number | null } = { time: 0, wanted: null };
 
 export interface SkeletonBone {
   name: string;
@@ -61,6 +75,34 @@ export const skeletonBones = (root: THREE.Object3D): SkeletonBone[] => {
     indexOf.set(node, list.length);
     if (parent >= 0) list[parent].children += 1;
     list.push({ name: node.name, bone: node, parent, depth: parent >= 0 ? list[parent].depth + 1 : 0, children: 0 });
+  });
+  return list;
+};
+
+/**
+ * A stand-in for each skinned mesh under `root`, to draw over it: it shares the mesh's geometry, skeleton and
+ * place in the world, but belongs to no model. The model is left as it is, as others read and dispose its
+ * materials, and copies of it carry whatever it holds. A second mesh over the same surface gets none.
+ */
+export const skinnedStandIns = (root: THREE.Object3D, materialFor: (mesh: THREE.SkinnedMesh) => THREE.Material): { mesh: THREE.SkinnedMesh; standIn: THREE.SkinnedMesh }[] => {
+  const list: { mesh: THREE.SkinnedMesh; standIn: THREE.SkinnedMesh }[] = [];
+  const drawn = new Map<THREE.BufferGeometry, THREE.Skeleton>();
+  root.traverse((node) => {
+    const mesh = node as THREE.SkinnedMesh;
+    if (!mesh.isSkinnedMesh || drawn.get(mesh.geometry) === mesh.skeleton) return;
+    drawn.set(mesh.geometry, mesh.skeleton);
+    const standIn = new THREE.SkinnedMesh(mesh.geometry, materialFor(mesh));
+    standIn.skeleton = mesh.skeleton;
+    standIn.bindMatrix = mesh.bindMatrix;
+    standIn.bindMatrixInverse = mesh.bindMatrixInverse;
+    standIn.bindMode = mesh.bindMode;
+    standIn.morphTargetInfluences = mesh.morphTargetInfluences;
+    standIn.morphTargetDictionary = mesh.morphTargetDictionary;
+    standIn.matrixWorld = mesh.matrixWorld;
+    // Its place is the mesh's, and it must never write it: a parent's update would, whatever its flags say.
+    standIn.updateMatrixWorld = () => undefined;
+    standIn.frustumCulled = false;
+    list.push({ mesh, standIn });
   });
   return list;
 };

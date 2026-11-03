@@ -294,6 +294,8 @@ class ProjectRepository:
         candidate_refs = self.referenced_asset_ids(candidate)
         superseded = (_superseded_terrain_assets(self.get_domain("objects"), validated["objects"])
                       if "objects" in validated else set())
+        if "models" in validated:
+            superseded |= _superseded_skin_paint(self.get_domain("models"), validated["models"])
         try:
             validate_project_references(candidate, asset_exists=self.assets.verify)
         except ValueError as exc:
@@ -307,8 +309,9 @@ class ProjectRepository:
         self._dirty = True
         if superseded:
             # Every sculpt or paint stroke, terrain undo and redo commits a new
-            # content-addressed heightfield or splat map, and the editor
-            # re-uploads any heights or weights it needs again. Drop a replaced
+            # content-addressed heightfield or splat map (and every stroke on a
+            # model, its painted weights), and the editor re-uploads any heights
+            # or weights it needs again. Drop a replaced
             # one as soon as no committed document references it, instead of
             # keeping it in Content (and copying it into every recovery point)
             # until close.
@@ -715,6 +718,19 @@ def _superseded_terrain_assets(previous: dict[str, Any], committed: dict[str, An
     kept = {document.get("id") for document in committed.get("documents", []) if isinstance(document, dict)}
     return {asset_id for (object_id, key), asset_id in _terrain_assets(previous).items()
             if object_id in kept and after.get((object_id, key)) != asset_id}
+
+def _superseded_skin_paint(previous: dict[str, Any], committed: dict[str, Any]) -> set[str]:
+    """Painted weights that a kept model document replaced or gave up."""
+    after = {document.get("id"): document for document in committed.get("documents", []) if isinstance(document, dict)}
+    superseded: set[str] = set()
+    for document in previous.get("documents", []):
+        reference = document.get("skinPaint") if isinstance(document, dict) else None
+        kept = after.get(document.get("id")) if isinstance(document, dict) else None
+        if not isinstance(reference, dict) or not isinstance(reference.get("assetId"), str) or kept is None:
+            continue
+        if (kept.get("skinPaint") or {}).get("assetId") != reference["assetId"]:
+            superseded.add(reference["assetId"])
+    return superseded
 
 def _journal_path(project_root: Path, value: Any, area: str) -> Path:
     """Resolve only the journal's approved relative path namespaces."""

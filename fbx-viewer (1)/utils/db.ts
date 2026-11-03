@@ -12,6 +12,7 @@ import { editorSession, type EditorSessionLease } from './editorSession';
 import { sortByHierarchy } from './sceneGraph';
 import { normalizeMaterialOverrides, setMaterialOverrideField, type MaterialOverrides } from './materialOverrides';
 import { MATERIALS_DOMAIN, materialAssetDocument, readMaterialAsset, withoutGraphTexture } from '../runtime/materials/materialLibrary';
+import { SKIN_PAINT_ENCODING, SKIN_PAINT_FILE_NAME, SKIN_PAINT_MIME, type SkinPaintFile, type SkinPaintReference } from './skinPaint/skinPaintFile';
 
 const DB_NAME = 'OmniRenderDB';
 
@@ -332,6 +333,22 @@ class DBOperations {
 
   async updateModelBoneRoles(id: string, boneRoles: { role: string; bone: string }[]): Promise<void> {
       await this.canonicalChange('models', 'upsert', { id, boneRoles }, id);
+  }
+
+  /**
+   * Stores the weights painted on a model. `encode` runs in its turn among the document changes, so the
+   * newest paint is what gets written; null means none are left. Returns what the document now points to.
+   */
+  async updateModelSkinPaint(id: string, encode: () => SkinPaintFile | null): Promise<SkinPaintReference | undefined> {
+      let skinPaint: SkinPaintReference | undefined;
+      await this.canonicalChange('models', 'upsert', { id }, id, undefined, async (value) => {
+          const file = encode();
+          skinPaint = file
+              ? { assetId: await projectService.uploadAsset(new File([file.bytes], SKIN_PAINT_FILE_NAME, { type: SKIN_PAINT_MIME })), encoding: SKIN_PAINT_ENCODING, count: file.count }
+              : undefined;
+          return { value: { ...(value as object), skinPaint } };
+      });
+      return skinPaint;
   }
 
   /** Rename and/or move a model in the content browser; folder '' is the library root. */
