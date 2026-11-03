@@ -196,6 +196,8 @@ const BoneTree: React.FC<{ model: LoadedModelData; playback: ClipPlayback }> = (
 /** The selected model's skeleton: its bones as a tree, what each is for, and what each moves. */
 export const SkeletonPanel: React.FC<ClipPlayback> = (playback) => {
   const { models, selectedModelId } = useScene();
+  // The colours mean nothing without this panel's key, and other tabs are about the model as it looks.
+  useEffect(() => () => setSkeletonView({ showWeights: false }), []);
   const model = models.find((candidate) => candidate.id === selectedModelId);
   const hasBones = useMemo(() => (model ? skeletonBones(model.object).length > 0 : false), [model]);
   if (!model) return <Empty>Select a model to see its skeleton.</Empty>;

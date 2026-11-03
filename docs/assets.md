@@ -46,7 +46,7 @@ A mesh hidden in the art tool when the file was saved is left out too, unless ev
 
 ## Skeletons
 
-Select a model and open the **Skeleton** tab in the sidebar to see its bones as a tree you can search, each with the part of the body it stands for. **Show bones** draws them over the model, and clicking a joint in the view picks its bone in the tree. **Show weights** colours the model by how much the picked bone moves it, from dark where not at all to red where fully. **Add a socket here** puts a socket on the picked bone, for things carried or attached.
+Select a model and open the **Skeleton** tab in the sidebar to see its bones as a tree you can search, each with the part of the body it stands for. **Show bones** draws them over the model, and clicking a joint in the view picks its bone in the tree. **Show weights** colours the model by how much the picked bone moves it, from dark where not at all to red where fully, and goes off when you leave the tab. **Add a socket here** puts a socket on the picked bone, for things carried or attached.
 
 A clip made for one skeleton plays on another when both read as people. Bones are recognised by the names rigs commonly use (`mixamorig:LeftArm`, `upperarm_l`, `UpperArm.L`, `LUpperLeg`, `FootL`). A skeleton whose names say nothing, such as `Bone.012`, is read from its shape at rest: the feet are the lowest leaves, the head the highest, the hands those furthest out, and hips and chest are where their paths meet. The tab warns when a part is still missing. To put a bone right, pick it and choose under **This bone is**; the choice stays with the project, and **Make them again** remakes the clips from other rigs with it.
 

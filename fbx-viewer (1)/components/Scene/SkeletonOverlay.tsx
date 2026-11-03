@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { Html } from '@react-three/drei';
 import { useFrame, useThree } from '@react-three/fiber';
-import { boneAtScreen, setSkeletonView, skeletonBones, useSkeletonView } from '../../utils/skeletonView';
+import { boneAtScreen, setSkeletonView, skeletonBones, skinnedStandIns, useSkeletonView } from '../../utils/skeletonView';
 import { SkinPaintBrush } from './SkinPaintBrush';
 
 const BONE_COLOR = new THREE.Color('#c7ccd6');
@@ -12,6 +12,9 @@ const NOTHING = (): void => undefined;
 
 /** A press that moves further than this, in pixels, is the camera being dragged and not a click. */
 const CLICK_SLOP = 4;
+
+/** Weights draw after everything of the model, its see-through parts too, and before the bones. */
+const WEIGHT_ORDER = 900;
 
 /** Bones drawn over the model as lines from each joint to its parent, the picked bone in the accent colour. */
 const SkeletonLines: React.FC<{ root: THREE.Object3D; selectedBone: string | null; pickable: boolean }> = ({ root, selectedBone, pickable }) => {
@@ -127,10 +130,19 @@ const SkeletonLines: React.FC<{ root: THREE.Object3D; selectedBone: string | nul
 /**
  * A mesh coloured by how much the picked bone moves it: slate where not at all, then from blue through
  * green to red where fully, in the same colours as the panel's key. It is lit from the view, so the
- * shape of what is being painted can be seen.
+ * shape of what is being painted can be seen. It covers the mesh as drawn already, at the same depth.
  */
 const weightMaterial = (pickedBone: { value: number }): THREE.MeshBasicMaterial => {
-  const material = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, toneMapped: false, fog: false });
+  const material = new THREE.MeshBasicMaterial({
+    side: THREE.DoubleSide,
+    toneMapped: false,
+    fog: false,
+    transparent: true,
+    forceSinglePass: true,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  });
   material.onBeforeCompile = (shader) => {
     shader.uniforms.pickedBone = pickedBone;
     shader.vertexShader = shader.vertexShader
@@ -157,34 +169,43 @@ const weightMaterial = (pickedBone: { value: number }): THREE.MeshBasicMaterial 
   return material;
 };
 
-/** While on, draws each skinned mesh by the picked bone's weights, and puts its own materials back afterwards. */
+/** While on, draws each skinned mesh over again by the picked bone's weights. */
 const WeightView: React.FC<{ root: THREE.Object3D; selectedBone: string | null }> = ({ root, selectedBone }) => {
-  const shaded = useRef<{ mesh: THREE.SkinnedMesh; pickedBone: { value: number } }[]>([]);
+  const holder = useRef<THREE.Group>(null);
+  const shaded = useRef<{ mesh: THREE.SkinnedMesh; standIn: THREE.SkinnedMesh; pickedBone: { value: number } }[]>([]);
   useEffect(() => {
-    const restore: (() => void)[] = [];
-    shaded.current = [];
-    root.traverse((node) => {
-      const mesh = node as THREE.SkinnedMesh;
-      if (!mesh.isSkinnedMesh) return;
-      const original = mesh.material;
+    const group = holder.current;
+    if (!group) return undefined;
+    const picks = new Map<THREE.SkinnedMesh, { value: number }>();
+    const standIns = skinnedStandIns(root, (mesh) => {
       const pickedBone = { value: -1 };
-      const material = weightMaterial(pickedBone);
-      mesh.material = material;
-      shaded.current.push({ mesh, pickedBone });
-      restore.push(() => {
-        mesh.material = original;
-        material.dispose();
-      });
+      picks.set(mesh, pickedBone);
+      return weightMaterial(pickedBone);
     });
-    return () => { for (const undo of restore) undo(); };
+    shaded.current = standIns.map(({ mesh, standIn }) => {
+      standIn.renderOrder = WEIGHT_ORDER;
+      standIn.raycast = NOTHING;
+      group.add(standIn);
+      return { mesh, standIn, pickedBone: picks.get(mesh)! };
+    });
+    return () => {
+      for (const { standIn } of standIns) {
+        group.remove(standIn);
+        (standIn.material as THREE.Material).dispose();
+      }
+      shaded.current = [];
+    };
   }, [root]);
-  // Looked up each frame: painting can give a mesh a bone it did not have.
   useFrame(() => {
-    for (const { mesh, pickedBone } of shaded.current) {
+    for (const { mesh, standIn, pickedBone } of shaded.current) {
+      // Looked up each frame: painting can give a mesh a bone it did not have.
       pickedBone.value = selectedBone ? mesh.skeleton.bones.findIndex((bone) => bone.name === selectedBone) : -1;
+      let shown = true;
+      for (let node: THREE.Object3D | null = mesh; node && shown; node = node.parent) shown = node.visible;
+      standIn.visible = shown;
     }
   });
-  return null;
+  return <group ref={holder} />;
 };
 
 /** The Skeleton panel's view of the selected model in the viewport: its bones, and what the picked one moves. */

@@ -79,6 +79,34 @@ export const skeletonBones = (root: THREE.Object3D): SkeletonBone[] => {
   return list;
 };
 
+/**
+ * A stand-in for each skinned mesh under `root`, to draw over it: it shares the mesh's geometry, skeleton and
+ * place in the world, but belongs to no model. The model is left as it is, as others read and dispose its
+ * materials, and copies of it carry whatever it holds. A second mesh over the same surface gets none.
+ */
+export const skinnedStandIns = (root: THREE.Object3D, materialFor: (mesh: THREE.SkinnedMesh) => THREE.Material): { mesh: THREE.SkinnedMesh; standIn: THREE.SkinnedMesh }[] => {
+  const list: { mesh: THREE.SkinnedMesh; standIn: THREE.SkinnedMesh }[] = [];
+  const drawn = new Map<THREE.BufferGeometry, THREE.Skeleton>();
+  root.traverse((node) => {
+    const mesh = node as THREE.SkinnedMesh;
+    if (!mesh.isSkinnedMesh || drawn.get(mesh.geometry) === mesh.skeleton) return;
+    drawn.set(mesh.geometry, mesh.skeleton);
+    const standIn = new THREE.SkinnedMesh(mesh.geometry, materialFor(mesh));
+    standIn.skeleton = mesh.skeleton;
+    standIn.bindMatrix = mesh.bindMatrix;
+    standIn.bindMatrixInverse = mesh.bindMatrixInverse;
+    standIn.bindMode = mesh.bindMode;
+    standIn.morphTargetInfluences = mesh.morphTargetInfluences;
+    standIn.morphTargetDictionary = mesh.morphTargetDictionary;
+    standIn.matrixWorld = mesh.matrixWorld;
+    // Its place is the mesh's, and it must never write it: a parent's update would, whatever its flags say.
+    standIn.updateMatrixWorld = () => undefined;
+    standIn.frustumCulled = false;
+    list.push({ mesh, standIn });
+  });
+  return list;
+};
+
 /** How far from a joint a click still picks it, in pixels. */
 const PICK_REACH = 14;
 
