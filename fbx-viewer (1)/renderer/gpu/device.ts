@@ -79,6 +79,15 @@ const LET_GO_AFTER_MS = 30_000;
 let pending: Promise<GpuCoreResult> | null = null;
 let surfaces = 0;
 let letGo: ReturnType<typeof setTimeout> | null = null;
+let softwareAccepted = false;
+
+/**
+ * Lets this page draw on a graphics card emulated on the processor. Only the rendering pictures ask: their machines have
+ * no other, and a picture drawn slowly is still the picture.
+ */
+export const acceptSoftwareAdapter = (): void => {
+  softwareAccepted = true;
+};
 
 const stayAwake = (): void => {
   if (letGo) clearTimeout(letGo);
@@ -91,7 +100,7 @@ const requestCore = async (): Promise<GpuCoreResult> => {
   const adapter = await gpu.requestAdapter({ powerPreference: "high-performance" }).catch(() => null);
   if (!adapter) return { core: null, reason: "no-adapter" };
   // A graphics card emulated on the processor: everything this renderer does there is many times slower than WebGL2's path.
-  if (adapter.info?.isFallbackAdapter) return { core: null, reason: "software-adapter" };
+  if (adapter.info?.isFallbackAdapter && !softwareAccepted) return { core: null, reason: "software-adapter" };
   const requiredFeatures = OPTIONAL_FEATURES.filter((feature) => adapter.features.has(feature));
   const device = await adapter.requestDevice({ requiredFeatures, requiredLimits: requestLimits(adapter) }).catch(() => null);
   if (!device) return { core: null, reason: "device-failed" };

@@ -4,6 +4,7 @@ import { useThree, type RootState } from '@react-three/fiber';
 import { DEFAULT_SKY_CONFIG, SkySystem } from '../../components/Environment/SkySystem';
 import { POST_PROCESS_COMPONENT } from '../../runtime/components/postProcess';
 import { LevelDynamicGi, dynamicGiFor } from '../../runtime/lighting/dynamicGi/LevelDynamicGi';
+import { isGpuRenderer } from '../../renderer/gpu/frame';
 import { GraphMaterial } from '../../runtime/materials/graphMaterial';
 import { normalizeMaterialGraph } from '../../runtime/materials/materialGraph';
 import type { LevelComponent, LevelObject, SkyConfig } from '../../types';
@@ -196,6 +197,11 @@ const GI_OBJECTS = (rays: Record<string, unknown>): LevelObject[] => [
 
 /** Waits for the rays' two big shaders, on the GPU's time, without the frames moving on. */
 const settleWithRays = (frames: number) => async ({ frames: run, until, state }: SceneSteps): Promise<void> => {
+  // On WebGPU each frame already waits for the pipelines it asked for: two frames ask for the tracing and the reflections.
+  if (isGpuRenderer(state().gl)) {
+    await run(2 + frames);
+    return;
+  }
   const shaders = () => dynamicGiFor(state().gl) as unknown as { traceReady: boolean; reflectionsReady: boolean } | null;
   await run(1);
   await until(() => shaders()?.traceReady === true);

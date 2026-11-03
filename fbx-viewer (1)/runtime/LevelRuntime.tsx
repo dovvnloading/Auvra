@@ -745,7 +745,6 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
     // What enemies hear this session: gunshots and the level's Make Noise nodes.
     const noises = useMemo(() => new NoiseBus(), []);
     const driving = useVehicleSessionState().driving !== null;
-    const gpuDrawn = useThree(state => isGpuRenderer(state.gl));
 
     if (!runtimePlayerModel) return null;
 
@@ -777,8 +776,7 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
                         visible={true}
                         castShadow
                         receiveShadow
-                        // Its chunks swap index buffers over vertices they share, which the GPU renderer's pool keeps once per geometry.
-                        lod={!gpuDrawn}
+                        lod
                     />
                 ))}
 

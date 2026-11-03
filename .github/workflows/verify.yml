@@ -92,6 +92,10 @@ jobs:
       - name: Draw the scenes and compare them with the kept pictures
         run: npm run rendering:verify
 
+      - name: Draw the scenes on WebGPU and compare them with its kept pictures
+        if: ${{ !cancelled() }}
+        run: npm run rendering:verify -- --renderer webgpu
+
       - name: Compare what they cost with main
         if: ${{ !cancelled() && hashFiles('fbx-viewer (1)/tests/visual/output/numbers.json') != '' }}
         run: |

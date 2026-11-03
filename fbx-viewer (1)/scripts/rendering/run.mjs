@@ -5,6 +5,9 @@
 //   node scripts/rendering/run.mjs --update   keep the new pictures as the ones to compare with
 //   node scripts/rendering/run.mjs --gpu      draw on the machine's real GPU, for its numbers (the pictures will differ)
 //   node scripts/rendering/run.mjs --only a,b just those scenes
+//   node scripts/rendering/run.mjs --renderer webgpu
+//                                             the same on the WebGPU renderer, with pictures of its own in
+//                                             tests/visual/references/webgpu/ and its output in tests/visual/output/webgpu/
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -14,16 +17,20 @@ import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { build } from 'vite';
 
-const projectDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const visualDir = path.join(projectDir, 'tests/visual');
-const referenceDir = path.join(visualDir, 'references');
-const outputDir = path.join(visualDir, 'output');
-
 const args = process.argv.slice(2);
 const updating = args.includes('--update');
 const realGpu = args.includes('--gpu');
 const onlyAt = args.indexOf('--only');
 const only = onlyAt >= 0 ? new Set(args[onlyAt + 1].split(',')) : null;
+const rendererAt = args.indexOf('--renderer');
+const renderer = rendererAt >= 0 ? args[rendererAt + 1] : 'webgl2';
+if (renderer !== 'webgl2' && renderer !== 'webgpu') throw new Error(`No renderer called ${renderer}: webgl2 or webgpu`);
+const onWebGpu = renderer === 'webgpu';
+
+const projectDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const visualDir = path.join(projectDir, 'tests/visual');
+const referenceDir = path.join(visualDir, 'references', ...(onWebGpu ? ['webgpu'] : []));
+const outputDir = path.join(visualDir, 'output', ...(onWebGpu ? ['webgpu'] : []));
 
 /** A pixel differs when a channel is further off than this: software GPUs round a little differently between machines. */
 const PIXEL_TOLERANCE = 10;
@@ -117,7 +124,12 @@ const main = async () => {
     });
     server = await serve(siteDir);
 
-    const gpuFlags = realGpu ? ['--ignore-gpu-blocklist'] : ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
+    // WebGPU on the processor goes through Vulkan's SwiftShader, which the browser brings along. Asking for GL's
+    // SwiftShader as well leaves the browser with no WebGPU adapter at all.
+    const softwareGpu = onWebGpu
+      ? ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--use-vulkan=swiftshader', '--use-webgpu-adapter=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist']
+      : ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
+    const gpuFlags = realGpu ? ['--ignore-gpu-blocklist', ...(onWebGpu ? ['--enable-unsafe-webgpu'] : [])] : softwareGpu;
     browser = spawn(browserPath(), [
       '--headless=new',
       `--user-data-dir=${profileDir}`,
@@ -146,7 +158,7 @@ const main = async () => {
     await send('Page.enable');
     await send('Emulation.setFocusEmulationEnabled', { enabled: true });
     const { address, port: sitePort } = server.address();
-    await send('Page.navigate', { url: `http://${address}:${sitePort}/index.html` });
+    await send('Page.navigate', { url: `http://${address}:${sitePort}/index.html?renderer=${renderer}` });
 
     const run = async (expression) => {
       const result = await Promise.race([
@@ -200,12 +212,13 @@ const main = async () => {
     writeFileSync(path.join(outputDir, 'numbers.json'), `${JSON.stringify(numbers, null, 2)}\n`);
     if (updating && !only) {
       for (const file of readdirSync(referenceDir)) {
-        if (!names.includes(path.basename(file, '.png'))) rmSync(path.join(referenceDir, file));
+        if (file.endsWith('.png') && !names.includes(path.basename(file, '.png'))) rmSync(path.join(referenceDir, file));
       }
     }
     client.close();
     if (failures.length) {
-      console.error(`Rendering has changed:\n  ${failures.join('\n  ')}\nThe pictures are in tests/visual/output/. If the change is meant, keep them with: npm run rendering:verify -- --update`);
+      const again = onWebGpu ? ' --renderer webgpu' : '';
+      console.error(`Rendering has changed on ${renderer}:\n  ${failures.join('\n  ')}\nThe pictures are in ${path.relative(projectDir, outputDir)}/. If the change is meant, keep them with: npm run rendering:verify -- --update${again}`);
       process.exitCode = 1;
     }
   } finally {

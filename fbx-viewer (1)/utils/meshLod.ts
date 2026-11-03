@@ -87,10 +87,22 @@ const surfaceAttributes = (geometry: THREE.BufferGeometry): { values: Float32Arr
 };
 
 /** Freeing a mesh frees its levels, which nothing else would. Drawn again, they upload again as it does. */
+// A geometry can be filled again after it is disposed (terrain skirts are): its levels go with the old contents.
 const disposeLevelsWith = (geometry: THREE.BufferGeometry, levels: readonly MeshLodLevel[]): void => {
-    geometry.addEventListener('dispose', () => {
+    const onDispose = () => {
+        geometry.removeEventListener('dispose', onDispose);
+        if (chains.get(geometry) === levels) chains.delete(geometry);
         for (const level of levels) if (level.geometry !== geometry) level.geometry.dispose();
-    });
+    };
+    geometry.addEventListener('dispose', onDispose);
+};
+
+/**
+ * Marks a geometry to be drawn as it is, with no detail levels made for it: one that already is a detail level of
+ * something larger, such as a terrain chunk, or a thin strip the simplifier would cut across, such as a chunk's skirt.
+ */
+export const keepFullDetail = (geometry: THREE.BufferGeometry): void => {
+    geometry.userData.keepFullDetail = true;
 };
 
 /**
@@ -105,7 +117,7 @@ export const meshLodChain = (geometry: THREE.BufferGeometry): MeshLodLevel[] => 
     const position = geometry.attributes.position;
     const full: MeshLodLevel = { geometry, error: 0, triangles: position ? triangleCount(geometry) : 0 };
     if (!position || !simplifierReady || !MeshoptSimplifier.supported) return [full];
-    if (full.triangles < MIN_LOD_TRIANGLES) {
+    if (full.triangles < MIN_LOD_TRIANGLES || geometry.userData.keepFullDetail) {
         chains.set(geometry, [full]);
         return [full];
     }
