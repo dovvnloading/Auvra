@@ -11,7 +11,7 @@ import type { GraphEntry, GraphResolver } from '../../../texturing/graph/registr
 import { readStoredGraph } from '../../../texturing/graph/stored';
 import { buildPartMesh, buildWholeMesh, type PartMesh } from '../../../texturing/mesh/partMesh';
 import { SurfacePicker } from '../../../texturing/mesh/picker';
-import { ROLE_LABELS, encodeChannels, materialGraphForTextures, type ChannelTextureIds, type PictureLayout } from '../../../texturing/materialOutput';
+import { ROLE_LABELS, encodeChannels, materialGraphForTextures, tileAtlas, type ChannelTextureIds, type PictureLayout } from '../../../texturing/materialOutput';
 import { PaintStack, type StackHost } from '../../../texturing/paint/paintStack';
 import { BUILTIN_GRAPHS } from '../../../texturing/paint/smartLibrary';
 import { applyPixelHistory, type HistoryEntry } from '../../../texturing/paint/strokes';
@@ -39,6 +39,8 @@ export interface PaintSessionHost {
     storeTexture: (blob: Blob, name: string, size: { width: number; height: number }, folder: string) => Promise<string>;
     discardTextures: (ids: readonly string[]) => Promise<void>;
     texture: (id: string) => THREE.Texture | null;
+    /** A kept texture's name and content folder, or null. */
+    textureEntry: (id: string) => { name: string; folder: string } | null;
     setMaterialOverrides: (modelId: string, overrides: MaterialOverrides) => Promise<void>;
     materialOverrides: (modelId: string) => MaterialOverrides | undefined;
 }
@@ -98,16 +100,20 @@ export class PaintSession {
         let asset = findPaintAsset(target);
         let document = asset ? readPaintDocument(asset.paint) : null;
         const part = buildPartMesh(target.object, new Set(target.materials), { udim: document ? document.udim : 'auto' });
+        const material = target.materials[0] as THREE.MeshStandardMaterial;
         if (!asset || !document) {
             document = createPaintDocument(target.modelId, target.materialNames, 11);
             document.udim = part.udim;
-            // Painting starts from what the surface wears now, never from nothing.
-            document.layers = [{ ...newFillLayer(document, 'What it wears now', Object.fromEntries((['baseColor', 'roughness', 'metallic', 'normal'] as PaintChannel[]).map((channel) => [channel, { kind: 'current' as const }]))), id: paintId('l') }];
+            // Painting starts from what the surface wears now, never from nothing: its glow too, as the set
+            // goes on the model in place of its material.
+            const glows = Boolean(material?.emissiveMap) || Boolean(material?.emissive && material.emissive.getHex() !== 0 && material.emissiveIntensity > 0);
+            if (glows) document.channels = [...document.channels, 'emissive'];
+            const wears: PaintChannel[] = ['baseColor', 'roughness', 'metallic', 'normal', ...(glows ? ['emissive' as const] : [])];
+            document.layers = [{ ...newFillLayer(document, 'What it wears now', Object.fromEntries(wears.map((channel) => [channel, { kind: 'current' as const }]))), id: paintId('l') }];
             asset = { id: crypto.randomUUID(), name: `${target.modelName.replace(/\.[^.]+$/, '')} ${target.partName} (painted)`.slice(0, 128), graph: createMaterialGraph(), paint: document as unknown as Record<string, unknown> };
             materialLibrary.upsert(asset);
             await projectService.applyChanges([{ domain: MATERIALS_DOMAIN, operation: 'upsert', id: asset.id, value: materialAssetDocument(asset) }]);
         }
-        const material = target.materials[0] as THREE.MeshStandardMaterial;
         const own = material ? ownMaps(material) : { map: null, normalMap: null };
         const color = (value: THREE.Color | undefined): [number, number, number] => {
             const c = value ? value.clone().convertLinearToSRGB() : new THREE.Color(0.5, 0.5, 0.5);
@@ -319,22 +325,42 @@ export class PaintSession {
         try {
             await this.stack.compose();
             await this.save();
-            const tile = this.stack.tiles.includes(1001) ? 1001 : this.stack.tiles[0];
-            const images = this.stack.channelImages(tile);
+            const tiles = this.stack.tiles;
             const size = this.stack.size;
             const flipRows = overrideTextureFlipY(this.target.object);
-            const pictures = await encodeChannels(this.gpu, images, size, size, 'engine', flipRows);
+            // A set over several UDIM tiles goes on as one picture per channel with every tile in its place,
+            // read by the material with the coordinates scaled to the grid; one tile goes on as it is.
+            const idleBefore = this.gpu.memory.idle;
+            const atlas = tiles.length > 1 ? tileAtlas(this.gpu, tiles, (tile) => this.stack.channelImages(tile), size) : null;
+            const images = atlas ? atlas.images : this.stack.channelImages(tiles[0]);
+            const width = atlas ? atlas.width : size;
+            const height = atlas ? atlas.height : size;
+            let pictures: Awaited<ReturnType<typeof encodeChannels>>;
+            try {
+                pictures = await encodeChannels(this.gpu, images, width, height, 'engine', flipRows);
+            } finally {
+                if (atlas) {
+                    for (const image of Object.values(atlas.images)) this.gpu.release(image);
+                    // Pictures the size of the whole grid serve nothing else: they are let go at once
+                    // (the largest idle pictures go first).
+                    this.gpu.trimPool(idleBefore);
+                }
+            }
             const ids: ChannelTextureIds = {};
             const folder = `Painted/${this.target.modelName.replace(/\.[^.]+$/, '')}`;
             for (const picture of pictures) {
                 this.busy = `Keeping ${ROLE_LABELS[picture.role].toLowerCase()}`;
                 this.emit();
-                ids[picture.role] = await this.host.storeTexture(picture.blob, `${this.target.partName} ${ROLE_LABELS[picture.role]}`, { width: size, height: size }, folder);
+                ids[picture.role] = await this.host.storeTexture(picture.blob, `${this.target.partName} ${ROLE_LABELS[picture.role]}`, { width, height }, folder);
             }
             const previous = Object.values(this.stack.document.applied?.textures ?? {}).filter((id): id is string => Boolean(id));
             const document: PaintDocument = { ...this.stack.document, applied: { textures: ids, at: Date.now() } };
             this.stack.setDocument(document);
-            this.asset = { ...(materialLibrary.get(this.asset.id) ?? this.asset), graph: materialGraphForTextures(ids, { opacityMode: images.opacity ? 'masked' : undefined }), paint: document as unknown as Record<string, unknown> };
+            this.asset = {
+                ...(materialLibrary.get(this.asset.id) ?? this.asset),
+                graph: materialGraphForTextures(ids, { opacityMode: images.opacity ? 'masked' : undefined, tiles: atlas ? { columns: atlas.columns, rows: atlas.rows } : undefined }),
+                paint: document as unknown as Record<string, unknown>,
+            };
             materialLibrary.upsert(this.asset);
             await projectService.applyChanges([{ domain: MATERIALS_DOMAIN, operation: 'upsert', id: this.asset.id, value: materialAssetDocument(this.asset) }]);
             // The surface's materials draw with the painted material from now on.
@@ -343,9 +369,11 @@ export class PaintSession {
             await this.host.setMaterialOverrides(this.target.modelId, overrides);
             void this.host.discardTextures(previous);
             this.changedSinceApply = false;
-            this.status = this.stack.tiles.length > 1
-                ? `The model now wears tile 1001 of this set. Its other ${this.stack.tiles.length - 1} UDIM tiles are kept for export.`
-                : 'The model now wears this painting.';
+            this.status = !atlas
+                ? 'The model now wears this painting.'
+                : atlas.cell < size
+                    ? `The model now wears all ${tiles.length} UDIM tiles of this set, each at ${atlas.cell} × ${atlas.cell} so they fit one picture this machine can hold.`
+                    : `The model now wears all ${tiles.length} UDIM tiles of this set.`;
         } catch (error) {
             frontendDiagnostics.failure('paint_apply_failed', error);
             this.status = error instanceof Error ? error.message : 'The pictures could not be given to the model.';

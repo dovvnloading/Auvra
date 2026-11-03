@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { buildPartMesh } from '../../texturing/mesh/partMesh';
 import { coverage, packIslands, smallestBoxAngle, type Island } from '../../texturing/uv/pack';
+import { newTriangleTiles } from '../../texturing/uv/transfer';
 import { DEFAULT_UNWRAP, unwrap } from '../../texturing/uv/unwrap';
 import { applyLayout, buildLayout, decodeLayout, encodeLayout } from '../../texturing/uv/uvLayout';
 import { buildTopology, existingSeams } from '../../texturing/uv/uvTopology';
@@ -126,6 +127,17 @@ describe('packing', () => {
             const u = placement.uv[0];
             expect(Math.floor(u)).toBe(placement.tile - 1001);
         }
+    });
+
+    it('finds the UDIM tile each triangle of a layout lands in, by its middle', () => {
+        const corner = new Float32Array([
+            0.1, 0.1, 0.4, 0.1, 0.1, 0.4,
+            1.2, 0.3, 1.6, 0.3, 1.2, 0.7,
+            0.2, 1.1, 0.5, 1.1, 0.2, 1.5,
+            // Touching the next tile's edge, but lying in the first.
+            0.7, 0.2, 1.0, 0.2, 0.7, 0.5,
+        ]);
+        expect([...newTriangleTiles(corner)]).toEqual([1001, 1002, 1011, 1001]);
     });
 });
 
