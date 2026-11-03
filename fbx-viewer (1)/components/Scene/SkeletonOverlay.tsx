@@ -1,12 +1,16 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import { useFrame } from '@react-three/fiber';
-import { skeletonBones, useSkeletonView } from '../../utils/skeletonView';
+import { Html } from '@react-three/drei';
+import { useFrame, useThree } from '@react-three/fiber';
+import { boneAtScreen, setSkeletonView, skeletonBones, useSkeletonView } from '../../utils/skeletonView';
 
 const BONE_COLOR = new THREE.Color('#c7ccd6');
 const SELECTED_COLOR = new THREE.Color('#ff9a3d');
 
 const NOTHING = (): void => undefined;
+
+/** A press that moves further than this, in pixels, is the camera being dragged and not a click. */
+const CLICK_SLOP = 4;
 
 /** Bones drawn over the model as lines from each joint to its parent, the picked bone in the accent colour. */
 const SkeletonLines: React.FC<{ root: THREE.Object3D; selectedBone: string | null }> = ({ root, selectedBone }) => {
@@ -46,8 +50,35 @@ const SkeletonLines: React.FC<{ root: THREE.Object3D; selectedBone: string | nul
     jointColors.needsUpdate = true;
   }, [bones, linked, lines, joints, selectedBone]);
 
+  // A click near a joint picks its bone.
+  const camera = useThree((three) => three.camera);
+  const canvas = useThree((three) => three.gl.domElement);
+  useEffect(() => {
+    let pressedAt: { x: number; y: number } | null = null;
+    const onDown = (event: PointerEvent): void => {
+      pressedAt = event.button === 0 ? { x: event.clientX, y: event.clientY } : null;
+    };
+    const onUp = (event: PointerEvent): void => {
+      if (!pressedAt || Math.hypot(event.clientX - pressedAt.x, event.clientY - pressedAt.y) > CLICK_SLOP) return;
+      const bounds = canvas.getBoundingClientRect();
+      const picked = boneAtScreen(bones, camera, event.clientX - bounds.left, event.clientY - bounds.top, bounds.width, bounds.height);
+      if (picked) setSkeletonView({ selectedBone: picked.name });
+    };
+    canvas.addEventListener('pointerdown', onDown);
+    canvas.addEventListener('pointerup', onUp);
+    return () => {
+      canvas.removeEventListener('pointerdown', onDown);
+      canvas.removeEventListener('pointerup', onUp);
+    };
+  }, [bones, camera, canvas]);
+
+  // The picked bone's name goes by its joint, and follows it.
+  const pickedBone = bones.find((entry) => entry.name === selectedBone)?.bone ?? null;
+  const pickedLabel = useRef<THREE.Group>(null);
+
   const point = useRef(new THREE.Vector3());
   useFrame(() => {
+    if (pickedLabel.current && pickedBone) pickedBone.getWorldPosition(pickedLabel.current.position);
     const places = joints.getAttribute('position') as THREE.BufferAttribute;
     bones.forEach((entry, index) => {
       entry.bone.getWorldPosition(point.current);
@@ -80,6 +111,13 @@ const SkeletonLines: React.FC<{ root: THREE.Object3D; selectedBone: string | nul
       <points ref={placeInWorld} geometry={joints} renderOrder={1001} frustumCulled={false} raycast={NOTHING}>
         <pointsMaterial vertexColors size={5} sizeAttenuation={false} depthTest={false} transparent toneMapped={false} fog={false} />
       </points>
+      {pickedBone && (
+        <group ref={pickedLabel}>
+          <Html zIndexRange={[20, 0]} style={{ pointerEvents: 'none' }}>
+            <span className="absolute left-2 -top-2 whitespace-nowrap rounded bg-black/60 px-1 py-px text-2xs text-white">{selectedBone}</span>
+          </Html>
+        </group>
+      )}
     </>
   );
 };

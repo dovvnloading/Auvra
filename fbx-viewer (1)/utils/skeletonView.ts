@@ -65,6 +65,34 @@ export const skeletonBones = (root: THREE.Object3D): SkeletonBone[] => {
   return list;
 };
 
+/** How far from a joint a click still picks it, in pixels. */
+const PICK_REACH = 14;
+
+const _onScreen = new THREE.Vector3();
+
+/**
+ * The bone whose joint is nearest a place in the view, within reach of it. `x` and `y` are in pixels
+ * from the view's top left. A joint behind the camera cannot be picked. Where joints crowd, the nearest
+ * on the screen wins, then the nearest to the camera.
+ */
+export const boneAtScreen = (bones: readonly SkeletonBone[], camera: THREE.Camera, x: number, y: number, width: number, height: number, reach = PICK_REACH): SkeletonBone | null => {
+  let best: SkeletonBone | null = null;
+  let bestGap = reach;
+  let bestDepth = Infinity;
+  for (const entry of bones) {
+    entry.bone.getWorldPosition(_onScreen).project(camera);
+    if (_onScreen.z > 1 || _onScreen.z < -1) continue;
+    const gap = Math.hypot(((_onScreen.x + 1) / 2) * width - x, ((1 - _onScreen.y) / 2) * height - y);
+    if (gap > reach) continue;
+    if (gap < bestGap - 0.5 || (gap <= bestGap + 0.5 && _onScreen.z < bestDepth)) {
+      best = entry;
+      bestGap = gap;
+      bestDepth = _onScreen.z;
+    }
+  }
+  return best;
+};
+
 /** How many vertices each bone is the strongest influence on, by bone name. */
 export const boneInfluences = (root: THREE.Object3D): Map<string, number> => {
   const counts = new Map<string, number>();

@@ -106,6 +106,37 @@ export const packMetalRough = ({ roughness, invertRoughness = false, metalness }
   return { data, width, height };
 };
 
+/** How steep a height map's slopes are drawn: a step from black to white in one pixel leans a normal by about 63 degrees. */
+const HEIGHT_STRENGTH = 4;
+
+/**
+ * A normal map worked out from a height map, as materials here shade with normals. Slopes are read
+ * over each pixel's neighbours (a Sobel filter), wrapping at the edges as textures tile. Green points
+ * towards the top of the image, as glTF expects.
+ */
+export const normalsFromHeight = (heights: Pixels, strength = HEIGHT_STRENGTH): Pixels => {
+  const { data: source, width, height } = heights;
+  const data = new Uint8Array(width * height * 4);
+  // Height maps are grey, so one channel is enough; green is the one every format keeps best.
+  const at = (x: number, y: number): number => source[(((y + height) % height) * width + ((x + width) % width)) * 4 + 1] / 255;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const across = (at(x + 1, y - 1) + 2 * at(x + 1, y) + at(x + 1, y + 1) - at(x - 1, y - 1) - 2 * at(x - 1, y) - at(x - 1, y + 1)) / 8;
+      const down = (at(x - 1, y + 1) + 2 * at(x, y + 1) + at(x + 1, y + 1) - at(x - 1, y - 1) - 2 * at(x, y - 1) - at(x + 1, y - 1)) / 8;
+      // Uphill to the right leans the surface left; uphill towards the bottom of the image leans it to the top.
+      const nx = -across * strength;
+      const ny = down * strength;
+      const scale = 1 / Math.sqrt(nx * nx + ny * ny + 1);
+      const to = (y * width + x) * 4;
+      data[to] = Math.round((nx * scale * 0.5 + 0.5) * 255);
+      data[to + 1] = Math.round((ny * scale * 0.5 + 0.5) * 255);
+      data[to + 2] = Math.round((scale * 0.5 + 0.5) * 255);
+      data[to + 3] = 255;
+    }
+  }
+  return { data, width, height };
+};
+
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
   for (let n = 0; n < 256; n += 1) {

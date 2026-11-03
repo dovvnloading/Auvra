@@ -411,6 +411,30 @@ describe('imported materials', () => {
     expect(json.images[0].mimeType).toBe('image/png');
   });
 
+  it('works out a normal map from a height map', async () => {
+    const heights = { data: new Uint8Array(4 * 4 * 4).fill(128), width: 4, height: 4 };
+    const { json } = await finished(
+      painted('', texture(400, 'paint_height.png')),
+      `${onPaint}\n  C: "OP",400,300, "Bump"`,
+      { 'paint_height.png': namedPng('height') },
+      { height: heights },
+    );
+    expect(json.materials[0].normalTexture).toBeDefined();
+    const image = json.images[json.textures[json.materials[0].normalTexture.index].source];
+    expect(image.mimeType).toBe('image/png');
+    expect(image.name).toBe('Paint normal');
+  });
+
+  it('takes a normal map over a height map when a material has both', async () => {
+    const { json } = await finished(
+      painted('', `${texture(400, 'paint_normal.png')}\n${texture(401, 'paint_height.png')}`),
+      `${onPaint}\n  C: "OP",400,300, "NormalMap"\n  C: "OP",401,300, "Bump"`,
+      { 'paint_normal.png': namedPng('normal'), 'paint_height.png': namedPng('height') },
+    );
+    expect(json.images).toHaveLength(1);
+    expect(json.materials[0].normalTexture).toBeDefined();
+  });
+
   it('inverts a legacy shininess map into roughness', async () => {
     const gloss = { data: new Uint8Array([9, 200, 9, 255]), width: 1, height: 1 };
     const { json, glb } = await finished(

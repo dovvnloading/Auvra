@@ -248,6 +248,9 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
                   {report.triangles > 0 ? `${count(report.meshes, 'mesh', 'meshes')}, ${count(report.triangles, 'triangle')}` : 'None: animation only'}
                 </Fact>
                 {report.materials > 0 && <Fact label="Materials">{count(report.materials, 'material')}{report.images?.length ? `, ${count(report.images.length, 'image')}` : ''}</Fact>}
+                {report.collisionMeshes > 0 && <Fact label="Collision">{count(report.collisionMeshes, 'shape')}, for colliders and rigid bodies</Fact>}
+                {report.sockets > 0 && <Fact label="Sockets">{count(report.sockets, 'socket')}, added to the model</Fact>}
+                {report.lodGroups > 0 && <Fact label="Detail">{count(report.lodGroups, 'detail group')}: the finest of each is kept, and simpler levels made from it</Fact>}
                 {report.bones > 0 && (
                   <Fact label="Skeleton">
                     {count(report.bones, 'bone')}{report.maxInfluences > 4 ? `, up to ${report.maxInfluences} per vertex (the strongest 4 are kept)` : ''}

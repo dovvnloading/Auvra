@@ -89,6 +89,7 @@ const EXEMPT = new Map(Object.entries({
   'utils/autoRig/skinWeights.ts': 'pure-utility',
   'utils/autoRig/voxels.ts': 'pure-utility',
   'utils/fbxImport/clipOrder.ts': 'pure-utility',
+  'utils/modelConventions.ts': 'pure-utility',
   'utils/fbxImport/gltfReport.ts': 'pure-utility',
   'utils/humanoidShape.ts': 'pure-utility',
   'utils/skeletonView.ts': 'pure-utility',

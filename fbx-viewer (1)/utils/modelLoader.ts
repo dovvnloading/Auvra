@@ -5,6 +5,7 @@ import { splitAlphaCards } from './processing/ModelMaterials';
 import { compressModelTextures } from './textureCompression/compressTextures';
 import { withGltfDecoders } from './gltfDecoders';
 import type { RigSource } from './autoRig/riggedGlb';
+import { takeModelConventions } from './modelConventions';
 import { normalizeModel, SOURCE_METRES_PER_UNIT } from './processing/ModelTransforms';
 import { disposeObject } from './processing/ModelLifecycle';
 import { UV_ORIGIN_TOP_LEFT_KEY } from './materialOverrides';
@@ -504,6 +505,7 @@ export const readGltfSource = async (file: File, options: { convert?: ModelConve
 const prepareImportedModel = (object: THREE.Object3D): void => {
   // glTF UVs start top-left, so override textures for this model load with flipY off.
   object.userData[UV_ORIGIN_TOP_LEFT_KEY] = true;
+  takeModelConventions(object);
   object.traverse((child) => {
     if ((child as THREE.Mesh).isMesh) {
       child.castShadow = true;
